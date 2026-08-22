@@ -1,8 +1,0 @@
-{
-  "schema_version": 2,
-  "doc_class": "behavioral_sequences",
-  "ic_name": "Fixed_priority_arbiter",
-  "behavioral_sequences": [],
-  "no_behavioral_sequences_in_input": true,
-  "extraction_evidence": {}
-}

@@ -1,5 +1,0 @@
-{
-  "ic_name": "Modbus Application Protocol V1.1b3 (Modbus.org)",
-  "lab_calibration_present": false,
-  "notes": "MODBUS is an application-layer messaging protocol — it has no analog reference, no oscillator trim, and no PVT-dependent calibration loop. Any implementation-side calibration (e.g. UART baud-rate trim for RTU/ASCII transports, Ethernet PHY auto-negotiation for Modbus TCP) belongs to the underlying transport hardware, not to the MODBUS protocol itself. The MODBUS spec is a 50-page PDF defining only byte sequences, framing markers, function-code semantics, and exception codes."
-}

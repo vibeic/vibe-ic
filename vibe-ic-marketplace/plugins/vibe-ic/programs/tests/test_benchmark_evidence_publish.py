@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 
 PROG = Path(__file__).resolve().parent.parent / "benchmark_evidence_publish.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _pdk_revision_fixture as _pdk_fixture  # noqa: E402
 
 _GDS_BYTES = b"GDSII-FAKE-STREAM-" * 64
 _RESULT_PASS = "# RESULT\n\n## VERDICT\n\n**PASS_WITH_WAIVERS.** re-derived.\n"
@@ -61,6 +63,11 @@ def _make_run(base: Path, verdict: str = "PASS_WITH_WAIVERS",
     if with_gds:
         (run / "phase3" / "stage4" / "gds").mkdir(parents=True, exist_ok=True)
         (run / "phase3" / "stage4" / "gds" / "top.gds").write_bytes(_GDS_BYTES)
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6). The record is produced by the
+    # REAL resolver over a synthesized tree — never hand-written — so this
+    # fixture cannot drift from the program that writes it in production.
+    _pdk_fixture.write_run_pdk_revision(run)
     return run
 
 

@@ -201,10 +201,13 @@ def test_leak2_unparseable_ctx_file_dropped(monkeypatch):
 
     def fake_run(cmd, timeout=120):
         calls.append(cmd)
-        # solo pre-parse probe: reject the file containing the class
-        f = cmd[-1].split("read_verilog -sv ", 1)[-1]
+        # solo pre-parse probe: reject the file containing the class.
+        # The real call QUOTES the path inside the `-p` script (an unquoted
+        # path let a TMPDIR containing a space silently degrade the smoke),
+        # so strip the quotes the same way a shell-ish reader would.
+        f = cmd[-1].split("read_verilog -sv ", 1)[-1].strip().strip('"')
         try:
-            txt = open(f.strip()).read()
+            txt = open(f).read()
         except OSError:
             txt = ""
         return (1, "", "syntax error") if "class " in txt else (0, "", "")

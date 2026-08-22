@@ -1,0 +1,19 @@
+{
+  "gate": "l23_security_requirements_typed_check",
+  "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/ibex",
+  "verdict": "SKIP",
+  "blocking_findings": [],
+  "advisory_findings": [],
+  "evidence": {
+    "l23_path": "/home/reyerchu/vibe-ic/benchmark-data/ic/ibex/phase1/generated_docs/L23_SECURITY_REQUIREMENTS.json",
+    "applicability": "APPLICABLE",
+    "security_record_count": 0,
+    "typed_record_count": 0,
+    "security_requirements_present": false,
+    "secure_boot": false,
+    "asserts_security": false,
+    "security_requirement_hits_input_docs": 0,
+    "security_requirement_hits_sibling_l_docs": 0
+  },
+  "reason": "design declares no security-relevant asset and L23 asserts none"
+}
