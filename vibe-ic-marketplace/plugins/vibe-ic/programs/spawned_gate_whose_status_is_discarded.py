@@ -38,10 +38,13 @@ directions, which is why one rule carries both.
 
 COVERAGE, MEASURED — and the two clauses are NOT equal
 =======================================================
-CLAUSE A IS A RULE. Population on the tree this shipped with: 654 modules
-contain a handler that swallows everything, and 10 unbound spawns name a
-checking program. It returns 5, of which FOUR were found by asking the
-repository rather than by anyone noticing. It generalises.
+CLAUSE A IS A RULE. Population on the tree this shipped with, restated at the
+merge with main a4caccefe (v1.11.69): 669 modules contain a handler that
+swallows everything, out of 4223 parsed. It returns 5, of which FOUR were found
+by asking the repository rather than by anyone noticing. It generalises -- and
+the population growing from 654 to 669 under 214 commits of main WITHOUT the
+finding count moving is the useful part: the clause tracked a tree it had never
+seen and still found the same five.
 
 CLAUSE B IS A REGRESSION GUARD, NOT A RULE, AND SAYING SO IS THE POINT. Its
 population is **1** — `full_suite_run_check.py`, which is the instance the

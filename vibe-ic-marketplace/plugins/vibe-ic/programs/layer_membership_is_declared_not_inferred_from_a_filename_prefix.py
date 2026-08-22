@@ -18,18 +18,26 @@ inventory absorbed the finding is the shape this work exists to remove.
 WHAT IS RED, AND WHAT FIXES IT
 ==============================
     layer `ppa`
-        glob-derived   (`ppa_*.py`)                    19
-        relation-derived (executables importing `_ppa`) 24
-        IN THE LAYER, OUTSIDE THE GLOB                   5
+        glob-derived   (`ppa_*.py`)                    20
+        relation-derived (executables importing `_ppa`) 26
+        IN THE LAYER, OUTSIDE THE GLOB                   6
 
-        area.py · openroad.py · power_total_vs_budget_check.py
-        readme_ppa_extractor.py · timing.py
+        area.py · gate_proof_vocabulary_has_a_producer.py · openroad.py
+        power_total_vs_budget_check.py · readme_ppa_extractor.py · timing.py
+
+        Restated at the merge with main a4caccefe (v1.11.69), which grew the
+        layer. ONE OF THE SIX IS THIS BRANCH'S OWN
+        `gate_proof_vocabulary_has_a_producer.py`: it imports `_ppa` and is
+        executable, so it is a layer member that the `ppa_*.py` glob does not
+        reach, and the two suites below do not enforce the layer contract on
+        it. That is the defect this gate reports, arriving by the ordinary
+        route -- somebody added a member -- which is the point.
 
     used by  test_ppa_layer_exit_contract.py
              test_ppa_layer_internal_error_is_not_a_finding.py
 
 Both suites enforce a LAYER-WIDE property — the exit-code contract, and that an
-internal error is not reported as a finding — over a population that omits five
+internal error is not reported as a finding — over a population that omits six
 of the layer's own executables. The first even says so in a comment: "Discovered,
 not listed: a fifteenth program added tomorrow is covered by this file the
 moment it lands, which is the only way a LAYER property stays a layer property."
