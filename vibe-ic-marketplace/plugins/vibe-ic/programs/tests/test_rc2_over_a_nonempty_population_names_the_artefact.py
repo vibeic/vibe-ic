@@ -259,6 +259,17 @@ def assert_rc2_names_the_missing_artefact(proc, subjects, label,
     unreferenced = []
     for subject, lines in _subject_lines(
             [proc.stdout, proc.stderr], named).items():
+        # A SUBJECT THAT PASSED OWES NOTHING, and the rule demanded it anyway.
+        # An rc-2 corpus verdict is the roll-up of MANY per-subject verdicts, so
+        # most of the named subjects can be accepted records. MEASURED the day
+        # `h2h_F` was re-filed and the cross-layer row went 1 -> 2: this clause
+        # started requiring twelve PASSING head-to-heads to say what was
+        # "missing" from them. Nothing is. Forcing a gate to invent an absence
+        # for a record it accepted is the mirror image of the defect this file
+        # exists to catch, and it would have been paid for in noise on every
+        # future corpus.
+        if any(l.lstrip().startswith("[PASS]") for l in lines[:1]):
+            continue
         if not _referents(lines, subject):
             unreferenced.append(subject)
     assert unreferenced == [], (
@@ -480,6 +491,27 @@ def test_a_feasibility_refusal_names_the_metric_and_the_cited_artefact(feas_corp
         "the record CITES the artefact it read and the refusal did not repeat "
         "it, so a reader is told a measurement is absent and not where the "
         "absence is:\n" + text)
+
+
+def test_a_passing_subject_in_an_rc_2_corpus_owes_no_referent():
+    """The clause above, pinned in both directions.
+
+    Without the skip this rule fails a gate for its ACCEPTED records, which is
+    how a guard against silence becomes a demand for noise. With it, a subject
+    that was refused still owes a referent -- otherwise the skip is a hole big
+    enough to drive the whole file through.
+    """
+    passed = ["[PASS] gate: /c/ok.json",
+              "  everything about this record is fine"]
+    assert _referents(passed, "/c/ok.json") == []      # nothing to name
+    groups = {"/c/ok.json": passed}
+    # A group opening with [PASS] is skipped...
+    assert any(l.lstrip().startswith("[PASS]") for l in groups["/c/ok.json"][:1])
+    # ...and one opening with a refusal is NOT.
+    refused = ["[UNDETERMINED] gate: /c/bad.json: SOME_CODE",
+               "  nothing here names a thing to go and get"]
+    assert not refused[0].lstrip().startswith("[PASS]")
+    assert _referents(refused, "/c/bad.json") == []
 
 
 def test_a_verdict_code_alone_is_not_a_referent():
