@@ -4,6 +4,22 @@
 the sixteen branches named in the freeze. Nothing here modifies a frozen branch;
 it is a map for whoever assembles them.
 
+## OUTCOME: the batch LANDED as v1.11.70 -- this document is now history
+
+`main` moved `a4caccefe` -> `ae78abb28` (673 commits), whose subject is
+`landing: assign v1.11.70 at landing time` and whose parent is `e11626e28` --
+`land/one-assembled` itself. So the assembly this document maps is what shipped.
+
+Verified on the landed `main`: `checker_execution_wiring_audit` and
+`hdl_declaration_scan_strips_comments_check` both exit 0, `CAPTURE_ROUTING.json`
+holds the predicted **64** entries with no side dropped, and the rc-3 pair landed
+TOGETHER -- the gate emits it and the runner's `elif rc == _usage_rc()` arm reads
+it, which was the one hazard flagged throughout.
+
+Everything below was written while the batch was still being assembled. Read it as
+a record of how it got there, not as instructions. The §4 hygiene baseline in
+particular is stamped `a4caccefe` and main has moved past it.
+
 ## What this says, in short
 
 Read this first. The sections below are the working, in the order it happened, and
