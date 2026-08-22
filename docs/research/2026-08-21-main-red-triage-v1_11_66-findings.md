@@ -5202,7 +5202,11 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **`declaration scans strip comments`** | **FIXED (M78) — this row was WRONG to be here.** The analyser did not propagate stripped status through `for`/comprehension targets. Fixed: 10-case A/B 0 wrong, repo 175->168, **0 newly flagged**, 5 regression tests of which 4 go red on revert. Blocking list 5 -> 3 names, and the two that left are verified false. **Remaining: 2 real candidates** (`crosslayer` scans raw `rtl_text`) **+ 1 false positive of a SECOND class** (`declared_io_delay_fraction` scans MARKDOWN, not HDL — a subject-kind error). Baseline deliberately NOT written though the gate asks. | **fixed; 2 real candidates remain** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump (M54 stands). M84: the decision is now TWO NAMES.** Census is CLEAN — `swept 181 = declared 181`, `unswept []`, `unrecognised {}`. Clause SETS vs main: ADDED 3, REMOVED 2, and **3 of those 5 are one already-authorised refactor** (the two removals are written up in the file itself; `+tapeout_precheck` is the fold target). Genuinely new: `crosslayer_rewrite_equivalence_check` (1.6x) and `pad_assignment_gen` (15.5ic). A GROW with nothing uncovered. **The comment's blocker — 'a deliberate shrink has no way to be authorised' — is answered in the same comment**, which performs one and authorises it in prose; what is missing is a machine-readable form, not a policy. | **owner's call, now a 2-name confirmation** |
 
-## D. Corrections to my own earlier reports — 26 of them
+## D. Corrections to my own earlier reports
+
+> **No count in this heading, deliberately.** It said "26 of them" and was
+> accurate; it would have been wrong the moment I appended #27. Re-derive:
+> `sed -n '/^## D\. Corrections/,$p' <file> | grep -cE '^[0-9]+\. \*\*'`
 
 This section listed FOUR corrections while the log had accumulated roughly a
 dozen more. It is the section whose whole job is to stop you acting on a
@@ -5278,8 +5282,54 @@ anti-staleness section is not exempt):
     flow audit simply scans a different scope. It needs a classification rule,
     not wiring.
 
-**Three near-misses that measurement killed before publication**, listed because
+27. **"the repair is invisible to CI, because all 22 image failures die on the
+    absent Docker CLI"** — the conclusion is FALSE (M90), and this is the claim I
+    repeated most often, here and in every summary I gave. Four invocation flags
+    take the image lane to **6 failed, 128 passed** with a set byte-identical to
+    the host's, **both re-founded tests among the passes**. The mechanism was
+    real; the leap from "the arms cannot run here" to "the repair does not reach"
+    was not.
+28. **"adding a Docker CLI to the image would fix the image lane"** — INSUFFICIENT
+    (M89), measured. CLI errors go 18 -> 0 and the identical 22 still fail on the
+    bind-mount namespace.
+29. **"B's channel is confirmed (the container label, from source)"** — FALSE
+    (M82). I verified the label EXISTS and wrote it as though I had verified a
+    test can learn its VALUE. It cannot, and `refs/gk-verify` exists only on the
+    `--pr` path (M83), so the channel failed twice over.
+30. **"the fixture needs a real published cell before either corpus test can
+    exercise a transition"** — FALSE (M79), disproved by me in M68 and left
+    standing as doctrine for days. Worse than a stale number: a retired blocker
+    restated as a principle reads as settled.
+31. **"the matrix family needs a published run tree" (as ONE item)** — imprecise
+    (M86/M87). Six reds, five citing ONE root, artefacts present on this host in
+    other `home` trees; step 30's outputs ARE declared, as globs. One publication
+    decision, not an investigation.
+32. **"`0.5ic` needs an external artefact"** — filed five times (M85). It needed a
+    `git clone`; the network worked throughout and the repo is public and
+    open-licensed.
+33. **"one line each, `advisory` truthful"** for the two undeclared flow gates —
+    true of the WIRING and wrong as an ACTION (M80). Writing the line decides
+    rather than describes, and for `area_total_vs_budget_check` it would ratify
+    the exact defect the program exists to remove.
+34. **"the corpus and bootstrap four have no second blocker"** — FALSE (M92),
+    corrected within one commit of writing it. They have a different second
+    blocker from the interrupt pair, in the same protected place.
+35. **"the document now runs to M36"**, in the header block that warns summaries
+    decay and publishes a command to re-derive exactly that number. It was 56
+    sections stale.
+
+**Six near-misses that measurement killed before publication**, listed because
 each would have been believed: "three tamper guards fail in the strong tier" (the
-tamper simply fails now), a `git stash` control that measured my own file and
-would have confirmed my conclusions circularly, and a `tail -3` capture that
-reported a fix I had not made.
+tamper simply fails now); a `git stash` control that measured my own file and
+would have confirmed my conclusions circularly; a `tail -3` capture that reported
+a fix I had not made; **"M27 is refuted"** — from a docker-absence grep whose
+patterns missed the real message, `cannot execute Docker CLI`, 18 times;
+**"0 protected paths"** from a `grep -Ff` whose empty pattern file matched every
+line and would have said the same for any branch; and a host-vs-image comparison
+read off a pytest run whose sentinel had not appeared, reporting **0 host
+failures** mid-run.
+
+**The shape of all six is one thing: an instrument that returned a number, and a
+number that was not a measurement.** Four of the eight items above and all six
+near-misses were caught by asking the same question — *did the check actually
+look at what I think it looked at?*
