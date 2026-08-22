@@ -3557,7 +3557,7 @@ number and not the question.
 
     records                                47
       fix text quotes a figure             35
-      fix text names the command            7   (6 before this section was written)
+      fix text names the command           10   (6 before this section was written)
 
 The brief is explicit about this: *the command, the number, the before and
 after.* On the strict reading, 28 figure-bearing records fall short.
@@ -3577,9 +3577,30 @@ detail that cost me two attempts — the run directories have to be named with t
 prefix the gate's own discovery uses, or both arms read zero and the effect
 vanishes.
 
-The rest is work for whoever continues, and it is the first thing I would do:
-a figure without its question is a memory, which is the brief's own word for
-what this loop exists to stop producing.
+**Four figures have now been re-derived, and the result is reassuring in a way
+worth stating**, because "I could not reproduce it" is easy to mistake for "it
+was wrong":
+
+| figure | recorded | today | what moved |
+|---|---:|---:|---|
+| programs walking a repository index | 37 | **38** | the tree grew by one |
+| programs naming the split-out corpus | 98 | **99** | the tree grew by one |
+| programs directly under the program directory | 1238 | **1240** | the tree grew by two |
+| gates the wiring enumeration counts | 619 | **624** | the tree grew by five |
+
+**Four re-derivations, four small growths, zero screen mismatches.** The numbers
+were sound; what was missing was the question that produced them. That is a
+better outcome than it looked when the first two disagreed, and it is only
+knowable because the screens are now written down.
+
+One of the four is taken from the gate itself rather than counted independently,
+deliberately: an independent count would have to re-derive what counts as a
+gate, and a second definition of one population is exactly how two figures about
+one thing begin to disagree.
+
+The remaining 25 are work for whoever continues, and it is the first thing I
+would do: a figure without its question is a memory, which is the brief's own
+word for what this loop exists to stop producing.
 
 ## Summary
 
