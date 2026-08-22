@@ -16204,7 +16204,17 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
     if clk_sink_buf:
         _clkswap = (
             f"if {{$_dplok{v} == 0}} {{\n"
-            f"  if {{![catch {{\n"
+            # NOT `![catch ...]` here.  Every other `![catch ...]` in this emitter
+            # guards a body whose SUCCESS is the interesting case ("if it did not
+            # error, proceed").  This one guards a body whose FAILURE is the
+            # interesting case, so the polarity reverses: with the `!` the
+            # `_NONFATAL:` line printed on SUCCESS with an empty message and said
+            # NOTHING when the swap actually threw -- a downsize that silently did
+            # not happen, followed by a `detailed_placement` that behaves as though
+            # it had.  Measured on a real run: the rung is worth an 87 % drop in the
+            # illegal-cell count, so a silent failure there presents as "this design
+            # will not legalize".
+            f"  if {{[catch {{\n"
             f"    set _rblk{v} [ord::get_db_block]\n"
             f"    set _rtgt{v} [[ord::get_db] findMaster {clk_sink_buf}]\n"
             f"    if {{$_rtgt{v} ne \"NULL\" && $_rtgt{v} ne \"\"}} {{\n"
