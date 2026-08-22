@@ -228,15 +228,45 @@ class TestFlagReachesFaultChain:
         # stage the fixed-pinout contract for auto mode
         _stage_config(tmp_path, "top_wrap", die=[0, 0, 1234, 5678],
                       def_template="dir::fixed_dont_change/top_wrap.def")
-        orig = _fatpg._run_docker
-        _fatpg._run_docker = _fake_run_docker
+        # Patch the seam THROUGH THE REFERENCE THE PRODUCTION PATH USES.
+        #
+        # `run_chain` calls `_fatpg._run_docker(...)`, dereferencing the
+        # `fault_atpg_run` object that `fault_scan_chain_insert` bound at ITS
+        # import time. That is not necessarily the object this test's own
+        # `import fault_atpg_run` returns: 27 files in this suite reload or pop
+        # modules from `sys.modules`, so under whole-directory collection the
+        # module exists TWICE and `SCI._fatpg is not sys.modules["fault_atpg_run"]`.
+        #
+        # Patching our copy then left the real one untouched, `run_chain` shelled
+        # out for real, returned early at the liberty stage, and the fake was
+        # never called at all. Measured on 764fea6df:
+        #
+        #     pytest <this file>                    14 passed
+        #     pytest programs/tests -k <this class>  2 FAILED
+        #         fatpg_is_sysmod     True    <- our copy is the sys.modules one
+        #         sci_fatpg_is_fatpg  False   <- SCI's copy is a different object
+        #
+        # Going through `SCI._fatpg` cannot drift: it is by construction the
+        # object whose attribute `run_chain` will look up.
+        seam = SCI._fatpg
+        orig = seam._run_docker
+        seam._run_docker = _fake_run_docker
         try:
             SCI.run_chain(tmp_path, "phase2/stage2/synth/netlist.v",
                           "clk", "sky130", skip_boundary=skip_mode,
                           top_module="top_wrap")
         finally:
-            _fatpg._run_docker = orig
-        return captured.get("cmd", [])
+            seam._run_docker = orig
+        # "the transport was never reached" and "the flag was absent" are
+        # different failures; `captured.get("cmd", [])` reported the second when
+        # it was the first, which is what made this red read as a flag bug for
+        # as long as it did. Say which one happened.
+        assert "cmd" in captured, (
+            "run_chain returned without ever calling the docker transport, so "
+            "no command was captured — this says nothing about the "
+            "--skip-boundary flag. Check the early returns in run_chain "
+            "(liberty resolution) and that `SCI._fatpg` is the patched module.")
+        return captured["cmd"]
 
     def test_auto_fixed_pinout_passes_the_flag(self, tmp_path):
         cmd = self._run_and_capture(tmp_path, "auto")
