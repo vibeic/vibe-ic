@@ -172,6 +172,11 @@ _PATH_METRIC_SUFFIX = ".worst_path_slack_ns"
 _SCOPE_KEYS = ("stage", "mode", "process", "voltage_v", "temperature_c",
                "rc_corner", "clock", "check")
 
+#: The extraction producer's closed RC-corner vocabulary. These are flow
+#: roles, not PDK names: every active PDK maps its own extraction models onto
+#: min/nom/max before the STA report is emitted.
+_RC_CORNERS = frozenset(("min", "nom", "max"))
+
 Row = Dict[str, Any]
 
 _PARSER_DIGEST_CACHE: Dict[str, Optional[str]] = {}
@@ -672,6 +677,60 @@ def _withhold_reason(check_no_paths: bool, kind: str,
             "infinity and not evidence of met timing" % kind)
 
 
+def _rc_corner_for(section: opensta.Section, report: opensta.Report
+                   ) -> Tuple[Optional[str], Optional[str]]:
+    """Return ``(corner, identity_error)`` from explicit producer evidence.
+
+    ``Section.rc_corner`` is dialect A's explicit ``max-RC corner`` banner;
+    ``basis_corners`` carries every common ``STA_BASIS_CORNER`` declaration.
+    A SPEF path is deliberately absent from this function: deriving a corner
+    from a file name would manufacture the identity this layer exists to
+    police.
+
+    A contradictory or out-of-vocabulary stamp invalidates the view. Picking
+    either side would publish a confidently wrong scope, which is worse than
+    refusing the measurement.
+    """
+    banner = section.rc_corner
+    stamps = section.basis_corners
+    if section.banner is None and not stamps:
+        stamps = report.basis_corners
+
+    def _normalise(value: Optional[str], source: str
+                   ) -> Tuple[Optional[str], Optional[str]]:
+        if value is None:
+            return None, None
+        corner = str(value).strip().lower()
+        if corner not in _RC_CORNERS:
+            return None, (
+                "%s declares unsupported RC corner %r; expected one of %s"
+                % (source, value, ", ".join(sorted(_RC_CORNERS))))
+        return corner, None
+
+    banner_corner, banner_error = _normalise(banner, "section banner")
+    stamp_corners = []
+    for ordinal, stamp in enumerate(stamps, 1):
+        stamp_corner, stamp_error = _normalise(
+            stamp, "STA_BASIS_CORNER declaration %d" % ordinal)
+        if stamp_error:
+            return None, stamp_error
+        stamp_corners.append(stamp_corner)
+    distinct_stamps = sorted(set(stamp_corners))
+    if len(distinct_stamps) > 1:
+        return None, (
+            "RC_CORNER_CONTRADICTION: STA_BASIS_CORNER declarations "
+            "disagree: %s" % ", ".join(distinct_stamps))
+    stamp_corner = distinct_stamps[0] if distinct_stamps else None
+    if banner_error:
+        return None, banner_error
+    if (banner_corner is not None and stamp_corner is not None
+            and banner_corner != stamp_corner):
+        return None, (
+            "RC_CORNER_CONTRADICTION: section banner declares %s but "
+            "STA_BASIS_CORNER declares %s" % (banner_corner, stamp_corner))
+    return stamp_corner or banner_corner, None
+
+
 def rows_from_report(project: Path, path: Path, report: opensta.Report,
                      *, mode: Optional[str],
                      mode_gap: Optional[str]) -> List[Row]:
@@ -695,7 +754,7 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
     for sec in report.sections:
         # ── the view's identity ────────────────────────────────────────────
         liberty = sec.liberty
-        rc_corner = sec.rc_corner
+        rc_corner, rc_identity_error = _rc_corner_for(sec, report)
         process = sec.process
         # Which parasitic file this view was timed against. Dialect A/B name it
         # on the banner; the unbannered dialect can only say so whole-file.
@@ -731,58 +790,21 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
             gaps["process"] = (
                 "banner declares process=%s but its liberty stem %s reads %s"
                 % (process, pvt.stem, pvt.process))
-        # THE RC AXIS IS AN AXIS, and it is NOT filled from a file name.
-        # Only dialect A prints a `<x>-RC corner` label; every other dialect
-        # leaves `rc_corner` unestablished, and two views timed against
-        # DIFFERENT parasitic files then carry one identity. That is a real
-        # defect and the repair for it is (a) the corner AS THE TOOL REPORTS
-        # IT, carried through from the producer, or failing that (b) a stated
-        # gap. It is NOT (c) `_rc_corner_from_spef(spef)`, which read `max`
-        # back out of `<top>.max.spef` and briefly stood here.
-        #
-        # WHY (c) IS REFUSED, and it is the module's own rule rather than a
-        # preference: `_stage_for` above declines the identical inference in
-        # the identical shape -- "inferring `post_route_extracted` from the
-        # filename would let a pre-layout estimate be compared against sign-off
-        # evidence the moment somebody adds a pre-layout report to the same
-        # directory". A module that refuses a filename inference for `stage`
-        # and performs one for `rc_corner` contradicts itself, and unlike a
-        # stage the contradiction SHIPS: `rc_corner` is a scope key, two scopes
-        # that compare equal are what licenses a comparison, and the corner
-        # would have been an identity nobody measured. `<top>.max.spef` says
-        # what somebody NAMED the file, never what corner the extraction ran
-        # at.
-        #
-        # (a) IS STILL THE ANSWER WANTED, and it is not available in this
-        # dialect today: the banner states the parasitics as a PATH and no
-        # normalised corner label, so there is no tool-reported corner here to
-        # carry. The gap below says exactly that, and names the artefact, so
-        # the producer that could stamp one is where the next reader starts.
-        if rc_corner is None:
-            # THE DATUM WAS HERE AND THIS BRANCH USED TO DENY IT. Dialect B's
-            # banner reads `=== SETUP corner: process=SS liberty=..,
-            # SPEF=x.max.spef ===`, and the backend captures that token off the
-            # SAME line it takes `process=` and `liberty=` from
-            # (`_BANNER_SPEF_RE`). This branch answered "this report names no
-            # RC corner" for it regardless -- a producer reporting a field
-            # unreported while holding the identity of it, which is the class
-            # the PPA record gates exist to end. MEASURED on a real run's
-            # `sta_mcorner_ocv.rpt`: rc_corner=None, spef='<top>.max.spef'.
-            #
-            # It stays a GAP, and that is deliberate rather than a half-fix.
-            # The token is a FILE NAME, and reading `max` out of `x.max.spef`
-            # is exactly the filename inference `_stage_for` refuses above --
-            # "inferring `post_route_extracted` from the filename would let a
-            # pre-layout estimate be compared against sign-off evidence". What
-            # the reason owes is the TRUE cause and the identity it is holding,
-            # so the next reader starts at the artefact instead of at a denial.
+        # THE RC AXIS IS AN AXIS, and it is filled only from explicit producer
+        # evidence: dialect A's `<x>-RC corner` banner or the common
+        # `STA_BASIS_CORNER` stamp. `_rc_corner_for` validates and reconciles
+        # those claims. The SPEF path stays out of identity construction: a
+        # filename says what somebody named a file, not which extraction model
+        # produced its bytes.
+        if rc_identity_error:
+            gaps["rc_corner"] = rc_identity_error
+        elif rc_corner is None:
             if spef:
                 gaps["rc_corner"] = (
-                    "this section names its parasitics as %r but no normalised "
-                    "RC-corner label, and the file name is NOT read as one: "
-                    "deriving a corner from a stem is the filename inference "
-                    "this module refuses elsewhere. The RC identity IS stated "
-                    "by the report and is not yet carried in scope" % (spef,))
+                    "this section names its parasitics as %r but carries no "
+                    "STA_BASIS_CORNER (and no explicit `<x>-RC corner` "
+                    "banner); the file name is NOT read as corner evidence"
+                    % (spef,))
             else:
                 gaps["rc_corner"] = (
                     "this report names no RC corner for the section; the RC "
@@ -820,6 +842,13 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
                 m = next((x for x in sec.measurements
                           if x.kind == kind
                           and (x.check or sec.check or check) == check), None)
+                if rc_identity_error:
+                    rows.append(_row(
+                        metric, INVALID, scope,
+                        _source(project, path, parser_src_sha,
+                                m.line if m else None, m.raw if m else None),
+                        reason=rc_identity_error, scope_gaps=view_gaps))
+                    continue
                 if m is None:
                     rows.append(_row(
                         metric, NOT_MEASURED, scope,
@@ -896,10 +925,13 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
                 (start, end, p.clock, check), 0) == 1
             path_scope = _path_scope(scope, p, ordinals[key], identifies)
             rows.append(_row(
-                "timing.%s.worst_path_slack_ns" % check, MEASURED,
+                "timing.%s.worst_path_slack_ns" % check,
+                INVALID if rc_identity_error else MEASURED,
                 path_scope,
                 _source(project, path, parser_src_sha, p.line, p.raw),
-                value=p.slack, scope_gaps=_gaps_for(path_scope, gaps)))
+                value=None if rc_identity_error else p.slack,
+                reason=rc_identity_error,
+                scope_gaps=_gaps_for(path_scope, gaps)))
     return rows
 
 

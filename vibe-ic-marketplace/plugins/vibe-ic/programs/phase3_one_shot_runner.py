@@ -35424,6 +35424,10 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         # `<top>.spef` -- unstated, so a consumer saw two setup slacks under one
         # identity and had to call two different measurements a contradiction.
         f"puts $_bf \"STA_BASIS_SPEF: {spef_path.name}\"\n"
+        # The single-corner extractor uses the nominal captable, or the
+        # tech-LEF nominal-RC fallback. The role is explicit evidence; the
+        # SPEF filename is not.
+        f"puts $_bf \"STA_BASIS_CORNER: nom\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_COUNT: 1\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_SEMANTICS this report times ONE process "
         f"corner; it is NOT by itself multi-corner sign-off evidence\"\n"
@@ -36668,6 +36672,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
             f"puts $_f \"STA_BASIS_NETLIST: {netlist.name}\"\n"
             f"puts $_f \"STA_BASIS_SPEF: {Path(corner_spefs[corner]).name}\"\n"
+            f"puts $_f \"STA_BASIS_CORNER: {corner}\"\n"
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
@@ -36872,14 +36877,17 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         notes.append("multi-corner OCV STA skipped: no SS/TT/FF liberty corner")
         return False
 
-    def _spef_for(prefer: Tuple[str, ...]) -> Optional[Path]:
+    def _spef_for(prefer: Tuple[str, ...]
+                  ) -> Tuple[Optional[str], Optional[Path]]:
         for k in prefer:
             if k in corner_spefs and Path(corner_spefs[k]).is_file():
-                return corner_spefs[k]
-        return nom_spef if (nom_spef and Path(nom_spef).is_file()) else None
+                return k, Path(corner_spefs[k])
+        if nom_spef and Path(nom_spef).is_file():
+            return "nom", Path(nom_spef)
+        return None, None
 
-    setup_spef = _spef_for(("max", "nom"))
-    hold_spef = _spef_for(("min", "nom"))
+    setup_rc_corner, setup_spef = _spef_for(("max", "nom"))
+    hold_rc_corner, hold_spef = _spef_for(("min", "nom"))
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in (pdk.macro_libs or []))
@@ -36893,13 +36901,16 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     # of it carried `stage: null`. Derived per stanza below, because whether a
     # SPEF was read is decided per stanza here.
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
-              open_mode: str) -> str:
+              rc_corner: Optional[str], open_mode: str) -> str:
         lib_c = corner_libs[label]
         spef_tcl = ""
         spef_disc = "no-SPEF (netlist-only)"
         if spef_host and Path(spef_host).is_file():
             spef_tcl = f"read_spef {_to_container_path(str(spef_host), container)}\n"
             spef_disc = Path(spef_host).name
+        corner_stamp = (
+            f'puts $_f "STA_BASIS_CORNER: {rc_corner}"\n'
+            if spef_tcl and rc_corner is not None else "")
         # BOTH sides derived this classification and they name the SAME three
         # values; they disagreed about PRECEDENCE, and only one of the two
         # readings matches the prose that landed with it. The landed comment on
@@ -36960,6 +36971,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
             f'puts $_f "STA_BASIS_NETLIST: {netlist.name}"\n'
             f'puts $_f "STA_BASIS_SPEF: {spef_disc}"\n'
+            f"{corner_stamp}"
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
@@ -36982,7 +36994,8 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     ran = False
     # SETUP pass (slow/ss process, max-RC) — truncates the report + writes header.
     if setup_label is not None:
-        tcl = _pass(setup_label, "SETUP", "-max", setup_spef, "w")
+        tcl = _pass(setup_label, "SETUP", "-max", setup_spef,
+                    setup_rc_corner, "w")
         tcl_path = rpt_out.parent / "sta_mcorner_ocv_setup.tcl"
         tcl_path.write_text(tcl)
         tcl_c = _to_container_path(str(tcl_path), container)
@@ -37003,7 +37016,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     # HOLD pass (fast/ff process, min-RC) — appends, and is the FINAL writer, so
     # this is the invocation that declares the finished report.
     if hold_label is not None:
-        tcl = _pass(hold_label, "HOLD", "-min", hold_spef,
+        tcl = _pass(hold_label, "HOLD", "-min", hold_spef, hold_rc_corner,
                     "a" if ran else "w")
         tcl_path = rpt_out.parent / "sta_mcorner_ocv_hold.tcl"
         tcl_path.write_text(tcl)
@@ -40041,10 +40054,12 @@ def _emit_aging_sta_report(project: Path, top: str, pdk: PdkConfig,
         return False
     # Aging is a LATE-path (setup) analysis -> max-RC corner, then nominal.
     aging_spef: Optional[Path] = None
+    aging_rc_corner: Optional[str] = None
     for _k in ("SS", "*", "TT"):
         cand = spef_map.get(_k)
         if cand is not None and Path(cand).is_file():
             aging_spef = Path(cand)
+            aging_rc_corner = "max" if _k == "SS" else "nom"
             break
     read_spef_tcl = ""
     if aging_spef is not None:
@@ -40052,9 +40067,15 @@ def _emit_aging_sta_report(project: Path, top: str, pdk: PdkConfig,
             f"if {{[catch {{read_spef "
             f"{_to_container_path(str(aging_spef), container)}}} _sp]}} "
             f"{{ puts \"SPEF_ERR: $_sp\" }}\n")
-        spef_disc = f"{aging_spef.name} (max-RC / late-path corner)"
+        spef_disc = f"{aging_spef.name} ({aging_rc_corner}-RC corner)"
     else:
         spef_disc = "NO SPEF found — interconnect RC is UNCOUNTED"
+    basis_corner_tcl = (
+        f'puts "STA_BASIS_CORNER: {aging_rc_corner}"\n'
+        if aging_rc_corner is not None else "")
+    basis_corner_header = (
+        f"# STA_BASIS_CORNER: {aging_rc_corner}\n"
+        if aging_rc_corner is not None else "")
     netlist_c = _to_container_path(str(netlist), container)
     sdc_c = _to_container_path(str(sdc_path), container)
     # GRADE AGING ON THE CORNER BEING SIGNED OFF. `pdk.liberty` is the NOMINAL
@@ -40107,7 +40128,7 @@ read_sdc {sdc_c}
 {read_spef_tcl}puts "STA_BASIS: {basis}"
 puts "STA_BASIS_NETLIST: {netlist.name}"
 puts "STA_BASIS_SPEF: {spef_disc}"
-puts "STA_BASIS_LIBERTY: {lib_disc}"
+{basis_corner_tcl}puts "STA_BASIS_LIBERTY: {lib_disc}"
 # AGING derate (generic, disclosed): late-path (data) paths slowed to model
 # NBTI/PBTI/HCI Vt-drift over lifetime, BEYOND the fresh-silicon OCV.
 set_timing_derate -late {aging_late_derate:.4f}
@@ -40149,6 +40170,7 @@ exit
         f"# STA_BASIS: {basis}\n"
         f"# STA_BASIS_NETLIST: {netlist.name}\n"
         f"# STA_BASIS_SPEF: {spef_disc}\n"
+        f"{basis_corner_header}"
         f"# STA_BASIS_LIBERTY: {lib_disc}\n"
         f"# {basis_note}\n"
         "# aging nbti pbti hci lifetime end-of-life eol degradation vt-shift "
@@ -40164,6 +40186,7 @@ exit
         "sta_basis": basis,
         "sta_basis_netlist": netlist.name,
         "sta_basis_spef": spef_disc,
+        "sta_basis_corner": aging_rc_corner,
         "sta_basis_liberty": lib_disc,
         "sta_basis_note": basis_note,
         "report": str(out_rpt.relative_to(project)),
@@ -40179,6 +40202,7 @@ exit
     notes.append(f"aging STA: worst slack {worst} ns under generic aging derate "
                  f"late={aging_late_derate:.2f} (disclosed margin); basis="
                  f"{basis} netlist={netlist.name} spef={spef_disc} "
+                 f"rc_corner={aging_rc_corner or 'UNSTATED'} "
                  f"liberty={lib_disc}")
     return True
 

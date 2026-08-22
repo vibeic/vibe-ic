@@ -4,77 +4,62 @@
     {
       "question": 1,
       "evidence": [
-        {
-          "kind": "path",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/slot_pad_budget_check.py"
-        },
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_slot_pad_budget_check.py::test_a_design_that_fits_is_rc0_FITS"
-        }
+        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/_ppa/timing.py"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_two_reports_timed_against_different_parasitics_are_not_one_identity"},
+        {"kind": "prose", "text": "This change does not create a proxy or feasibility score. It preserves the explicit RC-corner identity of OpenSTA timing metrics and invalidates a view whose explicit identities conflict."}
       ]
     },
     {
       "question": 2,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_an_unbondable_interface_makes_step_2_itself_go_FAIL"
-        },
-        {
-          "kind": "path",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_section_corner_is_read_from_the_explicit_stamp_not_the_spef_name"},
+        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md"},
+        {"kind": "prose", "text": "The changed axis is scope.rc_corner on post-route OpenSTA rows. Stage, mode, process, voltage, temperature, clock and check remain owned by their existing evidence paths. The corner is accepted only from the section banner or STA_BASIS_CORNER, never the SPEF filename."}
       ]
     },
     {
       "question": 3,
       "evidence": [
-        {
-          "kind": "artefact",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "sha256": "sha256:a378a3b91217b0fecf5d3f4636c8ca4b1cf0ad651a404c42a2160fa6f5cb7a68"
-        }
+        {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"},
+        {"kind": "prose", "text": "PPA_INTERFACES.md is the producer-consumer contract whose digest is declared above; the source STA report line is retained in each metric row's source reference by the existing timing-row schema."}
       ]
     },
     {
       "question": 4,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_the_cell_path_is_a_DISCLOSED_skip_never_a_silent_pass"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_a_declared_view_with_no_report_at_all_becomes_a_not_measured_row"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_missing_corner_stamp_is_not_recovered_from_any_spef_name"},
+        {"kind": "prose", "text": "No report produces NOT_MEASURED. A report that measured timing but did not establish its RC corner keeps the metric while omitting scope.rc_corner and emitting a named scope gap; it never invents the corner from a filename."}
       ]
     },
     {
       "question": 5,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_refusal_and_skip_do_not_share_a_tier"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_missing_input_is_rc2_with_a_printed_marker"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_the_extractor_never_returns_one"},
+        {"kind": "prose", "text": "No. The timing extractor reserves rc=2 for an explicit UNMEASURED marker and never returns the design-finding rc=1. Corner contradictions are record-level INVALID evidence, not a successful extraction claim."}
       ]
     },
     {
       "question": 11,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_an_unbondable_interface_turns_the_step_RED"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"},
+        {"kind": "prose", "text": "Yes. Both max-then-min and min-then-max controls fail on the pre-fix stamp because only the first observed value survives, and both pass after the schema preserves all declarations and the consumer rejects their disagreement."}
+      ]
+    },
+    {
+      "question": 12,
+      "evidence": [
+        {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"},
+        {"kind": "prose", "text": "No outward claim exceeds the evidence: the docs allow only missing, one, or semantically identical repeated declarations, and explicitly state that empty, unsupported or conflicting declarations invalidate the view. The bidirectional test exercises the exact first-value-wins harm in both orders."}
       ]
     },
     {
       "question": 19,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_slot_pad_budget_check.py::test_a_json_destination_that_climbs_out_is_REFUSED"
-        },
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_slot_pad_budget_check.py::test_the_refusal_is_the_USAGE_tier_not_the_vacuous_one"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_malformed_explicit_corner_declaration_is_invalid"},
+        {"kind": "prose", "text": "The changed parser accepts report text, performs no prompt or MCP dispatch, opens no path from the stamp, and invokes no shell. Empty and arbitrary out-of-vocabulary values are retained as evidence and rejected; the closed min/nom/max vocabulary prevents a raw stamp from becoming a command, path or fabricated metric identity."}
       ]
     }
   ]
