@@ -68,6 +68,8 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
+
+from _prose_polarity import is_denied, sentence_scope
 #   (prompt+context ONLY — the hidden cocotb harness / .env / golden are OFF-LIMITS).
 
 Port = Tuple[str, int]  # (name, width)
@@ -160,13 +162,30 @@ def _prose_pins_protocol(prompt: str, outs: List[Port]) -> bool:
 # CVDP-native parameter-default reader (prompt prose) — used by the multi-operand
 # emit to pull IN_DATA_WIDTH / IN_DATA_NS defaults. PROMPT-sourced only.
 # --------------------------------------------------------------------------- #
+#: A prompt is written by a person, and a person states a RETIRED value as
+#: readily as a live one. `sentence_scope` breaks on ". " and a blank line;
+#: a prompt also ends sentences at a line end, so these are ADDED -- it
+#: cannot remove from the shared set. Not "\n" alone: a prompt wraps
+#: mid-sentence, and breaking there misses a denial written across two
+#: lines, which is the under-reach that publishes the denied value.
+_PROMPT_LINE_BREAKS = (".\n", "!\n", "?\n")
+
+
 def _param_defaults(prompt: str) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for m in re.finditer(
             r"`?([A-Z][A-Z0-9_]+)`?[^.\n]{0,80}?default(?:\s+value)?(?:\s+of)?\s*"
             r"(?:is\s+|=\s*)?`?(\d+)`?", prompt):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=_PROMPT_LINE_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
         out.setdefault(m.group(1), int(m.group(2)))
     for m in re.finditer(r"parameter\s+(?:int\s+)?([A-Z][A-Z0-9_]+)\s*=\s*(\d+)", prompt):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=_PROMPT_LINE_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
         out.setdefault(m.group(1), int(m.group(2)))
     return out
 
