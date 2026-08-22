@@ -73,7 +73,20 @@ from typing import Callable, List, NamedTuple, Optional, Tuple
 LOCK_NAME = ".owner.lock"
 
 #: Name of the sidecar that serialises REAPERS against each other, one per
-#: (root, prefix).  It is a FILE, so it is never a reap candidate.
+#: (root, prefix).  It is a FILE, so `reap` itself never considers it — every
+#: candidate must be a directory.
+#:
+#: THE LEADING DOT IS LOAD-BEARING AND WAS PAID FOR. Named `<prefix>.reap.lock`
+#: first, it matched `root.glob(prefix + "*")` — the expression callers use to
+#: ask "what did this run leave behind" — and
+#: `test_a_clean_run_leaves_no_scratch_behind` correctly reported the lock as
+#: litter this module had added. The test was right; the name was wrong. A lock
+#: is not scratch OF that prefix, and it must not answer a glob that asks for
+#: scratch.
+REAP_LOCK_NAME = ".%s.reap.lock"
+
+#: Kept as the old spelling so an external reader is not silently broken; it was
+#: never anything but this suffix.
 REAP_LOCK_SUFFIX = ".reap.lock"
 
 #: (root, prefix) pairs this PROCESS is already reaping.  `remover` is caller
@@ -120,7 +133,7 @@ def _reap_lock(base: "Path", prefix: str):
             return
         fd = None
         try:
-            fd = os.open(str(base / (prefix + REAP_LOCK_SUFFIX)),
+            fd = os.open(str(base / (REAP_LOCK_NAME % prefix)),
                          os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(fd, fcntl.LOCK_EX)
         except OSError:

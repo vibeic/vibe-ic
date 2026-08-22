@@ -315,13 +315,13 @@ def _hold_the_reap_lock(root: Path, prefix: str, ready: Path, release: Path):
     own lock, which would test nothing."""
     code = (
         "import fcntl,os,sys,time,pathlib\n"
-        "lock=pathlib.Path(%r)/(%r+%r)\n"
+        "lock=pathlib.Path(%r)/(%r %% %r)\n"
         "fd=os.open(str(lock), os.O_RDWR|os.O_CREAT, 0o600)\n"
         "fcntl.flock(fd, fcntl.LOCK_EX)\n"
         "pathlib.Path(%r).write_text('held')\n"
         "rel=pathlib.Path(%r)\n"
         "while not rel.exists(): time.sleep(0.02)\n"
-        % (str(root), prefix, S.REAP_LOCK_SUFFIX, str(ready), str(release))
+        % (str(root), S.REAP_LOCK_NAME, prefix, str(ready), str(release))
     )
     return subprocess.Popen([sys.executable, "-c", code])
 
