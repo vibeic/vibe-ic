@@ -1,9 +1,0 @@
-{
-  "ic_name": "I2S Bus (Inter-IC Sound, UM11732)",
-  "test_debug_architecture_present": false,
-  "spec_provided_observability": [
-    {"name": "WS edge",         "purpose": "Channel boundary marker; receiver can verify expected periodicity (e.g. 32 SCK periods per channel for 16-bit stereo)."},
-    {"name": "SCK frequency",   "purpose": "Bit clock; can be measured externally to verify sample rate × 2 (channels) × bits-per-sample."}
-  ],
-  "notes": "I2S 2.0 does NOT specify any protocol-level error detection, CRC, parity, or framing error reporting. There is no handshake or acknowledgment. Concrete I2S controller IPs may add FIFO overrun / underrun status registers, but these are per-implementation, not protocol-defined."
-}
