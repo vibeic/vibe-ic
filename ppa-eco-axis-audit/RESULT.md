@@ -18,6 +18,17 @@ document is the evidence behind them.
 
 **Code changes** are on `jeco2/eco-axis-bite-audit`, frozen at `22b18cb10`.
 
+**This is a SNAPSHOT, not a live document.** It is the handover as it stood when
+`jeco2/eco-axis-bite-audit` was frozen at `22b18cb10`, copied verbatim. The
+working copy it came from was in `/tmp` and does not survive; if the two ever
+differ, this one is the record and that one is gone. Nothing here is updated in
+place — see the next paragraph for why that is deliberate rather than lazy.
+
+**Verified.** The frozen branch merged onto main `a4caccefe`: 4 failed / 2360
+passed against main's own 4 failed / 2300 passed — 0 attributable reds, +60
+being exactly this lane's test count. The follow-on branch carrying this
+document measures identically, as it adds no tests.
+
 **Read in order.** Later sections supersede earlier ones and the superseded text
 is kept with its correction attached rather than edited away — the same rule
 `ppa-gate-audit/RESULT.md` states, for the same reason: a report whose early
