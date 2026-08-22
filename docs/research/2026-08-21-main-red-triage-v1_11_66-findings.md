@@ -6005,6 +6005,49 @@ always the same: **run the pattern against a known positive before believing a
 zero.**
 
 
+## M114 — audited my own zeros. The load-bearing ones hold, and now they have controls
+
+Five times a zero from a pattern I wrote produced a wrong claim (M113). **The
+systematic version of that lesson is to audit MY OWN zeros**, of which this
+document makes **18**. Two are load-bearing; the rest are incidental.
+
+**LOAD-BEARING ZERO 1 — the three env names (M91, M107; SIX reds rest on it):**
+
+    GATEKEEPER_STUB_ROUTED_TRANSITION      0
+    GATEKEEPER_STUB_BASE_EXPANDED          0
+    GATEKEEPER_CONCURRENCY_PROBE_DIR       0
+    ------------------------------------------ known positives, same pattern class
+    GATEKEEPER_VERIFY_ARM                  8
+    GATEKEEPER_BASE                        2
+    VIBEIC_LANDING_PROGRESS_NONCE          2
+
+**HOLDS.** Plain substring `grep -c` against a file where three names of identical
+shape return 8, 2 and 2. The pattern demonstrably finds what is there.
+
+**LOAD-BEARING ZERO 2 — `critical_path.sp` absent (M86/M87):**
+
+    critical_path.sp            0
+    routed.def                130   <- same root, same depth
+    eco_trigger_decision.json 140   <- same root, same depth
+
+**HOLDS — and my first control did not.** I initially proved `find -name` works by
+searching `routed.def` under `benchmark-data/`, a **narrower root** than the
+absence claim searched. That proves the mechanism, not the coverage. **A control
+under a different root is not a control**, and re-running both under
+`/home/reyerchu` at the same depth is what makes the zero evidence.
+
+**So the two claims this document leans hardest on both survive**, and they now
+carry the controls they should have carried when written. **The check costs one
+extra line in the same command** — the positive control goes in the loop beside
+the thing being tested, so a broken pattern cannot report an absence.
+
+**What I would not claim:** that the other 16 zeros are all validated. They are
+incidental — occurrence counts inside corrections, arithmetic like `0 closed`,
+diffs that were themselves set-compared. **I checked the two that carry weight and
+say so, rather than asserting a sweep I did not perform.** That distinction is the
+one this document has spent a hundred sections learning to make.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
