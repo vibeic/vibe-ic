@@ -2521,3 +2521,48 @@ is an owner decision the flag's own help text marks as one. But the severity in
 path-loaded consumers of `gatekeeper_review` — or to the equivalent for any
 other module — can land without its guarding test running, and without the
 disclosure saying so.
+
+### Measured on THIS branch: the landing would drop five of its own guards
+
+The abstract version of §39 is "a landing can miss a guarding test". The
+concrete version, for the diff in front of us:
+
+```
+ci_targeted_test_select.py --base 546487a8a3        119 files selected
+files that reach gatekeeper_review by any route      20
+  selected                                           15
+  NOT selected                                        5
+```
+
+The five a landing of this branch would NOT run:
+
+```
+test_issue538_merge_gate_covers_ci_hygiene.py     <- the no-skip guarantee itself
+test_hygiene_corpus_binding_before_the_set.py
+test_issue584_not_checked_is_load_bearing.py
+test_v1_1_6_core_agent_pr_method.py
+test_v1_2_39_grounding_loop_smoke.py
+```
+
+**The headline guarantee of this fix would not be verified by the landing that
+ships it.** `test_the_cli_offers_no_way_to_skip_the_hygiene_set` — the test the
+brief was written around, the one whose passing means nobody can land while
+stepping around the hygiene gates — is dropped by the landing's own test arm for
+a change to the module it polices.
+
+**All five were run here, by hand.** `test_issue538` many times over; the other
+four inside the 17-file selection (§13) and the twelve reachers (§35). That is
+not luck: it is what the widened denominator in §33–35 was for, and this is the
+first place its value is visible as something other than diligence. **This
+branch is verified past what its own landing would check**, and it is worth
+saying which parts of that verification the machine would not have repeated.
+
+**The uncomfortable corollary, stated because it is the useful part.** If this
+fix is later regressed — someone re-adds a record handover under any spelling —
+the landing that ships the regression will not run the test that forbids it,
+for exactly the reason `4232a7301` was not caught. The seam guard added by this
+branch IS selected (it plain-imports), so the specific hole §38 constructs would
+be caught. But the older string-based test, which is the one the BRIEF names, is
+not. **Two tests guard this property and the landing runs only the newer one**,
+which is an argument for the guard existing and not an argument that the gap is
+harmless.
