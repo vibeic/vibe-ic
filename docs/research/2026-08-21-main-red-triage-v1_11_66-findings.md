@@ -5544,6 +5544,51 @@ same kind of call I have been recording other people's versions of all day. It
 should be read as one, not as a finding.
 
 
+## M104 — the repo's own doctrine settles it: the corpus skip has NO legal state, and my reason for declining was the wrong one
+
+M103 declined the anti-skip fix on blast radius. **I then checked that reasoning
+and it was wrong — not the decision, the reason.** D3's own docstring contains the
+precedent, under the heading *"TOOLCHAIN-GATED CELLS (steps 6 and 39) STAY WAIVED
+— AND WHY THE NA WAS WRONG"*:
+
+> A proposal moved them into a new `NA_TOOLCHAIN_ABSENT` state whose precondition
+> was asserted live [...] **It went red immediately.** [...] The design of the NA
+> was sound; **its premise was a property of ONE MACHINE**, which is precisely the
+> host-dependence **#527** took out of this module. The waivers are back, and
+> their premises are **statements about the COMMIT** (`git ls-tree -r HEAD` [...])
+> that every checkout answers the same way.
+
+**THE RULE: a cell's state must rest on a fact about the COMMIT, not about the
+machine.** Apply it to `corpus_root() is None`:
+
+| candidate state | legal? | why |
+|---|---|---|
+| NA (asserted precondition) | **NO** | the premise is a machine fact — this is verbatim the #527 defect |
+| WAIVED (strict xfail) | **NO** | waiver premises are commit facts, same rule |
+| skip | **NO** | the anti-skip gate forbids it in a cell test (M103) |
+| ENFORCED | yes | the only one left |
+
+**There is no legal state for "the corpus is absent on this host."** The skip at
+D3:2309 is a re-introduction of exactly the host-dependence #527 removed from this
+module, and `test_every_na_cell_asserts_a_live_precondition` is the gate catching
+it. **The repository argued this out, wrote down the conclusion, removed the
+machinery — and the skip came back through a different door.**
+
+**So the resolution is not a code change at all.** The only legal state is
+ENFORCED, which means **the corpus cannot be optional**: either every checkout has
+it, or CI supplies it, and a host without it does not get to run the matrix and
+call the result clean. **That is an infrastructure decision about the development
+environment, not a test edit** — and it is why no amount of editing D3 fixes this
+correctly.
+
+**My decline stands; my reason does not.** I said the blast radius was too large.
+The real answer is that **all three alternative states are illegal under a rule
+this module already litigated**, so the change I was contemplating would have
+re-created a defect the repo removed a month ago. **"Too big to do" and "not the
+thing to do" are different, and I gave the first when the second was true and
+written down twenty lines above the code I was reading.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
