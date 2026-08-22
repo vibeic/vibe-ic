@@ -69,3 +69,31 @@ def test_the_remedy_never_says_the_path_twice(tmp_path):
         pytest.skip("gate did not reach the stale-index branch")
     fix = next(l for l in r.stdout.splitlines() if "Fix:" in l)
     assert fix.count("INDEX.md") == 1, fix
+
+
+def test_a_dotdot_spelling_does_not_make_an_outside_index_look_inside(tmp_path):
+    """The predicate must answer about the FILE, not about its spelling.
+
+    `relative_to` is lexical and `ic_root` is built from
+    $VIBE_IC_BENCHMARK_DATA without being resolved, so a value carrying `..`
+    used to defeat this: an index genuinely OUTSIDE the repository was reported
+    as "this repository", printing exactly the wrong-repository remedy this
+    module exists to prevent. Measured before the fix; this pins it.
+
+    The two arms differ only in the SPELLING of the same corpus path.
+    """
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    corpus_root = tmp_path / "corpus"
+    _corpus(corpus_root, "# stale\n\nnothing that regenerates\n")
+
+    # the same directory, reached by a path that walks INTO the repo first
+    spelled = repo / "sub" / ".." / ".." / "corpus" / "ic"
+    assert spelled.resolve() == (corpus_root / "ic").resolve()
+
+    r = _run(repo, spelled)
+    if "Fix:" not in r.stdout:
+        import pytest
+        pytest.skip(f"gate did not reach the stale-index branch: "
+                    f"rc={r.returncode} {r.stdout[-200:]}")
+    assert "NOT this repository" in r.stdout, r.stdout

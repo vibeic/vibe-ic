@@ -705,7 +705,15 @@ def main(argv=None) -> int:
         # A printed remedy is executed, not read. One that names the wrong place
         # is the same defect as one that does not run.
         try:
-            index_path.relative_to(repo_root)
+            # RESOLVE BEFORE COMPARING. `relative_to` is LEXICAL, and `ic_root`
+            # comes from $VIBE_IC_BENCHMARK_DATA unresolved (:556), so a value
+            # carrying `..` — or a symlink — makes this predicate answer about
+            # the spelling instead of the file. MEASURED: an index at
+            # `<repo>/../../benchmark-data/ic/INDEX.md` is OUTSIDE the repo and
+            # the lexical test called it "this repository", printing exactly the
+            # wrong-repository remedy this block was added to prevent. The fix
+            # had the defect it fixes.
+            index_path.resolve().relative_to(repo_root)
             where = "this repository"
         except ValueError:
             where = ("the corpus clone that owns it — NOT this repository, "
