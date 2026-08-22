@@ -2101,6 +2101,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # So the handover keeps its ten tests and its callers inside this process,
     # and `argv` cannot reach it.
     ap.add_argument(
+        "--hygiene-record-in", dest="hygiene_record_in", default=None,
+        help=("adjudicate a repo-hygiene summary JSON the CALLER already "
+              "produced instead of running the set a second time. Requires "
+              "--hygiene-record-rc. The record is checked against this tree's "
+              "declared gate set, not trusted; anything unestablished is rc 2 "
+              "UNDETERMINED and blocking"))
+    ap.add_argument(
+        "--hygiene-record-rc", dest="hygiene_record_rc", type=int, default=None,
+        help=("the exit status of the run that produced --hygiene-record-in. "
+              "Separate because the record says WHICH gates were red and only "
+              "the rc says whether the set completed"))
+    ap.add_argument(
         "--gate-progress", dest="hygiene_progress", default=None,
         help=("append one owner-only JSONL process attestation after each "
               "completed hygiene gate; intended for sparse monitoring of a "
@@ -2142,7 +2154,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                    hygiene_report=(Path(args.hygiene_report)
                                    if args.hygiene_report else None),
                    hygiene_progress=(Path(args.hygiene_progress)
-                                     if args.hygiene_progress else None))
+                                     if args.hygiene_progress else None),
+                   hygiene_record_in=(Path(args.hygiene_record_in)
+                                      if args.hygiene_record_in else None),
+                   hygiene_record_rc=args.hygiene_record_rc)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

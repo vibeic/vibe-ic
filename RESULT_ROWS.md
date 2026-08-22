@@ -123,6 +123,15 @@ other programs:
 The deadline I opened yesterday, and the eight rows I wrote today, are in that
 same class right now.
 
+> **CLOSED IN THIS BRANCH — the paragraphs above are the measurement, not the
+> current state.** The owner ruled on 2026-08-21: wire it into
+> `tools/gatekeeper-land.sh`, budget four minutes, and a review that cannot
+> decide returns rc 2 UNDETERMINED and BLOCKS. That is now the
+> `full:gatekeeper-review` unit. The measurement is kept rather than deleted
+> because it is the evidence for why the wiring was needed, and because a report
+> that quietly rewrites what it found reads as if it had never been wrong — but
+> read it as of a00f53f20's parent, not as of this branch's head.
+
 **On the substance, six rows and two decisions.** Six of the eight went red in
 the last 48 hours, from three commits, each of which added programs and left one
 clause unfinished: `41bfd8a12` shipped `closed_loop_edge_check`,
@@ -135,11 +144,18 @@ small, local, owned, dated.
 
 The other two are different in kind. `L-doc field producer` and `evidence
 citation resolves` both went red at `c5d7f2d00`, the commit that moved published
-results to `vibeic/benchmark-data`, and their fix is in **another repository**. A
-dated row in this repo cannot make a change happen in that one. For those two a
-row is the wrong instrument, and the honest options are to have the checkers
-declare the external fields optional, or to accept that these two gates cannot
-be green here and say so in the gate rather than in a ledger.
+results to `vibeic/benchmark-data`.
+
+> **SUPERSEDED — and I was wrong about these two.** I wrote here that "for those
+> two a row is the wrong instrument" because their fix is in another repository.
+> The owner ruled: adjudicate, do not renew. Adjudicating them showed the
+> premise was too quick. Both populations are non-empty here (48 L-docs; 105
+> citations), so both are REAL FINDINGS that stay red — and one quarter of the
+> second one was not in another repository at all but a defect in the gate,
+> whose scope predicate stopped reaching this repo when the corpus became a
+> sibling of it rather than a child. Their rows stand, already expired, which is
+> the correct state for "stays red until fixed".
+> See `docs/research/2026-08-21-corpus-gate-adjudication.md`.
 
 **And the part about how you have been working, since you asked for it written
 down.** The flag is not the finding. The finding is that the flag did not
@@ -150,21 +166,206 @@ version-bearing landings. Landing fast is not the problem and I would not stop
 it. What is missing is a step that closes the loop inside the same day, and
 right now the repo has one — it is just wired the weakest way there is.
 
-## REQUESTS TO THE LANDER
+## WHAT HAPPENED TO THE FIVE REQUESTS
 
-1. **Land the rows.** They change nothing today except that
-   `gatekeeper_review` now returns rc 1 for a named reason instead of a general
-   one — which is only visible if something runs it.
-2. **Wire `gatekeeper_review` to something.** This is the request that makes the
-   other work real, and it is not mine to place: hook, workflow, or
-   `gatekeeper-land.sh`. Naming the runner is a decision about how long a
-   landing may take, which is yours.
-3. **Rule on the two corpus gates** rather than renewing their rows. They are
-   already 291 commits and 97 landings old and their fix is not in this repo.
-4. **Substitute issue numbers for `owner: repo-gatekeeper`** if you want them —
-   one line each. I did not open issues; that is an outward-facing write and it
-   is your queue.
+All five are answered. Kept as a record of who decided what, rather than deleted.
+
+1. ~~Land the rows.~~ Still the ask; they are in this branch.
+2. ~~Wire `gatekeeper_review` to something.~~ **RULED and DONE** — the lander,
+   240 s, rc 2 UNDETERMINED blocks. Fed this run's hygiene record rather than
+   running the set twice, because with the corpus bound the review's own run
+   measured 214.6 s against a 240 s budget and 275 s standalone in another run:
+   re-running it makes the timeout a coin flip decided by load.
+3. ~~Rule on the two corpus gates.~~ **RULED and ADJUDICATED** — both real
+   findings, both stay red, neither renewed.
+4. ~~Substitute issue numbers.~~ **RULED: no.** `owner: repo-gatekeeper` stays;
+   opening issues is a write to a public repository and carries the NDA
+   constraint.
 5. Three rows come due within about five commits of each other
    (`checker execution wiring` and `gates are wired to something` have 5 left,
    `d3` has 40). At the current rate that is under two hours and half a day. I
    have not padded them to buy room.
+
+## WHAT IS ACTUALLY OUTSTANDING
+
+1. **This branch needs a PREPARE/ACTIVATE pair**, because it moves three
+   protected paths. The PREPARE is authored and pushed as
+   `agent/jrows-prepare-review-wired`; this branch is the ACTIVATE. Order:
+   PREPARE first.
+   I earlier reported `tools/gatekeeper-land.sh` as unprotected. That was wrong
+   — my check read `current.files` as a mapping when it is a list of objects, so
+   a membership test matched nothing and printed a confident false negative.
+2. **`main` is in a state its own manifest refuses**, and it is not this
+   branch's doing: 46 of 47 protected paths match `next`, and
+   `landing_merge_verdict.py` drifted when the deadline landed at v1.11.63/64
+   without the manifest moving with it. The PREPARE re-authorises it by zero
+   bytes. Any protected-path landing is blocked until that lands.
+3. **`published-evidence index honest` fails on clean main when the corpus is
+   bound** and passes unbound. Not mine, and it has no row: a row is true against
+   a stated corpus state, and nothing on the landing path states one.
+
+## THE MEASUREMENT A LANDING WOULD ACTUALLY MAKE
+
+Completed 2026-08-22. `ci_targeted_test_select --base origin/main` selects **131
+test files** for this branch's 20 changed ones. Both arms, by TEST ID:
+
+| group | base | candidate | NEW |
+|---|---|---|---|
+| 124 non-matrix files | 43 failed, 2721 passed | 44 failed, 2753 passed | **2** |
+| 7 `test_matrix_*`, one pytest call each | 12 failed | 12 failed | **0** |
+
+The matrix arms are **identical** — same twelve ids on both — so nothing this
+branch does reaches them. They were run one file per call, which is how a family
+this repo records as killing a session under load is measured at all, and at
+load 2 rather than the 42 the first arms ran at.
+
+Of the two NEW in the larger group:
+
+* **one was real and mine** — `test_the_land_script_still_honours_the_variable`
+  pinned the literal `--summary-json "$GATEKEEPER_HYGIENE_REPORT"`, which the
+  unconditional record reshaped. Now asserts the property in three parts, with a
+  three-way mutation arm; fixed in this branch.
+* **one is not attributable** — `test_nested_validated_progress_is_relayed_to_
+  the_outer_session` asserts `elapsed > 4.5`, a wall-clock MINIMUM that fails
+  when the host is fast. Alternating arms at load 2 it failed on the BASE three
+  times (4.16, 1.88, 3.19) and passed on the candidate twice. Its sibling is the
+  single only-on-base id, which is the same timing family flipping the other
+  way — reading the pair as "one broken, one fixed" would have charged both to a
+  diff that touches neither file.
+
+So after the fix, **NEW = 0** against the selection a landing would run.
+
+### RE-VERIFIED ON THE FINAL HEAD
+
+Nine commits later — three programs and several test files changed since — the
+candidate arm was re-run against the same base (`origin/main` had not moved, so
+the base arm stands):
+
+    base 43 failed  |  candidate 40 failed  |  NEW 1, only-on-base 4
+
+The single NEW is `test_nested_validated_progress_is_relayed_to_the_outer_session`
+again — the `elapsed > 4.5` wall-clock MINIMUM already shown to fail on both
+arms and more often on the base.
+
+Three of the four only-on-base entries are in
+`test_issue1710_corpus_reading_gates_find_the_moved_corpus.py`, and they are not
+a difference between the arms at all. Run alone, that file is **identical on
+both arms — 12 failed, 30 passed, twice each**. Inside the 124-file selection it
+reported 3 failures on one run and 0 on another. Its verdict depends on what
+else ran in the same pytest session, not on the diff.
+
+That is worth stating rather than netting out: **a file whose result depends on
+its session neighbours cannot be used for arm attribution in either direction**,
+and taking the three as "fixed by this branch" would have been a flattering
+reading of the same instability that produced the NEW one.
+
+**NEW attributable to this branch: 0.**
+
+### RE-VERIFIED AGAIN, AGAINST CURRENT MAIN
+
+The comparison above was against `a00f53f20`. Main then moved 110 commits, this
+branch was rebased onto `81cd5321b`, and two programs changed since — so BOTH
+arms were re-run, and the selection re-derived (132 files for 23 changed):
+
+    125 non-matrix files    base 40 failed / 2735 passed
+                            cand 40 failed / 2803 passed
+                            NEW 0, only-on-base 0 — the two id sets are IDENTICAL
+
+    7 test_matrix_* files   base 13 failed | cand 11 failed
+    one pytest call each    NEW 0, only-on-base 2
+
+Not even the wall-clock timing test flipped in the non-matrix arm this time; the
+two sets match exactly.
+
+The two only-on-base ids in the matrix arm are
+`test_the_census_block_is_fresh` and
+`test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress`. They
+are NOT fixes by this branch — re-run on both arms they flip on both:
+
+    base 2 passed | cand 1 failed 1 passed | base 1 failed 1 passed
+
+which is the same standard applied earlier to the `issue1710` file: a result
+that moves on the base too cannot attribute in either direction, and crediting
+this branch with them would be the flattering reading.
+
+## WHAT HAPPENS THE MOMENT THIS LANDS — A ONE-LANDING FUSE
+
+Stated because it is not obvious from any single commit here, and because it is
+the whole point of the row rather than a side effect.
+
+Right now, driven exactly as the lander will drive it, the review says:
+
+    [PASS] gate_red_since: every red is NEW or owned by a live, unexpired
+           acknowledgement — 18 NEW red, 0 acknowledged
+
+**Zero acknowledged**, because the rows are read from the BASE — and the base is
+`origin/main`, whose `acknowledged` is still `[]`. So this pair lands green on
+its own account.
+
+The landing AFTER it is the one that changes. Once the rows are on main:
+
+    base ledger = the eight rows            base clock = main
+    -> [FAIL] gate_red_since: 5 acknowledgement(s) expired
+
+measured, with the rows read at this branch and the clock counted to
+`origin/main`. `gatekeeper_review` then returns REQUEST_CHANGES, and
+`full:gatekeeper-review` fails the landing.
+
+So the sequence is:
+
+1. **This pair lands.** Nothing is refused; the review reports PASS on a base
+   that has no rows yet.
+2. **The next landing is refused**, naming five gates and the bound each row set
+   for itself.
+
+That is the fuse the owner asked for — "opening this deadline will make some
+landing that currently succeeds start failing. That is the point." It is one
+landing long, and it starts when this lands, not when it is written.
+
+**RE-MEASURED at `81cd5321b` (v1.11.68), and it is now SEVEN, not five.** Main
+advanced and two rows came due while this branch was being written — which is
+the clearest evidence available that these are deadlines and not decoration:
+
+    flow-gate enforcement audit         119 / 70    EXPIRED
+    L-doc field producer                325 / 210   EXPIRED   (condition, see below)
+    evidence citation resolves          325 / 140   EXPIRED   (condition, see below)
+    checker execution wiring             99 / 70    EXPIRED   <- came due since
+    gates are wired to something         99 / 70    EXPIRED   <- came due since
+    declaration scans strip comments    117 / 70    EXPIRED
+    d3 declaration/manifest parity       54 / 60    live, 6 left
+    liar census controls still fire      99 / 35    EXPIRED
+
+`d3` has six commits of margin at the current rate — roughly two hours. It will
+have come due by the time anyone reads this, and that is the row behaving
+correctly rather than a number needing another edit.
+
+All eight were re-probed at `81cd5321b` and all eight are still FAIL, so no row
+is STALE — a row whose gate had been fixed would itself be failed, and none has.
+
+The two corpus rows are annotated as stating a CONDITION rather than a deadline
+and must not be read as blocking a corpus-less landing host.
+
+
+## FINAL MEASUREMENT, AT THE HEAD THAT LANDS
+
+Re-run once more at `a68c160e7`, five commits after the previous one and with
+`gate_red_since_check.py` changed three times since. Host load 2–3, which
+mattered: three earlier attempts were deferred at loads of 26, 61 and 90 because
+a wall-clock minimum and several gates here are demonstrably load-sensitive.
+
+    125 non-matrix files    base 40 failed / 2735 passed
+                            cand 40 failed / 2809 passed
+                            id sets IDENTICAL — NEW 0, only-on-base 0
+
+    7 test_matrix_* files   base 12 failed | cand 12 failed
+    one pytest call each    id sets IDENTICAL — NEW 0, only-on-base 0
+
+Every one of the seven matrix files matches its own base run exactly, including
+the three this repository records as session-killers under load
+(`63x8_census_freshness` 6 passed, `63x8_coverage` 3 failed / 26 passed,
+`mutation_ledger` 3 failed / 121 passed — the same on both arms).
+
+Not even the wall-clock timing test flipped this time. The two arms are the same
+set, twice over.
+
+**NEW attributable to this branch: 0.**
