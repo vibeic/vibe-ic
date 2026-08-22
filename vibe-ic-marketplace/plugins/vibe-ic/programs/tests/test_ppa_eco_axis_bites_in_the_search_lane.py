@@ -822,3 +822,72 @@ def test_real_the_two_refused_arms_are_the_ones_the_campaign_published(
             pytest.skip(f"{plan} is not in this tree; NOT OBSERVED")
         counts[trial] = json.loads(plan.read_text(encoding="utf-8"))["count"]
     assert counts == {"z23": 10, "p08": 10, "p04": 0, "z21": 0}, counts
+
+
+# ---------------------------------------------------------------------------
+# WHAT THE AXIS ACTUALLY COSTS, BY THE SHIPPED COMPARATOR
+# ---------------------------------------------------------------------------
+# "This gate is expensive" is the objection the axis will meet, and the honest
+# answer is not a sentence, it is a domination relation. Computed by
+# `_ppa/pareto.dominates` over the two published objectives rather than by
+# eyeballing a table:
+#
+#     z23 (admitted)  DOMINATES  p04 (refused, the published PnR-only winner)
+#     z23 (admitted)  vs         z21 (refused)  -> INCOMPARABLE
+#
+# z21 is 95 um2 smaller and 0.000004 W hotter, so it does not dominate z23; it
+# is a trade, and the campaign's own report publishes trades as trades. So NO
+# arm this axis refuses dominates the arm it admits. The gate costs zero
+# Pareto-dominating candidates, and that is the claim -- not "z21 was the price".
+from _ppa import pareto as PA                   # noqa: E402
+
+#: area µm² and post-route power W, from the campaign's published head-to-head.
+CAMPAIGN_TRIPLES = {"z23": (6106, 0.000541), "p08": (6291, 0.000562),
+                    "p04": (6136, 0.000559), "z21": (6011, 0.000545)}
+ADMITTED_ARMS = ("z23", "p08")
+REFUSED_ARMS = ("p04", "z21")
+
+
+def _objectives():
+    return (PA.Objective("area", "area.design_report.um2", PA.SENSE_MIN),
+            PA.Objective("power", "power.total_w", PA.SENSE_MIN))
+
+
+def _point(trial):
+    area, power = CAMPAIGN_TRIPLES[trial]
+    return {"values": {"area": {"value": area}, "power": {"value": power}}}
+
+
+def test_cost_no_refused_arm_dominates_the_arm_the_axis_admits():
+    """THE cost claim, as a domination relation and not a sentence.
+
+    If any refused arm dominated an admitted one, the axis would be throwing
+    away a strictly better design and "expensive" would be the right word.
+    None does.
+    """
+    objs = _objectives()
+    best_admitted = "z23"
+    offenders = [r for r in REFUSED_ARMS
+                 if PA.dominates(_point(r), _point(best_admitted), objs)]
+    assert offenders == [], (
+        f"{offenders} are refused by the ECO axis and dominate {best_admitted} "
+        f"on both published objectives; the axis is discarding a strictly "
+        f"better design")
+
+
+def test_cost_the_admitted_arm_dominates_the_published_winner():
+    """The positive half. z23 is not merely allowed through -- it is strictly
+    better than the arm the campaign published, on BOTH objectives at once."""
+    objs = _objectives()
+    assert PA.dominates(_point("z23"), _point("p04"), objs), (
+        "z23 no longer dominates p04; the 'the axis does not cost us the win' "
+        "claim rests on this and must be re-measured")
+
+
+def test_cost_the_other_refused_arm_is_a_trade_and_not_a_loss():
+    """z21 is smaller and hotter. Neither dominates, so refusing it costs a
+    TRADE, not a win -- and the campaign's own report publishes trades as
+    trades. Asserted in both directions so a one-sided change is caught."""
+    objs = _objectives()
+    assert not PA.dominates(_point("z21"), _point("z23"), objs)
+    assert not PA.dominates(_point("z23"), _point("z21"), objs)
