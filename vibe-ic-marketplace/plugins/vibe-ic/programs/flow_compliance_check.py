@@ -10055,11 +10055,39 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                             and not r.startswith(_INCOMPLETE_HINT_PREFIX)
                             and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
         if (passed and waiver_hints and not non_hint_reasons
-                and not skip_hints and not vacuous_hints):
+                and not skip_hints):
             # WAIVED here means "DEFERRED via waiver": it leaves the required
             # denominator the same way an explicit waivers.json entry does and
             # drives Overall → PASS_WITH_WAIVERS. The gate DID pass its
             # threshold; the WITH_WAIVERS distinction is the whole point (#651).
+            #
+            # `not vacuous_hints` REMOVED — the same masking #675 removed from
+            # the `skip_hints` branch immediately below, two branches apart in
+            # this same chain, left in place here.
+            #
+            # A WAIVER IS MORE SPECIFIC THAN A VACUOUS PASS, for the reason
+            # this file states in its own words: "a vacuous step is one nobody
+            # needs to come back to". A step credited via a waiver is one
+            # somebody MUST come back to -- production tapeout review has to
+            # close it. When an `all_of` step carried both hints the waiver
+            # branch was skipped and the step fell through to VACUOUS_PASS,
+            # which erased the review_required obligation AND removed the step
+            # from the WAIVED-DEFERRED tally a reviewer reads.
+            #
+            # MEASURED on the #460 oracle replica (Step 4, no verilator):
+            #   verilator_coverage_measure  rc=3  PASS_WITH_WAIVERS   <- waiver
+            #   vacuous_testbench_check     rc=2  VACUOUS_PASS        <- vacuous
+            #   professional_tb_check       rc=0  VACUOUS_PASS
+            # and the step rendered `○ [VACUOUS-PASS]`, tallying
+            # WAIVED-DEFERRED=0 for a run that had one. Both hints are true;
+            # the label can carry one, and it must be the one that says
+            # somebody owes an answer.
+            #
+            # Aggregation is unchanged for every step that has no waiver hint,
+            # and this can only ever move a step OUT of VACUOUS_PASS and INTO
+            # WAIVED -- both sit outside the executed-PASS numerator and inside
+            # `total_required`, so no numerator moves and nothing turns green
+            # that was not already passing.
             result.status = "WAIVED"
             for h in waiver_hints:
                 result.reasons.append(

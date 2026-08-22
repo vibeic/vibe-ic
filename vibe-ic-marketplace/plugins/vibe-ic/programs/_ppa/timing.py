@@ -231,19 +231,25 @@ def discover_reports(project: Path,
     Sorted because row order feeds document identity: an unsorted glob makes the
     same tree hash two ways on two filesystems.
 
-    DE-DUPLICATED BY CONTENT, NOT BY PATH. `_STA_DIRS` names three directories
-    and this flow's runner publishes each report into TWO of them, as separate
-    files with identical bytes -- measured on a real run, all three sign-off
-    reports satisfy
-    `sha256(phase3/stage3/sta/X.rpt) == sha256(reports/phase3/X.rpt)`.
-    De-duplicating on the resolved path (which is what this did until v1.11.33)
-    sees two files and reads both, so EVERY row was emitted twice and all 20
-    (metric, scope) groups in the document collided. They are one artefact and
-    one reading; the second copy is the publisher's, not the tool's.
+    DE-DUPLICATED BY PATH. Byte equality is DETECTED here and decided
+    elsewhere -- see the comment below, and `collapse_declared_mirrors`.
 
-    The first path in `_STA_DIRS` order wins, and each collapse is appended to
-    `collapsed` so the caller can say what it dropped instead of dropping it
-    quietly.
+    `_STA_DIRS` names three directories and this flow's runner publishes each
+    report into TWO of them, as separate files with identical bytes -- measured
+    on a real run, all three sign-off reports satisfy
+    `sha256(phase3/stage3/sta/X.rpt) == sha256(reports/phase3/X.rpt)`.
+    De-duplicating on the resolved path alone (which is all this did until
+    v1.11.33) sees two files and reads both, so EVERY row was emitted twice and
+    all 20 (metric, scope) groups in the document collided.
+
+    THIS DOCSTRING SAID "DE-DUPLICATED BY CONTENT" AND THE CODE HAD STOPPED
+    DOING THAT (v1.11.57). A comment that states the opposite of the code is
+    worse than no comment: it is read as the contract. It was, and it cost
+    three red arms in `test_ppa_layer_timing_view_dedup.py`, which were written
+    against this sentence rather than against the function.
+
+    Every byte-identical pair is appended to `collapsed` so the caller can say
+    what it found instead of finding it quietly. NOTHING IS DROPPED HERE.
     """
     candidates: Dict[str, Path] = {}
     for rel in _STA_DIRS:
@@ -942,11 +948,15 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
     # TWO LANES FIXED F-10 INDEPENDENTLY AND BOTH ARE KEPT, because they are
     # not the same mechanism and neither subsumes the other:
     #
-    #   discover_reports(..., collapsed)   collapses byte-identical artefacts by
-    #                                      CONTENT DIGEST. It catches duplicates
-    #                                      nobody declared, which is the only
-    #                                      thing that can catch a duplicate the
-    #                                      producer does not know it made.
+    #   discover_reports(..., collapsed)   REPORTS byte-identical artefacts by
+    #                                      CONTENT DIGEST and drops none of
+    #                                      them. It catches duplicates nobody
+    #                                      declared, which is the only thing
+    #                                      that can catch a duplicate the
+    #                                      producer does not know it made --
+    #                                      but a hash cannot tell that copy
+    #                                      from a second reading that agrees,
+    #                                      so it reports and does not decide.
     #   collapse_declared_mirrors(...)     collapses what the RUN ITSELF wrote
     #                                      down as a copy, in
     #                                      reports/phase3/artefact_mirrors.json.

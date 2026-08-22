@@ -143,6 +143,30 @@ _LEDGER = frozenset({
     "_power_domain_family", "_propagated_clock_tcl",
     "_reconcile_staged_sdc_driving_cell", "_reconcile_staged_sdc_drv",
     "_recover_power_tcl", "_reference_flow_declared_die_util",
+    # ADDED v1.11.57+ ON THE RECORD, which is what this ledger is for.
+    # `_report_wns_tcl` emits a `report_wns <-max|-min>` stanza, guarded by a
+    # catch, into the sign-off STA script. It is flagged only because its NAME
+    # carries the `wns` token; its sibling `_report_check_types_tcl` sits
+    # beside it unflagged purely because "check" is not in the vocabulary.
+    #
+    # It is NOT extractable to `_ppa/timing.py`, and the reason is the layer
+    # split this whole lane defends. `_ppa/timing.py` is an EXTRACTOR -- it
+    # reads STA artefacts into rows and emits no TCL anywhere (its one
+    # `report_wns` hit is a comment). Moving a producer's tool-query emitter
+    # into the reader module would put the flow's two halves back in one file,
+    # which is the defect `_ppa` exists to have removed.
+    #
+    # The function's own docstring states the same conclusion from the other
+    # side: `_ppa/timing.py` will not DERIVE wns from the worst slack, because
+    # a derived number presented as a measured one is the failure this lane
+    # was filed for -- so the emitter has to ask the tool for the fact, and
+    # asking the tool is the runner's job.
+    #
+    # Precedent, not a one-off: thirteen `*_tcl` emitters with PPA-token names
+    # are already ledgered here (`_flat_ocv_derate_tcl`,
+    # `_post_route_spef_repair_tcl`, `_min_area_patch_tcl`,
+    # `_propagated_clock_tcl`, `_recover_power_tcl`, and the rest).
+    "_report_wns_tcl",
     "_resolve_auto_die_um", "_resolve_clock_spec",
     "_resolve_staged_silicon_sdc", "_rewrite_pnr_floorplan_die",
     "_scale_sdc_to_liberty_units", "_sdc_period_ps",

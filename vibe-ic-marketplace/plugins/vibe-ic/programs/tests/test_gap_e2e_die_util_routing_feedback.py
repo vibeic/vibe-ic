@@ -251,10 +251,58 @@ class TestRewriteFloorplanDie:
         assert "make_tracks" in out
 
     def test_matches_the_real_pnr_tcl_emit(self):
-        # The rewrite regex must match what _build_pnr_tcl_text actually emits,
-        # or a resize would silently no-op the tcl. Assert against a real emit.
+        """The rewrite regex must match what the flow actually emits, or a
+        resize silently no-ops the tcl and the die never moves.
+
+        THIS ARM USED TO GREP `_build_pnr_tcl_text`'s SOURCE for the literal
+        `initialize_floorplan -die_area "0 0 {die_w} {die_h}"`, and it went red
+        when that literal was moved OUT of the f-string and into
+        `_floorplan_geometry_tcl` -- a single builder introduced for exactly
+        the reason this arm exists: "emitted from one function so the initial
+        build and every retry-loop rewrite cannot drift apart". The refactor
+        was the property being asked for, and the arm failed it.
+
+        The defect was in the instrument. A source substring is not "a real
+        emit", which is what the old comment claimed it was; it is a proxy that
+        breaks on a rename and stays green on a semantic change (edit the
+        NUMBERS in the emit and the literal still matches). So the property is
+        now asserted end to end, on real output: emit -> the regex matches ->
+        the rewrite CHANGES it. That holds through any refactor and fails on
+        the drift the arm was written to catch.
+        """
+        # 1. The emitter still routes through the single builder. If this ever
+        #    stops being true the two can drift again, which no output check on
+        #    the builder alone would notice.
         src = inspect.getsource(mod._build_pnr_tcl_text)
-        assert 'initialize_floorplan -die_area "0 0 {die_w} {die_h}"' in src
+        # `\b` and not a bare substring: `in` also matches a DIFFERENT function
+        # whose name merely ends with this one (`_INLINED_floorplan_geometry_
+        # tcl(`), which is exactly how a drift would be spelled. Measured -- a
+        # substring check passed that mutation.
+        assert re.search(r"\b_floorplan_geometry_tcl\(", src), (
+            "_build_pnr_tcl_text no longer builds its floorplan geometry with "
+            "_floorplan_geometry_tcl, so the emit and the retry-loop rewrite "
+            "can drift apart -- the exact failure that builder exists to "
+            "prevent")
+
+        # 2. What that builder emits is what the rewrite regex matches, for
+        #    BOTH branches: the ordinary --die-um floorplan and a pinned
+        #    shuttle-slot rectangle.
+        for label, rect in (("die-um", None), ("slot", (5, 5, 90, 90))):
+            emitted = mod._floorplan_geometry_tcl(95, 95, 10, 85, 85,
+                                                  fp_rect=rect)
+            assert mod._RE_PNR_FLOORPLAN_DIE.search(emitted), (
+                f"the {label} floorplan emit is not matched by "
+                f"_RE_PNR_FLOORPLAN_DIE, so every resize would no-op:\n"
+                f"{emitted}")
+
+            # 3. And the rewrite is not a no-op on it. A regex that matches but
+            #    substitutes the same text back is the same silent failure.
+            tcl = f"foo\n{emitted} \\\n                      -site unithd\n"
+            out = mod._rewrite_pnr_floorplan_die(tcl, 130, 130, 10, 120, 120)
+            assert out != tcl, (
+                f"the {label} rewrite left the tcl byte-identical: a resize "
+                f"would be silently discarded")
+            assert "-site unithd" in out, "the rewrite ate the -site line"
 
 
 # ---------------------------------------------------------------------------
