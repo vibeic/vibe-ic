@@ -504,3 +504,27 @@ against `main` instead of against each branch's merge-base -- and both times the
 defect was the same: a measurement taken against ONE reference, reported as though
 it were a property of the whole. Before calling anything missing, ask what else it
 could be in.
+
+### How the split actually falls, and how narrow the reconciliation is
+
+Per-branch, by sha256 over each branch's own changed files (merge-base to head),
+against both assemblies:
+
+    branch                                one-assembled   batchbig
+    jppafind-inert-ppa-gates                   3/24         14/24
+    jred5-batchbig-five-reds                    1/1          1/1
+    the other fourteen frozen branches       varies          0/N
+
+**`batchbig-assembled` carries essentially one frozen branch -- `jppafind` -- plus
+`jred5` (which is in both), the four PPA test files by another author, and
+`j1764`. Everything else in the batch is in `one-assembled`.** So reconciling is a
+small job, not a re-assembly: carry `jppafind` and those extras into
+`one-assembled`, or land both refs.
+
+READ THE RATIOS AS A LOWER BOUND, NOT A SCORE. Byte-identity undercounts any file
+that was legitimately merged with another branch's edit -- it is why
+`agent/jrows-on-batchbig` reads 2/17 in the assembly it is demonstrably IN (four of
+four of its distinctive added lines are present). A LOW ratio proves nothing on its
+own. What is load-bearing here is the column of ZEROS: fourteen branches at 0/N in
+`batchbig` is not a merge artefact, because merging leaves most files untouched and
+identical. Use the zeros; distrust the fractions.
