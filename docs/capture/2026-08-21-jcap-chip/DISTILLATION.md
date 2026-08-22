@@ -1108,3 +1108,37 @@ this file depends on them still being true at a line offset.
 That is the honest form for a `FILE:LINE` in a document that outlives the file:
 name the sha you checked at, and quote enough that the reader can re-find it
 without you.
+
+### Whether this branch touches a protected path: NOT CHECKED, and why
+
+Their fifth title was *"the protected tuple's drift has grown from two paths to
+eleven"*. That is landing-relevant to me: this branch regenerates
+`PROGRAM_INVENTORY.json`, `INDEX.md` and the README counts, and if any of those sit
+in a protected-landing tuple then this branch does not land by an ordinary merge —
+it needs the PREPARE/ACTIVATE path, and my report would owe the reader that.
+
+I went looking for the manifest. It is not here:
+
+    find  -name '*protected*landing*' / '*landing*transition*'   -> nothing
+    git grep  protected_landing_transition                       -> nothing
+    git grep  -e landing_transition -e PREPARE -e prepare_slot   -> only benchmark-data
+                                                                    prose containing the
+                                                                    word "PREPARE"
+
+The mechanism exists — I have used it — but **it is not present in this repo at
+`main`**, so the question cannot be answered from this checkout.
+
+**That makes the honest verdict NOT CHECKED, not PASS.** This is the same
+distinction the brief demanded of `local_clone_does_not_borrow_objects` and
+`prepared_checkout_states_the_revision_it_holds`: *did not look* and *looked and
+found nothing* must never share a verdict. I did not look — I could not — and
+writing "this branch touches no protected path" would have been an unearned claim
+of exactly the kind the rc=2 rung exists to prevent.
+
+**What the reader should do:** before landing this branch, re-run the intersection
+wherever the manifest actually lives:
+
+    git diff --name-only origin/main...<this branch>   ∩   <manifest>.paths[].path
+
+The four generated files above are the plausible hits. If any is protected, this
+branch needs the two-landing protected path, not a merge.
