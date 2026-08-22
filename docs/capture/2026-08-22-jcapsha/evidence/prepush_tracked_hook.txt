@@ -1,0 +1,8 @@
+PASS: no NDA foundry / SKU / process token in 6 commit message(s)
+--- how to read this ---
+`run_gate` prints only when a gate fails or when the gate itself emits.
+The hook's own exit code is the verdict over all 7 gates; the earlier run of
+the same command over the same range exited 1 and named its finding, which is
+the control showing this file is not silent-by-construction.
+
+hook rc = 0 over refs origin/main..HEAD, 7 gates, tracked hook via core.hooksPath

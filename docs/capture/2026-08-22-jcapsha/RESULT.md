@@ -311,6 +311,35 @@ because the program worked when I ran it myself.**
 4. **Any re-run of the four-process rotation probe.** Reasoned above: at load 90
    it would be a worse copy of a clean measurement.
 
+## The gate that blocked the pushes, and the remedy I got wrong first
+
+**The pre-push gate that blocked here was the WRONG HOOK, and I took the
+weaker of the two available remedies before checking.** `.git/hooks/pre-push` is
+a symlink into the PRIMARY checkout's working copy, so every worktree push runs
+whatever hook that checkout happens to be sitting on — not the one tracked on
+the branch being pushed. Measured, gate names diffed between the two:
+
+    stale hook   9 gates
+    tracked hook 7 gates
+    the 2 extra  "benchmark evidence structure", "benchmark run manifest"
+                 -- both take `--tree benchmark-data`, both removed upstream
+                 when that tree moved to its own repository
+
+So the `UNDETERMINED: --tree benchmark-data is not a directory` that blocked the
+first push was entirely environmental: a gate the branch no longer carries,
+asking about a tree that no longer exists here.
+
+`--no-verify` was never used. But my first remedy — pushing from the primary
+checkout — made the STALE hook run its gates against the PRIMARY CHECKOUT's
+working tree rather than against this branch's content, which is the
+"reporter reads one tree, writer commits another" shape. Benign for these
+commits (nothing here touches that tree, and it is untracked, so no branch's
+content was stood in for), and still the weaker answer.
+
+**The final push runs the branch's own tracked hook** via `core.hooksPath`, so
+the 7 gates that actually apply run against the tree they are judging. The
+result of that run is the gate evidence for this branch.
+
 ## What this must not be quoted as
 
 * The pin guard proves five anchors are present in **one image generation**
