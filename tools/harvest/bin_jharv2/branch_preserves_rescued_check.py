@@ -29,13 +29,36 @@ def main():
     if have.returncode != 0:
         print(f"  cannot walk {rev}"); return 2
     reach = set(have.stdout.split())
+    # The PRESERVE tips are a second, separate category: whole trees of content that is on no
+    # commit anywhere else (pruned checkouts, stashes). They were left out of the first fold and
+    # were unreachable from this branch until 2026-08-22 -- the same one-deletion-from-gone shape
+    # as the rescue anchors, and the more fragile of the two, because pruned-checkout content is
+    # on no commit BY DEFINITION.
+    tips_path = os.path.join(base, 'preserved_tips.tsv')
+    tips = []
+    if os.path.exists(tips_path):
+        with open(tips_path) as f:
+            for i, line in enumerate(f):
+                if i == 0 or not line.strip():
+                    continue
+                parts = line.rstrip('\n').split('\t')
+                if len(parts) >= 3:
+                    tips.append((parts[0], parts[1], parts[2]))
     missing = [c for c in want if c not in reach]
     print(f"  manifest        : {len(want)} commits")
     print(f"  reachable from {rev}: {len(want) - len(missing)}")
     print(f"  MISSING         : {len(missing)}")
     for c in missing[:10]:
         print(f"      {c}")
-    return 1 if missing else 0
+    tip_missing = []
+    for c, ref, nf in tips:
+        ok = c in reach
+        print(f"  {'ok  ' if ok else 'MISSING'} preserve tip {ref} ({nf} files)")
+        if not ok:
+            tip_missing.append(ref)
+    if tips_path and not tips:
+        print("  note: no preserve tips declared")
+    return 1 if (missing or tip_missing) else 0
 
 if __name__ == '__main__':
     sys.exit(main())

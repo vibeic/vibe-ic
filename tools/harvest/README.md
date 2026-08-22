@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 24 markdown files and 72 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 25 markdown files and 72 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -81,7 +81,9 @@ Nine gates. Seven need nothing but the checkout; `live_ref_citation_check.py` ne
 because a survivability citation can only be verified against `git ls-remote` — the authority — and
 offline it REFUSES rather than passing. On 2026-08-22 every `harvest/rescue-*` ref had been deleted
 from origin while this clone's `refs/remotes` still listed 529 of them; see `RESCUE_REANCHOR.md`. One of them, `branch_preserves_rescued_check.py`, asserts that the 2950 commits in
-`rescued_commits.txt` are reachable from this branch. They are reachable because the branch carries
+`rescued_commits.txt` AND the three whole trees in `preserved_tips.tsv` — 4929 files of
+pruned-checkout and stash content that is on no commit anywhere else — are reachable from this
+branch. They are reachable because the branch carries
 the rescue anchors as extra parents: a rebase, squash or amend that dropped them would un-preserve
 all 2950 while every file in the tree stayed byte-identical, so no diff would show it.
 
