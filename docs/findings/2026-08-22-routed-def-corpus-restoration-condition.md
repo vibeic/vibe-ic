@@ -144,6 +144,26 @@ because that is the only shape `routed_def_corpus._index_paths` counts: it
 requires the path relative to `ic/` to have **exactly six components**, with
 `parts[2:] == ("phase3", "stage3", "pnr", "routed.def")`.
 
+**[re-measured @ a4caccefe] — and the operator does not have to find this
+document to learn it.** The sentence the producer itself prints beside the
+blocking row, captured verbatim from the run above, already names the member
+shape:
+
+> scanned the env corpus at …/ic and its git index holds 0 routed DEF(s). **A
+> member is `<design>/<version>/phase3/stage3/pnr/routed.def`.** This is an
+> EMPTY POPULATION, not a clean one: no published cell was examined and nothing
+> is claimed about any. The per-cell gates go live again on the first cell
+> published with a routed DEF.
+
+That is worth stating because it is the strongest single fact in favour of
+leaving the declaration alone: the row that blocks says what it measured, says
+that zero is not clean, names the exact path that would end it, and does not
+overstate what a first publication buys beyond its own loop. Nothing about the
+gate's own reporting is dishonest. The gap this record closes is one directory
+level BELOW that sentence — that a cell can be published carrying that exact
+filename and still not be counted — and it is closed in the publish path, where
+it belongs, not by rewording a row that is already true.
+
 ## The sentence this record contradicts
 
 The earlier adjudication closes with:
