@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
 import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -258,7 +259,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(txt)
         else:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-            Path(args.json).write_text(txt + "\n")
+            atomic_write_text(Path(args.json), txt + "\n")
     else:
         for f in result.findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")
