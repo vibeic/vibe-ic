@@ -60,6 +60,36 @@ def test_waive_writes_lessons_digest_and_points_author_at_it(tmp_path):
     assert "when to apply" in low
 
 
+def test_knowledge_digest_writer_is_staged_and_never_adopts_replaced_root(
+        tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    displaced = tmp_path / "project.displaced"
+    seen_stage1 = []
+    real_render = _lesson_digest.render_lesson_digest
+
+    def _render_after_live_root_replacement(stage1, *args, **kwargs):
+        stage1 = Path(stage1)
+        seen_stage1.append(stage1)
+        assert project not in (stage1, *stage1.parents)
+        project.rename(displaced)
+        project.mkdir()
+        return real_render(stage1, *args, **kwargs)
+
+    monkeypatch.setattr(
+        _lesson_digest, "render_lesson_digest",
+        _render_after_live_root_replacement)
+
+    result = r.step_rtl_gen(project, _NULL_RTL_CLASS)
+
+    assert result.status == "BLOCKED"
+    assert result.extras["output_refusal"]["reason"] == (
+        "PROJECT_BOUNDARY_REPLACED_DURING_PUBLICATION")
+    assert len(seen_stage1) == 1
+    assert not list(project.rglob("*"))
+    assert not list(displaced.rglob("*"))
+
+
 def test_digest_surfaces_divider_topology_and_multiple_genres(tmp_path):
     _, res = _waive(tmp_path)
     txt = Path((res.extras or {})["lessons_digest"]).read_text()
