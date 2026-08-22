@@ -494,3 +494,33 @@ def test_stripping_preserves_line_numbers_and_citations(tmp_path):
     cited = lines[rep["line"] - 1]
     assert "I/O delay" in cited, (
         f"line {rep['line']} is {cited!r} — the strip shifted the offsets")
+
+
+# ── polarity: a document retires a table ROW as readily as it states one ────
+#
+# Found by prose_polarity_census. `parse_period_tables` supplies the period a
+# design is CONSTRAINED to, and a retired row came back as a declaration.
+
+def _rows(note_a, note_b):
+    import declared_clock_period as M
+    text = ("| Library | Period (ns) | Notes |\n|---|---|---|\n"
+            f"| lib_a | 10 | {note_a} |\n| lib_b | 20 | {note_b} |\n")
+    return [(r["key"], r["period_ns"]) for r in M.parse_period_tables(text, "d.md")]
+
+
+def test_a_row_its_own_cell_retires_is_not_a_declared_period():
+    assert _rows("this row is no longer used", "the shipping target") \
+        == [("lib_b", 20.0)]
+
+
+def test_a_denied_row_does_not_retire_the_row_beneath_it():
+    """The ROW is the record, so the row is the scope. A character-measured
+    scope would reach into the next row and retire a live period."""
+    assert _rows("the shipping target", "this row is no longer used") \
+        == [("lib_a", 10.0)]
+
+
+def test_plain_rows_are_still_declared():
+    """The control arm: a fix that dropped every row would pass the rest."""
+    assert _rows("the shipping target", "the shipping target") \
+        == [("lib_a", 10.0), ("lib_b", 20.0)]
