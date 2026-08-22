@@ -1,9 +1,0 @@
-read_liberty -ignore_miss_func /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib
-read_verilog /work/phase2/stage2/dft/cut_netlist.v
-hierarchy -top chip_top
-proc
-memory_collect
-memory_map
-flatten -separator _
-opt_clean
-write_verilog -noattr /work/phase2/stage2/dft/tdf/flat_core.v
