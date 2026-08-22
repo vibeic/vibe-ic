@@ -37,3 +37,22 @@ oracle was wrong, and a test with a wrong oracle reports divergences that belong
 to the test. Writing the table out against the tool's own orientation algebra —
 R0↔MX, R90↔MXR90, R180↔MY, R270↔MYR90 — caught it. The comment stays in the
 file so the correction is visible rather than silently absorbed.
+
+---
+
+# The second red — `test_f3c_side_to_variable_mapping.py`
+
+Pins which SIDES each rotation variable drives, against the tool's documented
+contract. It reads our mapping out of the source rather than restating it.
+
+```
+origin/main                RED   HORIZONTAL -> [N,S] (should be [E,W])
+                                 VERTICAL   -> [E,W] (should be [N,S])
+origin/jpadsite/pad-site   RED   HORIZONTAL -> [N,S] (should be [E,W])
+                                 VERTICAL   -> (nothing)
+```
+
+The second block is the finding: **the un-landed fix does not resolve this and
+removes the variable's effect instead of routing it**, because it was built on
+the conclusion that the variable is inert. It is not inert — it is misrouted by
+us, and in the tool it drives the two sides the fix left to the other variable.
