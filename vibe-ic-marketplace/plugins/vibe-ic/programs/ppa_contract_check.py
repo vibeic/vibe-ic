@@ -234,6 +234,17 @@ def is_contract(doc: Any) -> bool:
     return isinstance(doc, dict) and doc.get("schema") == C.CONTRACT_SCHEMA
 
 
+#: The declared schema and the NAME pattern of this gate's records. Module-level
+#: because the unit tests assert on the walk directly; see `corpus_contracts`.
+_CONTRACT_SCHEMA = C.CONTRACT_SCHEMA
+_NAME_GLOB = "**/*contract*.json"
+
+
+def corpus_contracts(corpus: Path) -> List[Path]:
+    """Every contract under `corpus`, by DECLARATION, unreadable-named kept in."""
+    return corpus_seam.population(Path(corpus), is_contract, _NAME_GLOB)
+
+
 def check_corpus(named: Path, schema_dir: str, may_be_absent: bool = False,
                  json_out: Optional[str] = None) -> int:
     """Every contract record under `named`, aggregated by severity.
@@ -318,7 +329,15 @@ def main(argv=None) -> int:
         return check_corpus(Path(args.corpus).resolve(), args.schema_dir,
                             args.corpus_may_be_absent, args.json_out)
     if args.contract is None:
-        ap.error("give --contract CONTRACT.json or --corpus DIR")
+        # `ap.error` exits 2, and PPA_INTERFACES §1 reserves 2 for "I could not
+        # look". Naming no mode at all is a BAD INVOCATION, which is 3, and
+        # `cli_exit.refuse` is the one call that says so. The message names
+        # every mode this gate has -- a refusal that hides a mode is how a
+        # caller concludes the gate cannot do what it can.
+        return cli_exit.refuse(
+            "ppa_contract_check",
+            "give --contract CONTRACT.json, or --corpus DIR, or "
+            "--corpus DIR --corpus-may-be-absent")
 
     document, reason = C.load_json(Path(args.contract))
     if reason is not None:

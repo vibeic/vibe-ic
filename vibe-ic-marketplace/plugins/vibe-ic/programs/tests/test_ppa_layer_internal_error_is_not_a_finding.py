@@ -56,6 +56,24 @@ _PROGRAMS = _TESTS.parent
 sys.path.insert(0, str(_TESTS))
 
 from _ppa_jsonschema import HAVE_DRAFT_2020_12, REASON  # noqa: E402
+sys.path.insert(0, str(_PROGRAMS))
+from not_verified_tier import not_verified_reason  # noqa: E402
+
+
+#: Why this file's "validator unavailable" arm does not run on a normal host.
+#: NOT a bare `pytest.skip`: `test_not_verified_tier` exists because an
+#: infrastructure-shaped skip that bypasses the tier is invisible to the roll-up,
+#: and "the run reported no failures" then covers a question nobody answered.
+_UNREACHABLE_REASON = not_verified_reason(
+    "`ppa_contract_check` resolved a working schema engine here -- the "
+    "reference library if usable, otherwise `_ppa/jsonschema_bundled`, which "
+    "SHIPS WITH THE PLUGIN. So the 'validator unavailable' branch this arm "
+    "asserts about is not reachable on this host and was NOT exercised. It "
+    "becomes reachable only for a schema the bundled engine cannot apply, "
+    "which `resolve()` reports as engine=None. This is a SKIP and NOT a pass.",
+    "add a schemas/ppa/*.json using a keyword `_ppa/jsonschema_bundled."
+    "unsupported()` lists, or run this arm on a host where resolve() returns "
+    "engine=None")
 
 
 def _run(args, timeout=120, env=None):
@@ -105,6 +123,42 @@ def test_contract_check_never_exits_one_because_of_the_validator(tmp_path):
         "raised, so the shape went unvalidated with nothing saying so")
 
 
+def _program_engine_is_unavailable():
+    """Can `ppa_contract_check` validate contract.v1 HERE? Its own question.
+
+    THE PREDICATE WAS ONE LAYER OFF, and that produced a FALSE RED.
+    This test asserts about the PROGRAM, and the program resolves its engine
+    through `_ppa/schema_validation.resolve`, which prefers the reference
+    library and FALLS BACK to `_ppa/jsonschema_bundled` -- shipped with the
+    plugin, so present on every host. `HAVE_DRAFT_2020_12` asks a different
+    question: is the REFERENCE library usable? `_ppa_jsonschema` is right to
+    ask that, because the tests it guards call `Draft202012Validator`
+    themselves as an INDEPENDENT cross-check and handing them the bundled
+    engine would make that cross-check the plugin agreeing with itself.
+
+    But this test calls nothing itself. Measured on a host with jsonschema
+    3.2.0: the reference is unusable, so `HAVE_DRAFT_2020_12` is False, so the
+    skip above did not fire, so this test RAN -- and reported
+
+        AssertionError: the contract's shape went unvalidated and nothing said so
+          [FAIL] PPA-C-010: the document violates contract.v1 at <document
+          root>: 'resolutions' is a required property
+          ...
+
+    The shape HAD been validated, by the bundled engine, and three violations
+    were printed directly above the assertion claiming nobody looked. A guard
+    asserting a defect that is not there is the same disease as a gate missing
+    one that is, and it is the harder of the two to unpick because the red
+    looks like work to do.
+    """
+    sys.path.insert(0, str(_PROGRAMS))
+    from _ppa import schema_validation as _SV
+    schema = json.loads(
+        (_PROGRAMS.parent / "schemas" / "ppa"
+         / "contract.v1.schema.json").read_text(encoding="utf-8"))
+    return _SV.resolve(schema)[0] is None
+
+
 def test_contract_check_says_the_schema_was_not_applied(tmp_path):
     """The honest half: when the validator is unavailable, the program must
     SAY the shape was not validated, not fall silent about it.
@@ -112,9 +166,8 @@ def test_contract_check_says_the_schema_was_not_applied(tmp_path):
     A refusal that does not name what it could not do is indistinguishable
     from a check that found nothing wrong.
     """
-    if HAVE_DRAFT_2020_12:
-        pytest.skip("validator present; the unavailable path is not reachable "
-                    "here and was NOT exercised. Not a pass.")
+    if not _program_engine_is_unavailable():
+        pytest.skip(_UNREACHABLE_REASON)
     r = _run(["ppa_contract_check.py", "--contract",
               str(_a_minimal_contract(tmp_path))])
     blob = r.stdout + r.stderr
@@ -197,6 +250,20 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
         "ppa_problem_integrity_check.py": ["--baseline", j, "--candidate", j],
         "ppa_report_gen.py": [j],
         "ppa_search_run.py": [j],
+        # FOUR ENTRIES THIS TABLE WAS MISSING, and their absence was RED rather
+        # than quiet -- `pytest.fail(...its traceback arm is untested)` below is
+        # the table refusing to be silently incomplete, which is the same rule
+        # the programs it sweeps are held to. They were measured before being
+        # listed, not listed and hoped for: each returns a verdict (3, 3, 1, 3)
+        # with no traceback on a well-formed JSON that is not what it wanted.
+        "ppa_agent_context_build.py": ["--policy", j, "--out",
+                                       str(tmp_path / "ctx.json")],
+        "ppa_diagnostic_router.py": ["--policy", j, "--json",
+                                     str(tmp_path / "route.json")],
+        # A REPO with no diff rather than a document: this program takes a
+        # commit RANGE, so the junk file goes where a changed file goes.
+        "ppa_pr_scope_check.py": ["--repo", str(tmp_path), "--changed-file", j],
+        "ppa_signoff_records.py": [j],
     }.get(prog)
     if argv is None:
         pytest.fail(f"{prog} has no invocation in this file's table; its "

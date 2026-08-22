@@ -161,7 +161,10 @@ def _index_from(path: Path) -> Tuple[M.MetricIndex, List[Dict[str, Any]]]:
     return index, refusals
 
 
-def _expected_from(bundle_doc: Any, expect_path: Optional[Path]) -> List[Any]:
+def _expected_from(bundle_doc: Any, expect_path: Optional[Path],
+                   bundle_path: Optional[Path] = None,
+                   indexed: Optional[int] = None,
+                   refused: Optional[int] = None) -> List[Any]:
     """The denominator: from `--expect` if given, else from the bundle itself.
 
     If neither carries one, this raises. It does NOT fall back to "everything
@@ -181,11 +184,39 @@ def _expected_from(bundle_doc: Any, expect_path: Optional[Path]) -> List[Any]:
     if isinstance(bundle_doc, dict) and isinstance(bundle_doc.get("expected"),
                                                    list) and bundle_doc["expected"]:
         return bundle_doc["expected"]
+    # NAME THE BUNDLE THAT WAS READ, AND HOW MUCH OF IT.
+    # This refusal is CORRECT and stays rc 2 -- a coverage figure computed from
+    # the records alone can only ever be 100%. But it used to say "the bundle"
+    # without saying WHICH, over a set it had already opened and indexed, so a
+    # reader could not tell it from the same sentence over a file that is not
+    # there. "I could not find your input" and "I read 148 rows of your input
+    # and nothing declares what should have been in it" are different facts and
+    # only one of them is fixed by looking somewhere else.
+    read = ""
+    if bundle_path is not None:
+        # BOTH numbers, because they are not the same number. `indexed` is
+        # what reached the index; `refused` is what the index turned away. A
+        # reader told only the first would take it for the size of the file.
+        counts = []
+        if indexed is not None:
+            counts.append(f"{indexed} record(s) indexed")
+        if refused:
+            counts.append(f"{refused} refused (reported separately -- those "
+                          f"are findings and they do NOT depend on this "
+                          f"missing denominator)")
+        read = (f" READ: {bundle_path}"
+                + (" -- " + ", ".join(counts) if counts else "")
+                + ". The records half of this measurement is present.")
     raise CannotCheck(
         "no expectation set: neither --expect nor the bundle declares what "
         "should have been measured. Coverage computed from the records alone "
         "can only ever be 100%, because the rows it would report missing are "
-        "exactly the rows that are not there to iterate over.",
+        "exactly the rows that are not there to iterate over."
+        + read +
+        " MISSING ARTEFACT: a document carrying a non-empty `expected` list -- "
+        "the (metric, scope) pairs this run was REQUIRED to produce, declared "
+        "before it ran. Supply it with --expect, or as an `expected` key in the "
+        "bundle itself.",
         "NO_EXPECTATION_SET")
 
 
@@ -193,7 +224,53 @@ def run_coverage(bundle_path: Path,
                  expect_path: Optional[Path]) -> Tuple[int, Dict[str, Any]]:
     index, refusals = _index_from(bundle_path)
     bundle_doc = _read_json(bundle_path, "bundle")
-    expected = _expected_from(bundle_doc, expect_path)
+    # THE ORDER IS THE DEFECT, AND IT HID AN rc 1 BEHIND AN rc 2.
+    # Twenty lines below, this function states its own severity rule: "An
+    # invalid record is a finding about the record set and outranks a coverage
+    # gap, for the same reason 1 outranks 2 everywhere else here." That rule
+    # could never fire on this path. `_index_from` establishes the refusals on
+    # the line above -- fully, with no further input needed, because a record
+    # that is invalid is invalid whatever the denominator says -- and then
+    # `_expected_from` RAISES over a completely independent absent input, so the
+    # report carrying `record_refusals` is never built and the rule never runs.
+    #
+    # MEASURED on the wired row, `ppa-crosslayer/records/trials/b000/
+    # records_flat.json`: 148 rows, 54 refused --
+    #     44 x SCOPE_SENTINEL          `scope.clock` is None
+    #      8 x SAME_ARTEFACT_TWO_VALUES one artefact read twice, two values
+    #      2 x CONFLICTING_RECORD       one metric+scope, two MEASURED values
+    # -- and the row reported NOT_CHECKED and named none of them.
+    #
+    # These are two INDEPENDENT questions over one bundle: "are these records
+    # valid" (answered: no, 54 times) and "did the run measure what it was
+    # required to" (undecidable: nothing declares the requirement). Answering
+    # the second with silence about the first is the failure this layer exists
+    # to end, and it is the more dangerous direction -- an unearned PASS at
+    # least looks like a claim, while an unearned NOT_CHECKED looks like
+    # diligence.
+    try:
+        expected = _expected_from(bundle_doc, expect_path, bundle_path,
+                                  len(index), len(refusals))
+    except CannotCheck as exc:
+        if not refusals:
+            raise
+        return RC_REFUSED, {
+            "program": "ppa_measurement_check.py", "mode": "coverage",
+            "bundle": str(bundle_path),
+            "expect": str(expect_path) if expect_path else "(from bundle)",
+            "records_indexed": len(index),
+            "record_refusals": refusals,
+            "coverage": None,
+            # The rc 2 is NOT discarded. It is demoted to a stated fact about a
+            # DIFFERENT question, so a reader learns both: these records carry
+            # findings, AND coverage over them remains undecidable.
+            "coverage_undetermined": {"code": exc.code, "detail": exc.message},
+            "rc": RC_REFUSED, "code": "RECORD_REFUSED",
+            "_text": (f"{len(refusals)} record(s) in {bundle_path} are "
+                      f"REFUSED; that is a finding about the record set and it "
+                      f"does not depend on a denominator. Coverage over them "
+                      f"is separately UNDETERMINED: {exc.message}"),
+        }
     try:
         cov = M.coverage(index, expected)
     except M.MetricError as exc:
@@ -403,7 +480,23 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{r['code']}: {r['message']}", file=sys.stderr)
 
     if rc == RC_REFUSED:
-        if report["mode"] == "coverage":
+        # THE COVERAGE BLOCK CAN BE ABSENT AND THE ROW STILL BE rc 1.
+        # When the records carry refusals AND no denominator is declared, this
+        # run has a finding about the record set and NO coverage figure -- two
+        # separate answers to two separate questions. Reading `report
+        # ["coverage"]["rows"]` unconditionally raised TypeError on that path,
+        # and an escaping traceback exits 1, which is the code reserved for a
+        # finding. A crash publishing itself as a finding is the exact shape
+        # this file's siblings were repaired for; it is not going to be
+        # introduced here to fix them.
+        und = report.get("coverage_undetermined")
+        if und:
+            print(f"[CANNOT CHECK] coverage itself is UNDETERMINED and that is "
+                  f"a SEPARATE question from the refusals above: {und['detail']}"
+                  f" ({und['code']}). The rc is 1 for the records, not 0 for the "
+                  f"coverage -- no coverage figure was computed at all.",
+                  file=sys.stderr)
+        if report["mode"] == "coverage" and report.get("coverage"):
             absent = [row["metric"] for row in report["coverage"]["rows"]
                       if row["outcome"] == M.ABSENT]
             if absent:
@@ -420,7 +513,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"[REFUSE] an ESTIMATE stands where a measurement was "
                       f"owed: {', '.join(est)}. An estimate is never part of a "
                       f"final PPA claim. rc=1.", file=sys.stderr)
-        else:
+        elif report["mode"] != "coverage":
             print(f"[REFUSE] {report['comparison']['detail']} rc=1.",
                   file=sys.stderr)
     elif rc == RC_UNDETERMINED:

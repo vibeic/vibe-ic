@@ -324,7 +324,36 @@ def check_corpus(named: Path, require_impl_differs: bool = False,
             for j in range(i + 1, len(arms)):
                 (pa, da), (pb, db) = arms[i], arms[j]
                 pairs += 1
-                findings = compare_contracts(da, db, require_impl_differs)
+                try:
+                    findings = compare_contracts(da, db, require_impl_differs)
+                except Exception as exc:
+                    # AN INTERNAL ERROR IS NOT A FINDING, and without this the
+                    # traceback escaped and the interpreter exited 1 -- the code
+                    # §1 reserves for "these two runs were not solving the same
+                    # problem", a verdict nothing reached.
+                    #
+                    # MEASURED: two contracts that GROUP on a well-formed
+                    # `problem` identity but whose `analysis` is written as a
+                    # bare digest STRING instead of a record raise
+                    # AttributeError out of `identity.compare`. In corpus mode
+                    # ONE such document decides a row over an entire campaign --
+                    # the wired rows sweep 21 and 61 contracts.
+                    #
+                    # 2 AND NOT 3, for the same reason as the head-to-head
+                    # gate's: the INVOCATION was correct. A corpus where one
+                    # pair is badly shaped is not a bad invocation, and 3 would
+                    # let that pair decide a row about all the others. The pair
+                    # and the exception are NAMED, and so is the missing input.
+                    print(f"[{_GATE}] CANNOT CHECK: comparing {pa} against "
+                          f"{pb} raised {type(exc).__name__}: {exc}. Neither "
+                          f"contract was judged and this is NOT a finding "
+                          f"about either run. WHAT IS MISSING: a contract of "
+                          f"the shape schemas/ppa/contract.v1.schema.json "
+                          f"declares -- both documents parsed as JSON, so a "
+                          f"field one of them carries is not the type that "
+                          f"schema gives it. rc=2.", file=sys.stderr)
+                    group_rcs.append(corpus_seam.RC_UNDETERMINED)
+                    continue
                 # BOTH arms get their own mutation clause; see the docstring.
                 seen = {(f["code"], f["message"]) for f in findings}
                 for extra in C._check_mutations(da):
@@ -362,6 +391,168 @@ def check_corpus(named: Path, require_impl_differs: bool = False,
     return worst
 
 
+#: Module-level for the same reason as its siblings; see `corpus_candidates`.
+_CONTRACT_SCHEMA = C.CONTRACT_SCHEMA
+_NAME_GLOB = "**/*contract*.json"
+
+
+def corpus_candidates(corpus: Path, baseline: Path) -> List[Path]:
+    """Every contract under `corpus` that is NOT the baseline itself.
+
+    THE BASELINE IS NEVER PAIRED WITH ITSELF: a contract compared against
+    itself matches on every identity by construction, so counting it would let
+    a corpus of ONE document look checked.
+    """
+    corpus = Path(corpus)
+    try:
+        base = Path(baseline).resolve()
+    except OSError:                       # pragma: no cover - defensive
+        base = Path(baseline)
+    return [p for p in corpus_seam.population(corpus, is_contract, _NAME_GLOB)
+            if p.resolve() != base]
+
+
+def check_corpus_against_baseline(named: Path, baseline: str,
+                                 require_impl_differs: bool = False,
+                                 may_be_absent: bool = False,
+                                 json_out: Optional[str] = None) -> int:
+    """The NAMED baseline against every OTHER contract under `named`.
+
+    TWO QUESTIONS, NOT TWO SPELLINGS OF ONE (owner ruling, 2026-08-22).
+    `--corpus DIR` alone asks "does every arm of each problem agree with every
+    other arm" — more comparisons, no arbitrary baseline. `--baseline X
+    --corpus DIR` asks "does every published contract agree with THIS one" —
+    fewer comparisons, but the baseline is the thing under test. The flag
+    combination is how the caller says which question is being asked; it is not
+    a bad invocation and it is not a third contract.
+
+    THE CORPUS IS READ THROUGH THE SAME SEAM IN BOTH MODES. ABSENT, VACUOUS and
+    UNREADABLE keep their own verdicts here, because the property that stops an
+    empty corpus becoming a pass does not belong to one of the two questions —
+    it belongs to reading a corpus at all. An empty corpus is rc 2 whether or
+    not a baseline was named.
+
+    THE BASELINE IS NEVER PAIRED WITH ITSELF. A contract compared against
+    itself matches on every identity by construction, so counting it would be
+    the gate writing its own evidence and would make a corpus of ONE document
+    look checked.
+    """
+    corpus, rc = corpus_seam.open_corpus(named, _GATE, _SCANNED, may_be_absent)
+    if corpus is None:
+        return rc
+
+    base_path = Path(baseline)
+    base_doc, reason = C.load_json(base_path)
+    if reason is not None:
+        print(f"[CANNOT CHECK] ppa_problem_integrity_check: baseline "
+              f"{reason} No comparison was attempted, so this run establishes "
+              f"nothing about the corpus at {corpus}. rc=2.", file=sys.stderr)
+        return corpus_seam.RC_UNDETERMINED
+    if not isinstance(base_doc, dict):
+        print(f"[CANNOT CHECK] ppa_problem_integrity_check: baseline "
+              f"{base_path} holds a {type(base_doc).__name__}, not a contract. "
+              f"rc=2.", file=sys.stderr)
+        return corpus_seam.RC_UNDETERMINED
+
+    scan = corpus_seam.collect(corpus, is_contract)
+    # THE POPULATION COMES FROM `corpus_candidates`, the same function the unit
+    # tests assert on, so a test cannot pass against a walk this CLI does not
+    # use. It keeps an unreadable NAMED contract in, which is why the loop below
+    # re-reads each path instead of taking `scan.records`.
+    arm_paths = corpus_candidates(corpus, base_path)
+    print(f"ppa_problem_integrity_check --baseline {base_path} --corpus "
+          f"{corpus}: {scan.denominator(_SCANNED)}, {len(arm_paths)} to pair "
+          f"against the baseline")
+    if not arm_paths:
+        # VACUOUS, and it stays rc 2 even though a baseline WAS read: a gate
+        # that has never met a second arm cannot have cleared a comparison.
+        return corpus_seam.vacuous(_GATE, corpus, _SCANNED, scan)
+
+    rcs: List[int] = []
+    pair_rows: List[Dict[str, Any]] = []
+    for path in arm_paths:
+        doc, why = C.load_json(path)
+        if why is not None or not isinstance(doc, dict):
+            # UNREADABLE IS NOT ABSENT. The pair this file would have formed is
+            # REPORTED rc 2, never dropped: a comparison never attempted is not
+            # a finding about either design, and it is not a pass either.
+            print(f"[{_GATE}] CANNOT CHECK: {path} was NAMED a contract and "
+                  f"could not be read as one, so the pair it would have formed "
+                  f"with {base_path.name} was not attempted. rc=2.",
+                  file=sys.stderr)
+            rcs.append(corpus_seam.RC_UNDETERMINED)
+            pair_rows.append({"baseline": str(base_path),
+                              "candidate": str(path),
+                              "rc": corpus_seam.RC_UNDETERMINED,
+                              "findings": []})
+            continue
+        try:
+            findings = compare_contracts(base_doc, doc, require_impl_differs)
+        except Exception as exc:
+            # THE SAME RULING AS THE ALL-PAIRS LOOP ABOVE, applied to the loop
+            # that shares its shape. An internal error is not a finding, and
+            # rc 2 rather than rc 3 because the INVOCATION was correct: a
+            # corpus where one document is badly shaped is not a bad command
+            # line, and 3 would let that one pair decide a row about the 20 or
+            # 60 others beside it. The pair, the exception and the missing
+            # input are all NAMED.
+            print(f"[{_GATE}] CANNOT CHECK: comparing {base_path} against "
+                  f"{path} raised {type(exc).__name__}: {exc}. Neither "
+                  f"contract was judged and this is NOT a finding about "
+                  f"either run. WHAT IS MISSING: a contract of the shape "
+                  f"schemas/ppa/contract.v1.schema.json declares -- both "
+                  f"documents parsed as JSON, so a field one of them carries "
+                  f"is not the type that schema gives it. rc=2.",
+                  file=sys.stderr)
+            rcs.append(corpus_seam.RC_UNDETERMINED)
+            pair_rows.append({"baseline": str(base_path),
+                              "candidate": str(path),
+                              "rc": corpus_seam.RC_UNDETERMINED,
+                              "findings": []})
+            continue
+        # BOTH arms get their own mutation clause, exactly as the pair loop in
+        # `check_corpus` does; the baseline is an arm too.
+        seen = {(f["code"], f["message"]) for f in findings}
+        for extra in C._check_mutations(base_doc):
+            if (extra["code"], extra["message"]) not in seen:
+                findings.append(extra)
+        findings.sort(key=lambda f: (f["code"], f["message"]))
+        pair_rc = C.rc_from(findings)
+        rcs.append(pair_rc)
+        stream = sys.stdout if pair_rc == 0 else sys.stderr
+        print(f"{C.marker_for(pair_rc)} ppa_problem_integrity_check: "
+              f"{base_path} vs {path} — {len(findings)} finding(s)",
+              file=stream)
+        for line in C.format_findings(findings):
+            print(line, file=stream)
+        pair_rows.append({"baseline": str(base_path), "candidate": str(path),
+                          "rc": pair_rc, "findings": findings})
+
+    worst = corpus_seam.worst_rc(rcs)
+    refused = sum(1 for r in pair_rows if r["rc"] == 1)
+    undet = sum(1 for r in pair_rows if r["rc"] == 2)
+    print(f"ppa_problem_integrity_check --baseline {base_path} --corpus "
+          f"{corpus}: {len(pair_rows)} pair(s), {refused} refused, "
+          f"{undet} undetermined, "
+          f"{len(pair_rows) - refused - undet} comparable -> rc={worst}")
+    if refused:
+        print(f"REFUSED: {refused} of {len(pair_rows)} pair(s) were not solving "
+              f"the same problem as {base_path.name}, so those comparisons may "
+              f"not be quoted. An undetermined pair beside a refused one does "
+              f"not soften it.", file=sys.stderr)
+    if json_out:
+        atomic_write_text(Path(json_out), json.dumps({
+            "program": "ppa_problem_integrity_check", "mode": "baseline+corpus",
+            "corpus": str(corpus), "baseline": str(base_path),
+            "files_opened": scan.files,
+            "contracts": [str(path) for path, _ in scan.records],
+            "unreadable": [{"path": str(pp), "why": w}
+                           for pp, w in scan.unreadable],
+            "pairs": pair_rows, "rc": worst,
+        }, indent=2) + "\n")
+    return worst
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--baseline", default=None)
@@ -384,14 +575,46 @@ def main(argv=None) -> int:
         return _rc
 
     if args.corpus is not None:
-        if args.baseline is not None or args.candidate is not None:
-            return corpus_seam.both_given("ppa_problem_integrity_check",
-                                          "--baseline/--candidate", "--corpus")
+        # OWNER RULING 2026-08-22. `--corpus` alone and `--baseline X --corpus`
+        # are two DIFFERENT questions and the flag combination says which one.
+        # What is still a bad invocation is naming TWO POPULATION SOURCES, or
+        # asking both questions in one command:
+        #   * `--candidate Y --corpus Z` -- Y is a population of one and Z is a
+        #     population; running either silently reports a verdict about
+        #     something the caller did not ask about.
+        #   * `--baseline X --candidate Y --corpus Z` -- both questions at once.
+        # Both are rc 3, and the message names every flag that was given.
+        if args.candidate is not None:
+            given = ["--candidate", "--corpus"]
+            if args.baseline is not None:
+                given.insert(0, "--baseline")
+            return cli_exit.refuse(
+                "ppa_problem_integrity_check",
+                f"{', '.join(given)} were given together. --candidate names "
+                f"ONE document and --corpus names a population, so this asks "
+                f"for a verdict about two different subjects at once. Give "
+                f"--baseline A.json --candidate B.json for the pair, "
+                f"--corpus DIR for every pair within each problem identity, "
+                f"or --baseline A.json --corpus DIR for that baseline against "
+                f"the corpus")
+        if args.baseline is not None:
+            return check_corpus_against_baseline(
+                Path(args.corpus).resolve(), args.baseline,
+                args.require_implementation_differs,
+                args.corpus_may_be_absent, args.json_out)
         return check_corpus(Path(args.corpus).resolve(),
                             args.require_implementation_differs,
                             args.corpus_may_be_absent, args.json_out)
     if args.baseline is None or args.candidate is None:
-        ap.error("give --baseline A.json --candidate B.json, or --corpus DIR")
+        # `ap.error` exits 2, and PPA_INTERFACES §1 reserves 2 for "I could not
+        # look". An incomplete mode is a BAD INVOCATION, which is 3, and
+        # `cli_exit.refuse` is the one call that says so. The message names
+        # every mode this gate has -- a refusal that hides a mode is how a
+        # caller concludes the gate cannot do what it can.
+        return cli_exit.refuse(
+            "ppa_problem_integrity_check",
+            "give --baseline A.json --candidate B.json, or --corpus DIR, or "
+            "--corpus DIR --corpus-may-be-absent")
 
     docs = {}
     for label, path in (("baseline", args.baseline), ("candidate", args.candidate)):
@@ -435,4 +658,15 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # Anything raised OUTSIDE the per-pair loop: there the invocation
+        # itself is what failed, so §1's 3 is right. `ppa_contract_check` has
+        # worded it this way since the beginning.
+        print(f"{cli_exit.MARK_REFUSE} ppa_problem_integrity_check: internal "
+              f"error {type(exc).__name__}: {exc}. Nothing was compared. rc=3 "
+              f"(NOT a finding about any contract).", file=sys.stderr)
+        raise SystemExit(cli_exit.RC_BAD_INVOCATION)

@@ -1,5 +1,13 @@
 {
- "schema": "vibeic.ppa.comparison.v2",
+ "schema": "vibeic.ppa.ablation.v1",
+ "claim_scope": "within_project",
+ "isolates": "what the CROSS-LAYER search adds over a place-and-route-only search: both arms are winners of a search this project ran, at the same PnR knobs and under one contract, and the only thing that differs is whether the search was allowed to move above the PnR layer.",
+ "provenance": {
+  "former_path": "ppa-crosslayer/records/h2h_F.json",
+  "former_schema": "vibeic.ppa.comparison.v2",
+  "refused_as": "BASELINE_TUNED_BY_US",
+  "why": "Both arms declare `tuned_by_this_project: true`, and comparison.v2's entire claim is a comparison against an opponent we did NOT tune. ppa_head_to_head_check refused it, correctly. The RECORD was honest -- it stated the fact that convicts it -- and the document KIND was the lie. Nothing here is edited: every arm, every scope and every number is byte-identical to the refused document, which is the point. A measurement is not improved or damaged by being filed correctly."
+ },
  "arms": [
   {
    "flow": "vibe-ic-pnr-only-searched",

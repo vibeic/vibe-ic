@@ -112,7 +112,12 @@ PAD_ANSWERS = {
     "pad_site_name": "io_site",
     "pad_corner_site_name": "io_corner_site",
     "pad_edge_spacing_um": 10,
-    "pad_rotations": {"horizontal": "R0", "vertical": "R90", "corner": "R0"},
+    # `vertical` is R0, librelane's own default, DELIBERATELY: the placer does
+    # not read PAD_ROTATION_VERTICAL (measured in four separate OpenROAD runs
+    # -- R0/R90/R180/MX all give WEST MXR90 / EAST R90), so `pad_ring_gen`
+    # refuses rc 2 on any other declared value. A fixture declaring R90 would
+    # trip that refusal before reaching what these tests assert.
+    "pad_rotations": {"horizontal": "R0", "vertical": "R0", "corner": "R0"},
     "pad_corner_master": "pad_corner",
     "pad_fillers": ["pad_fill1"],
     "pad_signal_map": {PADS[n]: n for n in ALL_SIGNALS},

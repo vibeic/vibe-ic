@@ -195,11 +195,71 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
         # satisfied by anything that happens to be on the machine.
         "ppa_pnr_search_space.py":     ["--verify", a, "--programs-dir", d],
         "ppa_predict_aggregate.py":    ["--cell-count", "0"],
+        # FOUR THE TABLE WAS MISSING. Their absence was RED, not quiet -- the
+        # `pytest.fail(... its vacuous arm is untested)` below is this table
+        # refusing to be silently incomplete, which is the rule it holds the
+        # programs to. Each invocation is the program's OWN vacuous shape,
+        # measured before it was listed: the first two take a POSITIONAL
+        # document (`manifest`, `situation`), and pointing `--policy` at the
+        # absent file instead is a BAD INVOCATION rather than a vacuous one --
+        # rc 3 for a reason that has nothing to do with this arm.
+        "ppa_agent_context_build.py":  [a, "--out",
+                                        str(emptydir / "ctx.json")],
+        "ppa_diagnostic_router.py":    [a, "--json",
+                                        str(emptydir / "route.json")],
+        "ppa_pr_scope_check.py":       ["--repo", d, "--changed-file", a],
+        # A run DIRECTORY that is not there. See `_VACUOUS_RC` for why this
+        # program's declared answer is 3 and not 2.
+        "ppa_signoff_records.py":      [str(emptydir / "absent_run_dir")],
         "ppa_problem_integrity_check.py": ["--baseline", a, "--candidate", a],
         "ppa_report_gen.py":           [a],
         "ppa_search_run.py":           [a],
     }
     return table.get(prog)
+
+
+#: PROGRAMS WHOSE DECLARED VACUOUS ANSWER IS NOT 2, WITH THE ARGUMENT FOR IT.
+#: A DECLARATION, never an exemption: `returncode != 0` below is unconditional,
+#: so nothing here can buy a vacuous pass. Only the choice BETWEEN 2 and 3 is
+#: declarable, and `test_the_vacuous_rc_declaration_can_never_buy_a_pass` pins
+#: that.
+#:
+#: THE FAMILY DOES NOT AGREE, AND THAT IS WHY IT IS WRITTEN DOWN. Handed a path
+#: argument that does not resolve, two PPA programs answer differently and each
+#: has a stated rationale:
+#:
+#:   ppa_pr_scope_check   `--changed-file not found` -> rc 2. An input that is
+#:                        not there is something it could not look at.
+#:   ppa_signoff_records  a `run` that is not a directory -> rc 3, and its own
+#:                        test argues it: "3 and not 2: a path that is not
+#:                        there is the caller's error, and a 2 would be
+#:                        indistinguishable from 'I looked and could not
+#:                        tell'."
+#:
+#: Both readings are defensible and PPA_INTERFACES §1 does not adjudicate
+#: between them. Silently excluding the disagreement, or "fixing" one program
+#: to match a rule its own test argues against, would each bury a real question
+#: about the contract. It is recorded here, and in ppa-gate-audit/RESULT.md
+#: Part 17, as something the contract's owner settles.
+_VACUOUS_RC = {
+    "ppa_signoff_records.py": 3,
+}
+
+
+def test_the_vacuous_rc_declaration_can_never_buy_a_pass():
+    """The escape hatch's own guard.
+
+    A per-program expected code is one careless edit from becoming a way to
+    declare a vacuous PASS, which is the single thing this file exists to
+    refuse. 0 is not declarable, and neither is 1.
+    """
+    assert 0 not in _VACUOUS_RC.values(), (
+        "a program declared rc 0 as its vacuous answer; that is the vacuous "
+        "pass this whole file exists to prevent and it is not declarable")
+    assert 1 not in _VACUOUS_RC.values(), (
+        "a program declared rc 1 as its vacuous answer; 1 is a finding about "
+        "a design and nothing was measured")
+    assert set(_VACUOUS_RC.values()) <= {2, 3}
 
 
 @pytest.mark.parametrize("prog", PPA_PROGRAMS)
@@ -220,10 +280,13 @@ def test_vacuous_input_is_undetermined_not_pass(prog, tmp_path):
         f"{prog} exited 0 with nothing to look at (argv: {argv!r}). A checker "
         f"that passes over an empty population is the defect this codebase "
         f"exists to prevent.\nstdout: {r.stdout[:400]}")
-    assert r.returncode == 2, (
-        f"{prog} exited {r.returncode} with nothing to look at; §1 says an "
-        f"absent input is UNDETERMINED (2). 1 would be a finding about a "
-        f"design nobody measured.\nstderr: {r.stderr[-400:]}")
+    want = _VACUOUS_RC.get(prog, 2)
+    assert r.returncode == want, (
+        f"{prog} exited {r.returncode} with nothing to look at; the code this "
+        f"family expects here is {want}. §1 says an absent input is "
+        f"UNDETERMINED (2), and a program that answers 3 must DECLARE it in "
+        f"`_VACUOUS_RC` with its reason. 1 is never right: it would be a "
+        f"finding about a design nobody measured.\nstderr: {r.stderr[-400:]}")
 
 
 @pytest.mark.parametrize("prog", PPA_PROGRAMS)
