@@ -2091,7 +2091,7 @@ F1  BLOCKING (chip) — `only_the_declaring_step_writes_its_output` EXITS 1 ON T
     checker performs and my grep did not. The imprecise instrument was mine.
 
     The pair I traced first, in full:
-        spare_cell_coverage_check.py:222-225  canon = project/"reports"/
+        spare_cell_coverage_check.py:223-226  canon = project/"reports"/
             "spare_cell_coverage.json"; canon.write_text(out + "\n")
         phase3_one_shot_runner.py:21655-21658 cov_path = project/"reports"/
             "spare_cell_coverage.json"; cov_path.write_text(json.dumps(...))
@@ -3248,6 +3248,52 @@ spelling of the same one, and its rc 3 was a correct refusal of an incomplete
 runtime invocation. The published rule was right; my static instrument was
 wrong, and I nearly corrected a correct sentence on its word. Sixth entry in
 the same list, and the only one so far that ran the other way.
+```
+
+## EVERY CITATION IN THIS REPORT, CHECKED AGAINST THE TREE
+
+```text
+The `write_json` mis-citation was not a typo. It was a sentence that read like a
+fact about the repository, was never checked, and propagated into remedy advice
+for the one finding that blocks a landing. That is a class, not an incident, so
+I checked the class.
+
+    40 distinct file:line citations in this document
+     9 are my own fixture files (my_audit.py, sample_gate_check.py and the
+       like) and correctly do not exist in any repo tree
+    31 resolve to a real file, every one with the line in range
+
+F1's SIX DUAL WRITERS, the load-bearing set — I claimed to have hand-verified
+each, so each citation was re-run against the tree:
+
+    l21_doc_supply_rail_synth.py:582     l21.write_text(json.dumps(doc, indent=2
+    l21_macro_supply_rail_synth.py:741   l21.write_text(json.dumps(doc, indent=1
+    phase3_one_shot_runner.py:33561      _eco_log.write_text(json.dumps({
+    eco_status_gen.py:216                log_path.write_text(json.dumps(merged
+    phase3_one_shot_runner.py:33417      _eco_flag.write_text(
+    eco_status_gen.py:143                flag.write_text(
+    phase1_coverage_report_gen.py:910    md_path.write_text(_emit_md(report)
+    phase1_doc_one_shot_runner.py:51051  out_json.write_text(json.dumps(report
+    phase3_one_shot_runner.py:21655      cov_path = project / "reports" / ...
+
+    Nine of nine exact. The output also confirms a claim I had made about the
+    pair rather than shown: the two L21 writers really do differ in `indent`,
+    2 against 1, so which one runs last changes the file's bytes and not only
+    its provenance.
+
+ONE CITATION WAS OFF, and it is the tenth. `spare_cell_coverage_check.py` was
+cited as `:222-225` for "canon = ...; canon.write_text(...)". The assignment is
+at 223 and the write is at 226, so the range named neither end correctly — it
+started on a comment and stopped one line short of the thing it was cited for.
+Now `:223-226`. (Its bare form elsewhere in this report was `:222`, corrected to
+`:223` earlier today, which is how this one came to light at all.)
+
+WHAT THE AUDIT DOES NOT COVER, said plainly: this checks that a cited line
+exists and, where the document quotes a token beside it, that the token is
+there. It cannot check that the line means what the sentence around it claims.
+For the citations that carry a finding — F1's six, F15's two producers, F14's
+twenty offenders, F9's named sites — that stronger check was done by reading,
+and each is recorded in its own section.
 ```
 
 ## VERDICTS
