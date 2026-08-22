@@ -78,12 +78,35 @@ renewed; both remain expired and both therefore refuse a landing.
 >
 > What remains is one level up, in the AGGREGATION rather than the gate. The
 > dispatcher records a NO_CORPUS gate in the same `PASS` bucket as a gate that
-> actually adjudicated something, so the run's closing sentence reads
+> actually adjudicated something.
 >
->     all 93 gate(s) passed
+> **Costed, because a recommendation without a number is how the last one went
+> wrong.** `repo_hygiene_gates.sh` invokes exactly **10** gates with
+> `--corpus-may-be-absent`. Ran all 10 from a worktree OUTSIDE `$HOME`, where
+> the corpus is genuinely absent rather than accidentally found:
 >
-> for a run in which two of them opened nothing. The gate said "NOTHING WAS
-> SCANNED ... nothing is claimed about them" and the summary answered "passed".
+>     L-doc field producer              PASS   says NOTHING WAS SCANNED
+>     tracked-symlink portability       PASS   says NOTHING WAS SCANNED
+>     tracked-symlink target present    PASS   says NOTHING WAS SCANNED
+>     evidence citation resolves        PASS   says NOTHING WAS SCANNED
+>     citation routing is true          PASS   says NOTHING WAS SCANNED
+>     cross-layer reference regression  PASS   says NOTHING WAS SCANNED
+>     step FAIL bubbles up              PASS   says NOTHING WAS SCANNED
+>     L4 -> SystemRDL disposition       PASS   says NOTHING WAS SCANNED
+>     published-evidence index honest   PASS   says NOTHING WAS SCANNED
+>     published records not superseded  PASS   says NOTHING WAS SCANNED
+>
+>     RECORDED PASS WHILE REPORTING NOTHING SCANNED: 10 of 10
+>
+> and the roll-up:
+>
+>     declared 93   ran 10   decided 10   passed 10   failed 0
+>     "repo_hygiene_gates: all 93 gate(s) passed"
+>
+> So it is not two gates, it is **ten** — a ninth of the declared set — each
+> counted by `PROCESS_STATES` among those that "actually ran". The gates said
+> "NOTHING WAS SCANNED ... nothing is claimed about them"; the summary answered
+> "passed".
 > The machinery to say otherwise already half exists — the same run prints
 > *"1 loop corpus expanded over 0 item(s) — NOTHING was checked over"* — but
 > that is `GATE_CORPUS_STATE` in `tools/ci/_gate_dispatch.sh:1374`, which
