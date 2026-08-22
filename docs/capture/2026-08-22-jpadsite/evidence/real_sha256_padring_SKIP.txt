@@ -1,0 +1,48 @@
+THE PAD RING, RUN ON THE REAL sha256 TREE — the brief's item 4, first half
+===========================================================================
+The report claimed "pad_ring_gen SKIP, naming every absent variable" for the
+real tree and NO ARTEFACT BACKED IT. My claims-to-files audit covered FIGURES
+and missed a prose claim. Run now, artefact saved as
+`real_sha256_padring_SKIP.json`.
+
+    project    _bm_sha256_sky130A_121 (the 873 um tree, sky130A)
+    verdict    SKIP
+    reason     step 15.5ic has no pad ring to generate because 1 required
+               input is absent: phase3/stage3/pnr/pad_assignment.json
+    finding    INFO REQUIRED_INPUT_ABSENT, naming all 13 variables
+    exit       1
+
+AND THE SITE FIX WORKS THERE TOO, which this is the first run to show on the
+design's OWN PDK and its OWN tree:
+
+    io_cell_library resolved   True
+    declared sites found       ['sky130_io', 'sky130_io_corner']
+
+sky130A declares its pad sites in the TECH view, like gf180mcuD. Before the fix
+this lookup returned nothing on both.
+
+A MISMATCH FOUND, MEASURED, AND SMALLER THAN IT FIRST LOOKED
+------------------------------------------------------------
+The module's docstring says: "when the config is absent this program SKIPs,
+EXITS 2, and its report names the absent variables one by one." It exits 1.
+
+I checked whether this branch introduced it before saying anything else:
+
+    main's pad_ring_gen, same tree     EXIT=1  VERDICT=SKIP
+    this branch's, same tree           EXIT=1  VERDICT=SKIP
+    both, on a project with no DEF     EXIT=1  VERDICT=SKIP, missing=2
+
+PRE-EXISTING. Not a breakage claim against the batch.
+
+AND NOT CONSEQUENTIAL FOR FLOW VERDICTS, which I nearly asserted before
+checking. `pad_ring_gen` is listed under step 15.5ic's `programs:` but is NOT a
+gate clause -- the flow gates on `pad_assignment_gen` and `pad_ring_check`, and
+reads only their exit codes. The yaml says so in as many words: "`pad_ring_gen`'s
+own SKIP is left exactly as it is today."
+
+SO WHAT IT IS: a docstring that promises an exit code the program does not
+return, in a program whose exit code nothing reads. Real, worth fixing, worth
+nobody's night. A `next/` candidate -- and note that CHANGING it is a behaviour
+change to an exit code, which needs its own acceptance run even though no clause
+reads it today, because "nothing reads it today" is exactly the kind of fact
+that stops being true.

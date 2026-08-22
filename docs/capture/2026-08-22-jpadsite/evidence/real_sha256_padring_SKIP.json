@@ -1,0 +1,134 @@
+{
+  "schema": "vibe-ic/padring/1",
+  "program": "pad_ring_gen",
+  "verdict": "SKIP",
+  "reason": "SKIPPED: step 15.5ic has no pad ring to generate because 1 required input(s) are absent: `phase3/stage3/pnr/pad_assignment.json` (pad ring config) \u2014 every declared variable is absent: PAD_SOUTH, PAD_EAST, PAD_NORTH, PAD_WEST, PAD_SITE_NAME, PAD_CORNER_SITE_NAME, PAD_EDGE_SPACING, PAD_ROTATION_HORIZONTAL, PAD_ROTATION_VERTICAL, PAD_ROTATION_CORNER, PAD_CORNER, PAD_FILLERS, SIGNAL_MAP. This program does not derive a pad ring config: the side variables name INSTANCES that must already exist in the netlist, and choosing them would mean choosing which package pin each signal leaves on. See `required_upstream_declaration` in this report.",
+  "missing_inputs": [
+    {
+      "input": "pad ring config",
+      "path": "phase3/stage3/pnr/pad_assignment.json",
+      "variables_absent": [
+        "PAD_SOUTH",
+        "PAD_EAST",
+        "PAD_NORTH",
+        "PAD_WEST",
+        "PAD_SITE_NAME",
+        "PAD_CORNER_SITE_NAME",
+        "PAD_EDGE_SPACING",
+        "PAD_ROTATION_HORIZONTAL",
+        "PAD_ROTATION_VERTICAL",
+        "PAD_ROTATION_CORNER",
+        "PAD_CORNER",
+        "PAD_FILLERS",
+        "SIGNAL_MAP"
+      ]
+    }
+  ],
+  "required_upstream_declaration": [
+    "A step upstream of 15.5ic must emit `phase3/stage3/pnr/pad_assignment.json` declaring every variable in ['PAD_SOUTH', 'PAD_EAST', 'PAD_NORTH', 'PAD_WEST', 'PAD_SITE_NAME', 'PAD_CORNER_SITE_NAME', 'PAD_EDGE_SPACING', 'PAD_ROTATION_HORIZONTAL', 'PAD_ROTATION_VERTICAL', 'PAD_ROTATION_CORNER', 'PAD_CORNER', 'PAD_FILLERS', 'SIGNAL_MAP']. The names are upstream's, so a config that drives their pad placer drives this step unchanged.",
+    "(1) PAD_SOUTH / PAD_EAST / PAD_NORTH / PAD_WEST are ordered lists of INSTANCE names, and upstream resolves each against the block and reads the master off the instance. So the netlist handed to this step must already INSTANTIATE the IO cells. This flow's synthesis emits a bare core; no step instantiates one.",
+    "(2) PAD_SITE_NAME / PAD_CORNER_SITE_NAME must name PAD-class SITEs the PDK declares \u2014 in EITHER of the two views a distribution uses: a top-level SITE record in the IO library's LEFs, or a PAD_FAKE_SITES entry in the IO library's tech-view config, which is upstream's own PDK variable for `the LEF does not include the site definitions for the IO pads`. Measured: only half the IO libraries in the pinned image ship a LEF SITE record, and the ones that do not declare their sites the other way. A name declared by neither view is still refused.",
+    "(3) PAD_EDGE_SPACING, PAD_ROTATION_HORIZONTAL / _VERTICAL / _CORNER, PAD_CORNER and PAD_FILLERS complete the geometry. Without a filler the ring cannot abut, and abutment is what carries its supply.",
+    "(4) SIGNAL_MAP is this flow's addition: instance -> the top-level BTerm that pad brings out. Upstream needs none because it never checks that every port reached a pad; this step does.",
+    "Until those are declared this step has no input, and a ring generated without them would be an invented pin-out, not a measurement."
+  ],
+  "upstream_refusals_made_machine_readable": [
+    {
+      "rule": "PAD_CONFIG_VARIABLE_ABSENT",
+      "upstream_exit_1": "the TCL aborts on an unset $::env(...)"
+    },
+    {
+      "rule": "PAD_SITE_NOT_FOUND",
+      "upstream_exit_1": "\"No pad site <name> found.\""
+    },
+    {
+      "rule": "PAD_SITE_CLASS_NOT_PAD",
+      "upstream_exit_1": "\"Wrong class for pad site <name>: <c> (expected PAD).\""
+    },
+    {
+      "rule": "PAD_INSTANCE_NOT_IN_BLOCK",
+      "upstream_exit_1": "\"No instance <name> found.\""
+    },
+    {
+      "rule": "PAD_RING_DOES_NOT_FIT",
+      "upstream_exit_1": "\"Sum of cell widths for <side> is larger than the width of this side.\""
+    },
+    {
+      "rule": "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE",
+      "upstream_exit_1": "\"The remaining area for the pads on the side (<x>) is not divisible by the minimum site width.\""
+    }
+  ],
+  "config_variables_required": [
+    "PAD_SOUTH",
+    "PAD_EAST",
+    "PAD_NORTH",
+    "PAD_WEST",
+    "PAD_SITE_NAME",
+    "PAD_CORNER_SITE_NAME",
+    "PAD_EDGE_SPACING",
+    "PAD_ROTATION_HORIZONTAL",
+    "PAD_ROTATION_VERTICAL",
+    "PAD_ROTATION_CORNER",
+    "PAD_CORNER",
+    "PAD_FILLERS",
+    "SIGNAL_MAP"
+  ],
+  "inputs": {
+    "floorplan_def": "phase3/stage3/pnr/floorplan.def",
+    "pad_assignment": null
+  },
+  "io_cell_library": {
+    "resolved": true,
+    "lefs": [
+      "/foss/pdks/sky130A/libs.ref/sky130_fd_io/lef/sky130_ef_io.lef",
+      "/foss/pdks/sky130A/libs.ref/sky130_fd_io/lef/sky130_fd_io.lef"
+    ],
+    "n_masters": 71,
+    "n_sites": 0,
+    "pad_class_sites": [],
+    "site_declarations": [
+      "/foss/pdks/sky130A/libs.tech/librelane/sky130_ef_io/config.tcl"
+    ],
+    "n_declared_sites": 2,
+    "declared_pad_class_sites": [
+      "sky130_io",
+      "sky130_io_corner"
+    ],
+    "pad_class_sites_resolvable": [
+      "sky130_io",
+      "sky130_io_corner"
+    ],
+    "site_declaration_conflicts": {}
+  },
+  "config": null,
+  "die": null,
+  "padring_def": null,
+  "pads": [],
+  "corners": [],
+  "abutment": null,
+  "fillers_declared": [],
+  "fillers_placed": null,
+  "spacing": null,
+  "unperformed": {
+    "io_filler_placement": "not performed by this step \u2014 upstream's chip flow inserts filler as its own later step; the per-gap sizes this ring needs are in `abutment.gaps`. `fillers_placed` is null, never 0: an absent placement is not a placement of none"
+  },
+  "rotation_vertical_not_honoured": {
+    "variable": "PAD_ROTATION_VERTICAL",
+    "honoured": false,
+    "reason": "this step does not implement it. RE-MEASURED 2026-08-22 in OpenROAD 26Q3-1581, holding one rotation parameter and varying the other while watching all four sides: `-rotation_horizontal` moves WEST and EAST (the VERTICAL sides) and `-rotation_vertical` moves SOUTH and NORTH (the HORIZONTAL sides). The parameters are named for the ROW AXIS, not the side. The placer therefore DOES honour this variable, on the N/S rows; this step places N/S at the orientation the placer produces at librelane's default and implements no other. That is why a declared non-default is refused rather than ignored: the value would have had an effect and this step would not have produced it. (The history of this record's own earlier, wrong claim is in the module docstring, not here \u2014 an artefact field should state what is true now, not carry a correction a machine has to parse around.)",
+    "measured_orientation": {
+      "W": "MXR90",
+      "E": "R90"
+    },
+    "librelane_default": "R0",
+    "what_this_step_does": "emits the orientation the placer produces, so the DEF does not contradict its own geometry. A run that DECLARES a non-default value is refused NOT_DETERMINED rather than silently ignored \u2014 an author who sets a knob is entitled to be told the knob is not honoured HERE, which is a different and truer statement than telling them it does nothing."
+  },
+  "bterms": null,
+  "findings": [
+    {
+      "severity": "INFO",
+      "rule": "REQUIRED_INPUT_ABSENT",
+      "message": "`phase3/stage3/pnr/pad_assignment.json` (pad ring config) \u2014 every declared variable is absent: PAD_SOUTH, PAD_EAST, PAD_NORTH, PAD_WEST, PAD_SITE_NAME, PAD_CORNER_SITE_NAME, PAD_EDGE_SPACING, PAD_ROTATION_HORIZONTAL, PAD_ROTATION_VERTICAL, PAD_ROTATION_CORNER, PAD_CORNER, PAD_FILLERS, SIGNAL_MAP"
+    }
+  ]
+}

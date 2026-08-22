@@ -809,8 +809,26 @@ on this host, and I never ran it there. Doing so:
                                       = 873 x 873 um = 0.762 mm^2
                                       COMPONENTS 12113 — a placed core
     padring / pad_* artefacts         NONE
-    pad_ring_gen                      SKIP, naming every absent variable
-                                      (PAD_SOUTH ... PAD_SITE_NAME)
+    pad_ring_gen                      SKIP, naming all 13 absent variables.
+                                      RUN, not inferred — this claim had NO
+                                      artefact until 2026-08-22; the audit that
+                                      was supposed to catch that covered figures
+                                      and missed prose. Artefact:
+                                      evidence/real_sha256_padring_SKIP.json
+                                      and real_sha256_padring_SKIP.txt.
+    the site fix on the REAL tree     io_cell_library resolved=True, sites
+                                      ['sky130_io','sky130_io_corner'] via the
+                                      TECH view. First run to show the fix
+                                      working on the design's OWN PDK and OWN
+                                      tree, not on a project I built.
+    a mismatch, pre-existing          the module says SKIP "exits 2"; it exits
+                                      1. MAIN does the same, so this branch did
+                                      not introduce it, and `pad_ring_gen` is
+                                      not a gate clause so no flow verdict turns
+                                      on it — the yaml says its SKIP is "left
+                                      exactly as it is today". A docstring
+                                      promising an exit code nothing reads.
+                                      next/ candidate, not a breakage claim.
 
     what a ring could hold on that die:
         sky130A    side 873 - 2x200 - 2x0  = 473 um -> 5 pads/side, 20 total
