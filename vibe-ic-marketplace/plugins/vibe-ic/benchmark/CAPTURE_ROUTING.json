@@ -266,6 +266,10 @@
     "ppa.schema_coverage": {
       "bucket_A_program": "programs/_ppa/schema_validation.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "ppa.problem_identity": {
+      "bucket_A_program": "programs/ppa_problem_integrity_check.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     }
   },
   "default_routing": {

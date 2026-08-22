@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 33 records, and the seventeen already-program claims of which sixteen hold
+# The PPA cluster, DISTILLED — 34 records, and the seventeen already-program claims of which sixteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 33 records](#the-33-records)
+- [The 34 records](#the-34-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -84,7 +84,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 30 | deterministic rules — the default, and every one names its predicate |
+| **A** | 31 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -225,7 +225,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 33 records
+## The 34 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1036,7 +1036,7 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            30     (22 when the rule was written)
+    Bucket-A records            31     (22 when the rule was written)
     distinct target programs    16
     targets that are unwired     0
 
@@ -1306,6 +1306,34 @@ it emits one domain's adapter for everybody.
 **(o)** yes — on every sketch this lane produced.
 **(d)** yes, and it already has 23 instances outside this lane, in two sibling
 lanes that ran the same night and were captured by different agents.
+
+---
+
+### A-32 · every identity a scheme declares must state what may not sit in it · `ppa.problem_identity`
+
+From a request in a named source that this batch had not mined. Measured on the
+document that declares the scheme:
+
+    identities the scheme declares                      5
+    carrying a bold rule for what may NOT sit in them   1
+      (`analysis`, the one whose violation was found first)
+    carrying none                                       4
+
+The rule is not absent because nobody thought of it. It is written, in bold, one
+identity over, in the same section — which is why the gap is invisible to a
+reader who checks that the document addresses the question at all.
+
+**The cost is concrete and it is why the request was made.** A cross-layer search
+has to place the specification in `problem` and the rewritten design in
+`implementation`. Because that membership rule is unstated, the obvious reading
+of the document makes the integrity checker refuse every legitimate cross-layer
+comparison — so the unwritten rule does not merely permit a mistake, it forbids
+correct work.
+
+**(o)** yes — it is the request, and the request exists because the omission bit.
+**(d)** yes: the predicate is presence of a stated rule per declared identity, so
+it covers the remaining three the moment anyone tries a run whose shape the
+existing examples do not anticipate, which is exactly when it is needed.
 
 ---
 
@@ -1660,7 +1688,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          30     (26 when the rubric was applied)
+    Bucket-A records                          31     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1714,9 +1742,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 33 records**:
+the patterns were unchecked by anything. Over **all 34 records**:
 
-    pairs compared                      528
+    pairs compared                      561
     maximum similarity                 0.38
     pairs above 0.40                      0
 
@@ -2098,7 +2126,7 @@ what it contains. Mapped properly:
 | # | request | this batch |
 |---|---|---|
 | 1 | give the runner a first-class synthesis-strategy flag | **unmined** — and it carries a rule: a lever with no actuator has to be turned by writing into the design's own input tree, and the runner's ingest line then reports it as *the design's* declaration |
-| 2 | state that an artefact the search may rewrite cannot sit in the `problem` identity | **unmined** — and it is the same rule as one already enforced for a NEIGHBOURING identity, which is this cluster's signature shape |
+| 2 | state that an artefact the search may rewrite cannot sit in the `problem` identity | **now recorded as A-32**, and measured wider than the request: the scheme declares five identities and exactly one states what may not sit in it |
 | 3 | the timing module should omit scope keys it cannot establish, not write null | partly **A-2**, from the producer side |
 | 4 | fix the Phase-3 power session or stop the report claiming post-PnR | the class is **F-7** in the eighteen |
 | 5 | a `drv` producer | **A-1** exactly — the axis with no producer for any of its proof names |
@@ -2547,7 +2575,7 @@ rather than in a command line that would fail for whoever tried it.
 
 ## Summary
 
-**STATUS**: 33 records emitted and validated — 30 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 34 records emitted and validated — 31 Bucket A, 2 C, 1 T, zero B,
 zero D. 17 ALREADY-PROGRAM claims examined, 16 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -2575,7 +2603,7 @@ bucket. My 27 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 17 claims, **16 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 7 | A-3, A-4, A-13, A-22, A-25, A-30, A-31 |
+| **EXTRACT-NEW** | 8 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -2716,6 +2744,7 @@ gap was non-empty every single time it was measured.
 | A-29 | 4 lanes | **3 wrong** | not my measurement — the convention commit's own |
 | A-30 | 1 raise site | **guard cannot fail** | proven by mutation; stated over semantics, not the syntax |
 | A-31 | 52 of 52 | **29 + 13 + 10** | the emitter's own template, across three lanes; not one step takes those inputs |
+| A-32 | 5 identities | **1 states its rule** | the prohibition exists in bold, one identity over, in the same section |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |
