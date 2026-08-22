@@ -2029,6 +2029,15 @@ is worse than the twelve that lied, and the reasoning that let me do it —
 dangerous to read linearly. It is the argument for §43's header, made against
 myself.
 
+*(Outcome, added after `jmeas3` checked the repair rather than taking my alarm
+on faith: the fix DID land clean at `7db242dec` — both surviving occurrences of
+the false sentence are inside corrections that QUOTE it, §51 itself reads
+"only SIXTEEN of them are NEW", and no standing assertion remains. I registered
+that entry from the pre-repair state, and a self-reported failure is easy to
+leave heavier than it ended up. **The instrument entry stands unsoftened**: the
+script printed CHECK and was overridden, and the outcome being fine does not
+retire the lesson.)*
+
 **A SIXTEENTH claim, and it landed in the navigation header itself.** "21 files
 run for the first time" was quoted in the header written to stop readers acting
 on stale numbers. Recounted from the three source lists, deduplicated: 2
