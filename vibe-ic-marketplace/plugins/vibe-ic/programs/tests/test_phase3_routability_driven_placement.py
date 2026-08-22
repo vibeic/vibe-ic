@@ -114,7 +114,7 @@ def test_default_emits_routability_driven_global_placement():
     assert "-routability_driven" in gp[0]
     # -density must still be present with the util value.
     assert "-density 0.45" in gp[0]
-    assert gp[0].strip() == "global_placement -routability_driven -density 0.45"
+    assert gp[0].strip() == "global_placement -routability_driven -timing_driven -density 0.45"
 
 
 def test_density_flag_tracks_util_value():
@@ -136,7 +136,8 @@ def test_routability_off_emits_plain_density_placement():
     gp = _gp_cmd_lines(tcl)
     assert len(gp) == 1
     assert "-routability_driven" not in gp[0]
-    assert gp[0].strip() == "global_placement -density 0.45"
+    # timing_driven remains DEFAULT-ON independently of routability.
+    assert gp[0].strip() == "global_placement -timing_driven -density 0.45"
 
 
 # ── optional padding knob: OFF by default, correct syntax when enabled ─────
@@ -250,8 +251,8 @@ def test_default_only_adds_routability_flag_vs_plain():
     plain = _build(routability_driven=False)
     routab = _build()
     assert plain.replace(
-        "global_placement -density 0.45",
-        "global_placement -routability_driven -density 0.45") == routab
+        "global_placement -timing_driven -density 0.45",
+        "global_placement -routability_driven -timing_driven -density 0.45") == routab
 
 
 # ── container OpenROAD flag verification (runs where openroad is on PATH) ───
@@ -264,7 +265,123 @@ def test_openroad_accepts_routability_driven_flag():
     res = subprocess.run(
         ["openroad", "-no_init", "-exit"],
         input="help global_placement\n",
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     out = res.stdout + res.stderr
     assert "-routability_driven" in out
+    assert "-timing_driven" in out
     assert re.search(r"-density\s+target_density", out)
+
+
+# -- timing-driven placement: DEFAULT-ON slack-weighted global placement ----
+# ORGANIC (sha256 x sky130A): routability_driven placement left the SS
+# post-route setup WNS deeply negative because global placement was BLIND to
+# the 25.907 ns clock. `-timing_driven` net-weights placement by setup slack so
+# critical-path cells cluster. Negative control: git-checkout the pre-fix runner
+# -> these assertions fail (no global_placement line carries -timing_driven).
+
+
+def test_timing_driven_on_by_default():
+    gp = _gp_cmd_lines(_build())
+    assert len(gp) == 1
+    assert "-timing_driven" in gp[0]
+
+
+def test_timing_driven_default_line_is_exact():
+    assert _gp_cmd_lines(_build())[0].strip() == (
+        "global_placement -routability_driven -timing_driven -density 0.45")
+
+
+def test_timing_driven_off_when_disabled():
+    gp = _gp_cmd_lines(_build(timing_driven=False))
+    assert len(gp) == 1
+    assert "-timing_driven" not in gp[0]
+    assert gp[0].strip() == "global_placement -routability_driven -density 0.45"
+
+
+def test_timing_and_routability_both_off_is_plain_density():
+    gp = _gp_cmd_lines(_build(routability_driven=False, timing_driven=False))
+    assert len(gp) == 1
+    assert gp[0].strip() == "global_placement -density 0.45"
+
+
+# ── approach (a): multi-corner liberty for the PnR session (ss setup/ff hold) ──
+# Repair the SLOW (ss) setup corner BEFORE detailed route by loading the PDK's
+# OWN ss/tt/ff corner libs into the PnR session (define_corners + read_liberty
+# -corner), so repair_timing -setup optimizes ss instead of only tt. RED on the
+# pre-fix runner: `_build_pnr_tcl_text` has no `corner_liberty_block` kwarg
+# (TypeError) and `_v1_5_37a_multicorner_pnr_block` does not exist
+# (AttributeError) — every assertion below fails until the fix is wired in.
+
+def _liberty_cmd_lines(tcl: str):
+    return [ln for ln in _command_lines(tcl)
+            if ln.lstrip().startswith("read_liberty")]
+
+
+def test_corner_liberty_none_is_byte_identical_single_read_liberty():
+    # Pure additive knob: OFF (None) keeps the exact single-corner read_liberty.
+    assert _liberty_cmd_lines(_build()) == ["read_liberty /pdk/lib.lib"]
+    assert _liberty_cmd_lines(_build(corner_liberty_block=None)) == [
+        "read_liberty /pdk/lib.lib"]
+
+
+def test_corner_liberty_block_replaces_single_read_liberty():
+    block = ("define_corners ss tt ff\n"
+             "read_liberty -corner ss /pdk/ss.lib\n"
+             "read_liberty -corner tt /pdk/tt.lib\n"
+             "read_liberty -corner ff /pdk/ff.lib")
+    tcl = _build(corner_liberty_block=block)
+    libs = _liberty_cmd_lines(tcl)
+    # the bare single-corner read_liberty is GONE, replaced by per-corner reads.
+    assert "read_liberty /pdk/lib.lib" not in libs, libs
+    assert libs == [
+        "read_liberty -corner ss /pdk/ss.lib",
+        "read_liberty -corner tt /pdk/tt.lib",
+        "read_liberty -corner ff /pdk/ff.lib",
+    ]
+    cmds = _command_lines(tcl)
+    assert "define_corners ss tt ff" in cmds
+    # corners+libs are loaded BEFORE read_verilog so repair sees ss on the
+    # placed cells that route in the normal detailed-route pass.
+    dc_idx = next(i for i, ln in enumerate(cmds)
+                  if ln.startswith("define_corners"))
+    rv_idx = next(i for i, ln in enumerate(cmds)
+                  if ln.startswith("read_verilog"))
+    assert dc_idx < rv_idx
+
+
+def test_multicorner_block_none_when_pdk_lacks_distinct_corners(monkeypatch):
+    # <2 distinct process libs -> None -> caller keeps single-corner PnR
+    # (chip/PDK-AGNOSTIC: a PDK that ships one lib is never forced multi-corner).
+    monkeypatch.setattr(R, "_resolve_signoff_corner_libs",
+                        lambda *a, **k: {"TT": "/pdk/tt.lib"})
+    assert R._v1_5_37a_multicorner_pnr_block(
+        Path("/proj"), _pdk(), "", "/pdk/tt.lib") is None
+    # all corners collapsing to the SAME lib is also <2 distinct -> None.
+    monkeypatch.setattr(
+        R, "_resolve_signoff_corner_libs",
+        lambda *a, **k: {"SS": "/x.lib", "TT": "/x.lib", "FF": "/x.lib"})
+    assert R._v1_5_37a_multicorner_pnr_block(
+        Path("/proj"), _pdk(), "", "/x.lib") is None
+
+
+def test_multicorner_block_built_from_pdk_own_corner_libs(monkeypatch):
+    monkeypatch.setattr(
+        R, "_resolve_signoff_corner_libs",
+        lambda *a, **k: {"SS": "/pdk/ss.lib", "TT": "/pdk/tt.lib",
+                         "FF": "/pdk/ff.lib"})
+    out = R._v1_5_37a_multicorner_pnr_block(
+        Path("/proj"), _pdk(), "", "/pdk/tt.lib")
+    lines = out.splitlines()
+    assert lines[0] == "define_corners ss tt ff"
+    assert "read_liberty -corner ss /pdk/ss.lib" in lines
+    assert "read_liberty -corner tt /pdk/tt.lib" in lines
+    assert "read_liberty -corner ff /pdk/ff.lib" in lines
+
+
+def test_multicorner_block_is_best_effort_none_on_resolver_failure(monkeypatch):
+    # A resolver crash must NEVER take down the PnR flow — best-effort -> None.
+    def _boom(*a, **k):
+        raise RuntimeError("no corner libs available")
+    monkeypatch.setattr(R, "_resolve_signoff_corner_libs", _boom)
+    assert R._v1_5_37a_multicorner_pnr_block(
+        Path("/proj"), _pdk(), "", "/pdk/tt.lib") is None
