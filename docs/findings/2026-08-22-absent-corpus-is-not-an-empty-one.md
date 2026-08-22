@@ -1,4 +1,4 @@
-# An ABSENT corpus is not an EMPTY one — the ruling, and the measurement behind it
+# An ABSENT corpus is not an EMPTY one — and calling it one closed the gate GREEN
 
 _Measured 2026-08-22 on host `8HD-6`, against `origin/main` at `81cd5321b` and
 against `fix/j1764-absent-is-not-empty`, with the SHIPPED
@@ -45,6 +45,34 @@ that state:
     state B, rc 0: MEASURED EMPTY: git's index at <corpus> was read under 'ic'
                    and it publishes no */*/phase3/stage3/pnr/routed.def. This IS
                    a measurement …
+
+## The part that was not cosmetic: `main` closed GREEN over state A
+
+#1764 reads as a wording defect because both states already refuse at
+`gate_dispatch_finish` (rc 2), and they do. But `gate_dispatch_finish` is not
+the closing verdict of the hygiene tier. `repo_hygiene_parallel._summary_rc` is,
+and it **waives exactly one unexempted NOT_CHECKED**: the phase-1 bootstrap row
+for a corpus that was READ and publishes nothing.
+
+An absent corpus reached that waiver wearing the same label and the same
+`expansion`, so it was waived too. Measured on real wiring — the real producer
+through the real `_gate_dispatch.sh`, then the real `_summary_rc`:
+
+| tree | state | `expansion` | `gate_dispatch_finish` | **`_summary_rc`** |
+|---|---|---|---|---|
+| `origin/main` | A absent | `EXPANDED` | 2 | **0 — a PASS** |
+| `origin/main` | B read-empty | `EXPANDED` | 2 | 0 — intended bootstrap |
+| this branch | A absent | `NO_CORPUS` | 2 | **2 — refused** |
+| this branch | B read-empty | `EXPANDED` | 2 | 0 — **unchanged** |
+
+So a bare checkout with no pointer ran the hygiene tier, reported enforcement,
+and closed green over a corpus nothing had opened. **The row wording was the
+symptom; this was the cost.** It is also exactly what the brief forbids: *do not
+make either state a pass.*
+
+Both the label and `expansion == "EXPANDED"` are now load-bearing in
+`_legacy_empty_without_process`, and the source says so, so an absent corpus
+fails the shape check even if some future caller hands it the EMPTY label.
 
 ## The ruling: which is blocking
 
@@ -103,9 +131,29 @@ Both states, as a pair, because the collapse was a statement about a pair:
 * `test_a_producer_that_claims_absence_and_prints_items_is_a_failure`.
 * `test_a_corpus_nothing_opened_is_not_reported_as_one_that_was_read` — the
   downstream delta may not re-collapse what the dispatcher split.
+* `test_an_absent_corpus_does_not_close_the_hygiene_dag_green` — **the one that
+  matters**: both states end to end through the real wiring, asserting the
+  closing rc of the DAG. A hand-built record could not show this, because on
+  `main` the defect *is* that the absent state is handed the empty row's label;
+  a fixture that types the right label in has already fixed the bug it tests.
+* `test_the_phase1_waiver_covers_the_measured_empty_row_and_not_the_absent_one`
+  and `test_the_waiver_checks_the_shape_and_not_only_the_label` — these two pass
+  on `main` as well. They are guards for the future, not the red, and this
+  record does not claim otherwise.
 
 **Red without the fix**, production code reverted to `origin/main` and the tests
-kept: `5 failed, 13 passed`, the sharpest being the machine-readable record —
+kept: `5 failed, 13 passed` on the row-identity set, plus the closing-rc test.
+The sharpest is the last one, because the log it captures contains the entire
+defect in one place — the producer says it scanned nothing, and one line later
+the run calls the corpus empty and closes 0:
+
+    [routed-def corpus] NO_CORPUS: nothing at …/benchmark-data/ic and
+    VIBE_IC_BENCHMARK_DATA is unset … NOTHING WAS SCANNED
+       ^^ NOT CHECKED (rc 2, BLOCKING): corpus "…" is EMPTY
+    AssertionError: the parallel hygiene DAG closed GREEN (rc 0) over a corpus
+    that was NEVER OPENED … assert 0 == 2
+
+and, in the machine-readable record,
 
     assert [{'name': 'published cells carrying a routed DEF', 'items': 0,
              'gates': 1, 'expansion': 'EXPANDED'}]     <- a MEASURED population
