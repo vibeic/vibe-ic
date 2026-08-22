@@ -1,0 +1,50 @@
+*** THE NUMBERS BELOW ARE CORRECT. THE CONCLUSION DRAWN FROM THEM WAS NOT. ***
+These measurements stand -- separate processes per argument pair, row identity
+confirmed by die position. What was wrong is the reading: the tool's documented
+convention makes every number here its intended behaviour. Read
+`f3_bucket_T_WITHDRAWN.txt` before drawing anything from this file.
+
+########## ROTH=R0 ROTV=R0
+##### roth=R0 rotv=R0
+  pw0 orient=MXR90 dx=350.0 dy=75.0
+  pw1 orient=R90 dx=350.0 dy=75.0
+  ps0 orient=R0 dx=75.0 dy=350.0
+  ps1 orient=MX dx=75.0 dy=350.0
+########## ROTH=R0 ROTV=R90
+##### roth=R0 rotv=R90
+  pw0 orient=MXR90 dx=350.0 dy=75.0
+  pw1 orient=R90 dx=350.0 dy=75.0
+  ps0 orient=R90 dx=350.0 dy=75.0
+  ps1 orient=MYR90 dx=350.0 dy=75.0
+########## ROTH=R0 ROTV=R180
+##### roth=R0 rotv=R180
+  pw0 orient=MXR90 dx=350.0 dy=75.0
+  pw1 orient=R90 dx=350.0 dy=75.0
+  ps0 orient=R180 dx=75.0 dy=350.0
+  ps1 orient=MY dx=75.0 dy=350.0
+########## ROTH=R0 ROTV=MX
+##### roth=R0 rotv=MX
+  pw0 orient=MXR90 dx=350.0 dy=75.0
+  pw1 orient=R90 dx=350.0 dy=75.0
+  ps0 orient=MX dx=75.0 dy=350.0
+  ps1 orient=R0 dx=75.0 dy=350.0
+########## ROTH=R90 ROTV=R0
+##### roth=R90 rotv=R0
+  pw0 orient=MX dx=75.0 dy=350.0
+  pw1 orient=R180 dx=75.0 dy=350.0
+  ps0 orient=R0 dx=75.0 dy=350.0
+  ps1 orient=MX dx=75.0 dy=350.0
+########## ROTH=R180 ROTV=R0
+##### roth=R180 rotv=R0
+  pw0 orient=MYR90 dx=350.0 dy=75.0
+  pw1 orient=R270 dx=350.0 dy=75.0
+  ps0 orient=R0 dx=75.0 dy=350.0
+  ps1 orient=MX dx=75.0 dy=350.0
+########## ROTH=MX ROTV=R0
+##### roth=MX rotv=R0
+  pw0 orient=R90 dx=350.0 dy=75.0
+  pw1 orient=MXR90 dx=350.0 dy=75.0
+  ps0 orient=R0 dx=75.0 dy=350.0
+  ps1 orient=MX dx=75.0 dy=350.0
+26Q3-1607-g27fd905b8a 
+PROBE_COMPLETE

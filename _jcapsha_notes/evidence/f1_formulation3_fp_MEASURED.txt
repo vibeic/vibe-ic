@@ -1,0 +1,24 @@
+=== gf180mcuD  views: ['.config', 'libs.ref', 'libs.tech']
+    real site declared in the tech view    'GF_IO_Site'           -> FIRES: libs.tech/librelane/gf180mcu_ocd_io/config.tcl
+    exists NOWHERE (true absence)          'zz_no_such_site_zz'   -> silent
+    SHORT generic name (the FP risk)       'io'                   -> FIRES: .config/nodeinfo.json
+    plausible-but-absent name              'core'                 -> FIRES: libs.tech/xyce/smbb000149.xyce
+=== sky130A  views: ['.config', 'libs.ref', 'libs.tech']
+    real site declared in the tech view    'sky130_io'            -> FIRES: libs.tech/librelane/sky130_ef_io/config.tcl
+    exists NOWHERE (true absence)          'zz_no_such_site_zz'   -> silent
+    SHORT generic name (the FP risk)       'io'                   -> FIRES: .config/nodeinfo.json
+    plausible-but-absent name              'core'                 -> FIRES: libs.tech/ngspice/spinit
+
+--- SAME QUESTION, ASKED THROUGH THE DECLARATION GRAMMAR ---
+=== gf180mcuD
+    declared-in-unread-view names: ['GF_COR_Site', 'GF_IO_Site']
+    real site declared in the tech view    'GF_IO_Site'           -> FIRES (size (0.1, 355.0))
+    exists NOWHERE (true absence)          'zz_no_such_site_zz'   -> silent
+    SHORT generic name (the FP risk)       'io'                   -> silent
+    plausible-but-absent name              'core'                 -> silent
+=== sky130A
+    declared-in-unread-view names: ['sky130_io', 'sky130_io_corner']
+    real site declared in the tech view    'sky130_io'            -> FIRES (size (1.0, 200.0))
+    exists NOWHERE (true absence)          'zz_no_such_site_zz'   -> silent
+    SHORT generic name (the FP risk)       'io'                   -> silent
+    plausible-but-absent name              'core'                 -> silent

@@ -1,0 +1,49 @@
+THE BUCKET-T RECORD IS WITHDRAWN. The tool is correct; I filed a defect against
+it without reading its documentation.
+
+WHAT I FILED
+  "The IO-row builder applies its two named rotation arguments to each other's
+  rows." Measured across seven processes, row identity confirmed by die
+  position, reproduced on two builds. The MEASUREMENTS ARE ALL CORRECT. The
+  INFERENCE from them was not.
+
+WHAT REFUTES IT — the tool's own documented contract, at the pinned commit:
+
+  -horizontal_site      "Name of the site for the horizontal pads (EAST AND
+                         WEST)."
+  -vertical_site        "Name of the site for the vertical pads (NORTH AND
+                         SOUTH)."
+  -rotation_horizontal  "Rotation to apply to the horizontal sites... The
+                         default value is R0 for the western (left) row when
+                         different sites are specified for horizontal and
+                         vertical rows; the default value is MXR90 when the
+                         SAME site is specified."
+  -rotation_vertical    "...default R0 for the southern (bottom) row."
+
+"Horizontal" names the horizontally-ORIENTED PADS, which sit on the east and
+west rows. It does not name the horizontal rows. Under that convention every
+number I measured is the documented behaviour -- including the MXR90 I found on
+the western pad at the default, which the table above predicts exactly, because
+upstream passes the SAME site to both arguments.
+
+The source agrees and is not crossed:
+  create_row(kRowNorth, vertical_site,   ..., rotation_ver, ...)
+  create_row(kRowEast,  horizontal_site, ..., rotation_hor, ...)
+  create_row(kRowSouth, vertical_site,   ..., rotation_ver, ...)
+  create_row(kRowWest,  horizontal_site, ..., rotation_hor, ...)
+
+HOW I GOT IT WRONG. I dumped the tool's Tcl layer, confirmed it passes the two
+arguments in declared order, and reasoned about what the argument NAMES must
+mean. I never fetched the page that defines them. Naming an inference "measured"
+because the numbers under it were measured is the failure here: the table was
+real, the reading of it was mine.
+
+WHAT IS ACTUALLY WRONG, AND IT IS OURS
+  ours   PAD_ROTATION_HORIZONTAL -> SOUTH/NORTH,  PAD_ROTATION_VERTICAL -> WEST/EAST
+  tool   rotation_horizontal     -> EAST/WEST,    rotation_vertical     -> NORTH/SOUTH
+
+Our step's side-to-variable mapping is INVERTED with respect to the contract of
+the tool it re-implements. That is the same class as the other two findings in
+this capture -- a re-implementation drifting from its upstream -- on the
+CONVENTION this time, rather than on the input set or the arithmetic. It is
+invisible at the default because both variables carry R0 there.

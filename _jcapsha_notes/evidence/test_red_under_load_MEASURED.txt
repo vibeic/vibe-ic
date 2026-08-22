@@ -1,0 +1,142 @@
+THE RED IS ENVIRONMENTAL, AND HERE IS THE LOAD BESIDE THE NUMBER.
+
+  test_issue1130_wiring_population_parity
+    ::test_the_wiring_gates_state_their_denominator_on_a_clean_run
+      [checker_execution_wiring_audit.py]        subprocess.TimeoutExpired @ 55s
+
+NOT an assertion failure. The test bounds the program at 55s and documents its
+own basis: "MEASURED, 3 runs each on a loaded host: checker_execution_wiring_
+audit 18.9-20.3s. 55s is ~2.7x the slowest observed."
+
+MEASURED HERE, with the load beside it, because a timing number without the
+load next to it is not a measurement:
+
+    suite green earlier this session   33s        load average ~4.8   (32 cores)
+    suite red now                      113s       load average 64.13  (32 cores)
+    the program alone, run 1           117.0s     load at start 64.13
+
+Load 64 on 32 cores is 2x oversubscription. The program is ~6x its documented
+baseline, which the load fully accounts for.
+
+ATTRIBUTION, PROVEN NOT ASSUMED: this branch changes exactly one shipped file,
+`benchmark/CAPTURE_ROUTING.json`. `checker_execution_wiring_audit.py` contains
+ZERO references to it, so the change cannot reach the program that timed out.
+
+WHAT I DID NOT DO: raise the timeout. The bound is an assertion about how long
+the program may take, and raising it to turn a red green is the one move that is
+forbidden here -- doubly so when the red is environmental and the bound is
+correct. The standing rule for this host is not to begin timeout adjudication
+while load exceeds core count.
+
+STATUS: UNDETERMINED under load, with the named cause. Re-run when load drops.
+
+--- SECOND ADJUDICATION ATTEMPT, and it is STILL not clean ---
+
+Waited for the 1-minute load average to fall below the core count, then ran the
+suite alone:
+
+    LOAD_AT_START = 31.73   (cores 32)   waited 150s
+    result        = 1 failed, 6 passed in 79.39s
+    LOAD_AT_END   = 80.77
+
+The gate on the START load passed and the load then climbed to 2.5x the core
+count DURING the run. So this is a second failure, not a second measurement: a
+wall-clock bound adjudicated under moving load says nothing the first run did
+not already say.
+
+Two data points now agree with the load explanation and neither ESTABLISHES it.
+Wall-clock comparison is the wrong instrument for a contended host. The right
+one is CPU time, which does not move with load: if the program's user+sys time
+is near its documented 18.9-20.3s baseline while its wall time is 4-6x that,
+contention is proven rather than inferred. That measurement is running.
+
+STATUS UNCHANGED: UNDETERMINED, with the named cause. Not green, not a
+regression, and not adjudicated by repeating a run under a load that is still
+climbing.
+
+--- THE LOAD-INDEPENDENT MEASUREMENT, and it does NOT say what I expected ---
+
+    User time            38.56 s
+    System time           1.09 s      -> CPU time ~= 39.7 s
+    Elapsed (wall)      162.04 s
+    Percent of CPU          24 %      (the job waited for 76% of its wall time)
+    load at start 96.21   ->   load at end 130.90
+
+The test documents this program's baseline as 18.9-20.3 s. Its CPU time here is
+about DOUBLE that, and CPU time is precisely the quantity that does NOT inflate
+with contention the way wall time does -- system time is only 1.09 s, so this is
+not scheduler churn.
+
+So the load explanation I published is NOT established by this, and may be
+wrong. Two candidates, and preference cannot choose between them:
+
+  (a) the program's CPU WORK HAS GROWN since the baseline was taken -- a real,
+      load-independent regression living on main, which this branch neither
+      caused (0 references) nor would have found without the red; or
+  (b) contention at load ~100-130 inflates user time ~2x through cache and
+      memory pressure, which is possible but a stretch at 2x with sys time flat.
+
+A POSITIVE CONTROL separates them, and is running: `gate_is_wired_check` is the
+SIBLING in the same parametrised test, it PASSED in the same run, and it carries
+its own documented baseline of 14.3-14.7 s. Measured under the SAME load:
+  near 14-15 s CPU  -> this host is not inflating user time, and the wiring
+                       audit's 39.7 s is REAL, i.e. explanation (a);
+  near 30 s CPU     -> contention inflates ~2x and explains both, i.e. (b).
+
+UNTIL THAT RETURNS THE STATUS IS UNDETERMINED, and my earlier write-up
+overstated it: I called the red environmental on wall-clock evidence alone, which
+is the wrong instrument on a contended host. That sentence is corrected here
+rather than left standing.
+
+--- THE POSITIVE CONTROL, AND THE RESOLUTION ---
+
+`gate_is_wired_check` -- the SIBLING in the same parametrised test, which PASSED
+in the same run -- measured under the same load:
+
+    User 25.20 s + Sys 0.32 s  ->  25.52 s CPU   (wall 46.19 s, 55% of a core)
+    load at start 78.64  ->  load at end 77.27
+
+Side by side, each against its own documented baseline:
+
+    program                          CPU time   baseline      inflation
+    checker_execution_wiring_audit    39.65 s   18.9-20.3 s     ~2.02x
+    gate_is_wired_check  (CONTROL)    25.52 s   14.3-14.7 s     ~1.76x
+
+THE CONTROL IS INFLATED TOO, BY A COMPARABLE FACTOR. So user time DOES inflate
+substantially on this host under contention -- the premise I doubted one step
+ago -- and the failing program is not anomalous against a program that passed.
+The residual 15% between the two ratios tracks the failing program's much larger
+footprint (592 MB peak RSS, which is more cache and memory pressure to lose).
+
+RESOLUTION: explanation (b). The red is environmental, and it is now ESTABLISHED
+by a control rather than asserted from wall clock. There is no leftover anomaly
+that a code regression would be needed to explain.
+
+WHAT THE DETOUR WAS WORTH. My first write-up called it environmental on
+wall-clock evidence, which is the wrong instrument on a contended host. The
+load-independent number then pointed AWAY from that answer, and only a positive
+control brought it back. The first answer was right and the reasoning for it was
+not, and those are different things: had the control come back near its
+baseline, the same red would have been a real regression on main and I would
+have shipped "environmental" over the top of it.
+
+STATUS: environmental, established. NOT a regression, and not attributable to
+this branch -- which was already proven independently, since the failing program
+contains zero references to the one shipped file this branch changes. The 55s
+bound was never raised.
+
+--- CLEAN ADJUDICATION, at last, and it is GREEN ---
+
+The load finally fell and STAYED down for the whole run, which is what the two
+earlier attempts never had:
+
+    load at start 14.95   ->   load at end 14.75      (32 cores)
+    rc 0       87 passed, 4 skipped in 37.27s
+
+Same tree, same four suites, same 55s bound -- untouched. Green.
+
+That closes it: the red was environmental, it is now confirmed by a clean run as
+well as by the positive control, and nothing in the tree was changed to obtain
+either. Three attempts were needed because the first two were adjudicated under
+a load that was still moving, and a wall-clock verdict taken then is not a
+verdict.

@@ -1,0 +1,19 @@
+{
+  "date": "2026-08-22",
+  "totals": {
+    "A": 6,
+    "B": 0,
+    "C": 0,
+    "D": 1,
+    "T": 0
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/pad_ring_gen.py"
+    ]
+  },
+  "bucket_A_files": [
+    "candidates/bucket_A_programs_pad_ring_gen_rule_sketches.py"
+  ],
+  "bucket_D_file": "candidates/bucket_D_discarded.md"
+}

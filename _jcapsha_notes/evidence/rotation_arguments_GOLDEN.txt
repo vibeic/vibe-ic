@@ -1,0 +1,37 @@
+*** SUPERSEDED -- DO NOT USE AS A TARGET ***
+This "golden" was DERIVED from what the argument names appeared to mean. They do
+not mean that: the tool documents "horizontal" as the horizontally-ORIENTED
+PADS, which sit on the east and west rows. Under the documented convention the
+measured table is already correct and this file describes a state that would be
+WRONG. Kept as the artefact of a withdrawn record, not as a target.
+See `f3_bucket_T_WITHDRAWN.txt`.
+
+GOLDEN — what the measured table must look like once the fork is fixed.
+
+DERIVED, NOT OBSERVED, and labelled that way deliberately: the tool ships no
+reference output for `make_io_sites`, so there is nothing to diff against. The
+expected behaviour is fixed by two things that ARE observed:
+
+  1. the argument NAMES: `-rotation_horizontal` names the horizontal rows
+     (IO_SOUTH / IO_NORTH), `-rotation_vertical` names the vertical rows
+     (IO_WEST / IO_EAST);
+  2. the tool's OWN Tcl layer, dumped from the running binary with
+     `info body make_io_sites`, which binds
+        -rotation_horizontal -> rotation_hor
+        -rotation_vertical   -> rotation_ver
+     and passes `pad::make_io_row ... $rotation_hor $rotation_ver
+     $rotation_cor $index` in that order. The Tcl half is correct; the
+     crossing is below it, in the C++ `pad::make_io_row`.
+
+So the golden table is the measured table with its two arms EXCHANGED:
+
+  ARM A — hold -rotation_horizontal R0, vary -rotation_vertical
+     the VERTICAL rows (pw0=WEST, pw1=EAST) move;
+     the HORIZONTAL rows (ps0=SOUTH, ps1=NORTH) stay at R0 / MX.
+
+  ARM B — hold -rotation_vertical R0, vary -rotation_horizontal
+     the HORIZONTAL rows move;
+     the VERTICAL rows stay at MXR90 / R90.
+
+MEASURED (`rotation_two_arm_MEASURED.txt`) is exactly the opposite of this in
+both arms.

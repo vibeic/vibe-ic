@@ -1,0 +1,39 @@
+  const odb::dbOrientType south_rotation_ver = odb::dbOrientType::R0;
+  const odb::dbOrientType north_rotation_ver = south_rotation_ver.flipX();
+  odb::dbOrientType west_rotation_hor = odb::dbOrientType::MXR90;
+  if (vertical_site != horizontal_site) {
+    west_rotation_hor = odb::dbOrientType::R0;
+  }
+  const odb::dbOrientType east_rotation_hor = west_rotation_hor.flipY();
+  create_row(kRowNorth,
+             vertical_site,
+             x_sites,
+             {nw->getBBox().xMax(), outer_io.yMax() - vertical_box.maxDXDY()},
+             north_rotation_ver,
+             rotation_ver,
+             odb::dbRowDir::HORIZONTAL,
+             vertical_box.minDXDY());
+  create_row(kRowEast,
+             horizontal_site,
+             y_sites,
+             {outer_io.xMax() - horizontal_box.maxDXDY(), se->getBBox().yMax()},
+             east_rotation_hor,
+             rotation_hor,
+             odb::dbRowDir::VERTICAL,
+             horizontal_box.minDXDY());
+  create_row(kRowSouth,
+             vertical_site,
+             x_sites,
+             {sw->getBBox().xMax(), outer_io.yMin()},
+             south_rotation_ver,
+             rotation_ver,
+             odb::dbRowDir::HORIZONTAL,
+             vertical_box.minDXDY());
+  create_row(kRowWest,
+             horizontal_site,
+             y_sites,
+             {outer_io.xMin(), sw->getBBox().yMax()},
+             west_rotation_hor,
+             rotation_hor,
+             odb::dbRowDir::VERTICAL,
+             horizontal_box.minDXDY());

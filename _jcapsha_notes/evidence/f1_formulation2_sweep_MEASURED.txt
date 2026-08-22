@@ -1,0 +1,18 @@
+programs scanned                                      : 1232
+refuse on a named absence AND resolve from a PDK tree : 14
+refuse on a named absence, no PDK tree (out of scope) : 138
+
+  _pad_ring.py                                   ['PAD_CONFIG_VARIABLE_ABSENT', 'PAD_SITE_NOT_FOUND']
+  _tapeout_declaration.py                        ['DECLARATION_FIELD_MISSING', 'PAD_CONFIG_VARIABLE_ABSENT', 'PAD_SITE_NOT_FOUND']
+  analog_real_corner_sweep.py                    ['NETLIST_PROV_ABSENT']
+  benchmark_evidence_publish.py                  ['PROVENANCE_OUTPUT_FILE_MISSING']
+  die_finishing_gen.py                           ['REQUIRED_AND_ABSENT']
+  fault_atpg_run.py                              ['SEQ_ABSENT']
+  input_doc_pdk_claim_vs_installed_pdk_check.py  ['ROOT_ABSENT']
+  not_verified_tier.py                           ['PROBE_ABSENT']
+  pad_ring_check.py                              ['PADRING_DEF_ABSENT', 'PADRING_FILLER_UNRESOLVED', 'PADRING_REPORT_ABSENT']
+  pad_ring_gen.py                                ['PAD_CONFIG_VARIABLE_ABSENT', 'PAD_SITE_NOT_FOUND', 'REQUIRED_INPUT_ABSENT']
+  phase1_doc_one_shot_runner.py                  ['COMMAND_NOT_FOUND', 'SUBMODULE_FILE_MISSING']
+  phase3_one_shot_runner.py                      ['BLOCKER_MISSING', 'COMMAND_NOT_FOUND', 'GUARDRING_ABSENT']
+  signoff_ladder_run.py                          ['NOT_RELEASED_EVIDENCE_ABSENT']
+  vibe_ic_one_shot_runner.py                     ['COMPUTE_DONE_DELIVERABLE_MISSING']

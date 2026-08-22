@@ -1,0 +1,35 @@
+THE UN-LANDED FIX DOES NOT RESOLVE F3c, AND IT IS WORSE THAN NOT RESOLVING IT.
+Measured by running the F3c pin against both trees.
+
+    origin/main                RED
+        PAD_ROTATION_HORIZONTAL: ours drives [N, S], upstream defines it for [E, W]
+        PAD_ROTATION_VERTICAL:   ours drives [E, W], upstream defines it for [N, S]
+        -- inverted on both axes.
+
+    origin/jpadsite/pad-site   STILL RED
+        PAD_ROTATION_HORIZONTAL: ours drives [N, S], upstream defines it for [E, W]
+        PAD_ROTATION_VERTICAL:   ours drives (NOTHING), upstream defines it for [N, S]
+
+READ THE SECOND LINE OF THE SECOND BLOCK. The fix did not route the variable to
+the sides it belongs to. It pinned the west and east orientation to a measured
+constant, which REMOVES the variable's effect altogether -- and it did that
+because it had concluded the variable was inert, which it is not: it is
+misrouted by us, and it drives the north and south sides in the tool.
+
+So after the fix:
+  * the horizontal-named variable still drives the wrong two sides, unguarded;
+  * the vertical-named variable drives nothing at all, and a run that declares
+    it is refused rc 2 -- a refusal of a declaration the tool would have
+    honoured;
+  * and the sides it should have driven, north and south, are driven by the
+    other variable.
+
+This is not a criticism of the work that found the site-view defect, which is
+real and which this capture confirms. It is what happens when a fix is built on
+a premise that was never checked against the contract it re-implements: every
+line of it is careful, and the thing it is careful ABOUT is wrong.
+
+THE PIN: `candidate_tests/test_f3c_side_to_variable_mapping.py`. It reads OUR
+mapping out of the source rather than restating it, so it keeps testing the code
+after somebody edits it, and it carries the upstream half as four entries that
+can be checked by eye against the quoted documentation.
