@@ -53,22 +53,27 @@ Every anchor in this harvest preserves **commits**. An untracked file is on no c
 them miss it by construction — and "the tree is clean" cannot answer the question either, because
 an untracked file does not make a tree dirty in the sense a verdict measures.
 
-Swept all 1113 judged worktrees on .105 and .102:
+Swept all 1439 judged worktrees, every host:
 
 | | |
 |---|---|
-| untracked files found | 2111 |
-| distinct blobs | 1409 |
-| on **no** origin ref (heads + PR heads + tags) | 1247 |
+| host group | untracked files | distinct blobs | on **no** origin ref |
+|---|---|---|---|
+| .105 + .102 (1113 rows) | 2,111 | 1,409 | 1,247 |
+| .108 .112 .114 .120 .121 (326 rows) | 18,878 | 4,895 | **34** |
+
+The five-host figure is the interesting one: 18,878 untracked files and only 34 blobs that exist
+nowhere on origin. Volume is not risk — `.121` alone contributes 18,785 of those files and almost
+all of them are build output already represented on origin.
 
 Classified by the repo's own `git check-ignore`, not by extension: **247 paths ignored, 331 not.**
 Of the 331, 194 files are `benchmark-data/` evaluation output — that path was split out into
 `vibeic/benchmark-data`, so this repo's ignore rules no longer describe it — and most of the rest is
 agent scratch (`.scratch/`, `.probe/`, `.sweep-*`).
 
-**16 are authored source, tests and a handoff document** under `vibe-ic-marketplace/` and `tools/`,
+**23 are authored source, tests and handoff documents** (16 from the first group, 7 from the second) under `vibe-ic-marketplace/` and `tools/`,
 each verified absent from origin before inclusion, preserved at
-`harvest/preserve-untracked-authored` with a `MANIFEST.tsv` recording which worktree each came from.
+`harvest/preserve-untracked-authored` and `-2`, each with a `MANIFEST.tsv` recording which worktree each came from.
 
 (The paths inside that commit carry a doubled `preserved/preserved/` prefix — a cosmetic slip in the
 tree builder. The files and the manifest are correct; recording it here rather than leaving a reader
