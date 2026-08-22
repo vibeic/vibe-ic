@@ -77,11 +77,46 @@ real measurement over a real population. I reacted to the last line of the outpu
 instead of reading the output — which is the same mistake as reading a roll-up
 and not the rows, one seat over.
 
+## Second pass: the gap this census named about itself, closed
+
+The first version stopped at 11 of 28 and said so. The seven it skipped as
+"not uniformly invocable" included the six PPA gates, which do take `--corpus
+DIR` and are exactly the shape that could carry the defect. Driven:
+
+| gate | verdict over the real empty corpus |
+|---|---|
+| `ppa_contract_check --corpus` | rc **2** — `5322 JSON file(s) opened … 0 published candidate(s)` |
+| `ppa_feasibility_check --corpus` | rc **2** — same denominator |
+| `ppa_head_to_head_check --corpus` | rc **2** — `0 head-to-head record(s) found in 5322 JSON document(s) scanned` |
+| `ppa_pareto_check --corpus` | rc **2** — same denominator |
+| `ppa_measurement_check --corpus` | rc **2** — same denominator |
+| `ppa_problem_integrity_check --corpus` | rc **2** — same denominator |
+| `matrix_mutation_ledger --census` | rc 0 — `replay mode: witness (25 pair(s) re-executed per run)` |
+
+Every one opened the corpus, counted what it found, and **refused** — the
+population is in the sentence, and none of them blames the pointer. This is the
+doctrine working, and it is worth recording as the positive control the rest of
+the census is read against: a repository where the correct shape is common is a
+repository where the one exception is a defect rather than a convention.
+
+Two of them also answer the confound that tripped this sweep twice:
+`ppa_measurement_check` and `ppa_problem_integrity_check` return **rc 3** for a
+bad invocation and say so in the message — `rc=3 (bad invocation, NOT …)` — so a
+usage error can never be read as a verdict. That is the property whose absence
+made the first sweep report argparse errors as findings.
+
+**18 of 28 driven end-to-end. Still exactly one defective site.**
+
 ## What this census does NOT establish
 
-- **It is not a proof of absence.** 11 of 28 were driven end-to-end; the rest are
-  tests, protected landing infrastructure, or modules with no standalone gate
-  entry. A site among those would not appear here.
+- **It is not a proof of absence.** 18 of 28 were driven end-to-end. The
+  remaining 10 are: five protected landing-infrastructure programs
+  (`benchmark_data_landing_checkout`, `hermetic_candidate_runner`,
+  `hermetic_landing_arm_receipt`, `protected_landing_transition`,
+  `routed_def_corpus` — the last already repaired by #1764), two test modules,
+  two shared modules with no standalone entry point (`_corpus_location`,
+  `_ppa_corpus`), and `gatekeeper_review`, which drives the whole hygiene set and
+  is not runnable at this hour. A site among those would not appear here.
 - **One corpus, one shape.** Every row is the population of *this* corpus today.
   A gate whose subject is absent for a different reason could answer differently.
 - **Not wired as anything.** Per the standing ruling on wide-population sweeps,
