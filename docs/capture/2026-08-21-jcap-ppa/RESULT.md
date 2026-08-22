@@ -3705,10 +3705,36 @@ What the three full reconstructions in this pass show is what "re-runnable"
 actually costs: the digest figure reproduced exactly in one attempt, the
 invariance figure took four attempts and settled its load-bearing half while
 bracketing its denominator, and the emitted-type figure could not be settled by
-any grep because the identifiers are assigned through constants. Nine records
-now carry a predicate at that standard. **The honest count of what is left is
-not a number I am willing to give from a screen** — it would need the same
-hand-reading, over the 26 I have not read this pass. A figure
+any grep because the identifiers are assigned through constants.
+
+**So I hand-read the rest — all 35 — and the count is 3.** Not 24, 12, 9, 8, 7
+or 6. Three records state a figure without saying enough about how it was taken
+for another reader to re-run it. Everything else states its scope, and a good
+deal of it states more than any detector I wrote ever credited:
+
+- one decomposes **52 of 52** across three independent lanes — 29, 13 and 10 —
+  so the total can be checked a lane at a time;
+- one specifies the predicate as a procedure: *join backslash continuations
+  first, then extract each quoted invocation, then decide acceptance from the
+  program's own declared options*;
+- **two say outright that the screen was validated before the figure was
+  believed** — which is the standard this whole section is arguing for, already
+  met, in records written before the argument existed.
+
+**The three are named here rather than left for someone to find**, because
+"three fall short" with no names is the same defect one level up:
+
+| record | what it says | what is missing |
+|---|---|---|
+| a scope key the producer cannot establish is omitted | *measured, and every party to it has already said this is wrong* | the population, and how it was counted |
+| layer membership is declared not inferred from a filename prefix | *measured instance, and it resolves a question a lane left open* | one instance is cited; the figure beside it has no screen |
+| a verdict reachable by exhaustion must say whether it exhausted | *measured on the program and on two of its own runs* | which two runs, and what was compared across them |
+
+I caught that omission re-reading my own paragraph, which is the fourth time
+this section has had to correct itself and the reason it is worth as much space
+as the records it audits. **That number comes from reading 35 records, not from
+a screen** — which is the only reason I trust it, and it took less time than the
+six re-measurements that produced the six wrong ones. A figure
 without its question is a memory, which is the brief's own word for what this
 loop exists to stop producing.
 
