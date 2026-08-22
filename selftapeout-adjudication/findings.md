@@ -6830,3 +6830,34 @@ is what every number above rests on; the aggregate is not, and it is reported ra
 quietly dropped because **a summary that disagrees with the rows above it is the one
 thing a reader will not re-derive**. Same family as J83's tolerance-larger-than-signal
 and J78's answer-depends-on-when-you-ask: rules that look like measurements and are not.
+
+---
+
+## J87 — a pin that cannot survive being updated is not a pin
+
+Closing out, the decay ledger's own row for the report branch was found to be
+**self-invalidating**. It pinned a literal sha:
+
+```
+row("external", "the report branch on the remote", "79496abce", ...)
+```
+
+Re-pinning it is itself a commit, which moves the tip the pin names — so every snapshot
+refresh left the ledger describing a sha **one behind the commit it travelled in**, and
+the next run would report `MOVED` on nothing having gone wrong. Four refreshes this
+dispatch, four re-pins, and the fourth was still one behind when the tree was checked at
+the end.
+
+**The invariant that actually matters, and that terminates**, is not "the tip equals a
+number I wrote down" but **"the branch is on the remote and its tip is what this worktree
+has"** — which is precisely what J74 found violated when two branches had silently
+vanished. It is now measured that way and it is stable under its own updates.
+
+The neighbouring rows are unaffected and were checked rather than assumed: the two
+fix branches are pinned to shas that **nothing in this ledger writes**, so their pins do
+not move when the ledger does; `origin/main` likewise. Only the row describing the
+ledger's own vehicle had the problem, which is the shape of it — **the instrument was
+inside the thing it was measuring.**
+
+**No verdict, no number and no tier moves.** What moves is one row's predicate, from a
+literal that could not survive its own maintenance to an invariant that can.

@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.abspath("meas/_j68"))
 from logcut import post_hold
 
 WT = "wt/vibe-ic-marketplace"
+REPORT_WT = "wt_report"
 ARMS = [(3300, "proj/edge_llm_matmul_accel/phase3/stage3/pnr/openroad.log"),
         (3800, "proj/matmul_d3800/phase3/stage3/pnr/openroad.log"),
         (4200, "meas/matmul_fullflow/fullflow_4200.log"),
@@ -73,8 +74,15 @@ row("external", "the placeability-bound branch on the remote", "4d1de0e2c",
 
 BR2 = "next/six-shuttle-refusals-readjudicated-on-the-self-tapeout-path"
 got2 = sh(f"git ls-remote --heads origin refs/heads/{BR2}", WT)
-row("external", "the report branch on the remote", "79496abce",
-    (got2.split()[0][:9] if got2 else "GONE"))
+# NOT pinned to a literal sha.  It was, and the pin invalidated ITSELF: re-pinning it
+# is a commit, which moves the tip the pin names, so every refresh left the ledger
+# reporting a sha one behind the commit it travelled in.  A pin that cannot survive
+# being updated is not a pin.  The invariant that actually matters -- and that
+# terminates -- is "the branch is on the remote and its tip is what this worktree
+# has", which is exactly what J74 found violated.
+_rw = sh("git rev-parse HEAD", REPORT_WT)[:9]
+row("external", "the report branch: remote tip == this worktree's HEAD",
+    _rw or "unreadable", (got2.split()[0][:9] if got2 else "GONE"))
 
 # The pushed report is a SNAPSHOT.  This directory's copy keeps moving, so the two
 # WILL diverge -- that is expected, not a failure, and it is reported so nobody quotes
