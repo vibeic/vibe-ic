@@ -3908,6 +3908,42 @@ was *impossible*. This claims it is *not worth doing*, and says what would chang
 if someone disagreed: run the 12 individually and read each traceback.
 
 
+## M74 — the last unexamined justification is my own, and the evidence sharpens it
+
+Every blocker in section C has now been audited except one, because it is not a
+claim about the world: **design B is unbuilt because of "sequencing and my
+measured error rate tonight"**. That is a claim about ME, and it deserves the same
+test as the seven claims about the repository that failed it.
+
+**The evidence does not support the reason as stated.** My error rate tonight was
+high — roughly ten wrong hypotheses and eight wrong blockers. **But every single
+one was caught**, and caught by the same mechanism each time: measure the thing
+rather than reason about it. A process with a high error rate and a reliable
+catcher is not the same as an unreliable process. **"I make mistakes" is a weak
+argument when the record shows the mistakes being found.**
+
+**So the honest reason is narrower and better.** It is not that I would get B
+wrong — it is that **B's failure mode is the one kind my catcher does not see.**
+
+Every error I caught tonight was a WRONG CONCLUSION, and wrong conclusions
+surface when the next measurement contradicts them. **B's failure mode is a
+leaked container and a live TERM-ignoring process on a shared host.** That is not
+a conclusion; it is a side effect. No subsequent measurement of mine would
+surface it, and the person it lands on is whoever else is using the machine.
+
+**That is the distinction worth leaving here:** I decline B not because I am
+error-prone, but because **its errors would not be mine to discover.** The safety
+bound in the proposal (kill the recorded PGID, force-remove by the run's container
+label) narrows that, and I verified both channels — but a bound I have not
+exercised is a claim like any other, and this document has spent seventy sections
+establishing what those are worth.
+
+**With that, every row and every justification in section C has been examined.**
+Seven blockers were false, one badly stated, one wrong about the work, one
+correct, one a stated diminishing-return boundary, and this one — the only claim
+about myself — **true in conclusion and wrong in its reasoning until now.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
