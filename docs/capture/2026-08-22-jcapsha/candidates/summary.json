@@ -5,7 +5,7 @@
     "B": 0,
     "C": 1,
     "D": 0,
-    "T": 1
+    "T": 2
   },
   "routing_used": {
     "bucket_A": [
@@ -13,6 +13,7 @@
       "programs/upstream_mirror_is_pinned_check.py"
     ],
     "bucket_T": [
+      "KLayout",
       "OpenROAD"
     ]
   },
@@ -26,6 +27,7 @@
   ],
   "bucket_T_dir": "docs/capture/2026-08-22-jcapsha/candidates/bucket_T_forked_tool",
   "bucket_T_files": [
-    "ORGANIC-20260822-io-row-option-families-use-opposite-axis-vocabularies.yaml"
+    "ORGANIC-20260822-io-row-option-families-use-opposite-axis-vocabularies.yaml",
+    "ORGANIC-20260822-sealring-branches-transpose-the-die-rectangle-indices.yaml"
   ]
 }

@@ -18,7 +18,9 @@ handed me for it did not survive being measured.**
 | F3 | a config variable the tool "ignores" | **T** | the tool does **not** ignore it. It is a live knob wired to the other side-pair, across a vocabulary collision inside the forked toolchain. |
 
 A fourth record, **C**, carries the consequence of F3 for a refusal that is
-already landed.
+already landed. A **fifth**, **T**, is a second forked-tool finding of the same
+class, found by *writing* one of the pins rather than by running anything — see
+"What the pins found" below.
 
 Nothing went to **D**. Neither program reads a pad or a PDK literal, and the
 tool finding is about two layers disagreeing on a word.
@@ -199,6 +201,80 @@ declaration still fails, with a test pinning that.
 
 ---
 
+## What the pins found — and the gap I said was follow-on is now closed
+
+The first version of this report left the mirror gate at a population of ONE,
+with two named candidates and a note calling them follow-on. That note was an
+accurate disclosure and a poor stopping point, so both are now declared and
+pinned. **Declared mirrors: 3. Undeclared candidates: 0.**
+
+    _pad_ring.py            -> the per-side pad arithmetic
+    digital_hardmacro_gen.py-> the LEF-write sequence and its three defaults
+    die_finishing_gen.py    -> the seal-ring generator contract
+
+All three pins pass against the real upstream in the image (**11 passed**), and
+each goes RED under a mutation of the thing it pins — an upstream default
+flipped, an upstream index transposed, an upstream accumulator switched to the
+other dimension. On a host with neither PDK nor upstream they skip by name.
+
+**AND WRITING THE THIRD PIN FOUND A SECOND TOOL DEFECT.** The seal-ring step
+dispatches on PDK name into two branches. The die rectangle is declared as four
+corner coordinates — `"x0 y0 x1 y1"` — so index 2 is an x and index 3 a y. The
+two branches pass them in opposite orders:
+
+    generic branch   --die-width  DIE_AREA[2]      # x1   correct
+                     --die-height DIE_AREA[3]      # y1   correct
+    other branch     width=       DIE_AREA[3]      # y1
+                     height=      DIE_AREA[2]      # x1
+
+This is not a naming ambiguity that could be argued either way. The receiving
+generator documents its own parameters — *"width: Width (X-Axis)"*,
+*"height: Heigth (Y-Axis)"* — so one branch is simply wrong. It has survived
+because the script's own usage example, and every fixture anyone would reach
+for, is a **square** die, on which the transposition is invisible. Filed as the
+fifth record; **not** patched here, and the pin is deliberately scoped to the
+branch this repo drives so that it neither blesses the transposition nor
+reddens over a defect in a path we do not use.
+`evidence/sealring_width_height_transposed.md`.
+
+That is the same class as F3: a dimension crossed at a boundary between two
+layers, invisible under the symmetric case everybody tests with, silent when
+wrong.
+
+## A verification of my own that was wrong, and how
+
+**I reported three emitted backlog YAMLs as passing `backlog_sanitize_check`.
+They were failing.** The command was
+
+    python3 backlog_sanitize_check.py --file "$f" | tail -4; echo "RC=$?"
+
+and `$?` there is `tail`'s exit status, which is 0 whatever the checker said.
+Re-run so the checker's own status is what is read, all three returned rc 1:
+`component` must match `skill:<name>` | `program:<name>` | `mcp:<tool>` |
+`flow:<step>`, and mine were free text. Now corrected at the source and
+re-verified with the checker's own exit status — **all three rc 0**.
+
+Two things worth keeping from it. The first is that the earlier commit message
+carries the wrong claim; it is corrected here rather than quietly fixed,
+because a commit message is not editable and a reader will meet it first. The
+second is that `flow:<step>` cannot name most steps in this flow: the pattern
+is `[\w_-]+`, and this repo's step ids carry a dot (`15.5ic`, `26.5ic`). I did
+NOT widen that regex — widening a pattern to clear my own red is the one move
+that is never available — and used the accurate `program:` form instead. The
+vocabulary gap is an observation, not a change.
+
+## A pre-existing failure I ran into and did not cause
+
+`test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged` fails
+on this host with *"magic did not complete: watchdog reported launch_error
+after 0s"*. Measured, not assumed: it fails identically with my declaration
+REMOVED (reverse edit, re-applied afterwards, diff back to +21 lines), and the
+whole file is **24 passed** inside the image. So it is host-dependence, green
+where the flow actually runs. Worth a note only because of what it does on the
+host: it FAILS rather than SKIPPING, which is the opposite of the convention
+the rest of this lane's tests follow — a question that could not be put should
+say so by name.
+
 ## Grep first — what was already there
 
 Checked before writing either program, per the brief:
@@ -224,10 +300,11 @@ next to.
 * **The F1 gate would not have caught F1** (above). It closes the reachable
   half.
 * **The F2 gate does not decide which modules ought to declare a mirror.** It
-  counts the candidates and prints them every run, PASS or FAIL — two on the
-  shipped tree, named. They do not fail the gate: turning a prose scan into a
-  blocking predicate is how a checker earns a reputation for firing on correct
-  code.
+  counts the candidates and prints them every run, PASS or FAIL. That count is
+  now **0** — the two it named have been declared and pinned — but the gate
+  still cannot decide the question for a module added tomorrow, and it does not
+  fail on a candidate: turning a prose scan into a blocking predicate is how a
+  checker earns a reputation for firing on correct code.
 * **The F3 tool finding is measured on ROWS.** The prior lane measured placed
   **pads**; the two agree where they overlap (`W=MXR90`, `E=R90` at the
   horizontal option's default). I did not re-measure placed pads.
@@ -274,13 +351,26 @@ brief's to change.
       evidence/probe_*.tcl, probe.def      the four scripts that reproduce it
     programs/absence_verdict_names_its_search_space_check.py   + 16 tests
     programs/upstream_mirror_is_pinned_check.py                + 11 tests
-    programs/tests/test_upstream_mirror_pad_cfg.py             the pin itself
+    programs/tests/test_upstream_mirror_pad_cfg.py             pin 1
+    programs/tests/test_upstream_mirror_magic_lef.py           pin 2
+    programs/tests/test_upstream_mirror_klayout_sealring.py    pin 3
+    programs/digital_hardmacro_gen.py, die_finishing_gen.py    UPSTREAM_MIRROR
     programs/_pad_ring.py                  UPSTREAM_MIRROR + one enriched refusal
     programs/_ppa/backends/openroad.py     one enriched note
     benchmark/CAPTURE_ROUTING.json         three new steps
 
-Ran, on the final tree: `test_absence_verdict_names_its_search_space`,
-`test_upstream_mirror_is_pinned`, `test_upstream_mirror_pad_cfg`,
-`test_pad_ring` — 125 passed, 6 skipped (the six decline by name on a host with
-no PDK and no upstream); the eight `ppa` backend suites — 53 passed;
-`test_enhancement_emit` — 63 passed, 4 skipped. Both new gates `rc 0`.
+Ran, on the final tree, with each verdict read from the program's OWN exit
+status and never from a pipe:
+
+    both new gates ................................................. rc 0
+    the 8 suites incl. all three pins, pad-ring, emit, sanitize ..... 203 passed, 15 skipped
+    the two newly-declared modules' own suites ..................... 100 passed, 26 skipped,
+                                                                     1 pre-existing host-only
+                                                                     failure (above)
+    all three pins against real upstream, in the image ............. 11 passed
+    each pin against a MUTATED upstream ............................ red, per mutation
+    the eight `ppa` backend suites ................................. 53 passed
+    the three emitted backlog YAMLs vs backlog_sanitize_check ...... rc 0, rc 0, rc 0
+
+The full `programs/tests` suite was NOT run — standing measured load
+constraint; host load was 42 at entry and ~50 at exit.

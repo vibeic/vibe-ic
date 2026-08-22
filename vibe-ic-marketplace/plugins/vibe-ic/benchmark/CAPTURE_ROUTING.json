@@ -181,6 +181,11 @@
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/hold-fix/SKILL.md"
     },
+    "phase3.die_finishing": {
+      "description": "Die finishing: the seal ring, driven through the PDK's own generator, and the die identification cells.",
+      "bucket_A_program": "programs/die_finishing_check.py",
+      "bucket_B_skill_file": "skills/phase3-backend-verify/SKILL.md"
+    },
     "phase3.drc": {
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/drc-fix/SKILL.md"

@@ -34,7 +34,7 @@
     "backlog_slug": "io-row-option-families-use-opposite-axis-vocabularies",
     "backlog_type": "bug",
     "severity": "P1",
-    "component": "forked-eda/OpenROAD pad module + the flow script that drives it",
+    "component": "program:pad_ring_gen",
     "session_context": "Found while converging on a prior lane's conclusion that the vertical-rotation variable is inert. Four separate tool processes had shown the east/west orientation constant across every value of it. Sweeping the horizontal family instead moved east/west and left south/north still; a single call with two distinguishable sites and two different rotations then showed both families routing the same way, and the row bounding boxes confirmed the row names mean what they say. The data behind the inertness conclusion was correct; the conclusion was not."
   },
   {
@@ -48,7 +48,25 @@
     "backlog_slug": "inertness-claim-rests-on-a-single-axis-sweep",
     "backlog_type": "bug",
     "severity": "P1",
-    "component": "phase3 pad-ring step",
+    "component": "program:pad_ring_gen",
     "session_context": "The refusal and its inertness record are landed. The complementary-axis sweep that refutes the stated reason is in ``docs/capture/2026-08-22-jcapsha/evidence/`rotation_axis_vocabulary.md`, with the four scripts that reproduce it."
+  },
+  {
+    "step": "phase3.die_finishing",
+    "design": "no design — found by reading the toolchain while writing an upstream pin",
+    "bucket": "T",
+    "tool": "KLayout",
+    "title": "One step's two code paths pass the die rectangle's coordinates in opposite order",
+    "problem": "A seal-ring step dispatches on PDK name into two branches that invoke the same generator. The die rectangle is declared as four corner coordinates, so one index is an x and the other a y. The generic branch passes them as width and height in that order; the other branch passes them in the opposite order. The receiving generator's own docstring states which axis each of its two parameters is, so this is not a naming ambiguity — one branch is simply wrong. Both values are valid numbers in valid units, nothing downstream re-derives the ring's extents from the die, and the generator's own usage example is a square die, so the defect is invisible except on a rectangular one.",
+    "golden_sample": "the correct branch in the same file and the receiving script's own parameter documentation, both quoted in the bad_sample record",
+    "bad_sample": "`docs/capture/2026-08-22-jcapsha/evidence/sealring_width_height_transposed.md`",
+    "tool_enhancement": "Make the two branches pass the die rectangle through ONE helper that derives the extents once from the declared corner order, so neither branch can pass a coordinate as an extent or transpose the two. Then refuse, rather than silently generate, when an extent arrives non-positive. Verification: drive both branches on a deliberately RECTANGULAR die and require the generated ring's bounding box to match the die's own aspect ratio in both — a square fixture cannot see this and is the reason it survived.",
+    "pattern": "One step has two code paths to the same external tool, selected by a name rather than by a capability. The paths pass a two-component quantity — a width and a height, a row and a column, a min and a max — and one of them transposes the pair. Every fixture is symmetric in that quantity, so both paths agree on every test, and the error appears only on asymmetric real input, where it produces a plausible wrong artefact instead of an error. A pin written against the tool finds it; nothing that exercises only one path ever can.",
+    "suggested_fix": "Derive the extents once, in one helper both paths call, and refuse a non-positive extent instead of generating from it.",
+    "backlog_slug": "sealring-branches-transpose-the-die-rectangle-indices",
+    "backlog_type": "bug",
+    "severity": "P2",
+    "component": "program:die_finishing_gen",
+    "session_context": "Found while writing the upstream PIN required by this lane's mirror rule, not by running anything. Reading the contract in order to assert it is what surfaced the disagreement between the two branches; the pin itself is deliberately scoped to the branch this repo drives, so it neither blesses the transposition nor reddens over a defect in a path it does not use."
   }
 ]
