@@ -16,12 +16,23 @@ clean worktree of `origin/main` @ `a4caccefe` (v1.11.69), 214 commits later,
 against the publishing repository at its live tip `3b58ccd42`.** Evidence
 attaches to a sha, not to a branch name: this record was written against a base
 that main has moved past, so every load-bearing claim below was taken again
-rather than carried forward. Ten passages are marked **[re-measured @
-a4caccefe]**; most reproduce unchanged. **Three claims moved, and each says so
-where it stands:** a count of mine that was simply wrong (4 cells and 342
-directories, not "5 cells, 388"), an item this record FILED that has since been
-FIXED on main by #1764, and a sibling branch that the same landing superseded on
-the merits. Nothing in the verdict moved. It reaches the same verdict as
+rather than carried forward. Every passage carrying a re-taken measurement is
+marked **[re-measured @ a4caccefe]** — deliberately not summarised as a count
+here, because a hand-maintained number beside a growing list is the next thing
+to drift. Most reproduce unchanged.
+
+**Three claims moved, and each says so where it stands:** a count of mine that
+was simply wrong (4 cells and 342 directories, not "5 cells, 388"), an item this
+record FILED that has since been FIXED on main by #1764, and a sibling branch
+that the same landing superseded on the merits.
+
+**Two things are newly named and deliberately NOT taken**, each with its
+reproduction and its reason, at the end of this record: a roll-up that reports
+`9/9 conformant` over a corpus with zero published cells, and a test helper that
+diagnoses a CORRECT pointer at the real corpus as a broken one — the #1764
+defect surviving one layer down.
+
+Nothing in the verdict moved. It reaches the same verdict as
 `2026-08-22-routed-def-corpus-adjudication.md` by a different route — that
 record read this repository's publishing programs; this one reads the
 **publishing repository's own committed statement** — and it then contradicts
