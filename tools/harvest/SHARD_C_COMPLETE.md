@@ -1,3 +1,12 @@
+> **COUNTS SUPERSEDED 2026-08-22T07:2xZ (jharv3, fifth session): now 74 RECOVER / 34 LANDED /
+> 2 ABANDON / 0 UNREACHABLE.** Every table below reading 90 / 18 / 2 predates this. **16 rows
+> moved RECOVER -> LANDED** because rule R2 compares a worktree against main's *tip*, and a
+> squash-landed branch differs from today's tip exactly as unlanded work does. Re-asked against
+> main's *history* -- did it ever hold these bytes at this path -- all 16 had already landed,
+> each with a named main commit holding the very file the row cited as proof of divergence.
+> `_ld/wt` qualified on content and deliberately did NOT move: 14 of its ignored entries fall in
+> a class the deletion-bound table has not declared. See `REVERIFY_shard_c_drift_jharv3.md` §8.
+
 > **SESSION 2026-08-22 13:5x–15:0x (jharv3, host 8HD-6/.108) — RE-VERIFIED, no verdict changed.**
 >
 > Counts stand at **90 RECOVER / 18 LANDED / 2 ABANDON / 0 UNREACHABLE**. What this session
