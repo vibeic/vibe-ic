@@ -44,6 +44,7 @@ chip-AGNOSTIC: no design, PDK, vendor, node or codename literal.
 import copy
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -300,6 +301,89 @@ def test_a_verdict_refusal_DELIBERATELY_stays_below_parity(tmp_path):
     rc, rep = _run(tmp_path, doc)
     assert rc == B.RC_UNDETERMINED, rep
     assert rep["refusal"]["code"].startswith("SCOPE_"), rep
+
+
+# ---------------------------------------------------------------------------
+# THE FAMILY'S ONE DELIBERATE INVERSION, AND THE CLAIM THAT LICENSES IT.
+#
+# `_ppa/feasibility.py` inverts this file's rule ON PURPOSE at SET level: an
+# UNDETERMINED candidate outranks an INFEASIBLE one, so the CLI returns 2 and
+# not 1. Its stated reason is sound -- "rc=1 asserts a complete finding about
+# the design, and a run that could not see all of its evidence must not make
+# one" -- and this file does NOT try to overturn it.
+#
+# What it does is enforce the sentence that LICENSES it, which was argued in a
+# docstring and pinned by nothing:
+#
+#     "Nothing is lost: both block, every per-candidate verdict is in the JSON,
+#      and every finding is printed regardless of which code is returned."
+#
+# That is the entire reason the inversion is acceptable rather than the defect
+# this file exists to end. If a future change stops printing the INFEASIBLE
+# line whenever the set returns 2, the justification silently becomes false and
+# a measured DRC violation disappears behind a NOT CHECKED -- with the
+# docstring still claiming otherwise. MEASURED as true today; pinned here so it
+# stays a fact rather than a promise.
+# ---------------------------------------------------------------------------
+
+def test_the_set_level_inversion_still_prints_and_records_every_finding(
+        tmp_path):
+    feas_tests = Path(__file__).resolve().parent / "test_ppa_feasibility.py"
+    if not feas_tests.exists():
+        pytest.skip("the feasibility fixture module is not in this checkout")
+    _s = importlib.util.spec_from_file_location("_feas_fx", feas_tests)
+    FX = importlib.util.module_from_spec(_s)
+    _s.loader.exec_module(FX)
+
+    violated = FX.clean_metrics()
+    violated[3]["value"] = 5                 # a real, MEASURED DRC violation
+    unmeasured = FX.clean_metrics()
+    unmeasured[6]["status"] = "NOT_MEASURED"  # an axis nobody looked at
+    unmeasured[6].pop("value")
+
+    doc = {"required_views": [dict(FX.VIEW)],
+           "candidates": [FX.candidate("cand_violated", metrics=violated),
+                          FX.candidate("cand_unmeasured", metrics=unmeasured)]}
+    cand = tmp_path / "candidates.json"
+    cand.write_text(json.dumps(doc), encoding="utf-8")
+    out = tmp_path / "feas.json"
+    r = subprocess.run(
+        [sys.executable, str(PROGRAMS / "ppa_feasibility_check.py"),
+         "--candidates", str(cand), "--json", str(out)],
+        capture_output=True, text=True)
+
+    # The inversion itself, asserted so the test is anchored to it rather than
+    # silently passing if the precedence ever changed underneath.
+    assert r.returncode == B.RC_UNDETERMINED, (
+        "the documented set-level precedence (UNDETERMINED over INFEASIBLE) "
+        f"no longer holds; got rc={r.returncode}. If that is a deliberate "
+        "change, this whole block needs rewriting, not re-pointing.")
+
+    text = r.stdout + r.stderr
+    assert "INFEASIBLE" in text, (
+        "the set returned 2 and the INFEASIBLE finding was NOT printed. That "
+        "is the sentence licensing the inversion, and it is now false: a "
+        "measured violation is hidden behind a NOT CHECKED.")
+    assert "cand_violated" in text, (
+        "the INFEASIBLE candidate is not NAMED on stdout, so a reader cannot "
+        "act on the finding the docstring promises is printed.")
+
+    assert out.exists(), "no JSON was written, so 'it is in the JSON' is false"
+    verdicts = {}
+
+    def _collect(o):
+        if isinstance(o, dict):
+            if "candidate_id" in o and "verdict" in o:
+                verdicts[o["candidate_id"]] = o["verdict"]
+            for v in o.values():
+                _collect(v)
+        elif isinstance(o, list):
+            for v in o:
+                _collect(v)
+
+    _collect(json.loads(out.read_text(encoding="utf-8")))
+    assert verdicts.get("cand_violated") == "INFEASIBLE", verdicts
+    assert verdicts.get("cand_unmeasured") == "UNDETERMINED", verdicts
 
 
 # ---------------------------------------------------------------------------

@@ -2899,3 +2899,76 @@ MEASURED directly on both trees: `checker_execution_wiring_audit.py` takes
 23.8s on this branch and 24.0s on pristine origin/main against a 30s budget --
 this branch is marginally FASTER. It tips over only when the host is loaded,
 reproduces identically on main, and is environmental rather than a regression.
+
+
+# Part 27 — the rest of the family, and a licence clause nothing enforced
+
+MY OWN SWEEP HAD A BLIND SPOT AND THIS PART EXISTS BECAUSE OF IT. Part 26's
+detector looked for a `try/except Refusal` inside a function and found exactly
+ONE evaluator, `ppa_head_to_head_check.evaluate`. That is the same mistake this
+lane keeps finding in other people's guards: a denominator of one, reported as
+coverage. MEASURED: of ten checkers in the family, NINE raise `Refusal` zero
+times -- they decide by RETURN VALUE, so the detector was blind to 9/10 of the
+population it claimed to have swept.
+
+WHAT THE RE-SWEEP FOUND, stated as a NEGATIVE RESULT because that is what it is:
+
+  1. CORPUS AGGREGATION IS SOUND. Every one of those nine gates aggregates
+     through one shared seam, `_ppa_corpus.worst_rc`. Probed directly rather
+     than read: worst_rc([2,1]) == 1, worst_rc([1,2]) == 1, worst_rc([0,2]) ==
+     2, worst_rc([3,1]) == 1. A refusal outranks an undetermined and the result
+     is order-independent, so no gate can lose a finding at corpus level.
+
+  2. `ppa_measurement_check.run_coverage` -- the Part 14 repair -- is INTACT,
+     with its reasoning still in the source above the fix.
+
+  3. `_ppa/feasibility.py` INVERTS THIS RULE ON PURPOSE, and the inversion is
+     correct. At SET level UNDETERMINED (rc 2) outranks INFEASIBLE (rc 1),
+     because "rc=1 asserts a complete finding about the design, and a run that
+     could not see all of its evidence must not make one". Per CANDIDATE the
+     precedence is the other way round and already tested. Nothing here
+     overturns either.
+
+THE REAL FINDING IS THE CLAUSE THAT LICENSES (3). The inversion is acceptable
+only because of one sentence in that module's docstring:
+
+    "Nothing is lost: both block, every per-candidate verdict is in the JSON,
+     and every finding is printed regardless of which code is returned."
+
+NOTHING ENFORCED IT. That sentence is the entire difference between a
+documented design decision and the defect this layer exists to end, and it was
+carried by prose alone. If a later change stopped printing the INFEASIBLE line
+whenever the set returns 2, a MEASURED DRC VIOLATION would vanish behind a NOT
+CHECKED while the docstring went on claiming otherwise -- and the deliberate
+inversion would have become the accidental one, silently.
+
+MEASURED TRUE TODAY, on a set built to hold both at once: one candidate with a
+real MEASURED DRC violation, one with an unmeasured axis.
+
+    rc                                     2   (the documented precedence)
+    "INFEASIBLE" on stdout                 yes
+    the violated candidate NAMED           yes -- `cand_violated: INFEASIBLE
+                                           drc:FEAS_VIOLATION`
+    per-candidate verdicts in the JSON     cand_violated=INFEASIBLE,
+                                           cand_unmeasured=UNDETERMINED
+
+Now pinned by `test_the_set_level_inversion_still_prints_and_records_every_
+finding`, which asserts the precedence itself as well, so the test is anchored
+to the design rather than silently passing if the precedence ever changed
+underneath it.
+
+NEGATIVE CONTROL G -- the per-candidate line withheld when the set is
+UNDETERMINED, which is exactly the regression the clause forbids:
+
+    1 failed, 15 passed
+    E  AssertionError: the set returned 2 and the INFEASIBLE finding was NOT
+       printed. That is the sentence licensing the inversion, and it is now
+       false: a measured violation is hidden behind a NOT CHECKED.
+
+REGRESSION. 2340 passed, 5 failed, 124 skipped, 17 xfailed, 2 errors over the
+full selection. FOUR fail identically on pristine origin/main. The fifth and
+both errors are `checker_execution_wiring_audit.py` exceeding a 30s subprocess
+timeout: measured at 23.8s on this branch and 24.0s on main, and the SAME
+selection run smaller -- so less host load -- returns 4 failed, 0 errors, with
+that test PASSING. Load-dependent, environmental, not a regression.
+chip-AGNOSTIC source guard: PASS, 1553 file(s).
