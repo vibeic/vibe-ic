@@ -1832,7 +1832,9 @@ def test_the_real_tree_has_no_undecidable_population(real_run):
 # PRINTED line instead of a comment line. That difference is the whole point:
 # once a commented `incr` stopped being a site, the comment version was skipped
 # by EITHER rule, so neither was individually necessary -- deleting the polarity
-# consult in `multiplied_counters` outright left all 88 tests green. Measured.
+# consult in `multiplied_counters` outright left the ENTIRE suite green -- 88
+# tests at the time, and the number is not what the sentence rests on: a
+# count of the tests that exist is stale as soon as one is added. Measured.
 EMITTER_DENIED_INCR_PRINTED_IN_A_HELPER = (
     'def _unused(name):\n'
     '    return "  puts \\"the fallback does not incr _n; it re-issues %s\\"\\n" % name\n\n\n'

@@ -906,7 +906,8 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
             # POLARITY FIRST, THEN THE COMMENT RULE -- the order `counters_of`
             # uses, and here it is load-bearing for a second reason. With the
             # comment rule first this consult became DEAD: measured, deleting
-            # it outright left all 88 tests green, and
+            # it outright left the ENTIRE suite green (88 tests then, and
+            # the count is not the point), and
             # `test_a_DENIED_incr_cannot_excuse_a_real_disagreement` went on
             # passing for a reason other than the one it names. Unreachable
             # code that a test appears to cover is worse than no code.
