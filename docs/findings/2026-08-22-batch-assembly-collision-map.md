@@ -4,6 +4,24 @@
 the sixteen branches named in the freeze. Nothing here modifies a frozen branch;
 it is a map for whoever assembles them.
 
+## What this says, in short
+
+Read this first; the sections below are the working, and two of them were
+superseded by later measurement.
+
+* The batch's collision surface is **eight files**, four of them generated
+  indices that should be REBUILT after assembly, not merged (§1).
+* Exactly **two** files are real content conflicts: `CAPTURE_ROUTING.json`
+  (take the union -- the check is **64** entries under `steps`, §2) and
+  `recoveries.json` (§7-§8).
+* Merging all sixteen with those two rules **assembles 15 of 16** (§6).
+* The single blocker is **ONE ROW** of `recoveries.json`, not eleven -- §7 said
+  eleven and §8 corrects it by measuring content instead of keys.
+* That row is a genuine delete against a rename, and no other rule replaces it,
+  so it needs one yes/no from the `jcap-ppa` author: **was dropping the
+  `repo.host_independence` capability-check rule intended?** 44 rows if yes,
+  45 if incidental.
+
 ## 1. The collision surface is eight files
 
 Computed per branch as `git diff --name-only $(git merge-base <branch> a4caccefe) <branch>`
@@ -19,7 +37,7 @@ order-independent, unlike a merge sequence.
 | `.../benchmark/CAPTURE_ROUTING.json` | 3 | UNION -- see §2 |
 | `.../programs/phase3_one_shot_runner.py` | 2 | shared touch, MERGES CLEAN (measured) |
 | `.../programs/gatekeeper_review.py` | 2 | shared touch, MERGES CLEAN (measured) |
-| `docs/capture/2026-08-21-jcap-ppa/recoveries.json` | 2 | REAL conflict -- needs its authors |
+| `docs/capture/2026-08-21-jcap-ppa/recoveries.json` | 2 | REAL conflict -- ONE row needs one author (§8) |
 
 Four of the eight are generated indices. Reconciling their hunks by hand is wasted
 work and can produce a file that matches neither tree: rebuild them once, after all
@@ -176,6 +194,11 @@ landing the batch belongs to whoever owns it; this section says only that the
 path is clear and where it is not.
 
 ## 7. The one blocker, sized: 11 entries need their two authors
+
+> **SUPERSEDED BY §8.** The count below is wrong: it was measured by KEY,
+> and the key is the field that moved. Measured by CONTENT, eleven of the
+> twelve are mechanical and ONE row is the question. The section is kept
+> because how the number collapsed is the useful part.
 
 `docs/capture/2026-08-21-jcap-ppa/recoveries.json` is the only thing standing
 between this batch and a full assembly (§6). It is a JSON LIST, and the two sides
