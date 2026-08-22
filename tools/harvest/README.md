@@ -94,10 +94,14 @@ checkout looks catastrophic: ~446 files differ because main moved, and ~17,192 r
 - **All 49 deletion-bound rows in `verdicts_joined.tsv` have now been measured** —
   `JOINED_DELETION_GUARD_RESULTS.tsv`: **41 SAFE, 3 safe-by-twin, 5 HOLD CONTENT** against live main.
 
-  Only **five** would lose work that exists nowhere else, and all five are uncommitted content —
+  Only **five** hold content that is on no commit in their own worktree, and all five are
+  uncommitted —
   `_agentjob_i1015/wt` (98 files), `_agent_scratch_whatif/wt_C` (37), `_wt_1486` (8, incl. the
   canonical `phase1_phase2_phase3.yaml`), `_wt_1236` (5), `_wt_1390pg` (1). All five are already in
-  the corrections file.
+  the corrections file. **Their 149 uncommitted blobs were separately checked and every one is
+  reachable from an origin ref**, so deleting those directories is recoverable — uncommitted
+  content is held by no commit in its own worktree, which is exactly why that had to be asked as a
+  second question rather than inferred from the verdict.
 
   A first pass reported **eleven**. Three of those — including `vibe-ic-wt-jxlayer` and its alarming
   "678 files not contained" — were a false alarm: their change is CONTAINED against
