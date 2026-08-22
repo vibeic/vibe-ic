@@ -496,8 +496,15 @@ wider than the thing it named, which is the defect this entire file catalogues.
 Every earlier instance was a gate reading a superset and reporting wrongly. This
 one deleted somebody's tree.
 
+**Re-checked afterwards, and the harm is smaller than I first reported:** `qv` is
+registered again, the directory exists with a live `.git`, and its mtime is later
+than my removal — its owner re-established it and that session is not blocked. My
+first write-up said "the directory is gone", and leaving that standing would have
+been this file's own defect one more time, so it is corrected here and in both
+copies of the incident note.
+
 What survives: it was detached-HEAD, so anything COMMITTED is still in the object
-store; uncommitted edits are gone. Twelve recent dangling commits that are not
+store; whatever was UNCOMMITTED at the moment of removal is gone. Twelve recent dangling commits that are not
 from this lane are pinned under
 `refs/rescue/jdistchip-accidental-worktree-removal/1..12` so nothing collects
 them — several are `WIP on (no branch)`, the shape an interrupted worktree
