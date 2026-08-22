@@ -203,6 +203,53 @@ TWO MODES
            records to 0 and printed ``~ improved: ... 3 -> 0`` before exiting
            0. See ``compare_denominator``.
 
+WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (vibe-ic#1710's treatment)
+-----------------------------------------------------------------------
+``tools/ci/repo_hygiene_gates.sh`` sweeps ``--corpus "$ROOT/benchmark-data/ic"``.
+v1.10.56 moved the published corpus into its own repository, so that directory
+is gone from this repo and the gate answered
+
+    [SKIP] corpus not found: <repo>/benchmark-data/ic                    rc 2
+
+That refusal was CORRECT for what it was asked — a sweep that found no corpus
+has judged nothing — and ``run`` in ``_gate_dispatch.sh`` maps rc 2 to FAIL, so
+it blocked every landing. What was wrong is WHERE it was told to look.
+``_corpus_location`` resolves it now, the override is ANNOUNCED, and the four
+outcomes stay distinct (see that module).
+
+AND THE REGISTER IS NOT EXCUSED WITH THE SWEEP
+----------------------------------------------
+``cross_layer_reference_baseline.json`` is this gate's own debt register and it
+lives in THIS repository — it did not move with the corpus. Its header says a
+findings count may SHRINK freely and any INCREASE fails CI, so widening the
+register is the cheapest way to make a real break stop being NEW.
+
+That is why ``repo_hygiene_gates.sh`` withdrew this gate's ``gate_scope`` in
+v1.10.55: a scope naming ``benchmark-data/ic/`` excludes the checker's own body
+and its own register, so a commit that only widens the register touches nothing
+in scope and the one gate guarding it does not run.
+
+A NO_CORPUS that returned rc 0 without opening the register would reintroduce
+exactly that hole through the other door. So under NO_CORPUS the SWEEP is
+excused and the REGISTER IS STILL ADJUDICATED:
+
+    register absent / unparseable / malformed  -> UNDETERMINED (rc 2)
+    register carries no `seal`                 -> UNDETERMINED (rc 2): without a
+                                                  corpus the seal is the ONLY
+                                                  evidence the numbers are the
+                                                  ones a sweep measured
+    `seal` does not match the numbers beside it -> FAIL (rc 1): the register was
+                                                  edited after it was written
+    seal verifies                              -> rc 0, printing what it holds
+                                                  and stating the counts were
+                                                  NOT re-measured
+
+``--write-baseline`` is the only thing that writes a seal, and it REFUSES a
+sweep that reached no cell (the vibe-ic#1025 shape, which this program still
+carried: a write over an empty corpus recorded ``{}`` and destroyed the
+register while reporting success). So re-sealing a widened register requires a
+corpus that actually reaches, which is what makes the numbers a measurement.
+
 DEGRADE LOUDLY
 --------------
 A layer file that EXISTS and does not parse is exit 2, never a quiet pass.
@@ -238,12 +285,14 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import re
 import subprocess
 import sys
 
+import _corpus_location as _cloc
 import _published_tree
 import _vacuous_exit as _vx
 from pathlib import Path
@@ -908,6 +957,80 @@ def load_baseline_examined(path: Path) -> Optional[Dict[str, int]]:
     return {k: int(v) for k, v in ex.items() if isinstance(v, int)}
 
 
+# ─────────────────────────────────────────────────────────────────────
+# The register's own seal
+# ─────────────────────────────────────────────────────────────────────
+#
+# WHAT IT IS FOR. `recorded` may only grow with a corpus that says so, and the
+# only thing that ever checked that was a live sweep. Once the corpus can be
+# absent, a run with no corpus opens the register, cannot re-measure it, and
+# would otherwise have nothing to say about whether the numbers in it are the
+# numbers a sweep produced. The seal is that evidence, and it is the reason the
+# NO_CORPUS row can return rc 0 without the register going unguarded.
+#
+# WHAT IT IS NOT FOR. It is not a secret and it stops nobody who runs
+# `--write-baseline` over a reaching corpus — that is the SUPPORTED way to move
+# these numbers, and it makes them a measurement again. What it removes is the
+# silent hand-edit: adding 300 to a count in a text editor to stop a real break
+# being NEW now requires deliberately recomputing a digest, which is a false
+# statement rather than an omission nothing measures. Same bar
+# `published_record_staleness_check` sets for its own register (#922).
+
+SEAL_KEY = "seal"
+_SEAL_ALGO = "sha256"
+
+
+def register_seal(doc: Dict[str, Any]) -> str:
+    """The digest of the MEASURED half of a register document.
+
+    Over `recorded` and `examined` only: `_comment` is prose a maintainer may
+    improve, and sealing it would make an editorial fix indistinguishable from
+    a tampered count — which trains readers to re-seal without looking, and a
+    seal nobody reads is not a seal.
+    """
+    payload = json.dumps(
+        {"recorded": doc.get("recorded") or {},
+         "examined": doc.get("examined") or {}},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return f"{_SEAL_ALGO}:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+def seal_status(path: Path) -> Tuple[str, str]:
+    """``(status, detail)`` for the register at `path`.
+
+    Statuses: ``ABSENT_FILE``, ``UNREADABLE``, ``MALFORMED``, ``NO_SEAL``,
+    ``MISMATCH``, ``OK``. Every one of them is a different fact and the caller
+    maps them to different exit codes; collapsing any two is the shape this
+    whole program argues against.
+    """
+    if not path.is_file():
+        return "ABSENT_FILE", f"{path} does not exist"
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:                    # noqa: BLE001
+        return "UNREADABLE", f"{path} could not be read as JSON ({exc})"
+    if not isinstance(doc, dict) or not isinstance(doc.get("recorded"), dict):
+        return "MALFORMED", (f"{path} carries no `recorded` object, so there is "
+                             f"no register in it to adjudicate")
+    have = doc.get(SEAL_KEY)
+    if not isinstance(have, str) or not have:
+        return "NO_SEAL", (
+            f"{path} records no `{SEAL_KEY}`. It predates the seal, or it was "
+            f"written by hand. Re-record it with --write-baseline over a corpus "
+            f"that reaches; the seal is what a run with no corpus has instead "
+            f"of a measurement.")
+    want = register_seal(doc)
+    if have != want:
+        return "MISMATCH", (
+            f"{path} records {SEAL_KEY}={have} and its own `recorded`/"
+            f"`examined` numbers digest to {want}. The register was EDITED "
+            f"after it was written. A count raised by hand stops a real break "
+            f"being NEW, which is the one thing this ratchet exists to make "
+            f"impossible; re-record it with --write-baseline over a corpus that "
+            f"reaches, or restore the numbers the seal was taken over.")
+    return "OK", f"{path} matches its own seal"
+
+
 def compare_denominator(examined: Dict[str, int],
                         recorded: Optional[Dict[str, int]]) -> List[str]:
     """Rows whose REACH shrank since the baseline was recorded.
@@ -980,6 +1103,52 @@ def _print_findings(findings: List[dict]) -> None:
         print(f"      {f.get('detail')}")
 
 
+def _adjudicate_register_without_a_corpus(bpath: Path) -> int:
+    """NO_CORPUS has been decided; now answer for the register itself.
+
+    The sweep is excused because the corpus moved to its own repository. The
+    register did NOT move: it sits beside this program, and widening it is the
+    cheapest way to stop a real break being NEW. `repo_hygiene_gates.sh`
+    withdrew this gate's `gate_scope` in v1.10.55 precisely so a commit that
+    touches only the register still runs this gate — an rc 0 that never opened
+    the file would give that hole back.
+
+    So the ONE thing still checkable with no corpus is checked: are these the
+    numbers a sweep wrote? Nothing here re-measures anything, and the printed
+    verdict says so in those words.
+    """
+    status, detail = seal_status(bpath)
+    if status == "MISMATCH":
+        print(f"[FAIL] {GATE}: no corpus was scanned, and the debt register "
+              f"beside this program was EDITED after it was written. {detail}",
+              file=sys.stderr)
+        return 1
+    if status != "OK":
+        print(f"[NOT CHECKED] {GATE}: no corpus was scanned, so the debt "
+              f"register is the only thing left to adjudicate, and it cannot "
+              f"be: {detail} Until it can, this run has judged NOTHING — "
+              f"neither the corpus nor the register — and that is not a pass.",
+              file=sys.stderr)
+        return 2
+    recorded = load_baseline(bpath)
+    examined = load_baseline_examined(bpath) or {}
+    total = sum(sum(v.values()) for v in recorded.values())
+    print(f"[{GATE}] register: {total} recorded break(s) across "
+          f"{len(recorded)} row(s), measured over "
+          f"{sum(examined.values())} producer record(s); seal verifies.",
+          file=sys.stderr)
+    for row in sorted(recorded):
+        for code in sorted(recorded[row]):
+            print(f"   recorded {row}/{code}: {recorded[row][code]} "
+                  f"(of {examined.get(row, 0)} examined)", file=sys.stderr)
+    print(f"[{GATE}] NO_CORPUS: 0 cell(s) swept. The counts above were NOT "
+          f"RE-MEASURED by this run and nothing is claimed about whether they "
+          f"are still true of the corpus — only that they are unchanged since "
+          f"the sweep that recorded them. Point "
+          f"${_cloc.CORPUS_ENV} at a clone to re-measure.", file=sys.stderr)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description=("one general gate over declared cross-layer references "
@@ -992,6 +1161,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--baseline", help="override the baseline path")
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the current corpus counts as the baseline")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the "
+                         "published corpus. Turns 'no corpus discoverable "
+                         "anywhere' from UNDETERMINED into NO_CORPUS (rc 0), "
+                         "which STATES that 0 cells were swept. It does NOT "
+                         f"excuse a ${_cloc.CORPUS_ENV} that is set and broken, "
+                         "and it does NOT excuse the debt register: that lives "
+                         "in this repo, did not move with the corpus, and is "
+                         "still adjudicated against its own seal.")
     ap.add_argument("--json", help="write the machine-readable report here")
     args = ap.parse_args(argv)
 
@@ -1002,14 +1180,66 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if args.corpus:
-        corpus = Path(args.corpus)
-        if not corpus.is_dir():
-            print(f"[SKIP] corpus not found: {corpus}")
-            return 2
-        report = check_corpus(corpus, rows)
+        named = Path(args.corpus)
         bpath = baseline_path(args.baseline)
+        corpus, origin = _cloc.resolve(named, subdir="ic", gate=GATE,
+                                       announce=True)
+        if not corpus.is_dir():
+            rc = _cloc.refuse(GATE, named, corpus, origin,
+                              args.corpus_may_be_absent, "published cell(s)")
+            if rc != 0:
+                return rc
+            # NO_CORPUS EXCUSES THE SWEEP, NEVER THE REGISTER. See the module
+            # docstring: the register did not move with the corpus, and an rc 0
+            # that never opened it is the gate_scope hole of v1.10.55 walked in
+            # through the other door.
+            return _adjudicate_register_without_a_corpus(bpath)
+        if origin == _cloc.ENV:
+            # THIS GATE'S POPULATION IS WHAT GIT TRACKS (`corpus_cells` ->
+            # `_published_tree.published_paths`), and that function falls back
+            # to the DISK when it cannot read an index. Over a corpus that is
+            # present but not a checkout, the sweep would silently change
+            # population and compare the result against a baseline measured
+            # over the tracked one.
+            why = _cloc.not_a_checkout_reason(corpus, "published cells")
+            if why is None and _published_tree.published_paths(corpus) is None:
+                # A CHECKOUT THAT TRACKS NOTHING IS THE SAME EMPTY RESULT WITH
+                # a `.git` beside it. `published_paths` returns None for BOTH
+                # "git could not answer" and "the index is empty", and
+                # `corpus_cells` sends both to the disk — so a clone that
+                # delivered no content would be swept from whatever is lying in
+                # it. The pointer says a corpus is there; a tree tracking
+                # nothing is not one.
+                why = (f"{corpus} is a git checkout that tracks NOTHING, so "
+                       f"the published population is empty and "
+                       f"`corpus_cells` would fall back to a disk walk.")
+            if why:
+                print(f"[{GATE}] UNDETERMINED: {why} The baseline records "
+                      f"counts measured over the TRACKED population, so a "
+                      f"verdict from a disk walk here would compare two "
+                      f"different populations.", file=sys.stderr)
+                return 2
+        report = check_corpus(corpus, rows)
         if args.write_baseline:
-            bpath.write_text(json.dumps({
+            # REFUSE TO RECORD A NUMBER A SWEEP DID NOT MEASURE (vibe-ic#1025's
+            # shape, which this program still had). The write used to happen
+            # unconditionally and BEFORE the "no cell swept" branch below, so
+            #     --corpus <empty> --baseline <the register> --write-baseline
+            # rewrote `recorded` and `examined` to {} and printed [WROTE].
+            # That satisfies MAY-ONLY-SHRINK while proving the opposite of what
+            # the rule exists to prove, and now that the register is also the
+            # thing a corpus-less run adjudicates, it would additionally mint a
+            # valid seal over nothing. No --force: an escape hatch here puts the
+            # same destruction one flag away.
+            if not report["cells"]:
+                print(f"[REFUSED] {GATE} --corpus: the sweep found 0 published "
+                      f"cell(s) under {corpus}, so it examined NOTHING. "
+                      f"Writing a baseline from it would record empty counts "
+                      f"as a measurement, destroy the recorded reference "
+                      f"point, and seal the result. Fix the corpus/reach "
+                      f"first (vibe-ic#1025).", file=sys.stderr)
+                return 2
+            doc: Dict[str, Any] = {
                 "_comment": (
                     "Measured cross-layer reference breaks on the published "
                     "corpus. Counts only, never cell identity — cell paths "
@@ -1020,10 +1250,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "over: it may not shrink silently, because a sweep that "
                     "reaches less than the recorded one produces a smaller "
                     "findings count for a reason that is not a repair."),
+                "_seal_comment": (
+                    "`seal` digests `recorded` + `examined` and NOTHING ELSE. "
+                    "It is what a run with NO CORPUS has instead of a "
+                    "measurement: since v1.10.56 the corpus lives in its own "
+                    "repository and this register does not, so a sweep can be "
+                    "excused while the register still has to be adjudicated. "
+                    "Written only by --write-baseline, which refuses a sweep "
+                    "that reached no cell — so re-sealing these numbers costs a "
+                    "corpus that actually reaches. Editing a count by hand does "
+                    "not."),
                 "recorded": report["counts"],
                 "examined": report["examined"],
-            }, indent=2) + "\n", encoding="utf-8")
-            print(f"[WROTE] {bpath}")
+            }
+            doc[SEAL_KEY] = register_seal(doc)
+            bpath.write_text(json.dumps(doc, indent=2) + "\n",
+                             encoding="utf-8")
+            print(f"[WROTE] {bpath} ({doc[SEAL_KEY]})")
         if args.json:
             Path(args.json).write_text(
                 json.dumps(report, indent=2, ensure_ascii=False),
@@ -1074,6 +1317,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"losing its reach. Re-record it with --write-baseline.",
                   file=sys.stderr)
             return 2
+        # THE REGISTER IS ADJUDICATED WHETHER OR NOT A CORPUS TURNED UP.
+        # Here a sweep DID happen, so a missing seal is only reported: the live
+        # counts are the measurement and the register is being compared against
+        # them. A seal that is present and WRONG is a different fact — somebody
+        # edited the file after it was written — and no sweep can tell whether
+        # the edit was the one hiding a break, so it FAILs in both modes.
+        sstatus, sdetail = seal_status(bpath)
+        if sstatus == "MISMATCH":
+            print(f"[FAIL] {GATE}: the debt register was EDITED after it was "
+                  f"written. {sdetail}", file=sys.stderr)
+            return 1
+        if sstatus == "NO_SEAL":
+            print(f"  (register) {sdetail} A sweep ran here, so the counts "
+                  f"above are the measurement; a run with NO corpus has only "
+                  f"the seal and will refuse.", file=sys.stderr)
         if shrunk:
             for line in shrunk:
                 print(f"[FAIL] cross-layer reference sweep LOST REACH: {line}",
