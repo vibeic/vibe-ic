@@ -1363,3 +1363,699 @@ The same selection on this branch:
     failures on the baseline and not this branch:
       test_issue1241_ppa_gates_are_aimed_at_a_population_that_exists.py
         ::test_every_in_tree_corpus_holds_at_least_one_document
+
+---
+
+# Part 13 — reproduced from the pushed branch, and a count in Part 12 corrected
+
+Part 11 established the rule this part follows: a result measured once, in the
+tree that produced it, is a result whose host-dependence nobody has tested. Every
+number in Part 12 was measured in the worktree that authored it. So a second
+worktree was created from the pushed commit `48ea29e6b`, `git clean -xdfq`,
+`PYTHONDONTWRITEBYTECODE=1`, and all of it was run again on a checkout that had
+never seen it.
+
+## The eleven wired rows
+
+    rc=2  PPA head-to-head records                      published corpus, other repo
+    rc=1  PPA head-to-head records (cross-layer)        15 records, 1 refused
+    rc=2  PPA head-to-head records (end-to-end)          2 records
+    rc=0  PPA measurement contract (cross-layer)        21 contracts
+    rc=0  PPA measurement contract (end-to-end)         61 contracts
+    rc=2  PPA measurement contract                      published corpus, other repo
+    rc=2  PPA measurement coverage                      148 rows, no denominator
+    rc=2  PPA promotion feasibility (cross-layer)       21 candidate sets
+    rc=2  PPA frontier recomputes                       no objective declared
+    rc=0  PPA arms solved one problem (cross-layer)      210 pair(s)
+    rc=0  PPA arms solved one problem (end-to-end)      1830 pair(s)
+
+**Identical to Part 12, row for row.** And the naming itself reproduced, which is
+the part that matters here — an rc that travels while the sentence does not would
+be the same defect wearing a passing exit code:
+
+    [FAIL] ppa_head_to_head_check: .../ppa-crosslayer/records/h2h_F.json: BASELINE_TUNED_BY_US
+    [UNDETERMINED] ppa_head_to_head_check: .../ppa-e2e/records/head_to_head.json: SCOPE_SENTINEL
+    [UNDETERMINED] ppa_head_to_head_check: .../ppa-e2e/records/head_to_head_diagnostic_power.json: SCOPE_SENTINEL
+      em: MISSING `reliability.em.violations` ... cited artefact: reports/phase3/em.json
+      em: MISSING `reliability.em.worst_ratio` ... cited artefact: reports/phase3/em.json
+      equivalence: MISSING `equivalence.verdict` ... cited artefact: reports/lec.json
+
+    83 passed   the new guard + the three #1241/#1121 files it sits beside
+    PASS        source_chip_agnostic_check, 1553 file(s), no forbidden token
+
+## A COUNT IN PART 12 IS WRONG, AND IT IS CORRECTED HERE RATHER THAN EDITED THERE
+
+Part 12 records negative control A as **3 failed, 10 passed**. Re-run from the
+pushed commit it is **4 failed, 23 passed**:
+
+    test_a_refusal_over_two_records_names_both_of_them
+    test_the_two_blocks_are_not_byte_identical
+    test_an_internal_error_is_rc_2_and_names_the_record_not_rc_1     <- the fourth
+    test_every_wired_corpus_gate_that_refuses_names_what_is_missing[ppa_head_to_head_check.py-ppa-e2e]
+
+Nothing regressed and nothing was overstated in the direction that flatters this
+branch — the control got STRONGER, not weaker. The cause is ordinary and worth
+naming so nobody hunts for a subtler one: control A was measured when the guard
+file held 13 tests, and `test_an_internal_error_is_rc_2_and_names_the_record_not
+_rc_1` was written afterwards. It depends on the same record naming, so it joins
+the control. The file now holds 27 tests, which is where `23 passed` comes from.
+
+Control B re-run from the pushed commit is **2 failed, 25 passed** — the same two
+tests Part 12 names, against the same larger file.
+
+**Part 12's number is left standing.** This report's header rule is that later
+parts supersede earlier ones and that early sections are not quietly brought up
+to date, because a document edited in place cannot be checked against the commits
+that made the changes. A stale count that a reader can reproduce and see
+superseded is worth more than a corrected one they must take on trust.
+
+## What this part does NOT change
+
+No program, no gate, no test and no wiring line. Part 13 is prose in an audit
+document; every verdict above is the one the pushed commit already produced.
+
+---
+
+# Part 14 — the exact-path rows, and an rc 2 that was hiding an rc 1
+
+Part 12's guard enforces one rule: a gate that returns rc 2 over a population it
+opened must name what is missing. It enforces it on the four `--corpus` gates.
+**Two wired rows refuse over a non-empty population through an EXACT PATH**, not
+a corpus — `--coverage` and `--candidates` — so the guard never reached them and
+the rule went unenforced on a third of the family. Applying it by hand found
+three things, and the third is the most serious defect this lane has produced.
+
+## The two refusals, as they stood
+
+    PPA measurement coverage      148-row bundle
+      [CANNOT CHECK] NO_EXPECTATION_SET: ... neither --expect nor the bundle
+      declares what should have been measured. ...
+
+    PPA frontier recomputes       1 candidate set, 148 metric records
+      [CANNOT CHECK] the contract declares no objective, so there is no
+      trade-off to compute a frontier over
+
+The first names a flag and never the BUNDLE it opened. The second names nothing
+at all — no document, no key, no flag — over a set it had already read and
+counted. Both now name the document, the population they read, and the artefact
+they need; `ppa_pareto_check` names BOTH of the two Part 9 identified, because a
+reader told to declare objectives and not told a published frontier is also
+required will build the self-marking pass that gate exists to refuse.
+
+**Neither rc changed. Both are still 2, and both are still correct.**
+
+## AND AN rc 2 WAS HIDING AN rc 1
+
+`run_coverage` states its own severity rule, twenty lines below the defect:
+
+    # An invalid record is a finding about the record set and outranks a
+    # coverage gap, for the same reason 1 outranks 2 everywhere else here.
+
+That rule could never fire. `_index_from` establishes the record refusals on the
+function's FIRST line — fully, with no further input needed, because a record
+that is invalid is invalid whatever a denominator says — and then
+`_expected_from` RAISES over a completely independent absent input, so the report
+carrying `record_refusals` is never built and the rule never runs.
+
+Measured on the wired row, `ppa-crosslayer/records/trials/b000/records_flat.json`
+— **148 rows, 54 refused, and the gate reported NOT_CHECKED and named none of
+them**:
+
+    44 x SCOPE_SENTINEL           `scope.clock` is None
+     8 x SAME_ARTEFACT_TWO_VALUES one artefact, read twice, two values
+     2 x CONFLICTING_RECORD       one metric+scope, two MEASURED values
+
+The two CONFLICTING_RECORDs are not a shape complaint. They are two artefacts of
+the same run stating different numbers for the same fact:
+
+    route.wirelength.um   openroad.log 16511.0   vs   openroad.metrics.json 16522
+    route.via.count       openroad.log 4151      vs   openroad.metrics.json 4159
+
+A claim citing either binds to neither number. That had been sitting in a
+published campaign record set, behind an rc 2, for as long as the row has been
+wired.
+
+**These are two INDEPENDENT questions over one bundle** — "are these records
+valid" (answered: no, 54 times) and "did the run measure what it was required
+to" (undecidable: nothing declares the requirement). Answering the second with
+silence about the first is this lane's defect in its more dangerous direction: an
+unearned PASS at least looks like a claim, while an unearned NOT_CHECKED looks
+like diligence.
+
+The ordering is fixed. `PPA measurement coverage` is now **rc 1**, it prints all
+54 refusals, and it STILL SAYS the coverage question is separately undetermined —
+an rc 1 about the records is not an answer about coverage, and the row says so.
+
+### This is the one verdict change in the lane, and it is stated loudly
+
+    PPA measurement coverage    rc 2  ->  rc 1
+
+Nothing was made green. A row that reported NOT_CHECKED now reports a finding it
+had already computed and discarded. The suite was ALREADY red from the
+acknowledged `h2h_F` row, so this does not flip the batch; it adds a second red.
+`gate_red_since.json` is NOT edited — a NEW red passes that ledger by its own
+rule, and acknowledging a red found an hour ago would be taking on a deadline to
+avoid stating a finding.
+
+### A defect introduced while fixing it, and caught by this branch's own rule
+
+The first version of the ordering fix returned `"coverage": None`, and `main`
+read `report["coverage"]["rows"]` unconditionally. `TypeError`, traceback,
+interpreter exit **1** — a crash publishing itself as a finding, which is the
+exact defect Part 12 repaired in `ppa_head_to_head_check` and Part 7 in
+`ppa_problem_integrity_check`. It is recorded rather than quietly corrected
+because it is evidence about the class: this shape is easy to reintroduce, three
+programs in this family have now carried it, and only a test catches it.
+`test_a_refused_record_is_rc_1_even_when_the_denominator_is_absent` asserts
+`"Traceback" not in output` for that reason.
+
+## The eleven wired rows, final
+
+    rc=2  PPA head-to-head records                      published corpus, other repo
+    rc=1  PPA head-to-head records (cross-layer)        15 records, 1 refused, NAMED
+    rc=2  PPA head-to-head records (end-to-end)          2 records, both NAMED
+    rc=0  PPA measurement contract (cross-layer)        21 contracts
+    rc=0  PPA measurement contract (end-to-end)         61 contracts
+    rc=2  PPA measurement contract                      published corpus, other repo
+    rc=1  PPA measurement coverage                      54 of 148 records REFUSED  <- CHANGED
+    rc=2  PPA promotion feasibility (cross-layer)       21 sets, artefacts NAMED
+    rc=2  PPA frontier recomputes                       both missing artefacts NAMED
+    rc=0  PPA arms solved one problem (cross-layer)      210 pair(s)
+    rc=0  PPA arms solved one problem (end-to-end)      1830 pair(s)
+
+## Negative controls
+
+    D — the denominator refusal put back in front of the record refusals
+        1 failed, 30 passed
+          test_a_refused_record_is_rc_1_even_when_the_denominator_is_absent
+
+        AssertionError: a conflicting record is a finding about the record set
+        and this returned 2
+          [CANNOT CHECK] NO_EXPECTATION_SET: ... 1 record(s) indexed, 1 refused
+          ... rc=2.
+        assert 2 == 1
+
+    E — the frontier refusal returned to its one-sentence form
+        1 failed, 30 passed
+          test_a_frontier_refusal_names_the_document_and_BOTH_missing_artefacts
+
+        AssertionError: [CANNOT CHECK] the contract declares no objective, so
+        there is no trade-off to compute a frontier over
+        assert '.../candidates.json' in '[CANNOT CHECK] the contract declares
+        no objective, so there is no trade-off to compute a frontier over\n'
+
+And the paired half, so the rc-1 rule cannot be satisfied by a gate that refuses
+everything: `test_the_paired_half_a_clean_bundle_with_no_denominator_is_still_rc_2`
+pins a VALID bundle with no denominator at rc 2. The STILL-CANNOT verdict this
+row has carried all along is untouched where it is earned.
+
+## Regression
+
+Same targeted selection as Part 12, plus the five files covering the two programs
+changed here:
+
+    31 failed, 769 passed, 104 skipped, 4 xfailed
+    failures on this branch and not the base: (none)
+
+---
+
+# Part 15 — the guard's own blind spot, closed the same way the gates' were
+
+Part 14 found the two exact-path rows BY HAND, because the guard's live arm
+reached only `--corpus` rows. It then covered them with fixtures in `tmp_path`
+and left the arm as it was. That is the same defect this file has been about,
+one level up: the rule was enforced on the wired corpus rows and NOT on the
+wired exact-path rows, so re-aiming `PPA measurement coverage` or
+`PPA frontier recomputes`, or wiring a new exact-path row, escaped it entirely.
+A fixture proves a program behaves; only the wiring arm proves the ROW is
+guarded.
+
+Measured, before:
+
+    test_every_wired_corpus_gate_that_refuses_names_what_is_missing
+      [ppa_head_to_head_check.py-ppa-crosslayer]     7 rows, all --corpus
+      [ppa_head_to_head_check.py-ppa-e2e]            and NEITHER exact-path row
+      [ppa_contract_check.py-ppa-crosslayer]
+      [ppa_contract_check.py-ppa-e2e]
+      [ppa_feasibility_check.py-ppa-crosslayer]
+      [ppa_problem_integrity_check.py-ppa-crosslayer]
+      [ppa_problem_integrity_check.py-ppa-e2e]
+
+After — one arm, both shapes, running the wiring's OWN argv rather than a
+reconstructed `--corpus` one:
+
+    test_every_wired_gate_that_refuses_names_what_is_missing
+      [ppa_head_to_head_check:corpus:ppa-crosslayer]
+      [ppa_head_to_head_check:corpus:ppa-e2e]
+      [ppa_contract_check:corpus:ppa-crosslayer]
+      [ppa_contract_check:corpus:ppa-e2e]
+      [ppa_measurement_check:coverage:records_flat.json]     <- new
+      [ppa_feasibility_check:corpus:ppa-crosslayer]
+      [ppa_pareto_check:candidates:candidates.json]          <- new
+      [ppa_problem_integrity_check:corpus:ppa-crosslayer]
+      [ppa_problem_integrity_check:corpus:ppa-e2e]
+
+`test_the_live_arm_reaches_both_wiring_shapes` is the paired half: an arm that
+quietly resolved to corpus rows only is exactly the state this change ends, and
+it would pass every case in silence.
+
+## AND THE RULE HAD AN OPT-OUT
+
+`_counts` reads the denominator out of the gate's OWN roll-up line. A gate that
+prints no roll-up parses as population ZERO and takes the empty-corpus exit — so
+**the cheapest way to satisfy this entire file was to print less.** That is not a
+hypothetical: the two exact-path rows print no roll-up at all, which is how the
+hole was noticed rather than reasoned about.
+
+A population the CALLER knows now outranks a parsed one, and
+`test_a_gate_cannot_escape_the_rule_by_printing_no_count` pins both directions —
+silent with a parsed zero, refusing once the population is supplied.
+
+## Negative control F — the extension has teeth on the WIRED row
+
+Control E in Part 14 reverted the frontier naming and caught **one** test, the
+fixture. The same revert against this part:
+
+    2 failed, 31 passed
+      test_every_wired_gate_that_refuses_names_what_is_missing[ppa_pareto_check:candidates:candidates.json]   <- NEW
+      test_a_frontier_refusal_names_the_document_and_BOTH_missing_artefacts
+
+    AssertionError: ppa_pareto_check.py --candidates .../trials/z23/candidates.json:
+    rc 2 over a population of 1 with 0 undecided, and the output names 0 of them.
+    A refusal whose SUBJECT is unnamed cannot be acted on.
+      named: []
+      --- output ---
+      [CANNOT CHECK] the contract declares no objective, so there is no
+      trade-off to compute a frontier over
+    assert 0 >= 1
+
+The second failure is the fixture, which Part 14 already had. The FIRST is the
+wired row, which nothing guarded until now.
+
+## No verdict changes
+
+No program changed in this part. The guard file holds 34 tests.
+
+    31 failed, 772 passed, 104 skipped, 4 xfailed
+    failures on this branch and not the base: (none)
+
+---
+
+# Part 16 — how far the defect goes, measured instead of assumed
+
+Every part so far has fixed PPA rows and left the obvious question unasked: the
+rule is stated about *a gate*, so is the rest of the suite the same? Parts 12–15
+scoped the guard to the PPA family without saying why. That is an unexplained
+limit, and an unexplained limit on a guard is the shape this whole report is
+about.
+
+So the surface was measured. `repo_hygiene_gates.sh` wires **96** gate
+invocations, **25** of them through `run_tolerating_uncheckable` — the wrapper
+that renders rc 2 as NOT_CHECKED, and therefore the entire population this rule
+could ever apply to. Eleven are PPA rows. The other **fourteen** were run by
+hand, each from the cwd its own wiring line gives it.
+
+    rc 0   ten   container login-banner parses · no upstream forked twice ·
+                 PR bases reach main · STA engines agree · PDK via patch vs
+                 layer min width · macro OBS not crossed · DRC PASS is not
+                 vacuous · inner FAILs reach the verdict · new tool diagnostic
+                 id · image-gated verifications are not silently skipped
+    rc 2   three and every one of them already names what it needs
+    n/a    one   gates are host-independent exceeded a 90s probe — a slow gate,
+                 not a finding
+
+## The three, and why none of them has the defect
+
+    blocker list contract on committed reports
+      "--dir <ROOT>/benchmark-data is not a directory"
+      An EMPTY population living in another repository — the same excused shape
+      as the two published-corpus PPA rows — and the path is named.
+
+    engineering evidence fresh
+      "NOT_GENERATED: <ROOT>/docs/ENGINEERING_EVIDENCE.md does not exist — this
+       is NOT a pass; run `python3 tools/gen_engineering_evidence.py`."
+      The artefact AND its producer, in the refusal. This is what Parts 1 and 9
+      spent pages asking the PPA gates to do, already done here.
+
+    input-doc claims vs installed PDK
+      "[VACUOUS] ... examined nothing (reason: no_decidable_pdk_claim); this is
+       NOT a pass over the design"
+      "4 input document(s), 0 candidate claim(s) — contradicted=0 corroborated=0
+       undecided=0"
+      A THIRD shape, and it is legitimate. It read a non-empty corpus and found
+      no decidable claim in it. Nothing is ABSENT from disk, so there is no
+      artefact to name; it discloses the denominator instead and marks itself
+      VACUOUS rather than passing.
+
+## What this bounds
+
+**The defect was concentrated in the PPA family.** Six gates that had never
+checked anything (Part 1), two that checked and named nothing (Part 12), two
+exact-path rows that named too little and one of them hiding an rc 1 (Part 14),
+and two wired with arguments their own program refuses (Part 12) — all eleven
+rows, one subsystem. The other fourteen tolerating rows in the same file are
+already honest, and that is now a measurement rather than an assumption.
+
+**The arm is NOT widened to them, deliberately.** Three of the fourteen need a
+container image and one needs network, so pulling them into a pytest guard would
+trade a defect this repository does not have for host-dependence it would then
+have to manage — and `gates are host-independent` exists because that has bitten
+before. The reasoning is recorded in the guard file's own docstring so the
+scoping is answerable where a reader meets it, not only here.
+
+A negative result is worth writing down at the same standard as a positive one.
+Had it been skipped, the next person to ask "does this rule apply to the rest of
+the suite?" would have had to run all fourteen again to find out that it does.
+
+## No changes
+
+No program, no gate, no wiring, no verdict. Part 16 is a measurement and a
+docstring.
+
+---
+
+# Part 17 — guards that crashed, a guard that asserted a falsehood, and what is
+# genuinely left
+
+Part 12 recorded thirty-one pre-existing reds in the PPA guard family and called
+them "per-test-site work across four files with no shared fix". That was
+imprecise, and the imprecision mattered: nine of them were not the rename family
+at all, and one of the nine was a guard reporting a defect that does not exist.
+
+## A FALSE RED — a guard asserting a defect that is not there
+
+`test_contract_check_says_the_schema_was_not_applied` gates on
+`HAVE_DRAFT_2020_12` — *is the REFERENCE jsonschema usable here* — and then
+asserts about the PROGRAM. The program resolves its engine through
+`_ppa/schema_validation.resolve`, which prefers the reference library and falls
+back to `_ppa/jsonschema_bundled`, which SHIPS WITH THE PLUGIN. On a host with
+jsonschema 3.2.0 the reference is unusable, so the skip did not fire, so the test
+ran, and it reported:
+
+    AssertionError: the contract's shape went unvalidated and nothing said so
+      [FAIL] PPA-C-010: the document violates contract.v1 at <document root>:
+             'resolutions' is a required property
+      [FAIL] PPA-C-010: the document violates contract.v1 at <document root>:
+             'run_manifest' is a required property
+      ...
+
+The shape HAD been validated — by the bundled engine — and three violations were
+printed directly above an assertion claiming nobody looked.
+
+`_ppa_jsonschema` is RIGHT to ask about the reference library, and says so in its
+own docstring: the tests it guards call `Draft202012Validator` themselves as an
+independent cross-check, and handing them the bundled engine would make that
+cross-check the plugin agreeing with itself. But this test calls nothing itself,
+so its predicate was one layer off the thing it asserts about. It now asks
+`resolve()` — the program's own question — and where the branch is unreachable it
+says so through `not_verified_reason` with a remedy, so it lands in the
+not-verified roll-up as an unanswered question instead of a quiet green tick.
+
+**A guard asserting a defect that is not there is the same disease as a gate
+missing one that is, and it is the harder of the two to unpick, because the red
+looks like work to do.**
+
+## Eight missing table entries, in two sweeps that refuse to be incomplete
+
+`test_no_ppa_program_lets_a_traceback_reach_the_exit_code` and
+`test_vacuous_input_is_undetermined_not_pass` each `pytest.fail` for a program
+their table does not name — *"its traceback arm is untested"*, *"its vacuous arm
+is untested"*. That is those files holding themselves to the rule they hold the
+programs to, and four programs had no entry in either.
+
+All eight were MEASURED before being listed. No traceback anywhere; exit codes
+3/3/1/3 on junk input and 2/2/2/3 on vacuous input. The first two take a
+POSITIONAL document (`manifest`, `situation`), and pointing `--policy` at the
+absent file instead is a BAD INVOCATION rather than a vacuous one — a distinction
+that produced three misleading rc 3s in the first probe of this part, and which
+the table now records.
+
+`test_vacuous_refusal_is_marked` skipped those same four for want of an entry.
+Three now reach its assertion and pass; the fourth skips only because the rc arm
+already reports it. That file went `4 failed, 91 passed, 4 skipped` to
+`99 passed, 1 skipped`.
+
+## A CROSS-PROGRAM DISAGREEMENT ABOUT §1, declared rather than settled or buried
+
+Handed a path argument that does not resolve, two PPA programs answer
+differently, and each has a stated rationale:
+
+    ppa_pr_scope_check    `--changed-file not found`        -> rc 2
+    ppa_signoff_records   `run` is not a directory          -> rc 3
+
+and `ppa_signoff_records`' own test argues its choice: *"3 and not 2: a path that
+is not there is the caller's error, and a 2 would be indistinguishable from 'I
+looked and could not tell'."* Its docstring declares the same.
+
+Both readings are defensible and `PPA_INTERFACES.md` §1 does not adjudicate
+between them. There were three ways to make the sweep green and two of them were
+dishonest: "fix" one program to match a rule its own test argues against, or
+quietly drop it from the table. `_VACUOUS_RC` records the disagreement instead —
+a DECLARATION, not an exemption. `returncode != 0` stays unconditional, so
+nothing there can buy a vacuous pass; only the choice between 2 and 3 is
+declarable, and `test_the_vacuous_rc_declaration_can_never_buy_a_pass` refuses 0
+and 1 outright.
+
+**This is a question for the contract's owner, not for this branch.** It is
+written down so it is answerable, not answered.
+
+## What is genuinely left, characterised properly this time
+
+    targeted selection, 28 files:  31 failed -> 22 failed, 816 passed
+    new failures: NONE
+
+The remaining **22** are one cause — a test reaching for a program internal that
+a refactor renamed — but Part 12's "no shared fix" undersold WHY, and the real
+reason is the thing worth recording:
+
+    PI.corpus_candidates(corpus, baseline)    gone
+    CC.corpus_contracts(corpus)               gone
+    FC.corpus_candidate_sets(corpus)          gone
+    CC/PI._CONTRACT_SCHEMA, FC._CANDIDATES_SCHEMA   gone
+
+These are not renames with a one-line forwarding address. The PROPERTIES those
+helpers carried moved to a different level. `corpus_candidates(corpus, baseline)`
+existed so that
+
+    test_the_baseline_is_never_paired_with_itself
+        assert PI.corpus_candidates(tmp_path, base) == []
+
+could hold the program to it. Self-exclusion now lives in `check_corpus`'s
+problem-grouping, and it demonstrably still holds — 21 contracts in one group
+produce 210 pairs, which is exactly 21x20/2, so no contract is paired with
+itself. Selection likewise moved from a schema constant to a SHAPE predicate
+(`is_candidate_set`), which is why `_CANDIDATES_SCHEMA` has no successor at all.
+
+So a shim restoring the old signatures inside the test file would make those
+tests VACUOUS — the exclusion would be performed by the test and then asserted by
+the test, with the program no longer in the loop. That is the defect this entire
+report is about, manufactured deliberately to turn a red green.
+
+**Repairing them honestly means re-expressing each property at the level it now
+lives** — assert the pair COUNT and that no pair has both sides equal, rather
+than asserting a helper's return value. That is better than what was there, and
+it is a rewrite with its own reasoning per assertion, not a sweep. It is left
+undone and described, with the exact list above, so the next person starts from
+the diagnosis rather than from the AttributeError.
+
+## No program changed in this part, and no verdict
+
+Every repair here is in a test file. The eleven wired rows are exactly as Part 14
+lists them.
+
+---
+
+# Part 18 — the guard family is green, and what being dark had cost
+
+Part 17 left 22 tests red and described the repair rather than doing it. Done
+now. The targeted PPA selection, which was **32 failed / 603 passed** on the
+pristine `a758f4adc`, is **840 passed, 0 failed**.
+
+    a758f4adc      32 failed, 603 passed, 104 skipped, 4 xfailed
+    this branch     0 failed, 840 passed, 102 skipped, 4 xfailed
+    new failures    NONE, at every step
+
+## WHAT BEING DARK HAD COST: a wired gate crashing into an rc 1
+
+`test_an_internal_error_is_rc_3_and_never_rc_1` had been red on
+`AttributeError: module has no attribute '_CONTRACT_SCHEMA'`. While it was red,
+the guard it pins **was not in the program**:
+
+    two contracts that GROUP on a well-formed `problem` identity, whose
+    `analysis` is a bare digest STRING instead of a record
+      -> AttributeError out of `identity.compare`
+      -> traceback escapes `check_corpus`
+      -> the interpreter exits 1
+
+and 1 is the code §1 reserves for *"these two runs were not solving the same
+problem"* — a verdict nothing reached. In corpus mode ONE such document decides
+a row over a whole campaign, and the wired rows sweep 21 and 61 contracts.
+
+**Part 7 of this report states that this program "now carries the same one".**
+On this tree it did not. Two things had to be true at once for that to survive:
+a claim in the audit, and the test that would have contradicted it failing for
+an unrelated reason. That is the shape worth remembering — not the missing
+`try`, but that a dark guard let a false claim stand in a document whose whole
+purpose is measurement.
+
+Repaired per pair (rc 2, naming both contracts, the exception, and the missing
+input) and at the top level (rc 3, matching `ppa_contract_check`). Negative
+controls: with the per-pair guard removed the row exits 3 and one bad pair
+decides it; with both removed, the traceback.
+
+## THREE FILES, THREE DIFFERENT REPAIRS, and the difference is the point
+
+Part 17 said a shim would make these tests vacuous. That was true of ONE of the
+three, and treating all three the same would have been wrong in both directions.
+
+**`test_issue1241_problem_integrity_takes_a_corpus.py` — REWRITTEN.** `--corpus`
+mode was rebuilt: it no longer takes a baseline and pairs everything against it,
+it GROUPS by problem identity and pairs inside each group. `corpus_candidates(
+corpus, baseline)` did not move, it stopped existing, and a shim restoring its
+signature would have put the baseline-exclusion inside the test and then
+asserted it there, with the program out of the loop. Every property is now
+asserted where it lives, and every number was MEASURED before it was asserted:
+
+    comparable pair                      rc 0, 1 pair    <- THE POSITIVE CONTROL
+    one contract alone                   rc 2, 0 pairs   <- never self-paired
+    three comparable                     rc 0, 3 pairs   = C(3,2)
+    toolchain differs                    rc 1, PPA-C-012
+    comparable + an unreadable document  rc 2
+    REFUSED pair + an unreadable one     rc 1            <- never softened
+    a contract under another filename    rc 0, 1 pair    <- by declaration
+
+The positive control is the load-bearing one: a file of refusal tests alone is
+satisfied by a gate that refuses everything.
+
+The fixture also had to hash to its own digest — `PPA-C-001` refuses a contract
+whose `contract_digest` does not match its content, so a fixture omitting it is
+refused for THAT, and every test built on it asserts a refusal it did not mean
+to cause. Three wrong probes were spent before that surfaced.
+
+**`..._corpus_walks_cannot_be_extended_by_a_symlink.py` — ADAPTED, legitimately.**
+Here the thing under test IS the walk, and the walk is still program code:
+`collect` is the shared seam and the predicate is the gate's own. Nothing moves
+into the test. Three of its four rows had been raising AttributeError, so the
+symlink property — that `**` does not recurse into a symlinked directory, which
+is what keeps a corpus from being silently extended to documents elsewhere — was
+being held for ONE walk instead of four.
+
+**`..._ppa_record_gates_take_a_corpus.py` — ADAPTED, plus two corrections.**
+
+  * `CC.main([]) == 2` was stale and is now 3. §1 separates them deliberately:
+    2 is "I could not look", 3 is "you invoked me wrong". Collapsing them is
+    exactly how a stale flag in the wiring reads as a row that ran — which is
+    not hypothetical, it is Part 12's `PPA arms solved one problem` finding.
+  * "an unreadable document stays in the corpus" is now asserted on
+    `scan.unreadable` rather than `scan.records`. A document that cannot be
+    parsed cannot be SELECTED — there is nothing to run a predicate on — and
+    `collect` splits the two deliberately. The load-bearing half is unchanged:
+    the verdict is 2 and the file is NAMED, never dropped to a silent pass. The
+    test additionally pins that the denominator says "unreadable", so the
+    population cannot be silently mis-sized.
+
+## The eleven wired rows, re-verified after the program change
+
+    rc=2  PPA head-to-head records                      published corpus, other repo
+    rc=1  PPA head-to-head records (cross-layer)        15 records, 1 refused, NAMED
+    rc=2  PPA head-to-head records (end-to-end)          2 records, both NAMED
+    rc=0  PPA measurement contract (cross-layer)        21 contracts
+    rc=0  PPA measurement contract (end-to-end)         61 contracts
+    rc=2  PPA measurement contract                      published corpus, other repo
+    rc=1  PPA measurement coverage                      54 of 148 records REFUSED
+    rc=2  PPA promotion feasibility (cross-layer)       21 sets, artefacts NAMED
+    rc=2  PPA frontier recomputes                       both artefacts NAMED
+    rc=0  PPA arms solved one problem (cross-layer)      210 pair(s)
+    rc=0  PPA arms solved one problem (end-to-end)      1830 pair(s)
+
+Unchanged from Part 14. Chip-agnostic guard PASS over 1553 files.
+
+---
+
+# Part 19 — the whole suite, both trees; and Part 14 said something false
+
+Every measurement in Parts 12–18 was a gate run BY HAND, one row at a time, plus
+targeted pytest. The suite those rows live in was never run. That is the gap this
+part closes, and closing it overturned a claim.
+
+Both runs: separate worktrees, `git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`,
+nothing else touching either tree.
+
+|  | `a758f4adc` | this branch |
+|---|---|---|
+| gates declared | 93 | 93 |
+| decided | 83 | **84** |
+| passed | 76 | **78** |
+| failed | 7 | **6** |
+| NOT CHECKED | 10 | **9** |
+| seconds | 436 | 543 |
+
+    failures on this branch and not the base:
+      PPA measurement coverage
+    failures on the base and not this branch:
+      PPA arms solved one problem (cross-layer campaign)
+      PPA arms solved one problem (end-to-end campaign)
+
+**One red added, two removed, and both directions are earned.** The added one
+reports 54 record findings the gate had already computed and discarded. The two
+removed now compare 210 and 1830 real pairs where they previously compared none.
+
+The four reds present in both — `evidence citation resolves`, `gates are
+host-independent`, `L-doc field producer`, `liar census controls still fire` —
+are untouched by this branch, and three of them carry rows in
+`gate_red_since.json`. So does `PPA head-to-head records (cross-layer
+campaign)`, which is still red and still refusing `h2h_F`, exactly as the brief
+required.
+
+## PART 14 SAID SOMETHING FALSE, AND THIS IS THE CORRECTION
+
+Part 14 argued the two `PPA arms solved one problem` rows had been failing
+invisibly:
+
+> **rc 3 is quieter than rc 2 and that is why it survived.** ... nothing in the
+> roll-up distinguishes it from a row that ran
+
+**That is wrong.** Measured on the pristine base, the dispatcher rendered them:
+
+    ── PPA arms solved one problem (cross-layer campaign)
+    [ppa_problem_integrity_check] REFUSE (bad invocation): --baseline/--candidate
+    and --corpus were both given. ... Give exactly one. rc=3.
+       ^^ FAILED: PPA arms solved one problem (cross-layer campaign) [0s]
+
+`^^ FAILED:`, with the program's refusal printed directly above it. Both rows
+were LOUD, they were counted in the failure total, and anyone reading the
+roll-up would have seen them. What was true is narrower and still worth fixing:
+they were red, they had stayed red, and while red they examined zero pairs. What
+was NOT true is that the roll-up hid them.
+
+The claim was reasoned from `run_tolerating_uncheckable`'s name — it tolerates
+rc 2, so rc 3 must fall through to something quieter — instead of from a run.
+Part 14's paragraph is left standing and superseded here, per this report's
+header rule. It is a good example of the failure this whole document is about
+pointing at its own author: **an assertion about what a reader would see, made
+without being a reader.**
+
+## What that changes about the fix, and what it does not
+
+Nothing about the repair. `--corpus` mode was rewritten to need no baseline, the
+wiring still passed one, and the rows decided nothing — that was true before this
+part and is true after it. Only the argument for urgency was overstated, and
+overstated in the direction that flatters the person making it.
+
+## The NOT CHECKED count, and what is behind it
+
+Ten before, nine after, and the one that moved is `PPA measurement coverage` —
+from NOT_CHECKED to FAILED, because it now reports findings instead of being
+silent about them. The nine that remain:
+
+    blocker list contract on committed reports   empty population, other repo
+    engineering evidence fresh                   artefact + producer NAMED
+    input-doc claims vs installed PDK            non-empty corpus, no decidable claim
+    PPA head-to-head records                     published corpus, other repo
+    PPA measurement contract                     published corpus, other repo
+    PPA head-to-head records (end-to-end)        2 records, both NAMED
+    PPA promotion feasibility (cross-layer)      21 sets, artefacts NAMED
+    PPA frontier recomputes                      both artefacts NAMED
+
+Eight rows, every one of which now says what it is missing. That is the whole
+point of the branch, measured in the suite rather than row by row.

@@ -64,6 +64,45 @@ here forever and this file is satisfied -- it only ever asks that the refusal be
 actionable. Converting one of these rows to green by editing a record would be
 caught by nothing in this file, because that is not what it is for.
 
+WHY THE LIVE ARM IS SCOPED TO THE PPA FAMILY, AND IT IS A MEASUREMENT
+====================================================================
+`repo_hygiene_gates.sh` wires 96 gate invocations, 25 of them through
+`run_tolerating_uncheckable` -- the wrapper that renders rc 2 as NOT_CHECKED and
+therefore the whole surface this rule could apply to. Eleven are PPA rows and
+the live arm below covers them. The other FOURTEEN were run by hand, each from
+the cwd its own wiring line gives it, and the result is a clean negative:
+
+    rc 0, ten of them   container login-banner parses / no upstream forked twice
+                        / PR bases reach main / STA engines agree / PDK via patch
+                        vs layer min width / macro OBS not crossed / DRC PASS is
+                        not vacuous / inner FAILs reach the verdict / new tool
+                        diagnostic id / image-gated verifications
+    rc 2, three         and ALL THREE ALREADY NAME WHAT THEY NEED:
+      blocker list contract      "--dir <ROOT>/benchmark-data is not a directory"
+                                 -- an EMPTY population in another repository,
+                                 the same excused shape as the two published-
+                                 corpus PPA rows, and the path is named.
+      engineering evidence fresh "NOT_GENERATED: <ROOT>/docs/ENGINEERING_EVIDENCE
+                                 .md does not exist -- this is NOT a pass; run
+                                 `python3 tools/gen_engineering_evidence.py`."
+                                 The artefact AND its producer. Exemplary.
+      input-doc PDK claims       "4 input document(s), 0 candidate claim(s)" and
+                                 an explicit [VACUOUS] marker. It read a
+                                 non-empty corpus and found no decidable claim
+                                 in it; nothing is ABSENT from disk, so there is
+                                 no artefact to name and it discloses the
+                                 denominator instead.
+    exceeded a 90s probe, once   gates are host-independent (a slow gate, not a
+                                 finding)
+
+So the defect this file exists for was concentrated in the PPA family, and the
+rest of the tolerating surface is already honest. THE ARM IS NOT WIDENED TO
+THEM, deliberately: three of the fourteen need a container image and one needs
+network, so pulling them into a pytest guard would trade a defect this
+repository does not have for host-dependence it would then have to manage. That
+is a decision with a measurement behind it rather than an unexplained limit, and
+if the PPA scoping is ever questioned this paragraph is the answer.
+
 chip-AGNOSTIC: no design, PDK, vendor or node literal. The synthetic arm invents
 its own corpus; the live arm reads whatever the wiring names.
 """
@@ -190,7 +229,8 @@ def _referents(lines, subject: str):
     return sorted(set(found))
 
 
-def assert_rc2_names_the_missing_artefact(proc, subjects, label):
+def assert_rc2_names_the_missing_artefact(proc, subjects, label,
+                                          known_population=None):
     """THE RULE. Returns quietly for any rc but 2, and for an empty population.
 
     `subjects` are the paths the checker's OWN corpus walk found, so a gate is
@@ -199,7 +239,14 @@ def assert_rc2_names_the_missing_artefact(proc, subjects, label):
     if proc.returncode != RC_UNDETERMINED:
         return
     text = proc.stdout + "\n" + proc.stderr
-    population, undecided = _counts(text)
+    parsed, undecided = _counts(text)
+    # A KNOWN population OUTRANKS a parsed one, and this is not a convenience.
+    # `_counts` reads the denominator out of the gate's own roll-up line, and a
+    # gate that prints no roll-up would parse as ZERO and be excused by the
+    # empty-corpus branch below -- so the rule could be evaded by printing less.
+    # The exact-path rows have no roll-up at all: their population is the
+    # document the wiring named, which exists, which the caller already knows.
+    population = known_population if known_population is not None else parsed
     if population == 0:
         return                      # the empty-corpus case; a different rule
     wanted = max(undecided, 1)
@@ -495,34 +542,29 @@ def _wired_corpus_invocations():
     return out
 
 
-def test_the_live_arm_has_something_to_measure():
-    """A live arm that resolved to nothing would pass every case below in
-    silence, which is the shape of test this repository has shipped before."""
-    wired = _wired_corpus_invocations()
-    if not wired:
-        pytest.skip("no in-tree PPA corpus gate is wired in this checkout")
-    assert len(wired) >= 2, wired
+def test_a_gate_cannot_escape_the_rule_by_printing_no_count():
+    """`known_population` has teeth, and without it the rule is opt-out.
 
-
-@pytest.mark.parametrize(
-    "checker,corpus",
-    _wired_corpus_invocations() or [pytest.param(
-        None, None, marks=pytest.mark.skip(reason="no in-tree corpus wired"))],
-    ids=lambda v: Path(str(v)).name if v else "none")
-def test_every_wired_corpus_gate_that_refuses_names_what_is_missing(
-        checker, corpus):
-    """THE ONE THIS FILE IS FOR, on the real wiring.
-
-    Silent for a gate that PASSES or FAILS -- both of those reached a verdict.
-    It speaks only when a gate stood in front of a population it had opened and
-    said it could not look.
+    `_counts` reads the denominator out of the gate's OWN roll-up line. A gate
+    that prints no roll-up therefore parses as population ZERO and takes the
+    empty-corpus exit -- so the cheapest way to satisfy this whole file would
+    have been to print less. The exact-path rows genuinely print no roll-up,
+    which is how the hole was noticed rather than reasoned about.
     """
-    subjects = _subjects(checker, corpus)
-    proc = _run(checker, ["--corpus", corpus])
-    assert_rc2_names_the_missing_artefact(
-        proc, subjects, f"{checker} --corpus {corpus.name}")
+    class _P:
+        returncode = RC_UNDETERMINED
+        stdout = "[CANNOT CHECK] something is missing\n"   # no count, no name
+        stderr = ""
+    # Parsed population is 0, so the rule would fall silent...
+    assert _counts(_P.stdout)[0] == 0
+    assert_rc2_names_the_missing_artefact(_P, [Path("/c/x.json")], "silent gate")
+    # ...and with the population supplied by the caller it must refuse.
+    with pytest.raises(AssertionError, match="SUBJECT is unnamed"):
+        assert_rc2_names_the_missing_artefact(
+            _P, [Path("/c/x.json")], "silent gate", known_population=1)
 
 
+#: Flags that name ONE document rather than a population to walk.
 def _wired_ppa_invocations():
     """Every PPA gate line in the wiring, as the argv the dispatcher will run.
 
@@ -545,6 +587,218 @@ def _wired_ppa_invocations():
                 for a in argv[start + 1:]]
         rows.append((checker, rest))
     return rows
+
+
+_EXACT_PATH_FLAGS = ("--coverage", "--candidates", "--contract", "--baseline",
+                     "--frontier", "--expect", "--candidate")
+
+
+def _wired_rows():
+    """(checker, argv, subjects, population) for every wired PPA row in tree.
+
+    BOTH SHAPES, because the rule is about gates and not about corpora. Until
+    this function existed the live arm reached only `--corpus` rows, and two
+    wired gates refuse over a non-empty population through an EXACT PATH --
+    `ppa_measurement_check --coverage` and `ppa_pareto_check --candidates`.
+    They were covered by hand-written fixtures in this file and NOT by the rule
+    applied to the wiring, so re-aiming either of them, or wiring a new
+    exact-path row, escaped the guard entirely. That is the same gap one level
+    up as the one this whole file is about.
+
+    The argv is the wiring's OWN, not a reconstruction: a row is only measured
+    if it is reproduced whole.
+    """
+    rows = []
+    for checker, rest in _wired_ppa_invocations():
+        if checker not in CORPUS_GATES and "--corpus" in rest:
+            continue
+        if "--corpus" in rest:
+            corpus = Path(rest[rest.index("--corpus") + 1])
+            if "benchmark-data" in corpus.parts or not corpus.is_dir():
+                continue
+            subjects = _subjects(checker, corpus)
+            rows.append((checker, rest, subjects, len(subjects)))
+            continue
+        named = [Path(rest[i + 1]) for i, a in enumerate(rest)
+                 if a in _EXACT_PATH_FLAGS and i + 1 < len(rest)]
+        subjects = [q for q in named if q.is_file()]
+        if not subjects:
+            continue
+        # An exact-path row's population is the document the wiring named. It
+        # exists -- that is what `is_file()` just established -- so the gate has
+        # a subject whether or not it prints a count.
+        rows.append((checker, rest, subjects, len(subjects)))
+    return rows
+
+
+def test_the_live_arm_reaches_both_wiring_shapes():
+    """The paired half of the parametrisation itself.
+
+    A live arm that quietly resolved to corpus rows only is exactly the state
+    this function was written to end, and it would pass every case below in
+    silence.
+    """
+    rows = _wired_rows()
+    if not rows:
+        pytest.skip("no in-tree PPA row is wired in this checkout")
+    exact = [c for c, argv, _, _ in rows if "--corpus" not in argv]
+    corpus = [c for c, argv, _, _ in rows if "--corpus" in argv]
+    assert corpus, f"no --corpus row reached: {rows}"
+    assert exact, (
+        "the live arm reached no EXACT-PATH row, so `--coverage` and "
+        "`--candidates` gates are unguarded by the rule this file ships")
+
+
+def _row_id(row):
+    """`checker:--flag:subject-name` — enough to tell two rows of one gate apart."""
+    checker, argv, subjects, _ = row
+    flags = "+".join(a.lstrip("-") for a in argv if a.startswith("--"))
+    if "--corpus" in argv:
+        where = Path(argv[argv.index("--corpus") + 1]).name
+    else:
+        where = subjects[0].name
+    return f"{Path(checker).stem}:{flags}:{where}"
+
+
+_WIRED_ROWS = _wired_rows()
+
+
+@pytest.mark.parametrize(
+    "checker,argv,subjects,population",
+    _WIRED_ROWS or [pytest.param(
+        None, None, None, None,
+        marks=pytest.mark.skip(reason="no in-tree PPA row wired"))],
+    ids=[_row_id(r) for r in _WIRED_ROWS] or ["none"])
+def test_every_wired_gate_that_refuses_names_what_is_missing(
+        checker, argv, subjects, population):
+    """THE ONE THIS FILE IS FOR, on the real wiring, in both shapes.
+
+    Silent for a gate that PASSES or FAILS -- both of those reached a verdict.
+    It speaks only when a gate stood in front of a population it had opened and
+    said it could not look.
+    """
+    proc = _run(checker, argv)
+    assert_rc2_names_the_missing_artefact(
+        proc, subjects, f"{checker} {' '.join(argv)}",
+        known_population=population)
+
+
+# ===========================================================================
+# THE EXACT-PATH ROWS. Two wired gates refuse over a NON-EMPTY population
+# through `--coverage` / `--candidates`, not a corpus, so the corpus arm above
+# never reached them and the rule went unenforced on a third of the family.
+# ===========================================================================
+def _bundle(rows):
+    return [{"schema": "vibeic.ppa.metric.v1", "metric": m, "status": "MEASURED",
+             "unit": "u", "value": v, "scope": {"stage": "post_route"},
+             "source": {"path": src, "sha256": "sha256:" + h * 64,
+                        "tool": "TOOL_UNDER_TEST"}}
+            for m, v, src, h in rows]
+
+
+def test_a_coverage_refusal_names_the_bundle_it_read(tmp_path):
+    """RED before this branch: the refusal said "the bundle" and never which.
+
+    An rc 2 that names no document is indistinguishable from the same sentence
+    over a file that is not there, and only one of those is fixed by looking
+    somewhere else.
+    """
+    b = tmp_path / "records_flat.json"
+    b.write_text(json.dumps(_bundle([("area.die.um2", 1.0, "r/a.log", "a")])),
+                 encoding="utf-8")
+    proc = _run("ppa_measurement_check.py", ["--coverage", b])
+    assert proc.returncode == RC_UNDETERMINED, proc.stdout + proc.stderr
+    text = proc.stdout + proc.stderr
+    assert str(b) in text, (
+        "the coverage refusal does not name the bundle it opened:\n" + text)
+    assert "`expected`" in text, (
+        "the coverage refusal does not name the artefact it needs:\n" + text)
+    assert_rc2_names_the_missing_artefact(proc, [b], "coverage bundle")
+
+
+def test_a_frontier_refusal_names_the_document_and_BOTH_missing_artefacts(tmp_path):
+    """RED before this branch: one sentence, no document, no key, no flag.
+
+    Both artefacts must be named, not just the objectives list: with only the
+    objectives this gate would recompute a frontier and check it against its own
+    recomputation, so naming one of the two would send a reader to manufacture
+    exactly the pass the gate exists to refuse.
+    """
+    c = tmp_path / "candidates.json"
+    c.write_text(json.dumps({
+        "schema": "vibeic.ppa.candidates.v1",
+        "required_views_by_axis": {"em": [{"stage": "post_route"}]},
+        "required_views": [{"stage": "post_route"}], "limits": {},
+        "allow_waivers": False,
+        "candidates": [{"candidate_id": "c1", "metrics": _bundle(
+            [("area.die.um2", 1.0, "r/a.log", "a")]), "waivers": []}]}),
+        encoding="utf-8")
+    proc = _run("ppa_pareto_check.py", ["--candidates", c])
+    assert proc.returncode == RC_UNDETERMINED, proc.stdout + proc.stderr
+    text = proc.stdout + proc.stderr
+    assert str(c) in text, text
+    assert "`objectives`" in text, text
+    assert "--frontier" in text, (
+        "only ONE of the two missing artefacts is named; a reader told to "
+        "declare objectives and not told a published frontier is also required "
+        "will build the self-marking pass this gate refuses:\n" + text)
+    assert_rc2_names_the_missing_artefact(proc, [c], "frontier candidates")
+
+
+def test_a_refused_record_is_rc_1_even_when_the_denominator_is_absent(tmp_path):
+    """AN rc 2 WAS HIDING AN rc 1, and this is the one that matters most here.
+
+    `run_coverage` states its own severity rule -- "An invalid record is a
+    finding about the record set and outranks a coverage gap" -- and the rule
+    could never fire when no denominator was declared, because `_expected_from`
+    raised before the report carrying `record_refusals` was ever built.
+
+    The two questions are INDEPENDENT. A record that is invalid is invalid
+    whatever the denominator says. Answering "I could not check coverage" while
+    silent about a conflicting record is the more dangerous direction of this
+    lane's defect: an unearned PASS at least looks like a claim, an unearned
+    NOT_CHECKED looks like diligence.
+
+    MEASURED on the wired row: 148 rows, 54 refused -- 44 SCOPE_SENTINEL,
+    8 SAME_ARTEFACT_TWO_VALUES, 2 CONFLICTING_RECORD -- reported as NOT_CHECKED
+    and naming none of them.
+    """
+    b = tmp_path / "records_flat.json"
+    # One metric, one scope, TWO different measured values from TWO artefacts.
+    b.write_text(json.dumps(_bundle([
+        ("route.wirelength.um", 16511.0, "r/pnr.log", "a"),
+        ("route.wirelength.um", 16522.0, "r/pnr.metrics.json", "b")])),
+        encoding="utf-8")
+    proc = _run("ppa_measurement_check.py", ["--coverage", b])
+    text = proc.stdout + proc.stderr
+    assert "Traceback" not in text, (
+        "a traceback escaped; rc 1 is reserved for a finding and a crash must "
+        "never publish itself as one:\n" + text)
+    assert proc.returncode == 1, (
+        f"a conflicting record is a finding about the record set and this "
+        f"returned {proc.returncode}\n{text}")
+    assert "CONFLICTING_RECORD" in text, text
+    # ...and the undecidable half is still SAID, not swallowed by the finding.
+    assert "NO_EXPECTATION_SET" in text, (
+        "the coverage question is still undecidable and the run must say so; "
+        "an rc 1 about the records is not an answer about coverage:\n" + text)
+
+
+def test_the_paired_half_a_clean_bundle_with_no_denominator_is_still_rc_2(tmp_path):
+    """Without this, the test above is satisfied by a gate that returns 1 always.
+
+    A bundle whose records are all VALID and which still declares no denominator
+    has nothing to report as a finding, so it must stay rc 2 -- the STILL-CANNOT
+    verdict this row has carried all along, and which this branch does not touch.
+    """
+    b = tmp_path / "records_flat.json"
+    b.write_text(json.dumps(_bundle([("area.die.um2", 1.0, "r/a.log", "a")])),
+                 encoding="utf-8")
+    proc = _run("ppa_measurement_check.py", ["--coverage", b])
+    assert proc.returncode == RC_UNDETERMINED, (
+        "a clean bundle with no declared denominator must stay NOT CHECKED; "
+        "turning it into a finding would be inventing one\n"
+        + proc.stdout + proc.stderr)
 
 
 @pytest.mark.parametrize(
