@@ -236,8 +236,30 @@ false-positive, would both be worse than shipping the honest gap.
 
 ## What is shipped, and its red
 
-One behavioural change: a `CAPTURE_ROUTING.json` entry for `phase3.pad_ring`
-(and one for `repo.upstream_parity`).
+One behavioural change: a single `CAPTURE_ROUTING.json` entry for
+`phase3.pad_ring`.
+
+**A second entry was written and then removed, and the repo caught it, not me.**
+The first version of this branch also registered `repo.upstream_parity` pointing
+at `programs/upstream_contract_parity_check.py` — the general home for F2's
+rule. That program does not exist on main and this branch deliberately does not
+ship it, so the entry was a pointer to nothing.
+`test_capture_routing_consistency.py::test_bucket_A_program_paths_exist` failed
+on exactly that:
+
+    AssertionError: Bucket A programs in CAPTURE_ROUTING.json missing on disk:
+        repo.upstream_parity → programs/upstream_contract_parity_check.py
+
+The test offers two fixes — "add the program or null out the routing entry". I
+removed the entry and routed F2's record to `phase3.pad_ring`, the step where
+the drift was actually measured, so the sketch lands beside the module that
+drifted. I did not null the `bucket_A_program` and keep the step, because a
+registered step with a null program is the silent-drop state documented
+immediately below, and I would have been shipping the defect I was reporting.
+
+Worth saying plainly: I wrote a route to a program I had already decided not to
+ship, in a report whose subject is claims that outrun what was measured. The
+gate caught it in 1.23 seconds.
 
 The flow declares the step (`flow/phase1_phase2_phase3.yaml:2986`, "Pad Ring
 (chip/IC path only)"). CAPTURE_ROUTING carried **zero** pad entries, and
@@ -284,7 +306,7 @@ arrivals at one missing entry is the entry being missing.
 ## Files
 
     recoveries.json                              3 records, all Bucket A
-    candidates/                                  emitted by enhancement_emit.py, rc 0
+    candidates/                                  1 sketch file, 3 rules, emitter rc 0
     evidence/F2_the_PASS_is_partly_blind.md      the false PASS + positive control
     evidence/RED_routing_entry.md                the red the routing entry ships with
     evidence/F1_guard_on_current_main.txt        rc 1, the 2 false positives

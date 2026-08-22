@@ -11,7 +11,7 @@
     "evidence": "evidence/`F1_guard_on_current_main`.txt"
   },
   {
-    "step": "repo.upstream_parity",
+    "step": "phase3.pad_ring",
     "design": "sha256",
     "bucket": "A",
     "rule_name": "upstream_contract_parity_register",
@@ -19,7 +19,8 @@
     "expected_signal": "ERROR",
     "fix_action": "Register {upstream artefact, `extract_regex`, snapshot of extracted names + file sha256, our module, classification}. Refuse any name not accounted for. CRITICAL PREDICATE FIX, measured: the existing implementation's _mentions() requires the name as a BARE QUOTED LITERAL, so it cannot see a name consumed through a regex — which is exactly how _pad_ring.py:490 consumes `PAD_FAKE_SITES`. Consequence measured on origin/main a4caccefe: the register still classifies `PAD_FAKE_SITES` as `known_gap` while the fix that closed that gap is on main (`parse_pad_site_declarations` :497, `discover_io_site_declarations` :550, `IoLibrary`.`resolve_site` :642), the guard's own staleness rule at :213 exists for precisely this, and it does not fire. The guard exits 0. That PASS is partly blind. GENERAL-CORE TEST: this is F1's class one level up — F1 read one PDK VIEW and said 'not found'; this reads one SOURCE FORM and says 'not implemented'. Both are a search space narrower than the claim made over it.",
     "prior_art": "THREE near-duplicate implementations exist across my own prior lanes, none landed: `upstream_reimplementation_pin_check`.py (`UPSTREAM_PINS`, origin/agent/jcapsha-capture), `upstream_mirror_is_pinned_check`.py (`UPSTREAM_MIRROR`, origin/jcapsha/capture-`sha256-recovery`), `upstream_contract_parity_check`.py + register (origin/jcapsha/`sha256-capture`). Measured on current main: the first two exit 2 NOT DETERMINED over a population of ZERO declarations — a green over nothing, not a clean answer. Only the third has a non-vacuous population (20 upstream names, 8 implemented, 3 `declared_unperformed`, 8 `omitted_by_design`, 1 `known_gap`) and it is the one to keep. The deliverable here is a consolidation verdict and a predicate fix, NOT a fourth checker.",
-    "evidence": "evidence/`F2_the_PASS_is_partly_blind`.md"
+    "evidence": "evidence/`F2_the_PASS_is_partly_blind`.md",
+    "routing_note": "Measured in the pad-ring module and routed there. The general home -- a repo-level upstream-parity checker -- does not exist on main, and this branch deliberately does not ship one, so registering a route to it would be a pointer to nothing. That is not hypothetical: the first version of this branch DID register it, and `test_capture_routing_consistency.py` failed on the dangling path. The repo's own gate caught it; the entry was removed rather than the gate satisfied some other way."
   },
   {
     "step": "phase3.pad_ring",
