@@ -1707,17 +1707,6 @@ RETRACTED_CLAIMS = (
 #: survived in the console line the whole time the commit next to it was
 #: removing `is inert` from the record. One vocabulary, checked in both places,
 #: is the fix — a second list is a second thing to forget to update.
-
-
-
-#: The same falsehoods as the shortest fragment that still identifies one, for
-#: scanning EMITTED text — the report and the console.
-#:
-#: THIS LIST EXISTS BECAUSE THE TWO GUARDS DISAGREED. The record guard listed
-#: three phrases and did not list `placer ignores it`, so that one sentence
-#: survived in the console line the whole time the commit next to it was
-#: removing `is inert` from the record. One vocabulary, checked in both places,
-#: is the fix — a second list is a second thing to forget to update.
 RETRACTED_PHRASES = (
     "is inert",
     "does not read it",
