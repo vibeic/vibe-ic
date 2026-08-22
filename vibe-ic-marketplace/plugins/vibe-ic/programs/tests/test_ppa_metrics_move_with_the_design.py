@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -265,40 +266,88 @@ def test_a_group_the_artefact_never_mentions_is_not_reported_as_zero():
 # ---------------------------------------------------------------------------
 # end to end, on the wired chain
 # ---------------------------------------------------------------------------
-def _signoff_design(root: Path, drc: int, ir_mv: float, em: float) -> Path:
+def _signoff_design(root: Path, drc_violations: int) -> Path:
+    """A sign-off tree whose DRC count is the thing that varies.
+
+    `summary.real_violation_total` > 0 is MEASURED outright (read_drc rule 1:
+    "items cannot be reported by a deck that never ran"), so both arms carry a
+    real measured number without dragging in the zero-is-earned vacuity
+    machinery, which is a different question with its own fixtures.
+    """
     d = root / "reports" / "phase3"
     d.mkdir(parents=True, exist_ok=True)
     (d / "drc_signoff.json").write_text(json.dumps(
-        {"real_violation_total": drc, "deck": "open.drc", "tool": "klayout"}))
+        {"summary": {"real_violation_total": drc_violations,
+                     "categories_found": ["a", "b"]},
+         "deck": "open.drc", "tool": "klayout"}))
     (d / "lvs_verdict.json").write_text(json.dumps(
         {"status": "PASS", "finding": "LVS_MATCH"}))
-    (d / "ir_drop.json").write_text(json.dumps(
-        {"worst_ir_drop_mv": ir_mv, "supply_v": 1.8, "tool": "openroad"}))
-    (d / "em.json").write_text(json.dumps(
-        {"worst_current_density_ratio": em, "tool": "openroad"}))
     return root
 
 
-def _chain(tmp_path: Path, tag: str, *args):
-    proj = _signoff_design(tmp_path / tag, *args)
-    recs = tmp_path / f"rec_{tag}.json"
+def _chain_at(run_dir: Path, work: Path, drc_violations: int):
+    """Build a design AT `run_dir` and push it through the wired chain.
+
+    THE RUN DIRECTORY IS A PARAMETER AND BOTH ARMS PASS THE SAME ONE. Measured
+    while writing this file: the bundle digest of two BYTE-IDENTICAL designs
+    differs when they sit at different paths, because NOT_MEASURED reasons and
+    source fields carry the run path. An arm that built its two designs at
+    `tmp/a` and `tmp/b` would therefore go green with every metric pinned to a
+    constant -- it would be measuring the directory name. The negative control
+    below fails loudly if that ever becomes true again.
+    """
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    _signoff_design(run_dir, drc_violations)
+    recs = work / "rec.json"
+    if recs.exists():
+        recs.unlink()
     r1 = subprocess.run(
         [sys.executable, str(_PROGRAMS / "ppa_signoff_records.py"),
-         str(proj), "--json", str(recs), "--quiet"],
+         str(run_dir), "--json", str(recs), "--quiet"],
         capture_output=True, text=True)
     assert recs.is_file(), (
-        f"[{tag}] ppa_signoff_records wrote no bundle (rc={r1.returncode}): "
+        f"ppa_signoff_records wrote no bundle (rc={r1.returncode}): "
         f"{(r1.stdout or '') + (r1.stderr or '')}")
-    census = (json.loads(recs.read_text()) or {}).get("census") or {}
-    bundle = tmp_path / f"bun_{tag}.json"
+    doc = json.loads(recs.read_text())
+    bundle = work / "bun.json"
+    if bundle.exists():
+        bundle.unlink()
     r2 = subprocess.run(
         [sys.executable, str(_PROGRAMS / "ppa_metric_extract.py"),
          "--records", str(recs), "--out", str(bundle)],
         capture_output=True, text=True)
     assert bundle.is_file(), (
-        f"[{tag}] ppa_metric_extract wrote no bundle (rc={r2.returncode}): "
+        f"ppa_metric_extract wrote no bundle (rc={r2.returncode}): "
         f"{(r2.stdout or '') + (r2.stderr or '')}")
-    return census, json.loads(bundle.read_text())
+    b = json.loads(bundle.read_text())
+    measured = {r["metric"]: r.get("value") for r in b.get("records", [])
+                if r.get("status") == "MEASURED"}
+    return doc.get("census") or {}, b.get("records_digest"), measured
+
+
+def test_two_identical_designs_agree_the_negative_control(tmp_path):
+    """THE CONTROL THAT MAKES THE NEXT ARM MEAN ANYTHING.
+
+    If two byte-identical designs at ONE path disagree, the bundle depends on
+    something that is not the design, and "the digest moved" stops being
+    evidence that the design moved. This is the arm that caught exactly that:
+    the digest is path-dependent, so the two designs must share a run
+    directory.
+    """
+    run = tmp_path / "run"
+    ca, da, ma = _chain_at(run, tmp_path, 3)
+    cb, db, mb = _chain_at(run, tmp_path, 3)
+    assert ca.get("measured", 0) > 0, f"nothing measured; census={ca}"
+    assert da and db, f"no records_digest (A={da!r} B={db!r})"
+    assert ma == mb, (
+        f"two byte-identical designs produced different MEASURED values: "
+        f"{ma} vs {mb}")
+    assert da == db, (
+        f"two byte-identical designs at the same path produced DIFFERENT "
+        f"bundle digests ({da} vs {db}); the bundle depends on something that "
+        f"is not the design, so a digest change cannot be read as a design "
+        f"change")
 
 
 def test_the_signoff_bundle_digest_moves_with_the_design(tmp_path):
@@ -307,11 +356,12 @@ def test_the_signoff_bundle_digest_moves_with_the_design(tmp_path):
         sign-off artefacts -> ppa_signoff_records -> ppa_metric_extract
                            -> vibeic.ppa.metric_bundle.v1 records_digest
 
-    Two designs whose DRC / IR / EM numbers all differ must not produce the same
-    bundle. If they do, every comparison built on that bundle is inert.
+    Same run directory, same everything, ONE number different. If the bundle
+    does not move, every comparison built on it is inert.
     """
-    ca, ba = _chain(tmp_path, "a", 0, 41.2, 0.55)
-    cb, bb = _chain(tmp_path, "b", 7, 88.9, 0.91)
+    run = tmp_path / "run"
+    ca, da, ma = _chain_at(run, tmp_path, 3)
+    cb, db, mb = _chain_at(run, tmp_path, 11)
 
     # Failure mode 4: two designs nobody measured agree, correctly.
     assert ca.get("measured", 0) > 0 and cb.get("measured", 0) > 0, (
@@ -319,13 +369,20 @@ def test_the_signoff_bundle_digest_moves_with_the_design(tmp_path):
         f"all-NOT_MEASURED documents are identical for every design and this "
         f"arm must not read that as a finding about the tool")
 
-    da, db = ba.get("records_digest"), bb.get("records_digest")
+    # The measured population must itself move, or the digest could be moving
+    # on something incidental.
+    assert ma != mb, (
+        f"no MEASURED value differs between a design with 3 DRC violations and "
+        f"one with 11: {ma} vs {mb}")
+    assert ma.get("physical.drc.violations") == 3, ma
+    assert mb.get("physical.drc.violations") == 11, mb
+
     # Failure mode 3: absent is not equal.
     assert da and db, (
         f"the bundle carries no records_digest (A={da!r} B={db!r}); the digest "
         f"could not be read, which is not the same as two digests agreeing")
     assert da != db, (
-        f"two designs with different DRC / IR / EM numbers produced the SAME "
+        f"two designs with different DRC violation counts produced the SAME "
         f"bundle digest {da} -- the bundle does not depend on the design")
 
 
