@@ -9,14 +9,14 @@ it is a map for whoever assembles them.
 Read this first. The sections below are the working, in the order it happened, and
 several were superseded by later measurement.
 
-**Two live assemblies, and only one carries this batch:** `land/one-assembled` has
-it; `land/batchbig-assembled` is genuinely divergent (measured, last section) and
-carries none of the sixteen frozen branches.
+**The batch is SPLIT across two live assemblies (§10).** `land/one-assembled`
+carries fifteen of the sixteen frozen branches; `land/batchbig-assembled` carries
+`fix/jppafind-inert-ppa-gates` plus work the other lacks. Neither ships the whole
+batch, and they must be reconciled before either lands.
 
-**The one thing still open:** `fix/jppafind-inert-ppa-gates` is ON THE FREEZE LIST
-but is NOT in `land/one-assembled` (`e11626e28`). Verified two ways -- 5 of 5
-sampled files are byte-identical to MAIN rather than to the branch, so it was never
-applied. It merged clean in every test here, so this looks unintended (§9).
+**The one thing still open:** the two assemblies must be reconciled -- see §10.
+(§9 called `fix/jppafind-inert-ppa-gates` an unintended omission; §10 corrects
+that: it is assembled into `land/batchbig-assembled`.)
 
 **Already settled, do not redo:**
 
@@ -472,3 +472,35 @@ not the sampling artefact the six-line version might have been.
 
 The consequence is one-directional and expensive: landing
 `batchbig-assembled` ships none of the sixteen frozen branches.
+
+## 10. Correction: the batch is SPLIT across two assemblies, and nothing was dropped
+
+§9 reported `fix/jppafind-inert-ppa-gates` missing from `land/one-assembled` and
+called the absence "unintended". The absence is real; the reading was wrong. It is
+assembled into the OTHER live ref:
+
+    jppafind, by sha256 over the 24 files it changes
+        in land/batchbig-assembled : 14 identical to the branch,  6 still at main
+        in land/one-assembled      :  3 identical to the branch, 19 still at main
+
+`batchbig-assembled` also carries `fix/jred5-batchbig-five-reds`,
+`fix/j1764-absent-is-not-empty`, and four PPA test files by another author that
+`one-assembled` does not have at all:
+
+    test_a_producer_may_not_deny_a_datum_it_holds.py
+    test_a_refusal_may_not_hide_behind_an_undetermined.py
+    test_a_stamp_nothing_reads_is_not_a_disclosure.py
+    test_rc2_names_the_artefact_it_awaits_not_the_one_it_read.py
+
+**So the sixteen frozen branches are DIVIDED between two live assemblies, and
+neither one ships them all.** That is a different problem from a dropped branch,
+and it has a different fix: the two refs have to be reconciled before either
+lands, or landing one silently ships half a batch.
+
+WHAT I GOT WRONG AND WHY IT IS THE SAME MISTAKE TWICE. "Absent from the assembly I
+happened to be looking at" was reported as "absent from the batch". I had already
+made the identical error earlier in this document -- reading a per-branch overlap
+against `main` instead of against each branch's merge-base -- and both times the
+defect was the same: a measurement taken against ONE reference, reported as though
+it were a property of the whole. Before calling anything missing, ask what else it
+could be in.
