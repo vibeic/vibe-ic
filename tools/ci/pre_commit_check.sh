@@ -171,6 +171,37 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# 4.6. Package invariants (W7 — the rule lives next to the code it binds)
+# --------------------------------------------------------------------------
+# Two things happen here, and they are deliberately different.
+#
+# ENFORCE: every enrolled package must still carry a non-empty INVARIANTS.json,
+# every declared rule must hold over that package's own files, and every rule
+# must still reject its own counterexample. Deleting the file is a FAIL, not a
+# silence -- an absent invariant file must never read as "no constraints".
+#
+# READ: the invariants binding the packages this commit TOUCHES are printed
+# back to the author. That is the whole point of moving the rules out of the
+# centre: the rule is visible at the moment the code it binds is being changed,
+# without anyone having to go and look for it.
+echo ""
+echo "--- Package invariants ---"
+PKG_INV="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/package_invariants_check.py"
+if [ -f "$PKG_INV" ]; then
+    if python3 "$PKG_INV" --repo-root "$PROJECT_ROOT"; then
+        STAGED_FOR_INV=$(git -C "$PROJECT_ROOT" diff --cached --name-only 2>/dev/null || true)
+        if [ -n "$STAGED_FOR_INV" ]; then
+            # shellcheck disable=SC2086
+            python3 "$PKG_INV" --repo-root "$PROJECT_ROOT" --touched $STAGED_FOR_INV
+        fi
+    else
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "  SKIP: package_invariants_check.py not present"
+fi
+
+# --------------------------------------------------------------------------
 # 5. Check for accidental secret/credential files
 # --------------------------------------------------------------------------
 echo ""

@@ -1,0 +1,169 @@
+---
+name: ppa-measure
+description: Read PPA artefacts that the tools already wrote — STA reports, power reports, area reports, DEF/GDS summaries — and turn them into an evidence-linked measurement report of canonical `vibeic.ppa.metric.v1` records, each carrying its scope and its source hash. Use when the user says "measure PPA", "what is the real area/power/timing", "collect the PPA numbers", "post-route PPA", or when a report must state what was measured AND what was not.
+---
+
+# PPA Measure
+
+## The boundary this skill lives inside
+
+This skill produces an **evidence-linked report**. It never produces a
+gate verdict, and no part of it asks the model to settle whether the design is
+good enough. The pass/fail call belongs to a deterministic program —
+`_ppa/feasibility.py` per `docs/PPA_INTERFACES.md` §4 — and this report only
+supplies the records that program consumes.
+
+Concretely, this skill may say *"setup WNS is -0.124 ns at the `ss` corner,
+parsed from `<file>` whose sha256 is `<hash>`"*. It may not say what that number
+means for the release. If a caller wants the release answer, the handoff is the
+gate program, and the report says so on its own `Verdict authority:` line.
+
+The reason for the split is not tidiness. A number that a model produced and a
+number a parser produced look identical once they are in a table, and only one
+of them can be re-derived from an artefact. Keeping the verdict in a program
+keeps the re-derivable half load-bearing.
+
+## When to use
+
+Trigger when the user:
+- Has finished a synthesis / PnR / STA / power run and wants the numbers collected
+- Asks what the design's real post-route PPA is, as opposed to an early estimate
+- Needs the inputs a feasibility gate or a Pareto comparison will read
+- Needs an honest statement of PPA coverage — which metrics exist and which do not
+
+**Not** this skill: an early, pre-synthesis guess. That is `ppa-predict`, and the
+two must never be mixed in one table. A `ppa-predict` number carries status
+`ESTIMATED`, which `docs/PPA_INTERFACES.md` §2 forbids from ever entering final
+PPA; a `ppa-measure` number carries status `MEASURED` and a source hash.
+
+## Inputs to gather
+
+1. The design / run directory, and which stage it reached (synthesis, post-place,
+   post-route, post-route-extracted)
+2. The artefacts themselves: STA report(s), power report(s), area report, DEF or
+   GDS summary — by path, one per view
+3. The analysis views actually run: process corner, voltage, temperature, RC
+   corner, clock, check type
+4. The activity basis for any power number: vectorless, or a named VCD/SAIF
+5. Whether an extracted-parasitics run exists, or only the pre-extraction estimate
+
+If an input is absent, that absence is a result. Record it as `NOT_MEASURED`
+with a `reason`; do not substitute a value from a different stage and do not
+leave the row out.
+
+## Workflow
+
+1. **Enumerate the views before reading any number.** Write down the list of
+   (stage, mode, process, voltage, temperature, rc_corner, clock, check) tuples
+   the run was supposed to cover. This list is the denominator; without it a
+   report of three green rows cannot be told apart from a run that only produced
+   three rows.
+2. **Parse, never recompute.** Each number is lifted from an artefact by a parser
+   and hashed as parsed. A number you arrived at by arithmetic is `DERIVED` and
+   must carry its formula alongside; a number you arrived at by judgement is not
+   a measurement at all and does not belong in the table.
+3. **Bind every record to its source.** `source.path`, `source.sha256`,
+   `source.tool`, `source.parser`. A record without a resolvable source is
+   `INVALID`, not `MEASURED`.
+4. **Keep the taxonomy split.** Synthesis area and post-route area are different
+   metrics, not two samples of one. Vectorless power and VCD power are different
+   metrics. Pre-extraction and post-extraction timing are different metrics.
+   Collapsing them is the single most common way a PPA table becomes a fiction.
+5. **Emit the coverage line.** Count `MEASURED`, `NOT_MEASURED`,
+   `NOT_APPLICABLE`. An unstated denominator is how "we measured everything"
+   and "we measured what happened to be lying around" print the same page.
+6. **Hand off.** Name the program that will read these records and state that the
+   verdict is its output, not this document's.
+
+## Do not
+
+- Do not write `0`, `-1` or an empty string to mean "not measured". There are no
+  numeric sentinels; there is a status field and it is `NOT_MEASURED` with a reason.
+- Do not omit a row because it has no number. A missing row and a measured zero
+  are different facts and a reader cannot tell them apart after the fact.
+- Do not compare two numbers whose `scope` differs. That comparison is
+  `UNDETERMINED`; it does not have a winner.
+- Do not carry a `ppa-predict` estimate into this report, in any column, under
+  any heading.
+- Do not restate a program's exit code as your own conclusion. Quote it with its
+  program name and its rc.
+- Do not report a number whose artefact you could not open. "I could not read it"
+  and "I read it and it was empty" are different results and must print differently.
+
+## Output format
+
+The deliverable is one markdown report. The template below is the whole shape;
+`<...>` are the parts you fill in.
+
+    # PPA Measurement — <design> @ <stage>
+
+    Verdict authority: _ppa/feasibility.py — this report states no pass/fail of its own.
+
+    ## Summary
+    <two or three sentences: which stage, which views were run, what is absent>
+
+    Coverage: MEASURED=7 NOT_MEASURED=2 NOT_APPLICABLE=1
+
+    ## Measurements
+
+    | metric | status | value | unit | stage | corner | source sha256 |
+    |---|---|---|---|---|---|---|
+    | timing.setup.wns_ns | MEASURED | -0.124 | ns | post_route_extracted | ss/1.62V/125C | sha256:3f9a1c7d |
+    | power.total_mw | NOT_MEASURED | - | - | post_route_extracted | - | - |
+
+    ## Not measured, and why
+
+    | metric | reason |
+    |---|---|
+    | power.total_mw | no activity basis: neither a vectorless run nor a VCD exists |
+
+    ## Evidence
+
+    | artefact | sha256 | tool |
+    |---|---|---|
+    | phase3/stage3/sta/sta_mcorner_ocv.rpt | sha256:b204e8a1 | opensta |
+
+    Next: run /ppa-diagnose
+
+Every row of `## Measurements` is the human view of one canonical record. The
+records themselves are the machine deliverable and go in the report's JSON
+sidecar, one per row, in the frozen shape:
+
+```json
+{
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "timing.setup.wns_ns",
+  "status": "MEASURED",
+  "value": -0.124,
+  "unit": "ns",
+  "scope": {"stage": "post_route_extracted", "mode": "functional",
+            "process": "ss", "voltage_v": 1.62, "temperature_c": 125,
+            "rc_corner": "max", "clock": "clk", "check": "setup"},
+  "source": {"path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+             "sha256": "sha256:77c1de40", "tool": "opensta",
+             "parser": "ppa_metric_extract.py"}
+}
+```
+
+Serialize with `programs/_ppa/canonical_json.py` and nothing else — sorted keys,
+no spaces, UTF-8, no NaN. A hash taken over a hand-rolled `json.dumps` is a hash
+of a different document than the one the next reader will re-serialize.
+
+## Compliance gate (mandatory)
+
+After producing your output, save it to a file and run:
+
+```bash
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/ppa-measure/compliance.yaml \
+    <your_output_file>
+```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed, exit 2 =
+the checker could not read one of its own inputs and reached no conclusion.
+`compliance.yaml` in this skill directory enumerates every required element of
+your output, and its `X_verdict_boundary` cross-check is what stops this report
+from drifting into being a gate.
+
+**Your task is not complete until the audit returns PASS.** Missing elements are
+the single largest source of skill-execution non-determinism across agents.

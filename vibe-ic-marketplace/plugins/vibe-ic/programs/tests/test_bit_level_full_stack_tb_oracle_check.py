@@ -150,12 +150,44 @@ def test_no_evidence_fail(tmp_path):
     assert "INPUT_DOC_EVIDENCE_MISSING" in r.stdout
 
 
-def test_no_results_skips(tmp_path):
+def test_no_results_is_vacuous_not_a_pass(tmp_path):
+    """#515 — the missing-results.json path used to print `PASS_SKIP` and
+    exit 0, so a gate that had opened nothing landed in the plain PASS tier."""
     proj = tmp_path / "proj"
     proj.mkdir(parents=True, exist_ok=True)
     r = _run(proj)
-    assert r.returncode == 0
-    assert "PASS_SKIP" in r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "SKIP" in r.stdout
+    assert "PASS" not in r.stdout, (
+        "a gate that examined nothing must not lead its output with PASS")
+    assert "VACUOUS_PASS:" in r.stderr, r.stderr
+
+
+def test_command_oracle_not_applicable_is_vacuous_not_a_pass(tmp_path):
+    """#515, the sharpest instance — `check()` already returned
+    `{'pass': True, 'skipped': True}` with an honest INFO finding, and
+    `main()` never read the `skipped` key: it formatted a positive sign-off
+    sentence out of three `None`s ("None vectors, None/None passed") and
+    returned 0."""
+    proj = _proj(tmp_path, {"command_oracle_applicable": False})
+    r = _run(proj)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "COMMAND_ORACLE_NOT_APPLICABLE" in r.stdout
+    assert "None vectors" not in r.stdout
+    assert "VACUOUS_PASS:" in r.stderr, r.stderr
+
+
+def test_command_oracle_not_applicable_report_carries_skipped(tmp_path):
+    """The exit code must be derived from this field, not from the text."""
+    proj = _proj(tmp_path, {"command_oracle_applicable": False})
+    out = tmp_path / "report.json"
+    r = subprocess.run(
+        [sys.executable, str(PROG), str(proj), "--json", str(out)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2, r.stdout + r.stderr
+    doc = json.loads(out.read_text())
+    assert doc["pass"] is True and doc["skipped"] is True
 
 
 def test_with_waiver_pass(tmp_path):
@@ -456,8 +488,12 @@ def test_functional_coverage_emitted(tmp_path):
     )
     assert r.returncode == 1, r.stdout + r.stderr
     data = json.loads(out_json.read_text())
+    # `self_referential` is emitted even at zero: a golden that is the
+    # design's OWN earlier read is a concrete number and would otherwise be
+    # counted as an independent one. A count that appears only when non-zero
+    # cannot be used to show there were none.
     assert data["functional_coverage"] == {
-        "scored_with_golden": 5, "placeholder": 3}
+        "scored_with_golden": 5, "self_referential": 0, "placeholder": 3}
 
 
 def test_real_golden_pass_emits_coverage(tmp_path):

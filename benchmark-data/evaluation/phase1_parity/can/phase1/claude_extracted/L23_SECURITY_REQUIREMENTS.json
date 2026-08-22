@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "Bosch CAN 2.0 (1991) is a wire-level protocol spec; no confidentiality / integrity / authentication features. CAN is broadcast — every node sees every frame. Built-in security primitive is the 15-bit CRC (anti-corruption only, not anti-tampering). Modern automotive security (CAN-FD MAC, SecOC, AUTOSAR SecOC profile) is layered on top — not part of Bosch CAN 2.0."
-  }
-}
