@@ -174,3 +174,45 @@ those two authors, and nothing else in the batch waits on anything.
 This assembly was built to MEASURE and was not pushed anywhere. Assembling and
 landing the batch belongs to whoever owns it; this section says only that the
 path is clear and where it is not.
+
+## 7. The one blocker, sized: 11 entries need their two authors
+
+`docs/capture/2026-08-21-jcap-ppa/recoveries.json` is the only thing standing
+between this batch and a full assembly (§6). It is a JSON LIST, and the two sides
+did different KINDS of thing to it. Taking entry identity as
+`(rule_name, step, design)` over the merge-base `a4caccefe`:
+
+    base                          14 entries
+    jcap-ppa   adds 31, removes  1, MODIFIES 13 of the shared entries
+    jdistmat   adds 12, removes 12, modifies  0 of the shared entries
+
+    added by BOTH                  0
+    modified by BOTH               0
+
+So there is no head-on clash: no entry is edited by both, and no entry is
+introduced by both. **43 of the changes are mechanical** -- jcap-ppa's 31 new
+entries and jdistmat's 12 new entries are disjoint and both belong; 2 further
+jcap-ppa edits touch entries jdistmat left alone.
+
+**The whole question is 11 entries that jdistmat REMOVED and jcap-ppa MODIFIED.**
+That is a delete/modify, and it is not resolvable by inspection: jdistmat's
+`adds 12, removes 12` at a constant total of 14 reads like a REWRITE that changed
+the entries' identity fields, in which case its new rows supersede the old ones
+and jcap-ppa's edits to them are moot. If instead those removals were incidental,
+jcap-ppa's edited rows should survive. Only the two authors know which.
+
+Four of the eleven, so the question is concrete rather than abstract:
+
+    a metric constant across arms that differ is not measured under that lever   (ppa.search)
+    a published absence claim is rechecked against the tree                      (ppa.search)
+    a runtime output path may not resolve inside the installed tree              (ppa.artefact_write)
+    a writer enforces the field shapes its declared consumer requires            (capture.emit)
+
+This is deliberately NOT resolved here. A union would resurrect eleven rows that
+one author may have deliberately replaced, and a merge that silently reinstates
+retired rules is worse than the conflict -- the file is a recovery register, and a
+stale rule in it is a rule somebody will act on.
+
+WHAT IS ACTUALLY NEEDED: one yes/no from the `jdistmat/matrix-distil` and
+`jcap-ppa` authors -- "did the rewrite supersede these eleven?" -- after which the
+rest of the file merges mechanically and the batch assembles 16 of 16.
