@@ -199,7 +199,8 @@ cells for.
 **This section is a correction of itself, and the correction is the load-bearing
 part.** What stood here reported a live defect. It was real when it was measured
 — on `origin/main` @ `81cd5321b` — and it is **repaired on `a4caccefe`
-(v1.11.69), which is the base this branch stands on.** Leaving the report as
+(v1.11.69), and still repaired on `ae78abb28` (v1.11.70), which is the base this
+branch stands on after the rebase recorded below.** Leaving the report as
 written would have shipped a citation whose target no longer exists, inside the
 document whose whole subject is a gate that says something untrue about its own
 state.
@@ -883,3 +884,38 @@ The six are `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]`. **Measured
 rather than inherited:** a pristine detached worktree at `a4caccefe`, that file
 alone, gives `6 failed / 52 passed / 61 skipped` — the same six. Base red, not
 this branch.
+
+### Rebased onto v1.11.70, and re-measured there
+
+**The base moved under this document while it was open.** Five of this branch's
+commits — the adjudication itself, the refusal pin, the mutation-claim wording,
+the publisher's staging block and the satisfaction-condition correction — landed
+on `main` inside the `v1.11.70` batch as `8d50aedcb`, `e69f1446e`, `0730d5655`,
+`843d3d057` and `4a246184f`, and the `test_organic419b` example move landed
+inside `4b518c2ff`. The branch was rebased onto `ae78abb28` (v1.11.70); `git
+rebase` recognised all six as previously applied and dropped them, and the seven
+files this branch authors are **byte-identical before and after the rebase**
+(same blob OIDs). What remains against `ae78abb28` is six files — this document,
+`benchmark_evidence_publish.py`, the two shared test files, and the two new ones.
+
+Re-measured on that base rather than assumed, over the 16 files above **plus**
+`test_population_refusal_cannot_be_bought_off.py`,
+`test_routed_def_population_is_depth_exact.py` and
+`test_routed_def_corpus_dispatch.py` (19 files):
+
+| tree | summary line |
+|---|---|
+| this branch @ `ae78abb28` + 10 commits | `6 failed, 256 passed, 66 skipped, 1 xfailed in 50.65s` |
+| pristine `origin/main` @ `ae78abb28` (17 files; the two new ones do not exist there) | `6 failed, 246 passed, 66 skipped, 1 xfailed in 49.46s` |
+
+**The failing NAMES are identical** — `test_matrix_d3_outputs_produced
+[step15/17/19/20/30/32]` on both sides, the same six base reds this document has
+carried since the first sweep. The failing-name diff is EMPTY: this branch adds
+no red and removes none. The `+10 passed` is the two files it adds.
+
+The #1764 repair this document reports as fixed in the base was re-checked on
+`ae78abb28` and is still there: an unconfigured checkout answers
+`NO_CORPUS … NOTHING WAS SCANNED` at **rc 3**, not `rc 0, 0 items`.
+
+`git diff --name-only origin/main..HEAD -- tools/` → **0 files**, unchanged by
+the rebase. No version file is touched by any commit on this branch.
