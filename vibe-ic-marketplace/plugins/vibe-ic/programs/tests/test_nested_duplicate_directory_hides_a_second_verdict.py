@@ -113,13 +113,14 @@ def test_the_canonical_cell_is_not_refused(tmp_path):
 def test_the_rule_reports_a_verdict_on_a_clean_cell(tmp_path):
     """PASS must be a verdict this rule RENDERED, not one it never reached."""
     d = _conformant(tmp_path)
-    r = _run([str(d), "--json"])
+    out = tmp_path / "report.json"
+    r = _run([str(d), "--json", str(out)])
     assert r.returncode == 0, r.stdout + r.stderr
-    doc = json.loads(r.stdout)
-    row = doc["folders"][0] if "folders" in doc else doc
+    row = json.loads(out.read_text())["folders"][0]
     assert row["checks"].get(RULE) is True, (
         f"{RULE} rendered {row['checks'].get(RULE)!r} on a clean cell; a rule "
-        "absent from `checks` has not passed, it was never asked\n" + r.stdout)
+        "absent from `checks` has not passed, it was never asked\n"
+        + out.read_text())
 
 
 # --------------------------------------------------------------------------
@@ -178,12 +179,12 @@ def test_the_finding_is_machine_readable(tmp_path):
     d = _conformant(tmp_path)
     (d / "reports" / "reports").mkdir(parents=True)
     (d / "reports" / "reports" / "drc.json").write_text("{}")
-    r = _run([str(d), "--json"])
+    out = tmp_path / "report.json"
+    r = _run([str(d), "--json", str(out)])
     assert r.returncode != 0, r.stdout + r.stderr
-    doc = json.loads(r.stdout)
-    row = doc["folders"][0] if "folders" in doc else doc
-    assert row["checks"].get(RULE) is False, r.stdout
-    assert any(f.startswith(RULE + ":") for f in row["failures"]), r.stdout
+    row = json.loads(out.read_text())["folders"][0]
+    assert row["checks"].get(RULE) is False, out.read_text()
+    assert any(f.startswith(RULE + ":") for f in row["failures"]), out.read_text()
 
 
 def test_an_empty_nested_duplicate_still_counts(tmp_path):
