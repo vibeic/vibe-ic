@@ -177,19 +177,39 @@ run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$RO
 # (`tuned_by_this_project: const true` on EVERY arm, so a real head-to-head
 # cannot satisfy it), but a schema nothing applies refuses nothing.
 #
-# `run`, NOT `run_tolerating_uncheckable`, AND THE REASON IS MEASURED. This gate
-# PASSES today: 633 JSON file(s) opened under ppa-crosslayer, 1 ablation record
-# selected, 0 refused, 0 undetermined, 1 accepted -> rc=0. It needs no exemption,
-# so it gets none. And its rc 2 arm must stay FATAL: rc 2 here means the corpus
-# was absent, vacuous or unreadable, and "the only ablation record disappeared"
-# is exactly the state that must stop a landing rather than roll up as NOT
-# CHECKED. An empty corpus is never a pass.
+# THE WRAPPER, AND IT WAS CHOSEN THE SECOND TIME BY MEASUREMENT RATHER THAN BY
+# TASTE. The gate PASSES today: 633 JSON file(s) opened under ppa-crosslayer,
+# 1 ablation record selected, 0 refused, 0 undetermined, 1 accepted -> rc=0. So
+# plain `run` looked right and was written first. It is WRONG, and here is the
+# measurement that says so:
+#
+#   $ GATEKEEPER_BENCHMARK_DATA_SHA=... VIBE_IC_BENCHMARK_DATA=<clone> \
+#       ppa_ablation_check --corpus <repo>/ppa-crosslayer
+#   note: GATEKEEPER_BENCHMARK_DATA_SHA binds the landing corpus; forcing
+#         VIBE_IC_BENCHMARK_DATA=<clone> and refusing any candidate-local
+#         .../ppa-crosslayer shadow.
+#   VACUOUS: ... 0 ablation record(s) selected ... rc=2
+#
+# A BOUND LANDING REDIRECTS THIS ROW AWAY FROM THE NAMED ROOT. That is
+# `_corpus_location.resolve`'s bound branch working exactly as designed -- one
+# byte-attested external checkout, no candidate-local shadow -- and it means an
+# rc 2 here can be a fact about the LANDING ENVIRONMENT rather than about any
+# record. Failing a landing for that would be a gate answering a question
+# nobody asked, so rc 2 arrives as NOT CHECKED. rc 1 -- a record that WAS read
+# and does not hold -- still fails, which is the half that matters.
+#
+# AND NO `uncheckable_until` ON PURPOSE. An exemption would declare rc 2
+# EXPECTED here, and it is not: this repository holds an ablation record and
+# this gate reads it. Undeclared, the row prints `(NO EXEMPTION DECLARED)` in
+# the roll-up, which is exactly the visibility "the only ablation record
+# disappeared" deserves. An empty corpus is never a pass and it is never quiet
+# either.
 #
 # AIMED AT ppa-crosslayer AND NOT AT benchmark-data, deliberately: this is where
 # the kind lives (`records/ablations/`), and it is the directory a SECOND
 # ablation would be filed into tomorrow -- the case that was validated by
 # nothing before this row existed.
-run "PPA ablation records (within-project)" "$ROOT" \
+run_tolerating_uncheckable "PPA ablation records (within-project)" "$ROOT" \
     python3 "$PG/ppa_ablation_check.py" --corpus "$ROOT/ppa-crosslayer"
 
 # THE REST OF THE PPA RECORD FAMILY, wired on the ruling three lines above.

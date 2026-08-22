@@ -37,8 +37,8 @@ chip-AGNOSTIC: synthetic bytes and declared policy only.
 """
 from __future__ import annotations
 
-import copy
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -333,3 +333,57 @@ def test_the_gate_is_invoked_by_the_hygiene_dispatcher():
     assert len(invocations) == 1, (
         f"invoked {len(invocations)} times; a gate run twice reports one "
         f"verdict under two labels: {invocations}")
+
+
+def test_the_row_tolerates_rc_2_and_declares_no_exemption_for_it():
+    """The wrapper choice, pinned, because it was got wrong once.
+
+    MEASURED: a landing that binds a corpus (`GATEKEEPER_BENCHMARK_DATA_SHA`)
+    redirects `--corpus` away from the named root to the bound clone, and a
+    clone that carries no ablation record answers rc 2. Under plain `run` that
+    fails a landing for a fact about the ENVIRONMENT, not about any record.
+
+    And NO `uncheckable_until`: an exemption would declare rc 2 expected here,
+    and it is not — this repository holds an ablation record and this gate
+    reads it. Undeclared, the roll-up prints `(NO EXEMPTION DECLARED)`, which
+    is the visibility "the only ablation record disappeared" deserves.
+    """
+    if not DISPATCHER.is_file():                  # pragma: no cover - layout
+        pytest.skip(f"{DISPATCHER} is not in this checkout")
+    lines = DISPATCHER.read_text(encoding="utf-8").splitlines()
+    idx = [i for i, ln in enumerate(lines)
+           if "ppa_ablation_check.py" in ln and not ln.lstrip().startswith("#")]
+    assert len(idx) == 1
+    # The wrapper is on the line that opens the invocation, one above the
+    # continued command line.
+    window = "\n".join(lines[max(0, idx[0] - 3):idx[0] + 1])
+    assert "run_tolerating_uncheckable" in window, (
+        "the row must tolerate rc 2: a bound landing redirects this corpus and "
+        f"an absent one is not a finding about a record. Saw:\n{window}")
+    # No exemption attached: `uncheckable_until` binds to the NEXT gate, so it
+    # would have to sit between the previous invocation and this one.
+    preceding = lines[max(0, idx[0] - 12):idx[0]]
+    attached = [ln for ln in preceding
+                if ln.lstrip().startswith("uncheckable_until")]
+    assert not attached, (
+        "an exemption is attached to this row; rc 2 is NOT expected here and "
+        f"declaring it expected makes the roll-up quiet about it: {attached}")
+
+
+def test_a_bound_landing_redirects_the_corpus_and_says_so(tmp_path):
+    """The measured behaviour the wrapper choice rests on, driven end to end."""
+    clone = tmp_path / "bound-clone"
+    clone.mkdir()
+    env = dict(os.environ)
+    env["GATEKEEPER_BENCHMARK_DATA_SHA"] = "0" * 40
+    env["VIBE_IC_BENCHMARK_DATA"] = str(clone)
+    r = subprocess.run([sys.executable, str(GATE), "--corpus",
+                        str(REPO / "ppa-crosslayer")],
+                       capture_output=True, text=True,
+                       timeout=CLI_TIMEOUT_S, env=env)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "binds the landing corpus" in r.stderr
+    assert "VACUOUS" in r.stderr
+    # The redirect is ANNOUNCED, never silent: a reader must be able to tell
+    # which tree produced the verdict.
+    assert str(clone) in r.stderr
