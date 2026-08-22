@@ -113,6 +113,24 @@ _DEFAULT_ROOT_REL = "benchmark-data"
 CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
 
 
+def _parents_within_the_repository(here: Path):
+    """Ancestors of `here`, stopping AT the repository that contains it.
+
+    The unbounded `here.parents` walk finds a `benchmark-data/ic` anywhere above
+    the checkout — including one that merely happens to sit in $HOME, which is a
+    different repository's corpus. MEASURED 2026-08-22: that is what makes this
+    gate give two different verdicts for one commit depending on where the
+    worktree sits, which `gate_host_independence_check` reports as
+    HOST_DEPENDENT_VERDICT.
+    """
+    out = []
+    for b in here.parents:
+        out.append(b)
+        if (b / ".git").exists():
+            break
+    return out
+
+
 def _repo_root(start: Path):
     r = subprocess.run(["git", "-C", str(start), "rev-parse", "--show-toplevel"],
                        capture_output=True, text=True)
@@ -247,7 +265,7 @@ def main(argv=None) -> int:
     elif args.root:
         root = Path(args.root)
     else:
-        root = next((b / _DEFAULT_ROOT_REL for b in here.parents
+        root = next((b / _DEFAULT_ROOT_REL for b in _parents_within_the_repository(here)
                      if (b / _DEFAULT_ROOT_REL).is_dir()), None)
 
     if root is None or not root.is_dir():

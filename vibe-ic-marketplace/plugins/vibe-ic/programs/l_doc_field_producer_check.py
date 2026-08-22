@@ -158,6 +158,24 @@ PROGRESS_SCOPE = "issue1710:l-doc-field-producer"
 _ACTIVE_PROGRESS = None
 
 
+def _parents_within_the_repository(here: Path):
+    """Ancestors of `here`, stopping AT the repository that contains it.
+
+    The unbounded `here.parents` walk finds a `benchmark-data/ic` anywhere above
+    the checkout — including one that merely happens to sit in $HOME, which is a
+    different repository's corpus. MEASURED 2026-08-22: that is what makes this
+    gate give two different verdicts for one commit depending on where the
+    worktree sits, which `gate_host_independence_check` reports as
+    HOST_DEPENDENT_VERDICT.
+    """
+    out = []
+    for b in here.parents:
+        out.append(b)
+        if (b / ".git").exists():
+            break
+    return out
+
+
 def _reader_files(programs: Path) -> List[Path]:
     return sorted(programs.glob("*_check.py"))
 
@@ -297,7 +315,7 @@ def main(argv=None) -> int:
     # The fallback name stays the literal relative path the old message printed,
     # so a reader still learns WHAT was looked for when nothing is found.
     named = (Path(a.corpus) if a.corpus else
-             next((b / _DEFAULT_CORPUS_REL for b in here.parents
+             next((b / _DEFAULT_CORPUS_REL for b in _parents_within_the_repository(here)
                    if (b / _DEFAULT_CORPUS_REL).is_dir()),
                   Path(_DEFAULT_CORPUS_REL)))
     corpus, origin = _corpus.resolve(named, subdir=_CORPUS_SUBDIR,

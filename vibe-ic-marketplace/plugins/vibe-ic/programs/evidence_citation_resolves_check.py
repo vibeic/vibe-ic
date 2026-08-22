@@ -202,6 +202,24 @@ _BRACE_RE = re.compile(r"\{([^{}]*,[^{}]*)\}")
 _MAX_EXPANSIONS = 64
 
 
+def _parents_within_the_repository(here: Path):
+    """Ancestors of `here`, stopping AT the repository that contains it.
+
+    The unbounded `here.parents` walk finds a `benchmark-data/ic` anywhere above
+    the checkout — including one that merely happens to sit in $HOME, which is a
+    different repository's corpus. MEASURED 2026-08-22: that is what makes this
+    gate give two different verdicts for one commit depending on where the
+    worktree sits, which `gate_host_independence_check` reports as
+    HOST_DEPENDENT_VERDICT.
+    """
+    out = []
+    for b in here.parents:
+        out.append(b)
+        if (b / ".git").exists():
+            break
+    return out
+
+
 def expand_braces(tok: str) -> List[str]:
     """`a/{x,y}.rpt` -> `['a/x.rpt', 'a/y.rpt']`; no braces -> `[tok]`.
 
@@ -837,7 +855,7 @@ def main(argv=None) -> int:
     # who has the pointer exported still runs the gate CI runs when they name a
     # readable root, and still learns which tree produced the verdict.
     named = (Path(args.root) if args.root else
-             next((b / _DEFAULT_ROOT_REL for b in here.parents
+             next((b / _DEFAULT_ROOT_REL for b in _parents_within_the_repository(here)
                    if (b / _DEFAULT_ROOT_REL).is_dir()),
                   Path(_DEFAULT_ROOT_REL)))
     root, origin = _corpus.resolve(named, subdir=_CORPUS_SUBDIR,
