@@ -39,7 +39,7 @@ def rule_declared_basis_matches_the_session_inputs(sample_text, ports):
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
 
-def rule_emitted_script_paths_are_project_relative(sample_text, ports):
+def rule_emitted_script_portability_check(sample_text, ports):
     """A path an emitter writes into a generated analysis script must be relative to the project root or to a declared tool root. An absolute run-directory path makes two runs of one configuration hash differently, so any identity taken over that script identifies where the run happened instead of what was configured, and the two runs can never be compared as the same measurement."""
     # Expected signal: ERROR
     # Suggested fix action: Write every path in a generated analysis script relative to the project root or to a declared tool root, and fail the emit when an absolute path outside those roots is written. Extend the existing absolute-path rule from shipped source and from analog decks to the population of generated analysis scripts; do not solve it by dropping the script from the identity.
