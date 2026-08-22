@@ -214,11 +214,13 @@ def main(argv=None):
         print()
         for b in bad:
             print(b)
-        print(f"\nFAIL: {len(bad)} finding(s). An ignored entry nobody classified is an "
-              f"unexamined input under a verdict that authorises deleting it.")
+        print(f"\nFAIL: {len(bad)} finding(s). An ignored entry nobody classified, and a "
+              f"deletion-bound row measured dirty, are both unexamined or contradicted inputs "
+              f"under a verdict that authorises deleting a directory.")
         return 1
-    print("\nIGNORED ACCOUNTED OK — every ignored entry under a deletion-bound shard-C "
-          "row is attributed by git to a rule origin/main declares generated or scratch.")
+    print(f"\nIGNORED ACCOUNTED OK — for {os.path.basename(verd)}: every deletion-bound row "
+          f"is clean on disk, and every ignored entry under one is attributed by git to a rule "
+          f"origin/main declares generated or scratch.")
     return 0
 
 
