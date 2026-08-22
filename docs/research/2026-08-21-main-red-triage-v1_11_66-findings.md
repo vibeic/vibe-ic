@@ -6137,6 +6137,44 @@ This one was last because it looked the least likely to be interesting, which is
 a poor reason and produced the largest single correction of the set.
 
 
+## M117 — "a control must share the scope" is too blunt. It must cover the DIMENSION THAT COULD FAIL
+
+M114 earned a rule the hard way: my `find` control searched a NARROWER root than
+the absence claim, proving the mechanism and not the coverage. **Stated as "the
+control must share the scope", that rule is wrong in the other direction** — and
+applying it to my own earlier controls is what shows why.
+
+**M94's control was CROSS-FILE.** The claim was *"these three documents contain 0
+instances of the retracted phrases"*; the control was *"the same pattern finds 46
+and 6 in two OTHER documents"*. **Under a blunt same-scope rule that is invalid.
+It is not, and the distinction is what makes the rule usable:**
+
+| claim shape | what can fail | what the control must cover |
+|---|---|---|
+| `grep` a NAMED file | the PATTERN (the file is definitely read) | pattern validity — a positive **anywhere** suffices |
+| `find` over a TREE | the COVERAGE (which dirs were reached) | **same root, same depth, same flags** |
+| `grep -f` with a pattern FILE | the pattern file being non-empty | assert the pattern list, not the result |
+
+**M94 is sound because its two failure modes were each covered separately:**
+pattern validity by the cross-file positives (46 and 6), and file-readability by
+the line counts printed in the same command (460, 28, 1758 — none empty, all
+read). **Two dimensions, two pieces of evidence, neither standing in for the
+other.**
+
+**The corrected rule: a control must cover the dimension that could actually
+fail.** "Same scope" is a proxy for that, correct for tree searches and
+over-strict for single-file greps. **A proxy applied without its reason becomes
+superstition** — and an over-strict rule gets abandoned the first time it is
+inconvenient, which is worse than a precise one.
+
+**This is the fourth rule in this document that needed narrowing after it was
+written** — after *"a run root's premise must be a commit fact"* (narrowed by the
+offered-corpus route, M105), *"the allowlist means the control cannot cross"*
+(strengthened to a refusal, M107), and *"a skipped cell has no colour"* (narrowed
+to CELL tests, M103). **Every one was right and every one was imprecise, and the
+imprecision is only visible when you try to apply it somewhere new.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
