@@ -347,11 +347,12 @@ pristine `origin/main` at `a4caccefe`:
 | batch | files | this branch | pristine `origin/main` |
 |---|---|---|---|
 | `programs/tests` (less the one below) | 80 | 1613 passed, 18 skipped, **2 failed** (18m50s) | the same 2 IDs red |
-| `tools/ci` | 3 | 37 passed, **4 failed** | **identical**: 37 passed, the same 4 IDs |
+| `tools/ci` (grep-selected subset — **understated, see 2b**) | 3 | 37 passed, **4 failed** | **identical**: 37 passed, the same 4 IDs |
 | `test_landing_merge_verdict.py` | 1 | 125 passed, **9 failed** (7m12s) | **identical**: 125 passed, the same 9 IDs, `diff` empty |
 
 **1775 passed, 18 skipped, 15 red — and every red is red on `origin/main` too,
-ID for ID. This branch introduces none.** That is the brief's *"whatever you
+ID for ID. This branch introduces none.** (The `tools/ci` line of this table is
+superseded by 2b, which runs that suite whole: 21 red, identical on both trees.) That is the brief's *"whatever you
 change must run clean on the current repo"*, measured over the mechanically
 derived population rather than a chosen one.
 
@@ -383,6 +384,47 @@ a `#` comment block in `_summary_rc`, and — the part "comment blocks" was
 wrong about — the **docstring** of `_legacy_empty_without_process`, which is a
 runtime object rather than a comment. The distinction changes nothing here and
 is measured below rather than asserted.
+
+### 2b. The `tools/` selector gap — the sweep above understated its own population
+
+**The `tools/ci` row above was selected by grep, and a grep is exactly the wrong
+selector for this tree.** The `tools/` suite sits outside every selector this
+repository ships; batch 68 shipped 16 reds through that same gap. The producer
+this whole record is about — `tools/ci/routed_def_corpus.py` — lives there. A
+3-file subset is not evidence about it.
+
+So `tools/` was re-run WHOLE, on two clean worktrees, at the same commit:
+
+| tree | commit | result |
+|---|---|---|
+| this branch | `c6ec85abb` | 863 passed, 6 skipped, **21 failed** (3m46s) |
+| pristine `main` | `a4caccefe` | 863 passed, 6 skipped, **21 failed** (3m48s) |
+
+`diff` of the sorted `FAILED` ID lists is **empty**. The branch introduces none.
+
+The grep subset saw 4 of those 21. The other **17 were invisible to it**, in two
+files it never selected — and both are pre-existing, unrelated to any corpus:
+
+* **16 in `tools/test_gatekeeper_land_differential.py`**, all one shared cause:
+  the fixture's candidate is byte-identical to its base, so the gate answers
+  *"every path this branch touches is already byte-identical to <base> — there
+  is nothing to land, and ancestry cannot see it"* and returns 2 where the test
+  expects 0 or 1. A fixture-construction defect in that file, not a gate defect.
+* **1 in `tools/test_liar_census.py`** —
+  `test_nothing_the_flow_declares_is_left_unswept`, a stale hardcoded count:
+  `assert 182 == 181`, with `unswept: []`. Nothing is unswept; the literal is
+  one behind the tree.
+
+Neither was touched. They are red on `main` at the same commit, and bumping a
+stale literal or repairing someone else's fixture to clear a red is not this
+change's business — the rule against rewriting a baseline to make a red go away
+does not acquire an exception because the baseline belongs to another file.
+
+**What this corrects:** the claim *"whatever you change must run clean on the
+current repo"* was previously supported over a grep-derived population that
+missed 17 reds. It now rests on the whole `tools/` suite, diffed ID for ID at
+one commit. The conclusion did not move; the evidence under it did, and a record
+that names its own weak selector is worth more than one that quietly kept it.
 
 ### 3. Re-verified independently, 2026-08-22, on both trees
 
