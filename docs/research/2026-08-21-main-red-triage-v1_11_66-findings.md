@@ -6095,6 +6095,48 @@ someone a wasted afternoon later — the same reason the retracted `refs/gk-veri
 instruction in the proposal was worth correcting rather than deleting.
 
 
+## M116 — the last unaudited claim, and the mutation arm came back STRONGER than the claim
+
+Section A entry 1 was the only "take freely" row never re-checked: *"Kills a
+**4-in-10** flake [...] A/B 4/10 -> 0/12 on the host."* **A flake rate is the
+easiest kind of claim to get wrong, and a green run is the worst kind of evidence
+for one** — this document's own rule is that a flake's colour is not evidence.
+
+**AFTER ARM — 12 iterations with the fix: 12 passed, 0 failed.** That reproduces
+the recorded `0/12`, and on its own it proves nothing: twelve greens are exactly
+what a surviving flake looks like some of the time.
+
+**So I ran the BEFORE arm**, restoring `save_container` from `origin/main` (the
+pre-fix two-liner: `write_text` with no `create=` guard), with a checksum on both
+sides:
+
+    pre-fix save_container, 10 iterations   ->   1 passed, 9 FAILED
+    with the fix,           12 iterations   ->  12 passed, 0 failed
+    restored: sha256 MATCHES, git status clean
+
+**THE CLAIM IS CONFIRMED IN DIRECTION AND WRONG IN MAGNITUDE — upward.** Recorded
+as 4-in-10; measured today at **9-in-10**. The fix is not a nice-to-have that
+removes an occasional annoyance; **without it this test fails almost always on
+this host right now.**
+
+**What I will NOT infer.** A flake rate is not a property of the code — it is a
+property of code, host and load together. Earlier in this session I proved a
+neighbouring timing test fails when the host is FAST, not slow (M62), so a rate
+that rose from 4/10 to 9/10 on a quieter host is *consistent* with the same
+shape. **I did not measure that, and it stays a hypothesis.** What is measured is
+the A/B, and the A/B is unambiguous.
+
+**The useful correction is to how the number was WRITTEN, not what it was.**
+"Kills a 4-in-10 flake" reads as a stable property. It is one observation of a
+load-dependent rate, and the honest form is **"measured 9/10 pre-fix and 0/12
+post-fix on this host on 2026-08-22; the rate moves with load, the direction does
+not."** Section A updated to say that.
+
+**All seven entries in section A have now been re-checked against measurement.**
+This one was last because it looked the least likely to be interesting, which is
+a poor reason and produced the largest single correction of the set.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -6137,7 +6179,7 @@ manifest itself did not.
 
 | # | change | why it is safe |
 |---|---|---|
-| 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a **4-in-10** flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. A/B 4/10 -> 0/12 on the host; the race does not reproduce in the image at all (M23). The runner is untouched. |
+| 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. **RE-MEASURED 2026-08-22 (M116): 9 of 10 FAIL pre-fix, 0 of 12 post-fix** — recorded here earlier as 4/10, and the true rate on this host today is more than double that. A flake rate is a property of code AND host AND load, so read it as one dated observation; the DIRECTION is unambiguous and the before-arm was run by restoring `save_container` from `origin/main` with a checksum on both sides. the race does not reproduce in the image at all (M23). The runner is untouched. |
 | 2 | `test_hermetic_candidate_runner.py`: new `rw_bind` behaviour + `test_a_read_write_subject_bind_refuses_before_the_candidate_starts` (M15) | ADDITIVE. First coverage of the `"bind is not exact/read-only"` refusal. Mutation arm proven: delete the `RW is not False` clause and it goes red. Passes in BOTH lanes (M21). |
 | 3 | `test_landing_merge_verdict.py`: the G4 diagnosis fix (M8) | Does NOT change any verdict. Converts a misattributed `TimeoutExpired` into a message naming the true cause, and stops leaking the verifier process. The two tests stay RED either way. |
 | 4 | `test_landing_merge_verdict.py`: **design A** — `..._candidate_wave_precedes_parallel_isolated_base_wave` re-founded and renamed to `..._every_arm_of_both_waves_actually_ran` (M24 tail, proposal) | Asserts all four arms from the verdict document (`base_land`, `land`, `base_total`, `candidate_total`) instead of probe-directory markers the arm cannot write. STRONGER than what it replaces — a marker proved an arm STARTED, a record proves it COMPLETED. **Evidence, stated exactly (M111):** NON-VACUOUS BY CONSTRUCTION — every assertion is a bare subscript, so a missing key is a `KeyError`, never a pass. BITES ON REAL VALUES — `base_total > 0` is asserted against a measured **6** (`6 test(s) ran on the candidate, 6 on the base`). RED -> GREEN full-file, and among the 128 passes in the CONFIGURED image lane (M90). **A live mutation arm is NOT established**: suppressing a whole wave needs a control injected into the arm, which the exact-set env contract refuses (M107) — the same wall that blocks four of the six surviving reds. **Note the rename**, so a test-ID diff across this change will misreport it as a fix (M20 tail). |
