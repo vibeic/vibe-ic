@@ -29,13 +29,22 @@
 > **WHAT IN THIS TABLE CAN GO STALE, and what it is pinned to.** Rows about what
 > this BRANCH does — fixed, wiring, rename, breakage — are measurements of a
 > frozen tree and stay true. FIVE rows describe a MOVING world: *are the other
-> reds new* and *is there a gate defect* describe `main`; *can §20–56 be landed
+> reds new* and *is there a gate defect* describe `main`; *can §20–69 be landed
 > from here* describes this host; *what is still open* is a list that others can
-> close. **All four are as measured against `main` a4caccefea on 2026-08-22 —
-> re-check them before acting, they are not maintained.** This table has already
-> gone stale three ways (a cached count, a claim §47 retracted, and a landing
-> state the world moved past); the fix for the first two was to remove the
-> moving value, and this line is the fix for the rest.
+> close. **All FIVE were measured against `main` a4caccefea on 2026-08-22 —
+> re-check them before acting, they are not maintained.**
+>
+> **`main` HAS SINCE MOVED to `ae78abb285` (v1.11.70, 238 files).** Everything
+> load-bearing was re-checked against it in §69 and holds — the flow is still
+> 182/182, the ledger still 8 rows with the same five stale, the fixture debt
+> still 14 — with two exceptions: another agent shipped HALF of §62's race fix,
+> and the protected drift went 11 → 12. Re-read §69 before trusting a number
+> here.
+>
+> This table has now gone stale FIVE ways (a cached count, a claim §47 retracted,
+> a landing state the world moved past, a section range, and an "All four" left
+> behind when the sentence above it became FIVE). The fix for a moving value is
+> to delete it; this line is the fix for what cannot be deleted.
 >
 > **Superseded, do not act on** — *this list went stale too and is now current
 > to §57; if you add a retraction below, add it here:*
