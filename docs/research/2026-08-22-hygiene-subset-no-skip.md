@@ -4234,3 +4234,64 @@ The detector is not weakened: it now refuses a flow that falls to 181. The open
 question the file already states — a hand-maintained number an author must
 remember while editing a DIFFERENT file is prose wearing an assertion — is
 unchanged and remains the flow owner's call. This change does not take it.
+
+## 62. The flake was a real defect, and repetition could not have proved either half
+
+Branch: `next/fake-docker-state-is-serialised`, off `main` `a4caccefea`, two
+commits, one file.
+
+§57's addendum called `test_malformed_progress_is_norecord_and_cleanup_is_owned`
+"environment-flaky" and moved on. That was the right call about my regression
+claim and the wrong place to stop: a test whose verdict depends on the hour is a
+defect somewhere, and this one was real.
+
+**What it is.** rc 2, `[NORECORD]`, no receipt and no output are all correct; the
+only failing assertion is that `container.json` is gone. The leftover file is
+**zero bytes**, and that named it. The runner drives `container kill` and
+`container rm --force` CONCURRENTLY during teardown — fine against a real daemon,
+which serialises them in its own process — and the stub did:
+
+    kill: load_container()          <- the file exists
+    rm:   exists / read / unlink
+    kill: save_container()          <- RECREATES the file it no longer owns
+
+and when the stub was torn down between creating the name and writing to it,
+what it recreated was empty. **The call log misleads here and it is worth knowing
+why:** the stub appends to `calls.jsonl` on ENTRY, so `kill` is logged before
+`rm` while finishing after it. Reading that log as an ordering is reading start
+times as completion times.
+
+**The fix is in the fake, not the runner.** Real Docker serialises state and
+errors on a removed container; this stub modelled neither. Now every
+read-modify-write region takes an exclusive `flock`, `save_container` refuses to
+write when the container file is gone, and the write is atomic. The lock is
+deliberately NOT taken around a whole command: `container start --attach` blocks
+until the container exits and is itself what `kill` ends, so holding a lock
+across it would deadlock the pair this protects.
+
+### Why repetition could not settle it, in both directions
+
+After the fix the test passed 8 times in a row. That proved nothing — and the
+interleaved A/B proved less:
+
+    round1..5   main (UNFIXED): 3 passed     branch (fixed): 3 passed
+
+**Unfixed main passed five out of five.** The host had drifted back into its
+passing state, so the control I wrote a memory about two sections ago could not
+see a defect that was really there. Sampling cannot prove the absence of a race;
+it can only catch one while conditions happen to favour it.
+
+**So drive the racing pair directly.** A probe that launches `kill` and
+`rm --force` concurrently against the stub, N times, and counts survivors:
+
+    main (unfixed)   trials=200   LEAKED=41   (~20%)
+    branch (fixed)   trials=200   LEAKED=0
+
+That is deterministic in the only sense that matters — it does not depend on what
+else the machine is doing. It now ships as a test
+(`test_the_fake_docker_serialises_kill_against_rm`, 60 rounds, 1.4 s), and it
+goes RED without the fix: **8 of 60 races leaked**, sizes `[273]`.
+
+Sixty rounds rather than six because the guard must not inherit the flakiness it
+removes: at a ~20% per-round leak rate, P(a broken stub showing zero leaks) is
+about `0.8**60`, roughly one in seven hundred thousand.
