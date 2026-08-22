@@ -52,7 +52,7 @@ This file counts a WRITE SHAPE. Counted by INPUT instead -- every function whose
 first parameter is named `prompt`, `spec`, `spec_text`, `doc`, `doc_text` or `md`
 AND which matches a regex against it -- the population at 769ff000ea is:
 
-    functions fed a prompt/spec/doc and matching on it : 231
+    functions fed a prompt/spec/doc and matching on it : 262
     of those, consulting ANY polarity                  :   0
 
 Two were checked rather than counted, and both are real:
@@ -75,9 +75,11 @@ number is recorded so the next person knows the census is a WINDOW on the
 problem and not its measure, and does not mistake `newly_visible` going to zero
 for the problem being over.
 
-Reproduce: walk every program, take functions whose first argument is named for
-a document and which call `finditer`/`re.search` on it, and check for any of
-`is_denied`, `sentence_scope`, `NEGATION_RE`, `_negated`.
+Reproduce with `--wider`, which prints the list and the count. (An earlier
+hand-written probe said 231: it required `finditer` or `re.search` literally and
+missed `RX.search(text)` on a compiled pattern, which is the common spelling.
+The flag is the reproducible number and this paragraph now quotes it -- two
+figures for one question is the drift this file corrects everywhere else.)
 
 
 A THIRD SPELLING EXISTS, AND IS REFUSED
@@ -222,6 +224,15 @@ _DECLARED_RE = re.compile(r"NOT ASKED FOR POLARITY|POLARITY IS NOT ASKED",
 #: exemption register sets its own floor at 80 characters for a reason.
 _DECLARED_REASON_MIN = 200
 
+#: The WIDER question, behind `--wider`: not "what write shape is this" but
+#: "what is this function FED". A function whose first parameter is named for a
+#: document and which matches a regex against it is reading prose, whatever it
+#: does with the result -- including a PREDICATE, which no write-shape widening
+#: can ever reach.
+_DOC_ARGS = ("prompt", "spec", "spec_text", "doc", "doc_text", "md")
+_CONSULT_TOKENS = ("is_denied", "sentence_scope", "NEGATION_RE",
+                   "DENIAL_RETIRED_RE", "DENIAL_CORE_RE", "_negated")
+
 #: A CAVEAT, NEVER A FILTER. The predicate above matches a SHAPE -- a regex over
 #: text, a declared value written, no polarity consulted -- and that shape is
 #: also what a parser of Verilog, LEF/DEF, Liberty or SPICE looks like. A
@@ -320,6 +331,21 @@ def looks_like_a_code_parser(fn: ast.FunctionDef,
     return bool(_HDL_SHAPED.search(" ".join(lits)))
 
 
+def reads_a_document(fn: ast.FunctionDef) -> bool:
+    """True when this function is FED a document and matches a regex on it."""
+    args = [a.arg for a in fn.args.args]
+    if not args or args[0] not in _DOC_ARGS:
+        return False
+    src = ast.unparse(fn)
+    return "finditer" in src or "re.search" in src or ".search(" in src
+
+
+def consults_anything(fn: ast.FunctionDef) -> bool:
+    """Any polarity vocabulary at all, by any spelling this tree uses."""
+    src = ast.unparse(fn)
+    return any(tok in src for tok in _CONSULT_TOKENS)
+
+
 def declares_a_reason(fn: ast.FunctionDef) -> bool:
     """True when this function ARGUES, in its own docstring, that it does not
     consult polarity on purpose.
@@ -393,6 +419,10 @@ def main(argv: List[str] | None = None) -> int:
                                "polarity, with a predicate sharper than the gate's")
     ap.add_argument("--programs", type=Path, default=here)
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--wider", action="store_true",
+                    help="list functions FED a prompt/spec/doc that consult no "
+                         "polarity — a different question from the census, and "
+                         "a longer list; see THE SIZE OF THE PROBLEM")
     args = ap.parse_args(argv)
 
     if not args.programs.is_dir():
@@ -405,6 +435,26 @@ def main(argv: List[str] | None = None) -> int:
         return RC_USAGE
 
     sources = sorted(args.programs.glob("*.py"))
+    if args.wider:
+        blind_docs: List[str] = []
+        for src_path in sources:
+            try:
+                t = ast.parse(src_path.read_bytes().decode("utf-8", "replace"))
+            except (SyntaxError, OSError):
+                continue
+            for fn in ast.walk(t):
+                if (isinstance(fn, ast.FunctionDef) and reads_a_document(fn)
+                        and not consults_anything(fn)):
+                    blind_docs.append(f"{src_path.stem}::{fn.name}")
+        for name in sorted(blind_docs):
+            print(f"  [FED A DOCUMENT] {name}")
+        print(f"[WIDER] {TOOL}: {len(blind_docs)} function(s) are FED a "
+              f"prompt/spec/doc and consult no polarity, over "
+              f"{len(sources)} program(s). A DIFFERENT QUESTION from the census "
+              f"above: this asks what a function is fed, not what shape it "
+              f"writes, so it reaches PREDICATES that no write-shape widening "
+              f"can. It is not a defect list -- each entry needs reading.")
+        return RC_OK
     sharp, narrow, unreadable = census_of(args.programs)
     newly_all = sorted(set(sharp) - set(narrow))
     declared: List[str] = []
