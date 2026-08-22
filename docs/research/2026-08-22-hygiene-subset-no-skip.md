@@ -3047,3 +3047,35 @@ in the older test's coverage, not whether the guarantee is guarded.
 touching `gatekeeper_review.py` and little else". I generalised from one
 measurement — the n=1 error §31 already caught me making, in the section whose
 subject is a selector that generalises wrongly.
+
+### The minimal-diff test: §40's mitigation holds for the exact regression shape
+
+§46 left one hole in §40. In the narrow diff I used there (`d9322cdab^`), the
+seam guard FILE was itself part of the diff — so the guard may have been
+selected by NAME, not by the import edge. If that were so, a diff touching only
+`gatekeeper_review.py` might drop the guard too, and §40's mitigation would fail
+for exactly the case it claims to cover.
+
+Constructed the minimal case on `main`: one scratch commit appending a comment
+to `gatekeeper_review.py` and nothing else.
+
+```
+changed files                                     1
+  vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py
+selected                                         64
+  test_hygiene_handover_is_in_process_only.py     SELECTED   (not in the diff)
+  test_issue538_merge_gate_covers_ci_hygiene.py   not selected
+```
+
+**The guard is selected by the IMPORT EDGE, not by its own filename** — it is
+not in the diff and is still pulled in. So for the precise shape of the defect
+this brief was sent to fix — edit `gatekeeper_review.py`, add a CLI option,
+change nothing else — the landing WOULD run the test that forbids it.
+
+That is §40 confirmed at the only diff shape that matters, and it is the last
+load-bearing claim in this document to move from argument to measurement. The
+older string-based test remains unselected at that shape, which is the §46 gap
+and is unfixed; the guarantee survives it because a second test now covers the
+property by a route the selector can follow.
+
+Scratch commit and worktree deleted; `main` untouched.
