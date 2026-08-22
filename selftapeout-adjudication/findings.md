@@ -7127,3 +7127,60 @@ was asserted nowhere and is now measured on both open decisions.
 `u_hawaii_adc` is not among them — §2 measures it separately with its own 24 / 68 / 69-pad
 probes — and its verdict rests on the PDK having no 1.2 V device at all, which no pad
 width touches.
+
+---
+
+## J91 — main moved 673 commits under this report, the ledger caught it, and all four anchored claims survive
+
+The last verification pass ended with `decay_ledger.py` returning **rc 1**:
+
+```
+external  origin/main sha (J66/J67)   a4caccefe   ae78abb28   MOVED
+```
+
+**`origin/main` had moved 673 commits to `ae78abb28` (v1.11.70)** while this dispatch was
+running. Four things this report publishes are anchored to main, and one of the 673 is a
+merge literally named `fix/jpolarity-emitter-polarity` — which is close enough to my own
+clkbuf finding that reading the subject would have been the wrong instrument. Each was
+re-measured against the new sha instead.
+
+```
+1. S7's wall            pad_ring_gen.py on ae78abb28: 823 lines, PAD_INSTANCE_NOT_IN_BLOCK x2
+                        line 730 still reads `"PAD_INSTANCE_NOT_IN_BLOCK",`   UNCHANGED
+2. the clkbuf guard     phase3_one_shot_runner.py:16109 still `if {{![catch {{`  STILL INVERTED
+3. the bound            git grep PLACEABLE_WIDTH_BOUND on main -> the emitter and its own
+                        tests, and nothing else                  STILL UNCONSULTED
+4. cite_audit           exit 0 against the new main; pad_ring_gen.py:730 still resolves
+```
+
+**All four hold.** §7's wall stands on today's main, both plugin fixes are still live and
+still needed, and — a small piece of luck worth stating rather than relying on — the one
+`file:line` this report cites into main is at the **same line** after 673 commits.
+
+### The clean merge was not taken as evidence
+
+`phase3_one_shot_runner.py` did change in those commits (+20/−1). Both branches merge
+with **0 conflicts**, and *a clean merge proves nothing about semantics*, so both merged
+trees were BUILT and RUN rather than trusted:
+
+```
+clkbuf branch  merged onto ae78abb28 -> e6c1cf4d3    8 passed
+placeability   merged onto ae78abb28 -> ffdca0cc4   27 passed
+                                        and 490 passed / 1 skipped across all 17
+                                        test files that touch that emitter
+```
+
+The runner's actual change is an unrelated helper (`_rel_to_project`), nowhere near either
+edit — which is what the diff says, and is why the tests agreeing is unsurprising rather
+than lucky. **Neither branch needs a rebase and neither has been superseded.**
+
+### What the ledger earned here
+
+This is the second time the decay ledger has caught something nobody went looking for —
+J81 was the first, a ten-hour silence breaking. Here it caught **673 commits of upstream
+movement within minutes of it happening**, on a dispatch whose author had no reason to
+suspect it: `origin/main` had been quoted as `a4caccefe` in five places and had not moved
+in eleven hours. **Without the row, the report would have gone on citing a superseded sha
+and claiming a wall re-verified against it.** The row is now re-pinned to `ae78abb28`,
+and the pin being a literal is CORRECT here — unlike J87's self-referential one, a moving
+main is exactly the finding, and `MOVED` is the signal working.

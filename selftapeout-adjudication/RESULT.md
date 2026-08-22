@@ -12,6 +12,21 @@ it answered required the correction upward)*, and never at any point
 pad-limited. Not one of the six is refused by a pad budget
 here.
 
+**★ AND MAIN MOVED 673 COMMITS UNDER THIS REPORT — THE LEDGER CAUGHT IT AND ALL FOUR
+ANCHORED CLAIMS SURVIVE (J91).** `origin/main` went `a4caccefe` (v1.11.69) →
+**`ae78abb28`** (v1.11.70) mid-dispatch, and one of the 673 is a merge named
+`fix/jpolarity-emitter-polarity` — close enough to my own clkbuf finding that reading the
+subject would have been the wrong instrument. Each anchored claim was re-measured against
+the new sha: **§7's wall is still there** (`pad_ring_gen.py` still 823 lines,
+`PAD_INSTANCE_NOT_IN_BLOCK` ×2, still at line 730); **the clkbuf guard is still inverted**
+at `:16109`; **`PLACEABLE_WIDTH_BOUND` is still printed and never consulted**; and
+`cite_audit` still exits **0**. `phase3_one_shot_runner.py` did change (+20/−1) and both
+branches merge with 0 conflicts — *a clean merge proves nothing about semantics*, so both
+merged trees were **built and run**: **8 passed** and **27 passed**, plus **490 / 1
+skipped** across the 17 files touching that emitter. **Neither fix is superseded and
+neither needs a rebase.** This is the second time the ledger caught something nobody went
+looking for; without that row the report would have gone on citing a superseded sha.
+
 **★ RE-VERIFIED ON A LATER DISPATCH, AND NOTHING IN THE SIX MOVED (J79).** With every
 row decided there is no measurement left that changes a verdict, so that dispatch went
 at the CONTROLS instead. The two NOT FEASIBLE readings — the only two tiers that refuse
@@ -432,7 +447,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J90). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J91). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -2887,7 +2902,7 @@ of the four designs — is why their tier is UNDETERMINED rather than PASS.**
 **★ And that wall was re-verified on TODAY'S main, not on the sha this section was
 written against (J67).** Main has moved 214 commits since, and J66 established that
 one of them closed `PAD_SITE_NOT_FOUND` — the gap this report filed — so the next
-gap could plausibly have gone with it. It has not. On `origin/main` = `a4caccefe`
+gap could plausibly have gone with it. It has not. On `origin/main` = `ae78abb28`
 (v1.11.69), extracted with `git archive` and read directly, `PAD_INSTANCE_NOT_IN_BLOCK`
 is still a live refusal in `pad_ring_gen.py:730` — **on MAIN's copy, which is 823
 lines; my own worktree's is 662 and has no line 730 at all, so that coordinate is
@@ -3132,7 +3147,7 @@ The first run imported the file from the primary checkout — which is sitting o
 FEATURE branch (`fix/1464…` @ `886bb4a14`, dated 08-14), not on main, so on its own
 it establishes nothing about what the flow ships. The four constants are byte-identical
 at `a00f53f20` (the v1.11.66 main this branch was cut from), at both my branches, at
-`886bb4a14`, **and at `origin/main` = `a4caccefe` (v1.11.69, landed today)** — and the
+`886bb4a14`, **and at `origin/main` = `ae78abb28` (v1.11.69, landed today)** — and the
 whole probe was then RE-RUN against main's own tree, extracted with `git archive
 origin/main` so every sibling import is main's too. Every line above reproduces
 identically there. The finding is about what main ships, not about a branch in flight. `u_hawaii_adc` at 1212 µm is the only one of the six that fits, and it
@@ -3202,7 +3217,7 @@ a detail, either way.
 ### ★ A THIRD finding, authored, verified and PUSHED (J85)
 
 `next/placeability-bound-is-printed-and-never-consulted` @ **`4d1de0e2c`**, one commit
-on `origin/main` = `a4caccefe`. **No version bump, nothing on main, nothing on a frozen
+on `origin/main` = `ae78abb28`. **No version bump, nothing on main, nothing on a frozen
 batch branch.**
 
 **`PLACEABLE_WIDTH_BOUND` is measured, printed, and never consulted.** The width cap
@@ -3335,7 +3350,7 @@ answers.
 
 `next/six-shuttle-refusals-readjudicated-on-the-self-tapeout-path` @ **`450aba8fe`** —
 20 files, +10 869: this report, the journal, the standing controls and the J80 probe
-with its registered predictions, off `origin/main` = `a4caccefe`. **Not on main, no
+with its registered predictions, off `origin/main` = `ae78abb28`. **Not on main, no
 version bump.** Scanned first with the repo's OWN file guard
 (`source_chip_agnostic_check.py`): **PASS, 16 files, NDA panel 20 of 20** — and with a
 positive control (`--extra-tokens` on a word known to be in the text) returning
@@ -3349,7 +3364,7 @@ outranks a current one without.
 
 **`fix(phase3): the clkbuf-downsize rung could fail in total silence — its `catch`
 guard was inverted`** — `next/clkbuf-downsize-diagnostic-is-inverted` @
-**`f99979a73`**, one commit on top of `origin/main` = `a4caccefe` (v1.11.69).
+**`f99979a73`**, one commit on top of `origin/main` = `ae78abb28` (v1.11.69).
 **No version bump, nothing pushed to main, nothing added to a frozen batch branch.**
 
 `_build_escalating_legalize_tcl` emitted the downsize block as

@@ -56,7 +56,7 @@ row("external", "remote heads TOTAL (informational, not pinned)",
          "is reported and never asserted")
 row("external", "remote heads matching 'jself' (J74)", "0", jself,
     note="THIS is the load-bearing half of J74's sentence, and it is stable")
-row("external", "origin/main sha (J66/J67)", "a4caccefe",
+row("external", "origin/main sha — re-verified at ae78abb28 by J91", "ae78abb28",
     sh("git ls-remote origin refs/heads/main", WT).split()[0][:9])
 
 # J80's branch.  J74/J79 measured that a pushed branch can vanish from the remote with
