@@ -1082,3 +1082,29 @@ That is the same standard this lane applied to every gate — *a test that canno
 red is not a test* — finally applied to the helper the tests themselves depend on.
 Five findings from one rival lane's commit titles, and the last two were in the
 instruments measuring the instruments.
+
+### The six line-anchored citations in this file, verified and dated
+
+Their sixth title was *"correct a citation that named the wrong end of the
+chain"*. This file cites code by `FILE:LINE` in six places — and its own lead
+tells the reader that line-anchored citations rot. That is an inconsistency I put
+here, so it is resolved rather than left.
+
+Checked at `d21188dab`, every one still names what the prose says it does:
+
+    atomic_artifact_write_check.py:274   if args.strict and len(current) > len(baseline):
+    _ppa/timing.py:651                   metric = "timing.%s.%s_ns" % (check, kind)
+    _ppa/backends/openroad.py:554        e.emit("design.instance.count", _RE_IFP_NINST, ...)
+    ppa-crosslayer/tools/drv_records.py:73    _CHECKS = (("timing.drv.max_tran_violations", ...
+    ppa-crosslayer/tools/drv_records.py:156   r = {"schema": "vibeic.ppa.metric.v1", "metric": metric,
+    ppa-e2e/tools/build_trials.py:62     ("design.instance.count", {"stage": "floorplan"}),
+
+**The line numbers are navigation, not evidence.** Every one of the six is quoted
+with its content in the prose around it, and the content is what carries the
+argument. If a line has moved by the time you read this, grep the quoted text —
+that is why it is quoted. The citations were true at `d21188dab` and no claim in
+this file depends on them still being true at a line offset.
+
+That is the honest form for a `FILE:LINE` in a document that outlives the file:
+name the sha you checked at, and quote enough that the reader can re-find it
+without you.
