@@ -2,6 +2,11 @@
 """A PPA head-to-head is a claim about SILICON, so it has to survive every way
 such a claim goes wrong. vibe-ic#1121, comparison schema v2.
 
+CHIP_AGNOSTIC: strict-logic — no process, vendor or PDK name in the LOGIC of this
+file. `test_issue1121_ppa_head_to_head::test_the_checker_is_chip_and_pdk_agnostic` strips the module docstring before it looks, so the docstring MAY name
+one; the code below may not. This is STRICTER than the repo-wide
+`source_chip_agnostic_check`, whose PASS is not this file's verdict.
+
     SAME RTL, SAME PDK, LOWER POWER, HIGHER PERFORMANCE, SMALLER AREA -- THAT IS
     BETTER.
 

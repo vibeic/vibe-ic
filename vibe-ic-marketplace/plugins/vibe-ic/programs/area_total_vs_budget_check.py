@@ -2,6 +2,16 @@
 """area_total_vs_budget_check.py — the synthesised area figure must reach a
 COMPARISON, or the step must REFUSE and name the authority it lacks.
 
+CHIP_AGNOSTIC: strict — no process, vendor or PDK name anywhere in this file,
+DOCSTRING INCLUDED. This is STRICTER than the repo-wide `source_chip_agnostic_check`,
+which permits open-PDK names and clears 508 programs that carry one legitimately.
+That gate's PASS is not this file's verdict; `test_area_total_vs_budget_check::test_the_program_names_no_process_or_vendor_token` is, and it reads the WHOLE file.
+
+MEASURED, which is why this paragraph exists: a docstring paragraph naming two open
+PDKs was added to this file, the repo-wide gate returned PASS over 1544 files, and
+this file's own test was red. The rule was real and invisible. Identify a library by
+its cell count and the registry population it came from, never by its name.
+
 ENFORCEMENT: advisory — no runner spawns this gate inline, so its exit status
 cannot stop step 9 while step 9 is running. That is the ONLY axis this token
 names and the one `flow_gate_enforcement_audit` measures. The other two axes are

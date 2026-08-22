@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Arms, fairness conditions, and the independent scorer for a PPA head-to-head.
 
+CHIP_AGNOSTIC: strict-logic — no process, vendor or PDK name in the LOGIC of this
+file. `test_ppa_benchmark_fairness::test_the_library_is_chip_and_pdk_and_vendor_agnostic` strips the module docstring before it looks, so the docstring MAY name
+one; the code below may not. This is STRICTER than the repo-wide
+`source_chip_agnostic_check`, whose PASS is not this file's verdict.
+
 WHAT THIS MODULE IS FOR, IN ONE SENTENCE
 ========================================
 
