@@ -87,6 +87,16 @@ def run(cmd, cwd=None, timeout=120, env=None):
         return r.returncode, (r.stdout + r.stderr)
     except subprocess.TimeoutExpired:
         return 124, "TIMEOUT"
+    except FileNotFoundError as e:
+        # #1437 — this helper is the single exec path for EVERY gate step, so an
+        # absent tool (step 3 is a raw `iverilog`) escaped as a traceback out of
+        # main() and the module's promise — "writes <workdir>/<prob>/gates.json
+        # with each step's verdict" — could not be kept: the driver died before
+        # the report was written, and the step that could not RUN was
+        # indistinguishable from a step that had not been reached. rc=127 +
+        # COMMAND_NOT_FOUND is this repo's existing absent-command convention
+        # (_watchdog, design_one_shot_runner, phase{1_doc,3}_one_shot_runner).
+        return 127, f"COMMAND_NOT_FOUND: {e}"
 
 
 def _l9_rendered(wd: Path) -> bool:
@@ -180,7 +190,7 @@ def main():
     if _synth_rtl:
         sample.write_text(_synth_rtl)
         steps["deterministic_synth"] = {"applied": True, "kind": _synth_kind,
-                                        "note": "exact RTL from the prompt's own spec table"}
+                                        "note": "exact RTL from a parse-complete prompt artifact"}
 
     # v0.1.38 fix (Bucket A — 3 agents reported): probe BOTH locations for
     # `tools/phase1_engine`. In a monorepo checkout the package lives at
