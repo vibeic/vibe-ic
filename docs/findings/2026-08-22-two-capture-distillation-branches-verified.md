@@ -108,7 +108,9 @@ nothing else, and neither `main` nor either verified branch was touched.
   WHAT I COULD NOT BREAK: all 32 checkers reproduce their defect from a fixture
   I wrote myself, in both directions, with the finding naming the site and no
   traceback; all 32 negative controls fail on CONTENT when the checker is
-  blinded; zero duplicate any existing program, checked four ways — on the
+  blinded — true of the 32 this report QUOTES; see the re-derivation for the
+  eight OTHER red controls on jdistchip that assert rc alone, and for why that
+  is a narrower defect than it first looked; zero duplicate any existing program, checked four ways — on the
   EMPIRICAL probe's authority, 25 adjacent programs driven over defect and
   remedy arms, not on the docstring sweep's, which I re-derived on 2026-08-22
   and found separates twins from strangers by only 0.02; and 1824 cross-runs
@@ -3049,6 +3051,52 @@ none is from this lane". They measured 16; I measure 20 today, the branch having
 added four programs since. Two lanes reaching the same finding by different
 routes is worth more than either alone, and it is the strongest single argument
 that F14 is real rather than an artefact of how I drove the gate.
+```
+
+## THE BLINDED-CONTROL CLAIM, RE-DERIVED — and a mutant of mine that was unfair
+
+```text
+"All 32 negative controls fail on CONTENT when the checker is blinded" is the
+central methodological claim of this report, and it is the one I had not
+re-derived. Done now, at facc28860 / c0e19ace9, for all 32 rather than a sample.
+
+THE HEADLINE HOLDS. Replace each checker with a stub that exits 1 and prints
+nothing, run its own test file: 32 of 32 go red. Not one suite is satisfied by a
+silent stub.
+
+THE SUMMARY SENTENCE WAS STILL TOO BROAD, and I have narrowed it. It is true of
+the 32 controls this report QUOTES — one per checker, each asserting on output,
+each failing with the `AssertionError: in ''` the table records. It is not true
+of every negative control in those suites. 49 tests survive the blinding; 34 of
+them do invoke the program, and all 34 assert its rc and nothing about what it
+said. Eight of the 34 present as negative controls by name or docstring —
+including one whose docstring reads, in capitals, "THE NEGATIVE CONTROL for the
+source arm", asserting `rc == 1` alone. All eight are on jdistchip; jdistmat's
+red controls assert content without exception.
+
+AND THEN I CHECKED MY OWN MUTANT, WHICH IS THE PART WORTH READING. A stub that
+returns 1 while printing nothing is not a failure these programs can have. They
+map an uncaught exception to rc 2 — `prepared_checkout_states_the_revision_it_
+holds` has ten such handlers — and no-finding to rc 0. So an `rc == 1`
+assertion already excludes both realistic regressions. Measured rather than
+reasoned: stubbing that checker to return 0 fails 15 of its 17 tests.
+
+    what an rc-only red control DOES exclude:  the checker stopping detecting
+                                               (rc 0, caught, 15 tests)
+                                               the checker crashing (rc 2,
+                                               caught, these programs catch)
+    what it does NOT exclude:                  going red for a DIFFERENT reason
+                                               on that fixture
+
+    So the eight are WEAKER than the content-asserting ones, and they are not
+    vacuous. The gap is one failure mode wide, not a hole.
+
+I am recording this at that strength deliberately. My first reading of the 34
+was "a third of the surviving tests are vacuous", which is the shape of finding
+this report has already caught itself producing twice — an alarming number from
+an instrument nobody audited. The instrument here was mine, and auditing it cost
+one command and turned a headline into a footnote. The headline would have been
+wrong.
 ```
 
 ## VERDICTS
