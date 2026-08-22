@@ -43,6 +43,8 @@ if str(_HERE) not in sys.path:
 import cvdp_atomic_bridge as _bridge  # toplevel_name
 import verilog_width_resolve as _wr       # param_defaults / eval_width_expr
 
+from _prose_polarity import is_denied
+
 
 _DIR_RE = re.compile(r"^(input|output|inout)\b")
 _PORT_KW = re.compile(r"\b(input|output|inout)\b")
@@ -460,6 +462,21 @@ def recover_interface_from_prompt(record_or_prompt) -> List[dict]:
         if name in seen:
             continue
         desc = (pm.group("desc") or "")
+        # POLARITY, ON THE PORT'S OWN DESCRIPTION (vibe-ic#712). A prompt lists a
+        # RETIRED port as readily as a live one, and this recovered it:
+        #
+        #     - `ready` (1 bit) — this port is no longer present
+        #
+        # came back as a live input, and this function feeds interface recovery,
+        # so the phantom becomes a port on the generated module.
+        #
+        # THE DESCRIPTION, NOT A SENTENCE SCOPE. Each item here IS the record --
+        # one port, one line, its own prose -- so the denial that belongs to this
+        # port is the one written about it. A scope measured in characters would
+        # reach into the neighbouring port's description and retire a live port
+        # standing beside a dead one.
+        if is_denied(desc):
+            continue
         direction = "inout" if re.search(r"bidirectional", desc, re.IGNORECASE) else cur_dir
         width = None
         rng = pm.group("range")
