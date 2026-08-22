@@ -20,16 +20,40 @@ The refs are the authority, not this script's opinion: each names its worktree i
 its own commit message, and the ref only exists because the content was measured
 and pushed.
 """
-import re, subprocess, sys
+import os, re, subprocess, sys
 
-R = "/home/reyerchu/vibe-ic"
+
+def _die(msg):
+    """Fail loudly, naming the missing input -- never degrade to an empty pass."""
+    sys.exit(f"rescue_contradiction: {msg}")
+
+
+def _find_repo():
+    """Locate the clone from this file's own path, not from a constant.
+
+    jharv2 found a coverage checker that reported covered=0 uncovered=163 on
+    four hosts purely because its repo path was hardcoded -- a total failure
+    that reads exactly like a total loss. This script had the same constant.
+    """
+    if os.environ.get("VIBEIC_REPO"):
+        return os.environ["VIBEIC_REPO"]
+    here = os.path.dirname(os.path.abspath(__file__))
+    p = subprocess.run(["git", "-C", here, "rev-parse", "--show-toplevel"],
+                       capture_output=True, text=True)
+    if p.returncode == 0 and p.stdout.strip():
+        return p.stdout.strip()
+    _die(f"cannot locate the vibe-ic clone from {here}; set VIBEIC_REPO")
+
+
+R = _find_repo()
+BRANCH = os.environ.get("VIBEIC_REF", "origin/harvest/worktree-triage-jharvest")
 DELETION_BOUND = {"LANDED", "ABANDON"}
 
 
 def git(*a, check=True):
     p = subprocess.run(["git", "-C", R, *a], capture_output=True, text=True)
     if check and p.returncode != 0:
-        sys.exit(f"git {' '.join(a)} failed: {p.stderr.strip()}")
+        _die(f"git {' '.join(a)} failed: {p.stderr.strip()}")
     return p.stdout
 
 
@@ -46,7 +70,12 @@ def rescue_paths():
         sha, ref = line.split("\t")
         short = ref.replace("refs/heads/", "")
         git("fetch", "-q", "origin", short)
-        msg = git("log", "-1", "--format=%B", "FETCH_HEAD")
+        # Read the message from the SHA ls-remote gave, not FETCH_HEAD. They
+        # agree on this line today, but FETCH_HEAD is ambient and this loop
+        # fetches repeatedly -- one reordering and it reads the wrong commit.
+        msg = git("log", "-1", "--format=%B", sha, check=False)
+        if not msg.strip():
+            _die(f"fetched {short} but cannot read commit {sha[:9]}")
         # (\S+) swallows the sentence punctuation. The first version of this
         # gate captured "/home/reyerchu/_wt_1486," WITH THE COMMA, matched no
         # row, and reported 0 contradictions -- a PASS produced by a parser
@@ -71,15 +100,13 @@ def main():
     problems = 0
     for shard in ("a", "b", "c"):
         f = f"tools/harvest/verdicts_shard_{shard}.tsv"
-        try:
-            body = git("show", f"FETCH_HEAD_BRANCH:{f}", check=False)
-        except SystemExit:
-            body = ""
-        if not body:
-            body = git("show", f"origin/harvest/worktree-triage-jharvest:{f}", check=False)
-        if not body:
-            print(f"  {f}: not present, skipped")
-            continue
+        # Read from a NAMED ref. Never FETCH_HEAD: it means "whatever was
+        # fetched last", and this function fetches each rescue ref, so relying
+        # on it here would read the shard file out of a rescue branch.
+        body = git("show", f"{BRANCH}:{f}", check=False)
+        if not body.strip():
+            _die(f"{f} is absent or empty at {BRANCH} -- refusing to report "
+                 f"0 contradictions about a file I could not read")
         hits = 0
         for ln in body.split("\n"):
             parts = ln.split("\t")

@@ -294,3 +294,74 @@ failure**: a red gets investigated, a green gets believed and closes the row.
 Which is why a gate has to be watched failing before it is trusted passing. This
 one was: it is red now, on exactly the four rows measured on .120, and green on
 the two shards that were verified clean.
+
+## The checkers had jharv2's defect too, and finding it cost two more false reds
+
+jharv2's second defect was a coverage checker with a **hardcoded repo path** that
+reported `covered=0 uncovered=163` on four hosts — a total failure that reads
+exactly like a total loss. Both checkers I shipped had the same constant. One had
+something worse: it read `FETCH_HEAD:tools/harvest/…`.
+
+`FETCH_HEAD` means *whatever was fetched last*. Run after any other fetch, that
+script would have validated a different file — or an older state of this one —
+and printed `CONTRACT OK` about a file nobody asked it to check. In
+`rescue_contradiction.py` it was worse still, because that script fetches each
+rescue ref in a loop: one reordering and it reads the shard file out of a rescue
+branch. Both now locate the repo from the script's own path, name and fetch the
+ref explicitly, and exit loudly with the missing input named rather than
+degrading to a zero. Proven: unlocatable repo → exit 1 naming `VIBEIC_REPO`;
+unresolvable ref → exit 1 naming the ref.
+
+### False reds six and seven: I imposed my shard's house style on other people's
+
+Pointed at shards A and B, `contract_check.py` reported **216 and 245 problems**.
+Every one was mine. The three shards were written by three agents and their
+evidence grammars differ:
+
+| shard | grammar |
+|---|---|
+| C | `rule R2: <file> sha256 X … differs from origin/main <sha>` |
+| A | `<file>: sha256 X in this tree vs Y on main <sha>` |
+| B | `sha256(<file>) = <64hex> here, <64hex> on main` |
+
+The contract fixes the **shape** — three fields, one of four verdicts, an
+absolute path, evidence a stranger can check. It never fixed the wording. All
+three grammars name a file and both hashes; all three are perfectly checkable. My
+script knew one of them and called the other two broken.
+
+So grammar-dependent verification is now **coverage**, reported as a number, and
+only the contract's real requirements can fail. A row the script cannot parse is
+a row it *did not check* — and saying so is the honest result, not a failure.
+Then I taught it all three grammars, which turned 21 + 114 unverified rows into
+real verification instead of leaving them behind a caveat.
+
+### The stale-main gap is real, and it cost nothing
+
+Shard A cites main `a00f53f20` on **all 114 rows**; shard B on 118 of 131. Only
+shard C cites current main throughout. The amendment is explicit that judging
+against a stale main is the mistake being corrected, so the tempting conclusion
+was "shard A must be re-judged, 114 rows."
+
+That would have sent someone to redo 114 rows — the exact failure the original
+brief warns about. So it was measured instead of assumed. Direction bounds the
+damage: judging against an *older* main can only make landed work look unlanded.
+It inflates RECOVER and cannot manufacture a LANDED, because content that reached
+`a00f53f20` is still in `81cd5321b08`'s history.
+
+Measured across all three shards, taking each row's named file and comparing its
+content against **current** main:
+
+```
+landed_since_judging:  shard a 0    shard b 0    shard c 0
+verified_differs:      shard a 81   shard b 86   shard c 66
+```
+
+**Zero.** Not one RECOVER row in any shard has been overtaken by main. The
+provenance gap is real and worth fixing in the prose; the verdicts survive it
+intact, and nobody needs to redo anything.
+
+That is the seventh time tonight a check pointed at someone else's file and the
+file was fine. The pattern is stable enough to state as a rule: **when a checker
+disagrees with an artefact, the checker is the more likely defect** — it is
+younger, it was written to a sample of one, and it has never been reviewed. Go
+measure the artefact before you go fix it.
