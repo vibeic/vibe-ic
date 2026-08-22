@@ -18,11 +18,19 @@ document is the evidence behind them.
 
 **Code changes** are on `jeco2/eco-axis-bite-audit`, frozen at `22b18cb10`.
 
-**This is a SNAPSHOT, not a live document.** It is the handover as it stood when
-`jeco2/eco-axis-bite-audit` was frozen at `22b18cb10`, copied verbatim. The
-working copy it came from was in `/tmp` and does not survive; if the two ever
-differ, this one is the record and that one is gone. Nothing here is updated in
-place — see the next paragraph for why that is deliberate rather than lazy.
+**What this is, stated accurately because my first attempt was not.** It began
+as a verbatim copy of the handover as it stood when `jeco2/eco-axis-bite-audit`
+was frozen at `22b18cb10`, and I described it as a snapshot. It has since been
+edited three times — a branch it named was renamed, a citation went stale, and a
+verification was added — so "verbatim snapshot" stopped being true almost
+immediately, which is the same decay this document spends pages on.
+
+So: the FINDINGS and the MEASUREMENTS are as they stood at the freeze and are not
+revised. What IS maintained is the surrounding bookkeeping — branch names, shas,
+cross-references — because a citation that rots makes the findings harder to
+check, not easier. `git log -- ppa-eco-axis-audit/RESULT.md` shows every such
+edit. The `/tmp` working copy it came from does not survive; where the two
+differ, this is the record.
 
 **Verified.** The frozen branch merged onto main `a4caccefe`: 4 failed / 2360
 passed against main's own 4 failed / 2300 passed — 0 attributable reds, +60
