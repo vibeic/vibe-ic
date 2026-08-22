@@ -1,21 +1,72 @@
 #!/usr/bin/env python3
-"""gatekeeper_prepare_landing.py — do the three mechanical things the landing
-gate refuses a batch for, and refuse ONLY what a program cannot fix (vibe-ic#1129).
+"""gatekeeper_prepare_landing.py — do the mechanical things the landing gate
+refuses a batch for, and refuse ONLY what a program cannot fix (vibe-ic#1129).
 
 WHY THIS EXISTS
 ===============
-`tools/gatekeeper-land.sh` turns a batch away for three reasons that are
+`tools/gatekeeper-land.sh` turns a batch away for reasons that are
 deterministic, mechanical, and already owned by a tool in this repo:
 
     version_bump_monotonic_check      the version was not bumped
     landing_is_one_commit             no `[vX.Y.Z]`-tagged commit on the tip
     test_programs_index_freshness     programs/INDEX.md is stale
+    63x8 census freshness             the derived figures are stale (#1382)
 
 None of those is a judgement. Each has a program that already knows the answer:
 `gatekeeper_assign_version.py --write` (the version, and it writes plugin.json,
 every marketplace.json and the README prose in one place),
-`marketplace_version_sync_check.py --fix` (residual manifest drift), and
-`tools/gen_programs_index.py` (the index).
+`marketplace_version_sync_check.py --fix` (residual manifest drift),
+`tools/gen_programs_index.py` (the index), and
+`tools/gen_matrix_63x8_census.py --fix` (the 63x8 derived figures).
+
+WHERE THE 63x8 CENSUS IS DERIVED, AND WHY IT IS HERE (vibe-ic#1382)
+====================================================================
+`63x8 census freshness` was the single most frequent landing blocker measured —
+eleven of thirteen finished batches on 2026-08-13 — and not one of those was a
+defect in any PR it stopped. Every figure it named was off by exactly one: one
+gate added by one PR in the batch, with the derived figures never re-derived.
+
+#1382 put two readings and asked the repo to choose:
+
+    (a) derive at LAND — the batch builder re-derives before gating, exactly
+        as it already does for `programs/INDEX.md`;
+    (b) derive at PUSH — move `--check` into `pre-push` so authors meet it in
+        seconds, and accept a conflict on every gate-adding PR.
+
+THIS FILE IS THE ADOPTION OF (a), and the reason (b) was refused is measured
+rather than preferred. The anchored figures live in three shared files, each
+carrying tree-wide COUNTERS, so two branches that each add a gate rewrite the
+same lines with different totals and neither can be stacked after the other.
+That pathology is not hypothetical — `programs/INDEX.md` is the same shape and
+was measured at 26 of 30 conflicting open PRs on 2026-08-13 (vibe-ic#1431),
+which is why `tools/resolve_generated_conflicts.sh` had to be written. Reading
+(b) would have added three more files of that kind.
+
+The repo had already ruled the same way on the same question for a different
+gate: on 2026-08-14 `benchmark evidence structure` and `benchmark run manifest`
+were REMOVED from `tools/git-hooks/pre-push` and left at the landing gate,
+because "push means publish this branch; it does not mean this is fit to become
+main", and at push the only remedy was to rebuild the entire batch.
+
+Re-deriving here does NOT silence the gate. `repo_hygiene_gates.sh` still runs
+`gen_matrix_63x8_census.py --check` afterwards, on the tree this step produced,
+and still fails it on anything a generator run cannot reach.
+
+BEST EFFORT, AND ONLY THIS STEP — stated because the asymmetry is deliberate
+----------------------------------------------------------------------------
+The index and version steps are UNRUNNABLE-on-failure: each is a pure function
+of tracked files and completes in seconds, so one that cannot run means the
+checkout is broken. The census step is not like that. It drives the eight
+dimension modules through a 60 s inner bound (`180 // 3`), and on a contended
+host that bound is smaller than the work — measured red five runs out of five,
+including at load 33 on a 32-core box (vibe-ic#1277). Making it fatal would
+convert EVERY landing into a refusal, which is strictly worse than the blocker
+it is meant to remove.
+
+So a census step that cannot complete leaves the landing exactly where it stood
+before this step existed: the gate runs, and the gate decides. It is reported as
+`NOT RE-DERIVED` with the generator's own reason, never skipped silently, and it
+never turns a red tree green — the only thing it can do is fail to save an hour.
 
 The defect is not a wrong verdict. It is that the gate costs about an hour of
 wall-clock, so a refusal for a mechanical reason costs an hour and says nothing
@@ -48,6 +99,15 @@ file — it is collected from the writers themselves at run time:
   * `marketplace_version_sync_check.py --fix` writes only manifests already in
     the set above; it is run for residual drift and any path it touches must
     still fall inside that set or this program refuses.
+  * `tools/gen_matrix_63x8_census.py --fix` is asked for `--written-json`, a
+    JSON list of the repo-relative paths that run actually wrote. It is asked
+    rather than assumed for the same reason as the index: the corpus is
+    DISCOVERED by content ("a typed list is a promise that nobody will add a
+    document"), so any allow-list typed here would rot the moment a corpus file
+    appeared — silently, and in the forgiving direction. The generator emits
+    that list even when it fails, because `--fix` writes the anchors first and
+    only then drives the census, so a partial repair is the normal failure and
+    exactly the case whose writes must still be attributable.
 
 A hand-typed list would rot the moment a writer gained a file — silently, and in
 the direction that matters (forgiving a write nobody authorised). Deriving it
@@ -69,17 +129,39 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence, Set, Tuple
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
 REPO = PLUGIN.parent.parent.parent
 INDEX = HERE / "INDEX.md"
 GEN_INDEX = REPO / "tools" / "gen_programs_index.py"
+GEN_CENSUS = REPO / "tools" / "gen_matrix_63x8_census.py"
+
+#: Wall-clock bound on the census re-derivation, in seconds.
+#:
+#: NOT the `180 // 3` harness ceiling: this program is run by
+#: `tools/gatekeeper-land.sh`, not under `pytest --timeout=180`, and the gate it
+#: prepares for takes about ninety minutes. `ci_harness_timeout_ceiling_check`
+#: scans `programs/tests/**/*.py` and `tools/test_*.py`, neither of which this
+#: file is, and lowering the number to satisfy a harness that never bounds it
+#: would guarantee the step can never succeed.
+#:
+#: Sized from the measurements on vibe-ic#1382: the generator's own runs on this
+#: fleet took 102 s, ~250 s and 255 s before failing, and a successful run costs
+#: the same census. Ten minutes is roughly 2x the slowest observed run, and it
+#: MUST be able to fire — an unbounded subprocess inside the landing path would
+#: hang the gate instead of reporting that it could not re-derive.
+CENSUS_TIMEOUT_S = 600
 
 RC_OK, RC_REFUSED, RC_UNRUNNABLE = 0, 1, 2
 
@@ -155,6 +237,143 @@ def _default_index_writer(repo: Path) -> List[str]:
     return [str(INDEX.relative_to(repo))]
 
 
+def _default_census_writer(repo: Path,
+                           timeout_s: Optional[float] = None,
+                           ) -> Tuple[List[str], Optional[str]]:
+    """Re-derive the 63x8 census. Returns ``(paths written, reason it failed)``.
+
+    `timeout_s` exists because THE BOUND MUST BE ABLE TO FIRE WHERE THE CODE RUNS,
+    and this function has two callers with wall clocks an order of magnitude apart:
+
+      * `tools/gatekeeper-land.sh` — no outer clock, ~90 min gate, `CENSUS_TIMEOUT_S`
+        (600 s) is right and is sized from real runs (vibe-ic#1382: 102 s, ~250 s, 255 s).
+      * `programs/tests/test_issue1129_gatekeeper_prepare_landing.py` — driven under
+        `pytest --timeout=180`, so a 600 s bound CAN NEVER FIRE FIRST. The harness clock
+        wins every time, and with `--timeout-method=thread` pytest cannot unwind the
+        stuck thread, so it aborts the WHOLE SESSION. Measured on `ee849c19e`: the full
+        suite died at 27%, printed no `short test summary`, and left ZERO `FAILED`
+        lines — a reader grepping `^FAILED` gets 0 and reads an aborted run as a clean
+        one. One slow module cost the verdict for every module behind it.
+
+    Lowering `CENSUS_TIMEOUT_S` itself would be the wrong repair: it would guarantee the
+    production step can never succeed, which the constant's own comment warns about. The
+    bound is not wrong — it was being applied where a smaller one had to win.
+
+    A REASON, not an exception, because this step is best-effort by design —
+    see the module docstring. Both halves of the pair are meaningful at once:
+    `--fix` rewrites the anchored figures FIRST and only then drives the census
+    block, so `(["…/flowref.py"], "rc=1: …")` is the normal partial repair and
+    both facts have to reach the caller. Dropping either one loses a write that
+    then cannot be attributed, or hides a failure behind files that did change.
+    """
+    # READ AT CALL TIME, NOT AS A DEFAULT ARGUMENT.
+    #
+    # `timeout_s: float = CENSUS_TIMEOUT_S` binds the constant ONCE, when the
+    # module is imported. Three tests in
+    # `test_issue1382_census_timeout_keeps_its_promise.py` make the bound fire by
+    # monkeypatching `CENSUS_TIMEOUT_S` to a small value; against a default
+    # argument that patch has no effect at all, the real 600 s bound applies, the
+    # timeout never fires, and all three go red. v1.10.48 shipped exactly that.
+    #
+    # A bound nobody can override in a test is a bound whose failure path is
+    # unreachable — which is the same "cannot be made to fail" defect the bound
+    # itself was added to prevent, one level up.
+    if timeout_s is None:
+        timeout_s = CENSUS_TIMEOUT_S
+
+    if not GEN_CENSUS.is_file():
+        return [], f"{GEN_CENSUS} is missing"
+    # What was already dirty BEFORE the census, so a timeout can undo exactly what
+    # the census wrote and nothing the earlier index step wrote.
+    before = set(dirty_paths(repo))
+    with tempfile.TemporaryDirectory() as td:
+        written_json = Path(td) / "written.json"
+        proc = subprocess.Popen(
+            [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
+             "--written-json", str(written_json)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True)
+        timed_out = False
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            # Kill the WHOLE writer group, not only its Python parent.  The
+            # census drives nested pytest processes; restoring while one of
+            # them is still alive lets an orphan write the tracked tree again
+            # after this function has reported it clean.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = proc.communicate()
+        if timed_out:
+            # THE BOUND FIRED, AND THE CHILD DOES NOT GET TO SAY WHAT IT WROTE.
+            #
+            # `subprocess.run` kills the child with SIGKILL on timeout, so the
+            # generator's own `finally: write --written-json` NEVER RUNS. This
+            # branch used to return `_read_written(written_json)` on the belief
+            # that "anything written before it fired is still declared" — that
+            # file does not exist, so the declaration came back EMPTY while the
+            # census had already rewritten anchored figures. The boundary check
+            # below then sees an undeclared dirty path and REFUSES, and
+            # `gatekeeper-land.sh` exits 1 on a refusal — so a slow host turns a
+            # best-effort convenience into a landing that cannot start.
+            #
+            # Measured: a child whose `finally` writes the declaration, timed out
+            # by `subprocess.run`, leaves `written.json` ABSENT.
+            #
+            # The module docstring promises a census that cannot run "leaves the
+            # landing exactly where it stood before this step existed". Honour
+            # that literally: restore exactly the paths that became dirty during
+            # the census, declare nothing, and report the timeout as a reason.
+            # Restoring is safe precisely because `before` was captured above —
+            # the earlier index write is untouched.
+            undone, failed = [], []
+            for rel in sorted(set(dirty_paths(repo)) - before):
+                rc, _out = _git(repo, "checkout", "--", rel)
+                (undone if rc == 0 else failed).append(rel)
+            reason = f"the generator did not finish within {timeout_s}s"
+            if undone:
+                reason += f"; reverted {len(undone)} partial write(s)"
+            if failed:
+                # Could not restore: say so and DECLARE them, so the boundary
+                # judges a real state instead of refusing on a path nobody owns.
+                reason += (f"; COULD NOT revert {len(failed)}: "
+                           + ", ".join(failed[:4]))
+                return failed, reason
+            return [], reason
+        wrote = _read_written(written_json)
+        if proc.returncode != 0:
+            tail = (stdout + stderr).strip().splitlines()
+            return wrote, (f"rc={proc.returncode}: "
+                           + (tail[-1][:200] if tail else "no output"))
+        return wrote, None
+
+
+def _read_written(written_json: Path) -> List[str]:
+    """The writer's own declaration, or [] if it made none.
+
+    `[]` here means "declared nothing", and the caller must not read that as
+    "wrote nothing" — the two are the same observation and only one of them is
+    safe. It is safe HERE, and only here, because the boundary check downstream
+    refuses any dirty path this list does not contain: an undeclared write turns
+    into a REFUSAL rather than into silent forgiveness.
+    """
+    try:
+        data = json.loads(written_json.read_text(encoding="utf-8"))
+    except Exception:                                        # noqa: BLE001
+        return []
+    return [str(p) for p in data] if isinstance(data, list) else []
+
+
 def _default_version_writer(repo: Path, plugin: Path,
                             old: Optional[str]) -> List[str]:
     """Assign + write the next version. Returns what the writer says it wrote."""
@@ -168,19 +387,27 @@ def _default_version_writer(repo: Path, plugin: Path,
 
 
 def prepare(repo: Path, *, do_commit: bool,
-            index_writer=None, version_writer=None,
+            index_writer=None, version_writer=None, census_writer=None,
+            census_timeout_s: Optional[float] = None,
             plugin_root: Optional[Path] = None) -> Tuple[int, List[str], List[str]]:
     """Run every mechanical fixer. Returns (rc, notes, declared_paths).
 
     `declared_paths` is the boundary: repo-relative paths a writer said it wrote.
 
-    `index_writer` / `version_writer` exist so the ORCHESTRATION and the
-    BOUNDARY — which are the new logic here — can be driven end-to-end over a
-    real git repo in the tests without also re-testing two writers that already
-    have their own suites. Both default to the real ones, and each must RETURN
-    the repo-relative paths it wrote: a writer that declares nothing is treated
-    as unrunnable rather than as having written nothing, because those two are
-    the same observation and only one of them is safe.
+    `index_writer` / `version_writer` / `census_writer` exist so the
+    ORCHESTRATION and the BOUNDARY — which are the new logic here — can be
+    driven end-to-end over a real git repo in the tests without also re-testing
+    writers that already have their own suites. All default to the real ones.
+
+    `index_writer` and `version_writer` must RETURN the repo-relative paths they
+    wrote: a writer that declares nothing is treated as unrunnable rather than
+    as having written nothing, because those two are the same observation and
+    only one of them is safe.
+
+    `census_writer` returns `(paths, reason)` instead, because it is the one
+    step allowed to fail without refusing the landing (see the module
+    docstring), and "wrote these two files AND then failed" is a state the other
+    two cannot be in.
     """
     notes: List[str] = []
     declared: Set[str] = set()
@@ -210,6 +437,46 @@ def prepare(repo: Path, *, do_commit: bool,
         return RC_UNRUNNABLE, notes, sorted(declared)
     declared |= set(wrote)
     notes.append(f"index regenerated -> {', '.join(sorted(wrote))}")
+
+    # ---- 1b. the 63x8 census (vibe-ic#1382) -------------------------------
+    # THE ADOPTION OF READING (a): derive at LAND, so the figures are true at
+    # the only moment they are published, and no PR author is asked to re-derive
+    # counters that live in three files every gate-adding branch touches.
+    #
+    # The ONLY step here that does not refuse on failure. Its generator drives
+    # the eight dimension modules through a 60 s inner bound that is smaller
+    # than the work on a contended host, so a fatal step would refuse every
+    # landing (vibe-ic#1277). A census that could not be re-derived leaves the
+    # tree exactly as it found it, and `repo_hygiene_gates.sh` still runs
+    # `--check` on it afterwards and still decides.
+    #
+    # `except Exception` and NOT a bare call: an unexpected failure inside a
+    # best-effort step must not be more fatal than the failure it is best-effort
+    # about. Whatever it wrote before dying is still declared, so the boundary
+    # below judges it exactly as it judges a clean run.
+    try:
+        # `census_timeout_s` reaches ONLY the default writer. An injected stand-in
+        # keeps its own signature — narrowing the seam to fit a knob the caller may
+        # not know about would break every existing injection site.
+        if census_writer is not None:
+            wrote_c, census_why = census_writer(repo)
+        elif census_timeout_s is None:
+            wrote_c, census_why = _default_census_writer(repo)
+        else:
+            wrote_c, census_why = _default_census_writer(repo, census_timeout_s)
+    except Exception as exc:                                 # noqa: BLE001
+        wrote_c, census_why = [], f"{type(exc).__name__}: {exc}"
+    declared |= set(wrote_c)
+    if census_why:
+        notes.append(
+            f"63x8 census NOT RE-DERIVED ({len(wrote_c)} file(s) written "
+            f"before it stopped) — the landing gate's `63x8 census freshness` "
+            f"will decide on the tree as it stands, exactly as it did before "
+            f"this step existed: {census_why}")
+    else:
+        notes.append(f"63x8 census re-derived -> {len(wrote_c)} file(s)"
+                     + (": " + ", ".join(sorted(wrote_c)) if wrote_c
+                        else " (already fresh)"))
 
     # ---- 2. the version, only when the tip does not already carry one -----
     if tip_carries_version_tag(repo):
@@ -289,7 +556,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"    {n}")
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(
+        atomic_write_text(args.json, json.dumps(
             {"verdict": label, "notes": notes, "declared_paths": declared},
             indent=1), encoding="utf-8")
     return rc

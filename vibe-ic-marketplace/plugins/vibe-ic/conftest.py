@@ -49,7 +49,21 @@ if str(_HERE) not in sys.path:
 # rootdir conftest rides every pytest invocation rooted at the plugin,
 # including the targeted subset `tools/gatekeeper-land.sh` runs on EVERY
 # landing, so the disclosure cannot be missed by choosing a path filter.
-pytest_plugins = ("suite_write_guard", "not_verified_tier")
+# vibe-ic#1446 — the third tier, and the same argument a third time.
+# `suite_write_guard` stops a run lying about WHAT IT WROTE; `not_verified_tier`
+# stops it lying about WHAT IT VERIFIED; `scratch_root_guard` stops it lying
+# about WHAT IT MEASURED. A suite whose scratch root sits inside a git work tree
+# reports 46 failures that are the ROOT, not the tree — measured on 75776dbbb,
+# same commit, same host, one pytest invocation each, only `--basetemp` moved:
+# 86 passed outside a repository, 46 failed + 40 passed inside. Every one of
+# those 46 names its own subject instead of the cause, so the cause is nowhere
+# in the output. #1446 published five counts of main's redness — ~93, 46, 39,
+# 145, 218 — and four were retracted or corrected by their own author; the
+# largest single correction was exactly this. The guard DECLARES the scratch
+# root on every run and REFUSES a run it would falsify. Riding the rootdir
+# conftest is what makes that execute rather than be remembered, and it costs
+# one `git rev-parse` per session.
+pytest_plugins = ("suite_write_guard", "not_verified_tier", "scratch_root_guard")
 
 
 # ORGANIC #574 — robust waveform-artifact hygiene. Many tests run `vvp` on an

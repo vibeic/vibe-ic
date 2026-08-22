@@ -98,9 +98,33 @@ def test_the_new_stage_is_actually_wired(land_text):
     assert f"{_STAGE}()" in land_text, (
         f"{_STAGE} is not defined in tools/gatekeeper-land.sh — the "
         f"unselectable trees are still unreachable by a landing (#1424)")
-    assert re.search(rf"^{_STAGE}$", land_text, re.M), (
-        f"{_STAGE} is defined but never CALLED — a stage that does not run "
-        f"cannot block anything")
+    # CALLED -- not called IN A PARTICULAR SHAPE. This used to anchor on
+    # the name at the start of a line, optionally behind `if`. The full tier's
+    # independent stages now run at the same time, so the stage is called from
+    # inside the lane body the window launches
+    # (`fn_capture "full:unselectable-tests" run_unselectable_pytest`) and the
+    # column-zero anchor matched nothing at all -- a rule that cannot fail is
+    # not a weaker version of the one it replaced, it is an absent one.
+    #
+    # That the call is REACHED from the top level is not dropped, it is owned
+    # once, by `ci_harness_timeout_ceiling_check`'s execution-prefix digest; a
+    # second copy of that rule here is the drift shape this repo keeps
+    # deleting. What is asserted here is what this file is about: exactly one
+    # call site exists outside the definition.
+    _lines = land_text.splitlines()
+    _define = next(i for i, line in enumerate(_lines)
+                   if line.startswith(f"{_STAGE}() {{"))
+    _close = next(i for i in range(_define + 1, len(_lines))
+                  if _lines[i] == "}")
+    _callers = [i + 1 for i, line in enumerate(_lines)
+                if not (_define <= i <= _close)
+                and not line.lstrip().startswith("#")
+                and re.search(rf"(?<![\w./-]){_STAGE}(?![\w(])", line)]
+    assert len(_callers) == 1, (
+        f"{_STAGE} is defined but is called {len(_callers)} times outside its "
+        f"definition; a stage that does not run cannot block anything, and a "
+        f"stage that runs twice is two lanes where the landing record expects "
+        f"one")
     assert _PROG.name in land_text, (
         f"{_STAGE} does not invoke {_PROG.name}; whatever corpus it runs is "
         f"not the one this issue measures")
@@ -172,9 +196,19 @@ def test_the_stage_bound_matches_the_other_pytest_stages(land_text):
     would make that ceiling ambiguous, and the looser lane is the one that takes
     the session down instead of one test.
     """
-    bounds = set(re.findall(r"--timeout=(\d+)", land_text))
-    assert bounds == {"180"}, (
-        f"gatekeeper-land.sh now carries more than one pytest bound: {bounds}")
+    # The bound moved with 7c376e348 (v1.10.69): the stages no longer hand
+    # pytest a `--timeout=`, they drive it through `pytest_per_file_junit.py`,
+    # whose bound is the DRIVER STALL WINDOW. The property is unchanged — one
+    # bound shared by every pytest stage, never a looser lane for this one — so
+    # it is asserted on the bound the script actually declares today.
+    bounds = set(re.findall(r"--stall-after (\S+)", land_text))
+    agg = set(re.findall(r"--aggregate-stall-after (\S+)", land_text))
+    assert not re.search(r"--timeout=\d+", land_text), (
+        "gatekeeper-land.sh reintroduced a second, per-stage pytest bound "
+        "alongside the driver stall window")
+    assert len(bounds) == 1 and len(agg) == 1, (
+        f"gatekeeper-land.sh now carries more than one pytest bound: "
+        f"stall={bounds} aggregate={agg}")
 
 
 def test_the_stage_writes_no_bytecode_into_the_shipped_skills_tree(land_text):
@@ -199,7 +233,14 @@ def test_the_stage_writes_no_bytecode_into_the_shipped_skills_tree(land_text):
     body = land_text.split(f"{_STAGE}() {{", 1)
     assert len(body) == 2, f"{_STAGE} not found"
     body = body[1].split("\n}\n", 1)[0]
-    invocations = [ln for ln in body.splitlines() if "python3 -m pytest" in ln]
+    # 7c376e348 (v1.10.69) routed the stage's pytest through
+    # `pytest_per_file_junit.py` instead of a bare `python3 -m pytest`, and the
+    # command is written across continued lines — so the token and the pytest it
+    # guards are no longer on ONE line. Join the continuations first, then assert
+    # the same property on the whole command.
+    joined = re.sub(r"\\\n\s*", " ", body)
+    invocations = [ln for ln in joined.splitlines()
+                   if "python3 -m pytest" in ln or "pytest_per_file_junit.py" in ln]
     assert invocations, f"{_STAGE} runs no pytest at all"
     for ln in invocations:
         assert "PYTHONDONTWRITEBYTECODE=1" in ln, (
@@ -253,15 +294,31 @@ def test_a_covered_tree_whose_stage_vanished_is_a_finding(mod, tmp_path):
                 if "run_repo_tools_pytest" in f]
 
 
-def test_an_exclusion_that_matches_nothing_is_a_finding(mod):
-    """Roster rot, in the one place this program keeps a roster."""
-    files = [f for f in (mod.tracked_test_files(_REPO) or [])
-             if not f.startswith("benchmark-data/")]
-    assert files, "premise moved: nothing tracked outside benchmark-data/"
+def test_an_exclusion_that_matches_nothing_is_a_finding(mod, monkeypatch):
+    """Roster rot, in the one place this program keeps a roster.
+
+    THIS USED TO ASSERT ON `benchmark-data/` BY NAME, and that coupling broke it.
+    The roster held exactly that one entry; when the corpus moved to
+    vibeic/benchmark-data the entry was withdrawn, the roster became `()`, and this
+    test had nothing left to iterate — it failed not because the mechanism regressed
+    but because the example it was written against was gone.
+
+    A guard over a REGISTRY must not depend on any particular member of it. So the
+    entry is now synthetic and injected: the mechanism is what is under test, and it
+    stays under test whether the shipped roster holds one entry, ten, or none.
+    """
+    stale = mod.Excluded(
+        prefix="a-tree-that-is-not-in-this-repository/",
+        why="a synthetic entry, long enough to satisfy any written-reason rule, "
+            "existing only so this test measures the staleness MECHANISM rather "
+            "than the presence of one particular roster member.")
+    monkeypatch.setattr(mod, "_EXCLUDED", (stale,))
+    files = mod.tracked_test_files(_REPO) or []
+    assert files, "partitioned an empty file list; this is not a measurement"
     part = mod.partition(files, mod.plugin_rel(_REPO))
     findings = mod.audit(_REPO, part, mod.plugin_rel(_REPO))
-    assert any("benchmark-data/" in f and "NO tracked test file" in f
-               for f in findings), (
+    assert any("a-tree-that-is-not-in-this-repository/" in f
+               and "NO tracked test file" in f for f in findings), (
         f"an exclusion describing nothing raised no finding: {findings}")
 
 

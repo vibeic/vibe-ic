@@ -511,3 +511,141 @@ def test_paths_needing_quoting_are_parsed_not_mangled(tmp_path):
     odd.write_text("x\n")
     snap = swg.snapshot(repo)
     assert 'a file with "quotes" and spaces.txt' in snap, snap
+
+
+# --------------------------------------------------------------------------
+# THE AMBIENT-REPOSITORY TRAP (vibe-ic#1412)
+#
+# Both tests below drive the DISCOVERY door — no `--write-guard-repo` — because
+# that is the door the defect lives behind and the one every real session uses.
+# They are a pair on purpose: the first says the guard must decline a tree it
+# cannot measure, the second says it must still BITE on a tree it can. Either
+# one alone could be satisfied by breaking the guard in the other direction.
+# --------------------------------------------------------------------------
+
+def _detached_copy_of_the_guard(dest: Path) -> Path:
+    """A copy of the REAL guard module at `dest/programs/`, importable there."""
+    (dest / "programs").mkdir(parents=True, exist_ok=True)
+    target = dest / "programs" / "suite_write_guard.py"
+    target.write_text(_GUARD.read_text())
+    return target
+
+
+def _ambient_repo(tmp_path: Path) -> Path:
+    """A repo that is NOT this tree and has never heard of its `.gitignore`.
+
+    No `__pycache__` rule, which is the whole point: in THIS checkout
+    `.gitignore:2` puts bytecode in the IGNORED (advisory) class, and in an
+    unrelated repository the identical bytes are UNTRACKED (blocking).
+    """
+    r = tmp_path / "ambient"
+    r.mkdir()
+    (r / "unrelated.txt").write_text("a repository that is not the subject\n")
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(r), "config", k, v], check=True)
+    subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "base"], check=True)
+    return r
+
+
+def test_a_detached_copy_inside_an_ambient_repo_is_NOT_CHECKED_not_blocked(tmp_path):
+    """A `cp -al` mirror under a `$TMPDIR` inside some other checkout.
+
+    This is #1412 in miniature. `matrix_mutation_ledger`'s LOCK 2 replay runs
+    each PLUGIN_TREE witness cell in a hardlink mirror of the plugin, and reads
+    the cell's EXIT CODE to decide whether the unmutated cell was green. When
+    the mirror lands inside an unrelated repository the guard discovered THAT
+    repository, saw the session's own bytecode as `??`, and reddened a session
+    whose test passed — so the ledger recorded `ALREADY_RED`, i.e. "this gate
+    can no longer be shown to have teeth", about a replay that was working.
+
+    The guard must decline: a detached copy has no `git status` describing it.
+    Declining is not a quiet pass — `WRITE_GUARD_NOT_CHECKED` is asserted here,
+    and rc=2/NOT-CHECKED is this file's standing convention.
+    """
+    ambient = _ambient_repo(tmp_path)
+    mirror = ambient / "mirror"
+    _detached_copy_of_the_guard(mirror)
+    helper = mirror / "programs" / "zz_imported_after_the_baseline.py"
+    helper.write_text("OK = True\n")
+    tf = mirror / "test_in_the_mirror.py"
+    tf.write_text(
+        "def test_imports_a_module_and_writes_nothing_of_its_own():\n"
+        "    import zz_imported_after_the_baseline as z\n"
+        "    assert z.OK\n")
+
+    env = _child_env()
+    # the copy, NOT this checkout's `programs/` — otherwise the child imports
+    # the tracked original and discovers the real repository.
+    env["PYTHONPATH"] = str(mirror / "programs")
+
+    before = swg.snapshot(ambient)
+    p = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "-p", "suite_write_guard", str(tf)],
+        capture_output=True, text=True, timeout=_T, cwd=str(mirror), env=env)
+    out = p.stdout + p.stderr
+    after = swg.snapshot(ambient)
+
+    # The setup is live, not inert: the ambient repo really did gain
+    # blocking-class paths from that session. Without this the test could pass
+    # because nothing happened rather than because the guard declined.
+    gained = swg.compare(before, after)["blocking"]
+    assert gained, (
+        "the ambient repository gained no blocking-class path, so this test "
+        "would pass even with the trap wide open; the child wrote no bytecode "
+        f"(PYTHONDONTWRITEBYTECODE?). out={out[-800:]}")
+    assert all("mirror/" in f["path"] for f in gained), gained
+
+    assert p.returncode == 0, (
+        "a session in a detached copy was BLOCKED by the state of the "
+        "repository that merely encloses it:\n" + out[-2000:])
+    assert "WRITE_GUARD_NOT_CHECKED" in out, (
+        "declining must be LOUD — silence reads as 'measured and clean':\n"
+        + out[-2000:])
+    assert "does not track it" in out, out[-2000:]
+
+
+def test_the_SAME_discovery_door_still_reddens_a_real_checkout(tmp_path):
+    """PAIRED GUARD. The fix must not buy its green by declining everything.
+
+    Same door as the test above — discovery, no `--write-guard-repo` — but the
+    guard's own file is TRACKED here, so the repository it finds is the tree it
+    is testing and a planted writer must still make the session RED and NAME
+    the path. If `_repo_root` ever starts declining a real checkout, this goes
+    red; if it stops declining a detached copy, the test above goes red. Only
+    the correct discriminator satisfies both.
+    """
+    r = tmp_path / "checkout"
+    _detached_copy_of_the_guard(r)
+    (r / "pkg").mkdir()
+    (r / "pkg" / "shipped.txt").write_text("published bytes\n")
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(r), "config", k, v], check=True)
+    subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "base"], check=True)
+
+    tf = tmp_path / "test_planted_writer.py"
+    tf.write_text(
+        "from pathlib import Path\n"
+        "def test_appends_to_a_shipped_file():\n"
+        f"    p = Path(r'{r / 'pkg' / 'shipped.txt'}')\n"
+        "    p.write_text(p.read_text() + 'mutated by a test\\n')\n")
+
+    env = _child_env()
+    env["PYTHONPATH"] = str(r / "programs")
+    p = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "-p", "suite_write_guard", str(tf)],
+        capture_output=True, text=True, timeout=_T, cwd=str(r), env=env)
+    out = p.stdout + p.stderr
+    assert p.returncode == 1, (
+        "the guard discovered a REAL checkout and let a tracked write through:"
+        "\n" + out[-2000:])
+    assert "WROTE INTO THE TREE" in out, out[-2000:]
+    assert "pkg/shipped.txt" in out, out[-2000:]
+    assert "WRITE_GUARD_NOT_CHECKED" not in out, (
+        "declined a checkout that tracks the guard — the fix would then be "
+        "buying its green by measuring nothing:\n" + out[-2000:])

@@ -71,6 +71,12 @@ guarantee:
     repo, so ~53 min over a 32 k-test suite) — which is why it is opt-in and
     session mode is the default;
   * it sees what git sees. A write outside the repo is not its subject.
+  * a DETACHED COPY of this tree (a `cp -al` mirror, an unpacked tarball, a
+    scratch dir under a `$TMPDIR` that happens to sit inside some unrelated
+    checkout) has no `git status` that describes it. The guard declines it as
+    NOT CHECKED rather than measuring whatever repository happens to enclose
+    it — see `_repo_root` for the measurement that made that necessary
+    (vibe-ic#1412).
 
 DEGRADING LOUDLY (flow-change-acceptance §6)
 ============================================
@@ -128,7 +134,19 @@ class NotChecked(Exception):
     """The guard could not look. Never silently degraded into a pass."""
 
 
-def _git(repo: Path, *args: str) -> str:
+#: Bound for the two REPO-DISCOVERY calls (`rev-parse`, `ls-files`). Both read
+#: the index and neither walks the worktree, so they are milliseconds; the bound
+#: exists only so a wedged git cannot hang the session. It is deliberately under
+#: the 60 s ceiling `ci_harness_timeout_ceiling_check` derives from
+#: `gatekeeper-land.sh` (`--timeout=180` // 3): above that, pytest kills the
+#: whole SESSION first and every other file in the subset loses its verdict.
+#: The two SNAPSHOT calls keep the 120 s bound they landed with — those DO walk
+#: the worktree, and lowering them would turn a slow checkout into a
+#: NOT_CHECKED, which is a different change from this one.
+_DISCOVERY_TIMEOUT_S = 30
+
+
+def _git(repo: Path, *args: str, timeout: int = 120) -> str:
     """Run git read-only, and turn every failure into a LOUD NotChecked.
 
     `--no-optional-locks` so the guard can run concurrently with whatever it is
@@ -137,11 +155,11 @@ def _git(repo: Path, *args: str) -> str:
     """
     argv = ["git", "--no-optional-locks", "-C", str(repo), *args]
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
         raise NotChecked("git executable not found on PATH")
     except subprocess.TimeoutExpired:
-        raise NotChecked(f"git timed out after 120s: {' '.join(args)}")
+        raise NotChecked(f"git timed out after {timeout}s: {' '.join(args)}")
     if p.returncode != 0:
         raise NotChecked(
             f"git {' '.join(args)} exited {p.returncode}: "
@@ -385,11 +403,52 @@ def pytest_addoption(parser):
 
 
 def _repo_root(config) -> Path:
+    """The repository whose `git status` describes THE TREE UNDER TEST.
+
+    THE AMBIENT-REPOSITORY TRAP (vibe-ic#1412)
+    ------------------------------------------
+    `rev-parse --show-toplevel` answers "is there a repo above me", which is
+    NOT the question. A DETACHED COPY of this tree — the `cp -al` hardlink
+    mirror `matrix_mutation_ledger`'s LOCK 2 replay runs its cells in, an
+    unpacked tarball, any scratch dir under a `$TMPDIR` that happens to sit
+    inside some unrelated checkout — answers it with the AMBIENT repository.
+    The guard then measures a tree it is not testing, under a `.gitignore` that
+    never carried this tree's rules, so the session's own `__pycache__` lands in
+    the UNTRACKED class instead of the IGNORED one and BLOCKS a session that
+    wrote nothing anybody would ship.
+
+    Measured on #1412: the same commit, the same cell, the only difference
+    being `$TMPDIR` — `1 passed` and rc=1, 19 blocking paths, every one of them
+    `<mirror>/**/__pycache__/*.pyc`. The ledger read that rc and recorded
+    `ALREADY_RED`, i.e. "this gate can no longer be shown to have teeth", for
+    two mutations whose replays were in fact working perfectly.
+
+    So the discovered repo must actually TRACK this file. Anything else is a
+    tree with no `git status` to describe it, and NOT CHECKED is the honest
+    answer — the same one this guard already gives when there is no ambient
+    repo at all. It is never a pass: `pytest_configure` records the reason and
+    `pytest_sessionfinish` prints `WRITE_GUARD_NOT_CHECKED:` by name.
+
+    An EXPLICIT `--write-guard-repo` is obeyed unchecked. That is an operator
+    naming the subject on purpose, and every test in `test_suite_write_guard`
+    that plants a writer drives this door.
+    """
     explicit = config.getoption("--write-guard-repo")
     if explicit:
         return Path(explicit).resolve()
-    return Path(_git(Path(__file__).resolve().parent,
-                     "rev-parse", "--show-toplevel").strip()).resolve()
+    here = Path(__file__).resolve()
+    root = Path(_git(here.parent, "rev-parse", "--show-toplevel",
+                     timeout=_DISCOVERY_TIMEOUT_S).strip()).resolve()
+    try:
+        _git(root, "ls-files", "--error-unmatch", "--", str(here),
+             timeout=_DISCOVERY_TIMEOUT_S)
+    except NotChecked as exc:
+        raise NotChecked(
+            f"the repository above this file ({root}) does not track it "
+            f"({here}) — this is a DETACHED COPY of the tree, not a checkout, "
+            f"so a `git status` there reports the AMBIENT repository and not "
+            f"the tree under test [{exc}]")
+    return root
 
 
 def pytest_configure(config):

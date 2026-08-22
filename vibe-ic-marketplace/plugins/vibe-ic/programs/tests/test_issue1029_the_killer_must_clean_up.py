@@ -9,7 +9,7 @@ leaves the mutation in the tree. `TimeoutExpired` is a `SubprocessError`, so the
 loop caught it, filed `GATE_UNRUNNABLE`, and carried on with a corrupt checkout.
 
 REPRODUCED 2026-08-12 from a real landing run on .120 (candidate stack h1c,
-`/home/reyerchu/_pg_h1c`), byte for byte:
+`/home/<your-user>/_pg_h1c`), byte for byte:
 
     parent caught TimeoutExpired after 75s
     porcelain AFTER: 1

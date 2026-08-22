@@ -67,6 +67,44 @@ WHAT THIS GATE ENFORCES (each is a named nonconformance on failure)
                     passed this rule; it is a unit the rule never got to judge.
                     See ZERO DENOMINATOR below — that distinction is the whole
                     subject of the rule, moved one level up.
+                      Under `--changed-since` the rule judges the entries THIS
+                    CHANGE CREATED and RECORDS the rest. See ADDED vs
+                    PRE-EXISTING below.
+
+ADDED vs PRE-EXISTING: A RECORD MUST NOT BECOME A VETO (vibe-ic#1538)
+====================================================================
+`test_matrix_d3_outputs_produced` ends every unevidenced verdict with one
+instruction — "commit (or register in the manifest) a run tree that carries it".
+Taking it was refused, and the refusal was this rule: 8 of the 9 ICs that carry
+run output were laid out before the `v<ver>_<PDK>` convention, so EVERY tracked
+change under one of their pre-existing IC-level entries was failed by entries
+the change did not create. Measured on origin/main: a commit that ADDS NOTHING
+— one comment line appended to an already-tracked file under a stray — produced
+the byte-identical 15-entry finding as a commit that adds four files. The
+repository printed a remedy and then refused the action.
+
+`_changed_ic_dirs` already scoped the diff to the stray entries themselves, but
+that only exempts a push that publishes BESIDE a stray; a push that touches a
+file UNDER one still met the whole legacy register. So `--changed-since` now
+splits the finding at the granularity the rule actually judges — the entries
+directly under `ic/<IC>/`:
+
+  * an entry that is NOT in the baseline listing was created by this change and
+    is a FAILURE, exactly as before;
+  * an entry that IS in the baseline listing is DISCLOSED on its own line as a
+    pre-existing divergence, recorded and not accepted, and does not fail.
+
+The register is read from git at the baseline rev rather than kept in a file,
+which is what gives it the discipline every other shrink-only register in this
+repo is held to, without a list to forget to update:
+  * it CANNOT GROW — a stray absent at the baseline FAILs the moment it appears;
+  * it SHRINKS BY ITSELF — migrating or retiring an entry removes it from the
+    register in the same commit, with nothing to re-record;
+  * it is NEVER STANDING PERMISSION — every run reprints the full pre-existing
+    set, and a full `--tree` run (no `--changed-since`, the audit shape) still
+    FAILs on every one of them, unchanged.
+The lenient direction is bounded to entries git can prove predate the change; a
+baseline that cannot be read grandfathers NOTHING and says so.
 
 ZERO DENOMINATOR: A UNIT THAT EXAMINED NOTHING IS NOT A UNIT THAT PASSED (#967)
 ==============================================================================
@@ -158,6 +196,13 @@ from typing import Dict, List, Optional, Set, Tuple
 # --------------------------------------------------------------------------
 
 # `v<major>.<minor>.<patch>_<PDK>` — version FIRST, then a non-empty PDK tag.
+#: Where the published corpus is, now that it is not in this repository.
+#:
+#: Spelled the same way `programs/tests/_published_corpus.py` spells it, on purpose:
+#: one name for one thing. A gate and a test suite that disagree about where the
+#: corpus lives will disagree about whether it was checked.
+CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+
 _NAME_RE = re.compile(r"^v\d+\.\d+\.\d+_.+$")
 
 # Folder-name prefixes that are known-wrong and get a specific message.
@@ -229,6 +274,11 @@ class FolderResult:
     # True iff the unit's denominator was ZERO. Excluded from BOTH the numerator
     # and the denominator of the roll-up, and disclosed as `[SKIP]`.
     skipped: bool = False
+    # IC-level entries this change did NOT create, recorded rather than charged
+    # to it (vibe-ic#1538). Machine-readable on purpose: a disclosure only a
+    # human can read cannot be tracked for growth by anything but a human, and
+    # this one exists precisely so its size can be watched.
+    pre_existing: List[str] = field(default_factory=list)
     failures: List[str] = field(default_factory=list)   # "RULE: message"
     checks: Dict[str, Optional[bool]] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)     # "RULE: why it passed differently"
@@ -685,9 +735,70 @@ def ic_level_strays(ic_dir: Path, include_staged: bool = False) -> List[Path]:
     return ic_level_entries(ic_dir, include_staged=include_staged)[1]
 
 
+def _baseline_rev(base: str, repo: Path) -> str:
+    """The rev the change set is measured FROM, matching `_changed_file_set`.
+
+    That function diffs `base...HEAD` — three dots, i.e. from the MERGE BASE —
+    so the register of entries "this change did not create" has to be read at
+    the same point. Reading it at `base` itself would grandfather an entry that
+    `base` acquired independently and the branch re-created, which is the one
+    direction this split must not be wrong in. Falls back to `base` when
+    merge-base cannot be computed, mirroring the two-dot fallback there.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "merge-base", base, "HEAD"],
+                             capture_output=True, text=True, check=False, timeout=60)
+    except Exception:
+        return base
+    if out.returncode == 0 and out.stdout.strip():
+        return out.stdout.strip()
+    return base
+
+
+def ic_level_entry_names_at(base: str, ic_dir: Path) -> Tuple[Optional[Set[str]], str]:
+    """Names of the entries directly under `ic/<IC>/` AS OF `base` (vibe-ic#1538).
+
+    Returns `(names, mode)`, or `(None, why)` when the baseline could not be
+    read. `None` is NOT "nothing pre-existed": the caller grandfathers nothing
+    on it and says so, because a register derived from a listing that failed is
+    a licence, not a record — the same distinction `--changed-since` itself
+    draws between "determined, and nothing changed" and "could not determine".
+
+    An IC directory that did not exist at `base` yields an EMPTY set with rc 0
+    from git, which is the honest answer: every entry in it is new.
+    """
+    repo = _git_toplevel(ic_dir)
+    if repo is None:
+        return None, "not a git repo"
+    try:
+        rel = ic_dir.resolve().relative_to(Path(repo).resolve()).as_posix()
+    except ValueError:
+        return None, f"{ic_dir} is outside the repository"
+    baseline = _baseline_rev(base, repo)
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "ls-tree", "--name-only", baseline, f"{rel}/"],
+            capture_output=True, text=True, check=False, timeout=60)
+    except Exception as exc:
+        return None, f"git ls-tree error: {exc}"
+    if out.returncode != 0:
+        return None, f"git ls-tree {baseline} failed"
+    return ({Path(ln.strip()).name for ln in out.stdout.splitlines() if ln.strip()},
+            baseline)
+
+
 def check_ic_level_layout(ic_dir: Path,
-                          include_staged: bool = False) -> FolderResult:
-    """Validate the `ic/<IC>/` directory itself against the layout contract."""
+                          include_staged: bool = False,
+                          pre_existing_names: Optional[Set[str]] = None,
+                          baseline_mode: str = "") -> FolderResult:
+    """Validate the `ic/<IC>/` directory itself against the layout contract.
+
+    `pre_existing_names` is the diff-scoped half (vibe-ic#1538): the entry names
+    that already existed at the baseline rev. `None` — the default, and what a
+    full `--tree` audit passes — means NOT diff-scoped, and every stray is a
+    failure exactly as before. An EMPTY set is a different statement: nothing
+    predates this change, so every stray is charged to it.
+    """
     res = FolderResult(path=str(ic_dir), kind="ic-root", ic=ic_dir.name)
     published, strays = ic_level_entries(ic_dir, include_staged=include_staged)
     res.examined = len(published)
@@ -707,12 +818,47 @@ def check_ic_level_layout(ic_dir: Path,
     if not strays:
         res.ok("IC_LEVEL_LAYOUT")
         return res
-    named = ", ".join(s.name + ("/" if s.is_dir() else "") for s in strays)
+
+    def _named(entries: List[Path]) -> str:
+        return ", ".join(s.name + ("/" if s.is_dir() else "") for s in entries)
+
+    # vibe-ic#1538 — ADDED vs PRE-EXISTING. Only the diff-scoped shape splits
+    # them; a full audit run keeps every stray as a finding.
+    if pre_existing_names is None:
+        added, carried = strays, []
+    else:
+        added = [s for s in strays if s.name not in pre_existing_names]
+        carried = [s for s in strays if s.name in pre_existing_names]
+    res.pre_existing = [s.name + ("/" if s.is_dir() else "") for s in carried]
+
+    if carried:
+        res.notes.append(
+            f"IC_LEVEL_LAYOUT: {len(carried)} pre-existing IC-level "
+            f"entr{'y' if len(carried) == 1 else 'ies'} recorded, NOT accepted, "
+            f"and not charged to this change (already present at "
+            f"{baseline_mode or 'the baseline'}): {_named(carried)}. This set may "
+            f"only shrink — an entry that is not in it FAILs the moment it "
+            f"appears, and a full `--tree` run with no --changed-since still "
+            f"FAILs every one of these.")
+
+    if not added:
+        # Grandfathered, and LOUDLY: the note above prints on PASS for exactly
+        # this case. Charging the change for entries it did not create is what
+        # turns this record into a veto on whoever touches the IC next.
+        res.ok("IC_LEVEL_LAYOUT")
+        return res
+
+    scope = ""
+    if pre_existing_names is not None:
+        scope = (f" ADDED by this change"
+                 + (f" ({len(carried)} further pre-existing "
+                    f"entr{'y' if len(carried) == 1 else 'ies'} are recorded "
+                    f"above and are not what failed this)" if carried else ""))
     res.fail(
         "IC_LEVEL_LAYOUT",
-        f"{len(strays)} entr{'y' if len(strays) == 1 else 'ies'} at the IC level "
-        f"{'is' if len(strays) == 1 else 'are'} neither input/ nor a "
-        f"v<ver>_<PDK> cell: {named}. Run output "
+        f"{len(added)} entr{'y' if len(added) == 1 else 'ies'} at the IC level "
+        f"{'is' if len(added) == 1 else 'are'} neither input/ nor a "
+        f"v<ver>_<PDK> cell{scope}: {_named(added)}. Run output "
         f"here is attributable to no plugin version and no PDK. Move it into the "
         f"cell it belongs to, or retire it deliberately — this rule records the "
         f"divergence, it does not decide which.")
@@ -774,6 +920,15 @@ def _print_folder(res: FolderResult) -> None:
         if res.skipped:
             suffix = (f"  (IC={res.ic} IC-level layout: examined nothing — "
                       f"{_n_entries(res.examined or 0)}; NOT counted as a unit)")
+        elif res.conforms and res.pre_existing:
+            # NOT "all allowed" — this unit conforms because the entries that
+            # are not allowed predate the change (vibe-ic#1538). Printing the
+            # unqualified line here would be the escape being silent, which is
+            # the reading this whole check exists to prevent.
+            suffix = (f"  (IC={res.ic} IC-level layout: "
+                      f"{_n_entries(res.examined or 0)} examined, "
+                      f"{len(res.pre_existing)} pre-existing and recorded, "
+                      f"0 added by this change)")
         elif res.conforms:
             suffix = (f"  (IC={res.ic} IC-level layout: "
                       f"{_n_entries(res.examined or 0)} examined, all allowed)")
@@ -800,17 +955,47 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="evidence folder(s) v<ver>_<PDK> to validate")
     ap.add_argument("--tree", metavar="ROOT", default=None,
                     help="discover + validate every published cell under ROOT "
-                         "(e.g. benchmark-data or benchmark-data/ic)")
+                         "(e.g. benchmark-data or benchmark-data/ic). If "
+                         f"${CORPUS_ENV} is set it OVERRIDES this, because the "
+                         "published corpus now lives in its own repository.")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the corpus. "
+                         "Turns 'no corpus discoverable anywhere' from UNDETERMINED "
+                         "into NO_CORPUS (rc=0). It does NOT excuse a corpus pointer "
+                         f"that is set and broken: ${CORPUS_ENV} pointing at "
+                         "something unreadable is UNDETERMINED with or without this.")
     ap.add_argument("--include-staged", action="store_true",
                     help="also treat git-staged (not-yet-committed) files as "
                          "committed for the NO_RAW_GEOMETRY scan")
     ap.add_argument("--changed-since", metavar="BASE", default=None,
                     help="only validate discovered folders with a file changed "
                          "since BASE (added/modified) — the CI diff-scoped shape; "
-                         "pre-existing folders are grandfathered")
+                         "pre-existing folders are grandfathered, and at the IC "
+                         "level only entries this change CREATED fail (the ones "
+                         "that predate BASE are recorded, not charged to it)")
     ap.add_argument("--json", metavar="OUT", default=None,
                     help="write a machine-readable summary JSON here")
     args = ap.parse_args(argv)
+
+    # THE POINTER WINS OVER THE PATH. Both shipped call sites pass the literal
+    # `--tree benchmark-data`, a relative path that no longer exists in this repo.
+    # Rewriting both call sites instead would leave every OTHER caller — agents,
+    # local runs, the benchmark-agent skill — still pointed at a directory that is
+    # gone, and each would have to learn the new location separately.
+    #
+    # The override is announced, because a gate that silently scans a different
+    # tree than the one named on its command line is how `--tree ../../../
+    # benchmark-data` came to report "13/28 conformant" over 9 IC dirs while an
+    # absolute path over the same tree found 8 failing and 93 entries (2026-08-11,
+    # recorded above). Whatever this gate scanned, it says so.
+    _env_tree = os.environ.get(CORPUS_ENV)
+    if _env_tree and args.tree:
+        print(f"note: {CORPUS_ENV} overrides --tree {args.tree} -> {_env_tree}",
+              file=sys.stderr)
+        args.tree = _env_tree
+    elif _env_tree and not args.tree and not args.paths:
+        print(f"note: scanning {CORPUS_ENV} -> {_env_tree}", file=sys.stderr)
+        args.tree = _env_tree
 
     targets: List[Path] = [Path(p) for p in args.paths]
     ic_dirs: List[Path] = []
@@ -832,6 +1017,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         # determination ("I looked, there is nothing"), and collapsing it into
         # this branch would be the same error in the other direction.
         if args.tree and not Path(args.tree).is_dir():
+            # THREE OUTCOMES, AND COLLAPSING ANY TWO OF THEM IS THE DEFECT.
+            #
+            #  pointer SET and broken      -> UNDETERMINED. Somebody said where the
+            #                                 corpus is and was wrong. Never excused.
+            #  nothing set, none local,
+            #    caller says it may live
+            #    elsewhere                 -> NO_CORPUS (rc=0). Nothing to scan, and
+            #                                 nothing is claimed to have been scanned.
+            #  nothing set, none local,
+            #    nobody said that          -> UNDETERMINED. Unchanged: an absent tree
+            #                                 in a repo meant to carry one is exactly
+            #                                 what this branch was written for.
+            env_tree = os.environ.get(CORPUS_ENV)
+            if env_tree:
+                print(f"UNDETERMINED: {CORPUS_ENV}={env_tree} is set and did not "
+                      f"resolve to a readable corpus, so this gate discovered "
+                      f"nothing and scanned nothing. A pointer that is set and "
+                      f"wrong is a broken configuration, not an absent corpus.",
+                      file=sys.stderr)
+                return 2
+            if args.corpus_may_be_absent:
+                print(f"NO_CORPUS: nothing at {args.tree} and {CORPUS_ENV} is "
+                      f"unset. The published corpus lives in its own repository and "
+                      f"this repo is not required to carry it. NOTHING WAS SCANNED "
+                      f"and nothing is claimed — point {CORPUS_ENV} at a clone to "
+                      f"make this gate check something.", file=sys.stderr)
+                return 0
             print(f"UNDETERMINED: --tree {args.tree} is not a directory, so this "
                   f"gate discovered nothing and scanned nothing. A check that "
                   f"could not look has not passed.", file=sys.stderr)
@@ -872,7 +1084,22 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     results: List[FolderResult] = []
     for ic in ic_dirs:
-        results.append(check_ic_level_layout(ic, include_staged=args.include_staged))
+        pre_names: Optional[Set[str]] = None
+        baseline_mode = ""
+        if args.changed_since:
+            # vibe-ic#1538 — read the register of entries that predate this
+            # change. An unreadable baseline grandfathers NOTHING (the strict
+            # direction) and says why, rather than quietly widening the escape.
+            pre_names, baseline_mode = ic_level_entry_names_at(
+                args.changed_since, ic)
+            if pre_names is None:
+                pre_names = set()
+                baseline_mode = (f"NO baseline — it could not be read "
+                                 f"({baseline_mode}), so nothing was "
+                                 f"grandfathered")
+        results.append(check_ic_level_layout(
+            ic, include_staged=args.include_staged,
+            pre_existing_names=pre_names, baseline_mode=baseline_mode))
     for t in targets:
         if not t.exists():
             r = FolderResult(path=str(t))

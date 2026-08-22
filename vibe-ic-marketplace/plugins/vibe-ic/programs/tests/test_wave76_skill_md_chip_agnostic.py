@@ -4,7 +4,7 @@ the chip-AGNOSTIC banner, and zero ACTIVE INSTRUCTION_FIXED hits
 must remain.
 
 Run via:
-    python3 -m pytest plugins/vibe-ic/tests/test_wave76_skill_md_chip_agnostic.py
+    python3 -m pytest plugins/vibe-ic/programs/tests/test_wave76_skill_md_chip_agnostic.py
 """
 from __future__ import annotations
 import re
