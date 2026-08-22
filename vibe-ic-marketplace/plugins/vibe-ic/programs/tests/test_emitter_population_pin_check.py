@@ -1992,6 +1992,60 @@ def test_lower_bound_ness_does_not_spread_between_counters(tmp_path):
             for d in doc["not_determined"]] == [("_lb", 3)], doc
 
 
+# ── ACCEPTANCE: the incident this guard was built for ─────────────────────────
+#
+def _post_route_emitter(n_repairs, denominator):
+    """The shape from THE DEFECT, MEASURED 2026-08-21, at any size."""
+    body = "".join(
+        '        "  if {[catch {repair_%d}]} { incr _prr_refused }\\n"\n' % i
+        for i in range(n_repairs))
+    return ('def block() -> str:\n    return (\n'
+            '        "  set _prr_refused 0\\n"\n' + body
+            + '        "  puts \\"SPEF_REPAIR_PARTIAL: $_prr_refused of %d '
+              'repairs refused\\"\\n"\n'
+              '        "  if {$_prr_refused >= %d} { puts NOT_APPLIED }\\n")\n'
+              % (denominator, denominator))
+
+
+def _post_route_test(pins):
+    return ('from post_route import block\n\n\ndef test_the_partial_line():\n'
+            '    assert "of %d repairs refused" in block()\n' % pins)
+
+
+def test_the_incident_this_guard_was_built_for_is_still_caught(tmp_path):
+    """ACCEPTANCE, reconstructed from this guard's own account of the defect.
+
+    All 49 other tests here are unit-shaped -- they pin a rule, a spelling, a
+    boundary. None replays the incident, so a refactor could keep every one of
+    them green while the guard stopped doing the job it exists for. After a
+    branch that rewrote both of its readers, added a lower-bound rule and four
+    verdict paths, that is worth asserting directly.
+
+    From the module docstring: a lane added a THIRD repair, correctly moved the
+    emitter's printed denominator from two to three, and left the test asserting
+    the OLD ratio.
+
+        the incident      emitter says 3, test pins 2   -> REFUSED (CHECK B)
+        the sibling       a 4th repair, `of 3` unmoved  -> REFUSED (CHECK A)
+        done right        emitter and pin both say 3    -> PASS
+
+    The third row is what stops this from being satisfiable by a guard that
+    refuses everything."""
+    for label, emitter, pin, want in (
+            ("the incident", _post_route_emitter(3, 3), _post_route_test(2), RC_FAIL),
+            ("a fourth repair", _post_route_emitter(4, 3), _post_route_test(3), RC_FAIL),
+            ("the lane done right", _post_route_emitter(3, 3), _post_route_test(3), RC_PASS)):
+        progs = tmp_path / label.replace(" ", "_")
+        tests = progs / "tests"
+        tests.mkdir(parents=True)
+        (progs / "post_route.py").write_text(emitter, encoding="utf-8")
+        (tests / "test_post_route.py").write_text(pin, encoding="utf-8")
+        r = _run(progs, tests)
+        assert r.returncode == want, (
+            f"{label}: rc={r.returncode}, expected {want} -- the guard no longer "
+            f"does the job it was built for:\n{r.stdout}{r.stderr}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
