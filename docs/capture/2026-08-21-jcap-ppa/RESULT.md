@@ -5,12 +5,13 @@ distilled. This lane turns that cluster into records the next blind run can be
 gated by, and it is honest about the largest single finding: **eleven of the
 eighteen end-to-end findings are already enforced by a shipped program or a
 general census test, and were fixed between the run that found them and this
-tree.** Add the smaller `jsonschema` item, which is not one of the eighteen, and
-four more classes drawn from the six lane records, and the count is
-**11 + 1 + 6 = 18** claims examined — of which **seventeen hold and one, F-2, is
-disproven by execution**: its guard's predicate is satisfied by a production
-fallback and cannot fail. Those sixteen produced no record; duplicating them would be
-worse than skipping them.
+tree.** The first table also includes the smaller `jsonschema` item, which is not
+one of the eighteen; the second table adds nine classes drawn from the six lane
+records. Together those two tables are the current source of truth: **twenty-one claims
+examined — twenty hold and one, F-2, is disproven by execution** because its
+guard's predicate is satisfied by a production fallback and cannot fail. No
+duplicate record was produced for these claims; the disproven one is folded into
+the more general A-3 record.
 
 Two of the eighteen were marked *conditional* rather than clean, and one of those
 two, F-2, was later disproven outright. The brief's test
@@ -148,8 +149,10 @@ not resolve inside the installed product (**A-6**).
 
 ## The eighteen, and what is true on this tree
 
-Eleven are ALREADY-PROGRAM. For each, the program or census test that enforces
-it now — checked by reading it, not by trusting the fix note.
+Twelve are ALREADY-PROGRAM:
+eleven of the eighteen end-to-end findings plus the smaller `jsonschema` claim.
+For each, the program or census test that enforces it now was checked by reading
+it, not by trusting the fix note.
 
 | F | already enforced by | general over |
 |---|---|---|
@@ -2490,6 +2493,13 @@ now says so.
 
 ## The ALREADY-PROGRAM claims — can the guards they name actually fail?
 
+<!-- already-program-history-start checkpoint=d6ea69acfdac0d1a9810a1d554ed608802011df5 claims=16 holding=15 -->
+
+> Historical checkpoint (exact):
+> `d6ea69acfdac0d1a9810a1d554ed608802011df5`. This section preserves that
+> checkpoint's 16-claim mutation campaign, where 15 claims held. Its counts are
+> historical measurements, not the current totals.
+
 Sixteen findings produced no record because a program already enforces the class.
 Each was verified by reading that program. But an ALREADY-PROGRAM entry asserts
 **coverage**, and unverified coverage is the subject of three records in this
@@ -2678,6 +2688,8 @@ product tree to prove a point is a verifier that can leave the tree edited, and
 this batch already records what an unnoticed tree write costs. The procedure is
 written down here so it can be repeated by hand; the three commands are in the
 list above.
+
+<!-- already-program-history-end -->
 
 ## The brief's own requirements, audited against the finished records
 
@@ -3930,7 +3942,7 @@ loop exists to stop producing.
 ## Summary
 
 **STATUS**: 49 records emitted and validated — 46 Bucket A, 2 C, 1 T, zero B,
-zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
+zero D. 21 ALREADY-PROGRAM claims examined, 20 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
 re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (51 fast + 4 authoritative). No gate
@@ -3955,7 +3967,7 @@ bucket. The 46 Bucket-A records resolve as:
 
 | resolution | n | records |
 |---|---:|---|
-| ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
+| ALREADY-PROGRAM | 21 claims, **20 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-12, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
 | **EXTRACT-NEW** | 23 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43, A-44, A-45, A-46, A-47 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
@@ -4212,12 +4224,18 @@ route so the next reader can see it was asked rather than skipped.
 
 ## Next
 
+<!-- already-program-history-start checkpoint=4f2d47cf848bd2e69e95f82adba5d6dba5c2fbc1 claims=19 holding=18 -->
+
 **This bundle ships in two pieces, and the split is a batch decision, not a
 technical one.** The branch that carries it into the current batch was FROZEN
 while the batch was being assembled — ten of sixteen member branches had moved
 within two hours, so every re-merge invalidated the report describing it. The
 frozen branch holds 44 records and 19 already-program claims, and it verifies
 `rc 0` on its own tree; that is what lands.
+
+<!-- already-program-history-end -->
+
+<!-- already-program-history-start checkpoint=afbf611ceb1965d0ebcbeb298991f925c43a59d3 claims=20 holding=19 -->
 
 Everything measured after the freeze is on **`next/ppa-capture-followups`**,
 which branches from the frozen tip and rides the following batch. It is not
@@ -4229,6 +4247,8 @@ merged into the frozen branch:
 | new already-program claim | the twentieth — an empty value is not a value, because two empties compare equal |
 | refinements to frozen records | **two** — A-5 gains the demonstration its count was missing, A-36 gains a detector needing no second source |
 | new synthesis | the six-refusals family, and two classes checked and deliberately NOT recorded |
+
+<!-- already-program-history-end -->
 
 The three staleness guards in the verifier — the introducing-sentence count, the
 stated check count, and the per-record reading cost — are **in the frozen
