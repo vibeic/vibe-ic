@@ -2,6 +2,24 @@
 
 host 8hd-3 · started 2026-08-21 · **69 sections (M0–M74); read this header before M0**
 
+> **THE COUNTERS BELOW DECAY, AND HAVE THREE TIMES.** They were last re-derived at
+> the commit that added this note. Every section appended afterwards invalidates
+> them and none of them touches this header — a summary's accuracy is inversely
+> proportional to how much work happens after it is written. **Re-derive before
+> quoting**, with:
+>
+> ```sh
+> P=docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md
+> grep -cE '^## M[0-9]+' $P                                   # sections
+> grep -oE '^## M[0-9]+' $P | grep -oE '[0-9]+' | sort -n | tail -1   # highest M
+> sed -n "/instrument defects, consolidated/,/common shape/p" $P | grep -cE '^\| [0-9]+ \|'
+> sed -n "/^## D\. Corrections/,\$p" $P | grep -cE '^[0-9]+\. \*\*'   # corrections
+> ```
+>
+> That is four commands. **Every stale number in this document — six blockers, a
+> section count, an instrument tally, a corrections list, a red inventory — cost
+> less than that to check and more than that to believe.**
+
 **SCOPE HAS GROWN PAST THE TITLE IT STARTED WITH.** This began as RUN 8 —
 "v1.11.62 and the ownership question" — and M0 below still states that premise,
 correctly, as the premise OF RUN 8. The document now runs to M36 and the branch
