@@ -327,3 +327,54 @@ strictness.
 The headline result is unchanged by the hardening: pointer at the real landing
 checkout, `--collect-only` over the same 55 modules gives **1362 collected, 0
 errors** (1357 + the 5 new cases), against 52 collected / 52 errors on `main`.
+
+## LEDGER ROW: what became visible once collection stopped dying
+
+Making the corpus readable makes tests run that never ran, and some of them fail.
+Per the standing ruling — *a gate going NOT CHECKED → FAIL because it can finally
+SEE a real corpus is PROGRESS; it lands with a ledger row, and the exception is
+an instance the batch INTRODUCED* — here is the row, and the work establishing
+which kind it is.
+
+**The finding.** `tests/test_citation_routing_is_true.py` fails **4** cases with
+the pointer bound at the real (zero-cell) landing checkout. The failures are
+`assert C.main(["--root", str(repo)]) == 0` returning **2**, over a synthetic
+repo the test builds in its own `tmp_path`. The test names its own `--root`;
+`citation_routing_is_true_check` also consults `$VIBE_IC_BENCHMARK_DATA` through
+`_corpus_location`, and the ambient pointer reaches a run that named its subject
+explicitly. It is a **test-hermeticity gap**, not a corpus defect — the root
+cause below the "rc 2 instead of 0" is not diagnosed here and is not claimed to
+be.
+
+**It is NOT introduced by this branch, and that is measured three ways:**
+
+| control | main | this branch |
+|---|---|---|
+| the pinned 10 modules, **no pointer** | 201 passed, 17 skipped | 201 passed, 17 skipped — *identical* |
+| `test_citation_routing_is_true.py`, pointer at a corpus **with 4 cells** (`146d665`, so main survives collection) | 3 failed, 15 passed | 3 failed, 15 passed — *identical* |
+| does the failing program import either edited file? | — | **no** — `citation_routing_is_true_check` imports neither `tests/_published_corpus` nor `benchmark_evidence_structure_check` |
+
+The first control shows the default configuration is untouched. The second is the
+decisive one: bound at a corpus that main can also read, both trees produce the
+same verdict, so the difference is the corpus, never the code. The third shows
+there is no path by which this branch could reach that program at all.
+
+**Why main shows nothing in the failing configuration.** Pointer at the real
+zero-cell corpus, those same 10 modules on `main` give *10 errors during
+collection, 0 tests run*. There is no main-side verdict to compare against —
+which is the defect this branch repairs, and the reason the row below it was
+never seen.
+
+**Not fixed here, deliberately.** The fix is to make the check hermetic against
+an ambient pointer when `--root` is given, which is a change to a program this
+branch does not otherwise touch, in a seam (`_corpus_location.resolve`'s
+named-vs-env precedence) whose whole purpose is announcing which tree won. That
+deserves its own change and its own red, not a rider on this one.
+
+**A measurement of mine that was void, and is corrected here.** An earlier count
+in this record compared "10 needs_corpus modules" before and after the hardening
+and got 196 → 302 passed. The file list came from `grep -rl needs_corpus | head
+-10` and the *set changed under me*: this branch's own new test files mention
+`needs_corpus` in their prose, so they entered the grep and displaced others from
+the window. The integer was meaningless without the set it counted. Every figure
+in the table above is over an explicitly pinned, identical file list.
