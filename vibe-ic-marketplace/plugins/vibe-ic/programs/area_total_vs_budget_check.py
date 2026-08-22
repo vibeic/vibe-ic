@@ -120,7 +120,7 @@ left standing (2026-08-22):
      unit by cross-checking each cell's Liberty `area` against its LEF
      `SIZE w BY h`, which is in microns by the LEF spec. MEASURED over all five
      libraries the registry resolves in the shipped EDA image: every one
-     establishes um^2, on 42 to 405 cells apiece, median 1.000000. Two carry a
+     establishes um^2, on 42 to 428 cells apiece, median 1.000000. Two carry a
      single per-cell outlier — a filler at exactly 0.5, one scan flop at
      exactly 10/9 — which are DISCLOSED and do not unmake a library's unit: a
      unit error is a COMMON factor across the population, never one cell.
