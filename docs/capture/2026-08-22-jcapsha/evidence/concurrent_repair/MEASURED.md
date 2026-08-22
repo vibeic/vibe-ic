@@ -42,6 +42,36 @@ Twenty-six seconds, no message to the editor, no prompt, no record on the
 editing side. The edit was not recoverable from git: it was never committed,
 which is the precondition the rule selects for.
 
+## The tool's own report, and the consequence that is worse than the loss
+
+The run finished after the control above, and it names the file itself
+(`gate_own_report.txt`):
+
+    [GATE_CORRUPTED_CHECKOUT] no retired pytest plugin request
+        this gate left the WORKING CHECKOUT modified while being driven (it
+        exited normally). Every gate declared after it would have measured
+        that. Restored: docs/capture/2026-08-22-jcapsha/evidence/
+        rotation_axis/hv.tcl.
+
+So the destroyed edit is only half of it. **The misattribution also
+MANUFACTURED A FINDING AGAINST AN INNOCENT GATE.** The gate named there did
+not modify the checkout; this lane's editor did, in the window while that gate
+happened to be the one running. The report says it "left the WORKING CHECKOUT
+modified", classifies it `GATE_CORRUPTED_CHECKOUT`, and warns that every gate
+declared after it would have measured the contamination.
+
+A maintainer reading that would go and look for a write in a gate that has
+none. That is the more expensive failure of the two: lost work is at least
+visible to the person who lost it, while a false accusation is delivered to
+somebody with no way to tell it from the five real ones beside it in the same
+list.
+
+It also means the enclosing verdict is not clean data. This run reported
+`[FAIL] 17 of 81 probed corpus gate(s) ... 6 GATE_CORRUPTED_CHECKOUT,
+11 HOST_DEPENDENT_VERDICT`. Exactly one of those six is this lane's editor and
+not a gate. The other sixteen are not judged here and nothing above should be
+read as a claim about them.
+
 ## What makes this the same shape as the rest of this bundle
 
 The docstring states an attribution as a proof — "provably nothing else" — and
