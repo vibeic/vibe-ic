@@ -120,11 +120,61 @@ def find_unsquashed(repo: Path, limit: int = 200) -> Tuple[List[Dict], int]:
             continue                       # a real landing; carries content
         findings.append({
             "version_commit": top_sha[:9],
+            "version_sha": top_sha,
             "version_subject": top_subject[:100],
             "authoring_commit": low_sha[:9],
             "authoring_subject": low_subject[:100],
         })
     return findings, len(rows)
+
+
+#: The ref that decides whether a finding is still this operator's to fix.
+PUBLISHED_REF = "refs/remotes/origin/main"
+
+
+def published_head(repo: Path, ref: str = PUBLISHED_REF) -> Optional[str]:
+    """The commit everyone else already has, or None if it cannot be resolved.
+
+    None is NOT "nothing is published". It is "this program could not find out",
+    and the caller must treat the two differently — see :func:`split_by_reach`.
+    """
+    rc, out = _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    sha = out.strip()
+    return sha if rc == 0 and sha else None
+
+
+def split_by_reach(repo: Path, findings: List[Dict],
+                   ref: str = PUBLISHED_REF) -> Tuple[List[Dict], List[Dict], Optional[str]]:
+    """Split findings into (already published, still local, why-unknown).
+
+    A finding reachable from the published ref is HISTORY. Nobody can squash it
+    now without rewriting a branch other people have, so refusing it does not
+    prevent the defect — it only bans every future landing until the commit
+    scrolls out of `--limit`. A gate that refuses every landing is the ban this
+    repo already learned to distrust: `landing_merge_verdict.py` says so in its own
+    docstring, and the reason it says so is that a ban teaches the operator to
+    bypass, which is how the landing path lost its gate in the first place.
+
+    A finding NOT reachable from it is the one this operator can still fix with
+    `git reset --soft <base>` — the exact missing step in #459 — and it is the only
+    moment the defect can be prevented. That one still REFUSES.
+
+    If the ref cannot be resolved the split is UNKNOWN, and the caller degrades
+    toward the stricter side: everything counts as still-local and refuses. Reading
+    an unresolvable ref as "it must all be published" would turn one absent ref into
+    a blanket exemption.
+    """
+    head = published_head(repo, ref)
+    if head is None:
+        return [], list(findings), (
+            f"{ref} does not resolve here, so no finding could be shown to be "
+            f"already published; every one is judged as still local")
+    published, local = [], []
+    for f in findings:
+        sha = f.get("version_sha") or f.get("version_commit")
+        rc, _ = _git(repo, "merge-base", "--is-ancestor", sha, head)
+        (published if rc == 0 else local).append(f)
+    return published, local, None
 
 
 def head_is_one_commit(repo: Path, base: str,
@@ -224,6 +274,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "commit (see head_is_one_commit)")
     ap.add_argument("--limit", type=int, default=200,
                     help="history mode: how many commits to examine")
+    ap.add_argument("--published-ref", default=PUBLISHED_REF,
+                    help="history mode: the ref that decides whether a finding is "
+                         "still fixable. A finding reachable from it is history and "
+                         "is reported; one that is not is refused.")
     ap.add_argument("--json", dest="json_out", default=None)
     a = ap.parse_args(argv)
     repo = Path(a.repo).resolve()
@@ -240,10 +294,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0 if ok else (2 if n < 0 else 1)
 
     findings, examined = find_unsquashed(repo, a.limit)
-    if a.json_out:
-        Path(a.json_out).write_text(json.dumps(
-            {"mode": "history", "commits_examined": examined,
-             "findings": findings}, indent=2) + "\n")
 
     if examined == 0:
         # This program's own denominator. Reporting clean over an unread
@@ -252,17 +302,49 @@ def main(argv: Optional[List[str]] = None) -> int:
               "is NOT a pass, no landing was examined.", file=sys.stderr)
         return 2
 
-    for f in findings:
+    published, local, unknown_why = split_by_reach(repo, findings, a.published_ref)
+    if a.json_out:
+        # The split is in the record, not only the total: a reader who sees one
+        # number cannot tell a landing that must be fixed from one that cannot be.
+        Path(a.json_out).write_text(json.dumps(
+            {"mode": "history", "commits_examined": examined,
+             "published_ref": a.published_ref,
+             "findings": findings,
+             "unpublished_findings": local,
+             "published_findings": published,
+             "reach_unknown": unknown_why}, indent=2) + "\n")
+
+    for f in local:
         print(f"  [UNSQUASHED_LANDING] {f['version_commit']} carries only the "
               f"version manifests", file=sys.stderr)
         print(f"      sitting on {f['authoring_commit']} "
               f"{f['authoring_subject'][:70]}", file=sys.stderr)
+        print(f"      NOT YET PUBLISHED — fix it with "
+              f"`git reset --soft <base>` and recommit as one.", file=sys.stderr)
+    for f in published:
+        print(f"  [ALREADY_PUBLISHED] {f['version_commit']} on "
+              f"{f['authoring_commit']} — recorded, not refused; squashing it now "
+              f"would rewrite a branch other people have.", file=sys.stderr)
+    if unknown_why:
+        print(f"  [REACH_UNKNOWN] {unknown_why}", file=sys.stderr)
 
-    if findings:
-        print(f"[FAIL] landing_is_one_commit: {len(findings)} landing(s) of "
-              f"{examined} commit(s) examined left the authoring commit AND a "
-              f"version commit on the branch.", file=sys.stderr)
+    if local:
+        # Refuse ONLY for what this operator can still change. This is the one
+        # moment the defect is preventable, and it stays a hard refusal.
+        print(f"[FAIL] landing_is_one_commit: {len(local)} unpublished landing(s) "
+              f"of {examined} commit(s) examined left the authoring commit AND a "
+              f"version commit. ({len(published)} further finding(s) are already on "
+              f"{a.published_ref} and are reported, not refused.)", file=sys.stderr)
         return 1
+    if published:
+        # A finding nobody can act on must not hold the gate shut forever. It is
+        # still printed above, with its shas, so it is on the record — the record
+        # is what a check like this is for once the commit is immutable.
+        print(f"[PASS] landing_is_one_commit: {examined} commit(s) examined; "
+              f"{len(published)} historical unsquashed landing(s) are already "
+              f"published and are REPORTED above. No unpublished landing has the "
+              f"defect.", file=sys.stderr)
+        return 0
     print(f"[PASS] landing_is_one_commit: {examined} commit(s) examined, every "
           f"landing is a single squashed commit.", file=sys.stderr)
     return 0

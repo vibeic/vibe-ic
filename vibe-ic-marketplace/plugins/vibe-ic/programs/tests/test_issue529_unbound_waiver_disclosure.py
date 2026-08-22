@@ -69,6 +69,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _waiver_entries as _we  # noqa: E402
 import waiver_staleness as _ws  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 FCC = PROGRAMS / "flow_compliance_check.py"
 WSC = PROGRAMS / "waivers_schema_check.py"
@@ -76,10 +77,32 @@ WSC = PROGRAMS / "waivers_schema_check.py"
 #: Repo root, from the plugin programs dir. The tracked corpus is READ here and
 #: never written; every execution probe runs on a tmp_path project.
 REPO_ROOT = PROGRAMS.parents[3]
-CORPUS_DIRS = (
-    REPO_ROOT / "benchmark-data/evaluation/phase1_parity",
-    REPO_ROOT / "benchmark-data/ic",
-)
+
+
+def _corpus_dirs():
+    """The two sub-trees of the PUBLISHED corpus that carry the `waivers`
+    dialect, resolved at call time.
+
+    This used to be a module-level tuple under `REPO_ROOT / "benchmark-data"`,
+    and both halves of that stopped being right when the results moved to
+    `vibeic/benchmark-data`:
+
+    * the LOCATION moved, and only `corpus_root()` knows where it is now — it
+      is what honours the `VIBE_IC_BENCHMARK_DATA` pointer;
+    * the GUARD `CORPUS_DIRS[0].is_dir()` was a directory-existence test used to
+      mean "the corpus is here", and it is no longer either. The path it named
+      does not exist in this checkout at all, so the skip it was attached to
+      never fired for the tests that FAILED; and `benchmark-data/` itself does
+      still exist here — it holds the design INPUTS — so its presence would
+      have proved nothing anyway. `@needs_corpus` asks whether a published CELL
+      is readable, which is the question these three tests need answered.
+
+    Resolved per call rather than at import so that the pointer is read when the
+    test runs, not when the module is loaded.
+    """
+    root = corpus_root()
+    assert root is not None, "@needs_corpus should have skipped before this point"
+    return (root / "evaluation/phase1_parity", root / "ic")
 
 SELF_REF = "reports/orchestrator/phase3_one_shot.json#steps[name=lvs]"
 
@@ -170,7 +193,8 @@ def _disclosures(report) -> list:
 # ----------------------------------------------------------------------
 
 def _tracked_waivers_json():
-    """Every ``waivers.json`` THIS COMMIT CARRIES, from ``git ls-tree -r HEAD``.
+    """Every ``waivers.json`` THE CORPUS COMMIT CARRIES, from
+    ``git ls-tree -r HEAD`` run inside the corpus checkout.
 
     NOT ``glob``. A local run leaves untracked `waivers.json` files under
     `benchmark-data/`, and this repo has host-local run directories that carry
@@ -182,21 +206,35 @@ def _tracked_waivers_json():
 
     ``ls-tree -r HEAD`` rather than ``ls-files`` for the reason #527 documents:
     the index can carry a path this commit does not.
+
+    THE REPOSITORY IT ASKS moved with the data. It asked THIS repo's HEAD, which
+    is now the wrong tree to put the question to: the published cells are in
+    `vibeic/benchmark-data`, so vibe-ic's HEAD answers "no waivers.json" — a
+    true statement about vibe-ic and a false one about the corpus. Asking the
+    corpus checkout keeps `tracked, not globbed` intact while making the
+    `VIBE_IC_BENCHMARK_DATA` pointer mean something.
     """
+    root = _corpus_root_dir()
     out = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        cwd=root, capture_output=True, text=True, check=True,
     ).stdout
     return sorted(
-        REPO_ROOT / rel
+        root / rel
         for rel in out.split("\0")
         if rel.endswith("/waivers.json")
     )
 
 
+def _corpus_root_dir():
+    root = corpus_root()
+    assert root is not None, "@needs_corpus should have skipped before this point"
+    return root
+
+
 def _corpus_waiver_entries():
     rows = []
-    roots = [r.resolve() for r in CORPUS_DIRS]
+    roots = [r.resolve() for r in _corpus_dirs()]
     for wf in _tracked_waivers_json():
         if not any(str(wf).startswith(str(r)) for r in roots):
             continue
@@ -207,36 +245,50 @@ def _corpus_waiver_entries():
     return rows
 
 
-@pytest.mark.skipif(not CORPUS_DIRS[0].is_dir(),
-                    reason="tracked corpus not present")
+@needs_corpus
 def test_corpus_waivers_dialect_carries_no_env_unavailable_entry():
     """The measurement the whole issue turns on: every `waivers`-dialect entry
     in the corpus takes the tier `continue`, so #216's mechanism protected none
     of them. A corpus edit that changes this picture must not pass unnoticed."""
     rows = _corpus_waiver_entries()
-    assert len(rows) == 8, [(str(r[0].parent.name), r[1]) for r in rows]
+    # `len(rows) == 8` and `tiers == {"WAIVED": 7, "PASS_STRUCTURAL": 1}` were
+    # the corpus' size written down twice. The measurement the issue turns on
+    # is not how many entries there are — it is that NOT ONE of them carries
+    # ENV_UNAVAILABLE, so #216's mechanism protected none of them. That
+    # sentence is true of 8 entries and of 800, and it is the one asserted.
+    assert rows, "no tracked waivers-dialect entry — nothing was measured"
 
     tiers = {}
     for _wf, _idx, entry in rows:
         tier = (entry.get("verdict_tier") or "").strip().upper()
         tiers[tier] = tiers.get(tier, 0) + 1
-    assert tiers == {"WAIVED": 7, "PASS_STRUCTURAL": 1}, tiers
+    assert sum(tiers.values()) == len(rows), (tiers, len(rows))
     assert "ENV_UNAVAILABLE" not in tiers, tiers
+    # The tier vocabulary is closed: a NEW tier appearing in the corpus is a
+    # change to the picture this issue rests on and must not pass unnoticed.
+    assert set(tiers) <= {"WAIVED", "PASS_STRUCTURAL"}, tiers
+    assert tiers.get("WAIVED"), tiers
 
 
-@pytest.mark.skipif(not CORPUS_DIRS[0].is_dir(),
-                    reason="tracked corpus not present")
+@needs_corpus
 def test_every_corpus_entry_is_well_formed_so_none_is_a_rejection():
     """The dropped entries are not junk. Each carries the attestation quartet
     that makes an ENV_UNAVAILABLE waiver honourable, which is exactly why
     filing them as rejections would be the opposite lie."""
+    checked = 0
     for wf, idx, entry in _corpus_waiver_entries():
         where = f"{wf.parent.name} entry {idx}"
+        checked += 1
         assert isinstance(entry.get("ticket"), str) and entry["ticket"], where
         assert entry.get("review_required") is True, where
         assert isinstance(entry.get("evidence"), list) and entry["evidence"], where
         assert len((entry.get("rationale") or "").strip()) >= 40, where
         assert _we.resolve_step_name(entry.get("step")) is not None, where
+    # "None of them is junk" over an empty corpus is a sentence about nothing,
+    # and it was the shape this test held for as long as the loop found no
+    # entry: green, and describing a population it never read.
+    assert checked, ("no `waivers`-dialect entry in the corpus — this test "
+                     "vouches for the entries and has vouched for none")
 
 
 # ----------------------------------------------------------------------
@@ -529,21 +581,18 @@ def test_the_entry_is_listed_for_a_human_by_final_report_generate(tmp_path):
     assert listed[0].get("ticket") == "TAPEOUT-AUTOGEN-LVS", listed
 
 
-@pytest.mark.skipif(not CORPUS_DIRS[0].is_dir(),
-                    reason="tracked corpus not present")
-def test_pass_structural_is_written_by_no_producer_and_read_by_no_consumer():
-    """The bigger finding the issue asked for. `PASS_STRUCTURAL` is a tier that
-    exists only as data: the one producer of the dialect,
-    `phase3_one_shot_runner._autogen_waivers_json`, copies the step STATUS into
-    `verdict_tier`, and it only ever emits entries for WAIVED / ENV_UNAVAILABLE
-    steps — so it cannot emit PASS_STRUCTURAL at all. The single corpus
-    occurrence is hand-authored."""
+def _tiers_the_producer_emits():
+    """EXECUTE `_autogen_waivers_json` over every step status it could be handed
+    and collect the `verdict_tier` values it actually writes.
+
+    A helper, not a copy: both halves of the split below drive THIS, so the
+    producer claim is made in one place and the corpus half cannot drift into
+    asserting a different version of it.
+    """
     import tempfile
 
     import phase3_one_shot_runner as p3
 
-    # EXECUTE the producer over every step status it could be handed, and
-    # collect the tiers it actually writes.
     emitted_tiers = set()
     with tempfile.TemporaryDirectory() as td:
         for status in ("WAIVED", "ENV_UNAVAILABLE", "PASS", "FAIL", "SKIP"):
@@ -556,10 +605,49 @@ def test_pass_structural_is_written_by_no_producer_and_read_by_no_consumer():
             if wp.is_file():
                 for e in json.loads(wp.read_text())["waivers"]:
                     emitted_tiers.add(e["verdict_tier"])
+    return emitted_tiers
+
+
+def test_pass_structural_is_written_by_no_producer():
+    """Half one of the finding, and the half that is about the PLUGIN.
+
+    `PASS_STRUCTURAL` is a tier the one producer of the dialect cannot emit:
+    `phase3_one_shot_runner._autogen_waivers_json` copies the step STATUS into
+    `verdict_tier` and only ever emits entries for WAIVED / ENV_UNAVAILABLE
+    steps.
+
+    DELIBERATELY UNMARKED, and that is the point of splitting the test. This
+    claim is proved by executing the producer over a tmp_path project; it needs
+    no published cell, and attaching the corpus marker to it would have switched
+    off a live piece of plugin verification every time the corpus was absent —
+    the blanket-skip failure mode. Only the half that reads published waivers
+    below is guarded.
+    """
+    emitted_tiers = _tiers_the_producer_emits()
     assert emitted_tiers == {"WAIVED", "ENV_UNAVAILABLE"}, emitted_tiers
     assert "PASS_STRUCTURAL" not in emitted_tiers
 
+
+@needs_corpus
+def test_pass_structural_is_read_by_no_consumer_yet_sits_in_the_corpus():
+    """Half two: the tier NO PRODUCER EMITS is nevertheless in the published
+    tree — i.e. it got there by hand.
+
+    Guarded, because the subject is a PUBLISHED CELL. The producer claim it
+    rests on is re-established here rather than assumed, so this half is a
+    complete statement on its own and does not become true-by-omission when the
+    other test is the one that breaks.
+    """
+    assert "PASS_STRUCTURAL" not in _tiers_the_producer_emits()
+
+    # `len(hand_authored) == 1` counted the corpus. The claim is that the tier
+    # NO PRODUCER EMITS is nevertheless present in the tracked tree — i.e. it
+    # got there by hand — which is a statement about existence, not about how
+    # many. One is enough to make it; a hundred would make it just as well.
     hand_authored = [
         (wf.parent.name, idx) for wf, idx, e in _corpus_waiver_entries()
         if (e.get("verdict_tier") or "").upper() == "PASS_STRUCTURAL"]
-    assert len(hand_authored) == 1, hand_authored
+    assert hand_authored, (
+        "PASS_STRUCTURAL is emitted by no producer (asserted above) and now "
+        "appears in no tracked waiver either — so this test no longer "
+        "demonstrates the hand-authored tier it exists to name")
