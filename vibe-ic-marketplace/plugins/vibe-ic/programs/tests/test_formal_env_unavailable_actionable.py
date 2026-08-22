@@ -1,7 +1,7 @@
 """#216 — the formal (Step 5) environment gap must be ACTIONABLE, and a
 waived formal step must defer only its GENUINE dependents.
 
-Measured defect (SN2025): Step 5 (formal) reported an `ENV_UNAVAILABLE`
+Measured defect (EXAMPLE): Step 5 (formal) reported an `ENV_UNAVAILABLE`
 waiver that was a dead end. Three separate faults produced it:
 
   1. `formal_property_run` could not tell "the proof engine was never
@@ -80,7 +80,7 @@ def _run_formal(project: Path, container: str):
         [sys.executable, str(_FORMAL), str(project),
          "--harness", str(harness), "--rtl", str(rtl),
          "--top", "formal_ctr", "--container", container],
-        capture_output=True, text=True, timeout=900,
+        capture_output=True, text=True, timeout=60,
     )
     return r.returncode, r.stdout, r.stderr
 
@@ -191,7 +191,7 @@ def test_absent_env_gate_fails_but_names_the_gap(tmp_path):
     _run_formal(tmp_path, _ABSENT_CONTAINER)
     gate = _PROGRAMS / "formal_proof_evidence_check.py"
     r = subprocess.run([sys.executable, str(gate), str(tmp_path)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     report = json.loads(r.stdout)
 
     assert report["verdict"] == "FAIL"
@@ -218,7 +218,7 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
 
     NOTE ON INTENT: this is a CHARACTERIZATION test, not a defect detector.
     It passes on pre-fix code too — and that is precisely the finding. The
-    formal environment was never actually absent on the SN2025 run host, so
+    formal environment was never actually absent on the EXAMPLE run host, so
     an `ENV_UNAVAILABLE` verdict for Step 5 was never supported by the
     environment. This test pins that fact down so a future regression that
     starts declaring the environment unavailable while sby is right there
@@ -255,7 +255,7 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
 _COMPLETE_WAIVER = {
     "step": "formal",
     "verdict_tier": "ENV_UNAVAILABLE",
-    "ticket": "SN2025-FORMAL-1",
+    "ticket": "EXAMPLE-FORMAL-1",
     "review_required": True,
     "evidence": ["phase2/stage1/formal/formal_env_unavailable.json"],
     "rationale": (
@@ -275,29 +275,41 @@ def _compliance(project: Path, out_json: Path):
     rc = subprocess.run(
         [sys.executable, str(_COMPLIANCE), str(project), "--strict",
          "--json", str(out_json)],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, timeout=60,
     )
     return rc.returncode, json.loads(out_json.read_text())
 
 
 def _declared_formal_dependents() -> set:
-    """Steps that transitively depend on Step 5 per the flow's declared
-    `blocks_on` edges. Derived from the YAML so the assertion survives a
-    step renumber instead of pinning magic numbers."""
+    """Steps the flow DECLARES depend on Step 5's artefacts.
+
+    vibe-ic#776 — this used to return the transitive `blocks_on` closure, which
+    is the very thing the test below calls "an over-broad cascade would itself
+    be the defect". `blocks_on` is an ORDERING edge: on this flow it makes 1221
+    (step, ancestor) pairs and only 6 of them carry a declared dependency. The
+    closure returned {6, 39} for Step 5, and neither step's gate nor its
+    required_outputs names anything Step 5 writes (`phase2/stage1/formal/*.sby`,
+    `phase2/stage1/formal/results.json`,
+    `phase2/stage1/sim_full_stack/results.json`) — Step 6 builds an FPGA image,
+    Step 39 recompiles it and tests on board.
+
+    Derived from the producer's own relation so it cannot drift away from what
+    the checker does, and so a real declaration added to the flow later shows up
+    here as a widened expectation rather than a silent one.
+    """
     doc = yaml.safe_load(_FLOW_YAML.read_text())
     steps = [s for s in doc["steps"]
              if isinstance(s, dict) and s.get("id") is not None]
-    parents = {s["id"]: list(s.get("blocks_on") or []) for s in steps}
-    desc, changed = set(), True
-    while changed:
-        changed = False
-        for sid, ps in parents.items():
-            if sid in desc:
-                continue
-            if 5 in ps or any(p in desc for p in ps):
-                desc.add(sid)
-                changed = True
-    return desc
+    sys.path.insert(0, str(_COMPLIANCE.parent))
+    import flow_compliance_check as _fcc
+
+    ids = [s["id"] for s in steps if str(s["id"]) != "P0"]
+    results = [_fcc.StepResult(id=i, name="", stage="",
+                               status=("WAIVED" if i == 5 else "MISSING"))
+               for i in ids]
+    info = _fcc._attribute_cascade_verdicts(results, steps,
+                                            {5: {"ticket": "T"}})
+    return {sid for sid, _parent, _ticket in info["deferred_by_upstream"]}
 
 
 def test_formal_env_waiver_binds_to_the_formal_step(tmp_path):
@@ -347,6 +359,15 @@ def test_cascade_defers_only_genuinely_dependent_steps(tmp_path):
     for s in waived["steps"]:
         if s["status"] == "DEFERRED-BY-UPSTREAM":
             assert "deferred-by-upstream(5" in s["cascade_note"]
+
+    # #776 — the ordering fact is not thrown away, it is recorded WITHOUT
+    # softening: the steps ordered behind step 5 say so and stay MISSING. This
+    # is what keeps the assertions above from passing vacuously.
+    ordered_behind = {s["id"] for s in waived["steps"]
+                      if "waived-ancestor-undeclared(5)" in s["cascade_note"]}
+    assert ordered_behind, "the ordering fact must still be attributed"
+    for sid in ordered_behind:
+        assert waived_status[sid] == "MISSING", (sid, waived_status[sid])
 
 
 def test_waived_formal_never_counts_as_a_pass_downstream(tmp_path):

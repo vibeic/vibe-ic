@@ -193,9 +193,9 @@ def test_synth_bound_frontends_define_yosys():
             # which case forcing it would synthesise a behavioural array in
             # place of the macro). -DYOSYS — what this pin is about — is
             # unconditional at every synth-bound call site, as before.
-            (p3, ["read_slang --single-unit {slang_files} --top {top} {_simdef}-DYOSYS",
+            (p3, ["read_slang {slang_files} --top {top} {_simdef}-DYOSYS",
                   "sv2v {_simdef}-DYOSYS {sv2v_in}",
-                  "read_slang --single-unit {_syn_files} --top {top} -DSYNTHESIS -DYOSYS"]),
+                  "read_slang {_syn_files} --top {top} -DSYNTHESIS -DYOSYS"]),
             (p2, ["-DSYNTHESIS -DYOSYS {inc_flag}; ",
                   "sv2v -DSYNTHESIS -DYOSYS {inc_flag} {reads_join}"])):
         for s in snippets:
@@ -235,14 +235,14 @@ def test_sv2v_with_dyosys_strips_tri_from_wrapper(tmp_path):
         r = subprocess.run(["docker", "exec", container, "sh", "-c",
                             f"PATH=/foss/tools/bin:$PATH "
                             f"sv2v -DSIMULATION -DYOSYS {tag}/w.v"],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stderr
         assert "tri0" not in r.stdout and "tri1" not in r.stdout, (
             "-DYOSYS must select the plain-combine arm (yosys-safe)")
         r2 = subprocess.run(["docker", "exec", container, "sh", "-c",
                              f"PATH=/foss/tools/bin:$PATH "
                              f"sv2v -DSIMULATION {tag}/w.v"],
-                            capture_output=True, text=True, timeout=120)
+                            capture_output=True, text=True, timeout=60)
         assert "tri0" in r2.stdout, (
             "without -DYOSYS the sim arm keeps the tri pull (iverilog path)")
     finally:

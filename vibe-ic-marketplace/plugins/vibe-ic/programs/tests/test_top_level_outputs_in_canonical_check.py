@@ -24,9 +24,19 @@ def test_help():
 
 
 def test_vacuous_pass_empty_project(tmp_path):
+    """#528 — rc 2, and the disclosure in the form the CONSUMER matches.
+
+    See `test_reports_subfolder_taxonomy_check` for the full reasoning: the
+    old pair of assertions (`rc == 0`, `"VACUOUS_PASS" in stdout`) was
+    satisfied by a `[VACUOUS_PASS]` token that
+    `flow_compliance_check._stdout_signals_vacuous` cannot read, so it pinned
+    the defect rather than the contract.
+    """
     r = _run(tmp_path)
-    assert r.returncode == 0
-    assert "VACUOUS_PASS" in r.stdout
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    snippet = (r.stdout[-300:] + "\n" + r.stderr[-300:]).strip()
+    assert any(ln.lstrip().startswith("VACUOUS_PASS")
+               for ln in snippet.splitlines()), snippet
 
 
 def test_pass_canonical_only(tmp_path):

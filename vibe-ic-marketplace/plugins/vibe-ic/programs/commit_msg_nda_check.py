@@ -75,41 +75,21 @@ def token_roles() -> Dict[str, str]:
 
 def message_regex() -> "re.Pattern[str]":
     """Case-insensitive alternation over EVERY NDA token (SKU family + foundry
-    brands), longest-first so the most specific token wins the match.
+    brands + IP vendor/part), longest-first so the most specific token wins.
 
     Deliberately WIDER than `nda_source_regex()`: that one covers the process /
     SKU codename family, while a commit message leaks just as badly by naming
-    the foundry BRAND ("...built at <brand>..."). Prose is also less regular
-    than source, so the boundaries are relaxed to catch a token glued to
-    punctuation or a hyphenated word (`<TOKEN>-macro`, `(<TOKEN>)`) — the real
-    leak was mid-sentence next to a comma.
-
-    A brand token that contains a space is matched separator-insensitively, so
-    the spaced, unspaced, hyphenated and underscored forms of the same brand all
-    hit rather than only the exact spelling in the encoded store."""
-    toks = sorted(set(token_roles().values()), key=len, reverse=True)
-    alts = []
-    for t in toks:
-        # Any run of whitespace in a brand token matches any whitespace run.
-        alts.append(r"[\s_\-]+".join(re.escape(p) for p in t.split()))
-    # (?<![0-9a-z]) / (?![0-9a-z]) — reject a hit that is merely a substring of a
-    # longer alphanumeric word, but still allow punctuation/hyphen neighbours.
-    return re.compile(r"(?<![0-9a-zA-Z])(" + "|".join(alts) + r")(?![0-9a-zA-Z])",
-                      re.IGNORECASE)
+    the foundry / IP BRAND ("...built at <brand>..."). Delegates to the shared
+    `_commercial_pdk.nda_content_regex()` so the message guard and the diff
+    guard (`nda_diff_scan_check`) can never drift — one token store, one
+    boundary rule, both scanners."""
+    return _cpdk.nda_content_regex()
 
 
 def _role_of(matched: str) -> str:
     """Reverse-map a matched substring to its token ROLE, for masked reporting.
-    Normalizes case and whitespace/underscore/hyphen, so a two-word brand
-    written in any separator or capitalization style resolves to its role."""
-    def norm(s: str) -> str:
-        return re.sub(r"[\s_\-]+", " ", s).strip().lower()
-
-    n = norm(matched)
-    for role, tok in token_roles().items():
-        if norm(tok) == n:
-            return role
-    return "unknown"
+    Delegates to the shared `_commercial_pdk.nda_role_of()`."""
+    return _cpdk.nda_role_of(matched)
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +262,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     if findings:
         _print_findings(findings, scanned)
         return 1
+    if scanned == 0:
+        # An EMPTY range is not a clean range (vibe-ic#447/#449). Measured
+        # before wiring this into CI: `HEAD..HEAD` returned rc 0 PASS having
+        # read zero commit messages, byte-indistinguishable from a real clean
+        # scan of 33. A malformed or already-merged range would have silenced
+        # the guard this repo added after a real SKU leak.
+        #
+        # The other bad ranges already refuse: an all-zero SHA (force-push /
+        # first push of a branch) and an unknown ref both exit 2.
+        print("NOTHING_SCANNED: the range names 0 commit(s) — a clean result "
+              "over an empty range is not a clean result; check the range.",
+              file=sys.stderr)
+        return 2
     print(f"PASS: no NDA foundry / SKU / process token in {scanned} "
           f"commit message(s)")
     return 0

@@ -67,6 +67,15 @@ except Exception:  # pragma: no cover
     import sdd_atpg_run as _sdd  # type: ignore
 
 
+# Where the phase3 producer leaves a record when no coverage artefact could be
+# produced (vibe-ic#235). An absent artefact WITH one of these is BLOCKED (the
+# step said why); an absent artefact WITHOUT one is FAIL (nothing knows whether
+# it ever ran). Mirrors transition_coverage_check's DT1 channel.
+_NOT_RUN_RECORDS = (
+    "phase2/stage2/dft/sdd_atpg_not_run.json",
+    "reports/phase2/dft/sdd_atpg_not_run.json",
+)
+
 _PROGRAM = "sdd_coverage_check"
 _VERSION = "1.0.0"
 # Small tolerance to absorb float rounding only — NEVER a coverage slack.
@@ -126,16 +135,39 @@ def _recount(records: list, margin_ns) -> dict:
 
 
 def evaluate(blob: Optional[dict], min_slack_weighted: float = 0.0,
-             tol: float = COVERAGE_TOL_DEFAULT) -> dict:
+             tol: float = COVERAGE_TOL_DEFAULT,
+             not_run_record: Optional[dict] = None) -> dict:
     """Pure evaluator. Recomputes SDD strong/weak/undetected + coverage from the
     per-fault slack list and re-derives the verdict. NEVER trusts a written
-    bucket or coverage; NEVER counts a high-slack path as strong. chip-AGNOSTIC."""
+    bucket or coverage; NEVER counts a high-slack path as strong. chip-AGNOSTIC.
+
+    `not_run_record` — the producer's own not-run sentinel, when one exists
+    (vibe-ic#235). DT3 is the cascade case: whenever DT1 or DT2 self-disables,
+    DT3 has nothing to fuse and vanishes too. An absent grade is never a pass,
+    but a step that recorded WHY it could not grade is BLOCKED, not a bare FAIL
+    that cannot distinguish "never ran" from "ran and could not measure".
+    """
     reasons: list[str] = []
 
     if blob is None:
+        if isinstance(not_run_record, dict):
+            why = str(not_run_record.get("reason")
+                      or "producer recorded a not-run sentinel with no reason")
+            stage = not_run_record.get("not_run_stage")
+            return {"verdict": "BLOCKED", "status": "BLOCKED",
+                    "not_run_stage": stage,
+                    "reasons": [
+                        "no sdd_coverage.json was produced; the step recorded "
+                        f"why it did not run{f' ({stage})' if stage else ''}: "
+                        + why
+                        + " — BLOCKED (the small-delay-defect grade is "
+                          "unmeasured, which is not a pass)"]}
         return {"verdict": "FAIL", "status": "FAIL",
-                "reasons": ["sdd_coverage.json absent or invalid JSON — the SDD "
-                            "step cannot pass without a real coverage grade"]}
+                "reasons": ["sdd_coverage.json absent or invalid JSON, and NO "
+                            "not-run record was left either — there is no "
+                            "evidence the SDD step ran at all. An absent grade "
+                            "is never a pass; the step must produce a "
+                            "measurement or state why it could not"]}
 
     if blob.get("verdict") == "NOT_APPLICABLE":
         return {"verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
@@ -264,15 +296,30 @@ def _resolve_coverage_json(project: Path, override: Optional[str]) -> Optional[P
     return next((p for p in cands if p.is_file()), None)
 
 
+def _resolve_not_run_record(project: Path) -> tuple[Optional[dict], Optional[Path]]:
+    """Find the step's own record of why it produced no coverage grade."""
+    for rel in _NOT_RUN_RECORDS:
+        p = project / rel
+        if p.is_file():
+            d = _load_json(p)
+            if d is not None:
+                return d, p
+    return None, None
+
+
 def audit(project: Path, coverage_json: Optional[str] = None,
           min_slack_weighted: float = 0.0,
           tol: float = COVERAGE_TOL_DEFAULT) -> dict:
     path = _resolve_coverage_json(project, coverage_json)
+    blob = _load_json(path) if path else None
+    rec, rec_path = (_resolve_not_run_record(project) if blob is None
+                     else (None, None))
     base = {"program": _PROGRAM, "version": _VERSION,
             "project_dir": str(project),
-            "coverage_json": str(path) if path else None}
-    blob = _load_json(path) if path else None
-    result = evaluate(blob, min_slack_weighted=min_slack_weighted, tol=tol)
+            "coverage_json": str(path) if path else None,
+            "not_run_record": str(rec_path) if rec_path else None}
+    result = evaluate(blob, min_slack_weighted=min_slack_weighted, tol=tol,
+                      not_run_record=rec)
     result.update(base)
     return result
 
@@ -318,8 +365,12 @@ def main(argv: Optional[list] = None) -> int:
           f"graded={report.get('graded_faults')} "
           f"slack_weighted_cov={report.get('sdd_slack_weighted_coverage_pct')}% "
           f"margin_ns={report.get('margin_ns')}", file=sys.stderr)
+    if v in ("FAIL", "BLOCKED"):
+        for r in report.get("reasons", [])[:3]:
+            print(f"  {v}: {r}", file=sys.stderr)
     if v == "NOT_APPLICABLE":
         return 0
+    # BLOCKED is NOT a pass. An unmeasured at-speed step must not exit 0.
     return 0 if v == "PASS" else 1
 
 

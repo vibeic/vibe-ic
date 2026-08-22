@@ -255,6 +255,49 @@ def test_port_names_helper_excludes_keywords():
     assert P._chip_top_port_names(block) == {"clk", "q", "io"}
 
 
+# ── salvage-port guard: explicit declaration outranks the heuristic ─────
+def test_explicit_l9_top_module_outranks_the_portset_tiebreak(tmp_path):
+    """SALVAGE-PORT GUARD (#315 p12). When L9 states `top_module` outright and
+    exactly one pooled module carries that name, that declaration wins — the
+    port-set score is a heuristic read and must not override it. Here L9's
+    `top_ports` deliberately describes the WRAPPER's face while `top_module`
+    names the INNER block, so the two signals disagree and only the priority
+    order decides the outcome."""
+    proj = _mk(tmp_path)
+    gd = proj / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json"
+    d = json.loads(gd.read_text())
+    d["top_module"] = "user_proj_example"
+    gd.write_text(json.dumps(d))
+    out = _emit(proj)
+    assert out is not None, "declared top must still yield a chip_top"
+    assert _wrapped_dut(out) == "user_proj_example", (
+        "the port-set tiebreak overrode an explicit L9.top_module declaration")
+
+
+def test_declared_top_in_a_deferred_file_is_reachable(tmp_path):
+    """The declared top may live in a suffix-named file. Before #783 that file
+    was dropped before the v0.1.62 declaration preference could see it."""
+    proj = _mk(tmp_path)
+    gd = proj / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json"
+    d = json.loads(gd.read_text())
+    d["top_module"] = "user_project_wrapper"
+    gd.write_text(json.dumps(d))
+    out = _emit(proj)
+    assert out is not None and _wrapped_dut(out) == "user_project_wrapper"
+
+
+def test_noleak_declaration_guard_inert_without_top_module(tmp_path):
+    """No `top_module` key at all → the guard is a no-op and the port-set
+    tiebreak decides exactly as #783 shipped it."""
+    proj = _mk(tmp_path)
+    gd = proj / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json"
+    d = json.loads(gd.read_text())
+    d.pop("top_module", None)
+    gd.write_text(json.dumps(d))
+    out = _emit(proj)
+    assert out is not None and _wrapped_dut(out) == "user_project_wrapper"
+
+
 @pytest.mark.parametrize("top_name", ["caravel_user_project", "chip_top"])
 def test_top_name_independent(tmp_path, top_name):
     """chip-AGNOSTIC: the selection is driven by L9 port-set agreement, not by

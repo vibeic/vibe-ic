@@ -262,7 +262,7 @@ def test_ngspice_fail_to_pass_incontainer(tmp_path):
             cp = subprocess.run(
                 ["docker", "exec", container, "bash", "-lc",
                  f"{ngspice} -b {sp} 2>&1; echo RC=$?"],
-                capture_output=True, text=True, timeout=180)
+                capture_output=True, text=True, timeout=60)
             out = cp.stdout
             rc = 999
             for line in out.splitlines():
