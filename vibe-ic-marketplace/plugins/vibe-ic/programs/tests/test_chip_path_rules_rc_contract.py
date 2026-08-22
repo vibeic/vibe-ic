@@ -198,8 +198,25 @@ _CAPTURE = (_PROGRAMS.parents[3]
 
 def test_every_bucket_a_rule_with_a_program_is_swept():
     """Adding a gate without registering it must FAIL, not pass quietly."""
+    # A SKIP HERE WOULD TAKE THE STANDING RULE DARK, so the two absences that
+    # look identical to `is_file()` are separated.
+    #
+    # This plugin is shipped through a marketplace and can legitimately be
+    # installed and tested WITHOUT the repository's docs/ tree. That is a real
+    # skip. But if docs/capture/ is present and this one file is not, the
+    # reference has ROTTED — the capture was renamed or moved — and skipping
+    # would retire "a thirteenth gate added without registration must FAIL"
+    # without anyone being told. The second case is a failure, not a skip.
     if not _CAPTURE.is_file():
-        pytest.skip(f"capture absent at {_CAPTURE}")
+        if not _CAPTURE.parent.parent.is_dir():
+            pytest.skip(
+                f"docs/capture/ is absent entirely — this is the packaged-plugin "
+                f"context, where {_CAPTURE.name} legitimately does not ship")
+        pytest.fail(
+            f"docs/capture/ exists but {_CAPTURE} does not. The completeness "
+            f"sweep is keyed on that file, so this is a rotted reference and "
+            f"NOT a reason to stop enforcing registration. Re-point _CAPTURE at "
+            f"wherever the capture moved to.")
     rows = json.loads(_CAPTURE.read_text(encoding="utf-8"))
     names = {r.get("rule_name") for r in rows if r.get("bucket") == "A"}
     assert names, "the capture declared no Bucket-A rule — this sweep is vacuous"
@@ -396,3 +413,20 @@ def test_no_assertion_in_this_lane_compares_a_literal_to_its_own_size():
     assert not bad, (
         "these assertions cannot fail by construction, so they are the defect "
         "and not the guard:\n  " + "\n  ".join(bad))
+
+
+def test_the_capture_reference_has_not_rotted():
+    """The sweep above is keyed on a file. Pin that the key still resolves.
+
+    Kept separate from the sweep so the failure names the CAUSE: the sweep going
+    quiet and the capture moving are different events and must not share a line.
+    """
+    if not _CAPTURE.parent.parent.is_dir():
+        pytest.skip("packaged-plugin context — docs/capture/ does not ship")
+    assert _CAPTURE.is_file(), (
+        f"{_CAPTURE} is gone. Every registration guarantee in this file is keyed "
+        f"on it, so its absence silently retires them.")
+    rows = json.loads(_CAPTURE.read_text(encoding="utf-8"))
+    assert any(r.get("bucket") == "A" for r in rows), (
+        "the capture no longer declares a single Bucket-A rule, so the sweep "
+        "would pass over an empty set")

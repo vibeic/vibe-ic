@@ -1509,3 +1509,44 @@ tree as it was and writes numbers that are wrong in a way nothing else notices.
 the branch and not something the branch can fix from its own side — the composed
 counters can only be derived at assembly, against whatever main is at that moment.
 That is the assembler's step, and this is the tested procedure for it.
+
+## The one skip in this lane, and why it was a test going dark
+
+Standing rule: *a test that can no longer be constructed is a test that has gone
+dark; fix the test's construction.* Swept the thirteen files. One skip site, and it
+does not currently fire — 277 passed, 0 skipped. It was still wrong, and it was
+mine.
+
+The completeness sweep added earlier is keyed on the capture:
+
+    if not _CAPTURE.is_file():
+        pytest.skip(f"capture absent at {_CAPTURE}")
+
+If `recoveries.json` were ever renamed or moved, that skip would retire the whole
+standing rule — *a thirteenth gate added without registration must FAIL* — and the
+summary line would say `1 skipped` in a suite where nobody reads skips. The guard
+I had just written to stop a rule going quiet had its own way of going quiet.
+
+**Two absences look identical to `is_file()` and are not the same event.**
+
+* `docs/capture/` absent entirely — this plugin ships through a marketplace and can
+  legitimately be installed and tested without the repository's docs tree. A real
+  skip.
+* `docs/capture/` present and this one file gone — the reference has ROTTED. Not a
+  reason to stop enforcing registration; a reason to say so.
+
+Both proven, by moving the real files:
+
+    capture renamed, docs/capture/ present
+      E  Failed: docs/capture/ exists but .../recoveries.json does not. The
+         completeness sweep is keyed on that file, so this is a rotted reference
+         and NOT a reason to stop enforcing registration.
+
+    docs/capture/ removed entirely
+      SKIPPED — docs/capture/ is absent entirely; this is the packaged-plugin
+                context, where recoveries.json legitimately does not ship
+
+A second test pins the reference on its own, deliberately separate from the sweep,
+so the failure names the CAUSE: the sweep going quiet and the capture moving are
+different events and must not share a line. It also asserts the capture still
+declares at least one Bucket-A rule, because a sweep over an empty set passes.
