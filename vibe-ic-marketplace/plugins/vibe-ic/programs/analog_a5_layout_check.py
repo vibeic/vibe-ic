@@ -91,11 +91,38 @@ DRC/LVS result). So the exact claim is: every input this gate used to
 reject is still rejected rc=1 by A6, and for the evidence-ABSENCE
 classes that holds even under a project-side step waiver.
 
+WHAT THE GEOMETRY RULES CANNOT SEE — the matching disclosure
+------------------------------------------------------------
+Every rule above answers "is there a layout?". None of them answers "is it
+the layout this block needed?", and the gate one step later cannot either:
+A6's netgen compare is TOPOLOGY-only, so N isolated devices in N slots close
+it exactly as green as a common-centroid quad, and dummies — the thing the
+authoring skill mandates two of per side — actively HURT the compare.
+
+So this gate now also reads the block's own record of its matching structure,
+`layout_matching.json`, and puts the answer in its report on EVERY verdict
+path. `matching_style: "none"` is a legitimate, certifying answer; what is
+recorded is the DIFFERENCE between a block that says so and one that says
+nothing. The rules below fire only on a record that EXISTS, so writing one
+costs nothing but having to mean it. See `_analog_layout_matching`.
+
 Failure rules:
   A5_LAYOUT_MISSING        — neither layout.mag nor <block>.gds present
   A5_LAYOUT_TOO_SMALL      — layout source < 200 bytes (stub)
   A5_LAYOUT_EMPTY_GEOMETRY — layout source has no placed geometry (empty
                              stream or padded/deterministic stub)
+  A5_MATCHING_DISCLOSURE_MALFORMED
+                           — layout_matching.json exists and answers nothing
+  A5_MATCHING_STYLE_GROUPS_CONTRADICT
+                           — `matching_style` and `matched_groups` disagree
+  A5_MATCHING_GROUP_DUMMIES_INSUFFICIENT
+                           — a matched group declares < 2 dummies per side
+  A5_MATCHING_DUMMIES_LVS_UNRECONCILED
+                           — dummies declared, no `lvs_dummy_waiver` names how
+                             the A6 LVS compare reconciles them
+  A5_DEVICE_PARTITION_WIDTH_MISMATCH
+                           — an N-way device split whose layout widths do not
+                             sum to `w_um x m`
 
 Project-level verdicts (no `--block`):
   VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
@@ -121,6 +148,7 @@ from _analog_a_check_common import (
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
 )
+import _analog_layout_matching as _lm
 
 GATE = "analog_a5_layout_check"
 SKILL = "analog-layout"
@@ -206,10 +234,11 @@ def _layout_has_real_geometry(path: Path) -> tuple[bool, str]:
 
 
 def _check_block(project: Path, block: str
-                 ) -> tuple[Optional[str], List[dict]]:
+                 ) -> tuple[Optional[str], List[dict], "_lm.Disclosure"]:
     bdir = project / "phase3" / "analog" / block
     mag = bdir / "layout.mag"
     gds = bdir / f"{block}.gds"
+    disclosure = _lm.read_disclosure(bdir, block)
 
     findings: List[dict] = []
     layout_path: Optional[Path] = None
@@ -218,12 +247,14 @@ def _check_block(project: Path, block: str
     elif gds.is_file():
         layout_path = gds
     if layout_path is None:
-        # Treat as MISSING (not FAIL) so --block mode → WAIVED.
+        # Treat as MISSING (not FAIL) so --block mode → WAIVED. A block with
+        # no layout at all is not asked about its matching structure: there is
+        # nothing drawn to have one.
         return "MISSING", [{
             "block": block, "rule": "A5_LAYOUT_MISSING",
             "rel_path": str(bdir.relative_to(project)),
             "detail": "neither layout.mag nor <block>.gds present",
-        }]
+        }], _lm.Disclosure(_lm.DISCLOSURE_UNDISCLOSED, None, [], [])
     try:
         size = layout_path.stat().st_size
     except OSError:
@@ -251,9 +282,14 @@ def _check_block(project: Path, block: str
     # see the module docstring's "SCOPE" section. It is step A6's verdict,
     # over A6's own (richer) evidence, at the point in the flow where that
     # evidence exists.
+    #
+    # The MATCHING record is read here, where the layout is. Its findings join
+    # this block's list; its CLASS is reported by `main` on every path,
+    # including this one's failures.
+    findings.extend(disclosure.findings)
     if findings:
-        return "FAIL", findings
-    return "PASS", []
+        return "FAIL", findings, disclosure
+    return "PASS", [], disclosure
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -276,8 +312,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     findings: List[dict] = []
     blocks_pass = 0
     missing_seen: List[dict] = []
+    # Only blocks that HAVE a layout are asked what structure it has — a block
+    # with nothing drawn has no answer to give, and counting it as "did not
+    # say" would report the A5 gap twice under two different names.
+    disclosures: dict = {}
     for block in blocks:
-        status, fs = _check_block(project, block)
+        status, fs, disc = _check_block(project, block)
+        if status != "MISSING":
+            disclosures[block] = disc
         if status == "PASS":
             blocks_pass += 1
         elif status == "MISSING":
@@ -290,8 +332,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         "blocks_pass": blocks_pass,
         "blocks_missing": len(missing_seen),
         "blocks_fail": len(findings),
+        **_lm.summarise(disclosures),
     }
 
+    rc = _verdict(args, findings, missing_seen, blocks_pass, summary)
+    # LAST, and on every path — same contract as `structure_only_disclosure`.
+    _lm.matching_disclosure(GATE, disclosures)
+    return rc
+
+
+def _verdict(args, findings: List[dict], missing_seen: List[dict],
+             blocks_pass: int, summary: dict) -> int:
     if args.block:
         if findings:
             return emit_fail(GATE, args, findings, summary)

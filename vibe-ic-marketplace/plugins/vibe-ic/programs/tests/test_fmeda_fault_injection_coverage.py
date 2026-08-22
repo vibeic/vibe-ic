@@ -16,6 +16,7 @@ Pins:
 """
 import json
 import sys
+import time
 from pathlib import Path
 
 PROG_DIR = Path(__file__).resolve().parent.parent
@@ -656,5 +657,89 @@ def test_local_image_probe_reports_absence_where_resolve_invents_a_pin(
         returncode = 1        # `docker image inspect` -> not present locally
 
     monkeypatch.setattr(fi.subprocess, "run", lambda *a, **k: _Absent())
-    assert fi._resolve_docker_image() == fi._IMAGE_CANDIDATES[0]  # invents one
+
+    # WHAT CHANGED HERE, AND WHAT DID NOT. This used to read
+    # `fi._IMAGE_CANDIDATES[0]` — a pinned literal list that no longer exists,
+    # because the image is now RESOLVED from the registry to a digest. The
+    # PROPERTY being guarded is unchanged and is the reason this test exists:
+    # one function must always name something runnable, and the other must be
+    # willing to say "nothing here". Asserting the identity of the invented ref
+    # would just re-pin the literal under a different name.
+    # MEASURED while writing this: with the daemon holding nothing AND the
+    # registry unreachable, resolve lands on the LEGACY image
+    # `hpretl/iic-osic-tools:latest` and says so on stderr. That is the module's
+    # documented last resort, not a defect — so this test asserts the contract
+    # ("always names something runnable"), NOT a particular ref. Asserting
+    # "vibeic-eda in it" here would have failed the honest fallback, and
+    # asserting "never :latest" would have contradicted it: the no-floating-tag
+    # rule belongs to the resolver's own happy path and is guarded there, by
+    # `test_the_eda_image_is_resolved_not_remembered.py
+    #  ::test_resolve_returns_a_digest_not_a_floating_tag`.
+    resolved = fi._resolve_docker_image()
+    assert resolved and isinstance(resolved, str), (
+        f"resolve must always name a runnable ref; got {resolved!r}")
     assert fi._local_docker_image() is None                       # honest None
+
+
+# ── What this gate WRITES into the project, not just what it reports ───────
+#
+# The gate renders its injection testbench into `phase2/stage2/safety/` and
+# compiles it there, so two files under a DESIGN-round tree carry this gate's
+# timestamp. Anything that dates a run by mtime has to know that, and
+# `result_md_audit_provenance_check` imports `REGENERATED_PROJECT_PATHS` to
+# find out — so the declaration has to be the paths the gate really writes,
+# measured by RUNNING it, not a list beside the code that can drift from it.
+
+
+def test_the_declared_regenerated_paths_are_the_ones_it_actually_writes(
+        tmp_path):
+    """Census the project around a REAL injection run.
+
+    Every file `run()` creates outside `reports/` must be declared in
+    `REGENERATED_PROJECT_PATHS`, and every declared path must actually appear.
+    A stale declaration is worse than none: the freshness rule that consumes
+    it would exclude a path nothing writes while still reading the one that
+    moved — exactly the run-count-dependent verdict it exists to remove.
+    """
+    missing = _injection_backend_missing()
+    if missing:
+        import pytest
+        pytest.skip(missing)
+    project = _ecc_project(tmp_path, _DEC_OK)
+    before = {str(p.relative_to(project))
+              for p in project.rglob("*") if p.is_file()}
+    rc, rep = fi.run(project, _Args())
+    assert rep["applicable"] is True, rep      # the write path really ran
+    after = {str(p.relative_to(project))
+             for p in project.rglob("*") if p.is_file()}
+    created = {p for p in after - before if not p.startswith("reports/")}
+
+    assert created == set(fi.REGENERATED_PROJECT_PATHS), (
+        f"the gate writes {sorted(created)} into the project but declares "
+        f"{sorted(fi.REGENERATED_PROJECT_PATHS)} — a consumer that trusts the "
+        f"declaration would date the run by a file this gate rewrote")
+
+
+def test_a_second_run_rewrites_exactly_the_declared_paths(tmp_path):
+    """…and it is a RE-write on every run, which is why it matters.
+
+    The declaration would be harmless if the gate wrote these once. It does
+    not: a second run stamps both again, which is how `phase2/` — a tree the
+    freshness rule called "a design-round tree the flow never writes to" —
+    carried a verdict that changed with the run count.
+    """
+    missing = _injection_backend_missing()
+    if missing:
+        import pytest
+        pytest.skip(missing)
+    project = _ecc_project(tmp_path, _DEC_OK)
+    fi.run(project, _Args())
+    stamps = {rel: (project / rel).stat().st_mtime_ns
+              for rel in fi.REGENERATED_PROJECT_PATHS}
+    time.sleep(0.02)
+    fi.run(project, _Args())
+    moved = {rel for rel, m in stamps.items()
+             if (project / rel).stat().st_mtime_ns != m}
+    assert moved == set(fi.REGENERATED_PROJECT_PATHS), (
+        f"a re-run re-stamped {sorted(moved)}, not the declared "
+        f"{sorted(fi.REGENERATED_PROJECT_PATHS)}")

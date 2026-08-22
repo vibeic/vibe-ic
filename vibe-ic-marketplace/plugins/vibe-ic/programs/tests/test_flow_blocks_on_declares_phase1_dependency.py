@@ -65,12 +65,26 @@ def graph() -> dict:
 
 
 def _stage_steps(stage_id: str) -> list:
+    """Members of a stage, read from the ONE place membership is declared.
+
+    This used to read the per-stage roster ``stages[].steps``. That roster was
+    a SECOND declaration of membership, it disagreed with the per-step
+    ``stage:`` field for 12 of the 63 steps, and it has been deleted
+    (vibe-ic#923). Reading it now would return ``[]`` and make every caller
+    vacuously true, so the lookup moved to the surviving declaration and
+    asserts that it found somebody.
+    """
     import yaml
     doc = yaml.safe_load(FLOW.read_text())
-    for st in doc.get("stages", []):
-        if str(st.get("id")) == stage_id:
-            return [str(s) for s in (st.get("steps") or [])]
-    raise AssertionError(f"premise: stage {stage_id!r} not found in the flow")
+    declared = [str(st.get("id")) for st in (doc.get("stages") or [])]
+    assert stage_id in declared, (
+        f"premise: stage {stage_id!r} not declared in the flow; got {declared}")
+    members = [str(s.get("id")) for s in (doc.get("steps") or [])
+               if str(s.get("stage")) == stage_id]
+    assert members, (
+        f"premise: no step declares stage: {stage_id!r} — an empty membership "
+        f"would make every assertion over it vacuously true")
+    return members
 
 
 # ── the declaration itself ───────────────────────────────────────────────────
@@ -189,20 +203,45 @@ def test_legitimate_phase1_states_raise_no_violation(d1_status, graph):
 # converts — but it is a real consequence and is pinned here so it can never
 # be mistaken for an accident.
 
-def test_waived_phase1_defers_its_own_downstream_missing(graph):
+def test_waived_phase1_defers_only_what_declares_it_reads_phase1(graph):
+    """vibe-ic#776 NARROWED THIS, and the narrowing is the point.
+
+    Before #776 a waiver on D1 absorbed 49 downstream MISSING steps on this
+    flow — every step ordered behind it. It now absorbs the three that DECLARE
+    they read a Phase-1 doc: steps 2, 4 and 8, whose gates name
+    `phase1/generated_docs/L{3,8,10,11,12}*.json` in `condition_files_exist`.
+
+    Step 1 (Spec-to-RTL) is NOT among them, and that is the honest reading of
+    the flow as written: step 1 does consume the L-docs, but it consumes them
+    inside the runner, and its flow entry declares only
+    `files_exist: [phase2/stage1/rtl/*.sv, *.v]` — its own output. The discount
+    was being taken on an ordering edge. If the dependency should be declared,
+    the fix is one `condition_files_exist` entry on step 1's gate, reviewed on
+    its own merits; until then step 1 reports MISSING and says why.
+    """
     import yaml as _yaml
     import flow_compliance_check as _fcc
     steps = _yaml.safe_load(FLOW.read_text())["steps"]
     S = _fcc.StepResult
+    ids = [s["id"] for s in steps if str(s.get("id")) != "P0"]
     results = [
-        S(id=_PHASE1_STEP, name=_D1_NAME, stage="stage_phase1",
-          status="WAIVED", reasons=["ticket=ABC-1"]),
-        S(id=1, name="Spec-to-RTL", stage="stage1", status="MISSING"),
+        S(id=sid, name="", stage="",
+          status=("WAIVED" if sid == _PHASE1_STEP else "MISSING"),
+          reasons=(["ticket=ABC-1"] if sid == _PHASE1_STEP else []))
+        for sid in ids
     ]
     info = _fcc._attribute_cascade_verdicts(results, steps, {},
                                             skip_analog=False)
-    assert results[1].status == "DEFERRED-BY-UPSTREAM", results[1].status
-    assert (1, _PHASE1_STEP, "ABC-1") in info["deferred_by_upstream"], info
+    by_id = {r.id: r for r in results}
+
+    deferred = sorted(str(sid) for sid, _p, _t in info["deferred_by_upstream"])
+    assert deferred == ["2", "4", "8"], deferred
+    for sid in (2, 4, 8):
+        assert (sid, _PHASE1_STEP, "ABC-1") in info["deferred_by_upstream"], info
+
+    # DIRECTION-1: the ordering fact is recorded, not discarded, and it costs.
+    assert by_id[1].status == "MISSING", by_id[1].status
+    assert by_id[1].cascade_note == f"waived-ancestor-undeclared({_PHASE1_STEP})"
 
 
 def test_guard_a_failed_phase1_never_converts_to_deferred(graph):

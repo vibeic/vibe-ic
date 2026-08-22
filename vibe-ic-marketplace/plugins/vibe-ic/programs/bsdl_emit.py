@@ -60,6 +60,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _path_layout as _pl  # type: ignore
@@ -198,18 +199,81 @@ def _width(range_str: Optional[str]) -> Tuple[int, Optional[int], Optional[int]]
     return abs(hi - lo) + 1, hi, lo
 
 
+# An identifier is EITHER a plain Verilog identifier OR an IEEE-1364 §3.7.1
+# ESCAPED identifier: a backslash, then any run of non-whitespace, terminated
+# by whitespace. Escaped identifiers are not an exotic corner — they are the
+# ORDINARY shape of a gate-level netlist port in this flow, because
+# `yosys ... splitnets -ports; write_verilog` emits every bus bit as
+# `\bus_name[3] `. A pattern that only accepts `[A-Za-z_]\w*` silently drops
+# every one of them (vibe-ic: measured on a real sky130-mapped OpenTitan AES
+# core — 1995 declared top ports parsed as 14).
+_IDENT_RE = re.compile(r"\\\S+|[A-Za-z_]\w*")
+
 _ANSI_SEG_RE = re.compile(
     r"^\s*(?:(input|output|inout)\b)?\s*"
     r"(?:wire|reg|logic|signed|unsigned|\s)*?"
     r"(\[[^\]]+\])?\s*"
-    r"([A-Za-z_]\w*)\s*$")
+    r"(\\\S+|[A-Za-z_]\w*)\s*$")
 
+# The name blob is captured permissively (anything up to the `;`) and then
+# TOKENISED with _IDENT_RE, so escaped names carrying `[`, `]`, `$`, `.` etc.
+# survive. The optional width group still binds first, and cannot mis-capture
+# an escaped name's own `[..]` because that name begins with a backslash.
 _BODY_DECL_RE = re.compile(
     r"\b(input|output|inout)\b\s*"
     r"(?:wire|reg|logic|signed|unsigned|\s)*?"
     r"(\[[^\]]+\])?\s*"
-    r"([A-Za-z_][\w\s,]*?)\s*;",
+    r"([^;]*?)\s*;",
     re.DOTALL)
+
+# `\bus[3] ` → ("bus", 3). Used to coalesce splitnets-style per-bit ports back
+# into one vector Port, so the boundary register gets one BSC per pad bit AND
+# the BSDL port declaration stays legal (`bus : inout bit_vector(3 downto 0)`)
+# instead of an illegal `bus[3] : inout bit`.
+_BIT_SELECT_RE = re.compile(r"^(.+?)\[(\d+)\]$")
+
+
+def _normalise_ident(tok: str) -> str:
+    """Strip the leading backslash of an IEEE-1364 escaped identifier. The
+    trailing whitespace terminator is already consumed by the tokeniser."""
+    return tok[1:] if tok.startswith("\\") else tok
+
+
+def _coalesce_bit_selects(ports: List["Port"]) -> List["Port"]:
+    """Fold per-bit ports (`bus[0]`..`bus[N]`) emitted by `splitnets -ports`
+    back into a single vector Port, preserving first-appearance order.
+
+    Only a COMPLETE contiguous index set is folded. An incomplete set is left
+    as individual bits rather than folded into a range that would silently
+    invent pads the netlist does not declare — over-counting a boundary
+    register is the same class of error as under-counting it."""
+    groups: dict = {}
+    order: List[str] = []
+    for p in ports:
+        m = _BIT_SELECT_RE.match(p.name)
+        key = (m.group(1), p.direction) if (m and p.width == 1) else None
+        if key is None:
+            order.append(p.name)
+            groups[p.name] = p
+            continue
+        if key not in groups:
+            order.append(key)
+            groups[key] = []
+        groups[key].append((int(m.group(2)), p))
+
+    out: List[Port] = []
+    for key in order:
+        g = groups[key]
+        if isinstance(g, Port):
+            out.append(g)
+            continue
+        idxs = sorted(i for i, _ in g)
+        if idxs == list(range(idxs[0], idxs[-1] + 1)):
+            base, direction = key
+            out.append(Port(direction, base, len(idxs), idxs[-1], idxs[0]))
+        else:  # incomplete range — keep the bits exactly as declared
+            out.extend(p for _, p in sorted(g, key=lambda t: t[0]))
+    return out
 
 
 def parse_top_ports(text: str, top: str) -> List[Port]:
@@ -246,20 +310,18 @@ def parse_top_ports(text: str, top: str) -> List[Port]:
                 # non-ANSI style header (bare names) — resolved from body.
                 continue
             w, hi, lo = _width(rng)
-            _add(current_dir, w, hi, lo, name)
+            _add(current_dir, w, hi, lo, _normalise_ident(name))
 
     # 2) Non-ANSI (and any body-level) direction declarations.
     for bm in _BODY_DECL_RE.finditer(body):
         d, rng, names_blob = bm.group(1), bm.group(2), bm.group(3)
         w, hi, lo = _width(rng)
-        for nm in re.split(r"\s*,\s*", names_blob.strip()):
-            nm = nm.strip()
-            # keep only plain identifiers (drop stray range/dimension text)
-            im = re.match(r"^([A-Za-z_]\w*)", nm)
-            if im:
-                _add(d, w, hi, lo, im.group(1))
+        for tok in _IDENT_RE.findall(names_blob):
+            # net-type / sign keywords may still lead the blob; _add filters
+            # them via _VERILOG_KEYWORDS.
+            _add(d, w, hi, lo, _normalise_ident(tok))
 
-    return ordered
+    return _coalesce_bit_selects(ordered)
 
 
 # ── Pad-ring detection ─────────────────────────────────────────────────
@@ -689,7 +751,7 @@ def main(argv: Optional[list] = None) -> int:
         json_path = Path(args.json) if args.json else _plan_path(project)
         try:
             json_path.parent.mkdir(parents=True, exist_ok=True)
-            json_path.write_text(json.dumps({
+            atomic_write_text(json_path, json.dumps({
                 "program": _PROGRAM,
                 "version": _VERSION,
                 "project_dir": str(project),
@@ -712,7 +774,7 @@ def main(argv: Optional[list] = None) -> int:
     json_path = Path(args.json) if args.json else _plan_path(project)
     try:
         json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False)
+        atomic_write_text(json_path, json.dumps(plan, indent=2, ensure_ascii=False)
                              + "\n")
     except OSError as exc:  # pragma: no cover - IO edge
         print(f"WARN: could not write plan JSON {json_path}: {exc}",

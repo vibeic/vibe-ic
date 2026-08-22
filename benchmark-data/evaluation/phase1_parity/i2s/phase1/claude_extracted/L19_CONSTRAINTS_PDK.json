@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "I2S is a wire-level streaming protocol; no PDK / SDC / floorplan constraints at the protocol layer. Per-controller / per-codec integration constraints (pad type, clock-tree budget) live in the SoC integration spec, not in UM11732."
-  }
-}

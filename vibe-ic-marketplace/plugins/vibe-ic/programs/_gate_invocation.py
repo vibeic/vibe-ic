@@ -71,6 +71,7 @@ __all__ = [
     "NOT_INVOCABLE_SENTINEL",
     "NOT_INVOCABLE_HEADING_SENTINEL",
     "classify_not_invocable",
+    "rule_b_named_options",
     "format_not_invocable_entry",
     "format_not_invocable_heading",
     "is_not_invocable_entry",
@@ -101,6 +102,54 @@ _ERROR_LINE = re.compile(r"^[ \t]*(?:error|ERROR)\b.*$", re.M)
 _LONG_OPTION = re.compile(r"--[A-Za-z][A-Za-z0-9-]+")
 
 
+def _rule_b_hits(stdout: str, stderr: str, supplied: set):
+    """Every hand-rolled error line that NAMES a long option the caller did not
+    supply, as ``(line, named_options)``.
+
+    Factored out because two callers need the same two regexes applied the same
+    way: `classify_not_invocable`, which wants the LINE (it is the evidence in
+    the disclosure), and `rule_b_named_options`, which wants the OPTIONS (they
+    are what decides whether an umbrella could have driven the gate). Re-typing
+    either regex at the second caller is how the writer and the readers drifted
+    the first time — see the block comment below.
+    """
+    for blob in (stderr, stdout):
+        for line in _ERROR_LINE.findall(blob or ""):
+            named = set(_LONG_OPTION.findall(line))
+            # `not (named & supplied)`, NOT `named - supplied`: a line that
+            # mentions ANY flag the caller did pass is the gate judging that
+            # VALUE, and a line naming both a supplied and an unsupplied flag is
+            # ambiguous. The conservative reading is the shipped one and is
+            # deliberately preserved here — widening it would manufacture
+            # NOT_INVOCABLE verdicts in the umbrella, which is a verdict change.
+            if named and not (named & supplied):
+                yield line, named
+
+
+def rule_b_named_options(
+    stdout: str,
+    stderr: str,
+    supplied_flags: Iterable[str] = (),
+) -> list:
+    """The long options a Rule-B gate asked for and the caller did not supply.
+
+    A gate rejected under RULE A can be interrogated through argparse's own
+    ``the following arguments are required:`` line. A gate rejected under RULE B
+    never reaches that machinery, so its needs are recoverable ONLY from the
+    error line it wrote itself — the same line Rule B keyed on. Callers that
+    classify the un-invocable population (which need are mechanical wiring, and
+    which are a fact about the design?) must have this, or every Rule-B gate
+    reads as "requirements unknown" and lands in whichever pile that maps to.
+
+    Empty when the result is not a Rule-B rejection. Valid for rc-2 results
+    only, exactly like `classify_not_invocable`.
+    """
+    supplied = {f for f in supplied_flags if f.startswith("--")}
+    for _line, named in _rule_b_hits(stdout, stderr, supplied):
+        return sorted(named)
+    return []
+
+
 def classify_not_invocable(
     stdout: str,
     stderr: str,
@@ -128,12 +177,9 @@ def classify_not_invocable(
         return "argparse rejected the umbrella's argv"
 
     # Rule B — the gate hand-rolled the check and named the option it wanted.
-    for blob in (stderr, stdout):
-        for line in _ERROR_LINE.findall(blob or ""):
-            named = set(_LONG_OPTION.findall(line))
-            if named and not (named & supplied):
-                return (f"gate requires an option the umbrella does not "
-                        f"supply: {line.strip()}")
+    for line, _named in _rule_b_hits(stdout, stderr, supplied):
+        return (f"gate requires an option the umbrella does not "
+                f"supply: {line.strip()}")
     return None
 
 

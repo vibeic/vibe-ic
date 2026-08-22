@@ -2,6 +2,7 @@
 import importlib
 import json
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("signoff_ladder_run")
 
 
@@ -384,7 +385,8 @@ class TestRunLadder:
 
     def test_attribution(self, tmp_path):
         rep = mod.run_ladder(tmp_path)
-        assert "v0.1.51" in rep.as_dict()["emitted_by"]
+        assert rep.as_dict()["emitted_by"] == (
+            f"signoff_ladder_run v{shipped_plugin_version()} (release-gate-wired)")
 
     def test_tapeout_adds_release_tiers(self, tmp_path):
         rep = mod.run_ladder(tmp_path, mode="tapeout")
@@ -763,11 +765,30 @@ class TestDRCRealDiscovery:
         assert r.details["violations"] == 87
 
     def test_phase3_text_report_count_fail(self, tmp_path):
+        # A router-level violation is still a real defect and keeps its FAIL.
+        # FAIL is not waivable; downgrading it would have made it deferrable.
         _write(tmp_path / "reports/phase3/drc_signoff.rpt", _drc_text(5))
         assert mod.check_tier_1_drc(tmp_path).verdict == "FAIL"
 
-    def test_phase3_text_report_clean_pass(self, tmp_path):
+    def test_router_projection_clean_is_not_a_signoff_pass(self, tmp_path):
+        """`_drc_text` IS the router's own detailed-route projection —
+        `# Tool: openroad`, `drt-pass: detailed_route invoked`. This tier is
+        named "Full DRC (KLayout/Magic)" and is release-gating; it used to
+        return PASS from that log. The router cannot certify physical
+        verification, so its CLEAN is NOT_RUN — the state the governed
+        waivers.json channel exists for. Its FAIL is unchanged (above): router
+        evidence can withhold credit, never grant it, and never remove a
+        failure."""
         _write(tmp_path / "reports/phase3/drc_signoff.rpt", _drc_text(0))
+        r = mod.check_tier_1_drc(tmp_path)
+        assert r.verdict == "NOT_RUN", r
+        assert r.details["producer"] == "openroad"
+
+    def test_non_router_plain_text_clean_still_passes(self, tmp_path):
+        """The plain-text dialect itself is untouched — only the ROUTER as a
+        producer is refused."""
+        _write(tmp_path / "reports/phase3/drc_signoff.rpt",
+               "Magic 8.3.678\ndrc count\ntotal violations: 0\n")
         assert mod.check_tier_1_drc(tmp_path).verdict == "PASS"
 
     def test_legacy_json_still_read(self, tmp_path):

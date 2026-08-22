@@ -83,6 +83,49 @@ def test_defect_pass_headline_over_orchestrator_fail(tmp_path):
     assert rep.rc == 1
 
 
+def test_waiver_downgrades_the_contradiction_to_pass(tmp_path):
+    """An evidenced waiver — WAIVER_KEY in waivers.json, >=60 chars — downgrades
+    the escape direction to PASS_WITH_WAIVER (rc 0), disclosed not hidden."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    (run / "waivers.json").write_text(json.dumps({
+        G.WAIVER_KEY: "x" * G.WAIVER_MIN}))
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED"
+    assert rep.verdict == "PASS"
+    assert rep.rc == 0
+    assert "WAIVED" in rep.reason
+
+
+def test_waiver_too_short_does_not_downgrade(tmp_path):
+    """The >=WAIVER_MIN floor is enforced, not decorative — a placeholder
+    string one character short of it must not buy a pass."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    (run / "waivers.json").write_text(json.dumps({
+        G.WAIVER_KEY: "x" * (G.WAIVER_MIN - 1)}))
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR"
+    assert rep.rc == 1
+
+
+def test_no_waivers_json_at_all_still_fails(tmp_path):
+    """The base case (no waiver mechanism touched) must be untouched by this
+    addition — negative control for the waiver feature itself."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR"
+    assert rep.rc == 1
+
+
+def test_waiver_does_not_touch_an_unrelated_contradiction_free_run(tmp_path):
+    """A waiver present but nothing to waive: a CONSISTENT run stays
+    CONSISTENT, not accidentally promoted or altered."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    (run / "waivers.json").write_text(json.dumps({
+        G.WAIVER_KEY: "x" * G.WAIVER_MIN}))
+    rep = G.check(run)
+    assert rep.state == "CONSISTENT"
+
+
 def test_defect_pass_with_waivers_headline_over_fail(tmp_path):
     """A QUALIFIED pass is still a pass to a human reader — this is the exact
     token the measured escape used."""
@@ -123,13 +166,20 @@ def test_defect_verdict_section_lead_emphasis_over_fail(tmp_path):
 
 
 def test_defect_fires_when_only_a_phase_report_carries_the_fail(tmp_path):
-    """No aggregate report — the newest phase report is the counterpart. The
-    escape must not be evadable by deleting the aggregate."""
+    """No aggregate report — a phase report is the counterpart. The escape must
+    not be evadable by deleting the aggregate.
+
+    The `source` label changed from `newest_phase` to `strictest_phase` in
+    2026-08-04's fix: the selection no longer consults `st_mtime`, because this
+    gate runs under an umbrella that rewrites the very files it would be
+    timing. The BEHAVIOUR this test pins — rc 1, counterpart taken from a phase
+    report rather than an aggregate — is unchanged."""
     run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL",
                  orch_name="phase3_one_shot.json")
     rep = G.check(run)
     assert rep.rc == 1
-    assert rep.orchestrator["source"] == "newest_phase"
+    assert rep.orchestrator["source"] == "strictest_phase"
+    assert rep.orchestrator["report"].endswith("phase3_one_shot.json")
 
 
 def test_defect_failure_names_both_sides_with_locations(tmp_path):
@@ -415,3 +465,282 @@ def test_the_verdict_vocabulary_is_NOT_widened():
     import deliverable_verdict_consistency_check as M
     for word in ("PRODUCTION-READY", "CONVERGED", "COMPLETE", "CLEAN"):
         assert M._TOKEN_RE.match(word) is None, word
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #797 item 1 — A FRESHNESS JUDGEMENT THE JUDGE ITSELF PERTURBS.
+#
+# `read_orchestrator_verdict` used to take the per-phase report with the
+# greatest `st_mtime`. Two independent reasons that is not a measurement of
+# this run, either fatal on its own:
+#
+#   1. This gate is registered under `flow_compliance_check`, which is a
+#      producer as well as a judge — one invocation rewrites 17 tracked files
+#      and adds 25 (measured 2026-08-04; the measurement `--read-only` exists
+#      for). The orchestrator reports are inside that set, so the umbrella
+#      changes WHICH report this gate selects purely by having looked.
+#   2. On a fresh checkout git stamps every file with the checkout time, so
+#      `m > best[0]` is false for every candidate after the first and "newest"
+#      degrades silently to glob-then-alphabetical order.
+#
+# The tests below drive the REAL entry point and assert the property directly:
+# permuting only the mtimes of a fixed tree must not move the verdict.
+# ═══════════════════════════════════════════════════════════════════════════
+import os as _os
+
+
+def _phase_only_run(tmp_path: Path, verdicts: dict, mtimes: dict) -> Path:
+    """A run with NO aggregate report and several per-phase ones, so the
+    tie-break is what decides. `verdicts` and `mtimes` are keyed by filename."""
+    run = tmp_path / "run"
+    orch = run / "reports" / "orchestrator"
+    orch.mkdir(parents=True, exist_ok=True)
+    run.joinpath("RESULT.md").write_text(_PASS_MD)
+    for name, v in verdicts.items():
+        (orch / name).write_text(json.dumps({"verdict": v}))
+    for name, t in mtimes.items():
+        _os.utime(orch / name, (t, t))
+    return run
+
+
+def test_permuting_only_the_mtimes_cannot_move_the_verdict(tmp_path):
+    """THE property. Identical bytes, opposite mtime orderings: one verdict.
+
+    Before the fix this returned rc 1 with one ordering and rc 0 with the
+    other — the umbrella that drives this gate rewrites these very files, so
+    the run's verdict was decided by the order the auditor happened to touch
+    them."""
+    verdicts = {"phase2_one_shot.json": "PASS",
+                "phase3_one_shot.json": "FAIL"}
+    seen = []
+    for i, mt in enumerate(({"phase2_one_shot.json": 1000,
+                             "phase3_one_shot.json": 2000},
+                            {"phase2_one_shot.json": 2000,
+                             "phase3_one_shot.json": 1000})):
+        rep = G.check(_phase_only_run(tmp_path / f"p{i}", verdicts, mt))
+        seen.append((rep.rc, rep.state, Path(rep.orchestrator["report"]).name))
+    assert seen[0] == seen[1], (
+        f"the same tree gave two answers under two mtime orderings: {seen}")
+
+
+def test_all_equal_mtimes_still_reaches_the_failing_report(tmp_path):
+    """The fresh-checkout case, which the mtime rule could not express at all:
+    git gives every file the same stamp, so `newest` collapsed to glob order
+    and whichever directory a report happened to sit in decided the run."""
+    rep = G.check(_phase_only_run(
+        tmp_path, {"phase2_one_shot.json": "PASS",
+                   "phase3_one_shot.json": "FAIL"},
+        {"phase2_one_shot.json": 1000, "phase3_one_shot.json": 1000}))
+    assert rep.rc == 1, "a recorded phase FAIL must not be outvoted by a tie"
+    assert Path(rep.orchestrator["report"]).name == "phase3_one_shot.json"
+
+
+def test_a_disagreeing_set_is_disclosed_not_silently_resolved(tmp_path):
+    """A choice was made among reports that disagree; the evidence has to name
+    what it did NOT compare against, or a reader cannot tell a choice happened."""
+    rep = G.check(_phase_only_run(
+        tmp_path, {"phase2_one_shot.json": "PASS",
+                   "phase3_one_shot.json": "FAIL"},
+        {"phase2_one_shot.json": 1000, "phase3_one_shot.json": 2000}))
+    assert rep.orchestrator["source"] == "strictest_phase_of_disagreeing"
+    got = {(Path(c["report"]).name, c["verdict"])
+           for c in rep.orchestrator["candidates"]}
+    assert got == {("phase2_one_shot.json", "PASS"),
+                   ("phase3_one_shot.json", "FAIL")}, got
+
+
+def test_agreeing_reports_are_not_reported_as_a_disagreement(tmp_path):
+    """Negative control: when every candidate agrees there was no choice to
+    disclose, and the gate must not manufacture one."""
+    rep = G.check(_phase_only_run(
+        tmp_path, {"phase2_one_shot.json": "PASS",
+                   "phase3_one_shot.json": "PASS_WITH_WAIVERS"},
+        {"phase2_one_shot.json": 1000, "phase3_one_shot.json": 2000}))
+    assert rep.rc == 0
+    assert rep.orchestrator["source"] == "strictest_phase"
+    assert "candidates" not in rep.orchestrator
+
+
+def test_the_aggregate_still_wins_when_it_exists(tmp_path):
+    """Unchanged contract: an aggregate report is the deliverable's counterpart
+    and is taken WHOLE, disagreeing phase reports or not. The fix narrows only
+    the no-aggregate fallback."""
+    run = _phase_only_run(tmp_path, {"phase3_one_shot.json": "FAIL"},
+                          {"phase3_one_shot.json": 2000})
+    (run / "reports" / "orchestrator" / "vibe_ic_one_shot.json").write_text(
+        json.dumps({"verdict": "PASS"}))
+    rep = G.check(run)
+    assert rep.orchestrator["source"] == "aggregate"
+    assert rep.rc == 0
+
+
+def test_one_physical_report_reached_by_two_globs_is_not_a_disagreement(
+        tmp_path):
+    """`reports/orchestrator/*_one_shot.json` and `reports/*_one_shot.json` can
+    name ONE file through two paths. Counting it twice would invent a
+    disagreement out of a single report."""
+    run = tmp_path / "run"
+    orch = run / "reports" / "orchestrator"
+    orch.mkdir(parents=True)
+    run.joinpath("RESULT.md").write_text(_PASS_MD)
+    (orch / "phase3_one_shot.json").write_text(json.dumps({"verdict": "PASS"}))
+    link = run / "reports" / "phase3_one_shot.json"
+    try:
+        link.symlink_to(orch / "phase3_one_shot.json")
+    except OSError:
+        pytest.skip("symlinks unavailable on this filesystem")
+    rep = G.check(run)
+    assert rep.orchestrator["source"] == "strictest_phase"
+    assert "candidates" not in rep.orchestrator
+
+
+# ===========================================================================
+# vibe-ic#883 — THE COMPLETION AUDIT IS A VERDICT SOURCE TOO.
+#
+# The module's docstring cited `phase23_completion_audit.json` from the day it
+# was written and never read it. Because an AGGREGATE report short-circuits the
+# candidate search, a FAIL audit sat invisibly behind a PASS aggregate — and the
+# check returned exit 0 on the exact deliverable-over-FAIL shape it exists to
+# catch. Measured on the shipped tree
+# benchmark-data/ic/caravel_user_project/v1.9.43_sky130A; the false certificate
+# stood 6 days and was retired by a human, not by this gate.
+#
+# These tests are the defect-direction mutation for that escape: revert the fix
+# and the first two FAIL.
+# ===========================================================================
+def _add_audit(run: Path, verdict: str,
+               name: str = "phase23_completion_audit.json") -> Path:
+    d = run / "reports" / "audit"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / name
+    p.write_text(json.dumps({"phase": "all", "verdict": verdict}, indent=2))
+    return p
+
+
+def test_defect_pass_aggregate_hides_fail_completion_audit(tmp_path):
+    """THE #883 escape, reproduced exactly: deliverable PASS, aggregate
+    orchestrator PASS, completion audit FAIL. The aggregate must NOT be allowed
+    to short-circuit past the audit."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS_WITH_WAIVERS")
+    _add_audit(run, "FAIL")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+    # The audit must be NAMED as the source, so a reader can see which record
+    # decided it rather than having to infer it.
+    assert "completion_audit" in str(rep.orchestrator.get("source"))
+    assert rep.orchestrator["verdict"] == "FAIL"
+    # And the displaced value is retained: a choice was made, not hidden.
+    assert rep.orchestrator["displaced"]["verdict"] == "PASS_WITH_WAIVERS"
+
+
+def test_defect_fail_audit_beats_pass_when_no_aggregate_exists(tmp_path):
+    """Same escape through the per-phase lane rather than the aggregate lane."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS",
+                 orch_name="phase3_one_shot.json")
+    _add_audit(run, "FAIL")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+
+
+def test_lenient_audit_never_overrides_a_strict_orchestrator(tmp_path):
+    """The asymmetry is preserved. A PASS audit must NOT rescue a deliverable
+    from a FAIL orchestrator — that would open the escape from the other side."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    _add_audit(run, "PASS")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+
+
+def test_underclaiming_over_a_fail_audit_is_still_not_a_failure(tmp_path):
+    """Honest direction: deliverable FAIL over an audit FAIL is consistent, and
+    a deliverable stricter than the record is never punished."""
+    run = _mkrun(tmp_path, deliverable=_FAIL_MD, orch_verdict="PASS")
+    _add_audit(run, "FAIL")
+    rep = G.check(run)
+    assert rep.rc == 0, rep.state
+
+
+def test_audit_absent_changes_nothing(tmp_path):
+    """No audit in the tree -> byte-identical behaviour to before #883."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    rep = G.check(run)
+    assert rep.rc == 0, rep.state
+    assert rep.orchestrator["source"] == "aggregate"
+
+
+def test_agreeing_audit_is_recorded_even_when_it_changes_nothing(tmp_path):
+    """A consulted-and-agreed audit must still be visible in the evidence, or
+    'the audit was read' and 'there was no audit' look identical."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _add_audit(run, "PASS")
+    rep = G.check(run)
+    assert rep.rc == 0, rep.state
+    assert rep.orchestrator["audit_verdict"] == "PASS"
+
+
+# ===========================================================================
+# vibe-ic#897 — AN UNREADABLE SECOND OPINION MUST NOT READ AS AGREEMENT.
+#
+# `_load_verdict_json` collapses missing / wrong-key / empty / zero-byte /
+# malformed into ONE `None`, so "there is no audit" and "the audit is corrupt"
+# arrived identically — and the gate printed "agrees in polarity" having read
+# one record while the run shipped two. Four of the five measured silencing
+# edits now DISCLOSE. The fifth (delete the file) still passes, and that is
+# stated rather than papered over: an absent file is genuinely
+# indistinguishable from a run that never produced one.
+# ===========================================================================
+def _audit(run: Path, body: str | None, name="phase23_completion_audit.json"):
+    d = run / "reports" / "audit"
+    d.mkdir(parents=True, exist_ok=True)
+    if body is not None:
+        (d / name).write_text(body)
+
+
+@pytest.mark.parametrize("body,label", [
+    (json.dumps({"result": "FAIL"}), "wrong key"),
+    ("{}", "empty object"),
+    ("", "zero bytes"),
+    ("{not json", "malformed"),
+])
+def test_an_unreadable_audit_is_disclosed_not_called_agreement(
+        tmp_path, body, label):
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _audit(run, body)
+    rep = G.check(run)
+    assert rep.verdict == "DISCLOSED", f"{label}: {rep.verdict} / {rep.state}"
+    assert rep.orchestrator.get("audit_unreadable"), label
+    assert "did not parse" in rep.reason.lower(), label
+    # Still not a FAIL: an unreadable record is not evidence of contradiction,
+    # and failing here would adjudicate a question the gate just said it
+    # cannot put.
+    assert rep.rc == 0, label
+
+
+def test_a_readable_agreeing_audit_is_still_a_clean_pass(tmp_path):
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _audit(run, json.dumps({"verdict": "PASS"}))
+    rep = G.check(run)
+    assert rep.verdict == "PASS" and rep.state == "CONSISTENT", rep.state
+    assert not rep.orchestrator.get("audit_unreadable")
+
+
+def test_a_readable_fail_audit_still_beats_a_pass_aggregate(tmp_path):
+    """The #883 behaviour must survive the #897 change."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    _audit(run, json.dumps({"verdict": "FAIL"}))
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", rep.state
+    assert rep.rc == 1
+
+
+def test_no_audit_file_at_all_is_not_reported_as_unreadable(tmp_path):
+    """The honest limit of this fix, pinned so it cannot drift silently: an
+    ABSENT audit is indistinguishable from a run that never produced one, so
+    it stays a clean PASS and is NOT claimed as a lost second opinion."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    rep = G.check(run)
+    assert rep.verdict == "PASS", rep.verdict
+    assert not rep.orchestrator.get("audit_unreadable")

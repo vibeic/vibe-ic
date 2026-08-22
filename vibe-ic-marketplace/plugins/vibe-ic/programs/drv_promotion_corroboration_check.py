@@ -67,7 +67,26 @@ _PNR_DIRS = ("phase3/stage3/pnr", "pnr")
 
 # A DRV table row: "<pin>  <limit>  <value>  <slack>". A NEGATIVE trailing
 # slack is a violation. Matches slew and capacitance tables identically.
-_DRV_ROW_RE = re.compile(r"^\s*\S+\s+-?[\d.]+\s+-?[\d.]+\s+(-[\d.]+)\s*$", re.M)
+#
+# vibe-ic#579 — the `\s*$` used to sit immediately after the slack field, and
+# OpenSTA does not end the line there. Every violating row it prints carries a
+# trailing tag:
+#
+#     _07896_/B0                              3.00    6.12   -3.12 (VIOLATED)
+#
+# so the pattern matched NOTHING, `signoff_drv_violations()` returned 0 for every
+# report, and this BLOCKING gate could not fail. Measured on a real shipped
+# `sta_mcorner_ocv.rpt`: 0 matches against 4 rows carrying `(VIOLATED)`.
+#
+# The trailing group is OPTIONAL rather than required. A row ending in a bare
+# negative slack is still a violation — requiring the tag would trade one
+# unfireable gate for a narrower one, and would tie this gate to one tool's
+# choice of decoration. Measured on the same corpus: 0 rows end in a bare
+# negative slack today, so the optional arm changes no current verdict and
+# exists so a build that stops printing the tag does not silently re-empty this
+# gate.
+_DRV_ROW_RE = re.compile(
+    r"^\s*\S+\s+-?[\d.]+\s+-?[\d.]+\s+(-[\d.]+)\s*(?:\([A-Z]+\))?\s*$", re.M)
 
 
 def find_signoff_report(project: Path) -> Optional[Path]:
@@ -166,6 +185,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     rep = check(project)
     print(f"=== DRV promotion corroboration ===\n"
           f"verdict: {rep['verdict']}\n{rep['reason']}")
+    if rep["verdict"] == "VACUOUS_PASS":
+        # vibe-ic#1115. The word was already right and the SHAPE was not:
+        # `flow_compliance_check._stdout_signals_vacuous` matches the prefix at
+        # line start, so "verdict: VACUOUS_PASS" reached nobody and the step was
+        # recorded as an ordinary PASS. Measured against the consumer directly.
+        print(f"VACUOUS_PASS: {rep['reason']}")
     if a.json:
         Path(a.json).write_text(json.dumps(rep, indent=2, ensure_ascii=False))
     return rep["rc"]

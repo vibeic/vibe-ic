@@ -279,6 +279,63 @@ def _lef_via_cut_counts(lef_text: str) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
+#
+# THE DRIFT: `verdict = "PASS_WITH_ADVISORIES" if advisories else "PASS"`, where
+# `advisories` counts only WARNING findings. When the via-redundancy screen
+# cannot run — routed.def has no parseable VIAS section, or its NETS section
+# references no via — the gate says so HONESTLY, but it says it as an INFO
+# finding. INFO does not reach `advisories`, so the record carries a plain PASS,
+# indistinguishable from a run whose vias were screened and found redundant.
+#
+# The gate's own message calls that skip "honest", and it is — at the moment it
+# is printed. What is not visible later is that the PASS covers a screen that
+# never ran, which is the whole reason a published record needs re-adjudicating
+# rather than re-reading.
+import _record_adjudication as _ra  # noqa: E402
+
+#: The INFO categories this gate emits when the via screen could not run.
+_VIA_SCREEN_SKIPPED = ("VIA_DEFS_NOT_FOUND", "VIA_USES_NOT_FOUND")
+
+
+def _via_screen_vacuity(record: dict):
+    """Would this gate still call this a plain PASS, given what it screened?"""
+    if record.get("verdict") != "PASS":
+        return None                    # PASS_WITH_ADVISORIES already says more
+    cats = {str(f.get("category", "")) for f in (record.get("findings") or [])
+            if isinstance(f, dict)}
+    skipped = sorted(cats & set(_VIA_SCREEN_SKIPPED))
+    if not skipped:
+        return None                    # the screen really did run
+    return _ra.Supersession(
+        would_issue="VACUOUS_PASS",
+        because=("the record carries a plain PASS while also carrying "
+                 f"{', '.join(skipped)} — the via-redundancy screen could not "
+                 "run on that design, so the PASS covers a check that never "
+                 "examined a via. The skip was disclosed as INFO, which does "
+                 "not reach the advisory tier the verdict is built from, so "
+                 "the verdict alone reads as a screened-and-clean result"),
+    )
+
+
+RECORD_ADJUDICATION = _ra.declare(
+    __file__,
+    gate="dfm_screen_check",
+    decision_roots=("audit",),
+    decision_digest="e9d020a610b887db6483ba7b01e61e505408321e15b2dd05353a731de8d76f90",
+    rules=(
+        _ra.Rule(
+            rule_id="dfm_screen_check.via-screen-did-not-run",
+            landed_in="#562",
+            requires=("verdict", "findings"),
+            decide=_via_screen_vacuity,
+            what=("a plain PASS carrying VIA_*_NOT_FOUND screened no via at all"),
+        ),
+    ),
+)
+
+
 def audit(project: Path) -> dict:
     findings = []
     routed = _pl.pnr_dir(project) / "routed.def"

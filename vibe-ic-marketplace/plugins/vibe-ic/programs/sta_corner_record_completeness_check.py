@@ -173,7 +173,8 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -351,6 +352,34 @@ def _merge_slack(cur: Optional[float], new: Optional[float]) -> Optional[float]:
     return new if cur is None else min(cur, new)
 
 
+# ── report basis ───────────────────────────────────────────────────────────
+#: A report's own `STA_BASIS:` stamp, the same self-disclosure
+#: `eda_report_audit` already reads. PRE-PnR emitters stamp
+#: `PRE_LAYOUT_ESTIMATE`; post-route emitters stamp `POST_ROUTE_SPEF` /
+#: `POST_ROUTE_NO_SPEF` or carry no stamp at all.
+_STA_BASIS_STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)",
+                                 re.MULTILINE)
+
+BASIS_PRE_LAYOUT = "PRE_LAYOUT"
+BASIS_SIGNOFF = "SIGNOFF"
+
+
+def report_basis(text: str) -> str:
+    """Which side of place-and-route a report DISCLOSES ITSELF to be from.
+
+    Only an EXPLICIT `PRE_LAYOUT*` stamp is treated as pre-layout. Everything
+    else — a `POST_ROUTE*` stamp, an unrecognised stamp, or no stamp at all —
+    is `SIGNOFF`. That asymmetry is deliberate and is the safe direction: an
+    unstamped report keeps exactly the standing it has today, so this function
+    can only ever DEMOTE a report that went out of its way to say it is not
+    sign-off evidence.
+    """
+    m = _STA_BASIS_STAMP_RE.search(text or "")
+    if m and m.group(1).upper().startswith("PRE_LAYOUT"):
+        return BASIS_PRE_LAYOUT
+    return BASIS_SIGNOFF
+
+
 # ── slack extraction ───────────────────────────────────────────────────────
 def extract_slacks(text: str) -> Dict[str, Optional[float]]:
     """Worst SETUP slack, worst HOLD slack and TNS from an OpenSTA report body.
@@ -447,6 +476,82 @@ def extract_slacks(text: str) -> Dict[str, Optional[float]]:
             "tns_ns": min(tns_pool) if tns_pool else None}
 
 
+def _row_instance(line: str) -> str:
+    """The INSTANCE a DRV row belongs to.
+
+    OpenSTA prints `<instance>/<pin>` in the first column:
+
+        _07014_/A2                              1.50   27.34  -25.84 (VIOLATED)
+
+    Hierarchical names contain `/` too, so the PIN is the last segment and the
+    instance is everything before it. Returns "" when the row has no leading
+    identifier, which is not the same as an instance named "".
+    """
+    tok = line.split()[0] if line.split() else ""
+    if "/" not in tok:
+        return ""
+    return tok.rsplit("/", 1)[0]
+
+
+def spare_instances(project: Path) -> Optional[Set[str]]:
+    """Instance names the SPARE-CELL producer recorded, or None if it recorded
+    nothing here.
+
+    THE PRODUCER ALREADY KNOWS (vibe-ic#582). `_build_spare_postfix_tcl`
+    (#563 r2) deliberately ties every unconnected spare INPUT to one
+    `spare_tielo` net, because floating spare inputs make netgen wire their
+    pins to a neighbour's pseudo-net and LVS mismatches. That is correct and
+    must not be undone — but it puts every spare input on ONE net, and a net
+    with hundreds of sinks has an enormous transition, so those pins land in
+    the max-slew table as if they were design violations.
+
+    Read from `spare_cells.json` rather than re-derived: the producer states
+    `tied_off` and lists every instance, so no name heuristic is needed. A
+    `spare_`-prefix rule would be exactly the keyword an differently-named pool
+    escapes, and this repo has removed several of those.
+
+    None means "no spare record here" — NOT "no spare cells". The caller must
+    not report an attribution it could not compute.
+    """
+    for cand in (project / "phase3" / "stage3" / "pnr" / "spare_cells.json",
+                 project / "reports" / "phase3" / "spare_cells.json"):
+        if not cand.is_file():
+            continue
+        try:
+            d = json.loads(cand.read_text(errors="replace"))
+        except (OSError, ValueError):
+            return None
+        if not d.get("tied_off"):
+            # Not tied off -> its inputs are floating, not sinks on one net,
+            # and none of this applies.
+            return set()
+        return {i.get("name") for i in (d.get("instances") or [])
+                if i.get("name")}
+    return None
+
+
+def attribute_drv(rows: Dict[str, List[str]],
+                  spares: Optional[Set[str]]) -> Dict[str, object]:
+    """Split a DRV row population into design rows and tie-off rows.
+
+    DISCLOSED, NEVER SUBTRACTED. A DC-constant net's slew is meaningless, but a
+    total that quietly shrinks is the defect this repo keeps removing; both
+    numbers are published and their sum is still the total.
+    """
+    if spares is None:
+        return {"attributed": False,
+                "reason": "no spare_cells.json under this project"}
+    per_kind = {}
+    d_tot = s_tot = 0
+    for kind, insts in rows.items():
+        s_n = sum(1 for i in insts if i in spares)
+        per_kind[kind] = {"design": len(insts) - s_n, "constant_net": s_n}
+        d_tot += len(insts) - s_n
+        s_tot += s_n
+    return {"attributed": True, "per_kind": per_kind,
+            "design": d_tot, "constant_net": s_tot, "total": d_tot + s_tot}
+
+
 def extract_drv(text: str) -> Dict[str, object]:
     """DRV evidence from one STA report body: was OpenSTA ASKED for max_slew /
     max_capacitance / max_fanout, and what did it answer?
@@ -456,6 +561,9 @@ def extract_drv(text: str) -> Dict[str, object]:
     never asked — which this gate treats as a failure, not as a clean result,
     because an unqueried limit and a met limit look identical downstream."""
     counts: Dict[str, int] = {}
+    #: kind -> the INSTANCE each violating row belongs to, so a total can be
+    #: attributed instead of only sized (vibe-ic#582).
+    rows: Dict[str, List[str]] = {}
     queried = False
     query_error: Optional[str] = None
     kinds_seen: List[str] = []
@@ -463,8 +571,10 @@ def extract_drv(text: str) -> Dict[str, object]:
     # title": `report_check_types` prints SEVERAL tables back to back, so an
     # open-ended table would keep counting rows belonging to the NEXT one (the
     # `Group Slack` / `Required Width` tables OpenSTA emits alongside). A table
-    # ends at the first line carrying no digit, which is where the next title
-    # begins.
+    # ends at the first NON-BLANK line carrying no digit, which is where the
+    # next title begins. Blank lines are interior to a table (OpenSTA separates
+    # `max capacitance` rows with them) and only suspend it — see the
+    # ROWS_BLANK branch below.
     kind: Optional[str] = None
     state = "IDLE"
 
@@ -517,25 +627,79 @@ def extract_drv(text: str) -> Dict[str, object]:
             continue
 
         # state == ROWS: the table ends at the first line with no digit in it.
-        if not line or not any(ch.isdigit() for ch in line):
+        #
+        # ...but a BLANK line is NOT that terminator, and treating it as one
+        # under-counted a whole check kind. MEASURED on caravel_user_project x
+        # sky130A (bit-identical routes on two hosts, plugin v1.10.18): OpenSTA
+        # prints the `max capacitance` table with a blank line BETWEEN EVERY
+        # ROW, while `max slew` and `max fanout` print theirs contiguously. The
+        # walk therefore closed the cap table after its FIRST row in each
+        # corner, and a sign-off report holding 48 VIOLATED capacitance rows
+        # (24 setup + 24 hold) was recorded as `max_capacitance x2`. A 24x
+        # under-count, in the LENIENT direction — the record understated the
+        # design's own sign-off DRV population.
+        #
+        # A blank therefore only SUSPENDS the table; the next line decides.
+        # Every real terminator (a DRV title, a non-DRV title, an
+        # `=== SECTION ===` banner, the check-types markers) is consumed
+        # earlier in this loop, so each still closes or re-opens a table
+        # exactly as it did before — this can only stop the walk from ending
+        # a table early, never keep one open across a title.
+        if not line:
+            state = "ROWS_BLANK"
+            continue
+        if not any(ch.isdigit() for ch in line):
             kind, state = None, "IDLE"
             continue
+        if state == "ROWS_BLANK":
+            state = "ROWS"
         if _VIOLATED_RE.search(line):
             counts[kind] = counts.get(kind, 0) + 1
+            rows.setdefault(kind, []).append(_row_instance(line))
             continue
         mneg = _TRAILING_NEG_RE.search(line)
         # Only a data row (a name followed by numbers) counts, never the title
         # underline or a stray negative in prose.
         if mneg and len(line.split()) >= 3:
             counts[kind] = counts.get(kind, 0) + 1
+            rows.setdefault(kind, []).append(_row_instance(line))
 
     violations = {k: v for k, v in counts.items() if v > 0}
+    _rows = {k: v for k, v in rows.items() if v}
+    # vibe-ic#573 — a check type the run ASKED FOR whose table never appeared.
+    #
+    # `kinds_seen` is what the emitter's marker says was queried; `counts` gets a
+    # key only when a table with that title is actually PRINTED. The difference is
+    # a check that was requested and produced no table at all, which is NOT the
+    # same fact as a table with zero violator rows:
+    #
+    #   table present, no rows   the check ran over a real population and found
+    #                            nothing  ->  a genuine zero
+    #   no table at all          the check had nothing to report ON  ->  UNMEASURED
+    #
+    # Measured on caravel_user_project x sky130A: `set_max_fanout 16` IS declared
+    # in the sign-off SDC, and `report_check_types -max_fanout -violators` prints
+    # no fanout table whatsoever, because OpenSTA excludes constant-driven pins
+    # (`CheckFanouts::checkPin` -> `!sim()->isConstant(pin)`) and every tie cell
+    # present at link time is one. The design's tie-off net carries 30 loads
+    # against that limit of 16 and is silently outside the check.
+    #
+    # The pre-existing `SIGNOFF_MAX_FANOUT_SEMANTICS` note covers only the case
+    # where the SDC declares NO limit. This is the other one: a limit IS declared
+    # and the table is still empty by construction, which that note cannot
+    # distinguish and a reader would take for a clean result.
+    silent = [k for k in kinds_seen if k not in counts]
     return {
         "queried": queried,
         "query_error": query_error,
         "kinds_queried": kinds_seen,
+        "kinds_without_table": silent,
         "violations": violations,
         "total": sum(violations.values()),
+        # The INSTANCE each violating row belongs to, so a caller can attribute
+        # the total rather than only size it (vibe-ic#582). Kept out of the
+        # count so no existing consumer changes.
+        "rows": _rows,
     }
 
 
@@ -733,15 +897,62 @@ def read_records(project: Path,
     recs: Dict[Tuple[str, str], Dict[str, object]] = {}
 
     def _put(axis: str, corner: str, source: str,
-             vals: Dict[str, Optional[float]]) -> None:
+             vals: Dict[str, Optional[float]],
+             basis: str = BASIS_SIGNOFF) -> None:
+        """Record one report's datapoints for (axis, corner), KEEPING BASIS.
+
+        Datapoints are pooled PER BASIS rather than merged across bases. A
+        pre-layout estimate and a post-route measurement of the SAME corner are
+        two measurements of two different things, and `min()` across them
+        reports the pre-layout number as the corner's sign-off slack — which is
+        wrong by as much as the resizer is effective (measured: 100x on a
+        two-report fixture). Resolution happens once, in `_resolve`, after every
+        source has been read.
+        """
         k = _key(axis, corner)
         rec = recs.setdefault(k, {"corner": corner, "axis": axis,
                                   "setup_wns_ns": None, "hold_wns_ns": None,
-                                  "tns_ns": None, "source": source})
+                                  "tns_ns": None, "source": source,
+                                  "_pool": {}, "_src": {}})
+        pool = rec["_pool"].setdefault(basis, {})           # type: ignore[index]
         for f in ("setup_wns_ns", "hold_wns_ns", "tns_ns"):
-            rec[f] = _merge_slack(rec.get(f), vals.get(f))  # type: ignore[arg-type]
+            pool[f] = _merge_slack(pool.get(f), vals.get(f))
+        srcs = rec["_src"].setdefault(basis, [])            # type: ignore[index]
+        if source not in srcs:
+            srcs.append(source)
         if source not in str(rec["source"]).split(", "):
             rec["source"] = f"{rec['source']}, {source}"
+
+    def _resolve() -> None:
+        """Collapse the per-basis pools onto the row the rules read.
+
+        SIGN-OFF basis wins PER FIELD when it has a value; a field the sign-off
+        reports do not carry falls back to the pre-layout pool UNCHANGED, so a
+        project with only pre-layout evidence keeps exactly today's numbers and
+        today's verdict. Superseded pre-layout values are retained on the row
+        for disclosure, never discarded silently.
+        """
+        for rec in recs.values():
+            pools = rec["_pool"]                             # type: ignore[index]
+            signoff = pools.get(BASIS_SIGNOFF, {})
+            prelay = pools.get(BASIS_PRE_LAYOUT, {})
+            used, superseded = {}, {}
+            for f in ("setup_wns_ns", "hold_wns_ns", "tns_ns"):
+                if signoff.get(f) is not None:
+                    rec[f] = signoff[f]
+                    used[f] = BASIS_SIGNOFF
+                    if prelay.get(f) is not None:
+                        superseded[f] = prelay[f]
+                else:
+                    rec[f] = prelay.get(f)
+                    if rec[f] is not None:
+                        used[f] = BASIS_PRE_LAYOUT
+            rec["basis_used"] = used
+            if superseded:
+                rec["pre_layout_superseded_ns"] = superseded
+                rec["pre_layout_sources"] = list(
+                    rec["_src"].get(BASIS_PRE_LAYOUT, []))   # type: ignore[index]
+            del rec["_pool"], rec["_src"]
 
     declared = decl.get("declared") or []
     rc_role_corner = {d["role"]: d["corner"] for d in declared  # type: ignore[index]
@@ -769,7 +980,7 @@ def read_records(project: Path,
                 "setup_wns_ns": vals["setup_wns_ns"] if role == "setup" else None,
                 "hold_wns_ns": vals["hold_wns_ns"] if role == "hold" else None,
                 "tns_ns": vals["tns_ns"],
-            })
+            }, report_basis(text))
 
     # -- multi-corner OCV report (PROCESS axis): headers name the process corner
     ocv = _first_existing(project, _MCORNER_OCV_CANDIDATES)
@@ -787,7 +998,7 @@ def read_records(project: Path,
                 "setup_wns_ns": vals["setup_wns_ns"] if role == "setup" else None,
                 "hold_wns_ns": vals["hold_wns_ns"] if role == "hold" else None,
                 "tns_ns": vals["tns_ns"],
-            })
+            }, report_basis(text))
 
     # -- per-corner sweep (PROCESS axis): one report per corner, name in filename
     for rel in _PER_CORNER_DIRS:
@@ -803,7 +1014,7 @@ def read_records(project: Path,
             except OSError:
                 body = ""
             _put(AXIS_PROCESS, m.group(1), _rel(project, rpt),
-                 extract_slacks(body))
+                 extract_slacks(body), report_basis(body))
 
     # -- nominal single-corner SPEF report: the typ datapoint. Named from the
     #    flow's own RC availability list (the extracted corner that was NOT
@@ -821,8 +1032,10 @@ def read_records(project: Path,
             body = nom.read_text(errors="replace")
         except OSError:
             body = ""
-        _put(AXIS_RC, name, _rel(project, nom), extract_slacks(body))
+        _put(AXIS_RC, name, _rel(project, nom), extract_slacks(body),
+             report_basis(body))
 
+    _resolve()
     return recs
 
 
@@ -833,6 +1046,26 @@ _AXIS_ARTIFACTS = (
     (AXIS_PROCESS, _MCORNER_OCV_CANDIDATES, _PROCESS_STANCE_CANDIDATES,
      ("multi_process_corner",)),
 )
+
+
+def _drv_with_attribution(project: Path, text: str):
+    """`extract_drv` plus the tie-off split, attached where it is EMITTED.
+
+    #582 landed `attribute_drv` and never called it. The capability existed and
+    no artefact carried the answer — a gate can be perfectly correct and wired
+    into a place where it answers nothing. The issue's acceptance asks for the
+    excluded count "reported separately and visibly in the SAME artefact", and
+    that is this dict, which is what the report writes out.
+
+    NOTHING IS SUBTRACTED: `total` and `violations` are byte-identical to what
+    they were, and `attribution.total` is asserted to equal `total`.
+    """
+    if not text:
+        return None
+    drv = extract_drv(text)
+    rows = drv.get("rows") or {}
+    drv["attribution"] = attribute_drv(rows, spare_instances(project))
+    return drv
 
 
 def read_axis_evidence(project: Path,
@@ -926,7 +1159,7 @@ def read_axis_evidence(project: Path,
             "unresolved_reason": unresolved_reason,
             "resolution_source": res_src,
             "resolution_recorded": bool(lib_by_corner),
-            "drv": extract_drv(text) if text else None,
+            "drv": _drv_with_attribution(project, text),
         })
     return out
 
@@ -1005,6 +1238,13 @@ def evaluate(project: Path,
             "role_class": role_class,
             "declared": is_declared,
             "reported": rec is not None,
+            # Which side of PnR each number came from, and — when a sign-off
+            # datapoint superseded a pre-layout one for the same corner — what
+            # the pre-layout estimate said. Carried so the correction is
+            # DISCLOSED on the artefact rather than applied silently.
+            "basis_used": (rec.get("basis_used") or None) if rec else None,
+            "pre_layout_superseded_ns": (rec.get("pre_layout_superseded_ns")
+                                         or None) if rec else None,
             "setup_wns_ns": rec.get("setup_wns_ns") if rec else None,
             "hold_wns_ns": rec.get("hold_wns_ns") if rec else None,
             "tns_ns": rec.get("tns_ns") if rec else None,
@@ -1216,15 +1456,58 @@ def evaluate(project: Path,
                 f"from a met one, so this record cannot show a slew violation "
                 f"even if every net has one")
             continue
+        # vibe-ic#573 — a check type that was ASKED FOR and printed no table.
+        # Reported BEFORE the violation branch because the two are independent:
+        # a record can carry real max_slew violations AND a silently absent
+        # max_fanout table, and reporting only the former would let the reader
+        # conclude the rest was checked and clean.
+        #
+        # DISCLOSED, NOT BLOCKING, and that is a deliberate split rather than
+        # timidity. The cause is in OpenSTA (`CheckFanouts::checkPin` excludes
+        # constant-driven pins, and every tie cell linked in from disk is one), so
+        # EVERY design with a tie-off would fail this the moment it blocked —
+        # which is a gate people switch off, not a gate that gets answered. The
+        # fix belongs in the fork; until it lands, the honest record is that the
+        # limit was declared, the check was requested, and nothing was measured.
+        silent = drv.get("kinds_without_table") or []
+        if silent:
+            rules.append("R5_DRV_KIND_UNMEASURED")
+            findings.append(
+                f"R5 {rpt} ({axis} axis) requested {', '.join(sorted(silent))} "
+                f"and OpenSTA printed no table for it. An ABSENT table is not a "
+                f"table with zero rows: the check reported on nothing, so this "
+                f"record cannot show a violation of that kind even if the design "
+                f"has one. On max_fanout this is reproducible — a declared "
+                f"set_max_fanout with every tie cell excluded as constant-driven "
+                f"(vibe-ic#573). DISCLOSED, not blocking.")
+
         viol: Dict[str, int] = drv.get("violations") or {}   # type: ignore[assignment]
         if viol:
             rules.append("R5_DRV_VIOLATION")
             pretty = ", ".join(f"{k} x{v}" for k, v in sorted(viol.items()))
+            # #582: the total could be SIZED and not ATTRIBUTED. On the run
+            # that raised it, 602 of 1767 max-slew rows were the ECO spare
+            # pool's inputs, all tied to one 614-fanout constant net by
+            # `_build_spare_postfix_tcl` — a net whose transition is enormous
+            # and whose slew is meaningless. Both numbers are stated and their
+            # sum is still the total; the count is NOT reduced.
+            att = drv.get("attribution") or {}
+            split = ""
+            if att.get("attributed"):
+                split = (f" — of which {att['design']} are design rows and "
+                         f"{att['constant_net']} are the preserved spare "
+                         f"pool's tied-off inputs on a constant net "
+                         f"(DISCLOSED, not subtracted)")
+            elif att:
+                split = (f" — NOT attributed ({att.get('reason','?')}), so "
+                         f"whether any of these are tie-off rows is unknown "
+                         f"rather than zero")
             findings.append(
                 f"R5 {rpt} ({axis} axis) reports {drv['total']} DRV violation"
-                f"{'' if drv['total'] == 1 else 's'}: {pretty} — design-rule "
-                f"violations are sign-off violations and are surfaced here, "
-                f"not left in the report body for nobody to read")
+                f"{'' if drv['total'] == 1 else 's'}: {pretty}{split} — "
+                f"design-rule violations are sign-off violations and are "
+                f"surfaced here, not left in the report body for nobody to "
+                f"read")
 
     ordered = [r for r in ("R1_INCOMPLETE_CORNER_RECORD",
                            "R2_DECLARED_BUT_UNREPORTED",
@@ -1381,7 +1664,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if out_path is not None:
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(res, indent=2) + "\n")
+            atomic_write_text(out_path, json.dumps(res, indent=2) + "\n")
         except OSError as e:
             print(f"{_PROGRAM}: cannot write {out_path}: {e}", file=sys.stderr)
             return 2
@@ -1393,6 +1676,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ok = tag in ("PASS", "NOT_APPLICABLE", "SINGLE_CORNER_ONLY")
     banner = "PASS" if tag in ("PASS", "NOT_APPLICABLE") else tag
     print(f"[{banner}] {_PROGRAM}: {tag}")
+    if tag == "NOT_APPLICABLE":
+        # vibe-ic#1115. This gate already knew -- "no stance file, pvt_matrix or
+        # STA report declares or records any corner -- there is no timing record
+        # to judge". It said so inside a `[PASS]` banner, and the only channel
+        # `flow_compliance_check` reads on the passing path is this prefix, so
+        # the step was recorded as ordinary multi-corner sign-off over zero
+        # corners.
+        print(f"VACUOUS_PASS: {_PROGRAM} judged 0 corner(s) — "
+              + "; ".join(str(r) for r in res.get("reasons", []))[:200])
     print(render_table(res))
     for reason in res.get("reasons", []):  # type: ignore[union-attr]
         print(f"  - {reason}")

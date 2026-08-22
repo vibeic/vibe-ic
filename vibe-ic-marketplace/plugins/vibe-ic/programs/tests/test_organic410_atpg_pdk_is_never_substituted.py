@@ -29,22 +29,39 @@ _RUNNER = (_PROGRAMS / "design_one_shot_runner.py").read_text()
 
 
 def _sniff(head: str) -> str:
-    """The runner's own branch chain, read out of its source so this test
-    cannot drift from what actually ships."""
-    import _commercial_pdk as _cpdk
-    if "sky130_fd_sc_hd__" in head:
-        return "sky130"
-    if "gf180mcu" in head:
-        return "gf180"
-    if re.search(r"\bsg13g2_[a-z0-9_]+\b", head):
-        return "ihp-sg13g2"
-    if re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
-        return _cpdk.COMMERCIAL_PDK_ID
-    return ""
-
+    """Call the SHIPPED sniff. This used to RE-IMPLEMENT the runner's branch
+    chain inside the test, under a docstring claiming it was "read out of its
+    source so this test cannot drift from what actually ships" — it was not
+    read out of the source, it was a hand-copied duplicate, so every test
+    below would have passed with the real sniff deleted entirely. A control
+    that cannot fail when the thing it guards is removed is not a control."""
+    import tempfile
+    import design_one_shot_runner as _R
+    d = Path(tempfile.mkdtemp())
+    (d / "n.v").write_text(head)
+    return _R._dft_atpg_sniff_pdk(d, "n.v")[1]
 
 def test_the_ihp_branch_is_in_the_shipped_sniff():
-    assert r'\bsg13g2_[a-z0-9_]+\b' in _RUNNER
+    """EXPECTATION CHANGED, deliberately, and this is the record of it.
+
+    This used to assert a REGEX LITERAL was present in the runner's source:
+        assert r'\\bsg13g2_[a-z0-9_]+\\b' in _RUNNER
+    That pins an IMPLEMENTATION, not the property #410 is about. The sniff no
+    longer carries a hand-written branch per PDK; it derives the libraries
+    from `fault_atpg_run.PDK_CONFIG` and scans the WHOLE netlist — which is
+    what this file's own docstring already said was right: "the support
+    existed; only the sniff could not reach it". #410 answered that by adding
+    a row to the second table; deriving from the config deletes the table.
+
+    So this now asserts the PROPERTY: an IHP netlist resolves to a supported
+    entry, wherever in the file its cells appear. It fails if IHP support
+    regresses, and it does NOT fail merely because the code was rewritten."""
+    assert _sniff("module t; sg13g2_dfrbp_1 u1(.D(d));") == "ihp-sg13g2"
+    # ...and at an offset the old 20 KB head could never have reached.
+    late = ("module t;\n" + "  MY_MACRO u(.a(x));\n" * 12000
+            + "  sg13g2_dfrbp_1 ff(.D(d));\nendmodule\n")
+    assert len(late) > 200_000
+    assert _sniff(late) == "ihp-sg13g2"
 
 
 def test_an_ihp_netlist_resolves_to_a_supported_entry():
@@ -85,7 +102,36 @@ def test_the_default_is_no_longer_a_real_pdk():
 
 
 def test_an_unsupported_pdk_returns_rc2_with_the_supported_list():
-    src = (_PROGRAMS / "fault_atpg_run.py").read_text()
-    i = src.index("unsupported pdk:")
-    window = src[i:i + 300]
-    assert "Supported:" in window and "PDK_CONFIG.keys()" in window
+    """A refusal must NAME what is supported, or the caller cannot act on it.
+
+    Checked on every live emission site, with comments and docstrings removed
+    first. This used to take `src.index("unsupported pdk:")` — the FIRST
+    occurrence anywhere in the file — and a later change that merely QUOTED the
+    old message in a comment moved that index onto the quotation and broke the
+    test while the invariant still held. A guard that matches its subject being
+    discussed is the defect it exists to catch, and this repo has now fixed
+    three of those; this is the third.
+    """
+    import io
+    import tokenize
+
+    raw = (_PROGRAMS / "fault_atpg_run.py").read_text()
+    # Strip comments; keep strings, since the message itself IS a string.
+    out, prev_end = [], (1, 0)
+    for tok in tokenize.generate_tokens(io.StringIO(raw).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        if tok.start[0] > prev_end[0]:
+            out.append("\n" * (tok.start[0] - prev_end[0]))
+        out.append(tok.string)
+        prev_end = tok.end
+    code = "".join(out)
+
+    sites = [i for i in range(len(code))
+             if code.startswith("unsupported pdk:", i)]
+    assert sites, "the refusal message is gone — did it stop naming the case?"
+    for i in sites:
+        window = code[i:i + 300]
+        assert "Supported:" in window and "PDK_CONFIG.keys()" in window, (
+            f"an 'unsupported pdk:' refusal at offset {i} does not name the "
+            f"supported set: {window[:160]!r}")

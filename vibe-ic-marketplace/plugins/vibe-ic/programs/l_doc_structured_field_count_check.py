@@ -747,6 +747,67 @@ def _class_sparse_analog_blocks(ic_class: str) -> bool:
     return False
 
 
+def _class_non_analog_phantom_only(ic_class: str, blocks) -> bool:
+    """ORGANIC #676 PARITY for the L5 typed-analog-block floor.
+
+    #676 established the doctrine for the 3 analog P0 gates
+    (`_analog_a_check_common._ic_class_says_non_analog` +
+    `_all_blocks_low_confidence`): a gate must not hard-FAIL a
+    POSITIVELY non-analog IC over a PHANTOM `low_confidence` block that the
+    Phase-1 keyword harvester fabricated from an analog token occurring in
+    digital prose. The sibling analog gates already self-skip as N/A on such
+    an IC; the ones that lacked class awareness were given this predicate.
+
+    This L5 floor is a FOURTH gate in that family and never received it. Its
+    only escapes were the doc's own `no_analog` flag and #634's
+    `sparse_analog_block_set` (which means SPARSE analog, not NO analog) —
+    neither keyed on `analog_applicable`. So a class the registry declares
+    `analog_applicable: false` is held to a ≥3-analog-block floor it can never
+    meet, with the `no_analog: true` escape unavailable precisely BECAUSE the
+    harvester wrote `no_analog: false` off the phantom hit. The gate becomes
+    unsatisfiable through no fault of the design.
+
+    §4.05 no-leak — returns True (→ floor N/A) ONLY when BOTH hold:
+      * the registry marks the detected class `analog_applicable is False`
+        (explicitly; a missing/unknown class is fail-closed), AND
+      * EVERY declared block is tagged `low_confidence: true` — a phantom
+        keyword hit, never a spec-backed block.
+    A real analog class keeps the strict floor. A spec-backed
+    (high-confidence) block on a non-analog class still FAILs — that is a
+    genuine class/doc contradiction and must stay visible. An EMPTY block
+    list returns False so the existing floor still demands the honest
+    `no_analog: true` declaration; this predicate never converts an
+    under-populated doc into a pass.
+
+    chip-AGNOSTIC: a registry semantic flag + the per-block confidence tag;
+    no chip / vendor / PDK / class-name literal drives the decision."""
+    if not ic_class or ic_class in _NO_PROTOCOL_FAIL_CLOSED:
+        return False
+    try:
+        reg = json.loads(
+            (Path(__file__).resolve().parent / "ic_class_registry.json")
+            .read_text())
+    except (OSError, ValueError):
+        return False
+    entry = None
+    for e in reg.get("classes", []):
+        if (e.get("name") == ic_class
+                or ic_class in (e.get("synonyms") or [])):
+            entry = e
+            break
+    # Fail-closed: unknown class, or a class that is not EXPLICITLY
+    # non-analog, keeps the strict floor.
+    if entry is None or entry.get("analog_applicable") is not False:
+        return False
+    # An empty / non-list block set is NOT this path.
+    if not isinstance(blocks, list) or not blocks:
+        return False
+    for b in blocks:
+        if not isinstance(b, dict) or b.get("low_confidence") is not True:
+            return False
+    return True
+
+
 def _class_minimal_honest_absence(ic_class: str) -> bool:
     """ORGANIC #677 — True iff the registry marks this class as a genuinely
     MINIMAL register-mapped peripheral whose input spec legitimately carries
@@ -1216,6 +1277,16 @@ def _check_l_doc(layer: int, data: dict,
         blocks = (data.get("analog_blocks") or data.get("blocks")
                   or data.get("adi_blocks"))
         n_blocks = _list_len_of_dicts(blocks)
+        # ORGANIC #676 PARITY — a POSITIVELY non-analog class whose only
+        # declared blocks are phantom `low_confidence` keyword hits is N/A
+        # here, exactly as it already is for the 3 analog P0 gates #676
+        # covered. Without this the floor is unsatisfiable for such a class:
+        # ≥3 analog blocks is impossible for a design with no analog, and the
+        # `no_analog: true` escape is unavailable precisely BECAUSE the
+        # harvester set it false off the phantom hit. Fail-closed and
+        # no-leak — see `_class_non_analog_phantom_only`.
+        if _class_non_analog_phantom_only(ic_class, blocks):
+            return True, ""
         # ORGANIC #634 — IC-class-aware analog-block floor. The ≥3 default is
         # tuned for a multi-block analog SYSTEM (multi-rail PMIC / analog front-
         # end). A data-converter / mixed-signal class (delta-sigma / SAR /

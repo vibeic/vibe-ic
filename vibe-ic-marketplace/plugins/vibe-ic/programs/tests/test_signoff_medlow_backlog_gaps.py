@@ -769,15 +769,41 @@ def test_a_files_exist_only_step_is_not_gateless(fcc):
     list therefore fired it 0 times on the entire population it was written
     for. The summary names the gate that did not run; only a step with NO gate
     at all summarises to nothing.
+
+    THE EXEMPLAR IS DERIVED, NOT NAMED. This used to read `_step(12)` — step 12
+    was, when the test was written, a step whose gate was `files_exist:
+    [phase2/stage2/synth/post_dft_netlist.v]` and nothing else. v1.10.0
+    (23d96bf5) deliberately added `dft_post_optimization_scan_survival_check` to
+    that gate, so the hard-coded precondition `_declared_gate_commands(...) ==
+    []` became false and the test went red while the PROPERTY it states — a
+    predicate-only gate summarises to something and names no program — stayed
+    exactly true. A step id is an incidental fact about the flow at one moment;
+    the property is the claim. So the exemplar is now SELECTED from the shipped
+    flow by the property itself, and the selection is asserted non-empty, which
+    is what keeps the test from passing by finding nothing to look at.
     """
     assert fcc._declared_gate_summary(None) == ""
     assert fcc._declared_gate_summary({}) == ""
 
-    summary = fcc._declared_gate_summary(_step(12)["gate"])
-    assert summary, "step 12 declares a gate; the summary must describe it"
-    assert "post_dft_netlist.v" in summary, summary
-    assert fcc._declared_gate_commands(_step(12)["gate"]) == [], (
-        "precondition: step 12's gate declares no program")
+    predicate_only = [st for st in _flow_steps()
+                      if st.get("gate")
+                      and fcc._declared_gate_commands(st["gate"]) == []]
+    assert predicate_only, (
+        "NO STEP LEFT: the shipped flow declares no gate that is predicates "
+        "only, so this test examined nothing. That is a real change in the "
+        "flow, not a licence to pass — re-derive what the #675-strict "
+        "self-skip now resolves on before editing this assertion away.")
+
+    for st in predicate_only:
+        gate = st["gate"]
+        summary = fcc._declared_gate_summary(gate)
+        assert summary, (
+            f"step {st['id']} declares a gate; the summary must describe it")
+        # The summary must NAME the predicate's own operand — an empty-ish
+        # word like "files_exist[]" would satisfy `summary` while telling the
+        # reader nothing about which gate did not run.
+        for operand in (gate.get("files_exist") or []):
+            assert operand in summary, (st["id"], operand, summary)
 
 
 def test_declared_gate_summary_covers_the_predicate_kinds(fcc):
@@ -953,20 +979,64 @@ def test_declared_outputs_are_all_required(fcc, tmp_path, sid, files, dropped):
     assert any(dropped.rsplit("/", 1)[-1] in r for r in res.reasons)
 
 
-def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
-    """Step 33's gate must not point --json at reports/phase3/power.json.
+def _gate_commands_verbatim(gate):
+    """Every `*program_exit_zero` command string in a gate, nesting included.
 
-    That path is the step's declared required_output and holds the runner's
-    power summary; the checker writes a different schema, so honouring the flag
-    (which the wrapper now does) would overwrite the power data with an audit
-    of it.
+    `fcc._declared_gate_commands` answers with program NAMES; this test is
+    about the ARGV — specifically the `--json` operand — so it needs the whole
+    string. Walks `all_of` / `any_of` lists and the `optional_program_exit_zero`
+    mapping form, so a gate that grows an arm cannot hide one from this check.
     """
-    gate = _step(33)["gate"]
-    cmd = gate["program_exit_zero"]
-    assert "power_report_check" in cmd
-    assert "--json" in cmd
-    assert "reports/phase3/power.json" not in cmd
-    assert "reports/phase3/power.json" in _step(33)["required_outputs"]
+    out = []
+    if isinstance(gate, dict):
+        for key, val in gate.items():
+            if key.endswith("program_exit_zero"):
+                if isinstance(val, str):
+                    out.append(val)
+                elif isinstance(val, dict) and isinstance(
+                        val.get("command"), str):
+                    out.append(val["command"])
+            elif isinstance(val, (list, dict)):
+                out.extend(_gate_commands_verbatim(val))
+    elif isinstance(gate, list):
+        for item in gate:
+            out.extend(_gate_commands_verbatim(item))
+    return out
+
+
+def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
+    """No arm of step 33's gate may point --json at a declared required_output.
+
+    `reports/phase3/power.json` is the step's own required_output and holds the
+    runner's power summary; a checker writes a different schema there, so
+    honouring the flag (which the wrapper now does) would overwrite the power
+    data with an audit of it.
+
+    READ STRUCTURALLY, NOT BY SHAPE. This used to be `gate["program_exit_zero"]`
+    — the shape step 33's gate happened to have when the test was written. #1000
+    (fc664a57) deliberately gave the step a second arm
+    (`power_total_vs_budget_check`), which turns the gate into an `all_of` list,
+    and the test died on `KeyError: 'program_exit_zero'` — while the arm that was
+    added had never been checked for the very defect this test exists to stop.
+    A one-arm reader of a gate that may grow arms is a check with a blind spot;
+    the walk below has none, and the claim is now made against EVERY declared
+    output rather than the one path that was spelled out.
+    """
+    step = _step(33)
+    cmds = _gate_commands_verbatim(step["gate"])
+    assert cmds, "step 33 must declare at least one program gate"
+    assert any("power_report_check" in c for c in cmds), cmds
+
+    outputs = step["required_outputs"]
+    assert "reports/phase3/power.json" in outputs, outputs
+    for cmd in cmds:
+        assert "--json" in cmd, (
+            f"step 33 gate arm writes no audit trail at all: {cmd}")
+        for out in outputs:
+            assert out not in cmd, (
+                f"step 33 gate arm points --json at its own declared "
+                f"required_output {out!r}, which the checker would overwrite "
+                f"with a different schema: {cmd}")
 
 
 def _all_missing_results(fcc, waived=(), failed=()):
@@ -983,31 +1053,40 @@ def _all_missing_results(fcc, waived=(), failed=()):
     return out
 
 
-def test_step39_inherits_a_step6_waiver_as_deferred_by_upstream(fcc):
-    """DISCLOSED SECOND EFFECT of `blocks_on: [6, 13]`.
+def test_step39_does_not_inherit_a_step6_waiver(fcc):
+    """RETIRED SECOND EFFECT of `blocks_on: [6, 13]` — vibe-ic#776.
 
-    blocks_on is also the waiver-inheritance graph (#502): a MISSING step whose
-    ancestry reaches a WAIVED step becomes DEFERRED-BY-UPSTREAM, and
-    `total_required` subtracts that bucket. So a waiver written for step 6
-    alone now moves step 39 out of the final sign-off's required denominator.
-    Measured on an empty project waiving step 6 only: MISSING 39 -> 38 with
-    DEFERRED-BY-UPSTREAM=1.
+    This test used to pin the opposite: a waiver written for step 6 alone moved
+    step 39 out of the final sign-off's required denominator, because #502 read
+    `blocks_on` as the waiver-inheritance graph. Its own justification was "39
+    signs off the bitstream 6 builds — one waiver, one deduction".
 
-    That is the intended reading (39 signs off the bitstream 6 builds — one
-    waiver, one deduction), which is exactly why it must be pinned: it is the
-    ordering edge's cost, and a later change to either graph should have to
-    come past this test.
+    RE-MEASURED against what the flow declares, that justification does not
+    hold. Step 6 is required to produce `phase2/stage1/fpga/output_files/*.sof`;
+    step 39 RECOMPILES and is required to produce
+    `phase2/stage1/fpga/final/*.sof` plus `reports/phase2/fpga/
+    on_board_pass.json`, and its gate reads only its own artefacts. Different
+    directory, different artefact, no declared read — so nothing in the flow
+    says step 6's waiver is what stopped step 39.
+
+    The real reason an on-board sign-off does not run is usually "no board",
+    and the flow's answer to that is step 39's OWN ENV_UNAVAILABLE disclosure
+    with its own ticket and `review_required`, which stays available and is
+    reviewed on its own merits. Inheriting the discount silently off an
+    ordering edge is the mechanism #776 removed: on this flow it made 1153
+    such deductions, of which 6 are declared.
     """
     results = _all_missing_results(fcc, waived=(6,))
     info = fcc._attribute_cascade_verdicts(
         results, _flow_steps(), {6: {"ticket": "TKT-FPGA-6"}})
     by_id = {r.id: r for r in results}
 
-    assert by_id[39].status == "DEFERRED-BY-UPSTREAM", by_id[39].status
-    assert "TKT-FPGA-6" in by_id[39].cascade_note, by_id[39].cascade_note
-    deferred = sorted(str(sid) for sid, _p, _t in info["deferred_by_upstream"])
-    assert deferred == ["39"], (
-        f"a step-6 waiver defers more than the one step it should: {deferred}")
+    assert by_id[39].status == "MISSING", by_id[39].status
+    assert by_id[39].cascade_note == "waived-ancestor-undeclared(6)", (
+        by_id[39].cascade_note)
+    assert info["deferred_by_upstream"] == [], (
+        f"a step-6 waiver defers steps the flow does not connect to it: "
+        f"{info['deferred_by_upstream']}")
 
 
 def test_no_waiver_leaves_step39_in_the_denominator(fcc):

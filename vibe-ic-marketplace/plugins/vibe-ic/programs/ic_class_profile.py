@@ -301,17 +301,46 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
             return _dict_has_content(v)
         return bool(v)
 
+    def _doc_has_otp_content(j: Any) -> bool:
+        """True iff this L doc carries POPULATED OTP content (not a
+        geometry-only skeleton), at the top level or nested."""
+        if not isinstance(j, dict):
+            return False
+        for k in otp_keys:
+            if _otp_value_is_evidence(j.get(k)):
+                return True
+        for nested_key in ("L4_REGMAP", "L11_OTP_CONTENT", "L14_OTP_CONTENT"):
+            nv = j.get(nested_key)
+            if isinstance(nv, dict):
+                for k in nested_otp_keys:
+                    if _otp_value_is_evidence(nv.get(k)):
+                        return True
+        return False
+
     # (1) Explicit absence veto — hard short-circuit to False.  A no-OTP
     #     IC may carry a truthy-but-empty skeleton AND an honest negative
     #     declaration; the declaration wins.
-    for j in (l4, l11, l14_otp):
-        if not isinstance(j, dict):
-            continue
-        if j.get("otp_present") is False:
-            return False
-        for veto_key in ("no_otp_layout_in_input", "no_otp_in_input"):
-            if j.get(veto_key) is True:
+    #
+    #     ...but ONLY over a skeleton.  #653 added this veto to beat a
+    #     truthy-but-EMPTY otp_layout, and its own docstring says so.  As an
+    #     UNCONDITIONAL short-circuit it also beat POPULATED content, which
+    #     turns the declaration from a tie-breaker into an override: a doc
+    #     carrying a real OTP image was reported has_otp=False because some
+    #     other pass had left an `otp_present: False` beside it.  The
+    #     declaration is a PROXY for "this design has no OTP"; the property
+    #     is "is there OTP content".  So the veto is now scoped to the case
+    #     #653 describes — no populated OTP content anywhere in L4/L11/L14.
+    #     When content IS present the content wins and the stale/foreign
+    #     declaration is ignored.
+    if not any(_doc_has_otp_content(j) for j in (l4, l11, l14_otp)):
+        for j in (l4, l11, l14_otp):
+            if not isinstance(j, dict):
+                continue
+            if j.get("otp_present") is False:
                 return False
+            for veto_key in ("no_otp_layout_in_input", "no_otp_in_input"):
+                if j.get(veto_key) is True:
+                    return False
 
     for j in (l4, l11, l14_otp):
         if not isinstance(j, dict):
@@ -326,16 +355,23 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
         ):
             nv = j.get(nested_key)
             if isinstance(nv, dict):
-                if nv.get("otp_present") is False:
-                    return False
-                for veto_key in (
-                    "no_otp_layout_in_input", "no_otp_in_input",
-                ):
-                    if nv.get(veto_key) is True:
+                # Same scoping as the top-level veto above: a negative
+                # declaration only wins when the nested doc carries no
+                # populated content of its own.
+                nested_has_content = any(
+                    _otp_value_is_evidence(nv.get(k))
+                    for k in nested_otp_keys
+                )
+                if not nested_has_content:
+                    if nv.get("otp_present") is False:
                         return False
-                for k in nested_otp_keys:
-                    if _otp_value_is_evidence(nv.get(k)):
-                        return True
+                    for veto_key in (
+                        "no_otp_layout_in_input", "no_otp_in_input",
+                    ):
+                        if nv.get(veto_key) is True:
+                            return False
+                if nested_has_content:
+                    return True
     return False
 
 
@@ -818,13 +854,19 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
     if profile["is_mixed_signal"]:
         # Mixed signal w/o OTP collapses to digital_cmd_driven if it has
         # commands; else mixed_signal_otp without otp is rare — fall back.
-        if profile["has_command_protocol"]:
+        # Guard against processor_cpu misfire (ORGANIC #450 idiom, mirrors
+        # the #542 bus_peripheral guard): a CPU's ISA opcode enum harvests
+        # as has_command_protocol but carries no protocol framing, and must
+        # route to the ISA-bearing processor_cpu detector below, not here.
+        if (profile["has_command_protocol"]
+                and not _looks_like_processor_cpu(l1, l2)):
             profile["ic_class"] = "digital_cmd_driven"
             profile["decisive_evidence"] = (
                 "is_mixed_signal (no otp) + has_command_protocol")
             return profile
 
-    if profile["is_pure_digital"] and profile["has_command_protocol"]:
+    if (profile["is_pure_digital"] and profile["has_command_protocol"]
+            and not _looks_like_processor_cpu(l1, l2)):
         profile["ic_class"] = "digital_cmd_driven"
         profile["decisive_evidence"] = (
             "is_pure_digital + has_command_protocol")

@@ -177,13 +177,40 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
 
     drawn = pya.Region(top.begin_shapes_rec(lidx)).merged()  # circuit metal (constant)
     drawn_block = drawn.sized(spm)                     # keep-out from real metal
+    # Declared keep-out (seal ring / scribe band). Unioned into the SAME
+    # blocked region the circuit metal uses, so every fill pass on every ladder
+    # rung honours it — there is no path into `fillable` that bypasses this.
+    _ko = spec.get("_keepout")
+    if _ko is not None and not _ko.is_empty():
+        drawn_block = (drawn_block + _ko).merged()
+
+    #: Shapes already on the drawn layer before any fill. In the SHARED-datatype
+    #: case the fill is indistinguishable from circuit metal afterwards, so the
+    #: fill count is only recoverable as a difference against this.
+    n_drawn0 = sum(1 for _ in top.begin_shapes_rec(lidx))
 
     def _fill_now():
-        return pya.Region(top.begin_shapes_rec(fill_lidx)).merged() if separate \
-            else drawn
+        """Current contents of the fill layer, RE-READ from the layout.
+
+        When `fill_datatype` equals the drawn datatype, `fill_lidx is lidx` and
+        this returns drawn+fill — which is exactly what the density target is
+        stated against.
+
+        This used to return the `drawn` SNAPSHOT in that case. `drawn` is
+        captured once and never changes, so the engine could not observe its own
+        fill: `_measure()` returned the same object before and after, the
+        in-loop `worst` never rose, `reached_target` never became True, and
+        every layer reported `density_after == density_before`. The gate then
+        FAILed a fill that had worked — measured on the 50x50um fixture, where
+        the emitted GDS reaches 0.675 against a 0.3 target while the report said
+        0.0368. A check that cannot pass is the same defect as one that cannot
+        fail, and it hid here because the fill and the verdict disagreed only in
+        a file nobody re-opened.
+        """
+        return pya.Region(top.begin_shapes_rec(fill_lidx)).merged()
 
     def _measure():
-        return (drawn + _fill_now()).merged() if separate else drawn
+        return (drawn + _fill_now()).merged() if separate else _fill_now()
 
     boundary = spec.get("_bbox")
     metal0 = _measure()
@@ -208,7 +235,10 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
         fcbox = pya.Box(0, 0, cur_fwd, cur_fwd)
         for _pass in range(max_passes):
             fill_r = _fill_now()
-            metal = (drawn + fill_r).merged() if separate else drawn
+            # Non-separate: `fill_r` IS the re-read layer, so it already
+            # carries the fill this loop placed. Reading `drawn` here made
+            # the convergence test blind to its own progress.
+            metal = (drawn + fill_r).merged() if separate else fill_r
             fill_zone = pya.Region()
             worst = 1.0
             for wb in _windows(bbox, wd):
@@ -223,7 +253,9 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
                 reached_target = True
                 break
             fill_zone.merge()
-            blocked = drawn_block + (fill_r.sized(sp) if separate else drawn.sized(sp))
+            # Keep out of ALREADY-PLACED fill too, not just circuit metal:
+            # in the shared-datatype case `fill_r` now includes it.
+            blocked = drawn_block + fill_r.sized(sp)
             fillable = fill_zone - blocked
             if fillable.is_empty():
                 break                                   # this size cannot fit -> smaller
@@ -247,7 +279,11 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
     metal_after = _measure()
     d_after = metal_after.area() / float(bbox.area())
     worst_after = _worst_window_density(metal_after, bbox, wd)
-    fill_shapes = sum(1 for _ in top.begin_shapes_rec(fill_lidx)) if separate else None
+    # Shared-datatype fill is not separable by layer, but it IS countable as a
+    # difference against the pre-fill census — so this reports a number rather
+    # than `null`, which read as "not measured" for the case that needs it most.
+    fill_shapes = (sum(1 for _ in top.begin_shapes_rec(fill_lidx)) if separate
+                   else sum(1 for _ in top.begin_shapes_rec(lidx)) - n_drawn0)
     return {
         "name": spec["name"],
         "target": target, "max": maxd,
@@ -290,17 +326,121 @@ def run(gds, cfg, out_gds, cell_name=None):
     wu = cfg.get("window_um", None)
     wd = None if wu in (None, 0, 0.0) else int(round(float(wu) / ly.dbu))
 
+    # === KEEP-OUT — the region the fill may not enter =======================
+    # This engine had none. It tiled every window of the measurement bbox that
+    # was under target, keeping out only of CIRCUIT metal on the same layer. On
+    # a bare die that is right. On a FINISHED die it is not: the seal ring is
+    # drawn at the die edge, it is not circuit metal, and its rules are about
+    # the ring's own structure — a dummy square dropped beside it violates them
+    # even though it clears every ordinary spacing rule. MEASURED on this
+    # design's sealed die: sign-off DRC 1177 -> 18686 with the fill on.
+    #
+    # The PDK's own `fill_all.rb` solves the same problem by subtracting a
+    # fixed scribe ring. Two declared forms are supported here, and BOTH are
+    # data — the engine still contains no geometry of its own:
+    #
+    #   keepout_layers: [[layer, datatype, margin_um], ...]
+    #       Subtract the geometry ON a declared layer, grown by margin_um. The
+    #       exact form when the PDK ships a marker for the band (the guard-ring
+    #       marker the operator's size check already requires to be non-empty),
+    #       because it follows the ring the generator actually drew instead of
+    #       assuming where it went.
+    #
+    #   keepout_edge_um: <float>
+    #       Subtract a band of this width inside the measurement bbox — the
+    #       `fill_all.rb` form, for a PDK that ships no marker.
+    #
+    # The measurement bbox is NOT changed by either. The foundry's density rule
+    # measures over the whole die, so shrinking the denominator to make the
+    # numbers look better would be exactly the kind of dishonesty this file's
+    # docstring already refuses elsewhere. A keep-out therefore makes the
+    # reported density HARDER to reach, and an unreachable target stays
+    # visible as `reached: false`.
+    keepout = pya.Region()
+    keepout_note = []
+    for ko in (cfg.get("keepout_layers") or []):
+        try:
+            kl, kdt = int(ko[0]), int(ko[1])
+            kmargin = float(ko[2]) if len(ko) > 2 else 0.0
+        except Exception:
+            continue
+        kr = pya.Region(top.begin_shapes_rec(_li(ly, [kl, kdt]))).merged()
+        if kr.is_empty():
+            keepout_note.append(f"{kl}/{kdt}:EMPTY")
+            continue
+        if kmargin > 0:
+            kr = kr.sized(int(round(kmargin / ly.dbu)))
+        keepout += kr
+        keepout_note.append(f"{kl}/{kdt}+{kmargin}um")
+    edge = cfg.get("keepout_edge_um")
+    if edge:
+        e = int(round(float(edge) / ly.dbu))
+        inner = pya.Box(bbox.left + e, bbox.bottom + e,
+                        bbox.right - e, bbox.top - e)
+        if inner.width() > 0 and inner.height() > 0:
+            keepout += (pya.Region(bbox) - pya.Region(inner))
+            keepout_note.append(f"edge:{edge}um")
+        else:
+            keepout_note.append(f"edge:{edge}um:DEGENERATE")
+    keepout = keepout.merged()
+
     layers = []
     for spec in cfg["layers"]:
         spec = dict(spec)
         spec["_bbox"] = bbox
+        spec["_keepout"] = keepout
         layers.append(fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu))
 
+    # A FILL CELL THAT WAS NEVER PLACED IS A SECOND TOP CELL, AND A SECOND TOP
+    # CELL STOPS SIGN-OFF DRC FROM RUNNING AT ALL.
+    #
+    # `fill_layer` creates one `FILL_<layer>_<size>` cell per ladder rung BEFORE
+    # it knows whether that rung fits anywhere. When a rung places nothing - the
+    # square is larger than any fillable channel on that layer - the cell stays
+    # in the layout with zero instances, and GDS has no notion of an "unused"
+    # cell: it is simply another root. gf180mcu's own sign-off deck then refuses
+    # the file outright, before a single rule executes:
+    #
+    #   ERROR: In .../gf180mcu.drc: 'source': The layout has multiple top cells
+    #          in Layout::top_cell
+    #
+    # MEASURED (r8, KLayout 0.30.10): a fill whose top rung did not fit on
+    # metal4 left `FILL_metal4_4` and `FILL_metal4_3` in the stream with
+    # `instances: 0`, and `klayout -b -r gf180mcu.drc` aborted with the error
+    # above and wrote NO report. A DRC that cannot start is indistinguishable
+    # from one that found nothing, so the failure mode is an ABSENT verdict,
+    # not a red one.
+    #
+    # Prune only cells this program created, and only when they were never
+    # instanced; a fill that placed something is byte-identical.
+    pruned = []
+    for _c in list(ly.each_cell()):
+        _n = _c.name
+        if not _n.startswith("FILL_"):
+            continue
+        if _c.parent_cells() == 0:
+            pruned.append(_n)
+            ly.delete_cell(_c.cell_index())
     ly.write(out_gds)
     reached_all = all(l.get("reached", False) for l in layers if "skipped" not in l)
     return {"verdict": "PASS" if reached_all else "PARTIAL",
             "gds_in": gds, "gds_out": out_gds,
             "window_um": cfg.get("window_um"), "mfg_grid_um": mfg_grid_um,
+            # The keep-out is REPORTED, not just applied. A reader has to be
+            # able to tell a fill that respected the seal ring from one that
+            # was simply never asked to, and "the config had the key" is not
+            # the same claim as "the geometry was there and was subtracted" —
+            # so an EMPTY declared keep-out layer says so by name.
+            "keepout": {"declared": bool(cfg.get("keepout_layers")
+                                         or cfg.get("keepout_edge_um")),
+                        "sources": keepout_note,
+                        "area_um2": round(keepout.area() * ly.dbu * ly.dbu, 3),
+                        "measurement_bbox_um": [
+                            round(bbox.left * ly.dbu, 3),
+                            round(bbox.bottom * ly.dbu, 3),
+                            round(bbox.right * ly.dbu, 3),
+                            round(bbox.top * ly.dbu, 3)]},
+            "unplaced_fill_cells_pruned": pruned,
             "layers": layers}
 
 

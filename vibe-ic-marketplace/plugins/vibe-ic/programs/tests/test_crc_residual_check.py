@@ -138,6 +138,11 @@ def test_main_exits_non_zero_on_a_defect(tmp_path, monkeypatch):
     f = C.Finding(severity="error", rule="zero-on-init-ff", file="x.v",
                   line=1, message="m")
     monkeypatch.setattr(C, "analyze_tree", lambda paths: [f])
+    # A real file under the project. `analyze_tree` is stubbed, but
+    # `files_scanned` is counted separately, and since v1.8.90 a zero count
+    # returns 2 BEFORE the verdict is reached (#564) — so an empty tmp_path
+    # would test the refusal path instead of the verdict this test is about.
+    (tmp_path / "x.v").write_text("module x; endmodule\n", encoding="utf-8")
     assert C.main([str(tmp_path)]) == 1
 
 
@@ -145,4 +150,5 @@ def test_main_exits_zero_when_clean(tmp_path, monkeypatch):
     """The other direction, or the test above is met by always failing."""
     import crc_residual_check as C
     monkeypatch.setattr(C, "analyze_tree", lambda paths: [])
+    (tmp_path / "x.v").write_text("module x; endmodule\n", encoding="utf-8")
     assert C.main([str(tmp_path)]) == 0

@@ -1122,22 +1122,116 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: to a real ``programs/<name>.py`` but are reachable through NONE of the three
 #: channels, measured 2026-07-27. Residue of the 2026-07 audit's dimension-1
 #: DEFECT notes on steps 4/5/6/9.
+#:
+#: 2026-08-03, vibe-ic#693 — TWO ENTRIES ADDED ON PURPOSE. The two SignalTap
+#: gates are declared at step 39 and wired through no channel BY DESIGN, and
+#: that is the whole point of listing them: #693's floor is that a shipped,
+#: gate-shaped program must never be both unwired and unlisted, and this pin is
+#: the only register in the repo whose semantics are exactly "declared in a
+#: step's ``programs:`` array and reachable through none of the three
+#: channels". Being here is the DISCLOSURE, not permission.
+#:
+#:   signaltap_recompile_sequence_check — audits a four-stage interactive
+#:     SignalTap recompile (quartus_stp -> map -> fit -> asm). The flow's only
+#:     FPGA command line is ``quartus_sh --flow compile <base>``, which contains
+#:     none of the four tokens, and the published corpus holds 0 compile.log,
+#:     0 *.map.rpt and 0 *.sof over 28 run roots. Wiring it anywhere would be
+#:     rc=2 NOT-CHECKED on 28/28 — a permanently silent gate.
+#:   signaltap_stp_completeness_check — validates a generated ``.stp``. No flow
+#:     step produces one and 0 exist in the corpus. It is also not yet safe as a
+#:     post-condition of its own declared producer, the MCP tool
+#:     ``eda_rtl_signaltap_autogen``, which fails it on its default invocation.
+#:
+#: Both are driven EXPLICITLY by the agent following
+#: ``skills/fpga-signaltap/SKILL.md`` with a board on the bench. If either ever
+#: gains a real automatic subject, wire it and delete its line here — this test
+#: reddens in that direction too.
+#: 2026-08-20, R5 — TWO ENTRIES ADDED, both of the same shape as step 9's
+#: ``synth_wrapper_gen``: a step's own PRODUCER, named in ``programs:``, while
+#: the step's ``gate`` names the JUDGE instead. Measured on this tree:
+#:
+#:   submission_template_ingest — step 0.5ic's producer. The step's gate is
+#:     ``submission_template_check`` (a different program), so the ingest is
+#:     named by no gate. `grep -c` over all eight ``programs/*one_shot_runner*.py``
+#:     returns 0 for it, and it is in no umbrella registry.
+#:   pad_ring_gen — step 15.5ic's producer, gate ``pad_ring_check``. Same
+#:     measurement, same zero.
+#:
+#: The wider fact behind both, and the reason they are DISCLOSED here rather
+#: than wired: `grep -rn '0\.5ic|15\.5ic|26\.5ic|37\.5ic|37\.5ip'` over those
+#: same eight runners returns ZERO lines. None of the five path-specific steps
+#: is dispatched by any runner at all, so there is no branch to hang either
+#: producer off; wiring one would mean inventing that dispatch, which is a flow
+#: change and not a pin repair. Being here is the DISCLOSURE, not permission.
+#: 2026-08-21 — THREE ENTRIES ADDED, FROM TWO SEPARATE CAUSES, and the two are
+#: worth keeping apart because a single-cause story would be wrong here.
+#:
+#:   ("1.6x", "crosslayer_search_space")
+#:   ("1.6x", "crosslayer_rewrite_equivalence")
+#:       `7fcbc7397` added step 1.6x with a `programs:` array of three and a
+#:       gate that runs exactly one of them, `crosslayer_rewrite_equivalence
+#:       _check`. The other two are the PRODUCERS the checker reads after: the
+#:       search-space emitter and the equivalence prover. Same shape as the
+#:       nine entries below — a generator an agent runs, advertised by the step
+#:       and dispatched by no runner.
+#:
+#:   ("0.5ic", "tapeout_declaration_gen")
+#:       NOT from that commit, and this is measured, not assumed:
+#:       `git log -S'      - tapeout_declaration_gen'` over the yaml returns
+#:       `00d9dc261` (v1.11.4), four releases earlier, which added it to
+#:       0.5ic's `programs:` and wired it to nothing. At `ff5071caa`, when this
+#:       pin was last set, the entry did not exist in the yaml at all.
+#:
+#: So this pin was stale for TWO independent reasons before either was noticed,
+#: which is the argument for reading it rather than moving it.
+#:
+#: The other lane recorded the same three entries with a different
+#: derivation, kept because it answers a different question — WHY they are
+#: unwired rather than WHEN they arrived:
+#:
+#: on main before the ninth dimension landed; these are what it was red about.
+#:
+#:   ("0.5ic", "tapeout_declaration_gen")
+#:       referenced by exactly one other program, `tapeout_declaration_check`,
+#:       which AUDITS its output rather than dispatching it. No gate clause
+#:       names it and no runner AST-dispatches it.
+#:   ("1.6x", "crosslayer_rewrite_equivalence")
+#:   ("1.6x", "crosslayer_search_space")
+#:       step 1.6x arrived in v1.11.15 under the message "wire step 1.6x to an
+#:       executor". What was wired is the JUDGE, not the tools:
+#:       `design_one_shot_runner` dispatches the string constant
+#:       `"crosslayer_rewrite_equivalence_check.py"` (AST-confirmed at line
+#:       8457) and its own docstring says so in as many words — "Runs the JUDGE
+#:       (`crosslayer_rewrite_equivalence_check`), never the tool". The two
+#:       TOOLS stay declared on the step and dispatched by nothing, which is
+#:       this pin's subject exactly.
+#:
+#: As the block below already says: being here is the DISCLOSURE, not
+#: permission. Wiring any of the three means inventing a dispatch branch, which
+#: is a flow change and not a pin repair.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
+    ("0.5ic", "submission_template_ingest"),
+    ("0.5ic", "tapeout_declaration_gen"),
+    ("1.6x", "crosslayer_rewrite_equivalence"),
+    ("1.6x", "crosslayer_search_space"),
+    ("15.5ic", "pad_ring_gen"),
     ("6", "debug_first_pass"),
     ("6", "fpga_test_harness_gen"),
     ("9", "synth_wrapper_gen"),
     ("15", "phase3_backend_step"),
     ("39", "bringup_plan_gen"),
+    ("39", "signaltap_recompile_sequence_check"),
+    ("39", "signaltap_stp_completeness_check"),
 )
 
 
 def test_probe_declared_programs_array_orphans_are_pinned():
     """The ``programs:`` array is OUT of this dimension's cell scope — pinned.
 
-    Dimension 1 as briefed asks about a step's GATE, so all 63 cells are
+    Dimension 1 as briefed asks about a step's GATE, so every cell is
     correctly green on the steps below: their gates are wired. But the step's
     ``programs:`` array is a second, independent wiring claim, and measured
-    live on this tree five of its entries resolve to a real
+    live on this tree nine of its entries resolve to a real
     ``programs/<name>.py`` while being named by no gate, registered in no
     umbrella registry, and dispatched by none of the one-shot runners.
 
@@ -1145,7 +1239,7 @@ def test_probe_declared_programs_array_orphans_are_pinned():
     cover it would have needed four new waivers and would have been the same
     substitution this campaign exists to stop — changing a predicate so a
     finding lands. So the finding is recorded HERE, pinned, outside the cell
-    grid: a sixth orphan appearing reddens this test, and one of these five
+    grid: a tenth orphan appearing reddens this test, and one of these nine
     getting wired also reddens it, so the population cannot drift in either
     direction unnoticed. It is reported as an open gap, not as coverage.
     """

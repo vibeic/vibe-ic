@@ -44,6 +44,7 @@ while still leaving `os.path.dirname` pointed at garbage.
 """
 from __future__ import annotations
 
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -104,22 +105,67 @@ def test_no_component_path_is_ever_double_quoted_into_one_argument() -> None:
                 f"two model files share one quoted argument: {token!r}")
 
 
-def test_single_path_cell_model_behaviour_is_unchanged() -> None:
-    """The other direction of the control: single-path PDKs must not regress.
+def test_every_pdk_cell_model_gets_its_primitives_exactly_once() -> None:
+    """The invariant this control is really about: whatever the config spells,
+    the combined model must contain the library's UDP primitives, and must
+    contain them EXACTLY ONCE.
 
-    This one PASSES BOTH BEFORE AND AFTER the fix, deliberately. It asserts the
-    single-path CONTRACT (the model itself and its co-located primitives.v are
-    named, and the combined output path is unchanged) and NOT the mechanism —
-    `cp X out` and `cat X > out` are equivalent for one file, so pinning either
-    spelling here would turn a control into a restatement of the diff."""
-    for pdk in ("sky130", "gf180"):
-        cm = F.PDK_CONFIG[pdk]["cell_model"]
-        assert len(shlex.split(cm)) == 1, f"{pdk} is unexpectedly multi-file"
+    It used to assert `len(split(cm)) == 1` for sky130/gf180 — i.e. it pinned
+    the SPELLING (single-path) rather than the property. v1.8.43 had to make
+    sky130 name `primitives.v` explicitly, because Step 29's consumer
+    (`pdk_cell_models.container_model_paths`) has no implicit co-located-
+    primitives prepend and so handed iverilog a model whose UDPs are undefined:
+    `67 error(s) during elaboration`, `sky130_fd_sc_hd__udp_dff$P_pp$PG$N
+    referenced 64 times`, and canonical Step 29 MISSING on every sky130 run.
+    Pinning the spelling would have blocked the fix while asserting nothing
+    about correctness; pinning the property catches both the missing-primitives
+    bug AND the duplicate-primitives bug the explicit spelling could cause."""
+    for pdk in F.PDK_CONFIG:
+        cm = F.PDK_CONFIG[pdk].get("cell_model")
+        if not cm:
+            continue
+        parts = shlex.split(cm)
         eff, prep = F._cell_model_prep(cm)
         assert eff == f"/work/{F._COMBINED_CELL_MODEL}"
-        assert f'"{cm}"' in prep
-        assert f'"{str(Path(cm).parent)}/primitives.v"' in prep
-        assert f'> "{eff}"' in prep, prep
+        assert f'> "{eff}"' in prep or f'cp ' in prep, prep
+        for part in parts:
+            assert f'"{part}"' in prep, f"{pdk}: {part} not in prep"
+        # The UDP primitives must reach the combined model EXACTLY ONCE.
+        # Two legal spellings, and the emitted snippet must match the one in use:
+        #   (a) the config NAMES its primitives file  -> no implicit prepend, or
+        #       the executed `cat` would list it twice and redefine every UDP;
+        #   (b) the config does NOT name it           -> the implicit
+        #       `if [ -f <co-located primitives.v> ]` prepend must be present.
+        # NOTE this asserts on the BRANCH STRUCTURE, not on a substring count:
+        # the snippet legitimately names each part in BOTH the then- and
+        # else-branch, and only one branch ever runs.
+        prim = f"{Path(parts[0]).parent}/primitives.v"
+        prim_named = any(os.path.normpath(x) == os.path.normpath(prim)
+                         for x in parts)
+        udp_named = any(Path(x).name in ("primitives.v", "sg13g2_udp.v")
+                        for x in parts)
+        if prim_named:
+            assert f'if [ -f "{prim}"' not in prep, (
+                f"{pdk}: primitives.v is named explicitly AND prepended "
+                f"implicitly — the combined model would redefine every UDP")
+        else:
+            assert udp_named or f'if [ -f "{prim}"' in prep, (
+                f"{pdk}: no primitives source at all")
+
+
+def test_prep_is_idempotent_when_primitives_is_named_explicitly() -> None:
+    """v1.8.43 — a config that names its own primitives.v must NOT also get the
+    implicit co-located prepend: the combined model would redefine every UDP and
+    iverilog rejects it. Constructed from the real sky130 entry."""
+    cm = F.PDK_CONFIG["sky130"]["cell_model"]
+    parts = shlex.split(cm)
+    assert any(Path(p).name == "primitives.v" for p in parts), cm
+    _eff, prep = F._cell_model_prep(cm)
+    assert "if [ -f " not in prep, (
+        "the implicit prepend branch must be gone when primitives.v is explicit")
+    # and the executed command lists each configured file once, in order
+    assert prep.count('"' + parts[0] + '"') == 1, prep
+    assert prep.index(parts[0]) < prep.index(parts[1]), prep
 
 
 def test_prep_snippet_still_creates_the_output_directory() -> None:

@@ -26,10 +26,13 @@ alarms.
 
 THE PROBE
 =========
-Run each corpus-scanning gate TWICE at the same commit — once in the working
-checkout, once in a throwaway `git worktree` (tracked files only) — and require
-the verdict line to be IDENTICAL. A difference is proof the gate is reading
-something that is not in the commit.
+Run each corpus-scanning gate at the same commit in two environments — once in
+the working checkout and once in a throwaway `git worktree` (tracked files
+only) — and require the structured process verdict to be IDENTICAL.  Inside
+`repo_hygiene_gates.sh`, the checkout arm is the argv-bound machine record the
+outer sweep has already produced, so only the fresh arm is launched here.  A
+standalone invocation still launches both arms.  A difference is proof the
+gate is reading something that is not in the commit.
 
 Proven BOTH ways before landing, which is what separates this from a guess:
 
@@ -87,29 +90,78 @@ to REPORT how much stimulus a run actually had, so that a comparison between
 two identical trees can never again be read as coverage. A run with no stimulus
 is NOT_CHECKED (rc 2), never a pass.
 
+THE SCRATCH WORKTREE OUTLIVES THE PROBE (measured 2026-08-04)
+=============================================================
+The comparison needs a second tree, so this program creates one — a `mkdtemp`
+plus a `git worktree add`, removed in a `finally`.  A `finally` does not run on
+`SIGKILL`, and in one parallel-agent session NINETEEN `/tmp/hostindep-*/wt`
+trees were left standing, each still REGISTERED as a worktree of the repository
+every agent shares.  `git worktree prune` cannot clear a registration whose
+directory still exists, so they do not age out; they accumulate.
+
+The repair is not a better `finally` — there is no code the killed process gets
+to run.  It is to make the NEXT run able to prove the previous one is dead and
+clean up for it: each scratch directory carries an `flock`'d sidecar, which the
+kernel releases on death however the process died, and `_crash_safe_scratch`
+reaps every sibling whose lock it can take.  A peer that is still running holds
+its lock, is skipped, and is NAMED in the output.
+
 chip-AGNOSTIC: it compares process output, nothing else.
+
+FLOW CLASSIFICATION: **BLOCKING**.  A reproducible host-dependent or
+non-deterministic gate returns rc 1 and the enclosing hygiene/landing flow must
+stop.  An unavailable comparison returns rc 2 as a named NOT_CHECKED state;
+only the dated ``run_tolerating_uncheckable`` declaration in the enclosing
+dispatcher may bound that refusal.  Neither state is a PASS.
 """
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
+import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
+
+import _crash_safe_scratch as _scratch
 
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent
 
-_RUN_RE = re.compile(
-    # Accepts BOTH `run` and its `run_*` variants. A wrapper added for one
-    # gate (`run_tolerating_uncheckable`) silently escaped this parser, so any
-    # gate wired through it would not be covered — a coverage hole in the very
-    # check that exists to close coverage holes.
-    r'^\s*run(?:_\w+)?\s+"([^"]+)"\s+"?(\$ROOT|\$PLUGIN)"?\s+(.+)$', re.M)
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+# THE SCRIPT IS PARSED IN ONE PLACE. This file used to carry a verbatim copy of
+# the other reader's regex, with a comment saying so — and the copy is what let
+# one defect hide in two files at once: neither could see a gate whose label
+# embeds `$(basename "$(dirname "$_cell")")`, because the label group stopped
+# at the inner quote, and neither folded `\` continuations. Fixing that in one
+# copy would have left the other still blind and the two readers disagreeing
+# about what the script says, which the #539 tests exist to forbid.
+#
+# THE COPY WAS RE-ADDED ONCE, IN A MERGE, AND THAT IS THE POINT. The crash-safe
+# scratch work landed a second `_RUN_RE` here — the very regex this file had
+# just stopped carrying — widened by one hand for `run_tolerating_uncheckable`
+# while the other hand was rewriting the shared reader. Driven against the
+# merged `tools/ci/repo_hygiene_gates.sh`, the regex saw 60 declarations and
+# `parse_declarations` saw 63: the three `$_cell` loop gates were invisible to
+# it, and `severity=ERROR is consumed` came back truncated at its `\`. The one
+# element the regex produced that the shared reader does not is that truncation
+# — same label, broken command — so nothing is lost by deleting it, and a
+# second copy is exactly how the last defect stayed invisible in both files.
+from gate_discloses_denominator_check import (            # noqa: E402
+    HOST_INDEPENDENCE_EXCLUDE_RE, parse_declarations)
+from gate_process_attestation import (                    # noqa: E402
+    argv_sha256, load_jsonl, process_attestation)
+from hygiene_shard_plan import load_profile, plan          # noqa: E402
+
+#: Scratch prefix.  UNCHANGED from the leaking version on purpose — the reaper
+#: keys on it, so the directories a pre-fix build already left behind are the
+#: first thing a fixed run cleans up.
+_SCRATCH_PREFIX = "hostindep-"
 
 #: A gate may DECLARE itself out of this comparison, on the line above its own
 #: `run` line, in the script where it is wired:
@@ -136,8 +188,7 @@ _RUN_RE = re.compile(
 #: is moved or a line is inserted, the gate is PROBED again — the failure mode
 #: is a returning flake, which is visible, not a silent exclusion. Every
 #: exclusion is NAMED in the verdict line for the same reason.
-_EXCLUDE_RE = re.compile(
-    r'^\s*#\s*host-independence:\s*EXCLUDE\b[\s—:-]*(.*?)\s*$')
+_EXCLUDE_RE = HOST_INDEPENDENCE_EXCLUDE_RE
 
 
 class Gate(NamedTuple):
@@ -146,6 +197,10 @@ class Gate(NamedTuple):
     cwd_token: str          # `$ROOT` or `$PLUGIN`
     cmd: str
     excluded: Optional[str]  # None = probed; a string = declared reason
+    #: Set when the declaration carries something only bash can resolve — a
+    #: loop variable, a command substitution. Such a gate is DECLARED here and
+    #: cannot be DRIVEN here, and the two are different facts.
+    runtime_expansion: Optional[str] = None
 
 
 class Dirt(NamedTuple):
@@ -184,6 +239,11 @@ class Audit(NamedTuple):
     declared: int
     probed: int
     not_probed: List[Tuple[str, str]]   # (label, why)
+    #: What the scratch reaper did on the way in. Reported rather than silent:
+    #: a sweep that removes another agent's live worktree and says nothing is
+    #: the same class of damage as the leak it is fixing, so both the removals
+    #: and the SKIPS are named.
+    scratch: Optional[Dict] = None
 
 
 def corpus_gates(script: Path) -> List[Gate]:
@@ -195,7 +255,7 @@ def corpus_gates(script: Path) -> List[Gate]:
     produced 9 identical-error "findings". A probe that reports a defect
     because it could not run the subject is worse than no probe."""
     try:
-        text = script.read_text(errors="replace")
+        lines = script.read_text(errors="replace").splitlines()
     except OSError:
         return []
     # NO FILTER. A first version kept only gates whose argv names
@@ -207,24 +267,46 @@ def corpus_gates(script: Path) -> List[Gate]:
     # An EXCLUDED gate is still parsed and still counted in `declared`. It
     # leaves the numerator, never the denominator.
     out: List[Gate] = []
-    for m in _RUN_RE.finditer(text):
-        # THE LINE THE GATE IS ON, derived from the LABEL's offset and not from
-        # `m.start()`. `_RUN_RE` opens with `^\s*` under `re.M`, and `\s`
-        # matches a newline — so on a blank line followed by `run ...` the
-        # match STARTS at the blank line, and a naive "text before the match"
-        # would hand back the directive as if it were adjacent. Both that and
-        # a `.rstrip("\n")` (which swallows any number of blank lines) were
-        # written here and both were caught by the detached-directive test:
-        # the whole fail-safe claim above is that drift STOPS the exclusion.
-        line_start = text.rfind("\n", 0, m.start(1)) + 1
-        head = text[:line_start]
-        if head.endswith("\n"):
-            head = head[:-1]
-        d = _EXCLUDE_RE.match(head.rsplit("\n", 1)[-1])
-        reason = None
-        if d:
-            reason = d.group(1).strip() or "declared at the gate, no reason given"
-        out.append(Gate(m.group(1), m.group(2), m.group(3).strip(), reason))
+    for decl in parse_declarations(script):
+        # THE DIRECTIVE BINDS TO THE LINE IMMEDIATELY ABOVE THE `run` LINE.
+        # `lineno` is the first PHYSICAL line of the declaration, so a gate
+        # written across a `\` continuation still looks one line up from where
+        # a reader of the script sees it start. The adjacency rule is the whole
+        # fail-safe claim: if the directive drifts, the gate is probed again.
+        out.append(Gate(decl.label, decl.cwd_token, decl.cmd,
+                        decl.host_independence_exclusion,
+                        decl.runtime_expansion))
+    return out
+
+
+def inert_exclusions(script: Path) -> List[Tuple[int, str]]:
+    """EXCLUDE directives WRITTEN in the script that exclude NOTHING.
+
+    The adjacency rule above is fail-safe for the gate — drift means the gate
+    is probed again — but it is NOT fail-safe for the READER, and that half was
+    unenforced. Measured on origin/main 1f3d8d067: THREE directives are written
+    (lines 162, 175, 221) and only TWO take effect. The third sits one blank
+    line above `run_tolerating_uncheckable "STA engines agree"`, so the parser
+    reads the blank line, finds no directive, and probes the gate anyway. A
+    reader of the script sees an exclusion that does not exist.
+
+    A declaration that silently does nothing is this repo's recurring shape
+    with the polarity reversed: not a check that lies about what it found, but
+    a directive that lies about what it governs. It is cheap to detect —
+    written count vs effective count — so it is detected.
+    """
+    try:
+        lines = script.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    out: List[Tuple[int, str]] = []
+    run_head = re.compile(r'^\s*run(?:_\w+)?\s')
+    for i, ln in enumerate(lines):
+        if not _EXCLUDE_RE.match(ln):
+            continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if not run_head.match(nxt):
+            out.append((i + 1, ln.strip()[:160]))
     return out
 
 
@@ -248,9 +330,58 @@ def _norm(line: str, repo_root: Path, wt: Path) -> str:
 
 
 def _verdict_line(out: str) -> str:
-    """The last non-empty line — the verdict a caller reads."""
+    """The last non-empty line — the verdict a caller reads.
+
+    Pytest's terminal summary appends elapsed wall time.  That value is not a
+    verdict and necessarily differs between two otherwise identical runs; the
+    outcome/count prefix and process return code remain compared exactly.
+    """
     lines = [ln.rstrip() for ln in (out or "").splitlines() if ln.strip()]
-    return lines[-1] if lines else "(no output)"
+    if not lines:
+        return "(no output)"
+    return re.sub(
+        r"\bin\s+\d+(?:\.\d+)?s(?:\s+\(\d+:\d{2}:\d{2}\))?\s*$",
+        "in <TIME>s", lines[-1])
+
+
+def _completed_attestation(label: str, proc: subprocess.CompletedProcess,
+                           argv: List[str], repo_root: Path, wt: Path) -> Dict:
+    """The structured verdict a host comparison consumes."""
+    return process_attestation(
+        label, (proc.stdout or "") + (proc.stderr or ""), proc.returncode,
+        argv, roots=(repo_root, wt))
+
+
+def _run_gate(argv: List[str], cwd: Path,
+              timeout: int) -> subprocess.CompletedProcess:
+    """Run one arm through the same combined stream as the outer dispatcher.
+
+    Separately captured stdout followed by stderr is not the order a human or
+    ``2>&1 | tee`` observes.  Python buffering makes that distinction verdict
+    bearing: stderr can arrive first while the final stdout PASS flushes at
+    exit.  Both arms therefore preserve one combined stream.
+    """
+    return subprocess.run(
+        argv, cwd=str(cwd), stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, timeout=timeout)
+
+
+def _attestation_summary(rec: Dict, limit: int = 200) -> str:
+    findings = rec.get("finding_identities") or []
+    named = " | ".join(findings[:3]) if findings else rec["verdict_line"]
+    return f"rc={rec['returncode']} {named[:limit]}"
+
+
+def _load_checkout_attestations(path: Path) -> Dict[str, Dict]:
+    records: Dict[str, Dict] = {}
+    for rec in load_jsonl(path):
+        label = str(rec["label"])
+        if label in records:
+            raise ValueError(f"duplicate process attestation for {label!r}")
+        records[label] = rec
+    if not records:
+        raise ValueError("the process attestation record is empty")
+    return records
 
 
 def checkout_dirt(repo_root: Path, timeout: int = 600) -> Optional[Dirt]:
@@ -287,29 +418,246 @@ def checkout_dirt(repo_root: Path, timeout: int = 600) -> Optional[Dirt]:
     return Dirt(tracked, untracked, ignored, ignored_reported)
 
 
+def _unregister_worktree(scratch: Path) -> None:
+    """Drop the git registration an abandoned scratch tree still holds.
+
+    Addressed THROUGH the worktree itself (`git -C <wt> worktree remove <wt>`)
+    rather than through the repo this run happens to be probing: a leftover may
+    belong to any checkout on the host, and pointing the wrong repository at it
+    would fail while looking like it worked.  The directory is what knows who
+    owns it.
+    """
+    wt = scratch / "wt"
+    if not wt.exists():
+        return
+    r = subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
+                        str(wt)], capture_output=True, text=True, timeout=120)
+    if r.returncode == 0:
+        return
+    # A worktree git considers LOCKED refuses a single `--force`. Measured: a
+    # run killed mid-`worktree add` left the lock behind, so the very state
+    # this reaper exists for is the one that can be locked. `unlock` then
+    # retry; if that still fails the directory is removed anyway and the
+    # registration is dropped by the `prune` the caller runs — never left
+    # standing because one git subcommand was fussy.
+    subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
+                   capture_output=True, text=True, timeout=120)
+    subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
+                    str(wt)], capture_output=True, text=True, timeout=120)
+
+
+def _release_scratch(res, repo_root: Path) -> None:
+    """The CLEAN path: unregister, unlock, delete.
+
+    Correctness does not depend on reaching it — that is what the reaper is for
+    — but a run that exits normally should not leave work for the next one.
+    """
+    _unregister_worktree(res.path)
+    res.release()
+    # Only ever removes registrations whose DIRECTORY is gone, so a worktree a
+    # concurrent agent is sitting in cannot be pruned by this.
+    subprocess.run(["git", "-C", str(repo_root), "worktree", "prune"],
+                   capture_output=True, text=True, timeout=120)
+
+
 def _setup(verdict: str, kind: str, detail: str, dirt: Optional[Dirt],
-           declared: int) -> Audit:
+           declared: int, scratch: Optional[Dict] = None) -> Audit:
     """A result decided before any gate ran. 0 probed, and it says so."""
     return Audit(verdict,
                  [{"gate": "(setup)", "kind": kind, "detail": detail}],
-                 dirt, declared, 0, [])
+                 dirt, declared, 0, [], scratch)
 
 
-def audit(repo_root: Path, timeout: int = 600) -> Audit:
+def _not_probed_reason(gate: Gate) -> Optional[str]:
+    """Why a declaration cannot be driven, shared by serial and parallel mode."""
+    if Path(__file__).name in gate.cmd:
+        return "this probe itself — it would recurse"
+    if gate.excluded is not None:
+        return f"EXCLUDED by declaration: {gate.excluded}"
+    if gate.runtime_expansion is not None:
+        return (
+            f"declared inside a shell loop — {gate.runtime_expansion}. Driving "
+            "it twice would need the loop's binding, and a fixed substitute "
+            "would make both trees identical, so the agreement would prove "
+            "nothing")
+    return None
+
+
+def peer_probes_running() -> List[int]:
+    """Other live processes running THIS program, by pid.
+
+    Needed only for the transition. A build that predates the lock sidecar
+    leaves a scratch directory this reaper cannot attribute, so it falls back
+    to age plus a `/proc` scan — and several agents demonstrably run against
+    one host, where a probe that has been alive longer than the age threshold
+    would be a candidate for deletion at the instant no child of it happens to
+    be sitting in the directory. While ANY peer is alive the unlockable
+    directories are simply kept; the guess is not made better, it is not made.
+    """
+    me = Path(__file__).name
+    pids: List[int] = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return [-1]                     # cannot look -> assume a peer exists
+    for entry in proc.iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            cmd = (entry / "cmdline").read_bytes().decode("utf-8", "replace")
+        except OSError:
+            continue
+        if me in cmd:
+            pids.append(int(entry.name))
+    return pids
+
+
+def sweep_abandoned_scratch(repo_root: Path,
+                            tmp_root: Optional[Path] = None,
+                            peers: Optional[List[int]] = None) -> Dict:
+    """Clean up after every PREVIOUS run of this program that was killed.
+
+    Runs before anything else, and on every exit path including the ones that
+    refuse to probe: a checkout too dirty to compare is exactly the state a
+    maintainer's tree is in while the leftovers pile up, so a reaper that only
+    ran on the happy path would almost never run at all.
+
+    `tmp_root` and `peers` are test seams, and they exist for a reason this
+    module is about: a test that drove this against the real `/tmp` would
+    create and delete directories other agents' probes are reading, and one
+    that depended on no peer being alive would either race them or skip
+    whenever the host is busy — which on this host is most of the time.
+    """
+    if peers is None:
+        peers = peer_probes_running()
+    rep = _scratch.reap(_SCRATCH_PREFIX, remover=_unregister_worktree,
+                        root=tmp_root, reap_unlocked=not peers)
+    if rep.reaped:
+        # `prune` after the removals, not instead of them: it drops the
+        # registrations whose directories this sweep has just deleted, and by
+        # construction cannot touch one whose directory still exists.
+        subprocess.run(["git", "-C", str(repo_root), "worktree", "prune"],
+                       capture_output=True, text=True, timeout=120)
+    return {"reaped": rep.reaped, "live_peers": rep.live,
+            "peer_probe_pids": peers,
+            "vanished_under_the_sweep": rep.vanished,
+            "kept": [{"path": p, "why": w} for p, w in rep.kept]}
+
+
+def _checkout_dirty_paths(repo_root: Path) -> Dict[str, str]:
+    """``{path: status}`` for everything git currently reports, or ``{}``.
+
+    No ``--ignored``: `__pycache__` and `.pytest_cache` churn on every drive and
+    are not what a killed mutator leaves. Including them would make this fire on
+    every gate in every run, and a guard that always fires is one people route
+    around.
+
+    An unreadable tree returns ``{}``, which makes `_repair_checkout` a no-op --
+    it can then only fail to repair, never repair the wrong thing.
+    """
+    try:
+        r = subprocess.run(["git", "-C", str(repo_root), "status",
+                            "--porcelain"],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if r.returncode != 0:
+        return {}
+    out: Dict[str, str] = {}
+    for line in (r.stdout or "").splitlines():
+        if len(line) > 3:
+            out[line[3:].strip()] = line[:2]
+    return out
+
+
+def _repair_checkout(repo_root: Path, before: Dict[str, str],
+                     label: str) -> Tuple[List[str], List[str]]:
+    """Undo what THIS drive wrote. Returns ``(repaired, refused)``.
+
+    THE BOUNDARY, because an over-eager repair here would destroy a
+    maintainer's work in order to tidy up after a gate:
+
+      * a TRACKED path that was pristine before and is modified after -- the
+        difference was made by the child this loop just ran, so
+        ``git checkout -- <path>`` undoes that and provably nothing else.
+        REPAIRED.
+      * a path that was ALREADY dirty before the drive -- somebody's in-flight
+        work, possibly with the gate's write layered on top. Nothing here can
+        separate the two, so it is NAMED and left exactly as it is. REFUSED.
+      * an UNTRACKED path that appeared -- a gate writing its own report beside
+        the code is doing the thing the corpus guard's message recommends.
+        Named, never deleted: this function's licence is to undo a modification
+        it can prove it caused, not to remove files.
+    """
+    after = _checkout_dirty_paths(repo_root)
+    repaired: List[str] = []
+    refused: List[str] = []
+    for path, status in sorted(after.items()):
+        if path in before:
+            continue
+        if status.strip() == "??":
+            refused.append(f"{path} (untracked -- named, not deleted)")
+            continue
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "checkout", "--", path],
+            capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and path not in _checkout_dirty_paths(repo_root):
+            repaired.append(path)
+        else:
+            refused.append(f"{path} (restore failed)")
+    for path in sorted(before):
+        if path in after and after[path] != before[path]:
+            refused.append(f"{path} (already dirty before this drive)")
+    return repaired, refused
+
+
+def audit(repo_root: Path, timeout: int = 600,
+          tmp_root: Optional[Path] = None,
+          checkout_attestations: Optional[Path] = None,
+          only_labels: Optional[Set[str]] = None,
+          include_script_findings: bool = True) -> Audit:
+    """`tmp_root` overrides where the scratch lives (default: the system temp).
+
+    A caller that needs to OBSERVE what this run left behind cannot do it in
+    the shared temp: on a busy host a peer's directory appears there mid-run
+    and is indistinguishable from a leak of our own. Pointing this at a private
+    root is what makes "left nothing behind" a statement about THIS run.
+    """
+    scratch = sweep_abandoned_scratch(repo_root, tmp_root=tmp_root)
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = corpus_gates(script)
+    if only_labels is not None:
+        available = {g.label for g in gates}
+        unknown = sorted(only_labels - available)
+        if unknown:
+            return _setup(
+                "SELECTION_UNAVAILABLE", "SELECTION_UNAVAILABLE",
+                "parallel worker was assigned label(s) the gate script does "
+                "not declare: " + ", ".join(unknown[:6]), None,
+                len(only_labels), scratch)
+        gates = [g for g in gates if g.label in only_labels]
     declared = len(gates)
     if not gates:
         # This program's own denominator: reporting clean over an empty gate
         # list is the defect it exists to catch, one level up.
-        return Audit("NOTHING_SCANNED", [], None, 0, 0, [])
+        return Audit("NOTHING_SCANNED", [], None, 0, 0, [], scratch)
+
+    checkout_records: Optional[Dict[str, Dict]] = None
+    if checkout_attestations is not None:
+        try:
+            checkout_records = _load_checkout_attestations(
+                Path(checkout_attestations))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return _setup(
+                "ATTESTATION_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+                "the outer hygiene run supplied no complete machine record "
+                f"for its checkout arm: {exc}", None, declared, scratch)
 
     dirt = checkout_dirt(repo_root, timeout)
     if dirt is None:
         return _setup("STATUS_UNAVAILABLE", "STATUS_UNAVAILABLE",
                       "`git status` did not answer, so the checkout could not "
                       "be characterised and no comparison was attempted",
-                      None, declared)
+                      None, declared, scratch)
 
     # MODIFIED TRACKED FILES make the comparison meaningless: the worktree is
     # at HEAD, so every uncommitted edit shows up as a "difference" that has
@@ -333,12 +681,27 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
             f"probe runs — untracked leftovers no longer block it "
             f"({len(dirt.untracked)} present). First few: "
             + ", ".join(x[3:][:40] for x in dirt.tracked[:4]),
-            dirt, declared)
+            dirt, declared, scratch)
 
     findings: List[Dict] = []
     not_probed: List[Tuple[str, str]] = []
-    td = tempfile.mkdtemp(prefix="hostindep-")
-    wt = Path(td) / "wt"
+    if include_script_findings:
+        for lineno, text in inert_exclusions(script):
+            findings.append({
+                "gate": f"(script line {lineno})", "kind": "INERT_EXCLUSION",
+                "detail": ("an EXCLUDE directive is written here but is not the "
+                           "line IMMEDIATELY above a `run` line, so it excludes "
+                           "NOTHING — the script says one thing and the parser "
+                           "reads another. Move it flush against its `run` line, "
+                           "or delete it."),
+                "checkout": text, "worktree": "-"})
+    # A LOCKED scratch directory, not a bare `mkdtemp`. The lock is what a later
+    # run reads to decide this one is dead; the `finally` below is the tidy
+    # path, and the reaper is the one that holds under `SIGKILL`.
+    res, _ = _scratch.reserve(_SCRATCH_PREFIX,
+                              remover=_unregister_worktree,
+                              root=tmp_root)
+    wt = res.path / "wt"
     try:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "worktree", "add", "-q",
@@ -348,11 +711,10 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
             # NEVER a silent pass — "I could not look" is its own state.
             return _setup("WORKTREE_UNAVAILABLE", "WORKTREE_UNAVAILABLE",
                           (r.stderr or r.stdout or "").strip()[:300],
-                          dirt, declared)
+                          dirt, declared, scratch)
 
         plugin_rel = Path("vibe-ic-marketplace") / "plugins" / "vibe-ic"
-        me = Path(__file__).name
-        for label, wd_tok, cmd, excluded in gates:
+        for label, wd_tok, cmd, excluded, templated in gates:
             # NEVER probe ITSELF. The gate list is unfiltered by design, so it
             # contains this program — and running it inside the worktree runs
             # it again, which creates another worktree, and so on.
@@ -367,29 +729,122 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
             # The skip is RECORDED, not silent. It used to be a bare `continue`
             # while the verdict line went on to say "all <declared> gate(s)" —
             # a denominator this program's whole subject is not over-claiming.
-            if me in cmd:
-                not_probed.append((label, "this probe itself — it would recurse"))
+            reason = _not_probed_reason(Gate(
+                label, wd_tok, cmd, excluded, templated))
+            if reason is not None:
+                not_probed.append((label, reason))
                 continue
-            if excluded is not None:
-                not_probed.append((label, f"EXCLUDED by declaration: {excluded}"))
-                continue
+            # A GATE DECLARED INSIDE A LOOP CANNOT BE DRIVEN HERE, and saying
+            # so is the only honest option available. This probe's evidence is
+            # that ONE tree carries something the other does not; binding the
+            # loop variable to some fixed path would hand BOTH invocations the
+            # same input, they would agree by construction, and the agreement
+            # would be counted as coverage — the NO_STIMULUS defect #539 exists
+            # to refuse, reintroduced one gate at a time.
+            #
+            # It stays in `declared`. Before v1.9.78 the parser could not see
+            # these lines at all, so the three loop gates were absent from the
+            # denominator AND from this list: the verdict named neither, and a
+            # reader had no way to tell they existed.
             ca = repo_root if wd_tok == "$ROOT" else repo_root / plugin_rel
             cb = wt if wd_tok == "$ROOT" else wt / plugin_rel
+            # THE KILLER CLEANS UP (vibe-ic#1029, same family).
+            #
+            # ARM A runs in THE WORKING CHECKOUT, and `subprocess.run(timeout=)`
+            # on expiry calls `Popen.kill()` -- SIGKILL. A killed process runs
+            # no `finally` and no signal handler, so a gate that was inside its
+            # own mutation window when the bound landed leaves the mutation in
+            # the tree, and this loop then filed `GATE_UNRUNNABLE` and carried
+            # on. Everything declared after it measured the mutation.
+            #
+            # MEASURED 2026-08-12, reproducing a real landing run on .120
+            # (candidate stack h1c, `/home/<your-user>/_pg_h1c`) byte for byte:
+            #
+            #   parent caught TimeoutExpired after 75s
+            #   porcelain AFTER: 1
+            #    M programs/phase3_one_shot_runner.py
+            #   -    return _detect_pdk(project, override="sky130A")
+            #   +    return _detect_pdk(project, override="nangate45")
+            #
+            # `an argued direction is pinned` needs 543 s here against the
+            # 600 s bound, and `phase3_one_shot_runner.py:8414` is the LAST
+            # site it processes in sort order -- so it is the site holding a
+            # mutation when the bound lands, which is exactly the file .120 was
+            # left carrying.
+            #
+            # WHY THE FIX IS HERE AND NOT IN THE KILLED GATE. Its `finally`
+            # already works: an exception raised mid-pin restores the file
+            # byte-identically (measured). SIGTERM is handled too, once #1090
+            # lands. SIGKILL cannot be caught by anybody -- so the only process
+            # still alive to undo the write is THIS ONE, the one that sent it.
+            before_dirty = _checkout_dirty_paths(repo_root)
+            drive_exc: Optional[BaseException] = None
+            argv_a = _expand(cmd, repo_root)
+            argv_b = _expand(cmd, wt)
+            rec_a: Optional[Dict] = None
+            rec_b: Optional[Dict] = None
+            if checkout_records is not None:
+                rec_a = checkout_records.get(label)
+                if rec_a is None:
+                    findings.append({
+                        "gate": label,
+                        "kind": "CHECKOUT_ATTESTATION_MISSING",
+                        "detail": ("the outer hygiene run supplied no complete "
+                                   "process record for this declared gate; the "
+                                   "fresh arm was not run because there is "
+                                   "nothing trustworthy to compare it with"),
+                        "checkout": "NORECORD", "worktree": "NOT RUN"})
+                    continue
+                expected_argv = argv_sha256(argv_a, roots=(repo_root, wt))
+                if rec_a.get("argv_sha256") != expected_argv:
+                    findings.append({
+                        "gate": label,
+                        "kind": "CHECKOUT_ATTESTATION_WRONG_COMMAND",
+                        "detail": ("the outer record belongs to different "
+                                   "argv than the gate declaration now being "
+                                   "compared; label equality is not evidence"),
+                        "checkout": str(rec_a.get("argv_sha256", "NORECORD")),
+                        "worktree": expected_argv})
+                    continue
             try:
-                a = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
-                                   capture_output=True, text=True,
-                                   timeout=timeout)
-                b = subprocess.run(_expand(cmd, wt), cwd=str(cb),
-                                   capture_output=True, text=True,
-                                   timeout=timeout)
+                if rec_a is None:
+                    a = _run_gate(argv_a, ca, timeout)
+                    rec_a = _completed_attestation(
+                        label, a, argv_a, repo_root, wt)
+                b = _run_gate(argv_b, cb, timeout)
+                rec_b = _completed_attestation(
+                    label, b, argv_b, repo_root, wt)
             except (OSError, subprocess.SubprocessError) as exc:
+                drive_exc = exc
+            # ALWAYS, not only on the exception path. A gate that writes into
+            # the checkout while EXITING CLEANLY corrupts the comparison just as
+            # thoroughly, and would otherwise be invisible here.
+            repaired, refused = _repair_checkout(repo_root, before_dirty, label)
+            if repaired or refused:
+                findings.append({
+                    "gate": label, "kind": "GATE_CORRUPTED_CHECKOUT",
+                    "detail": (
+                        "this gate left the WORKING CHECKOUT modified while "
+                        "being driven"
+                        + (f" (killed: {type(drive_exc).__name__})"
+                           if drive_exc is not None
+                           else " (it exited normally)")
+                        + ". Every gate declared after it would have measured "
+                          "that. "
+                        + (f"Restored: {', '.join(repaired)}. "
+                           if repaired else "")
+                        + (f"REFUSED to touch (dirty before this run): "
+                           f"{', '.join(refused)}. " if refused else "")),
+                    "checkout": "modified", "worktree": "-"})
+            if drive_exc is not None:
                 # A gate that cannot be driven is NOT host-dependence, and it
                 # is NOT a clean result either. It gets its own state rather
                 # than a traceback that kills the whole probe.
                 findings.append({
                     "gate": label, "kind": "GATE_UNRUNNABLE",
                     "detail": f"could not be driven twice: "
-                              f"{type(exc).__name__}: {str(exc)[:160]}",
+                              f"{type(drive_exc).__name__}: "
+                              f"{str(drive_exc)[:160]}",
                     "checkout": "-", "worktree": "-"})
                 continue
             # NORMALISE THE TREE PATH OUT before comparing. A gate that echoes
@@ -405,26 +860,120 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
             #
             # A REAL difference — a count, a verdict word, a finding — still
             # differs after this, so the check is not weakened.
-            va = _norm(_verdict_line(a.stdout + a.stderr), repo_root, wt)
-            vb = _norm(_verdict_line(b.stdout + b.stderr), repo_root, wt)
-            if va != vb or a.returncode != b.returncode:
-                findings.append({
-                    "gate": label, "kind": "HOST_DEPENDENT_VERDICT",
-                    "detail": ("the same commit gives different answers in a "
-                               "working checkout and a fresh worktree, so the "
-                               "gate is reading something that is not in the "
-                               "commit — almost always untracked run leftovers"),
-                    "checkout": f"rc={a.returncode} {va[:200]}",
-                    "worktree": f"rc={b.returncode} {vb[:200]}",
-                })
+            assert rec_a is not None and rec_b is not None
+            va, vb = rec_a["verdict_line"], rec_b["verdict_line"]
+            if rec_a["semantic_sha256"] != rec_b["semantic_sha256"]:
+                # A DIFFERENCE MUST REPRODUCE TO BE EVIDENCE (vibe-ic#1029).
+                #
+                # Measured on `3febf537`, this probe reported:
+                #
+                #   [HOST_DEPENDENT_VERDICT] 63x8 census freshness
+                #     checkout: rc=1 AssertionError: the outcome run for
+                #               test_matrix_d7_outputs_list_complete.py did not
+                #               finish within 60s
+                #     worktree: rc=0 [PASS] 63x8 census fresh: 504 cells ...
+                #
+                # The arms did not disagree about the SUBJECT. One ran out of
+                # wall clock: `_OUTCOME_TIMEOUT_S = 60` bounds an inner pytest,
+                # and this probe drives 66 gates twice, so the checkout arm is
+                # the one under load. The same tool reported 6/6 clean on one
+                # run and 5/6 on the next — a verdict that depends on the
+                # machine's load is the very thing this probe exists to refuse,
+                # occurring in the probe itself. That is the same shape as the
+                # `_norm` fix above: a reported difference which is not one.
+                #
+                # `TimeoutExpired` raised HERE is already GATE_UNRUNNABLE. The
+                # gap is a gate that enforces its OWN deadline and therefore
+                # RETURNS rc=1 with a message — indistinguishable, to a single
+                # comparison, from a real verdict.
+                #
+                # The discriminator is NOT the text of the message; deciding a
+                # tier by grepping prose is the defect `_vacuous_exit` was
+                # written to end. It is REPRODUCIBILITY. A gate reading local
+                # state disagrees on every round, because the leftovers are
+                # still there. A gate that ran out of clock does not.
+                #
+                # Paid ONLY on the disagreeing minority: the agreeing majority
+                # is still driven exactly twice, which matters at ~44 min.
+                retry_before = _checkout_dirty_paths(repo_root)
+                retry_exc: Optional[BaseException] = None
+                try:
+                    a2 = _run_gate(argv_a, ca, timeout)
+                    b2 = _run_gate(argv_b, cb, timeout)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    retry_exc = exc
+                retry_repaired, retry_refused = _repair_checkout(
+                    repo_root, retry_before, label)
+                if retry_repaired or retry_refused:
+                    findings.append({
+                        "gate": label, "kind": "GATE_CORRUPTED_CHECKOUT",
+                        "detail": ("the confirmation drive modified the "
+                                   "working checkout. Restored: "
+                                   + (", ".join(retry_repaired) or "none")
+                                   + ". Refused: "
+                                   + (", ".join(retry_refused) or "none")),
+                        "checkout": "modified", "worktree": "-"})
+                if retry_exc is not None:
+                    findings.append({
+                        "gate": label, "kind": "GATE_UNRUNNABLE",
+                        "detail": f"disagreed once, then could not be re-driven "
+                                  f"to confirm it: {type(retry_exc).__name__}: "
+                                  f"{str(retry_exc)[:160]}",
+                        "checkout": _attestation_summary(rec_a),
+                        "worktree": _attestation_summary(rec_b)})
+                    continue
+                rec_a2 = _completed_attestation(
+                    label, a2, argv_a, repo_root, wt)
+                rec_b2 = _completed_attestation(
+                    label, b2, argv_b, repo_root, wt)
+                va2, vb2 = rec_a2["verdict_line"], rec_b2["verdict_line"]
+                round2_differs = (
+                    rec_a2["semantic_sha256"] != rec_b2["semantic_sha256"])
+                same_shape = (
+                    round2_differs
+                    and (rec_a["semantic_sha256"], rec_b["semantic_sha256"])
+                    == (rec_a2["semantic_sha256"],
+                        rec_b2["semantic_sha256"]))
+                if same_shape:
+                    findings.append({
+                        "gate": label, "kind": "HOST_DEPENDENT_VERDICT",
+                        "detail": ("the same commit gives different answers in "
+                                   "a working checkout and a fresh worktree, "
+                                   "and does so on BOTH rounds, so the gate is "
+                                   "reading something that is not in the commit "
+                                   "— almost always untracked run leftovers"),
+                        "checkout": _attestation_summary(rec_a),
+                        "worktree": _attestation_summary(rec_b),
+                    })
+                else:
+                    # NOT folded into a pass. A gate that cannot reproduce its
+                    # own verdict is not usable evidence — it is a DIFFERENT
+                    # defect from host dependence, and naming it as host
+                    # dependence sends the reader to the wrong repair.
+                    findings.append({
+                        "gate": label, "kind": "NON_DETERMINISTIC_VERDICT",
+                        "detail": ("the two arms disagreed once and did not "
+                                   "disagree the same way when reran, so the "
+                                   "difference is not a property of the commit "
+                                   "— typically an inner wall-clock bound met "
+                                   "under this probe's own load. NOT host "
+                                   "dependence, and NOT a pass: a gate whose "
+                                   "verdict is not reproducible cannot be used "
+                                   "as evidence by anything downstream"),
+                        "checkout": _attestation_summary(rec_a)
+                                    + "  || second run "
+                                    + _attestation_summary(rec_a2, 120),
+                        "worktree": _attestation_summary(rec_b)
+                                    + "  || second run "
+                                    + _attestation_summary(rec_b2, 120),
+                    })
     finally:
-        subprocess.run(["git", "-C", str(repo_root), "worktree", "remove",
-                        "--force", str(wt)], capture_output=True, text=True)
-        shutil.rmtree(td, ignore_errors=True)
+        _release_scratch(res, repo_root)
 
     probed = declared - len(not_probed)
     if findings:
-        return Audit("FAIL", findings, dirt, declared, probed, not_probed)
+        return Audit("FAIL", findings, dirt, declared, probed, not_probed,
+                     scratch)
     # NO STIMULUS IS NOT A PASS (#539). Every gate agreeing across two trees
     # that carry the same bytes is arithmetic, not evidence: the leftovers this
     # probe detects a gate READING were absent from both sides, so the run had
@@ -438,46 +987,383 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
     # keeps the PASS: we cannot then prove the stimulus was zero, and inventing
     # a NOT_CHECKED out of an unknown is the mirror of inventing a pass.
     if dirt is not None and dirt.ignored_reported and dirt.stimulus == 0:
-        return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed)
-    return Audit("PASS", findings, dirt, declared, probed, not_probed)
+        return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
+                     scratch)
+    return Audit("PASS", findings, dirt, declared, probed, not_probed, scratch)
+
+
+def _audit_doc(res: Audit, selected: Optional[List[str]] = None) -> Dict:
+    """Stable machine record used by both a caller and parallel workers."""
+    return {
+        "verdict": res.verdict,
+        "gates_declared": res.declared,
+        "gates_probed": res.probed,
+        "selected_labels": sorted(selected or []),
+        "not_probed": [{"gate": g, "why": w} for g, w in res.not_probed],
+        "scratch_sweep": res.scratch,
+        "stimulus": (None if res.dirt is None else {
+            "untracked": len(res.dirt.untracked),
+            "ignored": len(res.dirt.ignored),
+            "ignored_reported": res.dirt.ignored_reported}),
+        "findings": res.findings,
+    }
+
+
+def precomputed_audit(repo_root: Path, checkout_attestations: Path,
+                      fresh_attestations: Path, timeout: int = 600) -> Audit:
+    """Compare concurrently-produced Arm A/B process records.
+
+    The records were emitted by the same dispatcher command in two trees; no
+    verdict is reconstructed from prose.  Any missing, duplicate, wrong-command
+    or semantic mismatch is a finding/refusal.  This is the pipelined common
+    path: Arm B no longer waits for the last Arm-A gate before it starts.
+    """
+    scratch = sweep_abandoned_scratch(repo_root)
+    script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
+    gates = corpus_gates(script)
+    declared = len(gates)
+    if not gates:
+        return Audit("NOTHING_SCANNED", [], None, 0, 0, [], scratch)
+    dirt = checkout_dirt(repo_root, timeout)
+    if dirt is None:
+        return _setup("STATUS_UNAVAILABLE", "STATUS_UNAVAILABLE",
+                      "`git status` did not answer", None, declared, scratch)
+    if dirt.tracked:
+        return _setup("DIRTY_CHECKOUT", "DIRTY_CHECKOUT",
+                      f"{len(dirt.tracked)} tracked path(s) are modified",
+                      dirt, declared, scratch)
+    try:
+        arm_a = _load_checkout_attestations(checkout_attestations)
+        arm_b = _load_checkout_attestations(fresh_attestations)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _setup(
+            "ATTESTATION_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+            f"a pipelined arm has no complete machine record: {exc}", dirt,
+            declared, scratch)
+
+    findings: List[Dict] = []
+    not_probed: List[Tuple[str, str]] = []
+    for lineno, text in inert_exclusions(script):
+        findings.append({
+            "gate": f"(script line {lineno})", "kind": "INERT_EXCLUSION",
+            "detail": "an EXCLUDE directive is written but excludes nothing",
+            "checkout": text, "worktree": "-"})
+    probed = 0
+    for gate in gates:
+        reason = _not_probed_reason(gate)
+        if reason is not None:
+            not_probed.append((gate.label, reason))
+            continue
+        probed += 1
+        a = arm_a.get(gate.label)
+        b = arm_b.get(gate.label)
+        if a is None or b is None:
+            findings.append({
+                "gate": gate.label, "kind": "PIPELINE_RECORD_MISSING",
+                "detail": "the gate did not produce one complete record in "
+                          "both concurrently-run trees",
+                "checkout": "NORECORD" if a is None else _attestation_summary(a),
+                "worktree": "NORECORD" if b is None else _attestation_summary(b)})
+            continue
+        if a.get("argv_sha256") != b.get("argv_sha256"):
+            findings.append({
+                "gate": gate.label, "kind": "PIPELINE_WRONG_COMMAND",
+                "detail": "the two records belong to different normalized argv",
+                "checkout": str(a.get("argv_sha256", "NORECORD")),
+                "worktree": str(b.get("argv_sha256", "NORECORD"))})
+            continue
+        if a.get("semantic_sha256") != b.get("semantic_sha256"):
+            findings.append({
+                "gate": gate.label, "kind": "HOST_OR_NONDETERMINISTIC_VERDICT",
+                "detail": "the same command on the same commit produced "
+                          "different structured outcomes in the checkout and "
+                          "fresh worktree. A one-off mismatch is not usable "
+                          "evidence and is never folded into PASS",
+                "checkout": _attestation_summary(a),
+                "worktree": _attestation_summary(b)})
+    if findings:
+        return Audit("FAIL", findings, dirt, declared, probed, not_probed,
+                     scratch)
+    if dirt.ignored_reported and dirt.stimulus == 0:
+        return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
+                     scratch)
+    return Audit("PASS", [], dirt, declared, probed, not_probed, scratch)
+
+
+def parallel_audit(repo_root: Path, jobs: int,
+                   checkout_attestations: Optional[Path],
+                   timeout: int = 600) -> Audit:
+    """Drive disjoint Arm-B label sets in isolated worker worktrees.
+
+    Each child uses the unchanged serial ``audit`` implementation and owns one
+    worktree.  The parent derives the denominator before launching anything and
+    accepts a result only when every planned label is named by exactly one
+    complete child record.  A dead child is therefore lost evidence, never a
+    smaller green run.
+    """
+    script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
+    gates = corpus_gates(script)
+    declared = len(gates)
+    if not gates:
+        return Audit("NOTHING_SCANNED", [], None, 0, 0, [], None)
+    if jobs < 1:
+        return _setup("PARALLEL_INCOMPLETE", "PARALLEL_INCOMPLETE",
+                      f"--jobs must be >= 1, got {jobs}", None, declared)
+
+    dirt = checkout_dirt(repo_root, timeout)
+    if dirt is None:
+        return _setup("STATUS_UNAVAILABLE", "STATUS_UNAVAILABLE",
+                      "`git status` did not answer before parallel launch",
+                      None, declared)
+    if dirt.tracked:
+        return _setup(
+            "DIRTY_CHECKOUT", "DIRTY_CHECKOUT",
+            f"{len(dirt.tracked)} TRACKED path(s) modified/staged; parallel "
+            "workers would compare them with HEAD rather than with this tree",
+            dirt, declared)
+    if checkout_attestations is not None:
+        try:
+            _load_checkout_attestations(Path(checkout_attestations))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return _setup(
+                "ATTESTATION_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+                f"the checkout-arm record is incomplete: {exc}", dirt,
+                declared)
+
+    not_probed = [(g.label, reason) for g in gates
+                  if (reason := _not_probed_reason(g)) is not None]
+    driveable = [g.label for g in gates if _not_probed_reason(g) is None]
+    if not driveable:
+        return _setup("PARALLEL_INCOMPLETE", "PARALLEL_INCOMPLETE",
+                      "no declared gate is driveable", dirt, declared)
+
+    jobs = min(jobs, len(driveable))
+    profile_path = _HERE / "hygiene_gate_profile.json"
+    try:
+        profile = load_profile(profile_path)
+        buckets, _ = plan(driveable, profile, jobs)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _setup(
+            "PARALLEL_INCOMPLETE", "PARALLEL_INCOMPLETE",
+            f"the measured shard profile could not be loaded: {exc}", dirt,
+            declared)
+
+    findings: List[Dict] = []
+    for lineno, text in inert_exclusions(script):
+        findings.append({
+            "gate": f"(script line {lineno})", "kind": "INERT_EXCLUSION",
+            "detail": ("an EXCLUDE directive is written here but excludes "
+                       "nothing; parallel execution does not waive the "
+                       "declaration defect"),
+            "checkout": text, "worktree": "-"})
+
+    scratch_rows: List[Dict] = []
+    problems: List[str] = []
+    seen: List[str] = []
+    probed = 0
+    verdicts: List[str] = []
+    with tempfile.TemporaryDirectory(prefix="hostindep-plan-") as td:
+        tmp = Path(td)
+        procs = []
+        for i, labels in enumerate(buckets):
+            labels_path = tmp / f"labels-{i}.txt"
+            labels_path.write_text("\n".join(labels) + "\n", encoding="utf-8")
+            json_path = tmp / f"worker-{i}.json"
+            argv = [sys.executable, str(Path(__file__).resolve()),
+                    str(repo_root), "--json", str(json_path),
+                    "--labels-file", str(labels_path)]
+            if checkout_attestations is not None:
+                argv += ["--checkout-attestations",
+                         str(Path(checkout_attestations).resolve())]
+            procs.append((i, labels, json_path, subprocess.Popen(
+                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True)))
+
+        def collect(row):
+            i, labels, json_path, proc = row
+            try:
+                out, err = proc.communicate(timeout=max(timeout * len(labels),
+                                                        timeout))
+                return i, labels, json_path, proc.returncode, out, err, None
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                out, err = proc.communicate()
+                return i, labels, json_path, proc.returncode, out, err, exc
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            rows = list(pool.map(collect, procs))
+
+        for i, labels, json_path, rc, out, err, exc in sorted(rows):
+            if exc is not None:
+                problems.append(
+                    f"worker {i} exceeded its {max(timeout * len(labels), timeout)}s "
+                    "process budget")
+                continue
+            if not json_path.is_file():
+                tail = ((err or out).strip().splitlines() or ["no output"])[-1]
+                problems.append(
+                    f"worker {i} exited {rc} without a machine record: {tail[:180]}")
+                continue
+            try:
+                doc = json.loads(json_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as parse_exc:
+                problems.append(f"worker {i} wrote an unreadable record: {parse_exc}")
+                continue
+            selected = [str(x) for x in doc.get("selected_labels") or []]
+            if sorted(selected) != sorted(labels):
+                problems.append(
+                    f"worker {i} reported a different selection than assigned")
+                continue
+            if int(doc.get("gates_declared") or 0) != len(labels):
+                problems.append(
+                    f"worker {i} declared {doc.get('gates_declared')} gate(s), "
+                    f"but was assigned {len(labels)}")
+                continue
+            seen.extend(selected)
+            probed += int(doc.get("gates_probed") or 0)
+            verdicts.append(str(doc.get("verdict") or ""))
+            findings.extend(doc.get("findings") or [])
+            if doc.get("scratch_sweep"):
+                scratch_rows.append(doc["scratch_sweep"])
+            if rc not in (0, 1, 2):
+                problems.append(f"worker {i} exited unexpected rc {rc}")
+            expected_rc = {"PASS": 0, "FAIL": 1,
+                           "NO_STIMULUS": 2}.get(str(doc.get("verdict")))
+            if expected_rc is not None and rc != expected_rc:
+                problems.append(
+                    f"worker {i} record says {doc.get('verdict')} but process "
+                    f"exited {rc}, expected {expected_rc}")
+
+    duplicates = sorted({label for label in seen if seen.count(label) > 1})
+    missing = sorted(set(driveable) - set(seen))
+    extra = sorted(set(seen) - set(driveable))
+    if duplicates:
+        problems.append("labels driven more than once: " + ", ".join(duplicates[:6]))
+    if missing:
+        problems.append("labels driven by no worker: " + ", ".join(missing[:6]))
+    if extra:
+        problems.append("unplanned labels were driven: " + ", ".join(extra[:6]))
+    if problems:
+        return Audit(
+            "PARALLEL_INCOMPLETE",
+            [{"gate": "(parallel workers)", "kind": "PARALLEL_INCOMPLETE",
+              "detail": p, "checkout": "-", "worktree": "-"}
+             for p in problems],
+            dirt, declared, probed, not_probed,
+            {"workers": scratch_rows})
+    if any(v not in ("PASS", "NO_STIMULUS", "FAIL") for v in verdicts):
+        return Audit(
+            "PARALLEL_INCOMPLETE",
+            [{"gate": "(parallel workers)", "kind": "PARALLEL_INCOMPLETE",
+              "detail": "worker setup/refusal verdict(s): " + ", ".join(verdicts),
+              "checkout": "-", "worktree": "-"}],
+            dirt, declared, probed, not_probed,
+            {"workers": scratch_rows})
+    if findings or "FAIL" in verdicts:
+        return Audit("FAIL", findings, dirt, declared, probed, not_probed,
+                     {"workers": scratch_rows})
+    if verdicts and all(v == "NO_STIMULUS" for v in verdicts):
+        return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
+                     {"workers": scratch_rows})
+    if any(v == "NO_STIMULUS" for v in verdicts):
+        return Audit(
+            "PARALLEL_INCOMPLETE",
+            [{"gate": "(parallel workers)", "kind": "PARALLEL_INCOMPLETE",
+              "detail": "workers disagreed about whether stimulus existed",
+              "checkout": "-", "worktree": "-"}],
+            dirt, declared, probed, not_probed,
+            {"workers": scratch_rows})
+    return Audit("PASS", [], dirt, declared, probed, not_probed,
+                 {"workers": scratch_rows})
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("repo_root", nargs="?", default=None)
     ap.add_argument("--json", dest="json_out", default=None)
+    ap.add_argument(
+        "--checkout-attestations", type=Path, default=None,
+        help=("JSONL process records written by the enclosing hygiene run; "
+              "when supplied, those records are Arm A and only the fresh "
+              "worktree Arm B is launched"))
+    ap.add_argument(
+        "--jobs", type=int, default=1,
+        help="parallel isolated Arm-B workers (default: serial compatibility)")
+    ap.add_argument("--labels-file", type=Path, default=None,
+                    help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
 
+    # The enclosing dispatcher owns this path and exports it to every gate.
+    # Reading that channel here keeps the shell declaration free of a
+    # run-specific variable.  The declaration parser treats unresolved shell
+    # variables as loop bindings; spelling this path in the argv therefore
+    # made the one repo-wide host gate look like a fifth per-cell gate and
+    # corrupted the loop denominator.  An explicit CLI argument remains the
+    # higher-priority interface for standalone callers and worker processes.
+    if a.checkout_attestations is None:
+        inherited = os.environ.get("GATE_DISPATCH_ATTESTATION_FILE", "")
+        if inherited:
+            a.checkout_attestations = Path(inherited)
+
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    res = audit(root)
+    selected: Optional[Set[str]] = None
+    if a.labels_file is not None:
+        try:
+            selected = {line.strip() for line in
+                        a.labels_file.read_text(encoding="utf-8").splitlines()
+                        if line.strip()}
+        except OSError as exc:
+            res = _setup("SELECTION_UNAVAILABLE", "SELECTION_UNAVAILABLE",
+                         f"could not read worker label manifest: {exc}", None, 0)
+        else:
+            res = audit(root, checkout_attestations=a.checkout_attestations,
+                        only_labels=selected, include_script_findings=False)
+    elif os.environ.get("VIBEIC_HOST_FRESH_ATTESTATIONS"):
+        if a.checkout_attestations is None:
+            res = _setup(
+                "ATTESTATION_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+                "pipelined fresh-arm evidence was supplied without Arm A",
+                None, len(corpus_gates(
+                    root / "tools" / "ci" / "repo_hygiene_gates.sh")))
+        else:
+            res = precomputed_audit(
+                root, a.checkout_attestations,
+                Path(os.environ["VIBEIC_HOST_FRESH_ATTESTATIONS"]))
+    elif a.jobs > 1:
+        res = parallel_audit(root, a.jobs, a.checkout_attestations)
+    else:
+        res = audit(root, checkout_attestations=a.checkout_attestations)
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
-            {"verdict": res.verdict,
-             # DECLARED is the denominator and PROBED is what this run actually
-             # drove twice. They differ by the self-skip and by every declared
-             # exclusion, each of which is named — a consumer must be able to
-             # tell a shrinking numerator from a shrinking population.
-             "gates_declared": res.declared,
-             "gates_probed": res.probed,
-             "not_probed": [{"gate": g, "why": w} for g, w in res.not_probed],
-             "stimulus": (None if res.dirt is None else {
-                 "untracked": len(res.dirt.untracked),
-                 "ignored": len(res.dirt.ignored),
-                 "ignored_reported": res.dirt.ignored_reported}),
-             "findings": res.findings}, indent=2) + "\n")
+            _audit_doc(res, sorted(selected or [])), indent=2) + "\n")
 
     # Whatever the outcome, SAY WHAT WAS NOT PROBED. A gate that left the
     # numerator without being named is how a set silently shrinks.
     for label, why in res.not_probed:
         print(f"  [NOT PROBED] {label} — {why}", file=sys.stderr)
 
+    # And say what the entry sweep did to other people's directories. A cleanup
+    # that runs silently is one nobody can audit when it removes the wrong
+    # thing, and this one deletes git worktrees.
+    if res.scratch:
+        for p in res.scratch.get("reaped", []):
+            print(f"  [REAPED] {p} — its owner was gone (the flock it held was "
+                  f"released), so an interrupted run's scratch worktree was "
+                  f"removed and unregistered", file=sys.stderr)
+        for p in res.scratch.get("live_peers", []):
+            print(f"  [LEFT ALONE] {p} — a live peer holds its lock",
+                  file=sys.stderr)
+        for k in res.scratch.get("kept", []):
+            print(f"  [LEFT ALONE] {k['path']} — {k['why']}", file=sys.stderr)
+
     if res.verdict == "NOTHING_SCANNED":
         print("NOTHING_SCANNED: no corpus-scanning gate parsed from "
               f"{root}/tools/ci/repo_hygiene_gates.sh", file=sys.stderr)
         return 2
     if res.verdict in ("DIRTY_CHECKOUT", "STATUS_UNAVAILABLE",
-                       "WORKTREE_UNAVAILABLE"):
+                       "WORKTREE_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+                       "SELECTION_UNAVAILABLE", "PARALLEL_INCOMPLETE"):
         head = {
             "DIRTY_CHECKOUT":
                 "DIRTY_CHECKOUT: host-independence was NOT checked — tracked "
@@ -491,6 +1377,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "WORKTREE_UNAVAILABLE: could not create a scratch git "
                 "worktree, so host-independence was NOT checked. This is not "
                 "a pass.",
+            "ATTESTATION_UNAVAILABLE":
+                "ATTESTATION_UNAVAILABLE: the outer hygiene run supplied no "
+                "complete checkout process record, so host-independence was "
+                "NOT checked. This is not a pass.",
+            "SELECTION_UNAVAILABLE":
+                "SELECTION_UNAVAILABLE: a parallel worker could not establish "
+                "its exact gate set. This is not a pass.",
+            "PARALLEL_INCOMPLETE":
+                "PARALLEL_INCOMPLETE: one or more isolated workers did not "
+                "return a complete, exactly-once record. This is not a pass.",
         }[res.verdict]
         print(head, file=sys.stderr)
         for f in res.findings:
@@ -505,9 +1401,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     stim = res.dirt.describe() if res.dirt is not None else "unknown stimulus"
     if res.findings:
+        # Split by KIND rather than totalling them. Reporting a gate that met
+        # an inner deadline as "HOST-DEPENDENT" sends the reader to look for
+        # untracked leftovers that are not there — the wrong repair, which is
+        # the cost this split exists to stop.
+        by_kind: dict = {}
+        for f in res.findings:
+            by_kind[f["kind"]] = by_kind.get(f["kind"], 0) + 1
+        parts = ", ".join(f"{n} {k}" for k, n in sorted(by_kind.items()))
         print(f"[FAIL] {len(res.findings)} of {res.probed} probed corpus "
-              f"gate(s) ({res.declared} declared) give a HOST-DEPENDENT "
-              f"verdict.", file=sys.stderr)
+              f"gate(s) ({res.declared} declared) did not give one reproducible "
+              f"verdict across two trees: {parts}.", file=sys.stderr)
         return 1
     if res.verdict == "NO_STIMULUS":
         # The sentence a two-pristine-tree run has always deserved and never
