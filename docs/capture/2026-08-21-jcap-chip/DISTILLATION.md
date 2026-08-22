@@ -37,9 +37,18 @@ supplies numbers, the plugin composes the claims.
 ## The finding that outlived the brief: gates that fail open
 
 Each of the twelve was then run against the scenario its RECORD describes, not
-the fixture its implementation invites. **Ten fail-open defects and one
-over-tight granularity error**, every one returning rc=0 with the defect
-present, every one in a gate written to catch that very class of defect:
+the fixture its implementation invites. **Ten gates failed OPEN** — each returning
+rc=0 with the defect present — and **two failed CLOSED**, which is the rarer and
+more embarrassing direction. All twelve are gates written to catch the very class
+of defect they were committing.
+
+The ten fail-open are the first ten rows below. The two fail-closed are the
+eleventh row (a static literal scan declaring a WORKING axis unprovable, rc=1)
+and, recorded further down, the disclosure check at FUNCTION granularity
+reddening `_resolve_clock_spec`, which hands its provenance to the artefact by a
+route a per-function rule cannot see. Counting the eleventh row among the
+fail-open — as an earlier draft of this sentence did — would have been the same
+error as the gates themselves: one label stretched over two different facts.
 
 | gate | it passed on |
 |---|---|
@@ -61,8 +70,12 @@ reading `"unknown"` passed the gate whose entire purpose is to make an aggregate
 name its runtime: the absence of an identity wearing the shape of one, which is
 this capture's own seam turned back on the instrument.
 
-**None was findable by re-running verification**, because in every case the bug
-WAS the pass, and verification looks for confirmation.
+**None of the TEN was findable by re-running verification**, because in each of
+those the bug WAS the pass, and verification looks for confirmation. The two
+fail-closed ones are the opposite: they announce themselves, and both were found
+within minutes of being written. That asymmetry is the argument for building the
+record's scenario rather than the implementation's fixture — the failures that
+announce themselves need no such discipline, and they are not the dangerous ones.
 
 ## The rule that generalises
 
