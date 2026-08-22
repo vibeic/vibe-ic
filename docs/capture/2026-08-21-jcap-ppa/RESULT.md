@@ -1558,18 +1558,25 @@ measured instance rather than a twenty-ninth record.
 ## Landing readiness — measured base against head, not asserted
 
 A question I had never asked of my own branch: **would it land?** Three gates
-could plausibly care about a new top-level directory and 17 added routing
-entries. All three were run on this branch AND with the routing file reverted to
-its base content, then the outputs compared:
+could plausibly care about a capture bundle and the routing entries beside it.
+All three were run on this branch AND with the routing file reverted, then the
+outputs compared.
+
+*Re-measured after the merge, because the shape of the change moved: the bundle
+is no longer a new top-level directory — it now updates one that main already
+carries — and of the 16 routing entries this lane wrote, 8 had already landed
+with the earlier snapshot, so only 8 are new against main. Main has not moved
+since (still `81cd5321b`), a trial merge is conflict-free, and no file this
+branch touches is one main touched.*
 
 | gate | base | head | comparison |
 |---|---|---|---|
 | tracked JSON/YAML parses | — | **rc 0** | clean on this branch |
-| gate is wired | rc 1, unwired 61 (baseline 59) | rc 1, unwired 61 | **name sets identical** |
+| gate is wired | rc 1, unwired 61 (baseline 59) | rc 1, unwired 61 | **output byte-identical** — re-run on both arms post-merge, `diff` empty |
 | checker execution wiring | rc 1 | rc 1 | **output byte-identical** |
 
 The two red gates are **pre-existing on main** and this branch moves neither —
-not the count, not the names, not a byte of the report. The 17 routing entries
+not the count, not the names, not a byte of the report. The routing entries
 wire nothing that was unwired, which is consistent with **A-23**: every program
 this batch routes to was already reachable from an automatic verdict.
 
