@@ -6354,6 +6354,42 @@ right file, or whether anything else moved while I was working.
 **The suite says both. It is the only thing that does.**
 
 
+## M121 — "the control cannot reach the arm" describes why they are red, not what blocks a fix
+
+M112's correction — that FIVE mounts cross, not just the tree — forced a re-read
+of the census row covering six reds. **It was compressing two different facts into
+one, and the compressed version is the one a lander would act on.**
+
+The row said: *"the exact-set env contract — a test control cannot reach the
+arm."* **That is true of the tests as shipped and false as a statement about what
+blocks a fix**, because M92 BUILT the fix and it reached the arm:
+
+    sentinel committed to the subject tree
+      -> stub takes the routed-transition path on BOTH arms
+      -> "arm A2/B2: base rc=1 candidate rc=1 (hermetic gates)"
+
+**The control reached the arm. The remedy is proven. The blocker moved.** And it
+moved to two DIFFERENT places, which the single row hid:
+
+| n | reaches the arm? | stops at | protected file |
+|--:|---|---|---|
+| 2 (interrupt) | **yes** — hang fires | cannot IDENTIFY the container | `gatekeeper-verify-merge.sh` must announce `RUN_ID` — **one line** |
+| 4 (corpus/bootstrap) | **yes** — routed path activates | trusted-parent-evidence integrity | `benchmark_data_landing_checkout.py`, `routed_def_corpus.py`, `_gate_dispatch.sh` |
+
+**Two decisions, not one, and they are not the same size.** The interrupt pair
+needs a single announcement line. The corpus four need someone who understands the
+trusted-parent-evidence protocol to decide whether a fixture can satisfy it — a
+materially larger ask, and I could not tell whether my fixture was wrong or the
+path was defective (M92).
+
+**Why the compression happened, since it is the third instance today:** "the env
+contract refuses" is TRUE, load-bearing, and I had just measured it precisely
+(M107). **A finding that is correct and freshly proven is the easiest thing to
+over-extend** — it carries its own authority into the next sentence, where it was
+never measured. **The allowlist explains the RED. It does not explain the BLOCK,
+and I let one sentence do both jobs.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -6459,7 +6495,7 @@ reading. **This is the measured grouping (M101 → M108): 34 reds, 5 roots.**
 | n | root | what closes it | whose |
 |--:|---|---|---|
 | **16** | **the corpus/record situation** — 11 D3 cells (6 citing `home` roots, 5 visible only once a corpus is offered) + 3 mutation-ledger + 2 nested-outcome, both downstream | **re-point the records to a `repo`/`published` kind.** `home` roots are excluded by `_ADMISSIBILITY` on purpose (#527) and **cannot become admissible by publishing anywhere** (M105). Separately, the corpus being OPTIONAL is what the illegal skip exists to tolerate (M103/M104) | corpus owner + infrastructure |
-| **6** | **the exact-set env contract** — a test control cannot reach the arm | extending it needs **3 coordinated changes** in a PROTECTED file (name, validator, symmetric verifier set). The sanctioned route is **committed tree data**, built and proven to cross (M92/M107) | protected-file owner |
+| **6** | **why they are RED TODAY:** the shipped tests use env controls, and the arm's environment is an exact-set contract that REFUSES (M107). **Why they are BLOCKED is a different and later thing** — the tree remedy WORKS (M92, built and run), and each half then stops one layer down, in a protected file, for a DIFFERENT reason. | **2 (interrupt):** sentinel crosses, hang fires — the test cannot IDENTIFY the arm's container; needs `gatekeeper-verify-merge.sh` to announce `RUN_ID`, **one line, PROTECTED** (M83). **4 (corpus/bootstrap):** sentinel crosses, routed path activates on both arms — stops at trusted-parent-evidence integrity (`benchmark_data_landing_checkout.py`, `routed_def_corpus.py`, `_gate_dispatch.sh`, all **PROTECTED**) (M92). | protected-file owner — **two separate one-layer-down decisions, not one** |
 | **5** | **`flow_compliance_check.py:10057`** — `not vacuous_hints` declines WAIVED-DEFERRED for Step 4 | **ONE decision.** The tier's own purpose supports the code (M106); the tests cover a waiver path the FIXTURE no longer reaches. **Do not assert `VACUOUS-PASS`** — it agrees with the drift (M46) | flow owner |
 | **3** | **`flow_gate_enforcement_audit` exits 1** on two undeclared gates | **ONE decision, and it closes 3 reds in three files section C never named.** *"Silence is not a decision (#886)"* — the audit exists to force it. **`advisory` is NOT the safe default** for `area_total_vs_budget_check` (M80) | gate authors |
 | **1** | `magic` cannot launch here | environment, not a defect (M60) | — |
