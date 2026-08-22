@@ -4406,6 +4406,73 @@ violates it. The mount channel is now verified to the standard the label channel
 only appeared to meet.
 
 
+## M83 — I BUILT B, ran it, and reverted it. The blocker is real and it is one line in a PROTECTED file
+
+M78 and M79 were blockers I had invented. So I built B rather than argue about
+it. **It fails, for a reason no amount of reading would have produced, and the
+fix is not mine to make.**
+
+**What I built and what it proved.** Replaced the env-knob hang with a COMMITTED
+SENTINEL guarded on `GATEKEEPER_VERIFY_ARM`, added mount-based container
+discovery, and replaced the meaningless PID assertion. **The sentinel half
+works**: the run went from 33 s to 111 s and reached `hermetic Git subject PASS`,
+where before the verifier sailed to `LAND OK`. **The tree crosses; the arm hangs.**
+
+**Then the identification failed, and the diagnostic said exactly why:**
+
+    Failed: the verifier was still running after 55s and no container ever
+            appeared for run(s) ['NONE ANNOUNCED']
+
+`NONE ANNOUNCED` — **no refs existed at all.** Reading the verifier settles it:
+
+    if [ -n "$PR" ]; then ... fetch "+refs/pull/$PR/head:$HEAD_REF" ...
+    else  HEAD_SHA="$("${G[@]}" rev-parse "$REF")"          # <- no ref written
+
+**`refs/gk-verify/<RUN_ID>/*` are created ONLY on the `--pr` path.** These tests
+run `--ref probe --no-fetch`, so the channel M82 identified as the working one
+does not exist for them either. **That is the second independent failure of the
+same claim**, and I found it by running the code rather than reading it.
+
+**Every remaining channel is closed, and I checked each:**
+
+| candidate | why not |
+|---|---|
+| label VALUE | `os.urandom(12).hex()`, receipt-only, receipt needs a COMPLETED run (M82) |
+| label KEY alone | catches a concurrent agent's container — B ruled this out itself |
+| `refs/gk-verify` | **only on the `--pr` path**; these tests use `--ref` |
+| any mount path | `BENCHMARK_A2/B2`, `WT_CAND`, `RUNTIME_SNAPSHOT` all live under `$RUN` |
+| `$RUN` itself | `mktemp -d -t gkverify.XXXXXX`, never announced on this path |
+| before/after set diff | a concurrent agent's container in the window is a FALSE RED |
+
+**THE ONE-LINE FIX, AND WHY IT IS NOT MINE.** The verifier already writes into
+`GATEKEEPER_CONCURRENCY_PROBE_DIR` — that is how `cleanup.started/reaped/done`
+reach the test (`:851-856`). Writing `RUN_ID` there alongside them costs one line
+and reuses an observability channel the verifier already owns. **But
+`tools/gatekeeper-verify-merge.sh` is PROTECTED** (AUTHORITY role, present in
+`/current`, `/next` and `/paths`), so this is the lander's edit.
+
+**Why I reverted instead of shipping the sentinel half.** Without identification
+the test cannot know WHEN the arm is hung, so it cannot interrupt at a meaningful
+moment — and `_hermetic_containers({})` returns `[]`, which would make the final
+assertion **pass vacuously**. That is the empty-denominator defect I have spent
+this branch finding in other people's code. **A test that goes green because it
+looked at nothing is worse than the red it replaces**, so the file is back at its
+committed state, byte for byte.
+
+**Operational note, recorded because it is a real cost.** The attempt leaked 3
+containers and 2 runner processes when my own diagnostic SIGKILLed their parent.
+Cleaned by **`/proc/PID/cwd` ownership**, not by pattern — both runners' cwd was
+inside my scratchpad clone. Worth noting that my first ownership probe reported a
+pid matching all three runs: **that was my own loop's command line**, which
+contained all three names. The rule against matching your own command line
+applies to the check you write to enforce it.
+
+**So B joins the corpus pair (M25) rather than standing apart from it.** I had
+ranked B buildable and the corpus pair unbuildable. **Both are blocked on the
+same thing — a channel from the host into a container-era test — and the
+difference I drew between them was not real.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4490,7 +4557,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | item | what is missing | kind |
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **REAL blocker, but REDESCRIBED — M80.** Audit exit 1: 172 gates, 19 can block, 153 AUDIT_ONLY (88%), 131 undeclared. Both named gates sit in the BLOCKING `program_exit_zero` slot and are still AUDIT_ONLY (no runner invokes them inline). **My note said `advisory` truthful for both; that is true of the WIRING and wrong as an action** — writing the line DECIDES rather than describes. For `area_total_vs_budget_check` `advisory` would ratify the exact defect it was written to remove (*'a figure produced and never compared'*): wire it, or declare `blocking` and stay red. `tapeout_docs_gen` is a GENERATOR, not a check — a classification question, same shape as (b) and as M70's hygiene gate. | **3 questions: 1 product, 2 classification** |
-| **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described. **M68: the "needs a cell authored" premise is FALSE** — a real published cell with a routed DEF is TRACKED in git's index on this host (`ic/spm/v1.5.58_ihp-sg13g2`, 17210 tracked benchmark-data paths); stage it and point `VIBE_IC_BENCHMARK_DATA` at it. Authoring remains forbidden and unnecessary. **A and C are DONE** (4 reds closed). | **decision + evidence** |
+| **Re-founding B and D** (2 + 2 reds) | **B: BUILT, RUN, REVERTED — M83.** The sentinel hang WORKS (33s -> 111s, reaches `hermetic Git subject PASS`), but the arm's container cannot be identified: label value is receipt-only, `refs/gk-verify` exists **only on the `--pr` path** and these tests use `--ref`, and every mount lives under an unannounced `mktemp -d`. **One line in `gatekeeper-verify-merge.sh` (PROTECTED) would fix it** — write `RUN_ID` into the probe dir it already writes cleanup markers to. Reverted rather than ship a vacuous pass. **D: blocker retired (M79)** — a real published cell IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, with `routed.def`), and the sandbox fixture already publishes one. **A and C are DONE.** | **one line, in a protected file** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — and M66 measured it as CHEAP:** a public Apache-2.0 repo at a pinned commit, clone command already written in `docs/research/template_ingest_run.md`, simply absent from this host. | **external artefact** |
