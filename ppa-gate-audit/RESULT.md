@@ -2059,3 +2059,151 @@ silent about them. The nine that remain:
 
 Eight rows, every one of which now says what it is missing. That is the whole
 point of the branch, measured in the suite rather than row by row.
+
+---
+
+# Part 20 — `h2h_F` re-filed as what it is, under a kind proposed for it
+
+Parts 1 and 12 named the finding and fixed the two producers so the document
+could not be written again. The record itself was left refused, deliberately.
+This part does the other half.
+
+## The kind did not exist, and that was the finding
+
+Fourteen schemas ship under `schemas/ppa/` and **not one declares a
+within-project ranking**. That absence is why the ablation was filed as
+`vibeic.ppa.comparison.v2` in the first place — it was the only shape available
+that could hold two arms and three metrics — and why
+`ppa_head_to_head_check` refused it `BASELINE_TUNED_BY_US` for two months.
+
+`vibeic.ppa.ablation.v1` is that missing kind, and it is **proposed, not
+assumed**. The argument is here and in the schema's own description; if the
+reviewer prefers a different shape, the RECORD is what matters and it re-files
+again. What must not happen is a third option: leaving a real measurement filed
+under a claim it cannot support because no better box exists.
+
+## What makes it worth having: exclusivity in BOTH directions
+
+    comparison.v2   a `baseline` arm MUST declare tuned_by_this_project: false
+    ablation.v1     EVERY arm MUST declare tuned_by_this_project: true
+
+A document cannot satisfy both, so a mis-filing is refusable by SHAPE from
+either side rather than only by a checker that happens to read it.
+
+The second clause is the load-bearing one, and it is there to close a hole this
+schema would otherwise have dug. An arm this project did not tune is an
+OPPONENT, and a document holding one is a head-to-head that must face the
+fairness conditions. Without `const: true`, re-filing a real head-to-head as an
+ablation would be a way out of them — **a hiding place built by the very fix
+that closed the mis-filing**.
+`test_a_REAL_head_to_head_cannot_HIDE_here` pins it.
+
+## Nothing was deleted, weakened or edited
+
+The arms are asserted byte-identical to the refused document before anything
+else is claimed about them:
+
+    area_um2      6136.0   vs   6040.0
+    power_mw       0.559   vs    0.540
+    timing_wns_ns    0.0   vs      0.0
+    both arms      tuned_by_this_project = true
+
+The record carries its `provenance` — former path, former schema, the refusal
+code — and the checker's own refusal report is KEPT beside it as
+`ablation_pnr_only_vs_crosslayer.refusal_that_caused_it.json`. **A re-filing
+whose causing refusal has been deleted is indistinguishable from a record that
+was always this kind.**
+
+The ablation is also the informative half of this campaign that the twelve
+passing head-to-heads cannot show: they measure the cross-layer winner against
+`vibe-ic-phase3-defaults`, and only this document isolates what the cross-layer
+search adds over a place-and-route-only search. Losing it to make a gate green
+would have been the worse trade by a distance.
+
+## The gate is untouched, and the corpus is what changed
+
+No assertion relaxed, no exemption added, no date moved. Selection is by
+DECLARED SCHEMA, so re-filing is what removes the document from the corpus —
+not a rename, not a move.
+
+    before   15 record(s), 1 refused, 2 undetermined, 12 accepted  -> rc 1
+    after    14 record(s), 0 refused, 2 undetermined, 12 accepted  -> rc 2
+
+## IT IS rc 2 AND NOT rc 0, AND THE 0 IS NOT AVAILABLE HONESTLY
+
+The two remaining undecidables are the pre-existing unrecorded-field defect Part
+4 has described from the start, and **neither field exists anywhere in this
+repository to copy**:
+
+    h2h_A  SCOPE_SENTINEL     `timing_wns_ns.rc_corner` is null at process=ss
+           MEASURED: 1213 `ss` timing scopes in this tree carry an `rc_corner`
+           key and ZERO of them state a value.
+
+    h2h_B  SCOPE_INCOMPLETE   `power_mw` scope declares no `mode` at stage=synth
+           MEASURED: 546 power scopes in the campaign's own record set and NOT
+           ONE carries a `mode`.
+
+Making the row green would mean writing two fields no artefact states — an
+invented measurement, which is the unearned pass this whole document refuses.
+The honest verdict for *"the slow-corner RC parasitic corner was never
+recorded"* is NOT_CHECKED, and it stays NOT_CHECKED until a producer records it.
+That repair is `_ppa/timing.py` emitting the corner it extracted at, exactly as
+the `tt` path already does, followed by a re-run — lane-owned work, not a
+re-labelling.
+
+## The ledger row, and a gap in the rule that governs it
+
+`gate_red_since.json` acknowledged this gate as red. It no longer is, so the row
+is deleted — the file's own instruction is *"delete the row in the SAME commit
+that fixes the gate"*, and deleting an acknowledgement REMOVES a deadline rather
+than granting anything. The row's own `why` had already named this exit: the red
+*"closes when that record is either relabelled as a within-project comparison or
+re-measured against an untuned baseline"*.
+
+**`gate_red_since_check` would not have caught it.** Its `stale` finding fires
+only when the acknowledged gate PASSES; this one became NOT_CHECKED, so the row
+would have survived as a live deadline for a red that no longer exists. Recorded
+rather than fixed — the rule belongs to the ledger's owner, and the fix is one
+clause.
+
+## One clause of the declaration corrected, and the date untouched
+
+The `uncheckable_until` text ended *"and this corpus produces one today"*,
+naming `h2h_F`. That is now false. The date is unchanged, no leniency changed,
+and no exemption was added — only a sentence of fact. Leaving a false sentence
+in a landing record is the disease this branch is about.
+
+## A defect in this branch's own guard, surfaced by the row changing
+
+With the cross-layer row at rc 2 instead of 1, the naming rule in
+`test_rc2_over_a_nonempty_population_names_the_artefact.py` began demanding that
+the **twelve PASSING** head-to-heads say what was "missing" from them. Nothing
+is. An rc-2 corpus verdict is a roll-up of many per-subject verdicts, and a
+subject that PASSED owes no referent; forcing a gate to invent an absence for a
+record it accepted is the mirror image of the defect that file exists to catch.
+
+Fixed, pinned in both directions, and negative controls A and B were re-proved
+after the loosening — 4 and 2 failures — so the skip is not a hole.
+
+## Negative control: the refusal, disabled surgically
+
+One condition flipped, no structure touched:
+
+    2 failed   test_a_baseline_this_project_tuned_is_refused
+               test_a_tuned_baseline_is_refused_even_when_we_would_have_won
+
+    E   AssertionError: assert 0 == 1
+    E    +  where 1 = C.RC_REFUSED
+
+    6 failed across the two files.
+
+The record that was refused now passes. And the SCHEMA clause is an independent
+guard: the ablation tests still pass under that mutation, because they validate
+shape rather than program behaviour, so removing one does not silence the other.
+
+## Regression
+
+    targeted selection, 31 files:  913 passed, 0 failed
+    chip-agnostic guard            PASS, 1553 files
+    PROGRAM_INVENTORY.json and the four stated counts in the two READMEs
+    re-derived for the added test file.
