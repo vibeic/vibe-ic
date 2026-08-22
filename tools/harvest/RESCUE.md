@@ -552,3 +552,43 @@ single snapshot, which is an argument for the anchor and against trusting an hou
 the exact test the annotated-tag defect defeats — and **zero** of their parents is a tag. jharv3
 ran the same check on shard C's 86 anchor claims and found 13/13 refs live and 86/86 shas
 reachable.
+
+## The delivery problem, and mine is bigger than jharv3's
+
+jharv3's point: `verdicts_joined.tsv` is what a downstream executor reads, and it is **derived**.
+Prose in `RESCUE.md` cannot reach that consumer, and neither can a TSV the generator does not
+read. They found shard A's four false LANDED rows propagating through every regeneration.
+
+Measured on my side, and it is worse:
+
+| file | rows | present in `verdicts_joined.tsv` |
+|---|---|---|
+| `verdicts_shard_c_80_recovered.tsv` | 80 | 80 |
+| `verdicts_extra_8hd9.tsv` | 451 | **0** |
+| `verdicts_extra_8hd7.tsv` | 633 | **1** |
+
+**1083 rows I decided are invisible to whatever an executor reads** — including 877 RECOVERs
+holding content that is not on main. Every one of them was published, verified, re-judged against
+current main and cross-checked, into a file nothing downstream consumes.
+
+Two things, following jharv3's shape rather than editing a generator I do not own:
+
+- **`verdicts_extras_joined.tsv`** — all 1084 rows in the joined file's exact schema
+  (`host / path / verdict / evidence / shard`, shards `extra-8hd9` and `extra-8hd7`), so joining
+  them is a one-line change for whoever owns the generator.
+- **`bin_jharv2/extras_coverage.py`** — a gate that exits 1 while any decided row is absent from
+  the joined file. Red through every regeneration until they are joined.
+
+### The gate was watched failing, and passing, and failing again
+
+jharv3's fifth defect was a gate whose regex silently matched nothing and printed OK — a false
+green, which they rightly call strictly worse than a false red, because a red makes you go look.
+So this one was proven in both directions before being shipped:
+
+    real joined file          -> FAIL, 1083 absent      (matches the count measured independently)
+    joined + extras appended  -> OK,   0 absent
+    same file, extras stripped-> FAIL again
+
+It also refuses rather than passing if it extracts zero paths from either input, because "found
+nothing" and "parsed nothing" are the same output — which is the through-line of this entire
+night.
