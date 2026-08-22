@@ -38,9 +38,15 @@ returns a mapping carrying at least three disclosure fields
 read-or-default helper therefore extends this rule automatically, which is the
 whole difference between marking two values and stating the rule.
 
-    FINDING   a non-test call site that binds such a helper's result and never
-              references any disclosure field in the same scope. The value was
-              taken and the provenance was dropped.
+    FINDING   a non-test MODULE that calls such a helper and never references
+              any disclosure field ANYWHERE in code. The value was taken and the
+              provenance was dropped.
+
+              Module, not function: measured, a per-function rule reported a
+              resolver that returns only the number, while the emitting caller
+              obtained the disclosure separately and wrote it into the artefact.
+              And "in code": a comment saying the provenance is discarded used to
+              satisfy this check, which is the defect certifying itself.
 
 Tests are excluded: a test that asserts only the value is asserting exactly what
 it means to, and reddening it would make this rule's PASS depend on weakening the
@@ -125,6 +131,33 @@ class Finding:
                 f"for.")
 
 
+def _carries_disclosure(scope: ast.AST) -> bool:
+    """True only when a disclosure field is REFERENCED IN CODE.
+
+    MEASURED FALSE PASS: this was `any(field in <function source text>)`, so
+
+        rep = declared_period_ns(docs, c)
+        # we deliberately ignore matched_key / source / line here
+        out.write_text(...)
+
+    reported PASS. A comment stating that the provenance is DISCARDED counted as
+    carrying it. Docstrings are excluded for the same reason.
+    """
+    doc = ast.get_docstring(scope, clean=False) if isinstance(
+        scope, (ast.FunctionDef, ast.AsyncFunctionDef)) else None
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value == doc:
+                continue
+            if node.value in DISCLOSURE_FIELDS or "disclosure" in node.value:
+                return True
+        elif isinstance(node, ast.Attribute) and node.attr in DISCLOSURE_FIELDS:
+            return True
+        elif isinstance(node, ast.Name) and node.id in DISCLOSURE_FIELDS:
+            return True
+    return False
+
+
 def audit(root: Path) -> Tuple[List[Finding], int, int]:
     helpers = find_helpers(root)
     findings: List[Finding] = []
@@ -143,14 +176,25 @@ def audit(root: Path) -> Tuple[List[Finding], int, int]:
             rel = path.relative_to(root).as_posix()
         except ValueError:
             rel = str(path)
-        lines = text.splitlines()
+        # MODULE granularity, and it was measured, not chosen.
+        #
+        # At FUNCTION granularity this reported `phase3_one_shot_runner.
+        # _resolve_clock_spec()` — which resolves the period and returns only the
+        # number — as dropping the provenance. It is not a defect: the SAME
+        # emitting caller obtains the disclosure 44 lines later from
+        # `_declared_period_disclosure()` and writes it into the SDC beside the
+        # value (3154 resolves, 3198 discloses). The provenance travels by a
+        # different route, which a per-function rule cannot see.
+        #
+        # This is the same granularity error made once already in this lane, in
+        # the pointer rule, where an accessor that merely RETURNS the pointer had
+        # its announcement one scope away. The obligation belongs to the unit
+        # that emits the artefact, not to whichever helper touches the value.
+        module_discloses = _carries_disclosure(tree)
         for scope in ast.walk(tree):
             if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            src = "\n".join(
-                lines[scope.lineno - 1:getattr(scope, "end_lineno", scope.lineno)])
-            discloses = any(d in src for d in DISCLOSURE_FIELDS) \
-                or "disclosure" in src
+            discloses = module_discloses or _carries_disclosure(scope)
             for node in ast.walk(scope):
                 if not isinstance(node, ast.Call):
                     continue

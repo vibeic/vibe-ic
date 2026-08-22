@@ -154,6 +154,29 @@ class Emitter:
                 f"instead of a failure.")
 
 
+def _emits_stamp(scope: ast.AST) -> bool:
+    """True only when the stamp is WRITTEN, not merely mentioned.
+
+    MEASURED FALSE PASS: this was `STAMP in <function source text>`, so
+
+        def emit(project, body):
+            # TODO: we should write STA_BASIS here one day
+            p.write_text(body)
+
+    reported PASS. A comment ADMITTING the stamp is missing certified it as
+    present — the strongest possible form of the defect this rule exists for.
+    Docstrings are excluded for the same reason: describing a stamp is not
+    emitting one.
+    """
+    doc = ast.get_docstring(scope, clean=False) if isinstance(
+        scope, (ast.FunctionDef, ast.AsyncFunctionDef)) else None
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                and STAMP in node.value and node.value != doc:
+            return True
+    return False
+
+
 def scan(root: Path) -> Tuple[List[Emitter], List[Emitter], int, int]:
     """(unstamped declared, undeclared emitted, declared population, found)."""
     flow = root / FLOW_REL
@@ -187,10 +210,7 @@ def scan(root: Path) -> Tuple[List[Emitter], List[Emitter], int, int]:
             for scope in ast.walk(tree):
                 if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                src = "\n".join(
-                    lines[scope.lineno - 1:getattr(scope, "end_lineno",
-                                                   scope.lineno)])
-                stamped = STAMP in src
+                stamped = _emits_stamp(scope)
                 var: Dict[str, Set[str]] = collections.defaultdict(set)
                 for stmt in ast.walk(scope):
                     if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 \

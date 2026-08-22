@@ -90,6 +90,37 @@ def test_the_same_emitter_with_the_stamp_passes(tmp_path):
     assert rc == 0, out
 
 
+def test_a_comment_mentioning_the_stamp_does_not_count(tmp_path):
+    """MEASURED FALSE PASS, now pinned.
+
+    The check was `STA_BASIS in <function source text>`, so an emitter carrying
+
+        # TODO: we should write STA_BASIS here one day
+
+    reported PASS. A comment ADMITTING the stamp is missing certified it as
+    present — the defect certifying itself, which is the strongest possible form
+    of what this rule exists to refuse.
+    """
+    root = _tree(tmp_path, _FLOW, {"runner.py":
+        'def emit(project, body):\n'
+        '    # TODO: we should write STA_BASIS here one day\n'
+        '    p = project / "sta" / "post_route_timing.rpt"\n'
+        '    p.write_text(body)\n'})
+    rc, out = _run(root)
+    assert rc == 1, f"a comment satisfied the stamp check:\n{out}"
+
+
+def test_a_docstring_mentioning_the_stamp_does_not_count(tmp_path):
+    """Describing a stamp is not emitting one."""
+    root = _tree(tmp_path, _FLOW, {"runner.py":
+        'def emit(project, body):\n'
+        '    """Writes the report; STA_BASIS is handled elsewhere."""\n'
+        '    p = project / "sta" / "post_route_timing.rpt"\n'
+        '    p.write_text(body)\n'})
+    rc, out = _run(root)
+    assert rc == 1, f"a docstring satisfied the stamp check:\n{out}"
+
+
 def test_the_stamp_must_be_in_the_emitting_function(tmp_path):
     """Module granularity cannot answer this: one module emits many reports."""
     other = ('def unrelated():\n'

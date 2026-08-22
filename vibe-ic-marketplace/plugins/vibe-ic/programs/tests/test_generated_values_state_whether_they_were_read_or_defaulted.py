@@ -92,6 +92,48 @@ def test_the_same_caller_carrying_the_disclosure_passes(tmp_path):
     assert rc == 0, out
 
 
+def test_a_comment_naming_the_disclosure_does_not_count(tmp_path):
+    """MEASURED FALSE PASS, now pinned.
+
+    The check was `any(field in <source text>)`, so a caller carrying
+
+        # we deliberately ignore matched_key / source / line here
+
+    reported PASS: a comment stating the provenance is DISCARDED counted as
+    carrying it.
+    """
+    root = _tree(tmp_path, {"helper.py": _HELPER, "gen.py":
+        'from helper import declared_period_ns\n'
+        'def emit_sdc(docs, c, out):\n'
+        '    rep = declared_period_ns(docs, c)\n'
+        '    # we deliberately ignore matched_key / source / line here\n'
+        '    out.write_text(str(rep["period_ns"] or 20.0))\n'})
+    rc, out = _run(root)
+    assert rc == 1, f"a comment satisfied the disclosure check:\n{out}"
+
+
+def test_the_disclosure_may_be_carried_elsewhere_in_the_module(tmp_path):
+    """MEASURED FALSE POSITIVE, now pinned the other way.
+
+    At FUNCTION granularity this reported `phase3_one_shot_runner.
+    _resolve_clock_spec()` — which returns only the number — as dropping the
+    provenance. It is not a defect: the same emitting caller obtains the
+    disclosure separately and writes it into the SDC beside the value. The
+    obligation belongs to the unit that emits the artefact.
+    """
+    root = _tree(tmp_path, {"helper.py": _HELPER, "gen.py":
+        'from helper import declared_period_ns\n'
+        'def resolve(docs, c):\n'
+        '    return declared_period_ns(docs, c)["period_ns"] or 20.0\n'
+        'def disclosure(docs, c):\n'
+        '    rep = declared_period_ns(docs, c)\n'
+        '    return f"# period from {rep[\'source\']} line {rep[\'line\']}"\n'
+        'def emit(docs, c, out):\n'
+        '    out.write_text(disclosure(docs, c) + str(resolve(docs, c)))\n'})
+    rc, out = _run(root)
+    assert rc == 0, out
+
+
 def test_a_new_helper_is_picked_up_automatically(tmp_path):
     """The rule is the shape, not a list of two names. A NEW read-or-default
     helper must extend the rule with no edit here."""
