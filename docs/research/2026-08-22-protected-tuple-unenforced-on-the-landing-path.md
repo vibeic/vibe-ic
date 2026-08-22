@@ -150,3 +150,17 @@ straight into it.
 The one failure remaining on the candidate is on BOTH arms: batchbig's ninth
 row, `PPA head-to-head records (cross-layer campaign)`, carries no
 `bound_because`. Not introduced here, and not mine to fill in.
+
+The three `test_matrix_*` files in the selection were run separately, one pytest
+call each, and are **identical on both arms** — 6 failures, the same six
+`test_d3_required_outputs_are_produced[stepNN]` ids, base and candidate. So the
+selection is measured in full rather than in the part that was cheap to run:
+
+    test_matrix_d1_wiring.py               82 passed          both arms
+    test_matrix_d3_outputs_produced.py     6 failed, 52 passed  both arms
+    test_matrix_d7_outputs_list_complete.py 97 passed          both arms
+
+They are split out because that family is the one this repository records as
+killing a session under load; at these sizes (4 s, 24 s, 34 s) they cost about a
+minute an arm, which is why they could be run at load 55 when the 72-file arms
+could not.
