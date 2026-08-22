@@ -5885,6 +5885,24 @@ read-only mount topology, M15). Vacuity alone did not seem sufficient grounds.
 
 ## C. What is left, and what each needs — CURRENT as of the last commit
 
+**READ THIS TABLE, NOT THE ELEVEN BELOW.** The eleven rows underneath are the
+items as I originally framed them, kept because each carries a correction worth
+reading. **This is the measured grouping (M101 → M108): 34 reds, 5 roots.**
+
+| n | root | what closes it | whose |
+|--:|---|---|---|
+| **16** | **the corpus/record situation** — 11 D3 cells (6 citing `home` roots, 5 visible only once a corpus is offered) + 3 mutation-ledger + 2 nested-outcome, both downstream | **re-point the records to a `repo`/`published` kind.** `home` roots are excluded by `_ADMISSIBILITY` on purpose (#527) and **cannot become admissible by publishing anywhere** (M105). Separately, the corpus being OPTIONAL is what the illegal skip exists to tolerate (M103/M104) | corpus owner + infrastructure |
+| **6** | **the exact-set env contract** — a test control cannot reach the arm | extending it needs **3 coordinated changes** in a PROTECTED file (name, validator, symmetric verifier set). The sanctioned route is **committed tree data**, built and proven to cross (M92/M107) | protected-file owner |
+| **5** | **`flow_compliance_check.py:10057`** — `not vacuous_hints` declines WAIVED-DEFERRED for Step 4 | **ONE decision.** The tier's own purpose supports the code (M106); the tests cover a waiver path the FIXTURE no longer reaches. **Do not assert `VACUOUS-PASS`** — it agrees with the drift (M46) | flow owner |
+| **3** | **`flow_gate_enforcement_audit` exits 1** on two undeclared gates | **ONE decision, and it closes 3 reds in three files section C never named.** *"Silence is not a decision (#886)"* — the audit exists to force it. **`advisory` is NOT the safe default** for `area_total_vs_budget_check` (M80) | gate authors |
+| **1** | `magic` cannot launch here | environment, not a defect (M60) | — |
+| **3** | 63x8 remainder: 1 anti-skip gate, 1 in-file interaction, 1 shared | the anti-skip gate is RED about the D3 skip and is correct to be (M102) | — |
+
+**None of the 34 is closable by me.** Each needs a protected file, a product
+decision, a corpus publication, or an infrastructure call.
+
+---
+
 Nothing here is "somebody else's lane". Each row says what is MISSING, because
 every row that named a person turned out to be hiding a requirement (M34).
 
