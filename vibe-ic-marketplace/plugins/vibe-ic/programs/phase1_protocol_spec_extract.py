@@ -28,11 +28,19 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 try:
     import l_doc_taxonomy as _tx
 except ImportError:  # pragma: no cover
     from . import l_doc_taxonomy as _tx  # type: ignore
+
+# THE L-document write chokepoint — records the producing release on the
+# L14-L18 documents this module merges into.
+try:
+    import l_doc_generator_stamp as _stamp
+except ImportError:  # pragma: no cover
+    from . import l_doc_generator_stamp as _stamp  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +398,32 @@ def extract_l17_channels(text: str) -> Dict[str, Any]:
             sum(c["signal_count"] for c in channels) + len(global_sigs)),
     }
 
+    # Dependency graph — emitted ONLY when this text actually yielded a
+    # channel catalog.
+    #
+    # TEMPLATE LEAK (fixed): `common_rule` and the read-dependency rule below
+    # were emitted UNCONDITIONALLY, so an unrelated (non-bus) design got an
+    # L17 whose extraction_status said EXTRACTION_FOUND_NOTHING while
+    # dependency_graph asserted handshake facts about signals the design does
+    # not have. Every presence/non-empty heuristic then read the layer as
+    # POPULATED — the same false-CAPTURED shape that let a missing
+    # L21_POWER_INTENT rail through. A layer must not assert what its own
+    # extractor did not extract. Guarded by
+    # l17_channel_catalog_consumer_contract_check.py
+    # (TEMPLATE_WITHOUT_EXTRACTION).
+    if not channels and not global_sigs:
+        return {
+            "fields": {
+                "channels": [],
+                "global_signals": [],
+                "channel_counts": counts,
+                "handshake_pairs": handshake_pairs,
+                "dependency_graph": {},
+            },
+            "evidence": evidence,
+            "extraction_status": "EXTRACTION_FOUND_NOTHING",
+        }
+
     # AXI3 vs AXI4 dependency graph — detected from text
     axi3_marker = "AXI3" in text
     axi4_marker = "AXI4" in text
@@ -449,13 +483,30 @@ def extract_l18_interconnect(text: str) -> Dict[str, Any]:
     evidence: List[Dict[str, Any]] = []
 
     # Pattern: "<SIGNAL> defaults to <value>"
+    #
+    # NON-FACT HARVEST (fixed): the module-level `re.I` used to apply to the
+    # signal-name group too, so `[A-Z][A-Z_]{2,10}` matched ordinary lowercase
+    # English words. A real run shipped
+    #   default_signal_values = {"always": "6'b0. |", "which": "40 bit wide
+    #                            counters", "being": "indicate the cause of"}
+    # while extraction_status said EXTRACTED. Nothing downstream consumes L18,
+    # so nothing ever caught it. The signal-name group is now case-SENSITIVE
+    # (a hardware signal name in these tables is upper-case); only the English
+    # connective phrase stays case-insensitive, via a scoped `(?i:...)` flag.
+    # The captured value is also cut at any rendered-table cell separator and
+    # whitespace-collapsed, so table debris cannot become a "default value".
+    # Guarded by l18_interconnect_topology_factuality_check.py.
     dv_re = re.compile(
-        r"\b([A-Z][A-Z_]{2,10})\s+(?:defaults to|default value is|"
-        r"is\s+ignored\s+if|set to)\s+([\S]+(?:\s+\S+){0,3})", re.I)
+        r"\b([A-Z][A-Z0-9_]{2,10})\s+"
+        r"(?i:defaults to|default value is|is\s+ignored\s+if|set to)\s+"
+        r"([\S]+(?:\s+\S+){0,3})")
     for i, line in enumerate(_lines_of(text), start=1):
         for m in dv_re.finditer(line):
             sig = m.group(1)
-            val = m.group(2).rstrip(".,;)")
+            val = re.sub(r"\s+", " ", m.group(2).split("|")[0]).strip()
+            val = val.rstrip(".,;)")
+            if not val:
+                continue
             if sig in ("AXI", "ACE", "AMBA"):
                 continue
             default_signal_values.setdefault(sig, val)
@@ -565,7 +616,16 @@ def extract_l18_interconnect(text: str) -> Dict[str, Any]:
             }
             break
 
-    # ID routing — interconnect appends ID bits
+    # ID routing — interconnect appends ID bits.
+    #
+    # TEMPLATE LEAK (fixed): this block used to be emitted UNCONDITIONALLY, so
+    # a design with no interconnect at all shipped an L18 asserting ID-width
+    # propagation rules about signals it does not have — and, because L18 has
+    # no downstream consumer, nothing ever contradicted it. It is now emitted
+    # only when the design's own source text actually evidences it (see the
+    # `if id_routing_evidence` guard below). Guarded by
+    # l18_interconnect_topology_factuality_check.py
+    # (TEMPLATE_WITHOUT_EXTRACTION / NARRATIVE_UNCORROBORATED).
     id_routing = {
         "description": (
             "Interconnect may append bits to AxID to identify the "
@@ -579,12 +639,16 @@ def extract_l18_interconnect(text: str) -> Dict[str, Any]:
         r"(?:append|widen|wider)\s+(?:bits?\s+to|on)\s+(?:Ax|A?[RWB])ID|"
         r"slave\W+side\s+ID_WIDTH|"
         r"ID_WIDTH\s+(?:greater|wider)", re.I)
+    id_routing_evidence: List[Dict[str, Any]] = []
     for i, line in enumerate(_lines_of(text), start=1):
         if ir_re.search(line):
-            id_routing.setdefault("evidence", []).append({
-                "line": i, "quote": line.strip()})
-            if len(id_routing.get("evidence", [])) >= 3:
+            id_routing_evidence.append({"line": i, "quote": line.strip()})
+            if len(id_routing_evidence) >= 3:
                 break
+    if id_routing_evidence:
+        id_routing["evidence"] = id_routing_evidence
+    else:
+        id_routing = {}
 
     return {
         "fields": {
@@ -596,10 +660,15 @@ def extract_l18_interconnect(text: str) -> Dict[str, Any]:
             "id_routing": id_routing,
         },
         "evidence": evidence[:200],
+        # id_routing now counts: it only survives when the design's own text
+        # evidenced it, so an L18 holding ONLY an evidenced id_routing is
+        # genuinely EXTRACTED — and an L18 holding a populated field while
+        # claiming it found nothing is a contradiction the L18 gate blocks.
         "extraction_status": (
             "EXTRACTED"
             if (interconnect_rules or default_signal_values
-                or typical_topologies or mca or axprot_polarity)
+                or typical_topologies or mca or axprot_polarity
+                or id_routing)
             else "EXTRACTION_FOUND_NOTHING"),
     }
 
@@ -645,10 +714,9 @@ def fill_skeletons(project_dir: Path, source_text: str) -> Dict[str, str]:
         existing["fields"] = extracted["fields"]
         existing["evidence"] = extracted["evidence"]
         existing["extraction_status"] = extracted["extraction_status"]
-        existing["extracted_by"] = (
-            f"phase1_protocol_spec_extract.extract_{code.lower()}_* v0.1.51"
-        )
-        path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        existing["extracted_by"] = _pmd.emitted_by(
+            f"phase1_protocol_spec_extract.extract_{code.lower()}_*")
+        _stamp.dump(path, existing)
         status[code] = extracted["extraction_status"]
     return status
 
@@ -670,7 +738,7 @@ def _cli() -> int:
         "project_dir": str(args.project_dir),
         "source": str(args.source),
         "status_per_l_doc": status,
-        "emitted_by": "phase1_protocol_spec_extract v0.1.51",
+        "emitted_by": _pmd.emitted_by("phase1_protocol_spec_extract"),
     }
     if args.out_json:
         args.out_json.write_text(json.dumps(payload, indent=2),
@@ -734,7 +802,7 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
             "DATA_WIDTH": {"legal_values": [8, 16, ...], "evidence": [...]},
             ...
         },
-        "extracted_by": "extract_l8_protocol_widths v0.1.65",
+        "extracted_by": "extract_l8_protocol_widths v<plugin version>",
       }
     """
     lines = _lines_of(text)
@@ -864,7 +932,7 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
 
     return {
         "width_parameters": width_params,
-        "extracted_by": "extract_l8_protocol_widths v0.1.65",
+        "extracted_by": _pmd.emitted_by("extract_l8_protocol_widths"),
     }
 
 
@@ -972,7 +1040,7 @@ def extract_l1_protocol_metadata(text: str, l8_widths: Optional[Dict] = None,
     those extractors instead of re-deriving.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l1_protocol_metadata v0.1.68",
+        "extracted_by": _pmd.emitted_by("extract_l1_protocol_metadata"),
     }
 
     # document_id
@@ -1262,7 +1330,7 @@ def extract_l9_integration_spec(text: str) -> Dict[str, Any]:
     Pure regex / no LLM. General catalog — no brand keywords.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l9_integration_spec v0.1.72",
+        "extracted_by": _pmd.emitted_by("extract_l9_integration_spec"),
     }
     for key, anchor_re, mode in _L9_CONCEPT_CATALOG:
         if mode == "bullets":
@@ -1314,7 +1382,7 @@ def extract_l6_control_logic(text: str,
     General — no brand strings.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l6_control_logic v0.1.72",
+        "extracted_by": _pmd.emitted_by("extract_l6_control_logic"),
     }
 
     # Paragraph extracts
@@ -1419,7 +1487,7 @@ def extract_l12_behavioral_sequences(text: str,
     Paragraph-extracted: narrow_transfer_sequence, byte_invariance_sequence.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l12_behavioral_sequences v0.1.73",
+        "extracted_by": _pmd.emitted_by("extract_l12_behavioral_sequences"),
     }
 
     # Paragraph extracts

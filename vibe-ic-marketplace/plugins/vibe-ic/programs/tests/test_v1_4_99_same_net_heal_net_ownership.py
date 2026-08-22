@@ -30,7 +30,16 @@ _DEF_CONNECTED = _DEF_HEAD + (
     "    - u2 INVD1 + PLACED ( 10 0 ) N ;\n"
     "END COMPONENTS\n"
     "NETS 1 ;\n    - n1 ( u1 Z ) ( u2 A ) ;\nEND NETS\n"
-    "SPECIALNETS 1 ;\n    - VDD ( u1 VDD ) ( u2 VDD ) ;\nEND SPECIALNETS\n"
+    # a CONFIRMED PDN: the marker in openroad.log is corroborated by real
+    # strap GEOMETRY in SPECIALNETS. Without SHAPE STRIPE/RING the
+    # measured-PDN check (_def_pdn_evidence: straps==0 and vias==0)
+    # refuses FIRST, so the net-ownership guard under test is never
+    # reached and the assertion pins the wrong refusal reason.
+    "SPECIALNETS 1 ;\n"
+    "    - VDD ( u1 VDD ) ( u2 VDD )\n"
+    "      + ROUTED MET1 800 + SHAPE STRIPE ( 0 0 ) ( 0 100 )\n"
+    "      NEW MET4 800 + SHAPE STRIPE ( 0 0 ) ( 100 0 ) ;\n"
+    "END SPECIALNETS\n"
     "END DESIGN\n")
 
 # same design + physical-only cells whose PG pins were never global-connected
@@ -42,7 +51,16 @@ _DEF_ORPHANS = _DEF_HEAD + (
     "    - FILLER_2 DECAP4 + SOURCE DIST + PLACED ( 30 0 ) N ;\n"
     "END COMPONENTS\n"
     "NETS 1 ;\n    - n1 ( u1 Z ) ( u2 A ) ;\nEND NETS\n"
-    "SPECIALNETS 1 ;\n    - VDD ( u1 VDD ) ( u2 VDD ) ;\nEND SPECIALNETS\n"
+    # a CONFIRMED PDN: the marker in openroad.log is corroborated by real
+    # strap GEOMETRY in SPECIALNETS. Without SHAPE STRIPE/RING the
+    # measured-PDN check (_def_pdn_evidence: straps==0 and vias==0)
+    # refuses FIRST, so the net-ownership guard under test is never
+    # reached and the assertion pins the wrong refusal reason.
+    "SPECIALNETS 1 ;\n"
+    "    - VDD ( u1 VDD ) ( u2 VDD )\n"
+    "      + ROUTED MET1 800 + SHAPE STRIPE ( 0 0 ) ( 0 100 )\n"
+    "      NEW MET4 800 + SHAPE STRIPE ( 0 0 ) ( 100 0 ) ;\n"
+    "END SPECIALNETS\n"
     "END DESIGN\n")
 
 
