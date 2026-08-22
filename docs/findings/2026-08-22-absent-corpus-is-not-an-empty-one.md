@@ -204,6 +204,38 @@ and, in the machine-readable record,
              'gates': 1, 'expansion': 'EXPANDED'}]     <- a MEASURED population
         == [{…                       'expansion': 'NO_CORPUS'}]  <- nothing opened
 
+## The question a new expansion state always raises: what does an OLD reader do with it?
+
+`NO_CORPUS` is a value that did not exist before, and `hygiene_finding_delta`
+runs from **the verifier's tree, not the tree under test** (`landing_merge_
+verdict.py:920` — "a tree under test must not be able to supply the program that
+judges it"). So a candidate carrying this change can be differenced by a
+verifier that predates it, and its `_validate_record` would meet an expansion
+state it does not know.
+
+Traced, not assumed. It raises `Refusal("unknown expansion state")` →
+`compare` returns `status: REFUSED` → `landing_merge_verdict` line 1277 marks
+the run **`unmeasurable = True`** and blocks:
+
+    THE HYGIENE FINDING DIFFERENTIAL COULD NOT BE COMPUTED, so whether this
+    branch introduced a hygiene finding is UNKNOWN
+
+That is the correct direction and the reason this needs no compatibility shim:
+an old reader meeting the new state gets an **honest UNMEASURABLE that blocks**,
+never a pass. The state it cannot parse is one it must not silently fold into
+`EXPANDED` anyway — that fold is the whole defect.
+
+It also should not arise on that path at all: `gatekeeper_review` binds the
+corpus before the set, so the landing arms are in state B. Both statements are
+here because the second is a single guard and the first is what happens when a
+single guard is wrong.
+
+The reverse direction is already handled: this branch's `_validate_record`
+**accepts** `NO_CORPUS` alongside `EXPANDED` and `PRODUCER_FAILED` rather than
+refusing, so a new verifier reading an old record, or either arm's record,
+differences normally. `absent_corpora` is read with `.get`, so a record from an
+older dispatcher simply has none.
+
 ## Corpus sweep
 
 43 test files that read `_gate_dispatch.sh`, `hygiene_finding_delta`,
