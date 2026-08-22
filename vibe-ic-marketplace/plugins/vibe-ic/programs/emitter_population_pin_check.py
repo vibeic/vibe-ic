@@ -145,6 +145,37 @@ blind to almost everything. It is not. Measured on 8efee1b4ce:
       yielding a counter with a literal denominator  : 1   (3 denominators)
       with no numeric comparison on that counter     : 3
 
+THE PIN SIDE, AND THE TWENTY-FOUR IT DOES NOT REACH
+===================================================
+`pins_unmatched` counts pins dropped because the named program states no literal
+for that phrase. It does NOT count pins in a test whose named program emits no
+matchable phrase at all: `if not em: continue` fires first, before `pins_of` is
+ever called. Sized on cd8687da8b, so the limit is a number rather than an
+admission:
+
+    test files                                         : 2727
+      naming no program in this corpus                 : 1104
+      naming a program that emits no matchable phrase  : 1396
+        of those, carrying a pin nobody looked at      :   18   (24 pins)
+
+Each of those 24 is correctly undecidable -- a program that states no `of N ...`
+anywhere offers nothing for a pin to disagree with -- and the reach sentence
+already in the verdict describes them exactly. Reaching them means calling
+`pins_of` on every parsed test instead of on the 227 that clear `em`: measured
+3.65s on top of 9.5s, +37%. The previous commit refused a +41% walk to carry one
+disclosure number, and this is the same trade at the same price, so it gets the
+same answer. Reproduce either figure by walking `tests/` with `pins_of`.
+
+DEGENERATE TAILS. `PHRASE` takes `of <digits> <words>`, and 9 of the corpus's 82
+emitter tails are junk that prose produced: `and`, `or`, `L`, `V`, `Gb`, `MHz`,
+`APs`, `Cat`. A pin matching one of those would produce a comparison, and a
+comparison against junk can produce a WRONG red -- the worst outcome this file
+has. Measured: no test in the corpus pins any of the nine, so the risk is
+theoretical rather than live. Tightening `PHRASE` on no evidence of harm would
+narrow the extractor to fix a fault nobody has, which is the trade this file
+argues against everywhere else, so it is recorded and not acted on.
+
+
 The other three state a membership and never state a threshold, so there is no
 second statement for the first to disagree with -- nothing was skipped. The
 phenomenon is RARE; the reach is not narrow. That is checkable rather than
@@ -185,9 +216,8 @@ need not read the source:
                          program computes the value. Nothing to compare, so not
                          a finding; counted because the alternative is dropping
                          it in silence. It counts pins from tests that named a
-                         program which emits SOMETHING; a test naming a program
-                         that emits nothing matchable is not reached at all, and
-                         that limit is not in this number.
+                         program which emits SOMETHING; the limit is SIZED under
+                         THE REACH, not merely admitted.
     substituted          sources whose BYTES would not decode as UTF-8. Read with
                          substitution, so the text analysed is not the file; what
                          substitution mangles goes unmatched, and an unmatched
