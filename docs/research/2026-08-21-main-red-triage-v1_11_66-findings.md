@@ -1377,6 +1377,26 @@ HOST-ONLY 0.
 
 # ===== FINAL DISPOSITION AT v1.11.66 =====
 
+> **⚠ THIS IS NOT THE FINAL DISPOSITION, AND THE WORD "FINAL" IN THIS BANNER IS A
+> NAVIGATIONAL TRAP OF MY OWN MAKING.** It sits at ~21% of the file, with roughly
+> **5,000 lines and eighty sections after it**. A reader who stops here — which
+> the title invites — leaves with counts that have all moved:
+>
+> | this table says | measured now | where |
+> |---|---|---|
+> | "one of **four** causes" | **5 roots**, 34 reds | M108, section C |
+> | 9 landing-verdict | **6** | M90, M120 |
+> | 3 flow-gate | **6** — three more reds in three files not named here | M95 |
+> | 2 coverage bridge | part of a **5-red** group under one conditional | M100 |
+> | 11 matrix family | **11 D3**, of which 5 are visible only once a corpus is offered | M96 |
+> | 2 `magic` / lease | 1 `magic` (environment); the lease was diagnosed as fails-when-FAST | M60, M62 |
+>
+> **The table below is accurate as of when it was written and is kept for
+> provenance.** The current disposition is `REQUESTS TO THE LANDER` → section C,
+> at the end of the file. **I named a section "final" while still working, which
+> is the same error as a summary that stops updating — except that this one
+> actively tells the reader to stop.**
+
 Every remaining red is now attributed to one of four causes, none of which is
 "unknown":
 
