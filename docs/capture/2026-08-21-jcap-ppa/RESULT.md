@@ -1449,6 +1449,19 @@ re-runs once and requires the disagreement twice before calling a figure stale. 
 single red from a ninety-second repository-wide gate is not evidence; treating it
 as evidence manufactures a confident false verdict.*
 
+*How this was found, and what else the same sweep says.* Every claim of absence
+in this report was enumerated and split by whether anything backs it:
+
+    paragraphs asserting that something does not exist        117
+    carrying no figure, artefact or measurement themselves     31
+    still unbacked once the neighbouring blocks are read        0
+    genuinely measured by nothing at all                        1   <-- below
+
+The 31 are argument whose evidence sits in the block above or below them, and
+that was **checked rather than assumed** — an earlier version of this paragraph
+said so on my judgement alone, which is the habit this whole sweep exists to
+catch. The one that survived is the sentence that follows.
+
 No gate is implemented. No version bumped. No baseline written. Nothing pushed
 to main. **Measured, not asserted** — that sentence stated four things and
 nothing checked any of them, which made the four claims a landing reviewer most
