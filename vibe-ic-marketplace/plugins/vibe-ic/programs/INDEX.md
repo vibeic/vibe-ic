@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1165
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1165)
+- **Total programs (excluding helpers / shims):** 1166
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1166)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1156 |
+| `any` | 1157 |
 
 ## Alphabetical listing
 
@@ -831,6 +831,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | Power report check — wrapper for eda_report_audit --mode power. |
 | `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks. |
+| `ppa_ablation_check` | any | — | `ppa_ablation_check.py` — every `vibeic.ppa.ablation.v1` document, validated. |
 | `ppa_agent_context_build` | any | — | CLI: build the read-only, hash-bound agent context from a manifest. |
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
 | `ppa_closure_run` | any | — | execute one declared closed_loop edge, or report that nothing can execute it. |
@@ -1237,7 +1238,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1156 programs)
+### `any` (1157 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2039,6 +2040,7 @@ _(no programs in this group)_
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — Power report check — wrapper for eda_report_audit --mode power.
 - `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks.
+- `ppa_ablation_check` — `ppa_ablation_check.py` — every `vibeic.ppa.ablation.v1` document, validated.
 - `ppa_agent_context_build` — CLI: build the read-only, hash-bound agent context from a manifest.
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
 - `ppa_closure_run` — execute one declared closed_loop edge, or report that nothing can execute it.
