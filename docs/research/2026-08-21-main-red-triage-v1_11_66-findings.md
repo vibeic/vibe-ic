@@ -1,6 +1,6 @@
 # findings — agent `ptmo`: the v1.11.66 red triage, and what auditing my own claims found
 
-host 8hd-3 · started 2026-08-21 · **57 sections (M0–M62); read this header before M0**
+host 8hd-3 · started 2026-08-21 · **69 sections (M0–M74); read this header before M0**
 
 **SCOPE HAS GROWN PAST THE TITLE IT STARTED WITH.** This began as RUN 8 —
 "v1.11.62 and the ownership question" — and M0 below still states that premise,
@@ -20,10 +20,14 @@ turned out to be the least reliable thing in it:
 * **six "not mine" claims audited → five collapsed, one held** with a better
   framing. A blocker reads as modesty and is therefore the last thing anyone
   re-checks, its author included.
-* **nine instrument defects catalogued**, of which FOUR reported my own work — or
-  my own record — as more accurate than it was.
-* **twenty-three retractions of published findings**, plus three near-misses that
+* **ten instrument defects catalogued**, of which FOUR reported my own work — or
+  my own record — as more accurate than it was, and one **silently skipped a push**
+  while reporting success.
+* **twenty-six retractions of published findings**, plus three near-misses that
   measurement killed before publication. **Two of my conclusions reversed twice.**
+* **eight blockers audited: seven were WRONG.** Five outright false, one badly
+  stated, one wrong about the work required — and one correct, which is the only
+  reason to trust the other seven.
 
 The reds are in the tables. The reason to keep the rest is that most of what went
 wrong here was not in the repository.
@@ -4039,7 +4043,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
-## D. Corrections to my own earlier reports — 23 of them
+## D. Corrections to my own earlier reports — 26 of them
 
 This section listed FOUR corrections while the log had accumulated roughly a
 dozen more. It is the section whose whole job is to stop you acting on a
@@ -4103,6 +4107,17 @@ anti-staleness section is not exempt):
     environment red (M60).
 23. **"load-confounded on both trees"** (my brief-2 call, accepted at the time) —
     **BACKWARDS.** `assert elapsed > 4.5` fails when the host is FAST (M62).
+
+24. **"design D needs a real published cell, which would have to be AUTHORED"** —
+    FALSE (M68). A real cell with a routed DEF is TRACKED in git's index on this
+    host; nothing needs authoring.
+25. **"the coverage bridge is blocked by fixture work in another agent's test"** —
+    an ownership claim, replaced by the real one (M69): the obvious fix violates
+    the fixture's own *"only the real runner emitters"* principle.
+26. **"`orphan::silent_decline_audit` needs WIRING"** — FALSE (M70). It is wired
+    at `repo_hygiene_gates.sh:1213` and declares `ENFORCEMENT: advisory`; the
+    flow audit simply scans a different scope. It needs a classification rule,
+    not wiring.
 
 **Three near-misses that measurement killed before publication**, listed because
 each would have been believed: "three tamper guards fail in the strong tier" (the
