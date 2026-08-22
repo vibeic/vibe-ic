@@ -70,6 +70,9 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+from _prose_polarity import (DENIAL_RETIRED_RE, is_denied,
+                             sentence_scope)
+
 # ---------------------------------------------------------------------------
 # Comment / fence stripping is NOT done here: a CVDP prompt's status-flag and
 # mode definitions frequently live in the markdown prose AND in the embedded
@@ -156,7 +159,7 @@ def _detect_rounding_modes(text: str) -> List[Tuple[str, str]]:
     emitted ONLY on a named idiom hit — silence yields []."""
     found: Dict[str, str] = {}
     for tag, rx in _MODE_PATTERNS:
-        m = rx.search(text)
+        m = _first_not_retired(rx, text)
         if m and tag not in found:
             found[tag] = m.group(0).strip()
     return list(found.items())
@@ -167,10 +170,62 @@ def _detect_tiebreak(text: str) -> Optional[str]:
     return m.group(0).strip()[:120] if m else None
 
 
+def _first_live(rx, text: str):
+    """The first match of `rx` in `text` that is NOT denied, or None.
+
+    ONE HELPER FOR THE WHOLE FILE (vibe-ic#712). The width pairs were guarded
+    first and their siblings were not, so one spec was read by two rules:
+
+        "Little-endian packing is no longer used; the packing is big-endian."
+            -> "Little-endian"   (the retired order: data arrives scrambled)
+        "Round-half-up is no longer used; rounding truncates."
+            -> BOTH modes, the retired one included
+
+    Byte order and rounding are what the arithmetic IS. A denied match does not
+    END the search, or a spec that retires one convention and states another
+    yields nothing.
+    """
+    for m in rx.finditer(text):
+        lo, hi = sentence_scope(text, m.start(), m.end(),
+                                extra_breaks=_LINE_END_BREAKS)
+        if is_denied(text[lo:hi]):
+            continue
+        return m
+    return None
+
+
+def _first_not_retired(rx, text: str):
+    """Like `_first_live`, but RETIREMENT only -- not every negation.
+
+    A rounding-mode NAME describes itself, and its description legitimately
+    contains negative words. Verbatim from a real prompt:
+
+        "RTZ: Truncate the fractional part without rounding up."
+
+    `is_denied` reads "without" and drops a correctly stated mode -- measured,
+    it broke `test_named_rounding_mode_round_to_nearest_even_verbatim`, which
+    quotes that line from the corpus. So here only a RETIREMENT denies:
+    "no longer used", not any "without" or "no".
+
+    WHAT THIS MISSES, said plainly: "The design does not use round-half-up" is
+    not caught, because the vocabulary that catches it is the one that
+    false-refuses the line above. Between a false refusal on real corpus text
+    and a missed denial, this takes the missed denial -- and says so, rather
+    than trading a visible regression for an invisible improvement.
+    """
+    for m in rx.finditer(text):
+        lo, hi = sentence_scope(text, m.start(), m.end(),
+                                extra_breaks=_LINE_END_BREAKS)
+        if DENIAL_RETIRED_RE.search(text[lo:hi]):
+            continue
+        return m
+    return None
+
+
 def _detect_flags(text: str) -> List[str]:
     flags: List[str] = []
     for tag, rx in _FLAG_PATTERNS:
-        if rx.search(text):
+        if _first_live(rx, text):
             flags.append(tag)
     return flags
 
@@ -181,6 +236,12 @@ def _detect_saturation(text: str) -> Optional[str]:
     sizing (no active verb in-clause) is NOT a behavioral saturation
     requirement. Returns the evidence phrase or None."""
     for clause in _clauses(text):
+        # THE CLAUSE IS THE RECORD here -- this loop already splits on them --
+        # so a clause that RETIRES the requirement is not one that states it.
+        # "Saturation on overflow is no longer used" was returned as the
+        # evidence FOR saturation.
+        if is_denied(clause):
+            continue
         m = _SATURATE_RE.search(clause)
         if not m:
             continue
@@ -213,6 +274,23 @@ def _detect_saturation(text: str) -> Optional[str]:
 #   "32 -> 8", "32-to-8", "32:8 downscale"
 #   "downscale/upscale ... NN ... to ... MM"
 # Captured: (in_width, out_width).
+#: A SENTENCE THAT ENDS AT A LINE END IS STILL A SENTENCE. The shared
+#: vocabulary breaks on ". " and on a blank line, but a specification wraps its
+#: paragraphs and writes ".\n" -- so without these the scope of a match reached
+#: backwards over the full stop into the previous sentence, and a DENIAL there
+#: refused a live pair standing beside it. Measured on
+#:
+#:     The path from 8-bit to 16-bit is no longer supported.
+#:     Data is packed from 8-bit to 32-bit words.
+#:
+#: which returned NOTHING once polarity was asked: the false refusal, which is
+#: the failure the other direction of this trade produces.
+#:
+#: `"\n"` alone would be wrong here. A spec wraps mid-sentence, and breaking on
+#: every newline would miss a denial written across two lines -- an under-reach
+#: that publishes a denied value, which is the failure being fixed.
+_LINE_END_BREAKS = (".\n", "!\n", "?\n")
+
 _WIDTH_PAIR_PATTERNS: List["re.Pattern[str]"] = [
     # "<adj> NN-bit width to <adj> width of MM-bit[s]" (axis up/down-scale form)
     re.compile(
@@ -302,10 +380,29 @@ def _ratio_str(a: int, b: int) -> str:
 
 def _detect_width_pairs(text: str) -> List[Tuple[int, int, str]]:
     """Return [(in_width, out_width, evidence)] for every EXPLICIT in->out width
-    statement. De-duplicated by (in,out). §4.05: only a stated numeric pair."""
+    statement. De-duplicated by (in,out). §4.05: only a stated numeric pair.
+
+    POLARITY IS ASKED (vibe-ic#712). A specification states a retired width as
+    readily as a live one, and this reader published both:
+
+        "The path from 8-bit to 16-bit is no longer supported."  -> (8, 16)
+        "The block does not pack from 8-bit to 16-bit."          -> (8, 16)
+
+    Both were returned as EXPLICIT stated pairs, which is a denied value
+    published as a declaration -- the defect #712 exists to answer, and the one
+    the polarity baseline names: it is how a design gets hard-sized onto
+    another chip's die while citing its own document as the authority.
+
+    The sentence around each match is asked, and a denied pair is dropped rather
+    than published. Dropped and not merely down-ranked, because a caller that
+    receives it cannot tell it from a stated one."""
     found: Dict[Tuple[int, int], str] = {}
     for rx in _WIDTH_PAIR_PATTERNS:
         for m in rx.finditer(text):
+            lo, hi = sentence_scope(text, m.start(), m.end(),
+                                    extra_breaks=_LINE_END_BREAKS)
+            if is_denied(text[lo:hi]):
+                continue
             try:
                 iw, ow = int(m.group(1)), int(m.group(2))
             except (ValueError, IndexError):
@@ -390,7 +487,7 @@ def _detect_byte_enable_width(text: str) -> Optional[int]:
 
 
 def _detect_byte_order(text: str) -> Optional[str]:
-    m = _BYTEORDER_RE.search(text)
+    m = _first_live(_BYTEORDER_RE, text)
     return m.group(0).strip() if m else None
 
 
