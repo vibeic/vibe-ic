@@ -1303,3 +1303,53 @@ and it is now a fourth decision on the list.
 The gate is therefore rc=1 on this repository, pinned as a SET by
 `test_repository_arm_a_is_clean_and_arm_b_reports_the_known_set`, which goes red
 if a new one appears and red if one is fixed.
+
+## The registration that proved nothing, and the guard that found it
+
+Two more titles from the census lane, both of which landed on work I had just
+written.
+
+**"exercise the PASS path, which nothing did."** All twelve test files assert
+rc==0 somewhere, so the file-level count says clean. It is not the right count.
+The two arm-B green tests I added asserted only that a report was ABSENT from the
+findings — never that the gate PASSED. Both bound `rc` and never used it, which is
+the tell. One of them was worse than weak: it renamed the stamped report, which
+left the flow-declared report with no emitter, so arm A returned **rc=2 NOT
+CHECKED** and the absence assertion was satisfied by a gate that never ran. A
+green assertion under rc=2 proves nothing at all.
+
+**"no instrument may let a traceback escape — the sweep, as a standing rule."**
+Two gaps, and the second is the interesting one.
+
+The map was hardcoded and one-scanner-per-rule. Arm B was a second scanning arm
+added after the map was written, so its traceback was unexercised while the
+rule's entry made the row look covered. I registered it — and the registration
+was **vacuous**. `main()` calls `scan()` first, which fails on a bare `tmp_path`
+with no flow file and returns 2 before arm B is ever reached. Deleting arm B's
+entire `try/except` left the test PASSING:
+
+    ########## try/except REMOVED from arm B ##########
+    1 passed, 39 deselected
+
+A green that survives deleting the guard it tests is precisely the defect this
+family exists to refuse, one level up.
+
+The fix is a VACUITY GUARD in the shared test: the injected function records that
+it was called, and the pair fails if it never was. Run across all thirteen pairs
+it isolated exactly one — mine. The other twelve genuinely reach their scanner,
+which is worth knowing and was never previously demonstrated.
+
+With a tree that reaches arm B, the same deletion now fails correctly:
+
+    E  Failed: signoff_report_states_its_stage: the exception ESCAPED main()
+       (RuntimeError), so the process would exit 1 and a crash would be read as
+       a finding
+
+**And the sweep is now a standing rule rather than a snapshot.** Completeness is
+itself a test, keyed on the capture: every Bucket-A rule that ships a program must
+appear in the map or in a named exemption list. A thirteenth gate added without
+registration now fails instead of passing quietly. That test has its own
+can-it-fail proof beside it, because a completeness check that cannot fail is the
+same defect a third level up.
+
+255 tests across the thirteen files.

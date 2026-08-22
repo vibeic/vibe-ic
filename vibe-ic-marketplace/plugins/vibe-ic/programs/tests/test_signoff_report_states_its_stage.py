@@ -310,12 +310,20 @@ def test_arm_b_an_unstamped_sibling_of_a_stamped_report_goes_red(tmp_path):
 
 def test_arm_b_a_module_that_stamps_nothing_is_outside_the_population(tmp_path):
     """No convention demonstrated, so the omission is a scope question, not a
-    finding. This is what keeps the arm from reddening every report in the tree."""
+    finding. This is what keeps the arm from reddening every report in the tree.
+
+    THE rc IS PINNED, AND THE FIRST VERSION OF THIS TEST NEEDED IT. It renamed the
+    stamped report to `other_sta.rpt`, which left the flow-declared report with no
+    emitter — so arm A bailed out at NOT CHECKED (rc=2) before arm B judged
+    anything, and the absence assertion below was satisfied by a gate that never
+    ran. A green assertion under rc=2 proves nothing at all. The declared report
+    keeps its emitter here so the gate actually reaches a verdict.
+    """
     body = ('def emit_b(project, body):\n'
             '    q = project / "sta" / "aging_sta.rpt"\n'
             '    q.write_text(body)\n')
-    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": _STAMPED.replace(
-        'post_route_timing.rpt', 'other_sta.rpt') , "n.py": body}))
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": _STAMPED, "n.py": body}))
+    assert rc == 0, out
     assert "aging_sta.rpt" not in out.split("examined")[0], out
 
 
@@ -354,6 +362,7 @@ def test_arm_b_does_not_require_a_copier_to_stamp(tmp_path):
             '    dst.write_bytes(payload)\n'
             '    return "sta_spef_based.rpt"\n')
     rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 0, out
     assert "sta_spef_based.rpt" not in out.split("examined")[0], out
 
 
