@@ -122,3 +122,54 @@ made the first sweep report argparse errors as findings.
 - **Not wired as anything.** Per the standing ruling on wide-population sweeps,
   this is a CENSUS that records debt. It is not a gate, it is not blocking, and
   it exists so the next person starts from a measured bound instead of a guess.
+
+## When the defect activated, and what it does on the landing path
+
+**Dated.** Files named exactly `CITATION_ROUTING.txt` in the publishing
+repository:
+
+| corpus state | count |
+|---|---|
+| `146d665`, before the withdrawal | **3** |
+| `bcf2f94`, the withdrawal itself | **0** |
+| `3b58ccd42`, the publisher's tip today | **0** |
+
+The withdrawal of 2026-08-20 19:28 +0800 took all three. Before it, this gate
+found its subject and never reached the refusal; since it, every run reaches the
+refusal and is told the pointer is wrong. **The sentence has been false for two
+days**, and only became reachable then.
+
+**A CORRECTION MADE MID-MEASUREMENT.** A first count said the tip tracks **1**
+`CITATION_ROUTING.txt` against the local checkout's 0, and I briefly concluded
+the whole finding was an artifact of a stale clone. It was not: `grep -c
+CITATION_ROUTING.txt` matches `protocol_parity/INPUT_DOC_CITATION_ROUTING.txt`
+as a substring. Counted by exact basename, both are 0 and the finding stands.
+A substring match on a filename is the same error class as the roll-up read
+without its rows.
+
+**What the landing does with it, and the limit of this claim.** Run exactly as
+`repo_hygiene_gates.sh:707` invokes it — `--root "$ROOT"
+--corpus-may-be-absent` — with the pointer bound the way
+`gatekeeper_review._published_corpus_binding` binds it (defaulting to
+`$HOME/_matrix_benchmark_data`), the gate returns **rc 2 on both trees**: `run`
+is a blocking wrapper and maps rc 2 to FAIL. The rc is **unchanged by the
+repair** — only the sentence differs — so whatever the landing does with it
+today, it does the same after.
+
+Whether that rc 2 is blocking a landing *right now* is NOT established here. A
+landing succeeded at 2026-08-22 11:46 +0800, after the withdrawal, so something
+about the real landing path differs from this invocation — the hygiene set is
+sharded and has a subset rule, neither of which was exercised. Running the set
+costs ~3750s and was not run. **The reachability is measured; the consequence is
+not.**
+
+## Incidental, and outside this census's subject
+
+`$HOME/_matrix_benchmark_data` — the checkout
+`benchmark_data_landing_checkout._checkout_arg` falls back to, and the one this
+census was measured against — is **43 commits behind** the publisher's tip
+(`bcf2f94` vs `3b58ccd42`). Every count in this record was re-taken at the tip
+and none of them moved, so nothing here depends on it. Whether a stale fallback
+checkout matters to a landing depends on the `GATEKEEPER_BENCHMARK_DATA_SHA`
+pinning protocol, which this record did not trace. Noted so it is not
+rediscovered as new.
