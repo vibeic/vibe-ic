@@ -271,9 +271,16 @@ def test_all_three_ppa_clis_can_resolve_the_route(tmp_path):
     """
     progs = ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
              "ppa_search_run.py")
-    # The denominator, stated. This loop is over a literal so it cannot be
-    # empty, but a literal edited down to two entries would still pass while
-    # checking less -- and "all three CLIs" is the claim in the name.
+    # A TRIPWIRE, not a measurement, and worth being exact about which.
+    #
+    # The forbidden shape is an assertion whose expected value is DERIVED from
+    # the thing under test (`len(x) == len(x)`): it cannot fail for any edit.
+    # This one compares the literal against a 3 typed independently of it, so
+    # dropping a CLI from the tuple DOES redden it. What it buys is narrow:
+    # it converts a silent reduction of coverage into a deliberate two-line
+    # edit. It proves nothing about the CLIs themselves -- the loop below does
+    # that -- and it must not be read as evidence that three is the right
+    # number, only that three is the number this row was written to check.
     assert len(progs) == 3, progs
     for prog in progs:
         out = subprocess.run([sys.executable, str(_PROGRAMS / prog), "--help"],
@@ -1357,7 +1364,11 @@ def test_publication_a_declared_stance_audits_clean(tmp_path):
     otherwise it is not "eligibility may not rest on silence", it is "no design
     may ever be eligible"."""
     proofs = ({"required": False}, dict(DECL))
-    assert len(proofs) == 2, proofs      # both licensing shapes, stated
+    # Same tripwire, same caveat as test_all_three_ppa_clis_can_resolve_the_route:
+    # the 2 is typed independently of the tuple, so removing a licensing shape
+    # reddens -- but it is a guard against a silent edit, not evidence that two
+    # is the complete set of shapes that license eligibility.
+    assert len(proofs) == 2, proofs
     for i, eco in enumerate(proofs):
         sub = tmp_path / f"case{i}"
         sub.mkdir()
