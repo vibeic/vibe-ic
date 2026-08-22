@@ -115,6 +115,36 @@ Neither directory was touched. Both trees were assembled locally from a **copy**
 (`GIT_INDEX_FILE`); `_v1123`'s original index is byte-identical and it still reports its 384
 entries, and .112 was only ever read.
 
+## The RECOVER contract, checked (added after the report above)
+
+The deliverable contract says a RECOVER row must *"name at least one file whose sha256
+differs from main."* Preservation and recovery instructions had been checked for all 74;
+the **citations themselves had not**. They are now.
+
+**All 74 RECOVER rows satisfy it, and none cites a file that actually matches main.**
+
+| result | rows | meaning |
+|---|---|---|
+| cited file differs from main | 72 | proved from the row's judged HEAD tree vs `origin/main a4caccefe` |
+| no cited path resolvable in a tree | 2 | `_a1456`, `vibe-ic-wt-caravel-slew-drv3` |
+| cited file identical to main | **0** | no RECOVER row rests on a file that already landed |
+
+The 2 unresolved are correct, not defects: their recoverable content is a working-tree
+edit and an untracked file respectively, so it is in **no tree by construction** and cannot
+be looked up from a HEAD. Both were checked by hand against their preservation refs:
+`_a1456`'s blob `c91acbe9f` differs from main's `e025d3dee` at that path, and
+`HANDOFF_TO_GATEKEEPER.md` is absent from main entirely. The gate reports them as
+NO_CITED_PATH_RESOLVED — a prompt to check by hand, never counted as a pass.
+
+**Two regexes were wrong before one was right, and both were mine.** Requiring a leading
+alphanumeric missed the dotfile `.image-version-ignore`; requiring a file extension missed
+it again, because it has no second dot. Each time the row was correct and the reader was
+broken — the same shape as the mawk defect above, and the reason the check now takes
+whatever token precedes `sha256` and lets the repository decide whether it is a path.
+
+Gate: `bin_jharv3_s6/recover_cites_differ.sh` (refuses with exit 2 rather than reporting a
+pass over 0 rows). Raw: `bin_jharv3_s6/raw_recover_citations_s6.tsv`.
+
 ## Standing exposures
 
 - `_v1126`'s ABANDON is preservation-bound (above). It is safe today and is one ref-deletion
