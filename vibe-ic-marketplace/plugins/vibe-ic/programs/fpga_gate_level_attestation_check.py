@@ -50,6 +50,12 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Optional
 
+try:  # config-driven commercial-PDK id (NDA: no SKU literal in source)
+    import _commercial_pdk as _cpdk
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _commercial_pdk as _cpdk
+
 
 # Default RTL submodule names that would prove fallback to source.
 # chip-AGNOSTIC defaults (BENCH-A-class names) — override per project.
@@ -60,13 +66,14 @@ _DEFAULT_RTL_SUBMODULES = (
     "uart_rx", "uart_tx", "spi_ctrl", "i2c_ctrl",
 )
 
-# PDK std-cell prefix families (v231)
+# PDK std-cell prefix families (v231). The commercial-PDK prefix is
+# reconstructed at runtime from the encoded NDA token (no SKU literal here).
 _PDK_CELL_PREFIXES = (
     "sg13g2_", "gf180mcu_", "sky130_fd_sc_",
-    "m18e80", "tsmc", "asap7sc",
-)
+    "tsmc", "asap7sc",
+) + _cpdk.nda_cell_prefixes()
 
-# Real cell-name regex patterns (v229) — catches HP18E80 / generic libs
+# Real cell-name regex patterns (v229) — catches commercial-PDK / generic libs
 _STDCELL_PATTERNS = (
     re.compile(r"\bDFF[A-Z]*\d+"),
     re.compile(r"\bAOI\d+"),

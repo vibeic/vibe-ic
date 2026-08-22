@@ -74,11 +74,91 @@ categories:
       - sim_timeout
       - work_dir
 
-  pdk_foundry:
-    description: "PDK / foundry names; proper-noun reference."
+  protocol_generation:
+    description: >-
+      Bus / link / fieldbus generation names — JEDEC, USB-IF, PCI-SIG, ARM
+      AMBA, JEDEC HBM, ARINC, MIL-STD, TIA, JESD, PSI5. #798: these have the
+      SAME shape as a benchmark design leaf-name (`ddr4` vs `lemmings1`), so
+      no shape rule can separate them; a finite public list is the honest
+      discriminator. Every entry here is the name of a published standard,
+      never a design. Pinned against collision with the benchmark leaf-name
+      corpora by test_industry_allowlist_never_contains_a_benchmark_leaf_name.
     entries:
+      - ahb3
+      - ahb5
+      - apb3
+      - apb4
+      - arinc429
+      - axi3
+      - axi4
+      - ddr3
+      - ddr4
+      - ddr5
+      - gddr6
+      - hbm3
+      - jesd204
+      - lpddr4
+      - lpddr5
+      - milstd1553
+      - pcie3
+      - pcie4
+      - pcie5
+      - psi5
+      - rs485
+      - usb2
+      - usb3
+      - usb4
+
+  encoding_and_width:
+    description: >-
+      Checksum / hash / text-encoding / numeric-format names — IEEE 754,
+      Unicode, RFC 4648, FIPS 180, ISO/IEC. #798: same residue as
+      protocol_generation; `sha256` and `popcount255` are the same shape.
+    entries:
+      - base64
+      - bf16
+      - crc16
+      - crc32
+      - crc64
+      - crc8
+      - float16
+      - float32
+      - float64
+      - fp16
+      - fp32
+      - fp8
+      - int16
+      - int32
+      - int64
+      - int8
+      - md5
+      - sha1
+      - sha256
+      - sha512
+      - uint16
+      - uint32
+      - uint8
+      - utf16
+      - utf32
+      - utf8
+
+  pdk_foundry:
+    description: >-
+      PDK / foundry names; proper-noun reference. #798: a PDK name whose
+      digits are followed by more letters (sg13g2, sky130a, gf180mcu) is
+      structurally indistinguishable from a benchmark design leaf-name
+      (radix2_div), so no shape rule can separate them — the honest
+      discriminator is this finite, public, enumerable list.
+    entries:
+      - asap7
+      - freepdk45
       - gf180
+      - gf180mcu
+      - nangate45
+      - sg13g2
       - sky130
+      - sky130a
+      - sky130b
       - skywater
       - tsmc
 

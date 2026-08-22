@@ -10,7 +10,7 @@ klayout — and was a no-op anyway; the TRUE root cause is the layermap.)
 Fix: drive the KLayout DEF reader with the PDK's own foundry layer-map
 (`<pdk>/libs.tech/klayout/tech/<pdk>.map`) via the reader's `map_file`,
 so metal/pin/label land on the foundry numbers Magic reads. Empirically
-validated in the iic-eda container on the real spm GDS: with the map the
+validated in the vibeic-eda container on the real spm GDS: with the map the
 shipped streamout produces a GDS where Magic recognises ALL 36 top ports
 (port indices 1..36; clk=1..y=36) vs 0 before.
 
