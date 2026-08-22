@@ -153,6 +153,11 @@ need not read the source:
     not_determined       populations declined because K is a LOWER BOUND, not a
                          count. `program` / `counter` / `increment_sites` /
                          `denominator` / `denominator_kind` / `emitted_per_site`
+    corpus               what there WAS to examine: {"programs": P, "tests": T}.
+                         A count of comparisons made carries no meaning without
+                         it -- "0 compared" out of 214 programs and out of an
+                         empty directory are the same number and not the same
+                         fact. vibe-ic#1200.
     substituted          sources whose BYTES would not decode as UTF-8. Read with
                          substitution, so the text analysed is not the file; what
                          substitution mangles goes unmatched, and an unmatched
@@ -968,7 +973,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return phrase_cache[stem]
 
     stems = set(sources)
+    tests_seen = 0
     for test in sorted(args.tests.rglob("test_*.py")):
+        tests_seen += 1
         try:
             text, n_sub = read_source(test)
         except OSError as e:
@@ -1012,13 +1019,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # leaving the older word would have the head describe a different quantity
     # from the one it prints.
     head = (f"{counters_examined} emitted counter denominator(s) and "
-            f"{pins_examined} test pin(s) COMPARED; {len(denied)} match(es) "
+            f"{pins_examined} test pin(s) COMPARED out of a corpus of "
+            f"{len(sources)} program(s) and {tests_seen} test(s); {len(denied)} match(es) "
             f"not counted because the statement DENIES them; {len(unparsed)} "
             f"source(s) NOT examined because they would not parse; "
             f"{len(undecidable)} population(s) NOT DECIDABLE; "
             f"{len(substituted)} source(s) whose bytes were SUBSTITUTED to be "
             f"read at all")
     report = {"tool": TOOL, "counters_examined": counters_examined,
+              "corpus": {"programs": len(sources), "tests": tests_seen},
               "pins_examined": pins_examined, "denied_by_polarity": denied,
               "unparsed": unparsed, "not_determined": undecidable,
               "substituted": substituted,
@@ -1053,7 +1062,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         # and this guard declined to decide it -- and that sentence is the only
         # thing a reader gets on a path where nothing else was printed.
         withheld = len(undecidable) + len(denied) + len(unparsed)
-        reason = ("declined-every-comparison" if withheld
+        # AN EMPTY CORPUS IS FIRST, because every other reason is a claim
+        # about programs that were read. Point this at a real but wrong
+        # directory and the old answer was "no population is stated twice
+        # here" -- true of an empty set, and it reads as "I checked".
+        reason = ("corpus-holds-no-program" if not sources
+                  else "declined-every-comparison" if withheld
                   else "source-bytes-substituted" if substituted
                   else "no-population-stated-twice")
         _vac.announce_vacuous(TOOL, reason)
@@ -1063,7 +1077,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         # this guard could not read. Without it, a run whose reach was emptied
         # by unparseable sources -- or by polarity -- announced the empty result
         # and not the cause.
-        said = ("every population this tree states twice was WITHHELD from "
+        said = ("the program corpus is EMPTY -- this directory holds no "
+                "program at all, so nothing here is a statement about any "
+                "tree" if not sources
+                else "every population this tree states twice was WITHHELD from "
                 "comparison above" if withheld
                 else "no population survived the byte substitution above, so "
                 "this tree may well state one twice" if substituted

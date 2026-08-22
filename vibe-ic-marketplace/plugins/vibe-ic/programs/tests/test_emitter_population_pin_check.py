@@ -2208,7 +2208,7 @@ def test_the_json_report_carries_exactly_the_documented_keys(tmp_path):
     # `== 7` and went red on `substituted` for the wrong reason.
     required = {"tool", "counters_examined", "pins_examined", "findings",
                 "denied_by_polarity", "not_determined", "unparsed",
-                "substituted"}
+                "substituted", "corpus"}
     assert required <= emitted, (
         "a documented key has been removed from the report and its schema "
         f"together: {sorted(required - emitted)}")
@@ -2391,6 +2391,50 @@ def test_an_unopenable_path_is_named_once(tmp_path):
     rep = json.loads(j.read_text())
     hits = [u for u in rep["unparsed"] if "broken_emit" in u]
     assert len(hits) == 1, rep["unparsed"]
+
+
+# ── the denominator ─────────────────────────────────────────────────────────
+# vibe-ic#1200: a statistic over the corpus must carry its own denominator. "0
+# compared" out of 1238 programs and out of an empty directory are the same
+# number and not the same fact, and the second is what a typo'd --programs
+# produces.
+
+def test_the_verdict_says_out_of_how_many(tmp_path):
+    emitter = ('def s():\n    return ("  set _m 0\\n"\n'
+               '            + "  if {[catch {a}]} { incr _m }\\n"\n'
+               '            + "  if {[catch {b}]} { incr _m }\\n"\n'
+               '            + "  if {$_m >= 2} { puts M }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    (progs / "second_emit.py").write_text("def s():\n    return \"\"\n",
+                                          encoding="utf-8")
+    r = _run(progs, tests)
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    assert "out of a corpus of 2 program(s) and 1 test(s)" in r.stdout, r.stdout
+
+
+def test_the_corpus_is_in_the_json_report(tmp_path):
+    progs, tests = _tree(tmp_path)
+    j = tmp_path / "r.json"
+    _run(progs, tests, "--json", str(j))
+    assert json.loads(j.read_text())["corpus"] == {"programs": 1, "tests": 1}
+
+
+def test_an_empty_corpus_is_not_a_statement_about_a_tree(tmp_path):
+    """Point this at a directory that exists but holds nothing -- a typo'd
+    --programs, a lane that moved -- and the old answer was "no emitted
+    population is stated twice here". True of an empty set, and it reads as
+    "I checked and it is fine"."""
+    progs = tmp_path / "progs"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_VACUOUS, out
+    assert "corpus-holds-no-program" in out, out
+    assert "no-population-stated-twice" not in out, (
+        "an empty directory is answering as though it held programs that "
+        "state no population twice:\n" + out)
+    assert "out of a corpus of 0 program(s)" in r.stdout, out
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────
