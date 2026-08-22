@@ -3711,3 +3711,37 @@ arguing**: the walked-past tell is a shared failure, not mine alone, and one bad
 predicate against the rest is a trade worth making. Overstating my own fault
 would be as inaccurate as understating it, and this document has enough
 corrections without adding a performative one.
+
+## 54. The re-landing recipe, re-measured at the current head
+
+§44 measured the recipe once and I have restated it many times since — "three
+conflicts, take the branch, comes out green" — while the branch grew by twenty
+sections. A recipe someone would ACT on is the last claim that should be allowed
+to go stale on repetition, so it was re-run rather than repeated again.
+
+**Against `main` `a4caccefea` with the branch at its current head:**
+
+```
+conflicts                                          3
+  docs/research/2026-08-22-hygiene-subset-no-skip.md
+  tools/gatekeeper-land.sh
+  vibe-ic-marketplace/plugins/vibe-ic/programs/ci_harness_timeout_ceiling_check.py
+
+resolved with --theirs on all three                0 remaining
+merged lander sha         710087cd5587fed7
+its _LANDING_SCRIPT_SHA256 710087cd5587fed7        MATCH
+ci_harness_timeout_ceiling_check                   rc 0
+149 passed  — ceiling tests, both targets, seam guard, seventh node
+```
+
+**Unchanged from §44, and now true of the head rather than of a commit twenty
+sections back.** The count did not drift because the code has not moved since
+`3106e4d3c2`; only the research document grew, and it is one of the three files
+either way.
+
+**The standing caveat still applies and is worth repeating precisely because
+this section exists:** re-derive the digest by running the checker on the merged
+tree. The match above is evidence that the pair is consistent today, not a
+number to transcribe. That is the rule this entire branch was written to
+demonstrate, and the one place where trusting a printed value instead of
+re-deriving it would reproduce §9 exactly.
