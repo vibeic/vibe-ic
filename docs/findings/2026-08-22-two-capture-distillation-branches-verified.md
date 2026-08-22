@@ -109,6 +109,34 @@ THEM TEST-STRENGTHENING. `git merge-base --is-ancestor` says so for both:
     was lost is the part of each branch that stops those rules going vacuous —
     which is precisely the part this report spent the day arguing matters.
 
+    BRINGING THEM OVER IS MEASURED, NOT RECOMMENDED. I first wrote that the five
+    "cost nothing", which was an untested claim of exactly the kind this report
+    keeps punishing. Measured on a throwaway tree at ae78abb28:
+
+        merge the chip tip  ..... 0 CONFLICTS. 4 files, +571 / -19, and
+            `sibling_stamp_gaps` goes 0 -> 2: the signoff gate gets its second
+            scanning arm back.
+        merge the matrix tip .... 3 conflicts, and my "costs nothing" was wrong
+            about this half. All three are COUNTS, not judgements — a test-file
+            count and a program count in two READMEs, and a count plus a
+            `sha256_of_sorted_paths` in PROGRAM_INVENTORY.json. Running the
+            repo's own `gen_program_inventory.py` (rc 0) and
+            `tools/gen_programs_index.py` (rc 0) settles them; after staging,
+            nothing else differs. That is the F4 class, three files rather than
+            four.
+
+        THE WIRED LANDING SUITE ON THE RESULT: rc0 = 26, rc1 = 0, rc2 = 2, and
+        diffed row by row against main alone it is IDENTICAL. Bringing the five
+        over does not move a single wired gate.
+
+        THE COVERAGE COMES BACK: the three affected test files collect 74 passing
+        on main today and 83 on the brought-over tree. Nine tests recovered, all
+        green, including the four that cover a gate's second scanning arm.
+
+    So the honest form of the recommendation is: the chip half is free, the
+    matrix half costs two generator runs, the landing suite does not notice, and
+    nine tests come back.
+
     MEASURABLE CONSEQUENCE, not an inference. `test_chip_path_rules_rc_contract`
     collects 40 tests on the chip tip and 36 on main. The four that vanished are
     the ones covering a gate's SECOND scanning arm: the tip maps each rule to a
