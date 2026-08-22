@@ -1921,6 +1921,42 @@ def test_the_lower_bound_rule_reaches_every_denominator_kind(tmp_path):
         assert r.returncode == RC_VACUOUS, r.stdout + r.stderr
 
 
+EMITTER_LOWER_BOUND_BESIDE_INLINE = (
+    'def _repair(name):\n'
+    '    return "  if {[catch {%s}]} { incr _lb }\\n" % name\n\n\n'
+    'def script():\n    return ("  set _lb 0\\n" + _repair("a") + _repair("b")\n'
+    '            + _repair("c") + "  if {$_lb >= 3} { puts LB }\\n"\n'
+    '            + "  if {[catch {z}]} { incr _in }\\n"\n'
+    '            + "  if {$_in >= 2} { puts IN }\\n")\n')
+
+
+def test_lower_bound_ness_does_not_spread_between_counters(tmp_path):
+    """One script, two counters. `_lb` is helper-assembled and undecidable;
+    `_in` is inline with a real disagreement and must still be REFUSED.
+
+    The polarity path had exactly this defect once on this branch -- one
+    counter's denial charged against another -- and the lower-bound rule added
+    later has never been probed the same way. `name in lower_bound` keys it per
+    counter, so it is structural rather than accidental; the test says so.
+
+    `_in` is ONE site against a denominator of 2, deliberately in
+    `sites < denominator`. That is the only relation a spread could move:
+    `sites > denominator` stays decidable even for a lower-bound counter, so a
+    fixture built that way would pass its own negative control and prove
+    nothing -- measured, on the cross-PROGRAM version of this test."""
+    progs, tests = _tree(tmp_path, EMITTER_LOWER_BOUND_BESIDE_INLINE,
+                         "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_FAIL, (
+        "one counter's helper excused another counter's disagreement:\n"
+        + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert [(f["counter"], f["increment_sites"], f["denominator"])
+            for f in doc["findings"]] == [("_in", 1, 2)], doc
+    assert [(d["counter"], d["emitted_per_site"])
+            for d in doc["not_determined"]] == [("_lb", 3)], doc
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
