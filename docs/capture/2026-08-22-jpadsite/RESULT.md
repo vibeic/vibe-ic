@@ -144,6 +144,19 @@ complaint attaches to that -- an assembly has to snapshot somewhere and mine
 moved after it did -- but a reader comparing the branch to main needs to know
 the snapshot point, not the freeze point.
 
+NO OTHER LANE HAS TOUCHED THESE FILES, which is what makes the pending work
+safe to land whenever somebody wants it. Across all 673 commits main gained,
+the ONLY changes to the four files this branch edits are my own two that landed:
+
+    _pad_ring.py            1 commit   41e6562d2 (mine)
+    pad_ring_gen.py         0 commits
+    pad_ring_check.py       0 commits
+    tests/test_pad_ring.py  2 commits  41e6562d2, b95dd8a9f (both mine)
+
+A clean merge alone would not have shown that -- two lanes can edit related
+things without a textual conflict and still disagree. Here there is no second
+lane to disagree with.
+
 CONSEQUENCE, MEASURED ON `ae78abb28`: `^SIDE_ORIENT` 0, `^CORNER_ORIENT` 0,
 `^VERTICAL_SIDE_ORIENT` 1, the disclosure key still `rotation_vertical_inert`,
 and line 301 still `PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_CORNER"], i)`.
