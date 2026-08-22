@@ -280,20 +280,50 @@ def test_finding_the_shipped_campaign_contracts_declare_neither_key():
     if not trials.is_dir():
         pytest.skip(f"the cross-layer campaign records are not in this tree "
                     f"({trials}); this row was NOT OBSERVED, not satisfied")
+    # BOTH documents, because they are not the same document and only one of
+    # them is the feasibility policy. `contract.json` is `vibeic.ppa.contract`
+    # -- identities, evidence manifest, declared facts. `candidates.json` is
+    # what `policy_from_document` actually reads: it carries `required_views`,
+    # `required_views_by_axis`, `limits` and `allow_waivers`. Checking only the
+    # first would be measuring the finding on the wrong artefact.
     seen = declares = routes = 0
-    for contract in sorted(trials.glob("*/contract.json")):
-        try:
-            doc = json.loads(contract.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        seen += 1
-        declares += int("eco_readiness" in doc)
-        routes += int("delivery_path" in doc)
-    assert seen > 0, "no contract.json parsed; the denominator is empty"
+    for name in ("contract.json", "candidates.json"):
+        for doc_path in sorted(trials.glob(f"*/{name}")):
+            try:
+                doc = json.loads(doc_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(doc, dict):
+                continue
+            seen += 1
+            declares += int("eco_readiness" in doc)
+            routes += int("delivery_path" in doc)
+    assert seen > 0, "no campaign document parsed; the denominator is empty"
     assert (declares, routes) == (0, 0), (
-        f"{declares} of {seen} campaign contracts declare eco_readiness and "
+        f"{declares} of {seen} campaign documents declare eco_readiness and "
         f"{routes} state a delivery path; the finding in this file's header "
         f"was measured when both were zero and must be re-measured")
+
+    # And the sharper form: the policy documents ENUMERATE the axes they
+    # require views for, and the ECO axis is not among them. These were written
+    # when the table had nine entries; `eco_readiness` is the tenth.
+    named = set()
+    policies = 0
+    for cand_path in sorted(trials.glob("*/candidates.json")):
+        try:
+            doc = json.loads(cand_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict) and isinstance(
+                doc.get("required_views_by_axis"), dict):
+            policies += 1
+            named |= set(doc["required_views_by_axis"])
+    if policies:
+        assert F.ECO_AXIS not in named, (
+            f"{F.ECO_AXIS} is now named in the campaign's per-axis view "
+            f"declarations ({sorted(named)}); the finding that the tenth axis "
+            f"is absent from all {policies} of them must be re-measured")
+        assert len(named) == 9, sorted(named)
 
 
 # ---------------------------------------------------------------------------
