@@ -1,0 +1,21 @@
+path	head_drift	disk_state
+/home/reyerchu/_jcapture	HEAD_MOVED(b3628c8da99b212aa5fe371396c5945de84588f6 -> b6aaf660853105a793ee90fcf6fe39c07851ce1b)	tracked_modified=0 untracked=0 head=b6aaf660853105a793ee90fcf6fe39c07851ce1b
+/home/reyerchu/jf-63x8-work/basejm9	SAME	tracked_modified=0 untracked=0 head=8a9c5ad9efdf732fab58171422a145c032c62b47
+/home/reyerchu/_jfeas_base	SAME	tracked_modified=0 untracked=0 head=e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075
+/home/reyerchu/_jppa_fixtures/tree	SAME	tracked_modified=0 untracked=0 head=0dc3e9e7f81486e2594a191ea0ec1f8beb5c5dd1
+/home/reyerchu/_jppa_power/base	SAME	tracked_modified=0 untracked=0 head=867de428920c708934f06411fc91225dc4f58fe6
+/home/reyerchu/wt-j63x8c	HEAD_MOVED(8a861bdc6d257112b011c615198ba32dca3e899c -> 3ab7fc723e4984597ed5a6662798b60e7bbb505c)	tracked_modified=0 untracked=0 head=3ab7fc723e4984597ed5a6662798b60e7bbb505c
+/home/reyerchu/wt-main62	SAME	tracked_modified=0 untracked=0 head=6dfe15a329e6e1fbd621d0bfaadaed41c3c5db9a
+/tmp/claude-1000/-home-reyerchu-vibe-ic/0144f922-cbe4-48a4-937e-a5e723ca0cec/scratchpad/wt-base	SAME	tracked_modified=0 untracked=0 head=867de428920c708934f06411fc91225dc4f58fe6
+/home/reyerchu/_cpath_priv/basetree	SAME	tracked_modified=0 untracked=0 head=46db018669cbd98a2bf6738235edaa03b2ae32a7
+/home/reyerchu/_gf180_priv/wt2	SAME	tracked_modified=0 untracked=0 head=e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075
+/home/reyerchu/_jcorpus/base	SAME	tracked_modified=0 untracked=0 head=e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075
+/home/reyerchu/_jd3	HEAD_MOVED(a00f53f2094812041c8aa6094f27058bc1b14ddd -> 66e0806689ecebaca790e037418676fad45b9de6)	tracked_modified=0 untracked=0 head=66e0806689ecebaca790e037418676fad45b9de6
+/home/reyerchu/_jppa_skills/tree	SAME	tracked_modified=0 untracked=0 head=39b985af57acb42a71855fb323391dac747880f5
+/home/reyerchu/_v1126	SAME	tracked_modified=0 untracked=0 head=a7b1ed913e21485660bfa3d9d5ba69042dabaea4
+/home/reyerchu/AI_IC_design/_jm9_base	SAME	tracked_modified=0 untracked=0 head=e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075
+/home/reyerchu/_j4reds2/base	SAME	tracked_modified=0 untracked=0 head=867de428920c708934f06411fc91225dc4f58fe6
+/home/reyerchu/_j4reds3/base	SAME	tracked_modified=0 untracked=0 head=867de428920c708934f06411fc91225dc4f58fe6
+/home/reyerchu/_jcap_priv/wt	SAME	tracked_modified=0 untracked=0 head=4c7df07a03b2295fb5ffbb4dd4bba84c24754ec3
+/home/reyerchu/_ptmo_priv/ppa	SAME	tracked_modified=0 untracked=0 head=bb90724dcd7ebe8d31474d5245a54fdce112b527
+/home/reyerchu/_smrg_priv/smrg_base	SAME	tracked_modified=0 untracked=0 head=053eecd27404294086d55b72b6d52d011b7a3257
