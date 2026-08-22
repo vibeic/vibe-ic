@@ -82,7 +82,7 @@ Accepted with no refusal and no unrouted record.
 - [This bundle moved, and it was the merge that said so](#this-bundle-moved-and-it-was-the-merge-that-said-so)
 - [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
 - [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
-- [Two classes checked this pass and deliberately NOT recorded](#two-classes-checked-this-pass-and-deliberately-not-recorded)
+- [Three classes checked this pass and deliberately NOT recorded](#three-classes-checked-this-pass-and-deliberately-not-recorded)
 - [Six refusals, one principle: two absences compare EQUAL](#six-refusals-one-principle-two-absences-compare-equal)
 - [Summary](#summary)
 - [Next](#next)
@@ -3351,9 +3351,9 @@ a declared path rather than guessing among candidates, standing outside the
 layer it was captured in, which is the whole argument for distilling a landed
 fix into a rule.
 
-## Two classes checked this pass and deliberately NOT recorded
+## Three classes checked this pass and deliberately NOT recorded
 
-Both looked like records. Neither survived measurement, and the reasons are
+All three looked like records. None survived measurement, and the reasons are
 different enough to be worth separating.
 
 **A gate's exit code must be exercised through the process boundary.** The
@@ -3425,6 +3425,32 @@ value of naming the family is that an implementer building any new comparison
 now has all four layers in one place instead of rediscovering them in the order
 they were originally discovered — which, judging by the three distinct code
 names, is how they were.
+
+
+**An emitted artefact must agree with the exit code.** The feasibility lane
+states this as a defect the repository *has shipped before*: **a `--json` file
+that looked clean beside an honest exit code.** Real, uncovered by any record
+here — and I could not measure it, across two screens.
+
+The first looked for a verdict-bearing key as a JSON literal: **271 of 650**
+programs appeared to carry none. That screen is wrong, and I knew a
+counter-example by name — most emitters serialise a dataclass, so the field is a
+class declaration and not a literal. Including declarations took it to **200**.
+
+Still not a population. Much of the 200 are *generators* whose JSON is a product
+rather than a verdict, and "no verdict field" is correct for those. So I drove
+one that is unambiguously a check: it exits **1** and writes
+`['program', 'version', 'summary', 'findings']` — no verdict key. But its
+`findings` list carries the failure, so a reader of the file alone *can* tell.
+That is not the defect the lane describes.
+
+**Zero confirmed instances, and the screen is the reason.** "Carries no verdict
+key" and "looks clean while the exit code says otherwise" are different
+properties, and only the second is the defect. A screen that can tell them apart
+has to compare the artefact's CONTENT against the exit code — run the program
+both ways and diff what it wrote — which is a fixture harness, not a grep. That
+is the honest statement of what building this rule costs, and it is why no
+record claims it.
 
 ## Summary
 
