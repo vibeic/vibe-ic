@@ -63,8 +63,18 @@ def _capture_synth_top(monkeypatch):
     seen = {}
 
     def _sentinel_run(cmd, *a, **k):
-        seen["cmd"] = " ".join(cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
-        return (1, "", "stub yosys ran")
+        # CAPTURE THE YOSYS CALL, NOT THE LAST CALL, AND DO NOT FAIL THE STEPS
+        # THAT MUST SUCCEED BEFORE IT. The first version returned rc 1 for every
+        # `_run` and kept only the most recent command. When the path gained a
+        # `docker cp` of the RTL into the container, that cp got rc 1, the step
+        # aborted before yosys, and `seen["cmd"]` held the failed cp — so both
+        # assertions read a docker-cp string and reported the missing `--top` as
+        # a product defect. The probe was measuring its own stub.
+        s = " ".join(cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+        if "yosys" in s:
+            seen["cmd"] = s
+            return (1, "", "stub yosys ran")
+        return (0, "", "")
     monkeypatch.setattr(P2, "_run", _sentinel_run)
     return seen
 

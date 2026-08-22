@@ -231,7 +231,7 @@ def _run_cli(rtl: Path, top: str, event: str, output: str, expect: str,
            "--event", event, "--output", output, "--expect", expect,
            "--reset", "rst_n", "--reset-active-low", "--json", str(jpath)]
     cmd += extra or []
-    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     report = json.loads(jpath.read_text()) if jpath.exists() else {}
     return cp.returncode, report
 

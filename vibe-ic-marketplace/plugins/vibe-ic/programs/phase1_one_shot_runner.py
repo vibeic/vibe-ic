@@ -38,11 +38,15 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
+# THE L-document write chokepoint — records the producing release on the
+# L1 / L4 / L8 documents this runner back-fills from a prompt.
+import l_doc_generator_stamp as _stamp
 
 # Phase 1 owns the doc-extraction track. The ~47k-line
 # doc-extraction implementation lives in `phase1_doc_one_shot_runner.py`.
@@ -69,6 +73,46 @@ class StepResult:
     status: str
     duration_s: float
     detail: str
+    # ADDED for the pre-flight. This runner's row was the only one of the four
+    # with no `extras`, so a refusal would have had to throw away everything
+    # that makes it actionable — which artefact was absent, which step owed it,
+    # where the ledger is. Additive and defaulted, so every existing
+    # construction site and every existing `asdict(...)` reader is unchanged.
+    extras: Dict[str, Any] = field(default_factory=dict)
+
+
+def _preflight_refusal(name: str):
+    """This runner's refusal row for `step_preflight.gate`.
+
+    `BLOCKED` carries the same meaning it does in the other three runners: the
+    step was NOT attempted because an INPUT could not support it, so NOTHING is
+    known. It is listed in `_aggregate_verdict._FAIL_STATUSES` — without that it
+    would have fallen through that function's catch-all `return "PASS"` and a
+    refusal would have produced a GREEN run, which is the defect class this
+    whole pre-flight exists to remove. Measured on this ladder specifically:
+    Phase 1's verdict was `FAIL if any FAIL else PASS_WITH_WAIVERS if any
+    WAIVED/SKIP else PASS`, so a lone BLOCKED row scored PASS — the cleanest
+    possible green run over a Phase 1 that was never given a document.
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, _spf.REFUSAL_STATUS, 0.0, detail, extras=extras)
+    return _mk
+
+
+# Statuses that must NOT reach a green verdict. `BLOCKED` is `step_preflight`'s
+# refusal status; `FAIL` is this runner's pre-existing one, unchanged.
+_FAIL_STATUSES = ("FAIL", _spf.REFUSAL_STATUS)
+
+
+def _aggregate_verdict(plan: List[StepResult]) -> str:
+    """Phase 1's top-level verdict. Extracted from `main()` unchanged except
+    for the BLOCKED tier, so a control can assert the non-greenness directly
+    rather than re-running the whole dispatcher to observe it."""
+    if any(s.status in _FAIL_STATUSES for s in plan):
+        return "FAIL"
+    if any(s.status in ("WAIVED", "SKIP") for s in plan):
+        return "PASS_WITH_WAIVERS"
+    return "PASS"
 
 
 # ── Input-mode detection ────────────────────────────────────────────
@@ -295,7 +339,7 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
             l1 = json.loads(l1p.read_text())
             if not l1.get("pinout"):
                 l1["pinout"] = ports
-                l1p.write_text(json.dumps(l1, indent=2))
+                _stamp.dump(l1p, l1)
         # L8R — structural RTL constants: ports + parameters + reset
         l8r = out_dir / "L8_RTL_CONSTANTS.json"
         d = json.loads(l8r.read_text()) if l8r.is_file() else {}
@@ -307,14 +351,14 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
             d["reset"] = facts["reset"]
         if facts.get("enums") and not d.get("enums"):
             d["enums"] = facts["enums"]
-        l8r.write_text(json.dumps(d, indent=2))
+        _stamp.dump(l8r, d)
         # L4 — register map (markdown register table with an offset column)
         if facts.get("regmap"):
             l4p = out_dir / "L4_REGMAP.json"
             l4 = json.loads(l4p.read_text()) if l4p.is_file() else {}
             if not l4.get("registers") and not l4.get("regmap"):
                 l4["registers"] = facts["regmap"]
-                l4p.write_text(json.dumps(l4, indent=2))
+                _stamp.dump(l4p, l4)
         return len(ports)
     except Exception:
         return 0
@@ -427,6 +471,96 @@ def _run_docs_mode(project: Path, ic_name: str,
     return int(rc) if rc is not None else 0
 
 
+# ── The second track (both input modes) ────────────────────────────
+#
+# Wired HERE, not in `phase1_doc_one_shot_runner`, for two reasons:
+#
+#   * this dispatcher is the one entry point that covers BOTH input modes, and
+#     both emit L-docs — a track wired only into the docs backend would never
+#     see a design that arrived through the dialogue/prompt path;
+#   * `flow_gate_enforcement_audit` (#306) inspects THIS file and not the docs
+#     backend. A gate wired where the audit cannot see it reads as AUDIT_ONLY —
+#     which is precisely the state that audit measured for 62 of 72 gates, and
+#     precisely what this track must not become.
+
+_EXPERT_TRACK = "phase1_expert_parse_track.py"
+
+
+def _run_expert_track(project: Path) -> int:
+    """Run the Phase-1 EXPERT track — the second track of the program-first +
+    AI-backup dual-track doctrine (#312).
+
+    Its FINDINGS are advisory: a divergence between the two tracks needs a
+    human to converge it, and a design may legitimately not state a fact.
+
+    Its EXECUTION is not. The track must produce a report, and a missing or
+    unparseable one FAILs Phase 1. That asymmetry is the whole point: a second
+    track that can quietly not run is indistinguishable from no second track,
+    which is the defect #312 exists to name.
+    """
+    prog = PROGRAMS_DIR / _EXPERT_TRACK
+    if not prog.is_file():
+        print(f"ERROR: {_EXPERT_TRACK} missing — the Phase-1 expert track "
+              f"cannot run and its absence must not pass silently",
+              file=sys.stderr)
+        return 1
+    # Resolve the report through the shared path helper rather than naming a
+    # directory here: the track writes it via the same helper, and a reader
+    # looking in the wrong place sees a track that never ran.
+    report = _pl.report_path(project, "phase1/expert_parse_track.json")
+    # Remove any prior report FIRST, so "the report exists" can only mean THIS
+    # run wrote it. A stale report from an earlier run is exactly how a track
+    # that died would still look like a track that ran.
+    try:
+        report.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"      ERROR: cannot clear the previous expert-track report "
+              f"({exc}) — its freshness could not be established",
+              file=sys.stderr)
+        return 1
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(prog), str(project)],
+            capture_output=True, text=True, timeout=600, check=False)
+    except subprocess.TimeoutExpired:
+        print("      ERROR: the expert track timed out — a timeout is not a "
+              "verdict, and an unevaluated track cannot pass",
+              file=sys.stderr)
+        return 1
+    for line in (cp.stdout or "").strip().splitlines():
+        print(f"      {line}")
+    # 0 = ran, 2 = ran and nothing applied. Anything else — including a crash
+    # that never reached the program's own error path — is a track that did
+    # not complete.
+    if cp.returncode not in (0, 2):
+        print(f"      expert track FAILED to complete (rc={cp.returncode}): "
+              f"{(cp.stderr or '').strip().splitlines()[-1:] or ['(no detail)']}",
+              file=sys.stderr)
+        return 1
+    if not report.is_file():
+        print("      ERROR: the expert track wrote no report — its verdict is "
+              "unknown, which is not the same as clean", file=sys.stderr)
+        return 1
+    try:
+        json.loads(report.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        print(f"      ERROR: the expert-track report does not parse ({exc}) — "
+              f"unreadable evidence is not evidence", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_phase1_second_track(project: Path, rc_in: int) -> int:
+    """The second track, run after the L-docs exist. Returns the exit code
+    Phase 1 should report: a track that did not run overrides a clean backend
+    run, and a backend failure is never masked by the track passing."""
+    print("[phase1] expert track (second track) ...")
+    rc_track = _run_expert_track(project)
+    return max(int(rc_in or 0), rc_track)
+
+
 # ── Top-level dispatcher ───────────────────────────────────────────
 
 def main() -> int:
@@ -466,12 +600,37 @@ def main() -> int:
     # Docs mode: delegate to phase1_doc_one_shot_runner
     if mode == "docs":
         t0 = time.time()
-        rc = _run_docs_mode(project, args.ic_name, extras)
+        # PRE-FLIGHT (canonical step D1). Its declared input is the STAGED
+        # corpus — `input/docs/*`, `input/phase1_prompt.md`,
+        # `input/phase1_structured.yaml`, or a directly-staged
+        # `phase1/input_{doc,prompt}/`. Without this, a project with nothing
+        # staged ran the whole 17-skill doc-extraction track over an empty
+        # tree and reported a verdict about the L-docs it "produced".
+        _pf = _spf.gate(
+            project, "phase1_one_shot_runner", "doc_extract",
+            _preflight_refusal("phase1_doc_extract"),
+            _run_docs_mode, project, args.ic_name, extras)
+        # `_run_docs_mode` returns an int rc; the refusal factory returns a
+        # StepResult. The TYPE is the discriminator, and it is exact — there is
+        # no rc value that is also a StepResult.
+        refused = isinstance(_pf, StepResult)
+        rc = 1 if refused else int(_pf)
+        if refused:
+            # The second track parses the L-docs D1 was supposed to write. D1
+            # was never called, so there is nothing for it to examine — running
+            # it would manufacture a second, derived failure and bury the real
+            # one. RECORDED in the summary below rather than skipped silently.
+            second_track = ("not run — D1 was REFUSED, so no L-doc exists for "
+                            "the expert track to parse")
+        else:
+            second_track = "ran"
+            rc = run_phase1_second_track(project, rc)
         # The dispatcher always emits reports/phase1_one_shot.json so
         # callers / tests see a unified entry point regardless of mode.
         reports = project / "reports"
         reports.mkdir(parents=True, exist_ok=True)
-        verdict = "PASS" if rc == 0 else "FAIL"
+        verdict = (_aggregate_verdict([_pf]) if refused
+                   else ("PASS" if rc == 0 else "FAIL"))
         summary = {
             "phase": 1,
             "mode": "docs",
@@ -481,15 +640,43 @@ def main() -> int:
             "delegated_rc": rc,
             "duration_s": time.time() - t0,
             "verdict": verdict,
+            "second_track": second_track,
         }
+        if refused:
+            # A refusal must be readable AS a refusal, not as "the delegate
+            # returned 1". Same shape as the prompt branch's `steps` list.
+            summary["steps"] = [asdict(_pf)]
+            summary["preflight_ledger"] = _spf.LEDGER_REL
+        # Per-step output view — see the prompt-mode call below. BOTH exits of
+        # this main() get it; wiring only one would leave the docs entry (Path
+        # A, the vendor-document front door) without a steps tree.
+        summary["steps_view"] = _pl.emit_steps_view(
+            project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
         (reports / "phase1_one_shot.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
         return rc
 
     # Prompt mode: original phase1_engine path
     plan: List[StepResult] = []
-    plan.append(step_ingest_render(project, args.ic_name))
+    # PRE-FLIGHT (canonical step D1) — the SAME site as the docs branch above:
+    # one flow step, two mode branches, one question. Gating only one of them
+    # would leave whichever front door a given design used unexamined, which is
+    # the shape of the gap this closes.
+    plan.append(_spf.gate(
+        project, "phase1_one_shot_runner", "doc_extract",
+        _preflight_refusal("phase1_ingest_render"),
+        step_ingest_render, project, args.ic_name))
     plan.append(step_human_docs(project))
+
+    # The prompt path emits the same L-docs, so it gets the same second track
+    # and the same supply gate. Wiring only the docs path would leave every
+    # dialogue-entered design unexamined by both.
+    #
+    # NOT after a refusal, for the reason given in the docs branch: the track
+    # parses L-docs that were never written, so it can only report a derived
+    # failure on top of the real one.
+    _refused = any(s.status == _spf.REFUSAL_STATUS for s in plan)
+    rc_second = 0 if _refused else run_phase1_second_track(project, 0)
 
     reports = project / "reports"
     reports.mkdir(parents=True, exist_ok=True)
@@ -499,18 +686,25 @@ def main() -> int:
         "project": str(project),
         "ic_name": args.ic_name,
         "steps": [asdict(s) for s in plan],
-        "verdict": ("FAIL" if any(s.status == "FAIL" for s in plan)
-                    else "PASS_WITH_WAIVERS"
-                    if any(s.status in ("WAIVED", "SKIP") for s in plan)
-                    else "PASS"),
+        "verdict": _aggregate_verdict(plan),
+        "second_track": "not run — D1 was REFUSED" if _refused else "ran",
     }
+    if _refused:
+        summary["preflight_ledger"] = _spf.LEDGER_REL
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # A phase1-only run shows every later step with zero outputs, which is the
+    # honest picture: the tree is the flow, and "nothing produced yet" is a
+    # statement worth having on disk. Best-effort, non-gating; recorded in
+    # reports/audit/steps_view.json either way.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
     (reports / "phase1_one_shot.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     print(f"\n=== phase1_one_shot_runner DONE (mode={mode}) ===")
     print(f"verdict: {summary['verdict']}")
     for s in plan:
         print(f"  {s.status:6} {s.name:24} {s.detail[:120]}")
-    return 0 if summary["verdict"] != "FAIL" else 1
+    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second)
 
 
 if __name__ == "__main__":
