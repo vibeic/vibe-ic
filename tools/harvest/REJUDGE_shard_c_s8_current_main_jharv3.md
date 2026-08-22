@@ -175,6 +175,51 @@ missing**.
 
 **Verdict flipped RECOVER -> LANDED.**
 
+## Closing the provenance gap on the other 108 rows
+
+`contract_check.py` reported, correctly, `110 row(s) do not cite current main
+ae78abb28 — a provenance gap, not a wrong verdict`. Every row had in fact been
+re-swept, but a reader of **one** row could not see that: the row cited `a4caccefe`
+and nothing in it said whether that was stale.
+
+So each row now carries its **own** measurement — file count, pairs main's history
+never held under the current main, and the same figure under the old one — rather
+than one blanket sentence repeated 108 times. A stamp that says the same thing on
+every row proves nothing about any of them.
+
+### A gate I made green by writing text, and then went and earned
+
+One row, `/home/reyerchu/vibe-ic-wt-caravel-slew-drv3`, has **no judged HEAD**: its
+value is an untracked file, which lives in no tree, so the sweep could not judge it.
+Its first stamp said exactly that — and `contract_check.py` went green on it anyway,
+because its staleness check is `if MAIN[:9] not in ev`, a **substring test**. A note
+saying "this row was NOT re-judged against ae78abb285" contains the string
+`ae78abb28` and therefore satisfies the check.
+
+That is a gate passed by text rather than by measurement, so the note was not left
+standing. The row was re-judged the only way an untracked file can be:
+
+* the preserved copy read back through live `harvest/worktree-triage-jharvest`
+  (`git show 33d256659929:HANDOFF_TO_GATEKEEPER.drv3.md`) is 9892 bytes at sha256
+  `f05e08482acbcffc…`, **the exact value the row cites**
+* its git blob `c89f7bcad647` appears at **0** of the 40565 `(path,blob)` pairs main's
+  history holds, and main has **never** held a file named `HANDOFF_TO_GATEKEEPER` at
+  any path — so the 673 commits took none of it
+* re-read on `.112` today: HEAD unmoved at `27523121a3af`, `git status -uall` reports
+  exactly one entry, `?? HANDOFF_TO_GATEKEEPER.md`, 9892 bytes, same sha256 — the
+  preserved snapshot still matches the disk
+* the sibling `…-drv2` still carries a **different** copy (7455 bytes, sha256
+  `bcf26247eabbb291…`), so the duplicate claim the original ABANDON rested on is
+  still false
+
+**The weakness is worth writing down for whoever runs that gate next:** its freshness
+check cannot distinguish a row that was measured against current main from a row that
+merely mentions it. It is reported here, not patched — the gate belongs to a peer, and
+a substring test is a real check that happens to be satisfiable by prose.
+
+`contract_check.py` now reports `CONTRACT OK` with **no** provenance note and
+`landed_since_judging: 0`.
+
 ## Shard C after session 8
 
 **110 rows — 73 RECOVER, 36 LANDED, 1 ABANDON.** Two rows moved, both RECOVER -> LANDED,
