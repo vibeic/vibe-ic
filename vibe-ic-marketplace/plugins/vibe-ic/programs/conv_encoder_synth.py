@@ -29,6 +29,8 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+from _prose_polarity import is_denied, sentence_scope
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -64,12 +66,39 @@ def _parse_K(prompt: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+#: A prompt ends sentences at a line end as often as with ". ", and the shared
+#: vocabulary breaks on the latter only. Without these, the scope of a live
+#: match reaches back over the full stop into a denial on the line above and
+#: refuses a polynomial the prompt plainly states. ADDS to `SENTENCE_BREAKS`;
+#: `sentence_scope` cannot remove from it. Not "\n" alone: a prompt wraps
+#: mid-sentence, and breaking there would miss a denial written across two
+#: lines -- the under-reach that publishes the denied value.
+_PROMPT_LINE_BREAKS = (".\n", "!\n", "?\n")
+
+
 def _parse_generators(prompt: str) -> List[Tuple[int, str]]:
     """Return [(index, tapstring)] sorted by index. Accepts `g1 is "111"`,
-    `g2 = "101"`, `generator polynomial g1 "111"`, with straight or curly quotes."""
+    `g2 = "101"`, `generator polynomial g1 "111"`, with straight or curly quotes.
+
+    POLARITY IS ASKED (vibe-ic#712). A prompt is written by a person, and a
+    person states a RETIRED polynomial as readily as a live one:
+
+        'g1 = "111" is no longer used. The encoder uses g2 = "101".'
+        'The encoder does not use g1 = "111".'
+
+    Both published g1 = 111. That is a denied value returned as a declaration,
+    and here it decides which convolutional encoder gets SYNTHESISED.
+
+    It compounds with `setdefault`, which keeps the FIRST match: a retired
+    polynomial stated before the live one wins outright, so the denial does not
+    merely add a wrong entry, it can take the right one's place."""
     found: Dict[int, str] = {}
     for m in re.finditer(r"\bg(\d+)\b[^.\"'\n]{0,48}?[\"“”']([01]{2,})[\"“”']",
                          prompt):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=_PROMPT_LINE_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
         found.setdefault(int(m.group(1)), m.group(2))
     return sorted(found.items())
 
