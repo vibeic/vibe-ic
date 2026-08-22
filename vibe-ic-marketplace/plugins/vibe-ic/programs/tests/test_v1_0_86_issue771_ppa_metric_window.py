@@ -18,6 +18,8 @@ a true "both" spec must stay `both`.
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -72,8 +74,33 @@ def test_771_noleak_multiclause_and_still_splits():
     assert sorted(cl) == [(15.0, "wires"), (25.0, "cells")], cl
 
 
+def _container_up(container: str = "vibeic-eda") -> bool:
+    """Is a RUNNING container of that name exec-able?
+
+    `--type=container` matters: a bare `docker inspect vibeic-eda` also resolves
+    the IMAGE of that name (which is exactly our image), so it reports success
+    on any host that merely has the image pulled.
+    """
+    if shutil.which("docker") is None:
+        return False
+    try:
+        cp = subprocess.run(
+            ["docker", "inspect", "--type=container", "-f", "{{.State.Running}}", container],
+            capture_output=True, text=True, timeout=10)
+        return cp.returncode == 0 and cp.stdout.strip() == "true"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ── #478 END-STATE: the real program binds the single metric ('wires'), via a
 #    tmp_path defect artifact + subprocess + returncode/JSON assert ────────────
+# Container-gated like its ppa siblings (test_v1_0_85_issue769, _80, _83, _85):
+# the program needs to SYNTHESISE to count wires, and without the container it
+# honestly self-reports NOT-APPLICABLE (rc 0) — so asserting the BLOCK rc 1 is
+# only meaningful when the container is up. This guard was missing here, which
+# made the file the single red in a full-suite run on a host with no container.
+@pytest.mark.skipif(not _container_up(),
+                    reason="vibeic-eda container not running — cannot synthesise")
 def test_771_endstate_real_program_binds_wires(tmp_path):
     import json
     import subprocess
