@@ -1,3 +1,33 @@
+> **SESSION 2026-08-22 13:5x–15:0x (jharv3, host 8HD-6/.108) — RE-VERIFIED, no verdict changed.**
+>
+> Counts stand at **90 RECOVER / 18 LANDED / 2 ABANDON / 0 UNREACHABLE**. What this session
+> found is that a finished file still rots while it sits: three claims in it had gone stale in
+> under two hours, and one of its gates was passing over an empty set.
+>
+> - **The 18 LANDED re-derived from scratch — and 16 were passing vacuously.** Their HEAD is
+>   inside main's history, so the diff against the merge-base is empty and the test examined
+>   nothing. Each is now re-proved by snapshot identity against the 2944 distinct tree hashes on
+>   `origin/main a4caccefe`. 0 divergent paths, 0 false LANDED.
+> - **All 110 directories re-read on their hosts. Five HEADs had moved**; all five re-judged at
+>   the new head, all five verdicts hold, none single-copy. 110/110 still exist; the 20
+>   deletion-bound rows are clean; the 9 dirty ones are all RECOVER.
+> - **86 of 110 rows were correct and unusable** — every `git fetch origin ...` in them named a
+>   `harvest/rescue-*` anchor origin has deleted. All 110 now carry an instruction verified to
+>   resolve, by walking the ref after fetching it.
+> - **The citation gate reported 0 dead over 1948 citations with this file in its glob.** It
+>   matches the backticked form; this file has none of those. It examined none of the file's 445
+>   citations while 86 rows were broken. `bin_jharv3_s5/recovery_resolves.py` replaces it and
+>   refuses (exit 2) rather than passing over an empty set.
+> - **Preservation re-checked against the live tip `218cd9bb6`**: 103/103 judged heads,
+>   2950/2950 rescued commits, and 270 of the 273 commit shas the evidence names — the 3 that
+>   are not contained are not content this file preserves.
+> - One exposure outside my shard was closed because it was cheap and unrecoverable if lost:
+>   a shard-A RECOVER head on no live ref, 8 files of work, folded in. See
+>   `HANDOVER_shards_a_b_recovery_jharv3.md`.
+>
+> Detail: `REVERIFY_shard_c_drift_jharv3.md`. Nothing was deleted; no tree, index or HEAD was
+> modified on any host.
+
 > **FINAL 2026-08-22T05:2xZ (jharv3): 90 RECOVER / 18 LANDED / 2 ABANDON / 0 UNREACHABLE.**
 > `wt-j63x8c` flipped ABANDON -> RECOVER -> ABANDON. Its content never changed and the
 > duplicate finding was never in doubt; what changed was *preservation*. Its first
