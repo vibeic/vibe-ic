@@ -136,7 +136,10 @@ VERDICT_SYM = {
 # Order: full pass, then qualified done-claims, then excused, then non-green.
 ROLLUP_ORDER = (
     "PASS",
-    "VACUOUS-PASS", "STRUCTURE-ONLY", "INCOMPLETE",
+    # vibe-ic#901 — PARTIALLY-VACUOUS beside VACUOUS-PASS: it is the same
+    # qualified done-claim tier split by a count, so it belongs next to the
+    # word it splits and before the other qualified tiers.
+    "VACUOUS-PASS", "PARTIALLY-VACUOUS", "STRUCTURE-ONLY", "INCOMPLETE",
     "WAIVED", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
     "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED",
     "PASS-VOIDED-BY-DEPENDENCY", "FAIL", "MISSING",

@@ -70,6 +70,7 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
 sys.path.insert(0, str(_PROGRAMS))
 import _eda_image as M  # noqa: E402
+import not_verified_tier as NV  # noqa: E402
 
 _PINNED = re.compile(r"vibeic-eda:\d+\.\d+\.\d+")
 
@@ -924,10 +925,23 @@ def _real_image():
     return j if j.ref and not M.unidentified_reason(j) else None
 
 
-@pytest.mark.skipif(_real_image() is None,
-                    reason="NOT_VERIFIED: no identifiable vibeic-eda image on "
-                           "this host — remedy: docker pull "
-                           "ghcr.io/vibeic/vibeic-eda:latest")
+# THE SENTINEL, BUILT BY THE TIER INSTEAD OF TYPED OUT.
+#
+# This reason was already the right SENTENCE — it opened with the sentinel and it
+# named a remedy — and it was still invisible to the machinery that reads the
+# tier, because that machinery looks for a call to a reason BUILDER, not for a
+# string that happens to start with the same eleven characters. So
+# `test_not_verified_tier::test_no_new_undeclared_infrastructure_skip_appears`
+# counted this file as a NEW undeclared infrastructure-absent skip, which is
+# exactly the report it should give for a hand-typed stamp: a copied prefix is
+# what the tier looks like right up until somebody copies it slightly wrong.
+# `not_verified_reason` composes the identical text from the same constants the
+# roll-up reads.
+@pytest.mark.skipif(
+    _real_image() is None,
+    reason=NV.not_verified_reason(
+        "no identifiable vibeic-eda image on this host",
+        remedy="docker pull ghcr.io/vibeic/vibeic-eda:latest"))
 def test_the_real_image_resolves_to_a_digest_and_names_its_own_version():
     """The fixture arms prove the PROGRAMS behave; this proves the RESOLVER meets
     a real registry-published image. Skipped, never faked, when the host has

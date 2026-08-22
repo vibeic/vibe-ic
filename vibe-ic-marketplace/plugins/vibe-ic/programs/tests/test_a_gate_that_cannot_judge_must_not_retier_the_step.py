@@ -142,7 +142,16 @@ def test_POSITIVE_CONTROL_the_blocking_slot_deletes_the_voided_line(
     variant.write_text(text.replace(_ADVISORY_CLAUSE, _BLOCKING_CLAUSE))
 
     block = _step20(_audit(broken_chain, variant))
-    assert "[VACUOUS-PASS" in block, block
+    # 2026-08-22 — was `"[VACUOUS-PASS" in block`. This line is the control's
+    # PRECONDITION, not its subject: it establishes that the blocking slot
+    # re-tiered the step out of a plain PASS, so that the deletion asserted
+    # below is attributable to the re-tiering. Step 20 here runs two clauses
+    # and one of them examined nothing, so the tier it lands in is
+    # `PARTIALLY-VACUOUS` — still a vacuity tier, still not `PASS`, still
+    # re-tiered, and the subject on the next line is unaffected. Accept either
+    # vacuity word rather than pinning one spelling; a plain PASS, a FAIL or a
+    # MISSING still fails here, which is all this line was ever for.
+    assert ("[VACUOUS-PASS" in block or "[PARTIALLY-VACUOUS" in block), block
     assert not _VOIDED_RE.search(block), (
         "the blocking slot was supposed to delete the voided disclosure; if "
         "it no longer does, the tier interaction was fixed elsewhere and this "

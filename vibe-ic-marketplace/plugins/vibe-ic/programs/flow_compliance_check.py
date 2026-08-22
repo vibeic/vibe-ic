@@ -10118,15 +10118,86 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"gate verified the equivalent by another route: "
                     f"{h[len(_SUBSTANTIVE_HINT_PREFIX):]}")
         elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
-            result.status = "VACUOUS_PASS"
+            # vibe-ic#901, 2026-08-22 — THE THIRD WORD. WHY IT EXISTS AND WHY
+            # IT IS SAFE.
+            #
+            # This branch used to grant one word, `VACUOUS_PASS`, whose meaning
+            # is "every executed sub-gate was vacuously satisfied". #901 built
+            # the count that decides whether that sentence is TRUE and wired it
+            # to the structured channel only, so the legacy channel kept saying
+            # it unconditionally. On the shipped step 4 over a tree whose
+            # simulation ran — real results.xml, testbenches that drive the
+            # unit, coverage measured at line=97.37% — the sentence was FALSE:
+            # 4 clauses ran, 3 read real content, 1 examined nothing.
+            #
+            # TWO LANDED REQUIREMENTS SAT ON OPPOSITE SIDES OF THAT, and the
+            # collision is real, not a misunderstanding:
+            #   step 4  must not be called "every sub-gate was vacuous"
+            #           (test_GUARD_the_shipped_step_is_not_vacuous_...)
+            #   step A9 an analog step that closed in simulation with no bench
+            #           measurement must NOT rejoin the executed-PASS numerator
+            #           (test_a9_...::test_simulation_only_close_is_not_a_bare_pass)
+            # Both are true statements about what a reader must not be told.
+            # ONE word cannot carry both, which is why the answer is a word.
+            #
+            # THE ALTERNATIVE, MEASURED AND REJECTED. Splitting the channel by
+            # exit code — rc=2 keeps the unconditional tier, rc=0 + printed
+            # `VACUOUS_PASS:` joins the counted bucket — turns all 20 tests in
+            # the #901 file green, guards included. It was still wrong: A9's
+            # emitter is an rc=0 printer too, so A9 came out
+            #     status=PASS, partial_vacuity_disclosed=True
+            # i.e. disclosed on its own line and COUNTED IN `pass_count`
+            # anyway, because `pass_count = counts["PASS"]` reads the word and
+            # not the disclosure. A step held out of the numerator for cause
+            # was handed back to it. Reverted.
+            #
+            # WHY THE THIRD WORD CANNOT DO THAT. The only status this branch
+            # can now produce in place of `VACUOUS_PASS` is `PARTIALLY-VACUOUS`,
+            # and neither is the string `"PASS"`. `pass_count` is
+            # `counts["PASS"]` and nothing else, so this change CANNOT move any
+            # step into or out of the executed-PASS numerator — not step 4, not
+            # A9, not any of the five steps whose word can move at all. It
+            # splits an existing bucket in two and leaves the numerator
+            # identical to origin/main, which is exactly the property the
+            # guards were written to protect and is asserted directly in them
+            # now, instead of being approximated by pinning a label.
+            unanimous = len(all_vacuous_cmds) >= len(ran_hints)
+            # SPELLED AS TWO STATEMENTS, NOT A TERNARY, ON PURPOSE.
+            # `test_issue634_flow_verdict_tiers::test_the_producers_vocabulary_
+            # is_pinned` discovers this file's vocabulary by scanning its SOURCE
+            # for status assignments to a quoted upper-case literal, which is
+            # the anti-drift device that makes
+            # a new tier a test failure instead of a silent escape. A ternary
+            # puts the second word out of that regex's reach: the pin would then
+            # report the word as "pinned, not in the producer" and, worse, the
+            # NEXT tier added the same way would never be noticed at all. Two
+            # plain assignments keep both words visible to the scanner.
+            if unanimous:
+                result.status = "VACUOUS_PASS"
+            else:
+                result.status = "PARTIALLY-VACUOUS"
             for h in vacuous_hints:
                 # Strip the internal prefix; surface a human-friendly
                 # diagnostic so reviewers see *why* it was vacuous.
                 cmd = h[len(_VACUOUS_HINT_PREFIX):]
-                result.reasons.append(
-                    f"vacuous: gate program signalled VACUOUS_PASS "
-                    f"(input not applicable): {cmd}"
-                )
+                if unanimous:
+                    result.reasons.append(
+                        f"vacuous: gate program signalled VACUOUS_PASS "
+                        f"(input not applicable), and it is "
+                        f"{len(all_vacuous_cmds)} of {len(ran_hints)} gate "
+                        f"clause(s) that ran here: {cmd}"
+                    )
+                else:
+                    # The same sentence the structured channel already prints
+                    # below, from the same numerator and denominator, so a
+                    # reader cannot tell which channel disclosed — nor should
+                    # they have to.
+                    result.partial_vacuity_disclosed = True
+                    result.reasons.append(
+                        f"PARTIALLY-VACUOUS ({len(all_vacuous_cmds)} of "
+                        f"{max(len(ran_hints), len(all_vacuous_cmds))} gate "
+                        f"clause(s) examined nothing): {cmd}"
+                    )
         elif passed and structure_only_hints and not non_hint_reasons:
             # The step ran and produced its declared artefact — from a library
             # default. PASS would say the artefact is design-bound; it is not.
@@ -11603,7 +11674,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     counts = {"PASS": 0, "FAIL": 0, "MISSING": 0, "WAIVED": 0,
               "DEFERRED-BY-UPSTREAM": 0,
               "SKIPPED-CONDITION": 0, "SKIPPED-SETUP-REQUIRED": 0,
-              "VACUOUS_PASS": 0, "STRUCTURE-ONLY": 0,
+              "VACUOUS_PASS": 0,
+              # vibe-ic#901 — the step ran, some clauses examined the design
+              # and some examined nothing. Counted and rendered separately
+              # from VACUOUS-PASS for the reason INCOMPLETE is: same
+              # aggregation (a disclosure tier, never a failure, never part of
+              # `pass_count`), a different word, because "every sub-gate was
+              # vacuous" is a false sentence about such a step.
+              "PARTIALLY-VACUOUS": 0, "STRUCTURE-ONLY": 0,
               # #599 — counted and rendered separately from VACUOUS-PASS.
               # Same aggregation (a disclosure tier, never a failure); a
               # different word, because a vacuous step is one nobody needs to
@@ -11977,6 +12055,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # `final_report_generate._parse_audit_tally` scans for.
     vacuous_head = (f", {counts['VACUOUS_PASS']} VACUOUS-PASS excluded from "
                     f"executed" if counts.get("VACUOUS_PASS") else "")
+    # vibe-ic#901 — ON THE HEADLINE TOO, for the reason spelled out beside
+    # `voided_str` below: a bucket this line does not name is a bucket whose
+    # steps silently vanish from the reader's arithmetic.
+    vacuous_head += (
+        f", {counts['PARTIALLY-VACUOUS']} PARTIALLY-VACUOUS excluded from "
+        f"executed" if counts.get("PARTIALLY-VACUOUS") else "")
     vacuous_head += (
         f", {counts['STRUCTURE-ONLY']} STRUCTURE-ONLY excluded from executed"
         if counts.get("STRUCTURE-ONLY") else "")
@@ -11993,6 +12077,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
     vacuous_str = (f"  VACUOUS-PASS={counts['VACUOUS_PASS']}"
                    if counts.get("VACUOUS_PASS") else "")
+    vacuous_str += (f"  PARTIALLY-VACUOUS={counts['PARTIALLY-VACUOUS']}"
+                    if counts.get("PARTIALLY-VACUOUS") else "")
     # ON THE LINE, or the parts stop summing to the total. The first cut of the
     # dependency write-back demoted 18 of 63 steps into a bucket this summary
     # does not print, so the line read 4+16+12+1+1+9+2 = 45 out of 63 and the
@@ -12098,13 +12184,15 @@ def main(argv: Optional[List[str]] = None) -> int:
              "INCOMPLETE": "…",
              "DEFERRED-BY-UPSTREAM": "~",
              "SKIPPED-CONDITION": "-", "SKIPPED-SETUP-REQUIRED": "!",
-             "VACUOUS_PASS": "○", "STRUCTURE-ONLY": "◐",
+             "VACUOUS_PASS": "○", "PARTIALLY-VACUOUS": "◔",
+             "STRUCTURE-ONLY": "◐",
              "PASS_VOIDED_BY_DEPENDENCY": "⊘"}
     _label = {"PASS": "PASS", "FAIL": "FAIL", "MISSING": "MISSING", "WAIVED": "WAIVED-DEFERRED",
               "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
               "SKIPPED-CONDITION": "SKIPPED-CONDITION",
               "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
               "VACUOUS_PASS": "VACUOUS-PASS",
+              "PARTIALLY-VACUOUS": "PARTIALLY-VACUOUS",
               "PASS_VOIDED_BY_DEPENDENCY": "PASS-VOIDED",
               "STRUCTURE-ONLY": "STRUCTURE-ONLY",
               "INCOMPLETE": "INCOMPLETE"}
