@@ -38,13 +38,27 @@ ONLY rc 1 STOPS THE STEP, and the bound is deliberate:
         A fact about the design, knowable at synthesis rather than at streamout,
         and a FAIL of the step.
   rc 0  compared, and it fits.
-  rc 2  INCOMPLETE — most often "no ceiling declared", which is the state of 176
-        of the 177 published L19 copies. Making that non-green would turn almost
-        every run non-green over a requirement nobody wrote. It is DISCLOSED in
-        the step's detail and does not stop the step. WHETHER THE FLOW SHOULD
-        DEMAND A DECLARED DIE BUDGET IS A PRODUCT DECISION AND IS DELIBERATELY
-        NOT TAKEN HERE — it is the one thing still standing between this gate
-        and answering on every run.
+  rc 2  INCOMPLETE — most often "no ceiling declared". MEASURED, and this is a
+        CORRECTION of the number an earlier version of this block carried: it
+        cited 176 of 177 published L19 copies, from a corpus that has since been
+        withdrawn and cannot be re-derived. The sound figure is in this
+        repository and was swept independently for a different gate —
+        `l19_pdk_floorplan_contract_check`: across 136 real converge runs on all
+        5 fleet machines, `die_area_budget_um` is null in 118. So roughly ONE RUN
+        IN SEVEN does declare a die, and this gate is materially less inert than
+        the older number implied.
+
+        AND THE FIELD IS POPULATABLE, so a null is the design's silence rather
+        than the flow's: `floorplan_contract` extracts a die WxH from the
+        design's OWN documents and phase 1 writes it into L19. Nothing is
+        broken; those designs did not state a die size.
+
+        Making rc 2 non-green would therefore turn 118 of 136 runs non-green
+        over a requirement they never wrote, so it is DISCLOSED in the step's
+        detail and does not stop the step. WHETHER THE FLOW SHOULD DEMAND A
+        DECLARED DIE BUDGET IS A PRODUCT DECISION AND IS DELIBERATELY NOT TAKEN
+        HERE — it is the one thing still standing between this gate and
+        answering on every run, and 118/136 is the number that decision costs.
 
 THE OTHER TWO AXES ARE UNCHANGED, stated so this token can never be read as
 permission to move anything: the FLOW SLOT is `program_exit_zero` and stays

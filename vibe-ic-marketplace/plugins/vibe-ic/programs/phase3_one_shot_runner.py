@@ -11819,12 +11819,17 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     #         declared. That is a fact about the design, it is knowable here
     #         rather than at streamout, and it is a FAIL.
     #   rc 0  compared and it fits.
-    #   rc 2  INCOMPLETE — most often "no ceiling declared", which is the state
-    #         of 176 of the 177 published L19 copies. Treating that as non-green
-    #         would turn almost every run non-green over a requirement nobody
-    #         wrote, so it is DISCLOSED in this step's detail and does not stop
-    #         the step. Whether the flow should demand a declared die budget is
-    #         a product decision and is deliberately NOT taken here.
+    #   rc 2  INCOMPLETE — most often "no ceiling declared". MEASURED, and a
+    #         CORRECTION of the number first written here: `die_area_budget_um`
+    #         is null in 118 of 136 real converge runs across all 5 fleet
+    #         machines (swept independently for
+    #         `l19_pdk_floorplan_contract_check`), not the 176-of-177 an earlier
+    #         comment cited from a withdrawn corpus. Roughly one run in seven
+    #         DOES declare a die. Treating rc 2 as non-green would still turn
+    #         118 of 136 runs non-green over a requirement they never wrote, so
+    #         it is DISCLOSED in this step's detail and does not stop the step.
+    #         Whether the flow should demand a declared die budget is a product
+    #         decision and is deliberately NOT taken here.
     #   any other outcome (timeout, missing program) is a fault of the check,
     #         never a verdict about the design, and is disclosed the same way.
     _area_verdict = ""
