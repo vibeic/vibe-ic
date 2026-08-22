@@ -13,6 +13,12 @@ Checks
   B freshness     every row cites the main sha it was judged against, and that sha
                   is the current origin/main. A stale cite is the exact mistake the
                   355 prior verdicts were being corrected for.
+                  This FAILS on drift rather than re-labelling: the rows RECORD the
+                  main their judge used, which is the only form that cannot mislead.
+                  A frozen constant lies once main moves; a live-derived label lies
+                  the moment a file is regenerated without re-judging, because it
+                  claims a freshness the JUDGEMENT does not have. Recorded plus
+                  disclosed drift is the third option and the only safe one.
   C content       each RECOVER row naming "<file> sha256 <A> ... origin/main's <B>"
                   must have B == sha256(origin/main:<file>); the ABSENT variant must
                   have main genuinely lacking the path. Where the judged commit is
@@ -123,7 +129,14 @@ def check_freshness(body, main, rep):
             rep.bad("B", p, "evidence names no main sha at all"); continue
         stale = [c for c in cited if c != main]
         if stale:
-            rep.bad("B", p, "judged against %s, current origin/main is %s" % (stale[0], main))
+            rep.bad("B", p, "judged against %s, current origin/main is %s. "
+                            "Drift direction: while main only fast-forwards, this can "
+                            "make a RECOVER over-conservative (its work may have landed "
+                            "since) but cannot make a LANDED or ABANDON unsafe -- main "
+                            "gaining commits never removes content it already had. A "
+                            "force-push or history rewrite breaks that, and then every "
+                            "verdict here needs re-judging, not re-labelling."
+                            % (stale[0], main))
         else:
             rep.bump("freshness-ok")
 

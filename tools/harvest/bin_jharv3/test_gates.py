@@ -316,6 +316,79 @@ def test_contract_check_absent_from_main_branch_is_load_bearing():
               out2[-350:])
 
 
+def test_untracked_directory_collapse():
+    """jharv2 found the -uno defect one level down, and it is worth an executable
+    fixture because the failure is silent and authorises deletion.
+
+    `git status --porcelain` with DEFAULT untracked handling collapses an untracked
+    DIRECTORY to a single entry ending in "/". A loop that then filters with `[ -f ]`
+    drops that entry entirely and counts a whole subtree as ZERO new files. On .102
+    that authorised deleting untracked content in 43 rows.
+
+    Two distinct claims are pinned here, because they have different blast radii:
+
+      1. -uall is required to COUNT untracked files. Default undercounts a directory
+         to 1, and to 0 once a [ -f ] filter is applied.
+      2. Counting `^??` ENTRIES (no [ -f ]) is safe for the ONLY question a deletion
+         gate actually asks -- "is anything untracked here?" -- because a collapsed
+         directory still produces one entry. That is why shard C's 8 locally measured
+         deletion-bound rows are sound: they are 0 under -uall, default, AND
+         `ls-files --others`, and a zero cannot be a collapsed anything.
+
+    Claim 2 is the one that would let somebody "simplify" -uall away without visible
+    harm. It holds only while nothing filters the entries by file-ness.
+    """
+    import shutil
+    tmp = tempfile.mkdtemp()
+    try:
+        r = os.path.join(tmp, "r")
+        os.makedirs(os.path.join(r, "scratch", "deep"))
+        def g(*a, **kw):
+            return subprocess.run(["git", "-C", r, *a], capture_output=True, text=True, **kw)
+        g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+        open(os.path.join(r, "tracked.txt"), "w").write("x")
+        g("add", "-A"); g("commit", "-qm", "init")
+        for rel in ("scratch/deep/one.md", "scratch/deep/two.md", "scratch/loose.txt",
+                    "toplevel_new.txt"):
+            open(os.path.join(r, rel), "w").write("data")
+
+        truth = len([l for l in g("ls-files", "--others", "--exclude-standard")
+                     .stdout.splitlines() if l.strip()])
+        default = [l for l in g("status", "--porcelain").stdout.splitlines()
+                   if l.startswith("??")]
+        uall = [l for l in g("status", "--porcelain", "--untracked-files=all")
+                .stdout.splitlines() if l.startswith("??")]
+        as_files = [l for l in default
+                    if os.path.isfile(os.path.join(r, l[3:].rstrip("/")))]
+
+        check("fixture really has 4 untracked files", truth == 4, f"truth={truth}")
+        check("-uall counts every untracked file", len(uall) == truth,
+              f"uall={len(uall)} truth={truth}")
+        check("DEFAULT --porcelain UNDERCOUNTS by collapsing the directory",
+              len(default) < truth, f"default={len(default)} truth={truth}")
+        check("and a [ -f ] filter on the default output loses the subtree entirely",
+              len(as_files) < len(default), f"as_files={len(as_files)} default={len(default)}")
+        check("but 'is anything untracked?' is TRUE under both — a collapsed dir still "
+              "yields an entry", len(default) > 0 and len(uall) > 0)
+
+        # the zero case: with nothing untracked, all three agree on 0, so shard C's
+        # locally measured rows cannot be hiding a collapsed subtree
+        for rel in ("scratch/deep/one.md", "scratch/deep/two.md", "scratch/loose.txt",
+                    "toplevel_new.txt"):
+            os.unlink(os.path.join(r, rel))
+        shutil.rmtree(os.path.join(r, "scratch"))
+        z_def = [l for l in g("status", "--porcelain").stdout.splitlines() if l.startswith("??")]
+        z_all = [l for l in g("status", "--porcelain", "--untracked-files=all")
+                 .stdout.splitlines() if l.startswith("??")]
+        z_ls = [l for l in g("ls-files", "--others", "--exclude-standard").stdout.splitlines()
+                if l.strip()]
+        check("a clean tree reads 0 under all three methods",
+              (len(z_def), len(z_all), len(z_ls)) == (0, 0, 0),
+              f"{len(z_def)}/{len(z_all)}/{len(z_ls)}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 for t in (test_rescue_gate_both_directions,
           test_rescue_gate_catches_trailing_comma_regression,
           test_parity_gate_all_directions,
@@ -323,7 +396,8 @@ for t in (test_rescue_gate_both_directions,
         test_contract_check_each_guarantee,
         test_contract_check_catches_recover_identical_to_main,
         test_contract_check_main_is_derived_not_frozen,
-        test_contract_check_absent_from_main_branch_is_load_bearing):
+        test_contract_check_absent_from_main_branch_is_load_bearing,
+        test_untracked_directory_collapse):
     print(f"\n--- {t.__name__}")
     t()
 

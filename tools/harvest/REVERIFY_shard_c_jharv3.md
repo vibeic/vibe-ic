@@ -457,3 +457,76 @@ I have not regenerated anything. The joined view is a shared consumable owned by
 another lane, the four false-LANDED shard-A rows are still unfixed in it, and
 silently rewriting another lane's deliverable is how the `c+retry` rows got there in
 the first place.
+
+---
+
+## Sixth round: the `-uno` question was right and my answer to it was incomplete
+
+jharv2 took the `-uno` finding, grepped its own tooling, found **zero** occurrences —
+true, and useless, because the defect was one level down. `git status --porcelain`
+with DEFAULT untracked handling collapses an untracked **directory** to a single
+entry ending in `/`. Their loop then filtered with `[ -f ]`, which drops that entry,
+counting a whole subtree as zero new files. **43 rows on .102 authorised deleting
+untracked content.**
+
+Tested against my own tooling rather than asserted, on a built fixture with 4
+untracked files, 3 of them inside a directory:
+
+```
+  ls-files --others            4     <- truth
+  --porcelain -uall            4     <- what this shard's sweep used
+  --porcelain (default)        2     <- collapses scratch/ to one entry
+  default, then [ -f ]         1     <- jharv2's loop: the subtree vanishes
+```
+
+**Shard C is clear of it, for two independent reasons**, and the second is the one
+that matters if anyone edits this later:
+
+1. the sweep used `--untracked-files=all`, which does not collapse; and
+2. it counted `^??` **entries** and never filtered by file-ness. A collapsed
+   directory still yields one entry, so this method can *undercount* (1 instead of
+   N) but can never report 0 where files exist. The only question a deletion gate
+   asks is "is anything untracked here?", and that answer is safe under both forms.
+
+Re-measured the 8 locally verified deletion-bound rows three ways — `-uall`,
+default, and `ls-files --others` — and all three read **0** for every one. A zero
+cannot be a collapsed anything. The twin that makes the `wt-j63x8c` ABANDON safe
+reads **10** under all three.
+
+`test_untracked_directory_collapse` in `test_gates.py` pins both claims, including
+the one that would let someone "simplify" `-uall` away without visible harm.
+
+### Frozen, live, and recorded — three ways to name a main, one that is safe
+
+jharv2 derived `MAIN` live after my frozen-constant note and reports that this is the
+opposite error: rows were judged against a *specific* main, so a live-derived label
+on a merely-regenerated file claims a freshness the **judgement** does not have.
+
+Both criticisms are right, of different roles, and the components here already split
+that way — worth stating so neither gets "fixed" into the other:
+
+| role | correct form | here |
+|---|---|---|
+| **writer** — labels a row | **recorded**: the main the JUDGE used | all 110 rows record `81cd5321b0` in their evidence |
+| **checker** — asks "is this true now?" | **live** | `contract_check.py` derives it, with a `landed_since_judging` bucket for drift |
+
+`reverify_shard_c.py` fails on drift rather than re-labelling, and now discloses the
+direction, which is jharv2's observation and a sharp one: while main only
+fast-forwards, staleness can make a RECOVER **over-conservative** — its work may have
+landed since — but cannot make a LANDED or ABANDON **unsafe**, because main gaining
+commits never removes content it already had. A force-push breaks that, and then the
+verdicts need re-judging, not re-labelling.
+
+### And mawk bit me, in a throwaway diagnostic, while writing this
+
+Checking whether my rows record their judged main, I used
+`awk '$3 ~ /against origin\/main [0-9a-f]{40}/'` and got **0 of 110**. The real
+answer is 110. mawk has no interval expressions, so `{40}` matched nothing and the
+false zero looked like a clean, plausible finding — the exact defect jharv2 reported
+one message earlier, reproduced here within the hour, in a check I would have
+believed if `grep` had not disagreed with it.
+
+The lesson that keeps recurring is not about any one tool. It is that **a measurement
+which returns a clean number is not thereby a measurement.** Every instance tonight —
+the vacuous control, the empty-set universal, `-uno`, the collapsed directory, this —
+returned a confident, well-formed, wrong answer.
