@@ -331,7 +331,12 @@ def test_the_runner_invokes_this_producer(tmp_path):
     src = _runner_src()
     assert "def step_digital_hardmacro_gen(" in src
     assert 'PROGRAMS_DIR / "digital_hardmacro_gen.py"' in src
-    assert "plan.append(step_digital_hardmacro_gen(project))" in src
+    # THE CALL NOW CARRIES THE DESIGN'S PDK, and that is load-bearing rather
+    # than cosmetic: without it the producer saw only `$PDK_ROOT` -- the PARENT
+    # of every installed PDK in the shipped image -- and abstracted every design
+    # against whichever technology sorted first. The `pdk` argument is what
+    # makes the producer's refusal the exception instead of the rule.
+    assert "plan.append(step_digital_hardmacro_gen(project, pdk))" in src
 
 
 def test_the_gate_never_invokes_this_producer():

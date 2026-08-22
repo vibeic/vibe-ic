@@ -31839,7 +31839,41 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                       time.time() - t0, detail, written)
 
 
-def step_digital_hardmacro_gen(project: Path) -> StepResult:
+def _hardmacro_pdk_dir(pdk: Optional["PdkConfig"]) -> Optional[str]:
+    """The DESIGN'S PDK directory, for `digital_hardmacro_gen --pdk-root`.
+
+    MEASURED DEFECT this exists to close. `digital_hardmacro_gen._magicrc_for`
+    took the alphabetically FIRST `*/libs.tech/magic/*.magicrc` under whatever
+    it was given, and this step gave it nothing -- so the producer fell back to
+    `$PDK_ROOT`, which in the shipped image is the PARENT of every installed
+    PDK:
+
+        PDK_ROOT = /foss/pdks   ->  gf180mcuD's technology, for EVERY design.
+
+    A design on any other PDK was abstracted against a technology that does not
+    define its layers, and magic answers that with `Unknown layer/datatype` and
+    a LEF carrying an outline and NO PINS -- not an error. The producer now
+    REFUSES when it cannot tell which PDK it is on; this supplies the answer so
+    the refusal is not the normal case.
+
+    Derived from the run's OWN `PdkConfig.name` under `$PDK_ROOT`, and returned
+    only when that directory actually holds `libs.tech/magic/`. Nothing is
+    reconstructed and no PDK name is hard-coded: if the layout is not the
+    standard one this returns None, the producer sees the bare `$PDK_ROOT` and
+    refuses with its own stated reason. Degrades to a refusal, never to a guess.
+    """
+    if pdk is None or not getattr(pdk, "name", ""):
+        return None
+    root = os.environ.get("PDK_ROOT", "")
+    if not root:
+        return None
+    cand = Path(root) / pdk.name
+    return str(cand) if (cand / "libs.tech" / "magic").is_dir() else None
+
+
+def step_digital_hardmacro_gen(project: Path,
+                               pdk: Optional["PdkConfig"] = None
+                               ) -> StepResult:
     """Canonical step 37.5ip — the cell/IP path TERMINAL producer.
 
     WIRED HERE AND NOT INTO THE GATE, for the reason step A8 already records in
@@ -31869,6 +31903,12 @@ def step_digital_hardmacro_gen(project: Path) -> StepResult:
     report = project / "reports" / "phase3" / "digital_hardmacro_gen.json"
     report.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(prog), str(project), "--json", str(report)]
+    # THE DESIGN'S PDK, NAMED. Without it the producer sees only `$PDK_ROOT`
+    # and, before it learned to refuse, silently picked whichever technology
+    # sorted first. See `_hardmacro_pdk_dir`.
+    _pdk_dir = _hardmacro_pdk_dir(pdk)
+    if _pdk_dir:
+        cmd += ["--pdk-root", _pdk_dir]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
                             errors="replace", timeout=1800)
@@ -41274,7 +41314,7 @@ def main() -> int:
     # produced digitally could be placed by anybody: a completed sign-off run
     # contained no `.lef` anywhere. Immediately after canonicalisation, which
     # is what puts the sign-off GDS at this producer's declared input path.
-    plan.append(step_digital_hardmacro_gen(project))
+    plan.append(step_digital_hardmacro_gen(project, pdk))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
