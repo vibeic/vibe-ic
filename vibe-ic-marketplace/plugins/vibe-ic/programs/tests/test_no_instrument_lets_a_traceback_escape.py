@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -131,5 +132,19 @@ def test_no_traceback_escapes_on_a_hostile_tree(prog: Path):
             assert r.returncode in (0, 1, 2, 3), (
                 f"{prog.name} returned rc={r.returncode}, which is outside the "
                 f"contract 0/1/2/3\n{blob[-2000:]}")
+            # A REAL VERDICT OWES A DENOMINATOR. rc 0 and rc 1 are claims about
+            # a population; rc 2 is "not checked" and owes nothing, which is
+            # why it is exempt rather than excused. Measured on this fixture:
+            # every rc 0/1 program prints at least THREE population lines and
+            # every rc 2 program prints none -- a clean split, so 2 is a
+            # threshold with margin rather than a number tuned to today.
+            if r.returncode in (0, 1):
+                denom = len(re.findall(r"^ +[A-Za-z][^:\n]*: +\d+ *$",
+                                       r.stdout, re.M))
+                assert denom >= 2, (
+                    f"{prog.name} returned rc={r.returncode} -- a claim about a "
+                    f"population -- while disclosing {denom} population "
+                    f"count(s). A verdict must state what it examined.\n"
+                    f"{r.stdout[-2000:]}")
     finally:
         _cleanup(root)
