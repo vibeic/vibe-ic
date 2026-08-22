@@ -2645,3 +2645,64 @@ document would have been the most expensive place to leave one, and the shape of
 the check matters as much as the answer — the AST answered a question the grep
 had already answered wrongly, which is the fourth time tonight that swap was
 what produced the truth.
+
+## 41. It landed. Main is v1.11.69, the wiring is on it, and the skip button is not
+
+The ref watch fired on `main`: `81cd5321b0` → `a4caccefea`, *"landing: assign
+v1.11.69 at landing time"*. This is the event the watch was armed for, and the
+check it exists to make is one specific combination — **the wiring on `main`
+WITHOUT this branch**, which is the only way the skip button reaches `main`.
+
+**First reading was a false alarm, and the parser caught it.** `grep -c
+'hygiene-record-in'` over `main`'s `gatekeeper_review.py` returns **2**, which
+read as "the skip button is on main". Both are prose:
+
+```
+1505:    v1.11.67 put it on the command line as `--hygiene-record-in`, argued as a
+2006:    # THERE IS NO `--hygiene-record-in`, AND THERE MUST NOT BE.
+```
+
+— my own docstring and my own comment, counted as if they were code. Asked
+properly:
+
+```
+declared CLI options mentioning 'hygiene' : NONE
+total declared options                    : 17
+```
+
+That is the fifth time tonight a grep answered a structural question wrongly and
+an AST answered it right, and it is the one where a wrong answer would have been
+an alarm about a skip button on `main`.
+
+**What actually landed, checked by content rather than by commit SHA** (the
+batch's history was rewritten at landing, so `d9322cdab` is not an ancestor even
+though its file is present — attribute by CONTENT when the history moved):
+
+```
+run_gatekeeper_review in gatekeeper-land.sh          2   the ruling, carried out
+declared CLI options mentioning 'hygiene'            0   no skip button
+--summary-json "$GATEKEEPER_HYGIENE_REPORT"          1   the verbatim path
+GATEKEEPER_REVIEW_BUDGET_S:-1800                     1   the budget
+tests/test_hygiene_handover_is_in_process_only.py    PRESENT (174 lines)
+test_the_cli_offers_no_way_to_skip_the_hygiene_set   PRESENT
+```
+
+**And it is green on `main`:**
+
+```
+9 passed   — the two target tests and the seam guard
+ci_harness_timeout_ceiling_check   rc 0
+```
+
+**So the brief is closed by the world, not just by the branch.** The two reds it
+named are green on `main`; the review is wired into the one path every landing
+takes; the hygiene subset is wired, honoured, and cannot be opted out of; and
+the guarantee is now policed by two tests, one of which — §40 — the landing's
+own selection can actually see.
+
+**What did NOT change, and should not be read as fixed by this:** §39's selector
+gap is on `main` too, unaltered. `4232a7301`'s escape route is still open for
+the next module. The watchdog mismatch (§18), the empty-loop-corpus label
+(§28), and `jrows`'s collateral revert are all still open. This branch fixed the
+regression and hardened the property against a rename; it did not fix the gate
+that let the regression through.
