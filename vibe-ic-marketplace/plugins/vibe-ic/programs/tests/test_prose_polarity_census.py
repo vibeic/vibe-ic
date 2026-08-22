@@ -328,3 +328,49 @@ def test_the_calibration_is_printed_beside_the_number_it_qualifies(tmp_path):
     r = _run(d)
     assert "[CALIBRATION]" in r.stdout, r.stdout
     assert "UPPER BOUND on a SHAPE" in r.stdout, r.stdout
+
+
+def test_wider_asks_a_different_question_and_says_so(tmp_path):
+    """`--wider` is the input-based population: what a function is FED, not what
+    shape it writes. It reaches PREDICATES, which no write-shape widening can,
+    and it is a longer list that is NOT a defect list."""
+    blind_predicate = '''\
+import re
+
+PAT = re.compile(r"\\bMoore\\b")
+
+
+def looks_moore(prompt):
+    return bool(PAT.search(prompt))
+'''
+    d = _tree(tmp_path, moore_probe=blind_predicate)
+    r = _run(d, "--wider")
+    assert r.returncode == RC_OK, r.stdout + r.stderr
+    assert "[FED A DOCUMENT] moore_probe::looks_moore" in r.stdout, r.stdout
+    assert "not a defect list" in r.stdout, r.stdout
+
+
+def test_wider_does_not_list_a_function_that_consults(tmp_path):
+    sighted = '''\
+import re
+
+from _prose_polarity import is_denied
+
+PAT = re.compile(r"\\bMoore\\b")
+
+
+def looks_moore(prompt):
+    m = PAT.search(prompt)
+    return bool(m) and not is_denied(prompt)
+'''
+    d = _tree(tmp_path, moore_probe=sighted)
+    r = _run(d, "--wider")
+    assert "moore_probe::looks_moore" not in r.stdout, r.stdout
+
+
+def test_the_census_headline_is_unchanged_by_the_flag(tmp_path):
+    """`--wider` answers instead of, never alongside: mixing a 262-entry list
+    into the census's own verdict is how the readable number stops being read."""
+    d = _tree(tmp_path, blind_emit=BLIND_FOR_TARGET_ONLY)
+    assert "[CENSUS]" in _run(d).stdout
+    assert "[CENSUS]" not in _run(d, "--wider").stdout
