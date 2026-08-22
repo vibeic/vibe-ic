@@ -5491,6 +5491,59 @@ argument. **A red test is a claim about the code. It is worth reading before it 
 worth counting.**
 
 
+## M103 — the anti-skip rule, stated exactly; the violators are NOT protected and I am still not changing them
+
+M102 found the gate. This is what it actually forbids, measured rather than
+paraphrased, because the paraphrase would be wrong in a way that matters.
+
+**THE RULE IS ABOUT CELL TESTS, NOT FILES.** Five dimension files contain
+`pytest.skip`; only two are flagged:
+
+| file | skips | enclosing function | flagged? |
+|---|--:|---|---|
+| d3 | 8 | `test_d3_required_outputs_are_produced(**cell**)` | **YES** |
+| d7 | 2 | `test_d7_required_outputs_list_is_complete(**cell**, record_property)` | **YES** |
+| d6 | 1 | `test_d6_waived_cells_are_clean_on_every_other_leg(step_id)` | no |
+| d2 | 1 | outside any cell test | no |
+| d8 | 1 | outside any cell test | no |
+
+**A test that takes the `cell` fixture may not skip.** d2, d6 and d8 skip freely
+and stay green because their skips are in guards and tripwires, not in cells.
+"This file contains a skip" would have been the wrong reading and would have sent
+someone to three innocent files.
+
+**THE OWNERSHIP IS INVERTED FROM EVERY OTHER ITEM IN THIS DOCUMENT:**
+
+    test_matrix_63x8_coverage.py   (the RULE)        PROTECTED
+    test_matrix_d3_outputs_produced.py (violator)    NOT protected
+    test_matrix_d7_outputs_list_complete.py          NOT protected
+
+Everywhere else the blocker has been "the fix is in a protected file". **Here the
+authority is protected and the violations are mine to edit.** By the standard this
+branch has been applying — M78, M85 — that is the shape of a job I should do.
+
+**I am not doing it, and the reason is the blast radius, not the ownership.**
+The gate names the correct shape: the three legal states are ENFORCED, WAIVED
+(strict xfail) and **NA (asserted precondition)** — d8 shows the pattern, where an
+NA *"self-invalidates and goes red"* if its precondition stops holding. Converting
+D3's skip to that shape is a real change with a real consequence: **on every host
+without a published corpus, 61 D3 cells stop being silent and start being NA-or-
+red.** That is the correct behaviour by the contract, and it is a change to what
+every developer sees on every run, ruled by an authority file I cannot edit.
+
+**What the owner needs, in one line:** D3:2309 and D7:375 skip on
+`corpus_root() is None`; both should assert an NA precondition instead, on the
+d8 pattern; the rule file is protected and the two violators are not, so this can
+land without touching authority — **and it will surface 61 cells that are
+currently reporting nothing.**
+
+**The honest asymmetry:** I have argued all engagement that a skipped cell has no
+colour. **Here is the change that would prove it, in files I am allowed to edit,
+and I am declining it on blast radius.** That is a defensible call and it is the
+same kind of call I have been recording other people's versions of all day. It
+should be read as one, not as a finding.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
