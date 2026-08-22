@@ -128,3 +128,55 @@ def test_real_flow_has_zero_silent_orphans():
     rows = ec.classify(doc, ec._load_runner_text())
     orphans = {str(r["id"]) for r in rows if r["classification"] == "ORPHANED"}
     assert orphans == set(), f"silent orphan step(s) reappeared: {orphans}"
+
+
+# ---------------------------------------------------------------------------
+# The gate above is a TEXT SEARCH over the concatenated runner sources, and it
+# is blind in one direction that matters to the two steps it most recently
+# stopped calling orphans.  MEASURED, not argued: with `step_pad_ring_gen` and
+# `step_tapeout_docs_gen` still DEFINED in phase3_one_shot_runner but their two
+# `plan.append(...)` call sites deleted, `test_real_flow_has_zero_silent_orphans`
+# above reports `1 passed` — the producer names survive inside the dead function
+# bodies, so `classify` still sees them and still says WIRED.
+#
+# That is exactly the shape 15.5ic and 37.5ic were in before they were wired:
+# a declaration nothing executes.  The gate cannot tell definition from
+# invocation without becoming a call-graph analysis, which is a different gate
+# with a corpus-wide blast radius and is not this change's call.  What IS this
+# change's call is that its own fix must have an absence that reappears, so the
+# invocation is pinned here, by AST, for these two steps only.
+def _phase3_runner_ast():
+    src = (Path(__file__).resolve().parent.parent
+           / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
+    import ast
+    return ast.parse(src)
+
+
+def _called_from(tree, caller: str):
+    """Names called anywhere inside the body of the top-level function `caller`."""
+    import ast
+    fn = next((n for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == caller), None)
+    assert fn is not None, f"{caller}() is not a top-level function any more"
+    return {n.func.id for n in ast.walk(fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+
+
+def test_the_two_newly_wired_producers_are_invoked_and_not_merely_defined():
+    # 15.5ic (pad ring) and 37.5ic (tape-out docs) were ORPHANED because their
+    # declared producers were invoked from nothing but each step's own `gate:`
+    # clause — the acceptance auditor writing the required_output it then reads.
+    # Defining a step function does not undo that; CALLING it does.
+    import ast
+    tree = _phase3_runner_ast()
+    defined = {n.name for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    called = _called_from(tree, "main")
+    for step in ("step_pad_ring_gen", "step_tapeout_docs_gen"):
+        assert step in defined, f"{step}() is gone from phase3_one_shot_runner"
+        assert step in called, (
+            f"{step}() is defined but never called from main() — the step is "
+            f"declared, the coverage gate reads its producer names out of the "
+            f"dead body and says WIRED, and nothing runs it. This is the "
+            f"orphan shape the wiring was supposed to end.")
