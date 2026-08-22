@@ -5,19 +5,31 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 
 ## IF YOU READ ONE SCREEN, READ THIS
 
-> **AND THE UNKNOWN IS NOW BOUNDED — SAMPLED, NOT ASSUMED.** Having stated that a
-> red outside these ten files "was never looked for", I looked. A **reproducible
-> random sample** (seed 20260822) of **40 of the 2737 out-of-census files**, run
-> with the corpus pointer set:
+> **AND THE UNKNOWN IS BOUNDED — AND THE FIRST BOUND WAS WRONG.** Having stated
+> that a red outside these ten files "was never looked for", I sampled. **Twice,
+> and the second sample overturned the first.**
 >
->     989 passed, 16 skipped, 0 FAILED   (148s)
+>     sample 1   40 files (seed 20260822)    989 passed,  16 skipped,  0 FAILED
+>     sample 2  120 files (disjoint, same)  1672 passed,  45 skipped,  7 FAILED
+>     ---------------------------------------------------------------------
+>     combined  160 of 2737 out-of-census files -> 2 FILES carry 7 reds
 >
-> **Zero reds outside the census, in a 1.5% sample.** That is real evidence the
-> inherited list is a reasonable proxy — and it is NOT proof there are none. At a
-> hypothetical 5% file-level red rate, a 40-file sample draws zero about 13% of
-> the time. **What it rules out is a LARGE unseen population; it does not rule out
-> a small one.** The 16 skips are unexamined and, by this campaign's own rule, a
-> skipped cell has no colour — they are not counted as passes here.
+> **So there IS an unseen population, and the 0-of-40 result was a small-sample
+> artefact** — exactly what its own caveat said it could not rule out. **A
+> file-level rate of 2/160 (1.25%) over 2737 files suggests on the order of
+> THIRTY MORE FILES carrying reds outside this census**, and that estimate is
+> rough: 2 events is a wide interval, not a figure to plan with.
+>
+> **The seven, named so someone can pick them up:**
+>
+>     test_issue1538_added_vs_pre_existing_ic_level_entries.py   6 reds (whole file)
+>     test_v1_9_63_issue693_repo_process_family_wiring.py        1 red
+>       ::test_the_checker_population_covers_checker_shaped_names
+>
+> **NOT diagnosed here** — out of this census's scope, and naming them without
+> root-causing them is the honest stopping point. **What changes is the framing:
+> the inherited list is NOT main's red set, and this document must not be read as
+> if it were.**
 
 > **⚠ SCOPE, STATED BEFORE ANY NUMBER: THIS IS NOT A SWEEP OF MAIN.**
 >
