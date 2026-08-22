@@ -1715,33 +1715,21 @@ landing_publish() {
   python3 "$LANDING_PROGRESS_TOOL" terminal \
     || { echo "[NORECORD] stub landing terminal is incomplete" >&2; exit 2; }
 }
-if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
-  mkdir -p "$GATEKEEPER_CONCURRENCY_PROBE_DIR"
-  : > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/${GATEKEEPER_VERIFY_ARM:-unknown}.started"
-fi
-if [ -n "${GATEKEEPER_MUTATE_BENCHMARK_ARM:-}" ] \
-   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "$GATEKEEPER_MUTATE_BENCHMARK_ARM" ]; then
-  printf 'MUTATED BY %s\n' "$GATEKEEPER_VERIFY_ARM" >> \
-    "$VIBE_IC_BENCHMARK_DATA/ic/tiny/v1/phase3/stage3/pnr/routed.def"
-fi
-if [ "${GATEKEEPER_PREWRITE_BASE_ARTIFACTS:-0}" = "1" ] \
-   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; then
-  run_dir="$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")"
-  printf '%s\n' '{"candidate":"forged-base-summary"}' > \
-    "$run_dir/base_hygiene.json"
-  printf '%s\n' '<testsuites tests="0" failures="0" errors="0"/>' > \
-    "$run_dir/base.xml"
-  printf '%s\n' '  FAIL  candidate planted this base log' > \
-    "$run_dir/base_land.log"
-  mkdir -p "$run_dir/base_hygiene_progress.jsonl"
-fi
-if [ "${GATEKEEPER_RELINK_SELECTION:-0}" = "1" ] \
-   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; then
-  run_dir="$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")"
-  cp "$run_dir/selection.txt" "$run_dir/selection-copy.txt"
-  rm -f "$run_dir/selection.txt"
-  ln -s "$run_dir/selection-copy.txt" "$run_dir/selection.txt"
-fi
+# FOUR STIMULUS BRANCHES USED TO SIT HERE AND NONE OF THEM COULD EVER FIRE.
+# They wrote `<ARM>.started` into GATEKEEPER_CONCURRENCY_PROBE_DIR, appended to
+# the corpus under GATEKEEPER_MUTATE_BENCHMARK_ARM, pre-wrote the base wave
+# under GATEKEEPER_PREWRITE_BASE_ARTIFACTS and relinked the selection under
+# GATEKEEPER_RELINK_SELECTION.  MEASURED on a4caccefe: not one of those four
+# names is on the hermetic launcher's `--env` allow-list, so inside an arm each
+# is EMPTY and the branch is skipped; and the three that reach for the parent's
+# run directory do it through GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD, a name
+# that occurs ZERO times in the verifier AND ZERO times in the real
+# tools/gatekeeper-land.sh, so it expands to `.` — the container's read-only
+# /subject.  Their four tests are rewritten against channels that exist; this
+# code is deleted rather than left, because unreachable stimulus code reads to
+# the next person exactly like coverage.  GATEKEEPER_STUB_ROUTED_TRANSITION
+# below is NOT of that class: _routed_activation_repo rewrites that branch to
+# key on committed subject content, which does reach an arm.
 if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \
    && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \
         || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then
@@ -1878,26 +1866,17 @@ exit "$FAILED"
 # control's diff therefore touches no test file at all — which is the whole
 # point: what got through five times looked like a normal source change.
 _THING_SRC = "VALUE = {v}\n"
-_THING_TEST = """import os
-import pathlib
-import time
+_THING_TEST = """import pathlib
 
 
-def _require_parallel_gate_arms():
-    probe = os.environ.get("GATEKEEPER_CONCURRENCY_PROBE_DIR")
-    if not probe or os.environ.get("GATEKEEPER_VERIFY_ARM") != "A1":
-        return
-    needed = [pathlib.Path(probe) / f"{arm}.started"
-              for arm in ("A2", "B1", "B2")]
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline and not all(path.is_file() for path in needed):
-        time.sleep(0.02)
-    assert all(path.is_file() for path in needed), \
-        "A1 completed before A2, B1 and B2 started"
+# The cross-arm rendezvous that used to be here waited for `<ARM>.started`
+# markers its siblings could not write: an arm is a container with network none
+# and no shared writable surface, so it cannot observe another arm at all. The
+# wave property is asserted host-side instead, in
+# test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave.
 
 
 def test_value_is_one():
-    _require_parallel_gate_arms()
     src = (pathlib.Path(__file__).resolve().parents[1] / "thing.py").read_text()
     assert "VALUE = 1" in src
 """
@@ -2326,47 +2305,6 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
         sandbox, tmp_path):
     """After activation, evidence must not demand another one-use transition.
 
-    WHAT THIS ARM MEASURES, AND WHAT IT PROVABLY CANNOT — because the previous
-    version of this test claimed the second as well.
-
-    `.get("corpus_transitions", [])` made "the producer never ran" and "the
-    producer ran and found nothing" the same verdict, and the first was what
-    was happening: the key was ABSENT from the delta. `hygiene_finding_delta`
-    now STATES the population on every record, empty when empty, so the key is
-    present here and the two are distinguishable — that half is repaired at the
-    producer, where it belongs.
-
-    The other half cannot be repaired here. `GATEKEEPER_STUB_ROUTED_TRANSITION`
-    and `GATEKEEPER_STUB_BASE_EXPANDED` are passed to the VERIFIER, and the
-    land arms it launches are hermetic: `gatekeeper-verify-merge.sh`
-    `launch_hermetic_land_arm` hands the runner an exact `--env` list and
-    `hermetic_candidate_runner.py` execs it under `env -i`, so no ambient
-    variable crosses that boundary — by design, and the receipt attests the
-    exact environment. MEASURED on this tree: both arms therefore run the
-    ordinary one-gate dispatch, base and candidate publish a BYTE-IDENTICAL
-    `hygiene.json`, and the delta reports `declared: 1` with no routed-DEF
-    loop on either side. The corpora here are equal because NEITHER expanded,
-    which is the empty<->empty path and not the one this test is named for.
-    The sibling above, which needs the transition to actually happen, is red on
-    pristine origin/main a4caccefe for exactly this reason (KeyError there,
-    `0 == 1` here) and is not this batch's.
-
-    So this arm asserts what it genuinely establishes end to end — the wiring
-    reaches a CLEAN ordinary delta, the population is STATED, and no second
-    one-use transition is demanded — and the expanded<->expanded equality it
-    cannot construct is pinned in
-    `test_hygiene_finding_delta.test_a_delta_with_no_transition_still_states_
-    the_population_as_empty`, which hands `delta` the expanded records directly.
-    """
-    r, doc = _verify(
-        sandbox, "routed_transition", tmp_path,
-        env_extra={
-            "GATEKEEPER_STUB_ROUTED_TRANSITION": "1",
-            "GATEKEEPER_STUB_BASE_EXPANDED": "1",
-        })
-
-    """After activation, evidence must not demand another one-use transition.
-
     THE PAIRED CONTROL, and it used to be green for the wrong reason. It
     asserted that no transition is claimed -- true, but only because the switch
     it set reached no arm, so neither side ever declared a routed corpus and
@@ -2384,13 +2322,6 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
     assert doc["verdict"] == "LAND_OK"
     delta = doc["hygiene_finding_delta"]
     assert delta["status"] == "CLEAN", delta
-    assert "corpus_transitions" in delta, (
-        "the delta does not STATE its corpus-transition population, so "
-        "'none' and 'nobody looked' are the same bytes again: "
-        + repr(sorted(delta)))
-    assert delta["corpus_transitions"] == []
-    assert "trusted EMPTY→expanded evidence supplied" not in r.stdout
-
     assert delta.get("corpus_transitions", []) == []
     assert "exact corpus transition" not in r.stdout
 
@@ -2834,16 +2765,138 @@ def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
         seen["b2-hermetic-receipt.json"]), seen
 
 
+# Every A-only artefact `clear_base_wave_artifacts` names, in its own words.
+_BASE_WAVE_ARTEFACTS = (
+    "base.xml",
+    "base_hygiene.json",
+    "base_land.log",
+    "base_tests.log",
+    "base_hygiene_progress.jsonl",
+    "selection_base.txt",
+    "selection_base.after",
+)
+_FORGED = b"candidate planted this base artefact\n"
+
+
 def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
         sandbox, tmp_path):
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_PREWRITE_BASE_ARTIFACTS": "1"},
-    )
+    """PROPERTY (unchanged): a candidate cannot pre-write the base wave's
+    artefacts and have them counted as base evidence.
 
-    assert r.returncode == 0, r.stdout + r.stderr
+    REWRITTEN, AND THIS ONE WAS GREEN — WHICH IS WORSE THAN RED. It set
+    `GATEKEEPER_PREWRITE_BASE_ARTIFACTS=1` and asserted that a planted line was
+    absent from the output. MEASURED on a4caccefe, TWO independent reasons that
+    assertion could never have failed:
+
+      1. the name occurs ZERO times in `tools/gatekeeper-verify-merge.sh` and
+         is not on the hermetic launcher's `--env` allow-list, so inside an arm
+         the switch is EMPTY and the stub's branch never runs; and
+      2. even if it ran, the branch writes to
+         `$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")`, and that name
+         occurs ZERO times in the verifier AND ZERO times in the real
+         `tools/gatekeeper-land.sh` — so inside the arm it expands to `.`, the
+         container's read-only `/subject`. The candidate cannot NAME the
+         parent's run directory, let alone write in it.
+
+    Two layers of prevention, and the test was reading the absence of a line
+    nobody had tried to print. "Unchanged" and "nobody tried" are the same
+    bytes; this one had been the second for four days while reading as the
+    first.
+
+    SO WHAT DOES MAIN ACTUALLY DO, and what can still be observed? Prevention
+    is layer one and is asserted by the measurement above rather than by a
+    stimulus that cannot exist. Layer two is `clear_base_wave_artifacts`, which
+    deletes every A-only artefact after both candidate process groups reach a
+    terminal census and before the base wave is prepared -- its own comment
+    says the names are "discoverable from the measurement-record path handed to
+    B2", i.e. it is written for a candidate that DOES somehow get a path. That
+    layer is testable, so this test drives it: the artefacts are planted from
+    the host, in the parent's own run directory, while the candidate wave is in
+    flight, and the base wave must start with not one of those bytes left.
+
+    One of them is planted as a DIRECTORY where a file belongs, which is what
+    the old stub did too: `rm -f` cannot remove that, `rm -rf` can, and the
+    difference between those two is a mutation somebody could make.
+    """
+    run_root = tmp_path / "verifier-tmp"
+    run_root.mkdir(parents=True)
+    out = tmp_path / "verdict.json"
+    proc = subprocess.Popen(
+        ["bash", str(_VERIFY), "--ref", "innocuous_green", "--base", "main",
+         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             "TMPDIR": str(run_root),
+             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
+                 str(_BENCHMARK_TEST["remote"])})
+
+    planted: list[str] = []
+    survivors: list[str] | None = None
+    deadline = time.monotonic() + _T
+    while proc.poll() is None and time.monotonic() < deadline:
+        runs = sorted(run_root.glob("gkverify.*"))
+        if not runs:
+            time.sleep(0.02)
+            continue
+        run = runs[0]
+        if not planted and (run / "b1-runner.log").exists():
+            for name in _BASE_WAVE_ARTEFACTS:
+                path = run / name
+                if path.is_dir():
+                    shutil.rmtree(path)
+                elif path.exists() or path.is_symlink():
+                    path.unlink()
+                if name == "base_hygiene_progress.jsonl":
+                    path.mkdir()
+                    (path / "forged").write_bytes(_FORGED)
+                else:
+                    path.write_bytes(_FORGED)
+                planted.append(name)
+            # NON-VACUITY: the forgery is READ BACK before anything is claimed
+            # about its removal, so "no forged byte survives" cannot be
+            # satisfied by never having written one.
+            assert sorted(_leaked_forgeries(run)) == sorted(planted), (
+                "the plant did not take")
+        if planted and (run / "a1-runner.log").exists():
+            survivors = _leaked_forgeries(run)
+            break
+        time.sleep(0.02)
+    try:
+        stdout, stderr = proc.communicate(timeout=_T)
+    except subprocess.TimeoutExpired:                     # pragma: no cover
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    doc = json.loads(out.read_text()) if out.is_file() else None
+
+    assert planted == list(_BASE_WAVE_ARTEFACTS), (
+        f"the candidate wave was never observed; planted {planted}")
+    assert survivors is not None, "the base wave never started"
+    # THE PROPERTY. Not one candidate-written byte is present in the parent's
+    # run directory when the base wave begins.
+    assert survivors == [], survivors
+
+    assert proc.returncode == 0, stdout + stderr
     assert doc is not None and doc["verdict"] == "LAND_OK"
-    assert "candidate planted this base log" not in r.stdout
+    assert "candidate planted this base" not in stdout
+
+
+def _leaked_forgeries(run):
+    """Top-level run-directory entries still carrying the planted bytes."""
+    found = []
+    for path in sorted(run.iterdir()):
+        try:
+            if path.is_dir():
+                if path.name in _BASE_WAVE_ARTEFACTS:
+                    found.append(path.name)
+                continue
+            if path.is_file() and _FORGED in path.read_bytes():
+                found.append(path.name)
+        except OSError:                                   # pragma: no cover
+            continue
+    return found
 
 
 def _verify_watching_the_run_dir(sandbox, ref, tmp_path, when_b1_starts=None):
@@ -3132,16 +3185,26 @@ fi
              "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
                  str(_BENCHMARK_TEST["remote"])},
     )
-    pid_file = probe / f"{hung_arm}.pid"
+    # WAIT FOR THE ARM PHASE THE WAY THE HOST CAN SEE IT. This used to wait for
+    # `probe / f"{hung_arm}.pid"`, and that file can never appear:
+    # GATEKEEPER_CONCURRENCY_PROBE_DIR is not on the hermetic launcher's
+    # `--env` allow-list, so inside the arm the variable is EMPTY and nothing
+    # writes there. The arm cannot signal out -- that is the point of the
+    # containment -- so what is polled is the verifier's own worktrees
+    # appearing in the subject repository, which is host-side and is what
+    # "the arms are set up and running" looks like from outside.
     # Wait on the same suite ceiling the cleanup wait below uses. The old bound
     # here was a 12s wall-clock estimate, which the verifier outlives on a cold
     # cache purely by doing its honest work.
+    def _arms_are_up():
+        return _git(repo, "worktree", "list").stdout.count("\n") > 1
+
     deadline = time.monotonic() + _T
-    while time.monotonic() < deadline and not pid_file.is_file():
+    while time.monotonic() < deadline and not _arms_are_up():
         if proc.poll() is not None:
             break
         time.sleep(0.05)
-    if not pid_file.is_file():
+    if not _arms_are_up():
         # NEVER evaluate the diagnosis inside the assert message. Against a
         # verifier that is still running, `proc.communicate(timeout=2)` raises
         # TimeoutExpired, and that exception REPLACES the AssertionError: the
@@ -3159,8 +3222,9 @@ fi
                 pass
         stdout, stderr = proc.communicate()
         if still_running:
-            why = (f"the verifier was still running after {_T}s and the "
-                   f"{hung_arm} control arm never announced itself")
+            why = (f"the verifier was still running after {_T}s and no "
+                   f"verifier worktree ever appeared in the subject "
+                   f"repository, so the {hung_arm} control arm never started")
         else:
             why = (f"the verifier EXITED rc={proc.returncode} without ever "
                    f"running the {hung_arm} control arm: the injected hang was "
@@ -3168,8 +3232,6 @@ fi
                    f"interrupt cleanup")
         pytest.fail(f"{why}\n=== verifier stdout ===\n{stdout}\n"
                     f"=== verifier stderr ===\n{stderr}")
-    arm_pid = int(pid_file.read_text().strip())
-
     if pid_only_term:
         os.kill(proc.pid, signal.SIGTERM)
     else:
