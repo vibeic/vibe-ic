@@ -298,6 +298,11 @@
       "description": "Proving that a named client-side enforcement point is installed and current",
       "bucket_A_program": "programs/landing_merge_verdict.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.unique_lookup": {
+      "description": "Resolving an artefact a caller expects to be unique, when the search returns several",
+      "bucket_A_program": "programs/_ppa_corpus.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
