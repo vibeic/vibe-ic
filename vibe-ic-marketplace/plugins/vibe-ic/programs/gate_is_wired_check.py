@@ -63,6 +63,43 @@ count as wired.
 Documentation mentions are excluded entirely: a gate named only in a `.md` is
 not thereby run by anything.
 
+THE CORPUS IS HALF THE ANSWER, AND IT USED TO BE UNSAID (vibe-ic#1467)
+----------------------------------------------------------------------
+Four of the wiring globs are anchored on the REPO root, not the plugin —
+`tools/ci/*`, `tools/*.py`, `tools/*.sh`, `.github/workflows/*` — and for
+several gates `tools/ci/repo_hygiene_gates.sh` is the ONLY caller there is.
+So this gate's verdict is a function of a corpus it never named, and when that
+corpus came back empty it did not say so: it printed the same confident
+sentence it prints for a real finding, with names under it.
+
+MEASURED, this repo's own bytes, `programs/` and `tools/` HARDLINKED so both
+arms are the same files, one `.git` dropped at the `vibe-ic-marketplace/`
+level as the only difference:
+
+    without it   wiring sources: 1147 + 66   unwired 59 (baseline 60)  [PASS]
+    with it      wiring sources: 1147 + 0    unwired 110   [FAIL] 50 gate(s)
+
+Fifty accusations, every one of them false, over an unchanged tree — because
+the old root walk tested `.git` BEFORE `tools/ci` and stopped at the first
+ancestor holding either. `container_login_banner_parse_check` is in that list
+of fifty, and it is one of the three names vibe-ic#1467 could not account for.
+
+Two repairs, and the second is the one that matters:
+
+  * `repo_root()` looks for `tools/ci/` and treats `.git` only as a fallback,
+    so an intermediate checkout cannot capture the root;
+  * an EMPTY repo-root corpus is `[CANNOT DETERMINE]` (rc 2), never a FAIL
+    with names. An empty result is not a zero: a corpus that could not be read
+    has not told this gate that nothing wires those gates, it has told it that
+    it could not look. And every run now PRINTS both source counts, so two
+    runs that disagree can be compared without access to each other's host —
+    which vibe-ic#1467 needed and did not have, across three machines at one
+    commit.
+
+rc 2 still BLOCKS: `repo_hygiene_gates.sh` dispatches this gate with plain
+`run`, where only `run_tolerating_uncheckable` forgives rc 2. Nothing here is
+a way to make the gate quieter.
+
 BASELINE, AND WHY IT MAY ONLY SHRINK
 ------------------------------------
 73 gates are unwired today. Failing the tree on all of them would make this gate
@@ -78,7 +115,12 @@ USAGE
 
     exit 0 = no NEW unwired gate, and the baseline has not grown
     exit 1 = a new one, or the baseline grew / went stale (BLOCKING)
-    exit 2 = could not be determined — never a vacuous pass
+    exit 2 = could not be determined — no programs/, no gate at all, no
+             readable baseline, or an EMPTY repo-root wiring corpus. Never a
+             vacuous pass, and never a confident FAIL over a failed look.
+
+Every run prints the size of both corpora it read, plugin and repo root, so
+that two runs which disagree can be compared from their output alone.
 """
 from __future__ import annotations
 
@@ -92,7 +134,18 @@ import tokenize
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-_GATE_RE = re.compile(r"_(check|lint|audit|guard)$")
+#: vibe-ic#1130 — `_gate` IS in this set, and its absence was the second
+#: route to "a checker nothing runs". `checker_execution_wiring_audit`
+#: added `*_gate.py` to its own population in #693, after
+#: `gitignore_scratch_guard.py` proved a wired-to-nothing gate could hide
+#: behind a filename; THIS regex never got the same widening, so the two
+#: instruments that both audit wiring disagreed about what a gate is.
+#: MEASURED on a38902d1: wiring-audit population 585, this one 581, and
+#: the difference is exactly the four `*_gate.py` programs —
+#: mpw_precheck_result_gate, plugin_change_pytest_gate, rtl_precheck_gate,
+#: wake_gen_silence_gate. Strict subset in one direction (0 the other
+#: way), so this is a pure widening with a bounded blast radius.
+_GATE_RE = re.compile(r"_(check|lint|audit|guard|gate)$")
 _BASELINE_NAME = "gate_is_wired_baseline.json"
 
 #: Where a reference means the gate can be REACHED without a human choosing to.
@@ -193,6 +246,63 @@ def _texts(plugin: Path, repo: Path, globs, repo_globs=()) -> List[Tuple[Path, s
     return out
 
 
+def repo_root(plugin: Path) -> Optional[Path]:
+    """The ancestor that carries the WIRING CORPUS, or None if there is none.
+
+    `tools/ci/` is the marker, and `.git` is only a fallback — that ORDER is
+    the fix for vibe-ic#1467 and it is not cosmetic. The walk used to read
+
+        if (repo / ".git").exists() or (repo / "tools" / "ci").is_dir():
+
+    which stops at the FIRST ancestor holding a `.git`, whether or not that
+    ancestor carries any `tools/` at all. MEASURED, on this repo's own bytes
+    with `programs/` and `tools/` hardlinked so the two arms are the same
+    files: dropping a single `.git` at the `vibe-ic-marketplace/` level moves
+
+        unwired: 59 (baseline 60)  [PASS]   ->   unwired: 110  [FAIL] 50 gates
+
+    because the walk then anchors on the marketplace directory, `tools/ci/*`,
+    `tools/*.py` and `.github/workflows/*` match nothing, and every gate wired
+    only from the repo root reads as unwired. Fifty confident accusations from
+    one marker file, over an unchanged tree.
+
+    Returning None rather than "six levels up, whatever that is" is the other
+    half: the caller must be able to tell an EMPTY corpus from a read one, and
+    `plugin.parents[5]` is a directory that exists and globs to nothing, which
+    is the shape that reads as an answer.
+    """
+    dot_git: Optional[Path] = None
+    cur = plugin
+    for _ in range(6):
+        if (cur / "tools" / "ci").is_dir():
+            return cur
+        if dot_git is None and (cur / ".git").exists():
+            dot_git = cur
+        if cur == cur.parent:                    # reached the filesystem root
+            break
+        cur = cur.parent
+    return dot_git
+
+
+def wiring_sources(plugin: Path, repo: Path) -> Tuple[int, int]:
+    """(wiring sources under the PLUGIN, wiring sources under the REPO root).
+
+    The denominator this gate never disclosed. Its whole verdict is a function
+    of these two numbers and nothing in the output said what they were, which
+    is why vibe-ic#1467 collected contradictory red lists from three hosts at
+    one commit and could not settle which corpus each run had read.
+    """
+    def _count(base: Path, pats) -> int:
+        # Globbed and counted, NOT read: `_texts` parses and strips every file
+        # it touches, and calling it a second time here doubled this gate's
+        # wall clock (24.1s vs 13.8s, measured on the shipped tree). The
+        # question this answers is how many files the corpus HAS, and that is
+        # a directory walk.
+        return sum(1 for pat in pats for f in base.glob(pat) if f.is_file())
+
+    return (_count(plugin, _EXECUTABLE_GLOBS), _count(repo, _REPO_GLOBS))
+
+
 def wiring(plugin: Path, repo: Path) -> Dict[str, Dict[str, List[str]]]:
     """{gate: {"executable": [...], "skill": [...]}} — where each is named."""
     g = gates(plugin)
@@ -245,11 +355,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     plugin = Path(a.root).resolve() if a.root else Path(__file__).resolve().parents[1]
-    repo = plugin
-    for _ in range(6):
-        if (repo / ".git").exists() or (repo / "tools" / "ci").is_dir():
-            break
-        repo = repo.parent
+    root = repo_root(plugin)
+    repo = root if root is not None else plugin
 
     if not (plugin / "programs").is_dir():
         print(f"[CANNOT DETERMINE] gate_is_wired: no programs/ under {plugin}. "
@@ -260,6 +367,30 @@ def main(argv=None) -> int:
     if not gates(plugin):
         print("[CANNOT DETERMINE] gate_is_wired: no gate found at all. NOT a "
               "pass.", file=sys.stderr)
+        return 2
+
+    # THE DENOMINATOR, SAID OUT LOUD (vibe-ic#1467). Half of `_EXECUTABLE_GLOBS`
+    # is anchored on the REPO root, and `tools/ci/repo_hygiene_gates.sh` alone
+    # is the only wiring several gates have. Read zero files from there and the
+    # verdict is not "these gates are unwired", it is "I could not look" — and
+    # until now the two printed the same sentence, with names under it.
+    n_plugin, n_repo = wiring_sources(plugin, repo)
+    print(f"  wiring sources: {n_plugin} under {plugin}"
+          + (f" + {n_repo} under {repo}" if root is not None
+             else "  + NO REPO ROOT FOUND"))
+    if n_repo == 0:
+        # Flushed so the disclosure above cannot land AFTER the refusal when
+        # the two streams are merged into one terminal.
+        sys.stdout.flush()
+        print(f"[CANNOT DETERMINE] gate_is_wired: the repo-root wiring corpus "
+              f"is EMPTY — `{'`, `'.join(_REPO_GLOBS)}` matched no file "
+              + (f"under {repo}." if root is not None else
+                 f"because no ancestor of {plugin} within 6 levels carries "
+                 f"`tools/ci/`.")
+              + f" {len(now)} gate(s) read as unwired against that corpus, and "
+                f"every gate whose only caller lives at the repo root is among "
+                f"them by construction. A failed look is not a finding. NOT a "
+                f"pass.", file=sys.stderr)
         return 2
 
     bpath = Path(a.baseline) if a.baseline else plugin / "programs" / _BASELINE_NAME

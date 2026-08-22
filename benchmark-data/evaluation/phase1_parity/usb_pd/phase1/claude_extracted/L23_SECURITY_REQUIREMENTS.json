@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "attack_surface": [
-      "A malicious Source could advertise out-of-range PDOs; the Sink must validate the offered voltage/current before accepting.",
-      "Vendor Defined Messages (VDM) for Alternate Modes must be authenticated to prevent rogue mode entry."
-    ],
-    "security_notes": "USB-PD defines optional Authentication (digital certificate exchange over the CC link) to verify a Source/cable before accepting high power."
-  }
-}

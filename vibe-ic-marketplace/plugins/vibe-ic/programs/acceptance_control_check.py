@@ -63,6 +63,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import List
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 # `CONTROL: <ref>` and the free-form shape this repo already writes.
 _DECL_RES = (
@@ -138,7 +139,7 @@ def main(argv=None) -> int:
 
     rep = audit(repo, a.base, a.head, msg)
     if a.json_out:
-        Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
+        atomic_write_text(Path(a.json_out), json.dumps(rep, indent=2) + "\n")
 
     if not rep.get("resolvable"):
         print(f"[SKIP] acceptance_control_check: cannot resolve "
