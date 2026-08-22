@@ -652,3 +652,47 @@ protected-file owner can act on in one sitting:
 `validate`'s can be separated without weakening the first. That is a design
 question for the owner of two protected files — and it is the whole of what is
 left on this item.
+
+---
+
+# Part 13 — the anti-skip finding HOLDS, and the skip it objects to was a REVIEWED, NARROWED decision
+
+**Re-checked on current main: unchanged.** `test_every_na_cell_asserts_a_live_precondition`
+still flags exactly `d3:2309` and `d7:375` — **same lines after 244 commits**, so
+the census's M102–M104 finding stands without amendment.
+
+**But the census framed the skip as an oversight, and it was not.** It landed in
+
+    c8c2ab0f7  test: apply the corpus-absent skip only where it is MEASURED to be needed
+               2026-08-16
+
+whose body shows its author had already reasoned about the exact hazard the census
+attributed to them:
+
+> *"CAUSE 2, REAL: the marker was over-applied. 19 tests carried `@needs_corpus`
+> that were not in the introduced-failure set — **a green test switched off is
+> exactly the failure mode the review exists to catch**, and it happened."*
+
+**They named the hazard, measured where the skip was actually needed, narrowed it
+to those sites, and had the result adversarially reviewed.** The census's
+characterisation — that the skip "re-introduces the host-dependence #527 removed"
+— is true of its EFFECT and unfair about its ORIGIN.
+
+**So this is a disagreement between two careful positions, not a defect:**
+
+| position | rule |
+|---|---|
+| the skip's author | apply a corpus-absent skip **only where it is measured to be needed** |
+| the anti-skip gate | a **cell test** may not skip at all — the three states are ENFORCED, WAIVED, NA |
+
+**Both are defensible and they are incompatible on exactly these two call sites.**
+M104's conclusion still follows from the gate's rule — if no skip is legal in a
+cell test and no host-premise NA or WAIVED is legal either, ENFORCED is what
+remains, and the corpus stops being optional. **What the census got wrong was
+implying nobody had thought about it.**
+
+**Worth stating because it is the second time in this document that reading the
+commit changed the finding's tone rather than its content** (the first was the
+flow-gate token, where the author answered an objection I had framed as a binary).
+**A red line and a considered decision look identical from the outside; the
+difference is one `git log -1` away, and the census took the shortcut both times.**
