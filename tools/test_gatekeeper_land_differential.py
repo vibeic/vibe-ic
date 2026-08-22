@@ -146,8 +146,18 @@ def _write_stub_tree(root: Path) -> None:
         "print(out)\n"
         "raise SystemExit(1 if out.strip() else 0)\n")
 
+    # THE SELECTOR IS BOTH EXECUTED AND IMPORTED, so the stub has to answer
+    # both. The differential derives its selection floor by importing this
+    # module and counting how many of `SMOKE_BASENAMES` resolve against the
+    # candidate tree; a stub without that attribute makes the floor
+    # underivable and the driver refuses before any arm starts. The print
+    # therefore has to sit under a `__main__` guard as the real selector's
+    # does — at import time it would land on the floor computation's stdout
+    # and the floor would stop being a number.
     (prog / "ci_targeted_test_select.py").write_text(
-        f"print({SELECTED!r})\n")
+        f"SMOKE_BASENAMES = ({Path(SELECTED).name!r},)\n"
+        "if __name__ == '__main__':\n"
+        f"    print({SELECTED!r})\n")
 
     # The test arm. It records WHEN it ran, so concurrency is MEASURED rather
     # than assumed, and writes the junit the real driver would write.
@@ -216,7 +226,11 @@ def _write_stub_tree(root: Path) -> None:
     # process attestations with — the same module the real dispatcher uses, so
     # the stub cannot attest in a dialect the validator would never see.
     for mod in ("hygiene_finding_delta.py", "_atomic_artefact.py",
-                "gate_process_attestation.py"):
+                "gate_process_attestation.py",
+                "landing_noop_verdict_check.py",
+                "attestation_preflight_check.py",
+                "generated_test_list_min_guard.py",
+                "_gate_usage_exit.py", "_vacuous_exit.py"):
         shutil.copy(REPO / PLUGIN_REL / "programs" / mod, prog / mod)
 
     (root / "tools" / "stub_hygiene_record.py").write_text(_HYGIENE_RECORD)
