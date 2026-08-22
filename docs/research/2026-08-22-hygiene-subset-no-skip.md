@@ -3828,3 +3828,43 @@ repaired by removing the drift's SOURCE. The re-synced ones will drift again the
 moment anything moves. The right question when a pointer goes stale is not *what
 does it say now* but **what would have to stop changing for this to stay true**,
 and if the answer is "the thing it points at", the claim is the wrong shape.
+
+## 56. Two of my own findings, never joined: the merge is green and the landing cannot be run HERE
+
+§54 verified the re-landing recipe — 3 conflicts, take the branch, `rc 0` and
+149 passed. §31 measured that `tools/gatekeeper-land.sh` refuses its full tier on
+this host. Both are correct, they sit twenty sections apart, and I never put
+them in one sentence. Doing so changes what the recipe means operationally:
+
+**Verified: the MERGE is green. NOT available: the LANDING, on 8HD-9.**
+
+Re-confirmed just now, so this is not carried from §31:
+
+```
+/home/reyerchu/.local/lib/python3.10/site-packages/argparse.py    present
+sys.path.insert(0, <user site>); ArgumentParser(allow_abbrev=False)
+    -> TypeError: unexpected keyword argument
+```
+
+The lander's protected-runtime probe prepends that user site, gets the 1.4.0
+backport instead of stdlib, and REFUSES rather than reporting every selected
+file as NORECORD. Correct behaviour, and it means the recipe in §54 stops one
+step short of what someone would actually need to do.
+
+**So the honest instruction for whoever lands §20–56 is two-part, not one:**
+
+1. either run it on a host whose user site carries no `argparse` backport, or
+   remove that file first (`pip uninstall argparse` for the user site — the
+   owner's environment, not mine to change);
+2. then the §54 recipe: merge, resolve all three conflicts with `--theirs`,
+   re-derive the digest by running the checker on the merged tree.
+
+**Why this needed saying rather than being obvious.** Every ingredient was
+already in this document, measured and correct. What was missing is the join —
+and a reader following §54 on this host would have hit the refusal after doing
+the merge work, with §31 twenty sections away and no reason to connect a
+Python packaging fault to a landing recipe. **Two true sections do not compose
+themselves**, which is the same shape as §33 and §39 (a selector gap and a
+disclosure gap, each harmless-looking alone) and as the fixture and the script
+in §53. The composition is where the failure lives, and nothing in a document
+checks that its own sections agree about what a reader should do.
