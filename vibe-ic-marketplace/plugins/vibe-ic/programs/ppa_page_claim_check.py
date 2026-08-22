@@ -74,6 +74,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 RC_OK = 0
@@ -604,7 +605,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="print the enforced forms and exit 0")
     ap.add_argument("--json", default=None, metavar="PATH",
                     help="write the machine-readable report here")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     if args.list_banned_forms:
         for form in BANNED_FORMS:
@@ -612,7 +615,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return RC_OK
 
     if not args.page or not args.claims:
-        ap.error("give a page path and --claims PATH")
+        return cli_exit.refuse(ap.prog, "give a page path and --claims PATH")
 
     rc, report = evaluate(Path(args.page), Path(args.claims),
                           cite_numbers=args.cite_numbers)

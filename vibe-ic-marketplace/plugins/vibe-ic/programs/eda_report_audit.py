@@ -1323,12 +1323,28 @@ def _drc_tool_final_violation_count(text: str) -> Optional[int]:
 
 def _check_drc(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:drc", passed=False)
+    # `.lyrdb` IS THE KLAYOUT REPORT DATABASE, and this audit already knows how
+    # to read one: `_drc_real_violation_count` lists "klayout RDB/.lyrdb XML" as
+    # its first accepted dialect and `_count_rdb_items_streaming` parses it.
+    # Until this line it could not FIND one — the glob accepted only
+    # .rpt/.log/.txt, which is not the extension KLayout writes.
+    # MEASURED (gf180mcuD chip path, 2026-08-21): a chip whose KLayout DRC is
+    # genuinely 0-violation, with `drc.klayout.lyrdb` sitting in the project,
+    # returned "No DRC report found" -> `Checker.KLayoutDRC` FAIL on our own
+    # precheck arm, while the shuttle operator's arm PASSED the same GDS. Step
+    # 37.5ic reads opposite conclusive verdicts from its two arms as a
+    # DISAGREEMENT and refuses — so a discovery gap here manufactures the exact
+    # outcome that step calls its most valuable signal. Selection is by CONTENT
+    # (the parser sniffs `<items>`), so widening the glob cannot mis-parse a
+    # file: an unreadable one still returns None and is reported unreadable.
     files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
-                                     "*DRC*.rpt", "*DRC*.log", "*DRC*.txt"])
+                                     "*drc*.lyrdb",
+                                     "*DRC*.rpt", "*DRC*.log", "*DRC*.txt",
+                                     "*DRC*.lyrdb"])
     if not files:
         result.findings.append(Finding(
             rule="DRC_REPORT_EXISTS", severity="ERROR",
-            message="No DRC report found (searched *drc*.rpt/log/txt)"))
+            message="No DRC report found (searched *drc*.rpt/log/txt/lyrdb)"))
         result.summary = {"files_found": 0, "categories_found": []}
         return result
 
@@ -2616,8 +2632,12 @@ def _check_antenna(project_dir: Path) -> AuditResult:
         result.passed = True
         result.summary = {"waived": True, "reason": reason}
         return result
+    # Same gap, same reason, same measurement: KLayout's antenna check writes
+    # `antenna.klayout.lyrdb` beside its .json, and the .lyrdb is the one that
+    # carries the per-rule item list.
     files = _discover(project_dir, ["*antenna*.rpt", "*antenna*.json",
-                                     "*ANT*.rpt"])
+                                     "*antenna*.lyrdb",
+                                     "*ANT*.rpt", "*ANT*.lyrdb"])
     if not files:
         result.findings.append(Finding(
             rule="ANTENNA_REPORT_EXISTS", severity="ERROR",

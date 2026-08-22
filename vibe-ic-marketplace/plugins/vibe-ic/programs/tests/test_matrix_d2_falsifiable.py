@@ -183,8 +183,8 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 172<!--figure:blocking_clauses--> blocking clauses over
-67<!--figure:gated_steps--> gated steps. This is the denominator a reader
+LIVE, not remembered: 178<!--figure:blocking_clauses--> blocking clauses over
+68<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
 the bindings that produced them (vibe-ic#961). Do not hand-edit them.
@@ -924,8 +924,32 @@ def _f_power_over_budget(p: Path) -> None:
     330 uW against a declared 100 uW: 3.3x over. Chip- and PDK-AGNOSTIC — a
     watt figure, a micro-watt budget, and the design's own number as the only
     authority.
+
+    A THIRD HALF BECAME LOAD-BEARING IN v1.11.22 AND THIS FIXTURE DID NOT SAY SO
+    ----------------------------------------------------------------------------
+    `POWER_ANALYSIS_MODE: vectorless_sdc` is not decoration on the report above.
+    Until v1.11.22 the gate compared any watt figure to the budget; it now
+    refuses — rc 2, INCOMPLETE — a figure whose ACTIVITY BASIS it cannot derive,
+    because a vectorless estimate and a VCD-driven measurement are both "total
+    power" and are not the same number. MEASURED on this fixture with the mode
+    line removed, verbatim:
+
+        rc 2  INCOMPLETE: total power was NOT compared against anything —
+              missing authority: the total-power record's activity basis is
+              'UNSTATED' ...
+
+    and rc 2 is a VACUOUS_PASS to `check_step`, so the blocking Step-33 clause
+    became one no input could redden — silently, because the fixture still
+    "worked" in the sense of being read. `test_d2_gate_has_a_reachable_fail`
+    [step33] is the mutation arm: delete the mode line and it goes red naming
+    this clause. `vectorless_sdc` and NOT a vector mode deliberately — a
+    declared vector basis is CONTRADICTED unless the transcript corroborates it
+    (`_ppa/power.py`: zero published vector report in this repository does), and
+    a fixture that has to fake a corroborating annotation count would be
+    asserting an activity model it never ran.
     """
     _w(p, "reports/phase2/power.rpt",
+       "POWER_ANALYSIS_MODE: vectorless_sdc\n"
        "Group                  Internal  Switching    Leakage      Total\n"
        "                          Power      Power      Power      Power (Watts)\n"
        "-----------------------------------------------------------------\n"
@@ -1510,6 +1534,240 @@ def _f_extract_illegal_overlap(p: Path) -> None:
        ".subckt top a b\nM1 a b 0 0 nfet\n.ends\n")
 
 
+def _f_crosslayer_refuted(p: Path) -> None:
+    """A cross-layer search whose candidate is NOT the baseline RTL.
+
+    Step 1.6x landed in v1.11.15 with a blocking gate whose FAIL nothing proved
+    reachable, and EMPTY cannot reach it BY DESIGN. The gate's own docstring
+    settles why: it was first written CONDITIONAL on the baseline snapshot and
+    `flow_condition_reachability_check` refused that shape in one line — "a
+    check disabled by exactly the situation it was written for" — so it runs
+    unconditionally and answers `NOT_APPLICABLE` for a design that never ran a
+    search. On EMPTY that is the honest answer, not a defect, which is exactly
+    the position `_f_a0_skipped` was built for one gate over.
+
+    So the fixture has to make a search look ATTEMPTED and REFUTED: the
+    baseline snapshot the search writes before it touches a lever, plus a
+    rewrite-fidelity report whose status says the candidate diverges. That is
+    the step's own closed_loop trigger, spelled in the yaml — "the candidate
+    RTL is not the baseline RTL ... The candidate is DISCARDED and step 1's RTL
+    stands" — so reddening here is the gate doing the one job it exists for,
+    not an artificial break.
+
+    MEASURED: rc 1, `CLX_NOT_EQUIVALENT`. Reached through the program's own
+    status ladder rather than by malforming the file — an unparseable report
+    would redden the clause too, and would prove only that the gate can crash.
+    """
+    (p / "reports" / "crosslayer").mkdir(parents=True, exist_ok=True)
+    (p / "reports" / "crosslayer" / "baseline_rtl").write_text(
+        "cross-layer baseline snapshot marker\n", encoding="utf-8")
+    _w(p, "reports/crosslayer/rewrite_equivalence.json",
+       {"status": "NOT_EQUIVALENT",
+        "compared_points": 4,
+        "unproven_points": 0,
+        "explanation": ("candidate diverges from baseline at 1 of 4 compared "
+                        "points")})
+
+
+def _f_ppa_h2h_claim_contradicted(p: Path) -> None:
+    """A published head-to-head asserts the one-word win its own triple denies.
+
+    Reddens the Step-36 clause ``ppa_head_to_head_check --corpus .``, which the
+    PPA lane wires BLOCKING. EMPTY cannot reach it, and the reason is
+    structural rather than incidental: the clause is
+    ``optional_program_exit_zero`` conditioned on ``**/*head_to_head*.json``,
+    and :func:`_materialise_conditions` satisfies that glob with a
+    SUBSTANCELESS ``{}``. A document carrying no ``vibeic.ppa.comparison.``
+    schema is not a record, so the corpus walk finds a population of zero and
+    the gate answers, correctly, that it judged nothing:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: ppa_head_to_head_check --corpus .
+
+    A gate that has only ever said "there was nothing to look at" has not been
+    shown able to block, which is what this cell asks.
+
+    WHAT THIS RECORD IS. Two arms over ONE problem, both triples MEASURED, the
+    baseline untuned by this project and its configuration sourced, the
+    measurement basis declared as simulated, contract identity and scope parity
+    intact, every feasibility check clean, tuning parity satisfied. It is a
+    record the gate ACCEPTS -- until it states a verdict.
+
+    The triple is deliberately MIXED: the subject is smaller and burns more
+    power, so the derived Pareto relation is INCOMPARABLE, which the program's
+    own docstring calls the common and honest result. The record then asserts
+    ``pareto: SUBJECT_DOMINATES`` against that same triple. C2 forbids the
+    record to CARRY a collapsed figure of merit, so the asserted verdict is the
+    one route left for an author who wants to say "we won" in a single word --
+    and the program says so in those terms: "an unchecked `pareto:
+    SUBJECT_DOMINATES` over a mixed triple is that word".
+
+    MEASURED, and in BOTH directions, which is what makes it a negative control
+    rather than a way of tripping an unguarded branch:
+
+        this record                    rc 1  VERDICT_CONTRADICTED
+                                             "record asserts
+                                             pareto='SUBJECT_DOMINATES'; the
+                                             numbers in the same record derive
+                                             'INCOMPARABLE'"
+        the same record, verdict key
+        removed and NOTHING else                rc 0  1 accepted
+
+    So the red is earned by the CLAIM contradicting the numbers beside it, not
+    by an absent input, a malformed document or a missing field -- reached
+    through the program's own derivation rather than by breaking the file.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: both flow names and the
+    process name are invented, and the rule under test is agreement between a
+    stated verdict and the numbers in the same document.
+    """
+    scope = {
+        "area_um2": {"stage": "post_route", "tool": "openroad",
+                     "fill": "post_fill"},
+        "timing_wns_ns": {"stage": "post_route_extracted", "mode": "functional",
+                          "process": "tt", "voltage_v": 1.8,
+                          "temperature_c": 25.0, "rc_corner": "max",
+                          "clock": "clk", "check": "setup"},
+        "power_mw": {"stage": "post_route_extracted", "scenario": "diagnostic",
+                     "activity_basis": "VECTORLESS", "liberty": "typical",
+                     "tool": "opensta", "process": "tt", "voltage_v": 1.8,
+                     "temperature_c": 25.0, "mode": "functional",
+                     "group": "Total"},
+    }
+    units = {"area_um2": "um^2", "timing_wns_ns": "ns", "power_mw": "mW"}
+    tools = {"area_um2": ("openroad", "pnr/openroad.log"),
+             "timing_wns_ns": ("opensta", "sta/sta.rpt"),
+             "power_mw": ("opensta", "diag/power.rpt")}
+
+    def _arm(flow, role, values, tuned, config_source):
+        return {
+            "flow": flow, "role": role,
+            "design": {"spec_sha256": "sha256:" + "1" * 64,
+                       "pdk": "open-pdk-a", "clock_target_ns": 10.0,
+                       "corners": ["ss", "tt", "ff"]},
+            "contract": {"sha256": "sha256:" + "2" * 64,
+                         "source": "contract.json"},
+            "measurement_basis": "post_route_sta",
+            "config_source": config_source,
+            "tuned_by_this_project": tuned,
+            "ppa": {ax: {"status": "MEASURED", "unit": units[ax],
+                         "scope": scope[ax], "value": val,
+                         "source": {"path": tools[ax][1],
+                                    "sha256": "sha256:" + "0" * 64,
+                                    "tool": tools[ax][0],
+                                    "parser": f"_ppa/{tools[ax][0]}.py"}}
+                    for ax, val in values.items()},
+            "feasibility": {"checks": {
+                k: {"status": "CLEAN", "violations": 0,
+                    "source": "ppa_feasibility_check: SATISFIED (FEAS_OK)"}
+                for k in ("setup", "hold", "drv", "drc", "lvs", "antenna",
+                          "em", "ir", "equivalence")}},
+            "tuning": {"supported": False},
+        }
+
+    _w(p, "reports/ppa/head_to_head.json", {
+        "schema": "vibeic.ppa.comparison.v2",
+        "arms": [
+            _arm("their-flow-defaults", "baseline",
+                 {"area_um2": 6594.0, "timing_wns_ns": 0.0,
+                  "power_mw": 0.573},
+                 False, "their flow's shipped defaults, unmodified"),
+            #: smaller AND hungrier than the baseline, so the derived relation
+            #: is INCOMPARABLE -- the mixed triple the asserted verdict below
+            #: collapses into a win.
+            _arm("our-flow", "subject",
+                 {"area_um2": 5961.0, "timing_wns_ns": 0.0,
+                  "power_mw": 0.698},
+                 True, "our flow's search winner"),
+        ],
+        "verdict": {"their-flow-defaults": {"pareto": "SUBJECT_DOMINATES"}},
+    })
+
+
+def _f_slot_pad_over_budget(p: Path) -> None:
+    """A design whose declared interface cannot be bonded out on the one slot
+    the project ingested — and still cannot after every fold is applied.
+
+    Reddens the Step-2 clause
+    ``slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json``,
+    wired BLOCKING in vibe-ic#1347. The clause arrived with no fixture, so it
+    fell back to EMPTY, and EMPTY cannot reach it. That is the program working
+    correctly, MEASURED verbatim on an empty project:
+
+        rc 2  slot_pad_budget_check: UNDECIDED
+                no slot files under input/submission_template/slots — step
+                0.5ic has not run
+
+    rc 2 is this flow's disclosed-skip tier, so the cell banked a VACUOUS_PASS
+    and the gate was declared blocking while nothing could make it block.
+
+    The fixture supplies BOTH halves the program needs before it will answer:
+    the slot inventory step 0.5ic ingests, and the step-1 RTL the gate globs
+    out of ``phase2/stage1/rtl``. The slot is written in the INGESTED shape —
+    ``pads.lists[].raw`` — because that is the only shape a real chip-path
+    project has, and reading the operator's RAW ``PAD_<SIDE>`` keys instead is
+    a defect this program already shipped once (it counted zero pads and
+    returned DOES_NOT_FIT with an authoritative-looking "0").
+
+    MEASURED, verbatim, through the same consumer this suite grades with:
+
+        rc 1  slot_pad_budget_check: DOES_NOT_FIT
+                declared signal bits            : 193
+                largest slot digital signal pads: 52
+                over by                         : 3.71x  (after folding every
+                                                  candidate: 2.48x)
+
+    THE FOLD MARGIN IS THE POINT, not a detail. This gate deliberately reports
+    fold candidates without applying them, because whether two buses are ever
+    simultaneously live is a PROTOCOL fact it does not decide — so a red that
+    a competent bond-out could fold away would be a red about arithmetic and
+    not about fitting. 2.48x over AFTER folding every candidate is a red no
+    bond-out decision can remove, which is the fact the step exists to refuse.
+    The one candidate the program names (a 64-bit input and a 64-bit output of
+    equal width) is therefore present on purpose: the fixture exercises the
+    fold path and still reddens, rather than dodging it.
+
+    Chip-, vendor- and PDK-AGNOSTIC: the module is ``chip_top`` with arithmetic
+    port names, the pad instance names are the generic per-side lists, and no
+    design, foundry or process literal appears. No oracle is consulted.
+    """
+    # The pad inventory, in the shape `submission_template_ingest` writes:
+    # 40 bidirectional + 12 input = 52 digital signal pads, plus analog, power
+    # and corner pads the gate must NOT count as signal.
+    entries = (
+        [f"bidir\\[{i}\\].pad" for i in range(40)]
+        + [f"inputs\\[{i}\\].pad" for i in range(12)]
+        + [f"analog\\[{i}\\].pad" for i in range(2)]
+        + [f"dvdd_pads\\[{i}\\].pad" for i in range(9)]
+        + [f"dvss_pads\\[{i}\\].pad" for i in range(9)]
+        + [f"corner\\[{i}\\].pad" for i in range(4)]
+        + ["clk_pad", "rst_n_pad"])
+    q = len(entries) // 4 + 1
+    sides = ("PAD_SOUTH", "PAD_EAST", "PAD_NORTH", "PAD_WEST")
+    chunks = [entries[:q], entries[q:2 * q], entries[2 * q:3 * q],
+              entries[3 * q:]]
+    _w(p, "input/submission_template/slots/slot_1x1.json", {
+        "slot": "slot_1x1",
+        "die_area": {"width": "3932"},
+        "pads": {"pattern": "^PAD.*$",
+                 "lists": [{"key": k, "raw": c, "count": len(c)}
+                           for k, c in zip(sides, chunks)]},
+    })
+    # 193 declared signal bits against 52 pads. The two 64-bit operands and the
+    # 64-bit result give the program exactly one fold candidate to find, and
+    # applying it still leaves the design over the budget.
+    _w(p, "phase2/stage1/rtl/chip_top.v", """
+module chip_top (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire [63:0] operand_a,
+    input  wire [63:0] operand_b,
+    output wire [63:0] result,
+    output wire        valid
+);
+endmodule
+""")
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1539,13 +1797,16 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "MACRO_OBS_SPANNED": _f_macro_obs_spanned,
     "STEP_FAIL_UNACKNOWLEDGED": _f_step_fail_unacknowledged,
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
+    "PPA_H2H_CLAIM_CONTRADICTED": _f_ppa_h2h_claim_contradicted,
     "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
     "POWER_OVER_BUDGET": _f_power_over_budget,
     "AREA_OVER_CEILING": _f_area_over_ceiling,
     "DIE_UNFINISHED": _f_die_unfinished,
     "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
+    "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
     "PAD_DECL_PARTIAL": _f_pad_decl_partial,
+    "SLOT_PAD_OVER_BUDGET": _f_slot_pad_over_budget,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1554,10 +1815,50 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
+    # vibe-ic#1347 wired `slot_pad_budget_check` BLOCKING on Step 2 and shipped
+    # it with no fixture, so it fell back to EMPTY and banked a VACUOUS_PASS —
+    # a gate declared blocking that nothing could make block. EMPTY cannot
+    # reach it by design: with no ingested slot the program answers rc 2
+    # "UNDECIDED: no slot files ... step 0.5ic has not run", which is this
+    # flow's disclosed-skip tier and is not an answer to "can this gate fail?".
+    #
+    # MEASURED through `_evaluate_clause` on this tree:
+    #   EMPTY                 tier=VACUOUS_PASS  rc 2 UNDECIDED (no slot files)
+    #   SLOT_PAD_OVER_BUDGET  tier=FAIL          rc 1 DOES_NOT_FIT, 193 bits
+    #                                            against 52 pads, still 2.48x
+    #                                            over after folding every
+    #                                            candidate
+    # The red is earned on the design's own declared interface against the
+    # operator's own pad list, not on a malformed file — and it survives the
+    # fold path, so it is not a red a bond-out decision could remove.
+    ("2", "slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json"): "SLOT_PAD_OVER_BUDGET",
     # vibe-ic#700 wired this into D1. EMPTY cannot redden it: absence of the
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # Step 1.6x (v1.11.15) — its single blocking clause answers
+    # NOT_APPLICABLE on EMPTY and banks a PASS, so nothing proved its FAIL
+    # reachable and the cell was red on main from the version it arrived in.
+    # See `_f_crosslayer_refuted` for why EMPTY cannot reach it by design.
+    # TWO LANES MAPPED THIS SAME CLAUSE AND THE MERGE KEPT ONE, ON EVIDENCE.
+    # `CLAUSE_FIXTURE` is a dict, so both entries under one key meant the second
+    # silently won and the first was dead code that read as live — the merge
+    # hazard, before the question of which fixture is better.
+    #
+    # BOTH REDDEN, MEASURED through `_evaluate_clause` on this tree:
+    #   EMPTY                        tier=PASS  (NOT_APPLICABLE — correct, and
+    #                                            therefore no answer to "can it
+    #                                            fail?")
+    #   CROSSLAYER_SEARCH_UNDECLARED tier=FAIL  CLX_BASELINE_PRESENT_NO_REPORT
+    #   CROSSLAYER_REFUTED           tier=FAIL  CLX_NOT_EQUIVALENT
+    #
+    # Neither is graded ABSENCE_RED, so the choice is not about which counts. It
+    # is about what each PROVES. The first reddens on a procedural precondition
+    # — a search ran and declared nothing. The second reddens on the relation
+    # the step exists for, the candidate diverging from the baseline, reached
+    # through the program's own status ladder rather than by malforming a file.
+    # The second is kept.
+    ("1.6x", "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"): "CROSSLAYER_REFUTED",
     # This change moves `reports/phase1/extraction_coverage_report.{md,json}`
     # onto D1 and wires this clause to read it. EMPTY cannot redden it, and for
     # the SAME reason `LDOC_TODO` exists at all: with no `generated_docs/` the
@@ -1587,6 +1888,21 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # -- a declared target AND a recorded library load -- have to be present
     # before it has anything to compare.
     ("36", "declared_pdk_is_the_pdk_used_check ."): "PDK_DECLARED_NOT_USED",
+    # The PPA lane wires this into step 36 as its one BLOCKING clause, and it
+    # arrived reaching only VACUOUS_PASS: the clause is conditioned on
+    # `**/*head_to_head*.json`, `_materialise_conditions` satisfies that glob
+    # with a substanceless `{}`, and a document with no
+    # `vibeic.ppa.comparison.` schema is not a record -- so the corpus walk
+    # judged a population of zero and the gate said so. Nothing had shown the
+    # clause able to block, which is the condition this cell exists to catch.
+    #
+    # MEASURED through `_evaluate_clause` on this tree:
+    #   EMPTY                        tier=VACUOUS  __VACUOUS_HINT__ (0 records)
+    #   PPA_H2H_CLAIM_CONTRADICTED   tier=FAIL     VERDICT_CONTRADICTED
+    # and the same fixture with its `verdict` key removed is rc 0 / 1 accepted,
+    # so the red is the claim contradicting its own numbers and not the record
+    # being broken.
+    ("36", "ppa_head_to_head_check --corpus ."): "PPA_H2H_CLAIM_CONTRADICTED",
     # vibe-ic#1017. #1000 wired both of these BLOCKING and left INCOMPLETE on
     # rc 0, so EMPTY answered PASS to a blocking clause while the programs' own
     # last lines said "NOT screened" / "NOT compared against anything". #1017

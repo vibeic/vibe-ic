@@ -21,6 +21,38 @@
             vibe-ic-marketplace/plugins/vibe-ic
 -->
 
+## PPA Appendix-C answers (optional today)
+
+<!--
+  `gatekeeper_review` runs `ppa_pr_scope_check`, which decides from your
+  change-set WHICH of the twenty Appendix-C review questions apply, and reports
+  how many did. Prose never satisfies a question; evidence a machine can
+  re-verify does.
+
+  Supplying answers is OPTIONAL right now, and the review says so rather than
+  refusing. It becomes BLOCKING the moment you supply the file — every
+  applicable question is then enforced, and marking an applicable question
+  "N/A" is refused: the changed-surface detector decides applicability, not the
+  author.
+
+  Path: .github/ppa_pr_answers.json
+
+    {
+      "schema": "vibeic.ppa.pr_answers.v1",
+      "answers": [
+        {"question": 3,
+         "evidence": [{"kind": "artefact", "ref": "reports/phase3/sta.rpt",
+                       "sha256": "sha256:..."}]},
+        {"question": 11,
+         "evidence": [{"kind": "test",
+                       "ref": "programs/tests/test_x.py::test_negative"}]}
+      ]
+    }
+
+  See the module docstring of programs/ppa_pr_scope_check.py for the accepted
+  evidence kinds and the exit-code contract.
+-->
+
 ## Checklist
 
 - [ ] I read [CONTRIBUTING.md](../CONTRIBUTING.md)
@@ -32,3 +64,4 @@
 - [ ] If I added a new MCP tool wrapper, I also opened a PR against [awesome-open-ic](https://github.com/vibeic/awesome-open-ic) to mark the upstream project as MCP-wrapped
 - [ ] No `git push --force` on `main`, no `--no-verify`, no skipped pre-commit hooks
 - [ ] No bundled secrets / API keys / proprietary PDK files
+- [ ] (Optional) If I supplied `.github/ppa_pr_answers.json`, every applicable Appendix-C question carries machine-verifiable evidence — supplying the file makes the check BLOCKING

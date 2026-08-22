@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import canonical_json as cj  # noqa: E402
 from _ppa.closure import (  # noqa: E402
     Binding, ClosureController, Outcome, RegistryError, load_registry,
@@ -116,7 +117,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="print every declared edge and its binding, then exit")
     ap.add_argument("--verify-registry", action="store_true",
                     help="check that every EXECUTABLE claim resolves, then exit")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     try:
         registry = load_registry(args.registry)

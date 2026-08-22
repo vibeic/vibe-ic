@@ -1077,7 +1077,50 @@ steps:
         # `step_internal_fail_bubble_up_check` reads as an unacknowledged
         # step-internal FAIL. See the cascade recorded at Step 36.
         - advisory_program_exit_zero: "l9_submodule_conformance_check ."
-    blocks_on: [1]
+        # CAN THIS INTERFACE BE BONDED OUT AT ALL (vibe-ic#1347).
+        #
+        # WHY HERE. The measured failure this program exists to end is an
+        # arithmetic fact learned by BUILDING: five of nine benchmark ICs on
+        # the chip path cannot be bonded out on any purchasable slot, and each
+        # was discovered by running synthesis, placement and routing until it
+        # hit a wall. Both inputs exist long before that wall — step 0.5ic
+        # ingests the operator's slot files with their per-side pad lists, and
+        # step 1 writes the RTL whose top-level port list is the other half.
+        # This is the FIRST step where both are on disk, and it sits ahead of
+        # synthesis (9), DFT (11) and the whole of PnR.
+        #
+        # WHY NOT 15.5ic, WHICH IS THE STEP ABOUT PADS. Because 15.5ic runs
+        # after the floorplan, which is after synthesis — on the far side of
+        # exactly the hours this gate exists to refuse to spend. A pad-ring
+        # step is where a pin-out is BUILT; this is whether one can exist.
+        #
+        # BLOCKING, and the two non-fitting tiers are kept apart: rc 1 is
+        # DOES_NOT_FIT, a real answer that fails the step; rc 2 is UNDECIDED —
+        # no slots ingested (the cell/IP path, which has no operator and no
+        # slot) or no top module found — which the flow reads as its disclosed
+        # VACUOUS_PASS tier. A design that simply does not fit never reaches
+        # rc 2, so a refusal can never be mistaken for a skip.
+        #
+        # WIRED WITH `--json`, unlike `l9_submodule_conformance_check` two
+        # clauses up. That one is wired bare because its report declares
+        # `verdict: FAIL`, which Step 36's `step_internal_fail_bubble_up_check`
+        # reads as an unacknowledged step-internal FAIL. This program's verdict
+        # vocabulary is FITS / FITS_AFTER_FOLD / DOES_NOT_FIT / UNDECIDED —
+        # neither FAIL nor MISSING — so that cascade is not reachable and the
+        # evidence artefact is kept.
+        #
+        # NO GLOB IN THIS CLAUSE, DELIBERATELY. `_resolve_program_cmd` expands
+        # a clause glob into separate argv tokens, `--rtl` takes one, and the
+        # rest land as extra positionals — argparse then exits 2, which IS the
+        # vacuous-pass tier. The gate would skip on every multi-file design and
+        # the skip would be indistinguishable from the honest one. The program
+        # discovers `phase2/stage1/rtl` itself instead; see `_discover_rtl`.
+        - program_exit_zero: "slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json"
+    # 0.5ic ingests the slot files whose pad lists are one of this gate's two
+    # inputs. Without the edge the graph permits lint to run before the slot
+    # geometry exists, and the gate would read "no slots" and disclose a skip
+    # on a chip-path design that HAS an operator (D5-MISSING-EDGE, 2026-08-20).
+    blocks_on: [1, 0.5ic]
 
   - id: 3
     name: "🔁 CDC / RDC check"
@@ -4597,6 +4640,56 @@ steps:
       # three published spm cells carry it tracked and non-empty (944-1131 B),
       # so declaring it closes the d7 finding and costs dimension 3 nothing.
       - "reports/phase3/lvs_verdict.json"
+      # A FIFTH, and the last one dimension 7 has to say out loud on this step.
+      # `reports/phase3/drc_signoff.json` is the machine-readable half of the
+      # DRC sign-off this step's own `--signoff` clause below produces, and the
+      # `.rpt` half three entries up has been declared all along. Three
+      # programs OTHER than its writer read it:
+      #   `signoff_ladder_run.check_tier_1_drc` discovers it by name and by
+      #       `reports/**/drc_signoff.json` and grades release-gating tier T1
+      #       on it; absent, that tier reports NOT_RUN.
+      #   `final_report_generate` echoes its verdict into the sign-off summary
+      #       a reader treats as the deliverable (see the ORGANIC-20260808
+      #       paragraph there: "nothing in this tree writes drc_signoff.json"
+      #       STOPPED BEING TRUE, and 3 committed cells carry it).
+      #   `macro_obs_geometry_intersect_check` names `passed` / `is_signoff_deck`
+      #       out of it as the geometric-DRC evidence it will not re-derive.
+      # So its absence is exactly the disease dimension 7 exists for: T1 takes
+      # its NOT_RUN branch, the summary prints "(report missing)", and no gate
+      # goes red. Same class as `reports/phase3/lvs.json` five entries up —
+      # a gate `--json` artefact with readers outside its writer — and
+      # undeclared for exactly as long.
+      #
+      # W1 charged it by name and got its NAMED consumer wrong: it reported
+      # `read by program:general_precheck`, and general_precheck does not read
+      # this file, it RE-RUNS `drc_report_check` and WRITES it (see the
+      # separate finding on that clobber). The rule's CONCLUSION is right
+      # anyway — the three readers above are real — so the entry is declared on
+      # their evidence, not on the consumer W1 quoted. It has to be: with the
+      # clobber fixed the accidental consumer is gone, W1 falls silent on this
+      # path, and the gap would go back to being invisible. MEASURED: remove
+      # this entry from a tree carrying the general_precheck fix and step 31
+      # goes GREEN with the three readers untouched.
+      #
+      # WHAT IT COSTS, measured over the published corpus the way the step-23
+      # stance withdrawal in `test_signoff_required_outputs_completeness`
+      # requires (`find` over benchmark-data, 2026-08-21, the corpus at
+      # `~/vibe-ic` — it is no longer tracked on main): 16 roots carry
+      # `drc_signoff.rpt`, 3 carry `drc_signoff.json`, so 13 would report the
+      # new entry MISSING. Those 13 are NOT runs that dropped it — the PRODUCER
+      # POSTDATES THEM. Every root carrying the JSON is dated 2026-08-03 or
+      # later (caravel_user_project/v1.9.43_sky130A 08-03, spm/v1.9.96_gf180mcuD
+      # 08-07, spm/v1.10.18_sky130A 08-09) and every root without it is
+      # 2026-07-25 or earlier, which is `final_report_generate`'s own
+      # ORGANIC-20260808 note from the other side: "nothing in this tree writes
+      # drc_signoff.json" STOPPED BEING TRUE when `eda_report_audit:drc` began
+      # staging one. So this is the `magic_illegal_overlap.json` case three
+      # entries up — the gate postdates every older published run, dimension 3
+      # records the entry UNPROVEN there, and that is the true statement of the
+      # gap replacing a hidden one. It is NOT the step-23 stance case, where the
+      # producer was contemporary with the roots that lacked the artefact and
+      # the declaration was withdrawn for that reason.
+      - "reports/phase3/drc_signoff.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.

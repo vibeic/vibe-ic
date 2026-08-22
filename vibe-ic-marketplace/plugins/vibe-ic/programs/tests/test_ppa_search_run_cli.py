@@ -16,6 +16,7 @@ import pytest
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import ppa_search_run as R  # noqa: E402
+from _ppa import schema_validation as _SV  # noqa: E402
 from _ppa import search as S  # noqa: E402
 
 SCHEMA_PATH = (_PROGRAMS.parent / "schemas" / "ppa"
@@ -130,12 +131,8 @@ def test_malformed_values_flag_is_rc3(space):
 # ---------------------------------------------------------------------------
 # POSITIVE — budget 1, with no flags, is a complete bundle
 # ---------------------------------------------------------------------------
-<<<<<<< HEAD
 def test_budget_one_needs_no_flags_and_produces_a_full_manifest(space,
                                                                 tmp_path):
-=======
-def test_budget_one_needs_no_flags_and_produces_a_full_bundle(space, tmp_path):
->>>>>>> origin/jppa-search/ppa-search-layer
     """MUTATION TARGET. Raise the `--max-trials` default and this reds.
     Never require N runs to produce a result."""
     out = tmp_path / "m.json"
@@ -143,57 +140,12 @@ def test_budget_one_needs_no_flags_and_produces_a_full_bundle(space, tmp_path):
     assert rc == R.RC_PASS
     man = json.loads(out.read_text())
     assert man["budget"]["max_trials"] == 1
-<<<<<<< HEAD
     assert man["schema"] == S.SCHEMA
-=======
->>>>>>> origin/jppa-search/ppa-search-layer
     assert len(man["candidates"]) == 4, \
         "every proposed point is published even at budget 1"
     assert man["budget_spent"]["states"]["BUDGET_EXHAUSTED"] == 3
 
 
-<<<<<<< HEAD
-=======
-def test_a_plan_declares_the_plan_schema_not_the_manifest_schema(space,
-                                                                 tmp_path):
-    """MUTATION TARGET. Pass `is_plan=False` in `build` and this reds.
-
-    A plan's candidates are PROPOSED, which `search_manifest.v1` forbids, so a
-    plan labelled `search_manifest.v1` is a document declaring a schema it
-    cannot satisfy — the exact defect this lane exists to refuse, and one this
-    file shipped until it was caught. The FIRST KEY says what the document IS.
-    """
-    out = tmp_path / "plan.json"
-    R.main([str(space), "--json", str(out)])
-    plan = json.loads(out.read_text())
-    assert plan["schema"] == S.PLAN_SCHEMA
-    assert plan["schema"] != S.SCHEMA
-
-
-def test_a_plan_does_not_validate_as_a_manifest(space, tmp_path):
-    """And the schema file agrees: a plan is not an instance of it."""
-    jsonschema = pytest.importorskip("jsonschema")
-    out = tmp_path / "plan.json"
-    R.main([str(space), "--json", str(out)])
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.Draft7Validator(
-            json.loads(SCHEMA_PATH.read_text())).validate(
-                json.loads(out.read_text()))
-
-
-def test_supplying_trials_promotes_the_document_to_a_real_manifest(space,
-                                                                   tmp_path):
-    """The positive half: the plan schema must not be what this program always
-    emits, or the distinction would be decoration."""
-    t = tmp_path / "trials.json"
-    t.write_text(json.dumps([_trial("binary")]))
-    out = tmp_path / "m.json"
-    assert R.main([str(space), "--trials", str(t), "--json", str(out)]) == \
-        R.RC_PASS
-    assert json.loads(out.read_text())["schema"] == S.SCHEMA
-
-
->>>>>>> origin/jppa-search/ppa-search-layer
 def test_the_budget_sentence_names_what_the_budget_bought(space, tmp_path,
                                                           capsys):
     R.main([str(space), "--json", str(tmp_path / "m.json")])
@@ -285,93 +237,50 @@ def test_a_manifest_this_program_built_verifies_clean(ran):
 
 
 def test_the_built_manifest_validates_against_its_own_schema(ran):
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
     schema = json.loads(SCHEMA_PATH.read_text())
-    jsonschema.Draft7Validator(schema).validate(man)
+    assert _SV.engine_or_skip(schema).errors(man) == []
 
 
-def test_the_schema_itself_is_a_valid_draft7_schema():
-    jsonschema = pytest.importorskip("jsonschema")
-    jsonschema.Draft7Validator.check_schema(json.loads(SCHEMA_PATH.read_text()))
+def test_the_schema_itself_is_a_schema_some_engine_can_apply():
+    assert _SV.check_schema(json.loads(SCHEMA_PATH.read_text())) == []
 
 
 def test_the_schema_refuses_an_integer_completed_stage(ran):
     """The ORFS `step` trap, enforced at the document layer as well as the
     code layer — a manifest written by some other producer is still refused."""
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
+    engine = _SV.engine_or_skip(json.loads(SCHEMA_PATH.read_text()))
     man["candidates"][0]["completed_stage"] = 7
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.Draft7Validator(
-            json.loads(SCHEMA_PATH.read_text())).validate(man)
+    assert engine.errors(man), (
+        "the schema accepted the shape it exists to forbid")
 
 
 def test_the_schema_refuses_a_non_terminal_state(ran):
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
+    engine = _SV.engine_or_skip(json.loads(SCHEMA_PATH.read_text()))
     man["candidates"][0]["state"] = "RUNNING"
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.Draft7Validator(
-            json.loads(SCHEMA_PATH.read_text())).validate(man)
+    assert engine.errors(man), (
+        "the schema accepted the shape it exists to forbid")
 
 
 def test_the_schema_refuses_a_budget_missing_a_dimension(ran):
-    jsonschema = pytest.importorskip("jsonschema")
     _, man, _ = ran
+    engine = _SV.engine_or_skip(json.loads(SCHEMA_PATH.read_text()))
     del man["budget"]["cache_policy"]
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.Draft7Validator(
-            json.loads(SCHEMA_PATH.read_text())).validate(man)
+    assert engine.errors(man), (
+        "the schema accepted the shape it exists to forbid")
 
 
 # ---------------------------------------------------------------------------
 # NEGATIVE — the audit is red when it should be red
 # ---------------------------------------------------------------------------
-<<<<<<< HEAD
 def test_a_plan_published_as_a_result_is_rc1(space, tmp_path, capsys):
     """A plan's candidates are PROPOSED. Publishing them as a search RESULT is
     a finding, and the audit is what makes the distinction cost something."""
     out = tmp_path / "plan.json"
     assert R.main([str(space), "--json", str(out)]) == R.RC_PASS
     assert R.main(["--verify", str(out)]) == R.RC_REFUSED
-=======
-def test_a_plan_audited_as_a_result_is_rc1_with_ONE_clear_finding(space,
-                                                                  tmp_path,
-                                                                  capsys):
-    """A plan is not a search RESULT, and the audit is what makes the
-    distinction cost something.
-
-    ONE finding, not one `NON_TERMINAL_STATE` per candidate: the document is
-    honest about being a plan, so the audit names that rather than burying it
-    under a per-candidate complaint the reader has to diagnose.
-    """
-    out = tmp_path / "plan.json"
-    assert R.main([str(space), "--json", str(out)]) == R.RC_PASS
-    assert R.main(["--verify", str(out)]) == R.RC_REFUSED
-    err = capsys.readouterr().err
-    assert "PLAN_NOT_A_RESULT" in err
-    assert err.count("NON_TERMINAL_STATE") == 0
-    assert S.audit_manifest(json.loads(out.read_text())) != []
-    assert len(S.audit_manifest(json.loads(out.read_text()))) == 1
-
-
-def test_a_result_whose_candidates_are_PROPOSED_is_still_caught(space,
-                                                                tmp_path,
-                                                                capsys):
-    """The plan-schema clause must not become an escape hatch: a document that
-    CLAIMS to be a manifest and carries an unfinished trial is still red."""
-    t = tmp_path / "trials.json"
-    t.write_text(json.dumps([_trial("binary")]))
-    out = tmp_path / "m.json"
-    R.main([str(space), "--trials", str(t), "--json", str(out)])
-    man = json.loads(out.read_text())
-    assert man["schema"] == S.SCHEMA
-    man["candidates"][0]["state"] = "PROPOSED"
-    bad = tmp_path / "bad.json"
-    bad.write_text(json.dumps(man))
-    assert R.main(["--verify", str(bad)]) == R.RC_REFUSED
->>>>>>> origin/jppa-search/ppa-search-layer
     assert "NON_TERMINAL_STATE" in capsys.readouterr().err
 
 

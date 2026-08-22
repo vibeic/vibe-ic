@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
-from _ppa import agent_context, agent_policy  # noqa: E402
+from _ppa import agent_context, agent_policy, cli_exit  # noqa: E402
 
 RC_OK = 0
 RC_REFUSED = 1
@@ -152,7 +152,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="write the context document here")
     ap.add_argument("--json", default=None, metavar="PATH",
                     help="write the machine-readable report here")
-    args = ap.parse_args(argv)
+    # `parse_args` exits 2 on a usage error, and 2 in this layer means
+    # UNDETERMINED -- a caller that treats 2 as "nothing to check here"
+    # carries on green over a misspelled flag. §1 says a bad invocation is
+    # 3. `parse_or_refuse` reads argparse's exit CODE, so `--help`
+    # (SystemExit(0)) stays rc=0 and only the usage error becomes 3.
+    args, rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return rc
 
     if not args.manifest:
         print("give a manifest path", file=sys.stderr)

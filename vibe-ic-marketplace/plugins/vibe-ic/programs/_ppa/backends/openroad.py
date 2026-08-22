@@ -1155,3 +1155,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":                          # pragma: no cover
     sys.exit(main())
+
+
+# ── the driver seam (`_ppa/backends/__init__.py`) ───────────────────────────
+def extract_records(path, **_opts) -> List[Dict[str, Any]]:
+    """Canonical records from an OpenROAD artefact, or a run directory of them.
+
+    A DIRECTORY is a PnR output directory and is read with `parse_run`, which
+    opens the log and, if present, the metrics JSON -- and emits BOTH readings
+    when they disagree (module docstring, "WHAT THIS MODULE DELIBERATELY DOES
+    NOT DO"). A FILE is read as the metrics JSON when its name ends
+    `.metrics.json` and as a log otherwise.
+
+    Refusals stay refusals: this returns whatever `ParseOutcome` produced,
+    including the NOT_MEASURED and INVALID rows, and it never converts an
+    unreadable artefact into an empty list.
+    """
+    p = Path(path)
+    if p.is_dir():
+        return list(parse_run(p).records)
+    if p.name.endswith(".metrics.json"):
+        return list(parse_metrics_json(p).records)
+    return list(parse_log(p).records)

@@ -10,6 +10,27 @@ There is no elapsed-time verdict here.  Git either exits and supplies complete
 index evidence, or the caller's progress supervisor owns liveness.  A broken
 pointer, a loose directory, or a failed git query is UNDETERMINED (rc 2), never
 an empty population.
+
+AN ABSENT CORPUS IS NOT AN EMPTY ONE, AND THEY DO NOT SHARE AN EXIT CODE
+(vibe-ic#1764).  The line above promised that every way of failing to READ the
+corpus stays out of the population, and one row was left out of it: when
+nothing is at ``benchmark-data/`` and ``VIBE_IC_BENCHMARK_DATA`` is unset,
+``_corpus_location.refuse(may_be_absent=True)`` answers rc 0 with an empty
+stdout -- which is byte-identical to "I read the index and it holds no routed
+DEF".  ``gate_dispatch_over`` then printed ONE row for both, and a reader could
+not tell a measurement of zero from the absence of a measurement.
+
+    rc 0  the index WAS read and it publishes no routed DEF   -- a measurement
+    rc 3  no corpus was resolved, so nothing was opened       -- no measurement
+    rc 2  somebody said where the corpus is and was wrong     -- UNDETERMINED
+
+rc 3 is :data:`NO_CORPUS_RC`, matched by ``GATE_DISPATCH_ABSENT_RC`` in
+``tools/ci/_gate_dispatch.sh``.  It is deliberately NOT rc 2: an absent corpus
+is not a broken configuration, and the considered opt-in in
+``_corpus_location.refuse`` -- that a repository which no longer carries the
+published tree is not thereby misconfigured -- is left standing.  BOTH states
+stay NOT CHECKED and BOTH stay blocking at the dispatcher; only the sentence
+each of them gets is different.
 """
 from __future__ import annotations
 
@@ -25,6 +46,13 @@ from typing import Sequence
 _CORPUS_NAME = "published cells carrying a routed DEF"
 _ORIGIN = "https://github.com/vibeic/benchmark-data.git"
 
+#: "No corpus was resolved; nothing was opened."  Distinct from rc 0 (an index
+#: was read and it holds none) and from rc 2 (a pointer was given and is
+#: wrong).  `GATE_DISPATCH_ABSENT_RC` in `tools/ci/_gate_dispatch.sh` is the
+#: same number, and `test_the_absent_exit_code_is_one_number_in_two_languages`
+#: pins that the two spellings cannot drift apart.
+NO_CORPUS_RC = 3
+
 
 def _programs(repo: Path) -> Path:
     return repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
@@ -39,7 +67,16 @@ def _git(argv: Sequence[str]) -> subprocess.CompletedProcess[str] | None:
         return None
 
 
-def _index_paths(corpus: Path) -> tuple[int, list[Path]]:
+def _index_paths(corpus: Path,
+                 announce_empty: bool = False) -> tuple[int, list[Path]]:
+    """``(rc, routed DEFs)`` read out of git's index under `corpus`.
+
+    `announce_empty` makes a MEASURED empty population say so and NAME the
+    index it read (vibe-ic#1764).  Without it, "the index under X publishes no
+    routed DEF" reaches a reader as the same silence as "there was no X to
+    open", and the whole point of keeping the two apart is that one of them is
+    a measurement and the other is the absence of one.
+    """
     top_probe = _git(["git", "-C", str(corpus), "rev-parse", "--show-toplevel"])
     if top_probe is None:
         return 2, []
@@ -153,6 +190,16 @@ def _index_paths(corpus: Path) -> tuple[int, list[Path]]:
                 )
                 return 2, []
             routed.append(candidate)
+    if not routed and announce_empty:
+        print(
+            f"[routed-def corpus] MEASURED EMPTY: git's index at {top} was "
+            f"read under {pathspec!r} and it publishes no "
+            f"*/*/phase3/stage3/pnr/routed.def. This IS a measurement -- the "
+            f"corpus was opened and the population is 0 -- and it is NOT the "
+            f"same state as a corpus that could not be found (rc "
+            f"{NO_CORPUS_RC}).",
+            file=sys.stderr,
+        )
     return 0, sorted(routed, key=lambda path: path.as_posix())
 
 
@@ -360,13 +407,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     corpus, origin = location.resolve(
         named, subdir="ic", gate="routed-def corpus", announce=True)
     if not corpus.is_dir():
-        return location.refuse(
+        rc = location.refuse(
             "routed-def corpus", named, corpus, origin,
             may_be_absent=True, scanned="routed DEF(s)")
+        if rc != 0:
+            # A pointer that is set and wrong, or a bound SHA with no checkout.
+            # Already UNDETERMINED and already distinct; nothing to add.
+            return rc
+        # NO_CORPUS. `_corpus_location` answers rc 0 there because for most
+        # gates "the corpus is not in this repository" is not a finding
+        # against anything, and that considered opt-in is left alone
+        # (vibe-ic#1764 argued for reversing it; reversing it would have made
+        # an absent corpus borrow the FAILED PRODUCER row instead, which is a
+        # second wrong sentence rather than the missing one).
+        #
+        # This program is a POPULATION PRODUCER, and rc 0 already means
+        # something else here: "I read an index and it publishes none". So the
+        # NO_CORPUS row leaves with its own code, and the dispatcher gives it
+        # its own row. It is still not a pass: rc 3 is a blocking NOT CHECKED.
+        print(
+            f"[routed-def corpus] NOT FOUND (rc {NO_CORPUS_RC}): no corpus "
+            f"was resolved, so no index was opened and 0 routed DEF(s) is the "
+            f"ABSENCE of a measurement, not a measurement of zero. The line "
+            f"above names what was looked for.",
+            file=sys.stderr,
+        )
+        return NO_CORPUS_RC
 
-    rc, paths = _index_paths(corpus)
+    rc, paths = _index_paths(corpus, announce_empty=True)
     if rc != 0:
         return rc
+    if not paths:
+        # A CORPUS THAT WAS READ AND HOLDS NONE USED TO SAY NOTHING AT ALL.
+        # The absent-corpus branch above prints a full sentence with a cause and
+        # a remedy; this one -- the state the landing path is actually in, since
+        # `gatekeeper_review` binds the corpus before the hygiene set runs --
+        # printed only the resolution note and exited. So the LESS informative
+        # outcome was loud and the more informative one was silent, and the
+        # loudest thing in the run (a blocking dispatcher refusal) was produced
+        # by the quietest possible producer.
+        #
+        # rc is UNCHANGED and so is the population: this is 0 items either way,
+        # the dispatcher still records NOT_CHECKED, and it still blocks. Only
+        # the reader gains the sentence. stderr, never stdout -- stdout is the
+        # machine population and prose there would become an item.
+        print(
+            f"[routed-def corpus] scanned the {origin} corpus at {corpus} and "
+            f"its git index holds 0 routed DEF(s). A member is "
+            f"<design>/<version>/phase3/stage3/pnr/routed.def. This is an "
+            f"EMPTY POPULATION, not a clean one: no published cell was "
+            f"examined and nothing is claimed about any. The per-cell gates "
+            f"go live again on the first cell published with a routed DEF.",
+            file=sys.stderr,
+        )
     for path in paths:
         print(path)
     return 0
