@@ -83,6 +83,7 @@ Accepted with no refusal and no unrouted record.
 - [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
 - [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
 - [Four classes checked this pass and deliberately NOT recorded](#four-classes-checked-this-pass-and-deliberately-not-recorded)
+- [The records quote numbers and mostly do not quote the command](#the-records-quote-numbers-and-mostly-do-not-quote-the-command)
 - [Six refusals, one principle: two absences compare EQUAL](#six-refusals-one-principle-two-absences-compare-equal)
 - [Summary](#summary)
 - [Next](#next)
@@ -3525,6 +3526,45 @@ has to compare the artefact's CONTENT against the exit code — run the program
 both ways and diff what it wrote — which is a fixture harness, not a grep. That
 is the honest statement of what building this rule costs, and it is why no
 record claims it.
+
+## The records quote numbers and mostly do not quote the command
+
+Found by trying to re-derive my own figures rather than by reading the brief
+again, which is the only reason it was found at all.
+
+Two records claim a count over the program tree — how many programs walk a
+repository index, how many reference the split-out corpus. Re-measuring both
+today gave **different numbers**. That is *not* proof they went stale: my screen
+today is not the screen that produced them, and comparing counts from two
+different screens is the error this batch has already recorded twice. It is
+proof of something else — **I could not tell**, because the record states the
+number and not the question.
+
+    records                                47
+      fix text quotes a figure             35
+      fix text names the command            7   (6 before this section was written)
+
+The brief is explicit about this: *the command, the number, the before and
+after.* On the strict reading, 28 figure-bearing records fall short.
+
+**The strict reading overstates it, and saying so is not a defence.** The
+brief's operative test is what a record must let a reader do — *what it
+returned, on what input* — and many records meet that without a shell line: A-40
+says a corpus of one manifest-less run exits 1 and the same corpus plus an
+unreadable manifest exits 2, which is an input and a return. What is missing in
+those is reproducibility of the *population* figures, not of the defect.
+
+So the honest split is: the defect measurements are mostly reproducible from
+what the record says; **the population figures mostly are not**, and those are
+exactly the numbers a later reader will want to re-check when the tree has
+moved. Three records measured today now carry their commands, including the
+detail that cost me two attempts — the run directories have to be named with the
+prefix the gate's own discovery uses, or both arms read zero and the effect
+vanishes.
+
+The rest is work for whoever continues, and it is the first thing I would do:
+a figure without its question is a memory, which is the brief's own word for
+what this loop exists to stop producing.
 
 ## Summary
 
