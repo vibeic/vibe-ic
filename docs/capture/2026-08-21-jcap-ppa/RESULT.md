@@ -2535,7 +2535,7 @@ four, and not one survived unchanged.**
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
 | A-22 | 216 imports | 51 | narrowed to true third-party; one package, proven fatal |
-| A-23 | — | 0 of 26 | **re-run as the batch grew; still passes** |
+| A-23 | 53 records, 3 lanes | **0 / 0** | **swept on a real population**, 23 records not mine: no unrouted step, no unwired target. Clean result is conditional on this branch's routing entries — without them 9 of 30 would be unrouted |
 | A-24 | 37 gates | 98 consumers | the consumed tree is outside every one of them |
 | A-25 | 29 types | **17 unschema'd** | upstream cause of A-15 and A-17 |
 | A-26 | 2 docs bound | 0 docstrings | 1 expired claim confirmed; population NOT estimated |
@@ -2699,8 +2699,8 @@ Work through it in sequence. Step 1 gates the rest.
    (one axis is unanswerable today, so no candidate can ever be promoted).
    **Build the five test-population rules as one piece of work**, per the
    contention list above.
-3. **Sweep before building each of the seven unswept rules** — A-6, A-10,
-   A-16, A-17, A-18, A-19, A-23, which are exactly the rows carrying no *before*
+3. **Sweep before building each of the six unswept rules** — A-6, A-10,
+   A-16, A-17, A-18, A-19, which are exactly the rows carrying no *before*
    figure in the sweep table. **A-1 and A-2 were two of the nine and have now
    been swept. Both overturned their own row, and for the same reason**: each
    claimed freedom from false positives *by construction*, on the ground that a
