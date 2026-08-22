@@ -389,6 +389,64 @@ def test_untracked_directory_collapse():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_reverify_refuses_to_answer_for_another_host():
+    """An on-disk claim is about ONE machine's disk.
+
+    reverify_shard_c.py used to decide whether to hash from `os.path.isdir(path)`
+    alone. Today no shard-C remote path exists on this host, so it was right by luck.
+    These hosts all use /home/reyerchu/_* conventions; the first collision answers a
+    question about .112 with .108's filesystem and reports it verified.
+
+    This builds exactly that collision -- a row the roster assigns to another host,
+    whose directory DOES exist here, holding a file with a DIFFERENT hash -- and
+    requires the checker to decline rather than to hash it.
+    """
+    import shutil
+    tmp = tempfile.mkdtemp()
+    try:
+        wt = os.path.join(tmp, "collide")
+        os.makedirs(wt)
+        open(os.path.join(wt, "NOTE.md"), "w").write("this host's copy, NOT the row's host")
+        wrong = "0" * 16                      # the row claims a hash this file does not have
+        ev = (f"rule L2: 1 tracked uncommitted EDIT(s) on disk. NOTE.md sha256 {wrong} "
+              f"(1 lines) is on disk here and ABSENT FROM origin/main entirely. "
+              f"judged against origin/main " + "0" * 40)
+        v = os.path.join(tmp, "v.tsv")
+        with open(v, "w") as fh:
+            fh.write("path\tverdict\tevidence\n")
+            fh.write(f"{wt}\tRECOVER\t{ev}\n")
+        # roster puts the row on host .999, which is not this host
+        r = os.path.join(tmp, "r.tsv")
+        with open(r, "w") as fh:
+            fh.write("host\tpath\trepo\thead\tbranch\tkind\tprior_verdict\tnotes\n")
+            fh.write(f"999\t{wt}\t-\t-\t-\t-\t-\t-\n")
+        rc, out = run("reverify_shard_c.py", "--repo", REPO, "--verdicts", v,
+                      "--roster", r, "--offline")
+        check("reverify DECLINES an on-disk claim belonging to another host",
+              "UNDETERMINED(row belongs to host .999" in out, out[-400:])
+        check("and does NOT report it as on-disk-verified",
+              "on-disk-verified" not in out, out[-400:])
+
+        # control: the SAME row, with the roster naming THIS host, must be hashed --
+        # and must FAIL, because the file's real hash is not the claimed one. Without
+        # this arm, a checker that declined everything would pass the assertion above.
+        here = subprocess.run(["hostname", "-I"], capture_output=True, text=True).stdout
+        octet = next((x.rsplit(".", 1)[1] for x in here.split()
+                      if x.startswith("192.168.1.")), None)
+        if not octet:
+            check("control arm needs this host's octet", False, "no 192.168.1.x address")
+            return
+        with open(r, "w") as fh:
+            fh.write("host\tpath\trepo\thead\tbranch\tkind\tprior_verdict\tnotes\n")
+            fh.write(f"{octet}\t{wt}\t-\t-\t-\t-\t-\t-\n")
+        rc2, out2 = run("reverify_shard_c.py", "--repo", REPO, "--verdicts", v,
+                        "--roster", r, "--offline")
+        check("CONTROL: for a row on THIS host it hashes the file and catches the bad sha",
+              rc2 == 1 and "on-disk sha256" in out2, out2[-400:])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 for t in (test_rescue_gate_both_directions,
           test_rescue_gate_catches_trailing_comma_regression,
           test_parity_gate_all_directions,
@@ -397,7 +455,8 @@ for t in (test_rescue_gate_both_directions,
         test_contract_check_catches_recover_identical_to_main,
         test_contract_check_main_is_derived_not_frozen,
         test_contract_check_absent_from_main_branch_is_load_bearing,
-        test_untracked_directory_collapse):
+        test_untracked_directory_collapse,
+        test_reverify_refuses_to_answer_for_another_host):
     print(f"\n--- {t.__name__}")
     t()
 

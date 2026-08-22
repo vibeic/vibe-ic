@@ -530,3 +530,62 @@ The lesson that keeps recurring is not about any one tool. It is that **a measur
 which returns a clean number is not thereby a measurement.** Every instance tonight —
 the vacuous control, the empty-set universal, `-uno`, the collapsed directory, this —
 returned a confident, well-formed, wrong answer.
+
+---
+
+## Seventh round: my checker answered a question about one host with another host's disk
+
+jharv2 found that re-auditing its 29 ABANDON rows was checking 15% of the class at
+risk — LANDED is deletion-bound too, and it had 163 of those. The same question
+turned on my own tooling found a defect of the same family, and a correction I owe
+to something I wrote earlier in this file.
+
+**The defect.** `reverify_shard_c.py` decided whether to hash an on-disk claim from
+`os.path.isdir(path)` alone. An on-disk claim is about **one machine's disk**. These
+hosts all use `/home/reyerchu/_*` conventions, so the first path that exists on both
+answers a question about `.112` with `.108`'s filesystem — and reports it *verified*.
+
+Measured before fixing: of shard C's 80 remote paths, **0** currently exist on this
+host. So the checker was right, by luck of which directories happen to exist, exactly
+as jharv2's 28/28 clean contract files were luck of which hosts had scratch
+directories. Right-by-luck and right-by-construction produce the same output until
+the day they do not.
+
+The checker now takes the roster's host column, refuses to hash a claim belonging to
+another host, and says which host it is running on. Pinned with a **built collision** —
+a row the roster assigns elsewhere whose directory does exist here, holding a file
+with a different hash — plus a control arm, because an assertion that a checker
+declines is satisfied by a checker that declines everything:
+
+```
+  PASS  reverify DECLINES an on-disk claim belonging to another host
+  PASS  and does NOT report it as on-disk-verified
+  PASS  CONTROL: for a row on THIS host it hashes the file and catches the bad sha
+```
+
+### A correction to this file: "shard b: 0 and 0" was two guarantees, not three
+
+Earlier I reported the vacuous gate over the joined view and the three shard files as
+`shard b: 0 and 0`, `shard c: 0 and 0`. That was run **before** the untracked
+guarantee existed, and I reported it without saying which guarantees it covered —
+the same subset error jharv2 made counting ABANDON and not LANDED. Complete, all
+three guarantees:
+
+| file | vacuous | stale | untracked-silent | deletion-bound |
+|---|---|---|---|---|
+| `verdicts_joined.tsv` | 20 | 44 | **48** | 48 |
+| `verdicts_shard_a.tsv` | 9 | 11 | **12** | 12 |
+| `verdicts_shard_b.tsv` | 0 | 0 | **17** | 17 |
+| `verdicts_shard_c.tsv` | 0 | 0 | 0 | 19 |
+| `verdicts_extras_joined.tsv` | 0 | 0 | **207** | 207 |
+
+Shard B is clean on vacuity and staleness and silent on untracked for every one of
+its 17 deletion-bound rows. **This is a disclosure gap, not a measurement gap**, and
+the distinction is the whole of it: jharv2 has since re-audited 192 deletion-bound
+rows under `-uall`, resolved on the host that holds each one, 0 dirty. The
+measurement exists and the evidence does not say so — which is jharv2's own
+"verdict refreshed, evidence not", recurring a fourth time on the other side of it.
+
+My gate cannot tell a measured-and-unwritten row from an unmeasured one, and should
+not pretend to: it detects **silence**. A row could also claim `untracked checked: 0`
+falsely and pass. It is a disclosure gate; the measurement still needs a host.

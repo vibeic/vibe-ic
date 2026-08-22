@@ -43,9 +43,31 @@ Usage
 
 Exit 0 only if every check passed.
 """
-import argparse, hashlib, re, subprocess, sys
+import argparse, hashlib, os, re, socket, subprocess, sys
 
 VOCAB = ("RECOVER", "ABANDON", "LANDED", "UNREACHABLE")
+
+
+def this_host():
+    """The roster identifies hosts by the last octet of their 192.168.1.x address.
+
+    An on-disk claim is about ONE machine's disk. Deciding whether to hash it from
+    `os.path.isdir(path)` alone answers a question about host .112 with host .108's
+    filesystem the moment the two share a path name -- and these hosts all use
+    /home/reyerchu/_* conventions, so that collision is a matter of time, not of
+    possibility. Today no shard-C remote path exists here, which makes the old code
+    right by luck rather than by construction. jharv2 hit the mirror image: four rows
+    read GONE from the two hosts it happened to ask, and were alive on two others.
+    A path absent from the host you asked is an unasked question, not an answer.
+    """
+    try:
+        for line in subprocess.run(["hostname", "-I"], capture_output=True,
+                                   text=True, timeout=10).stdout.split():
+            if line.startswith("192.168.1."):
+                return line.rsplit(".", 1)[1]
+    except Exception:
+        pass
+    return None
 
 RE_DIFFERS = re.compile(
     r"rule \w+[^:]*: (\S+) sha256 ([0-9a-f]{16}) \((\d+) lines\) "
@@ -141,7 +163,7 @@ def check_freshness(body, main, rep):
             rep.bump("freshness-ok")
 
 
-def check_content(repo, body, rep):
+def check_content(repo, body, rep, hostof=None, here=None):
     for p, v, e in body:
         m = RE_DIFFERS.search(e)
         if m:
@@ -175,7 +197,7 @@ def check_content(repo, body, rep):
                 rep.bad("C", p, "claims %s is absent from main, but main has it" % f)
             else:
                 rep.bump("main-side-verified")
-            _on_disk_side(p, f, a, rep, e, repo)
+            _on_disk_side(p, f, a, rep, e, repo, hostof, here)
             _leftover(p, e, [m] + _trailing(repo, p, e, rep), rep)
             continue
         extra = [m for m in (RE_UNTRACKED.search(e), RE_COMPARISON.search(e)) if m]
@@ -220,11 +242,19 @@ def _preserved_blob(repo, e, f, a):
     return False
 
 
-def _on_disk_side(p, f, a, rep, e="", repo=None):
+def _on_disk_side(p, f, a, rep, e="", repo=None, hostof=None, here=None):
     """The claim is about bytes on one host's disk. Hash them where that disk is THIS
     host; anywhere else say UNDETERMINED. Reporting an unreachable disk as verified is
     the manufactured pass this whole job exists to avoid."""
     import os
+    # Only this host's disk may answer a claim about this host's disk.
+    row_host = (hostof or {}).get(p)
+    mine = (row_host is None or here is None or row_host == here)
+    if not mine:
+        if repo is not None and _preserved_blob(repo, e, f, a):
+            rep.bump("untracked-verified-from-preserved-blob"); return
+        rep.bump("UNDETERMINED(row belongs to host .%s, this is .%s)" % (row_host, here))
+        return
     cand = os.path.join(p, f)
     if os.path.isdir(p) and os.path.isfile(cand):
         h = hashlib.sha256(open(cand, "rb").read()).hexdigest()
@@ -339,13 +369,18 @@ def check_survivability(repo, body, live, rep):
 def run(repo, verdicts, roster, offline, rep):
     rows = read_tsv(verdicts)
     roster_paths = None
+    roster_hosts = {}
     if roster:
         rr = [l for l in read_tsv(roster) if not l[0].startswith("#")]
         roster_paths = {r[1] for r in rr[1:]}
+        roster_hosts = {r[1]: r[0] for r in rr[1:] if len(r) > 1}
     body = check_shape(rows, roster_paths, rep)
+    hostof, here = roster_hosts, this_host()
+    if here:
+        rep.bump("running-on-host-.%s" % here)
     main = git(repo, "rev-parse", "origin/main").stdout.decode().strip()
     check_freshness(body, main, rep)
-    check_content(repo, body, rep)
+    check_content(repo, body, rep, hostof, here)
     check_survivability(repo, body, live_heads(repo, offline), rep)
     return rep
 
