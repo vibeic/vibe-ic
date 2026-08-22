@@ -64,6 +64,7 @@ Accepted with no refusal and no unrouted record.
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
 - [How often the instrument was the problem](#how-often-the-instrument-was-the-problem)
 - [Every blockage in this report, measured](#every-blockage-in-this-report-measured)
+- [Re-measuring the older sweeps, and what it cost to try](#re-measuring-the-older-sweeps-and-what-it-cost-to-try)
 - [The one claim class that keyword screens cannot audit](#the-one-claim-class-that-keyword-screens-cannot-audit)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
@@ -2083,6 +2084,35 @@ Both hold. One of them did not hold in the form it was first written: the
 handoff had said to *attach* the crash artefacts, which presumes they exist
 somewhere, and the check turned that into *re-run one arm to produce them* —
 a different instruction with a different cost.
+
+## Re-measuring the older sweeps, and what it cost to try
+
+Nine sweep rows were measured against the program tree, and main moved thirty
+commits underneath them. Six were re-attempted. The result splits by one thing
+only — whether the row recorded HOW it counted:
+
+| row | outcome |
+|---|---|
+| A-9 | reproduced, and **moved**: 6 of 29 → 10 of 33, the four new offenders being the sibling capture lanes |
+| A-22 | reproduced: 51 → 50, still exactly one package |
+| A-25 | reproduced, and **the gap widened**: 17 of 29 → 19 of 38 |
+| A-11 | **partial** — the census reproduces within three per cent (1584 → 1544) but its taxonomy does not, because where "extension-only" ends was never stated, and its load-bearing figure needs a judgement no screen makes |
+| A-24 | **not re-derivable** — a plausible reconstruction returned more than twice each figure |
+| A-20 | **not re-derivable** — no screen recorded at all |
+
+Three reproduced, two could not be, one partly. **Every failure is the same
+cause, and it is not the tree moving: it is that the row did not say how it
+counted.** A-25's row moved by nine types and that is a finding; A-24's row
+"moved" by a factor of two and that is an artefact of using a different screen.
+From the outside those look identical.
+
+*The obvious shortcut was tried and failed, which is worth recording because it
+is the fifth time.* Rather than re-attempt each row, a screen was written to ask
+which sections record their criterion. It answered nine of nine — including the
+two I had already read and confirmed do not. It fires on any section that happens
+to mention scanning. That is the fifth keyword screen over this report's own prose
+to measure the author's vocabulary instead of the text, and the table above is
+built from the re-measurements actually attempted, not from it.
 
 ## The one claim class that keyword screens cannot audit
 
