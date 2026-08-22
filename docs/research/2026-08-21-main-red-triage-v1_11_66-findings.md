@@ -5047,6 +5047,11 @@ done at all".
 
 ## M93 — closing regression: every remaining red is a documented item, and nothing is unexplained
 
+> **SUPERSEDED BY M97 — the numbers below are over a REDUCED DENOMINATOR.** This
+> run had no corpus pointer, so its `61 skipped` were cells reporting nothing. The
+> honest figures are **17 failed, 296 passed, 0 skipped**. The VERDICT here stands —
+> every red is still a documented item — but read the counts as M97 restates them.
+
 Ran every test file this branch touches, plus the two suites its changes could
 reach, on the host at the pushed commit.
 
@@ -5393,6 +5398,11 @@ thing is the owner's call, and it is ONE call, not five.**
 
 
 ## M101 — the consolidated census: 34 reds, 6 causes, measured rather than accumulated
+
+> **SUPERSEDED BY M108 — it is 5 roots, not 6 causes.** The mutation-ledger three
+> turned out to be DOWNSTREAM of the D3 group, which puts **16 of the 34 under one
+> root**. The census below is otherwise accurate and the totals are unchanged;
+> only the grouping consolidated. Section C carries the current shape.
 
 Twice this document recorded a correctly-diagnosed cause with **half its blast
 radius** (the flow-gate item at 3 when it owns 6, M95; the vacuity conditional at
