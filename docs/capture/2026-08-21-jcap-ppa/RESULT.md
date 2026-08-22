@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 44 records, and the eighteen already-program claims of which seventeen hold
+# The PPA cluster, DISTILLED — 44 records, and the nineteen already-program claims of which eighteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -163,7 +163,7 @@ it now — checked by reading it, not by trusting the fix note.
 | F-18 a count is demanded where the schema allows a status | `_ppa/benchmark.py` `CHECK_CLEAN` / `VERDICT_CLEAN`; `test_ppa_verdict_and_scope_shapes.py` | every floor check, verdict-valued or count-valued |
 | (smaller) `jsonschema` not a dependency | `_ppa/jsonschema_bundled.py` — bundled, so a stock host is covered | and it names the too-old case the import guard missed |
 
-Four more classes, drawn from the six lane records rather than from the 18, are
+Seven more classes, drawn from the six lane records rather than from the 18, are
 also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 
 | class | already enforced by |
@@ -174,6 +174,7 @@ also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 | a present-but-empty population is never a pass | `tests/test_ppa_layer_vacuous_population.py` — the right question, on 8 of 19 programs; the coverage gap is recorded under **A-3**, not as a class of its own |
 | a lever that deletes a design property is priced, and the axis refuses | `programs/ppa_eco_spare_records.py` producing the evidence, `ECO_AXIS = "eco_readiness"` in `_ppa/feasibility.py` refusing on it, and two gates on the flow's own spare-cell artefact. **Landed on main DURING this lane** — see the withdrawn `A-18` |
 | a published run's inputs are declared by DIGEST, so identity survives the path | the trial contracts' `evidence_manifest` — **525 of 525** artefacts carry a content digest beside path, role and byte count. Demonstrated working: the published baseline was recovered by hash after its source project ceased to exist on this host. Found late, in the one source section this lane had not read |
+| a shared ABSENCE is not a shared value, so records with no measured identity are not grouped together | `programs/ppa_contract_check.py` clause `PPA-C-007` — an identity that is NOT_MEASURED is CANNOT CHECK, never a pass, and the corpus mode refuses to key on it rather than comparing two runs on the strength of a shared blank. **Driven, not cited**: a contract declaring one identity as NOT_MEASURED returns four UNDETERMINED `PPA-C-007` rows naming each absent identity. The sibling gate states the matching exclusion out loud — a contract with no identities is dropped from the conflict scan, *because a silent exclusion is a denominator nobody can see* |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
 CLASS is what this lane recorded instead:

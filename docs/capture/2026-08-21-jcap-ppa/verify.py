@@ -181,7 +181,8 @@ check("every Bucket-A target program exists on disk", not badprog, str(badprog[:
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
          "seven": 7, "eight": 8, "nine": 9, "ten": 10,
          "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-         "sixteen": 16, "seventeen": 17, "eighteen": 18}
+         "sixteen": 16, "seventeen": 17, "eighteen": 18,
+         "nineteen": 19, "twenty": 20}
 # `claimed_ap`, not `claimed`: that name is already bound above for the summary
 # file list. Rebinding it worked only because the first use is consumed before
 # this line -- which is the shadowing trap check 36 refuses for `def` names, and
