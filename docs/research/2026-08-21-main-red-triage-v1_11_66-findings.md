@@ -6058,6 +6058,43 @@ say so, rather than asserting a sweep I did not perform.** That distinction is t
 one this document has spent a hundred sections learning to make.
 
 
+## M115 — the corpus pointer changes NONE of the six, and two of them are named as if it would
+
+A plausible wrong inference is available in this document, and it should be closed
+before someone acts on it. **Two of the six env-allowlist reds carry `corpus` in
+their names:**
+
+    test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord
+    test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta
+
+And this document establishes at length that a corpus pointer un-skips 61 cells
+and reveals 7 reds (M96/M98). **A reader could reasonably conclude the pointer is
+relevant to those two. It is not.**
+
+**Measured — and answered from data already taken rather than a fresh 7-minute
+run:** the closing regression exists in both arms, with and without
+`VIBE_IC_BENCHMARK_DATA`, and the landing-verdict subset is **identical**:
+
+    without pointer   6 landing-verdict failures
+    with pointer      6 landing-verdict failures
+    diff of the two sets                        EMPTY
+
+**All six are blocked by the exact-set env contract (M107), not by corpus
+availability.** Their subject is a corpus TRANSITION that a test control must
+announce; the control cannot reach the arm, so the transition never occurs. **The
+corpus being present does not help, because nothing is asking it a question.**
+
+**Two things worth separating, since this document has conflated them once
+already:** the D3 group is blocked on WHAT THE CORPUS CONTAINS (specific `home`
+roots, M105). These six are blocked on WHETHER A CONTROL CAN REACH THE ARM. **They
+share a word and nothing else**, and the 16-vs-6 split in section C depends on
+keeping them apart.
+
+**Recorded as a negative result** because it costs nothing now and would cost
+someone a wasted afternoon later — the same reason the retracted `refs/gk-verify`
+instruction in the proposal was worth correcting rather than deleting.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
