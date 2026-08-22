@@ -219,3 +219,38 @@ That record was filed as NOT distillable because there is no trailer to detect.
 This landing is the instance it describes: a protected-tuple refusal that should
 have fired, a landing that completed, and nothing written down anywhere that
 says which of the two happened.
+
+## How material is each unauthorised move? All eight, sized
+
+_Each group-B path's live content on `origin/main` diffed against the exact
+bytes the manifest authorises, fetched by the `blob_oid` the manifest itself
+records — not against a guess at what the authorised state was._
+
+| path | +/− | drift is |
+|---|---|---|
+| `tools/ci/repo_hygiene_gates.sh` | 192 / 11 | CODE |
+| `programs/tests/test_matrix_63x8_coverage.py` | 108 / 6 | CODE |
+| `tools/ci/routed_def_corpus.py` | 96 / 3 | CODE |
+| `tools/ci/_gate_dispatch.sh` | 70 / 6 | CODE |
+| `programs/hygiene_finding_delta.py` | 52 / 6 | CODE |
+| `programs/_corpus_location.py` | 26 / 5 | CODE |
+| `programs/repo_hygiene_parallel.py` | 24 / 0 | CODE |
+| `tools/ci/landing_completion_record.py` | **1 / 0** | CODE |
+
+**There is no cheap subset.** Every one of the eight is a real code change, not
+whitespace or comments, so none can be waved through on inspection. That is
+worth knowing before anyone starts: the group-B backlog is eight genuine
+reviews, not eight formalities.
+
+**The smallest is one line, and it is legible without context:**
+
+    LANDING_PROGRESS_UNITS = (
+        "full:repo-hygiene",
+        "full:plugin-audit",
+    +   "full:gatekeeper-review",
+        "full:write-guard-final",
+
+A landing progress unit was added. Whether that is authorised is still a
+decision — but it is a decision someone can take in a minute, and it is
+probably the right place to start: it exercises the whole repair path (decide,
+re-render, verify) on the least ambiguous instance in the set.
