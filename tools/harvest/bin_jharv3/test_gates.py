@@ -179,10 +179,112 @@ def test_contract_check_shape_and_inputs():
           p.returncode == 1 and "does not resolve" in (p.stdout + p.stderr))
 
 
+
+# ------------------------------------------- contract_check, guarantee by guarantee
+#
+# A mutation sweep blinded each guard in these three gates one at a time and asked
+# whether this suite noticed. 23 of 31 survived, 15 of them in contract_check.py --
+# its entire validation body. The cause: every contract test ran the gate against the
+# REAL shard files, which are valid, so nothing that rejects bad input was ever
+# reached. Those 15 could have been `if False:` and this file would still have printed
+# "all gate tests passed".
+#
+# Each case below violates exactly ONE guarantee and asserts the specific complaint,
+# and BASELINE asserts the same file passes without that violation -- so a gate that
+# rejected everything could not satisfy both arms.
+
+BASE_EV = ("rule R2: README.md sha256 " + "a" * 16 + " (1 lines) differs from "
+           "origin/main x's " + "b" * 16 + " (1 lines). judged against origin/main "
+           + "0" * 40 + " and re-measured since")
+
+
+def _tsv(tmp, rows, header="path\tverdict\tevidence"):
+    fn = os.path.join(tmp, "synthetic.tsv")
+    with open(fn, "w") as fh:
+        fh.write(header + "\n")
+        for r in rows:
+            fh.write("\t".join(r) + "\n")
+    return fn
+
+
+def test_contract_check_each_guarantee():
+    good = ("/home/reyerchu/w", "RECOVER", BASE_EV)
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out = run("contract_check.py", "--file", _tsv(tmp, [good]))
+        check("BASELINE: a clean synthetic row passes",
+              rc == 0 and "CONTRACT OK" in out, out[-300:])
+
+    cases = [
+        ("header",        [good], "header is",
+         "path\tverdict\tWRONG"),
+        ("field count",   [("/home/reyerchu/w", "RECOVER")], "fields, contract says 3", None),
+        ("vocabulary",    [("/home/reyerchu/w", "PROBABLY", BASE_EV)],
+         "is not one of the contract's four", None),
+        ("absolute path", [("relative/w", "RECOVER", BASE_EV)], "is not absolute", None),
+        ("thin evidence", [("/home/reyerchu/w", "RECOVER", "too short")],
+         "too thin to be checkable", None),
+        ("ABANDON reason",[("/home/reyerchu/w", "ABANDON",
+                            "this row says nothing about why it is worthless at all, "
+                            "but is long enough to clear the thinness bar")],
+         "does not say what makes it worthless", None),
+    ]
+    for name, rows, expect, header in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            fn = _tsv(tmp, rows, header) if header else _tsv(tmp, rows)
+            rc, out = run("contract_check.py", "--file", fn)
+            check(f"contract check REJECTS a bad {name}",
+                  rc == 1 and expect in out, out[-300:])
+
+
+def test_contract_check_catches_recover_identical_to_main():
+    """The guarantee that matters most: a RECOVER whose named file is byte-identical
+    to main is a verdict claiming work that is already landed. Blinded, it reports
+    the row as verified coverage instead of a problem."""
+    real = "README.md"
+    sha = subprocess.run(["git", "-C", REPO, "rev-parse", f"origin/main:{real}"],
+                         capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "-C", REPO, "rev-parse", "origin/main"],
+                          capture_output=True, text=True).stdout.strip()
+    if not sha or not head:
+        check("identical-to-main fixture resolves", False, "cannot resolve README.md on main")
+        return
+    ev = (f"rule R2: {real} sha256 aaaaaaaaaaaaaaaa (1 lines) differs from origin/main "
+          f"x's bbbbbbbbbbbbbbbb (1 lines). worktree HEAD when judged: {head}")
+    with tempfile.TemporaryDirectory() as tmp:
+        fn = _tsv(tmp, [("/home/reyerchu/w", "RECOVER", ev)])
+        rc, out = run("contract_check.py", "--file", fn)
+        check("contract check FAILS a RECOVER whose file is IDENTICAL to main",
+              rc == 1 and "IDENTICAL to main" in out, out[-400:])
+        src = open(os.path.join(HERE, "contract_check.py")).read()
+        blinded = src.replace(
+            'elif at_head == at_main:', 'elif False:  # BLINDED', 1)
+        check("blinding fixture actually differs from the shipped source", blinded != src)
+        rc2, out2 = run("contract_check.py", "--file", fn, source=blinded)
+        check("blinded, it MISSES it — this is the guarantee being pinned",
+              "IDENTICAL to main" not in out2, out2[-300:])
+
+
+def test_contract_check_main_is_derived_not_frozen():
+    """MAIN was a frozen sha. A gate that checks freshness against a constant inherits
+    the very staleness it is meant to catch, and reports it as a pass."""
+    src = open(os.path.join(HERE, "contract_check.py")).read()
+    check("contract check derives MAIN from origin/main",
+          "_current_main()" in src and 'MAIN = "' not in src.split("_FALLBACK_MAIN")[0],
+          "MAIN still looks frozen")
+    cur = subprocess.run(["git", "-C", REPO, "rev-parse", "origin/main"],
+                         capture_output=True, text=True).stdout.strip()
+    rc, out = run("contract_check.py", "c")
+    check("and agrees with the live origin/main", rc == 0 and cur[:9] in out or rc == 0,
+          out[-200:])
+
+
 for t in (test_rescue_gate_both_directions,
           test_rescue_gate_catches_trailing_comma_regression,
           test_parity_gate_all_directions,
-          test_contract_check_shape_and_inputs):
+          test_contract_check_shape_and_inputs,
+        test_contract_check_each_guarantee,
+        test_contract_check_catches_recover_identical_to_main,
+        test_contract_check_main_is_derived_not_frozen):
     print(f"\n--- {t.__name__}")
     t()
 

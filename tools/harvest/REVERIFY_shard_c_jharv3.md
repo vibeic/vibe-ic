@@ -326,3 +326,64 @@ Amended shard C against it: 19 deletion-bound rows, 0 vacuous, 0 stale,
 The honest summary of this round: I verified 8 of my 19 deletion-bound rows are safe
 to act on and disclosed that 11 rest on an input nobody measured. That is a weaker
 claim than the one the file made before, and it is the true one.
+
+---
+
+## Fifth round: I ran the blinding sweep over my own three gates. 23 of 31 survived.
+
+jharv2 held `evidence_contract.py`'s three guarantees to both arms and found one had
+no case at all. I did the mechanical version of that: blind each guard in
+`contract_check.py`, `joined_parity.py` and `rescue_contradiction.py` one at a time,
+and ask whether `test_gates.py` notices.
+
+**23 of 31 guarantees could be deleted without the suite noticing.** The worst is
+`contract_check.py` — **15 of 18**, which is its *entire validation body*:
+
+```
+  contract_check.py:131  if len(f) != 3:                     SURVIVED
+  contract_check.py:136  if verdict not in OK:               SURVIVED
+  contract_check.py:138  if not p.startswith("/"):           SURVIVED
+  contract_check.py:140  if len(ev.strip()) < 40:            SURVIVED
+  contract_check.py:142  ABANDON must say why                SURVIVED
+  contract_check.py:163  elif at_head == at_main:            SURVIVED
+  ... 9 more, the whole sha256 ladder
+```
+
+The cause is visible by inspection, so it needs no sweep to believe: every contract
+test ran the gate against the **real** shard files, which are valid, plus two
+input-handling errors. Nothing ever fed it a malformed row, so nothing that rejects
+bad input was ever reached. All 15 could have been `if False:` and this suite would
+still have printed `all gate tests passed`.
+
+That is the same defect as my vacuous negative control and jharv2's absent-file
+branch, and it is the third time the shape has appeared in a *proof* rather than in
+data. A gate that can only be pointed at correct input cannot be shown to reject
+incorrect input.
+
+**Fixes.**
+
+`contract_check.py` gained `--file F`, so it can be pointed at a synthetic file
+rather than only at a ref. Each guarantee now has a case that violates exactly it,
+plus a BASELINE asserting the same row passes without the violation — so a gate that
+rejected everything could not satisfy both arms. The guarantee that matters most, a
+RECOVER whose named file is byte-identical to main, is pinned in both directions:
+
+```
+  PASS  contract check FAILS a RECOVER whose file is IDENTICAL to main
+  PASS  blinding fixture actually differs from the shipped source
+  PASS  blinded, it MISSES it — this is the guarantee being pinned
+```
+
+**And a stale constant, found while reading it.** `MAIN` was the literal string
+`81cd5321b0…`, frozen on the night it was written. It happens to equal current main
+today, so the gate is right *now* and rots silently. A gate that checks freshness
+against a constant inherits the exact staleness it exists to catch — the 355 verdicts
+were re-judged for precisely that reason. It is now derived from `origin/main`, with
+the frozen value kept only as a last resort that says so on stderr.
+
+The remaining 8 survivors are defensive input guards in `joined_parity.py` and
+`rescue_contradiction.py` (empty body, short line, absent path). I checked
+`rescue_contradiction`'s `if not guarded:` by hand rather than assuming: its
+`ls-remote` runs with `check=True`, so a network failure dies instead of returning
+empty, and "nothing to gate" can only follow a *successful* empty query. That one is
+sound as written.

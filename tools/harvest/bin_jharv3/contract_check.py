@@ -2,6 +2,14 @@
 """Validate a shard verdicts file against the deliverable contract.
 
     usage: contract_check.py [shard]        shard in {a,b,c}, default c
+           contract_check.py --file F       validate a local file instead of a ref
+
+WHY --file EXISTS. A mutation sweep showed 15 of this script's 18 guarantees could be
+deleted without its test suite noticing: the suite only ever ran it against the REAL
+shard files, which are valid, so nothing in the validation body was ever exercised.
+A gate that can only be pointed at correct input cannot be shown to reject incorrect
+input. --file makes each guarantee testable, and is useful on its own for checking a
+file before pushing it.
     env:   VIBEIC_REPO   path to the vibe-ic clone (default: this file's own repo)
            VIBEIC_REF    ref to read the file from
                          (default: origin/harvest/worktree-triage-jharvest)
@@ -38,7 +46,25 @@ import subprocess
 import sys
 
 DEFAULT_REF = "origin/harvest/worktree-triage-jharvest"
-MAIN = "81cd5321b082f9535f1a607a6feb7855498e7fe6"
+# DERIVED, never hardcoded. This was the literal string
+# "81cd5321b082f9535f1a607a6feb7855498e7fe6", which was current main on the night it
+# was written and is a stale constant on every night after. The whole re-judgement
+# exists because 355 verdicts were measured against a main 4 to 18 days old; a gate
+# that checks freshness against a frozen sha inherits exactly that bug and reports it
+# as a pass. The old value is kept only as the last resort, and saying so out loud.
+_FALLBACK_MAIN = "81cd5321b082f9535f1a607a6feb7855498e7fe6"
+
+
+def _current_main():
+    p = subprocess.run(["git", "-C", REPO, "rev-parse", "origin/main"],
+                       capture_output=True, text=True)
+    sha = p.stdout.strip()
+    if p.returncode == 0 and len(sha) == 40:
+        return sha
+    print(f"WARNING: cannot resolve origin/main; falling back to the frozen "
+          f"{_FALLBACK_MAIN[:9]}, which may be stale.", file=sys.stderr)
+    return _FALLBACK_MAIN
+
 OK = {"RECOVER", "ABANDON", "LANDED", "UNREACHABLE"}
 
 
@@ -59,6 +85,7 @@ def find_repo():
 
 
 REPO = find_repo()
+MAIN = _current_main()   # after REPO exists: derived, not frozen
 REF = os.environ.get("VIBEIC_REF", DEFAULT_REF)
 
 
@@ -98,23 +125,38 @@ MAIN_CITED = re.compile(r"\b([0-9a-f]{9,40})\b")
 
 
 def main():
-    shard = (sys.argv[1] if len(sys.argv) > 1 else "c").lower()
-    if shard not in {"a", "b", "c"}:
-        die(f"shard must be a, b or c, not {shard!r}")
-    rel = f"tools/harvest/verdicts_shard_{shard}.tsv"
+    argv = sys.argv[1:]
+    shard = "(local file)"
+    if argv and argv[0] == "--file":
+        if len(argv) < 2:
+            die("--file needs a path")
+        rel = argv[1]
+        try:
+            body = open(rel).read()
+        except OSError as e:
+            die(f"cannot read {rel}: {e}")
+        if not body.strip():
+            die(f"{rel} is absent or empty")
+        print(f"repo   {REPO}")
+        print(f"file   {rel} (local)")
+    else:
+        shard = (argv[0] if argv else "c").lower()
+        if shard not in {"a", "b", "c"}:
+            die(f"shard must be a, b or c, not {shard!r}")
+        rel = f"tools/harvest/verdicts_shard_{shard}.tsv"
 
-    if REF.startswith("origin/"):
-        git("fetch", "-q", "origin", REF[len("origin/"):], check=False)
-    rev = git("rev-parse", "--verify", "--quiet", REF, check=False).strip()
-    if not rev:
-        die(f"ref {REF!r} does not resolve in {REPO}; fetch it or set VIBEIC_REF")
-    body = git("show", f"{rev}:{rel}", check=False)
-    if not body.strip():
-        die(f"{rel} is absent or empty at {REF} ({rev[:9]})")
+        if REF.startswith("origin/"):
+            git("fetch", "-q", "origin", REF[len("origin/"):], check=False)
+        rev = git("rev-parse", "--verify", "--quiet", REF, check=False).strip()
+        if not rev:
+            die(f"ref {REF!r} does not resolve in {REPO}; fetch it or set VIBEIC_REF")
+        body = git("show", f"{rev}:{rel}", check=False)
+        if not body.strip():
+            die(f"{rel} is absent or empty at {REF} ({rev[:9]})")
 
-    print(f"repo   {REPO}")
-    print(f"ref    {REF} = {rev[:9]}")
-    print(f"file   {rel}")
+        print(f"repo   {REPO}")
+        print(f"ref    {REF} = {rev[:9]}")
+        print(f"file   {rel}")
 
     lines = [l for l in body.split("\n") if l.strip()]
     problems, counts = [], {}
