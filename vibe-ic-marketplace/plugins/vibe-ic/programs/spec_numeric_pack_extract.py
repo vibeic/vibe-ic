@@ -70,7 +70,8 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
-from _prose_polarity import is_denied, sentence_scope
+from _prose_polarity import (DENIAL_RETIRED_RE, is_denied,
+                             sentence_scope)
 
 # ---------------------------------------------------------------------------
 # Comment / fence stripping is NOT done here: a CVDP prompt's status-flag and
@@ -158,7 +159,7 @@ def _detect_rounding_modes(text: str) -> List[Tuple[str, str]]:
     emitted ONLY on a named idiom hit — silence yields []."""
     found: Dict[str, str] = {}
     for tag, rx in _MODE_PATTERNS:
-        m = rx.search(text)
+        m = _first_not_retired(rx, text)
         if m and tag not in found:
             found[tag] = m.group(0).strip()
     return list(found.items())
@@ -169,10 +170,62 @@ def _detect_tiebreak(text: str) -> Optional[str]:
     return m.group(0).strip()[:120] if m else None
 
 
+def _first_live(rx, text: str):
+    """The first match of `rx` in `text` that is NOT denied, or None.
+
+    ONE HELPER FOR THE WHOLE FILE (vibe-ic#712). The width pairs were guarded
+    first and their siblings were not, so one spec was read by two rules:
+
+        "Little-endian packing is no longer used; the packing is big-endian."
+            -> "Little-endian"   (the retired order: data arrives scrambled)
+        "Round-half-up is no longer used; rounding truncates."
+            -> BOTH modes, the retired one included
+
+    Byte order and rounding are what the arithmetic IS. A denied match does not
+    END the search, or a spec that retires one convention and states another
+    yields nothing.
+    """
+    for m in rx.finditer(text):
+        lo, hi = sentence_scope(text, m.start(), m.end(),
+                                extra_breaks=_LINE_END_BREAKS)
+        if is_denied(text[lo:hi]):
+            continue
+        return m
+    return None
+
+
+def _first_not_retired(rx, text: str):
+    """Like `_first_live`, but RETIREMENT only -- not every negation.
+
+    A rounding-mode NAME describes itself, and its description legitimately
+    contains negative words. Verbatim from a real prompt:
+
+        "RTZ: Truncate the fractional part without rounding up."
+
+    `is_denied` reads "without" and drops a correctly stated mode -- measured,
+    it broke `test_named_rounding_mode_round_to_nearest_even_verbatim`, which
+    quotes that line from the corpus. So here only a RETIREMENT denies:
+    "no longer used", not any "without" or "no".
+
+    WHAT THIS MISSES, said plainly: "The design does not use round-half-up" is
+    not caught, because the vocabulary that catches it is the one that
+    false-refuses the line above. Between a false refusal on real corpus text
+    and a missed denial, this takes the missed denial -- and says so, rather
+    than trading a visible regression for an invisible improvement.
+    """
+    for m in rx.finditer(text):
+        lo, hi = sentence_scope(text, m.start(), m.end(),
+                                extra_breaks=_LINE_END_BREAKS)
+        if DENIAL_RETIRED_RE.search(text[lo:hi]):
+            continue
+        return m
+    return None
+
+
 def _detect_flags(text: str) -> List[str]:
     flags: List[str] = []
     for tag, rx in _FLAG_PATTERNS:
-        if rx.search(text):
+        if _first_live(rx, text):
             flags.append(tag)
     return flags
 
@@ -183,6 +236,12 @@ def _detect_saturation(text: str) -> Optional[str]:
     sizing (no active verb in-clause) is NOT a behavioral saturation
     requirement. Returns the evidence phrase or None."""
     for clause in _clauses(text):
+        # THE CLAUSE IS THE RECORD here -- this loop already splits on them --
+        # so a clause that RETIRES the requirement is not one that states it.
+        # "Saturation on overflow is no longer used" was returned as the
+        # evidence FOR saturation.
+        if is_denied(clause):
+            continue
         m = _SATURATE_RE.search(clause)
         if not m:
             continue
@@ -428,7 +487,7 @@ def _detect_byte_enable_width(text: str) -> Optional[int]:
 
 
 def _detect_byte_order(text: str) -> Optional[str]:
-    m = _BYTEORDER_RE.search(text)
+    m = _first_live(_BYTEORDER_RE, text)
     return m.group(0).strip() if m else None
 
 
