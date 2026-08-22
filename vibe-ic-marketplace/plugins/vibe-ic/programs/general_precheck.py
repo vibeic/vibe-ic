@@ -254,6 +254,12 @@ class Delegate:
     positional: str = "project"      # "project" | "reports_dir"
 
 
+#: Delegates that judge against a PDK's OWN stated rules and therefore cannot
+#: reach a verdict without being told which PDK. Named as a set so that adding
+#: one is a decision a reader can see, not a flag buried in an argv tuple.
+_PDK_AWARE_DELEGATES = frozenset({"metal_layer_density_check"})
+
+
 @dataclass(frozen=True)
 class Step:
     step_id: str
@@ -685,7 +691,8 @@ def _step_forbidden_layers(ev: StepEvidence, layers: Optional[Dict[Any, int]],
 def _step_delegate(ev: StepEvidence, step: Step, project: Path,
                    runner: Runner, programs_dir: Path,
                    timeout: Optional[float],
-                   seal_required: Any = None) -> None:
+                   seal_required: Any = None,
+                   pdk: Optional[str] = None) -> None:
     d = step.delegate
     assert d is not None
     if step.step_id == "General.SealRing" and seal_required is _decl.NOT_DETERMINED:
@@ -710,7 +717,17 @@ def _step_delegate(ev: StepEvidence, step: Step, project: Path,
                   else str(project / "reports" / "phase3"))
     out = project / d.report_rel
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, str(prog), positional, *d.argv_tail,
+    # `--pdk` IS NOT COSMETIC FOR THIS DELEGATE. MEASURED: with no PDK named,
+    # `metal_layer_density_check` has no per-layer windows, every metal layer
+    # comes back UNCHECKED and the step FAILs — on a die whose densities were
+    # measured and are comfortably inside the foundry's own rule. The delegate
+    # declared an EMPTY argv_tail, so the one argument that lets a PDK-aware
+    # gate reach a verdict was never passed. Forwarded here rather than frozen
+    # into `argv_tail` because the PDK is resolved per RUN, not per step.
+    extra: List[str] = []
+    if d.program in _PDK_AWARE_DELEGATES and pdk:
+        extra = ["--pdk", pdk]
+    cmd = [sys.executable, str(prog), positional, *d.argv_tail, *extra,
            "--json", str(out)]
     rc, stdout, stderr = runner(cmd, timeout)
     ev.returncode = rc
@@ -737,8 +754,16 @@ def evaluate(project: Path,
              declaration_path: Optional[Path] = None,
              runner: Optional[Runner] = None,
              programs_dir: Optional[Path] = None,
-             timeout: Optional[float] = 3600.0) -> PrecheckReport:
-    """Run the general ladder and report what came back — including nothing."""
+             timeout: Optional[float] = 3600.0,
+             pdk: Optional[str] = None) -> PrecheckReport:
+    """Run the general ladder and report what came back — including nothing.
+
+    `pdk` is forwarded to the delegates in `_PDK_AWARE_DELEGATES`, which judge
+    against a PDK's OWN stated rules and cannot reach a verdict without being
+    told which one. None is a legitimate state and stays honest: the delegate
+    is invoked without `--pdk`, has no windows, and the step reports that it
+    could not be judged — it is never credited as a pass.
+    """
     run = runner or default_runner
     pdir = programs_dir or _HERE
     steps = [_blank(s) for s in LADDER]
@@ -825,7 +850,8 @@ def evaluate(project: Path,
             seal = ans.get("seal_ring_required")
             _step_delegate(ev, step, project, run, pdir, timeout,
                            seal_required=(seal if _decl.is_answered(seal)
-                                          else _decl.NOT_DETERMINED))
+                                          else _decl.NOT_DETERMINED),
+                           pdk=pdk)
 
     with_evidence = sum(1 for s in steps if s.verdict != NOT_DETERMINED)
     failed = [s.step_id for s in steps if s.verdict == FAIL]
@@ -872,6 +898,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--declaration", type=Path, default=None,
                    help="The tape-out declaration (default: <project>/"
                         + _decl.DECLARATION_REL + ").")
+    p.add_argument("--pdk", default=None,
+                   help="The PDK whose OWN stated per-layer rules the density "
+                        "delegate should judge against. Without it that gate "
+                        "has no windows, every layer is UNCHECKED and the step "
+                        "cannot reach a verdict — so an absent --pdk is "
+                        "reported, never treated as a clean result.")
     p.add_argument("--timeout", type=float, default=3600.0,
                    help="Seconds to allow each delegated checker "
                         "(default: %(default)s).")
@@ -885,7 +917,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
-    rep = evaluate(project=args.project, layout=args.layout,
+    rep = evaluate(project=args.project, layout=args.layout, pdk=args.pdk,
                    declaration_path=args.declaration, timeout=args.timeout)
     payload = rep.as_dict()
     out_json = args.out_json or (args.project / PRECHECK_ARTEFACT)
