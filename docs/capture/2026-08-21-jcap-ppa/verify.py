@@ -100,7 +100,7 @@ control("similarity", sim(_b, _near) > 0.85 and sim(_b, RECS[7]["pattern"]) < 0.
 worst = max((sim(x["pattern"], y["pattern"]), x["bucket"] + y["bucket"])
             for x, y in __import__("itertools").combinations(
                 [r for r in RECS if str(r.get("pattern", "")).strip()], 2))
-check("no two patterns restate one class", worst[0] < 0.60, f"max {worst[0]:.2f}")
+check("no two patterns are lexically near-duplicate (a conceptual restatement in other words is invisible here)", worst[0] < 0.60, f"max {worst[0]:.2f}")
 
 # 6. B/C/D/T honest sentence rendered verbatim in the report
 flat = " ".join(MD.split()).lower()
@@ -121,7 +121,12 @@ check("summary file list agrees with disk",
 
 # 8. every sketch resolves back to a section by name
 def slug(x: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", x.lower()).strip("_")[:80]
+    # MIRROR THE EMITTER, do not normalise independently. The emitter maps each
+    # non-alphanumeric character to a separator WITHOUT collapsing runs, so ", "
+    # becomes two. This function collapsed them, and the two agreed for 37 rule
+    # names because not one contained a comma. The 38th did, and the check that
+    # resolves a sketch to its section failed on a document that was correct.
+    return "".join(c if c.isalnum() else "_" for c in x.lower()).strip("_")[:80]
 byslug = {slug(h) for _, h in heads}
 defs = [d for f in CAND.glob("*.py")
         for d in re.findall(r"^def rule_(\w+)\(", f.read_text(), re.M)]
@@ -412,9 +417,20 @@ if SLOW:
     # whose second clause is true whenever the gate printed anything at all,
     # so it could not detect that. Assert the parse produced a real population
     # and that it did not over-match into a name the gate never prints.
-    control("wiring-live", bool(_live) and "no_such_program" not in _live)
-    check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
-          not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
+    # The gate prints the unwired NAMES only when it fails. After main wired three
+    # of them it passes, the list is absent, and the intersection below would be
+    # empty for a reason that has nothing to do with this batch. The control
+    # caught exactly that -- it reported BROKEN rather than letting the check
+    # pass on an empty parse. So the two cases are separated instead.
+    if _r.returncode == 0:
+        control("wiring-live", "gates:" in _r.stdout)
+        check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
+              True, "the gate PASSES, so it prints no unwired list; the "
+                    "baseline form of this question is check 18")
+    else:
+        control("wiring-live", bool(_live) and "no_such_program" not in _live)
+        check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
+              not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
 
     # 22. the LIVE FIGURES this report quotes must still be what the gate says.
     #     Two places quote "gates N, unwired M (baseline B)" from a run made
@@ -452,7 +468,14 @@ else:
 _ids = {sid for sid, _ in heads}
 _refs = {m.group(1) for m in re.finditer(r"(?<![A-Za-z-])([ACT]-\d+)\b", MD)}
 control("dangling-refs", "A-999" not in _ids)
-_dang = sorted(_refs - _ids)
+# A record can be WITHDRAWN -- closed on main while this branch was open -- and
+# the prose still has to name it, in the ALREADY-PROGRAM row that replaced it and
+# in the sweep synthesis that still counts its result. The withdrawal is declared
+# in a section of its own, and ids named there are history, not dangles.
+_WD = "## A record closed on main"
+_withdrawn = (set(re.findall(r"`([ACT]-\d+)`", MD[MD.index(_WD):][:1500]))
+              if _WD in MD else set())
+_dang = sorted(_refs - _ids - _withdrawn)
 check("no prose reference points at a record with no section",
       not _dang, f"{len(_refs)} referenced, dangling {_dang}")
 
@@ -547,7 +570,7 @@ _secs = {m.group(1): s for s in re.split(r"^### ", MD, flags=re.M)[1:]
 control("brief-questions", all("**(z)**" not in s for s in _secs.values()))
 _no_o = sorted(k for k, s in _secs.items() if "**(o)**" not in s)
 _no_d = sorted(k for k, s in _secs.items() if "**(d)**" not in s)
-check("every record answers the brief's two questions",
+check("every record carries BOTH answer markers (not that the answers are good)",
       len(_secs) == len(RECS) and not _no_o and not _no_d,
       f"{len(_secs)} sections; missing (o): {_no_o or 'none'}; missing (d): {_no_d or 'none'}")
 
@@ -778,6 +801,59 @@ check("the brief's four constraints hold, measured against the base",
       not _viol,
       f"plugin files touched: {len(_plugdiff)}" + ("; " + "; ".join(_viol) if _viol else
       "; no version bump, no baseline, no program added, HEAD not on main"))
+
+# 48. the contention table in the summary is DERIVED from the routing, so derive
+# it. It went stale three times -- once by five rules, once when a record was
+# added at a shared target, once when a whole second cluster formed and the list
+# did not mention it. Every one of those was a figure a reader acts on: it tells
+# an implementing lane which rules must be applied in one pass over one file.
+import collections as _co
+_prog_of = {}
+for _r in RECS:
+    if _r["bucket"] != "A" or _r["step"] not in ROUTING["steps"]: continue
+    _prog_of.setdefault(pathlib.Path(
+        ROUTING["steps"][_r["step"]]["bucket_A_program"]).stem, []).append(_r)
+_live_rows = {k: len(v) for k, v in _prog_of.items() if len(v) >= 3}
+_stated = {m.group(2): int(m.group(1))
+           for m in re.finditer(r"^ {4,}(\d+) rules -> (\w+)", MD, re.M)}
+control("contention", bool(_live_rows) and "no_such_program" not in _stated)
+check("the contention table matches the routing it is derived from",
+      _stated == _live_rows,
+      f"stated {dict(sorted(_stated.items()))} vs routed {dict(sorted(_live_rows.items()))}")
+
+# 49. the routing figures the report quotes -- how many steps this branch adds
+# against the base, and how many records would be UNROUTED without them -- are a
+# projection of two files the repository holds. I re-derived them by hand five
+# times in one session and they went stale twice anyway, each time because a
+# record was added at a step the base does not carry. Derive them.
+_bR = _sp2.run(["git", "show",
+                "origin/main:vibe-ic-marketplace/plugins/vibe-ic/benchmark/CAPTURE_ROUTING.json"],
+               capture_output=True, text=True, cwd=str(ROOT))
+if _bR.returncode == 0:
+    def _steps(txt):
+        d = json.loads(txt)
+        return next(v for v in d.values() if isinstance(v, dict)
+                    and any(isinstance(x, dict) and "bucket_A_program" in x for x in v.values()))
+    _base_steps = set(_steps(_bR.stdout))
+    _new_steps = set(ROUTING["steps"]) - _base_steps
+    _at_new = sum(1 for r in RECS if r.get("step") in _new_steps)
+    _q = re.search(r"gains \*\*(\d+)\*\* steps\. Without them \*\*(\d+) of the\s+(\d+)\s+records\*\*",
+                   MD, re.S)
+    control("routing-figures", bool(_base_steps) and bool(_q))
+    # the same projection carries one more figure a record quotes: how many
+    # distinct programs the batch routes at. It was 16 and is 18, stale for the
+    # same reason and caught by the same derivation.
+    _ntp = len({ROUTING["steps"][r["step"]]["bucket_A_program"]
+                for r in RECS if r["bucket"] == "A" and r.get("step") in ROUTING["steps"]})
+    _qtp = re.search(r"^ {4,}distinct target programs\s+(\d+)", MD, re.M)
+    check("the quoted distinct-target-program count is the routed one",
+          bool(_qtp) and int(_qtp.group(1)) == _ntp,
+          f"live {_ntp}, quoted {_qtp.group(1) if _qtp else '-'}")
+    check("the quoted routing figures are derived from the two routing files",
+          bool(_q) and (int(_q.group(1)), int(_q.group(2)), int(_q.group(3)))
+                       == (len(_new_steps), _at_new, len(RECS)),
+          f"live ({len(_new_steps)}, {_at_new}, {len(RECS)}); quoted "
+          + (f"({_q.group(1)}, {_q.group(2)}, {_q.group(3)})" if _q else "not found"))
 
 print()
 if fails:

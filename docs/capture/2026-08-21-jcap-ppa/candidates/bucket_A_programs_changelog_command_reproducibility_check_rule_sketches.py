@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/changelog_command_reproducibility_check.py
 # Corpus-sweep REQUIRED before merging into programs/changelog_command_reproducibility_check.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: Shipped documentation quotes a command as the way to run a tool. The tool's options change; the document does not, because nothing relates the two. An existing guard may already check that the named FILE exists — which it does — so the command looks verified while the invocation itself has never been tried. An agent following the instruction literally gets an argument error and no output, and the document that sent it there is the same document a reviewer would consult to confirm the instruction is right.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/flow_compliance_check.py
 # Corpus-sweep REQUIRED before merging into programs/flow_compliance_check.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A step writes an artefact wherever its own option points. A later consumer needs that artefact and locates it by trying an ordered list of names it carries in its own source, taking the first that exists. The flow document ALREADY declares the path, and the consumer never reads it — so one artefact has two definitions of where it lives, and the list is where they drift. Nothing detects the drift, because a consumer that finds nothing reports the artefact as absent, which is indistinguishable from a step that did not run.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/crosslayer_rewrite_equivalence.py
 # Corpus-sweep REQUIRED before merging into programs/crosslayer_rewrite_equivalence.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A prover reports the same negative verdict whether it ran out of budget partway or finished its method and left a point open. The two demand opposite responses -- more time, or a different relation -- and the record distinguishes them only by elapsed seconds, which a reader must interpret. Detect by requiring any verdict a budget can cause to carry both how far the method got and whether the budget ended it.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

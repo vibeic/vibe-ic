@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/_atomic_artefact.py
 # Corpus-sweep REQUIRED before merging into programs/_atomic_artefact.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A tool takes an output path from the caller and writes it as given. A relative path is resolved against the process working directory, which for a tool invoked from inside the installation is the installation. The write then creates directories and files inside the INSTALLED product, where they survive the run, appear as untracked additions, and can be picked up by the next hygiene or packaging pass as if they were shipped content. The failure is invisible to the caller because the write succeeds.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

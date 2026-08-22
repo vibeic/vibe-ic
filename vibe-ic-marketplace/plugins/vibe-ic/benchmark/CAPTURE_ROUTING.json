@@ -264,10 +264,6 @@
       "bucket_A_program": "programs/_ppa/metrics.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
-    "ppa.pareto": {
-      "bucket_A_program": "programs/ppa_pareto_check.py",
-      "bucket_B_skill_file": "skills/design-for-eco/SKILL.md"
-    },
     "ppa.cli_contract": {
       "bucket_A_program": "programs/_ppa/cli_exit.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
@@ -299,6 +295,10 @@
         "programs/gatekeeper_review.py"
       ],
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "ppa.timing_scope": {
+      "bucket_A_program": "programs/_ppa/timing.py",
+      "bucket_B_skill_file": "skills/sta-review/SKILL.md"
     }
   },
   "default_routing": {

@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/backlog_sanitize_check.py
 # Corpus-sweep REQUIRED before merging into programs/backlog_sanitize_check.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A validator accepts a prefixed value and names, per prefix, the vocabulary the suffix is drawn from. One branch's suffix pattern cannot express any member of the vocabulary it names — every member carries a character the pattern excludes. The branch is therefore dead: it matches nothing, it has never matched anything, and it never will. Nothing detects this, because a branch that refuses everything looks exactly like a branch nobody has used yet, and the error message lists it among the supported forms.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

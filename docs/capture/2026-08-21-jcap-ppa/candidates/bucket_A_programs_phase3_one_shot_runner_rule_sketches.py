@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/phase3_one_shot_runner.py
 # Corpus-sweep REQUIRED before merging into programs/phase3_one_shot_runner.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A runner reads configuration from a directory inside the design's own input tree and reports the ingest by naming that path. When a caller has no first-class way to set the knob, it stages the file there, and the audit line then attributes to the design a value the caller chose. The record carries no field for who declared it, so the distinction survives only in whatever comment the author thought to write. Detect by requiring each ingested input to carry a declarer, and refuse an ingest that cannot say.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

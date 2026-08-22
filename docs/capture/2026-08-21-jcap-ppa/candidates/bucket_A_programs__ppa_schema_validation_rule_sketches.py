@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/_ppa/schema_validation.py
 # Corpus-sweep REQUIRED before merging into programs/_ppa/schema_validation.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: An interface states that every instance document declares its type and that each type has a schema. Producers duly stamp the type into every document they write. Nothing checks that the schema exists, so types accumulate faster than schema files and most documents end up self-declaring a type nothing can validate them against. The gap is silent by construction: the document is well-formed, it names its type, and a consumer that validates only when a schema is found reports success on the ones where none is.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
