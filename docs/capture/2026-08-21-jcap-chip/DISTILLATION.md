@@ -1995,3 +1995,26 @@ The message names the remedy and forbids the wrong one in the same sentence,
 because the tempting repair for a floor that fires is to lower the floor.
 
 281 tests across the thirteen.
+
+## The follow-on branch, held to the same standard as the frozen one
+
+`next/chip-path-rule-verdict-pins` carries the correction to the false positive and
+four vacuity guards. It lands AFTER the frozen batch, which makes it easy to leave
+unverified — the frozen branch got the measurement and this one inherits the
+assumption. It should not, so it was measured the same way.
+
+    merge-base with main            81cd5321b   (main a4caccefe)
+    merge                           conflicts on the SAME four generated counters
+                                    and nothing else — no source conflict
+    after the tested recipe         conflicts remaining 0
+    composed counters               programs_top_level 1252, catalogued 1177
+                                    (unchanged from the frozen branch: this branch
+                                     adds no programs)
+    the thirteen lane test files    281 passed on the merged tree
+    wired gates, main vs merged     61 compared, 0 differing
+
+Same four conflicts, same recipe, same composed counters, no wired gate moved. The
+one behavioural change it carries — arm B following one-hop delegation, so
+`sta_mcorner_ocv_posteco.rpt` is no longer reported — changes that gate's finding
+set from three to two and changes nothing else, which the 61-gate comparison
+confirms rather than assumes.
