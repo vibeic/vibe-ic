@@ -25,7 +25,9 @@ applied. It merged clean in every test here, so this looks unintended (§9).
 * `recoveries.json` -- **RESOLVED at 45 rows**; the disputed rule was KEPT under
   `jdistmat`'s renamed form. §7 said eleven entries needed two authors, §8 reduced
   it to one row by measuring content instead of keys, and §9 records how it landed.
-* The batch **assembles**: fifteen of the sixteen frozen branches are in (§6, §9).
+* The batch **assembles**: fifteen of the sixteen frozen branches are in (§6, §9),
+  and the assembled tree is regression-clean across the modules covering the files
+  where branches overlap -- 444 passes, no failures (§9).
 
 **A caution on the numbers here:** the hygiene baseline in §4 is stamped
 `a4caccefe` and expires into a FALSE ACCUSATION if diffed after exemption work
@@ -415,3 +417,24 @@ of its distinctive added LINES are present). Presence in a merged tree has to be
 tested by CONTENT THAT SURVIVES MERGING, not by whole-file equality. And §8
 predicted `jcap-ppa` would be the hold-out; the count was right and the name was
 wrong.
+
+### Regression-tested on the assembly, not only on a branch
+
+The interesting case is a module that passes on each branch alone and fails when
+two land together. Nothing tested before this touched that: the pre-existing
+modules were run against a single branch. Re-run on `land/one-assembled`
+(`e11626e28`), choosing the modules that cover the files where branches actually
+overlap -- `gatekeeper_review.py` and `CAPTURE_ROUTING.json`:
+
+    gatekeeper_review, three_orphan_checkers_have_a_machine_runner,
+    two_gates_declare_where_their_verdict_is_consumed, ledger_is_not_a_runner
+        -> 55 passed
+    ppa_pr_scope_check, pg_rail_geometry_check, issue306_gate_enforcement_audit,
+    issue459_landing_is_one_commit, matrix_d2_falsifiable
+        -> 214 passed, 2 xfailed
+    the four modules exercising this work (§9)
+        -> 175 passed, 9 skipped
+
+    444 passes on the assembled tree, no failures.
+
+`suite_write_guard` confirmed each session wrote nothing into the tree.
