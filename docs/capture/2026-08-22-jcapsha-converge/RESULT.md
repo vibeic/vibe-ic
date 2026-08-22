@@ -102,15 +102,23 @@ today:
 | `pad_ring_gen.py`:246 | artefact key `"rotation_vertical_inert"` |
 | `pad_ring_gen.py`:185 | constant `ROTATION_VERTICAL_INERT`, `"honoured": False` |
 | `pad_ring_gen.py`:67 | heading: `PAD_ROTATION_VERTICAL` IS INERT, AND SAYS SO OUT LOUD |
-| `pad_ring_gen.py`:68 | "The same measurement shows the placer does not read it" |
+| `pad_ring_gen.py`:69 | "The same measurement shows the placer does not read it" |
 | `pad_ring_gen.py`:313 | "does not reach this dict because it does not reach the tool either" |
-| `_pad_ring.py`:279 | "a CONSTANT of the placer, not a function of the declared rotation" |
+| `_pad_ring.py`:275 | "a CONSTANT of the placer, not a function of the declared rotation" |
 
 Every one asserts, in the schema and in the source, the proposition the
 branch's own re-measurement withdrew. **A retraction published in a report does
 not reach a reader who keys on a field name.** The behaviour is right — the
 step refuses rc 2 on a non-default value — and the name it refuses under says
 something false about why.
+
+Two line numbers in the table above were wrong in the first push of this
+section — `pad_ring_gen.py`:68 is the `===` underline beneath the heading, not
+the sentence, and the `_pad_ring.py` comment is at :275, not :279. Both were
+caught by re-reading every citation with `sed -n '<n>p'` before publishing,
+which is the check this whole report argues for; they are corrected above. The
+anchor STRINGS are the durable form and are quoted in full, so a reader can
+find them at any head.
 
 ### The consequence I am NOT confirming, and why it is written down anyway
 
