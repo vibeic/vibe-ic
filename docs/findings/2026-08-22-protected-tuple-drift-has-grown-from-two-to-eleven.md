@@ -126,3 +126,50 @@ It does not make the repair a lane's job. The refusal is raised on the BASE at
 that renders a perfect PREPARE receives the identical refusal. What the table
 above changes is only the cost of the owner's decision: each path now arrives
 with the commits that moved it, rather than as a hash that matches nothing.
+
+## The eleven split two ways, and the split is the owner's decision
+
+_Computed against `origin/main` at `a4caccefe` from the manifest's own
+`current.files` / `next.files` hashes — a path is "declared to move" iff the two
+states disagree about it._
+
+The transition `landing-lane-parallel-window-v1` declares **three** paths as
+moving. Of the eleven that hash to neither state:
+
+**A — the three declared to move, all three now past `next` (3 of 3)**
+
+    tools/gatekeeper-land.sh
+    programs/ci_harness_timeout_ceiling_check.py
+    programs/landing_merge_verdict.py
+
+These are the ACTIVATE itself. The earlier finding recorded the first two as
+correctly sitting at `next` — the half that had landed — and only
+`landing_merge_verdict.py` as a third state. **All three are now a third
+state.** The authorised part of the transition has been fully undone by
+ordinary work. For this group a re-render is a coherent repair: it authorises
+the state they are actually in, and the question is only whether that state is
+the intended destination.
+
+**B — the eight that moved outside the transition (8)**
+
+    tools/ci/_gate_dispatch.sh
+    tools/ci/landing_completion_record.py
+    tools/ci/repo_hygiene_gates.sh
+    tools/ci/routed_def_corpus.py
+    programs/_corpus_location.py
+    programs/hygiene_finding_delta.py
+    programs/repo_hygiene_parallel.py
+    programs/tests/test_matrix_63x8_coverage.py
+
+Nothing in this transition authorised any of these to move. A re-render here
+would not repair anything — it would PHOTOGRAPH eight unauthorised moves and
+record them as "the state we are leaving". Each needs a decision first: was the
+move intended, and is the current content the content that should be pinned.
+
+## Why the split matters more than the count
+
+"Eleven paths drifted" reads as one problem of size eleven. It is two problems:
+three paths where the transition's own intent is known and only the destination
+is in question, and eight where no intent was ever recorded. The first group can
+be resolved by the transition's author. The second cannot be resolved by anyone
+without asking the landings named in the table above.
