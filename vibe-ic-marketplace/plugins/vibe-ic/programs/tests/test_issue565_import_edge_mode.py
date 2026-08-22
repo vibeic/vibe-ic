@@ -138,3 +138,74 @@ def test_the_index_fails_open_on_an_unreadable_test(tmp_path):
     idx = C._build_import_edge_index(tmp_path, {"some_module"})
     assert "some_module" in idx, "a syntactically broken sibling emptied the index"
     assert any("test_ok.py" in p for p in idx["some_module"])
+
+
+def test_the_subprocess_driver_edge_kind_contributes(tmp_path):
+    """A test that RUNS a program is depending on it as surely as one that
+    imports it, and an import graph cannot see the difference.
+
+    MEASURED on 4232a7301e, the commit that put a hygiene-record handover on
+    `gatekeeper_review`'s argv. Two guards own that property. The one that
+    imports two modules WAS selected; the one that owns "the CLI offers no way
+    to skip the hygiene set" reaches its subject as
+
+        subprocess.run([sys.executable,
+                        str(_PROGRAMS / "gatekeeper_review.py"), "--help"])
+
+    and was NOT — so the only guard on that program's CLI surface sat out the
+    change that broke it. With this edge kind the same change selects it, at a
+    cost of two files (122 -> 124) against 138 for promoting `--mode reference`
+    to the default.
+
+    Built in `tmp_path` rather than over the real tree: the property is that the
+    INDEX carries the edge, and a synthetic pair states it without depending on
+    the repository continuing to contain any particular offender.
+    """
+    fake_tests = tmp_path / "programs" / "tests"
+    fake_tests.mkdir(parents=True)
+    (tmp_path / "programs" / "driven_program.py").write_text(
+        "raise SystemExit(0)\n", encoding="utf-8")
+    # NEITHER an import NOR a spec_from_file_location — the whole point.
+    (fake_tests / "test_drives_it.py").write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "_P = Path(__file__).resolve().parents[1]\n"
+        "def test_cli():\n"
+        "    subprocess.run([sys.executable,\n"
+        "                    str(_P / \"driven_program.py\"), \"--help\"])\n",
+        encoding="utf-8")
+
+    idx = C._build_import_edge_index(tmp_path, {"driven_program"})
+    assert "programs/tests/test_drives_it.py" in idx.get("driven_program", set()), (
+        "a test that drives `driven_program.py` as a subprocess carries no edge "
+        "to it, so a change to that program does not select the test that "
+        "exercises its command line — the miss measured on 4232a7301e")
+
+
+def test_the_driver_edge_does_not_fire_on_a_bare_mention(tmp_path):
+    """The edge is keyed on the FILENAME, not on the module name, and that is
+    what keeps it two files rather than sixteen.
+
+    `_build_reference_index` matches the bare stem, which occurs in prose, in
+    comments and inside unrelated identifiers. `"driven_program.py"` occurs
+    where something RUNS it. If this ever starts matching a bare mention the
+    rule has become `reference` mode wearing a different name, and its measured
+    cost stops being true.
+    """
+    fake_tests = tmp_path / "programs" / "tests"
+    fake_tests.mkdir(parents=True)
+    (tmp_path / "programs" / "driven_program.py").write_text(
+        "raise SystemExit(0)\n", encoding="utf-8")
+    (fake_tests / "test_only_mentions_it.py").write_text(
+        "# driven_program is discussed here and never run.\n"
+        "NOTE = 'see driven_program for the rationale'\n"
+        "def test_nothing():\n"
+        "    assert True\n",
+        encoding="utf-8")
+
+    idx = C._build_import_edge_index(tmp_path, {"driven_program"})
+    assert "programs/tests/test_only_mentions_it.py" not in idx.get(
+        "driven_program", set()), (
+        "a bare mention produced a driver edge; the rule is over-matching and "
+        "its measured +2 cost no longer holds")
