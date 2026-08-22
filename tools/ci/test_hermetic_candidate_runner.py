@@ -23,6 +23,8 @@ SPEC.loader.exec_module(runner)
 
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
+import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -57,9 +59,47 @@ def load_container(name):
         fail("Error: No such container: " + name)
     return json.loads(path.read_text(encoding="utf-8"))
 
-def save_container(doc):
-    container_path(doc["Name"].lstrip("/")).write_text(
-        json.dumps(doc), encoding="utf-8")
+@contextlib.contextmanager
+def state_lock():
+    """Serialise the state mutations real Docker serialises in its daemon.
+
+    The runner drives `container kill` and `container rm --force` CONCURRENTLY
+    during teardown, which is fine against a real daemon and was not fine here:
+    `kill` does load -> mutate -> save with nothing holding the two ends
+    together, so `rm` could unlink between them and `save` would then RESURRECT
+    the file. Measured 2026-08-22 -- a zero-byte `container.json` left behind,
+    because the stub was torn down between creating the name and writing to it.
+
+    The lock is NOT taken around a whole command. `container start --attach`
+    blocks until the container exits and is itself what `kill` ends, so holding
+    a lock across it would deadlock the pair it is meant to protect.
+    """
+    fd = os.open(str(root / ".state.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+def save_container(doc, create=False):
+    path = container_path(doc["Name"].lstrip("/"))
+    with state_lock():
+        if not create and not path.exists():
+            # REMOVED WHILE THIS COMMAND WAS MID-FLIGHT. Writing now would
+            # resurrect a container the runner has already torn down, and the
+            # test that checks cleanup is owned would see leftover state that
+            # the runner did not leave. Real Docker errors here; this returns
+            # quietly on purpose, because a non-zero exit from a late `kill`
+            # would change the runner's control flow rather than just its
+            # bookkeeping, and the fake exists to be deterministic about the
+            # latter.
+            return
+        # ATOMIC, so a stub killed mid-write can never leave a zero-byte file
+        # where a valid document or no document are the only two honest states.
+        tmp = path.parent / (path.name + "." + str(os.getpid()) + ".tmp")
+        tmp.write_text(json.dumps(doc), encoding="utf-8")
+        os.replace(str(tmp), str(path))
 
 if args[:2] == ["image", "inspect"]:
     print(json.dumps([{"Architecture": "amd64", "Id": IMAGE_ID,
@@ -176,7 +216,7 @@ elif args[:2] == ["container", "create"]:
             "Running": False, "Status": "created",
         },
     }
-    save_container(doc)
+    save_container(doc, create=True)
     (root / "evidence").mkdir(exist_ok=True)
     print(CID)
 elif args[:2] == ["container", "inspect"]:
@@ -284,12 +324,13 @@ elif args[:2] == ["container", "kill"]:
 elif args[:2] == ["container", "rm"]:
     name = args[-1]
     path = container_path(name)
-    if not path.exists():
-        fail("Error: No such container: candidate")
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if doc["State"]["Running"] and "--force" not in args:
-        fail("container is running")
-    path.unlink()
+    with state_lock():
+        if not path.exists():
+            fail("Error: No such container: candidate")
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if doc["State"]["Running"] and "--force" not in args:
+            fail("container is running")
+        path.unlink()
     print(doc["Name"].lstrip("/"))
 else:
     fail("unsupported fake Docker command: " + repr(args))
