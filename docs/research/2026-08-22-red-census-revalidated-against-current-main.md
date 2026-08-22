@@ -856,3 +856,47 @@ measurement that a second, unrelated red currently blocks"*.
 second time it split a group the census had merged. **The census's error was
 consistent in shape: it inferred causation from co-occurrence** — the ledger reds
 and the D3 reds share a symptom, and I grouped on the symptom.
+
+---
+
+# Part 17 — the census is COMPLETE: every one of the 30 is named and caused
+
+One red had never been individually diagnosed —
+`test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved`. **Run
+alone (157s), it fails with the SAME message as its two neighbours and names the
+SAME two D3 reds:**
+
+    the nested outcome run produced red test report(s) outside the matrix cell
+    join [...] NORECORD:
+      test_d3_evidence_is_live_wherever_the_run_root_exists
+      test_d3_the_compliance_audit_does_not_create_declared_outputs
+
+**So THREE 63x8 tests are downstream of TWO D3 reds, not two.** The grouping moves
+once more, and this is the last time:
+
+    14  corpus root      11 D3 + 3 nested-outcome (downstream), all one situation
+     3  mutation ledger  red BY DESIGN — frozen `applies_to` demands a measurement
+                         that the d3 red currently blocks (Part 16)
+     6  landing-verdict  2 need one line (RUN_ID); 4 fully diagnosed (Part 12)
+     5  vacuity          root-caused: the uncounted legacy branch at :10120 (Part 15)
+     1  63x8 anti-skip   a considered disagreement between two rules (Part 13)
+     1  magic            environment, not a defect
+    ---
+    30
+
+**EVERY ONE OF THE 30 IS NOW NAMED, CAUSED, AND ATTRIBUTED TO SOMEONE WHO CAN ACT.**
+Nothing is in the "red, cause unknown" state, and — unlike the frozen branch's
+version of that claim — no group rests on inference from co-occurrence. **Each
+downstream red names its upstream in its own failure text.**
+
+**Three of the six groups were regrouped after reading a commit or running one
+test alone.** The census's causes were right; **its GROUPING was wrong three times,
+always in the same direction — merging on a shared symptom.** The corrective was
+never cleverness. It was running one test by itself, or reading the commit that
+wrote the line.
+
+**What a lander should take from the whole exercise:** the frozen branch's
+findings survive 244 commits, four of its five requests have been answered
+upstream, and the remaining 30 reduce to **four decisions and two environment
+facts** — of which one decision (the vacuity count) has its fix already written
+twelve lines from the defect.
