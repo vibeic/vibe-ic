@@ -1865,6 +1865,8 @@ def test_no_identifier_in_the_pad_ring_producer_asserts_inertness():
         f"identifiers still assert a proposition measured false: {offenders}")
 
 
+
+
 @pytest.mark.parametrize("kind,was,now", [("pad", "FS", "S"),
                                           ("corner", "FN", "E")])
 def test_the_gate_refuses_a_mirror_written_where_the_report_says_a_rotation(
@@ -1910,8 +1912,6 @@ def test_the_gate_refuses_a_mirror_written_where_the_report_says_a_rotation(
         f["message"] for f in _report(root)["findings"])
 
 
-
-
 def test_the_doctrine_this_probe_broke_is_cited_by_a_name_that_exists():
     """A CITATION THAT ROTS IS WORSE THAN NONE — it sends the next author to a
     file that is not there, and prose cannot notice.
@@ -1955,62 +1955,13 @@ def test_the_doctrine_this_probe_broke_is_cited_by_a_name_that_exists():
 # corner and its site width are all discovered by reading LEF, so it runs
 # against whatever is installed and stays inside the chip-AGNOSTIC rule the
 # tests above enforce on this very file.
-
-
-# --------------------------------------------------------------------------- #
-# the eight orientations, asked of the PLACER rather than of ourselves
-# --------------------------------------------------------------------------- #
-# EVERY OTHER TEST IN THIS FILE PINS THE CONSTANTS AGAINST THEMSELVES. They
-# assert that the report carries `SIDE_ORIENT` and that `SIDE_ORIENT` is a
-# particular dict, so an author who changed both together would pass all of
-# them. The only thing tying the eight values to reality was a docstring
-# saying MEASURED — which is precisely the shape of the claim this branch
-# exists to retract, one nobody could falsify without redoing the work.
-#
-# So this asks the tool. It names no kit: the IO library, its pad master, its
-# corner and its site width are all discovered by reading LEF, so it runs
-# against whatever is installed and stays inside the chip-AGNOSTIC rule the
-# tests above enforce on this very file.
-_HAVE_OPENROAD = shutil.which("openroad") is not None
-
-
-# --------------------------------------------------------------------------- #
-# the eight orientations, asked of the PLACER rather than of ourselves
-# --------------------------------------------------------------------------- #
-# EVERY OTHER TEST IN THIS FILE PINS THE CONSTANTS AGAINST THEMSELVES. They
-# assert that the report carries `SIDE_ORIENT` and that `SIDE_ORIENT` is a
-# particular dict, so an author who changed both together would pass all of
-# them. The only thing tying the eight values to reality was a docstring
-# saying MEASURED — which is precisely the shape of the claim this branch
-# exists to retract, one nobody could falsify without redoing the work.
-#
-# So this asks the tool. It names no kit: the IO library, its pad master, its
-# corner and its site width are all discovered by reading LEF, so it runs
-# against whatever is installed and stays inside the chip-AGNOSTIC rule the
-# tests above enforce on this very file.
 _HAVE_OPENROAD = shutil.which("openroad") is not None
 _PDK_ROOT = os.environ.get("PDK_ROOT") or ""
-
-
-
-_LEF_MACRO = re.compile(r"^\s*MACRO\s+(\S+)", re.M)
-
-
-_LEF_MACRO = re.compile(r"^\s*MACRO\s+(\S+)", re.M)
-_LEF_CLASS = re.compile(r"^\s*CLASS\s+([A-Z]+)(?:\s+([A-Z]+))?", re.M)
-
-
-_LEF_MACRO = re.compile(r"^\s*MACRO\s+(\S+)", re.M)
-_LEF_CLASS = re.compile(r"^\s*CLASS\s+([A-Z]+)(?:\s+([A-Z]+))?", re.M)
-_LEF_SITE = re.compile(r"^\s*SITE\s+(\S+)\s*;", re.M)
-
 
 _LEF_MACRO = re.compile(r"^\s*MACRO\s+(\S+)", re.M)
 _LEF_CLASS = re.compile(r"^\s*CLASS\s+([A-Z]+)(?:\s+([A-Z]+))?", re.M)
 _LEF_SITE = re.compile(r"^\s*SITE\s+(\S+)\s*;", re.M)
 _LEF_SIZE = re.compile(r"^\s*SIZE\s+([\d.]+)\s+BY\s+([\d.]+)", re.M)
-
-
 
 
 def _lef_cells(text: str):
@@ -2025,8 +1976,6 @@ def _lef_cells(text: str):
         out.append((m.group(1), c.group(1), c.group(2) or "",
                     s.group(1) if s else "", float(z.group(1)), float(z.group(2))))
     return out
-
-
 
 
 def _find_io_library(pdk_root: str):
@@ -2055,8 +2004,6 @@ def _find_io_library(pdk_root: str):
     return None
 
 
-
-
 _PLACER_TCL = """\
 read_lef {tech_lef}
 make_fake_io_site -name {pad_site} -width {site_w} -height {pad_h}
@@ -2081,8 +2028,6 @@ set d [$blk getDieArea]
 puts "DIE [$d xMin] [$d yMin] [$d xMax] [$d yMax]"
 """
 
-
-
 _PLACER_DEF = """VERSION 5.8 ;
 DIVIDERCHAR "/" ;
 BUSBITCHARS "[]" ;
@@ -2093,8 +2038,6 @@ COMPONENTS 0 ;
 END COMPONENTS
 END DESIGN
 """
-
-
 
 
 def _measure_placer_orientations(lib, work: Path, rot: str):
@@ -2132,12 +2075,6 @@ def _measure_placer_orientations(lib, work: Path, rot: str):
         corners[("S" if cy < my else "N") + ("W" if cx < mx else "E")] = \
             PR.normalise_orient(orient)
     return sides, corners
-
-
-@pytest.mark.skipif(not _HAVE_OPENROAD,
-                    reason="openroad not on PATH (container-only tool)")
-@pytest.mark.skipif(not (_PDK_ROOT and Path(_PDK_ROOT).is_dir()),
-                    reason="no PDK_ROOT on this host")
 
 
 @pytest.mark.skipif(not _HAVE_OPENROAD,
