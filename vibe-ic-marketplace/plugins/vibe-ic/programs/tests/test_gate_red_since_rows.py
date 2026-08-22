@@ -58,15 +58,23 @@ def _record(states):
 
 def test_every_row_carries_the_three_required_keys_and_the_three_human_ones(rows):
     assert rows, "the ledger is empty -- the clock is stopped again"
+    # COLLECTED. An assert inside the row loop stops at the first offender, so
+    # the failure names one row and the next is reachable only by fixing that
+    # one and re-running. See the note on the bound test below.
+    missing = []
     for row in rows:
         for key in G._REQUIRED_KEYS:
-            assert key in row, f"{row.get('gate')!r} is missing {key!r}"
+            if key not in row:
+                missing.append(f"{row.get('gate')} is missing {key}")
         # Not required by the adjudicator, and required HERE. A bound with no
         # stated reason is indistinguishable at review time from a bound chosen
         # to reach past today, which is the one thing this mechanism cannot
         # detect for itself.
         for key in ("owner", "why", "bound_because"):
-            assert row.get(key), f"{row['gate']!r} has no {key}"
+            if not row.get(key):
+                missing.append(f"{row.get('gate')} has no {key}")
+    assert not missing, (
+        f"{len(missing)} field(s) missing across the ledger: " + "; ".join(missing))
 
 
 def test_every_row_names_a_gate_this_repo_actually_declares(rows):
@@ -75,26 +83,32 @@ def test_every_row_names_a_gate_this_repo_actually_declares(rows):
     the file looking like coverage, so it is checked against the declaring
     script directly."""
     script = HYGIENE.read_text(encoding="utf-8")
-    for row in rows:
-        assert f'"{row["gate"]}"' in script, (
-            f"{row['gate']!r} is named by no `run` line in "
-            f"{HYGIENE.relative_to(REPO)}")
+    undeclared = [row["gate"] for row in rows
+                  if f'"{row["gate"]}"' not in script]
+    assert not undeclared, (
+        f"{len(undeclared)} row(s) named by no `run` line in "
+        f"{HYGIENE.relative_to(REPO)}: " + ", ".join(undeclared))
 
 
 def test_every_since_resolves_to_a_commit_this_repo_contains(rows, age):
-    for row in rows:
-        assert age(row["since"]) is not None, (
-            f"{row['gate']!r} cites {row['since']!r}, which this repo does not "
-            f"have -- an unresolvable `since` is a clock that never advances")
+    unresolvable = [f"{row['gate']} cites {row['since']}" for row in rows
+                    if age(row["since"]) is None]
+    assert not unresolvable, (
+        f"{len(unresolvable)} row(s) cite a commit this repo does not have -- "
+        "an unresolvable `since` is a clock that never advances: "
+        + "; ".join(unresolvable))
 
 
 def test_every_bound_is_a_bound(rows):
+    bad = []
     for row in rows:
         bound = row["max_commits"]
-        assert isinstance(bound, int) and not isinstance(bound, bool)
-        assert 0 < bound <= G.MAX_BOUND_COMMITS, (
-            f"{row['gate']!r} declares {bound}, outside "
-            f"1..{G.MAX_BOUND_COMMITS}")
+        if not isinstance(bound, int) or isinstance(bound, bool):
+            bad.append(f"{row['gate']} declares {bound!r}, not an int")
+        elif not 0 < bound <= G.MAX_BOUND_COMMITS:
+            bad.append(f"{row['gate']} declares {bound}, outside "
+                       f"1..{G.MAX_BOUND_COMMITS}")
+    assert not bad, f"{len(bad)} bound(s) are not bounds: " + "; ".join(bad)
 
 
 # --------------------------------------------------------------------------
@@ -250,16 +264,26 @@ def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):
     judgement and not a stuck output."""
     head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
+    # Same correction as the bound test: one assert per loop names one row.
+    not_expiring = []
+    walled = []
     for row in rows:
         expired, _, _ = G.adjudicate(
             _record({row["gate"]: "FAIL"}), [dict(row, max_commits=1)], age)
-        assert any(f.kind == "expired" for f in expired)
+        if not any(f.kind == "expired" for f in expired):
+            not_expiring.append(row["gate"])
         renewed, _, _ = G.adjudicate(
             _record({row["gate"]: "FAIL"}),
             [dict(row, since=head, max_commits=1)], age)
-        assert not any(f.kind == "expired" for f in renewed), (
-            f"{row['gate']!r} cannot be renewed by moving `since` to HEAD, so "
-            f"the row has no legitimate way out and the mechanism is a wall")
+        if any(f.kind == "expired" for f in renewed):
+            walled.append(row["gate"])
+    assert not not_expiring, (
+        f"{len(not_expiring)} row(s) do not expire at a bound of 1: "
+        + ", ".join(not_expiring))
+    assert not walled, (
+        f"{len(walled)} row(s) cannot be renewed by moving `since` to HEAD, so "
+        "they have no legitimate way out and the mechanism is a wall for them: "
+        + ", ".join(walled))
 
 
 # --------------------------------------------------------------------------
