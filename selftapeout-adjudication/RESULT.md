@@ -432,7 +432,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J84). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J85). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -3171,6 +3171,38 @@ a detail, either way.
 ---
 
 ## 8. What this job put back into the plugin
+
+### ★ A THIRD finding, authored, verified and PUSHED (J85)
+
+`next/placeability-bound-is-printed-and-never-consulted` @ **`4d1de0e2c`**, one commit
+on `origin/main` = `a4caccefe`. **No version bump, nothing on main, nothing on a frozen
+batch branch.**
+
+**`PLACEABLE_WIDTH_BOUND` is measured, printed, and never consulted.** The width cap
+measures the longest contiguous free-site run from the live tap grid and prints it; a
+`git grep` for that marker finds it in the emitter and in its own tests and **nowhere
+else**. `clk_buf_root` meanwhile is a PDK-registry value — or, when the registry is
+silent, *"the LAST clkbuf in the Liberty"*, i.e. **the widest one** — fixed before any
+floorplan exists. **Nothing joins the two.** All three designs printed
+`PLACEABLE_WIDTH_BOUND: 56000 dbu = 50 site(s)` and all three named a **50-site** master
+as `-root_buf`; the small one used it once and legalized, the large one used it 2 055
+times and is the residual of §6.
+
+**And the off-by-one I went hunting is REFUTED by the tree itself.** The cap's predicate
+is `width > bound`, so a master exactly at the bound survives by exact equality — which
+reads like a `>` that should be `>=`. It is not:
+`test_a_master_exactly_at_the_bound_stays_legal` pins the strict form and its docstring
+names the slip in advance — on the floorplan it was measured against, the **surviving**
+masters sat exactly there, so `>=` would empty the pool. Recorded because a report that
+only lists its successful hunts is not a record.
+
+**What landed is REPORT-ONLY**: two lines that make the condition sayable at floorplan
+time instead of discoverable ten hours into a legalizer
+(`MASTERS_AT_PLACEABILITY_BOUND`, `CTS_MASTER_AT_PLACEABILITY_BOUND`). **Nothing is newly
+excluded, no `-root_buf` is changed, and the strict `>` is untouched** — those are the
+decision above, not a patch. Inert unless the caller supplies the names, so every other
+caller's Tcl is byte-identical. **Three-state: 27/27 → 4 FAIL mutated → 27/27 restored**,
+plus **490 passed / 1 skipped** across all 17 test files touching this emitter.
 
 ### ★ A DECISION, written out rather than taken (J84)
 

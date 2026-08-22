@@ -66,9 +66,14 @@ got = sh(f"git ls-remote --heads origin refs/heads/{BR}", WT)
 row("external", f"{BR} on the remote", "f99979a73",
     (got.split()[0][:9] if got else "GONE"))
 
+BR3 = "next/placeability-bound-is-printed-and-never-consulted"
+got3 = sh(f"git ls-remote --heads origin refs/heads/{BR3}", WT)
+row("external", "the placeability-bound branch on the remote", "4d1de0e2c",
+    (got3.split()[0][:9] if got3 else "GONE"))
+
 BR2 = "next/six-shuttle-refusals-readjudicated-on-the-self-tapeout-path"
 got2 = sh(f"git ls-remote --heads origin refs/heads/{BR2}", WT)
-row("external", "the report branch on the remote", "15ac6fe26",
+row("external", "the report branch on the remote", "01161f7a3",
     (got2.split()[0][:9] if got2 else "GONE"))
 
 # The pushed report is a SNAPSHOT.  This directory's copy keeps moving, so the two

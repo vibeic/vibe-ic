@@ -6647,3 +6647,91 @@ causal experiment rather than as a rule.
 for. The decision it raises — whether the ladder should be allowed to reach its own
 workaround — is written out in §8 with both sides and their measured costs, because it
 trades a bounded harm against an unbounded one and that is not mine to settle.
+
+---
+
+## J85 — I went hunting an off-by-one, the tree had already answered it, and the real hole was one layer over
+
+J84 left the arms' residual explained by 2 055 instances of a 50-site master. The
+obvious next question is why the flow let a 50-site master be chosen at all, since it
+has a guard for exactly this.
+
+### The guard, and the measurement it makes
+
+`_build_unplaceable_master_cap_tcl` measures the longest contiguous free-site run from
+the LIVE tap grid (after `tapcell`, before `buffer_ports`/`repair_design`/CTS — the
+ordering is deliberate and documented) and `set_dont_use`s every core master wider than
+it. On **all three** designs it printed the same thing:
+
+```
+PLACEABLE_WIDTH_BOUND: 56000 dbu = 50 site(s)
+UNPLACEABLE_MASTERS_EXCLUDED: 11 master(s) wider than 50 site(s)
+```
+
+`clkbuf_16` is 28.000 µm = **exactly 50 sites** = exactly the bound. The predicate is
+`getWidth() > _wc_run`, so it survives **by exact equality**. Three masters in this
+library sit exactly there: `buf_16`, `clkbuf_16`, `sdffrsnq_2`.
+
+### The off-by-one I was about to file, and why it is wrong
+
+The emitter's own docstring describes the failing condition as *"the widest members of
+that family were 50 and 62 sites — i.e. **AS WIDE AS** or WIDER than any free run"*, and
+the code implements only WIDER. That reads exactly like a `>` that should be `>=`.
+
+**It is not.** `test_a_master_exactly_at_the_bound_stays_legal` pins the strict
+comparison and its docstring names the slip in advance:
+
+> *"On the floorplan #951 was measured against the surviving masters sat EXACTLY at the
+> bound, so a `>` -> `>=` slip would have forbidden every one of them."*
+
+A master exactly as wide as the longest free run **has** a legal site. Excluding it can
+empty the pool. **The tree answered my hypothesis before I filed it**, and this is
+written down because "I checked and it held" is a different claim from "I did not
+check" — and because a report that only records its successful hunts is not a record.
+
+### The hole that is actually there
+
+`PLACEABLE_WIDTH_BOUND` is **printed and never consulted.** `git grep` finds the marker
+in the emitter and in its own tests and **nowhere else**. Meanwhile `clk_buf_root` is a
+PDK-registry value — or, when the registry is silent, *"the LAST clkbuf in the
+Liberty"*, i.e. **the widest one** — fixed before any floorplan exists. **Nothing joins
+the two.** So the flow can hand `clock_tree_synthesis -root_buf` a master its own cap
+has just measured to sit at the placeability limit, and on three designs it did.
+
+The difference between the two outcomes is not the cap and not the master. It is **how
+many**: `one fits` is not `many fit`. An instance this wide needs the single longest
+free run on the die; the control needed one and got it, the arm needed 2 055.
+
+### What was authored, and what was deliberately not
+
+**Report-only, two lines, nothing excluded and no choice changed:**
+
+```
+MASTERS_AT_PLACEABILITY_BOUND: <k> core master(s) are EXACTLY the measured
+  free-site run (<n> site(s)); one instance places, many cannot
+CTS_MASTER_AT_PLACEABILITY_BOUND: <name> is <w> site(s) against a measured
+  free-site run of <n> site(s)
+```
+
+The second is inert unless the caller supplies the resolved CTS masters, so any other
+caller's Tcl is byte-identical. It walks the libs rather than calling `findMaster`, so
+it needs nothing the block it is appended to does not already use, and it guards
+`[info exists _wc_run]` because **a report-only addition must not be able to drop the
+whole cap into its NONFATAL branch** on a rowless floorplan.
+
+**Not done, on purpose**: the strict `>` is untouched, no master is newly excluded, no
+`-root_buf` is changed, and nothing chooses a different clock buffer. Excluding a master
+at the bound is wrong; choosing a different root buffer changes every clock tree this
+flow builds. Those are the §8 decision, not a patch.
+
+**Verified**: 7 new behaviour tests in the file's existing `tclsh` + stubbed-odb
+harness, two of them negative controls, one of them asserting the **call site actually
+passes the names** — a check wired to nothing being the exact defect this closes, one
+layer up. **Three-state: 27/27 PASS → mutated (census to strict `>`, named check to
+inert) 4 FAIL → restored by reverse edit 27/27 PASS**, tree byte-identical to the
+commit. **490 passed / 1 skipped** across all 17 test files that touch this emitter,
+including the emitted-`pnr.tcl` syntax suite. No version bump.
+
+Branch `next/placeability-bound-is-printed-and-never-consulted` @ **`4d1de0e2c`**.
+
+**No verdict moves.** All six stand.
