@@ -20,9 +20,10 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
-
 PROGRAMS = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROGRAMS))
+from not_verified_tier import skip_not_verified  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location(
     "_dhm_gen_pin", PROGRAMS / "digital_hardmacro_gen.py")
 DHM = importlib.util.module_from_spec(_spec)
@@ -56,11 +57,13 @@ def _upstream(rel: str):
 
 
 def _skip(rel: str):
-    pytest.skip(
+    skip_not_verified(
         f"upstream {rel} is not on this host: $VIBEIC_LIBRELANE_ROOT is unset "
         f"or does not carry it and `librelane` is not importable. The question "
         f"could not be put here; it is put in the container image that ships "
-        f"the flow.")
+        f"the flow.",
+        "set VIBEIC_LIBRELANE_ROOT to a complete librelane source tree or "
+        "run this test in the shipped flow image")
 
 
 def test_the_declaration_is_well_formed():

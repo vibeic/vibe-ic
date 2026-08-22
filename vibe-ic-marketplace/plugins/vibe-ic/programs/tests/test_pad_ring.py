@@ -55,6 +55,10 @@ sys.path.insert(0, str(PROGRAMS))
 import _pad_ring as PR            # noqa: E402
 import pad_ring_check as CHK      # noqa: E402
 import pad_ring_gen as GEN        # noqa: E402
+from not_verified_tier import (   # noqa: E402
+    not_verified_reason,
+    skip_not_verified,
+)
 
 FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
@@ -2096,9 +2100,16 @@ def _measure_placer_orientations(lib, work: Path, rot: str):
 
 
 @pytest.mark.skipif(not _HAVE_OPENROAD,
-                    reason="openroad not on PATH (container-only tool)")
+                    reason=not_verified_reason(
+                        "openroad not on PATH; the live placer orientation "
+                        "was not measured",
+                        "run this test in the shipped flow image"))
 @pytest.mark.skipif(not (_PDK_ROOT and Path(_PDK_ROOT).is_dir()),
-                    reason="no PDK_ROOT on this host")
+                    reason=not_verified_reason(
+                        "PDK_ROOT does not name an installed PDK tree; the "
+                        "live placer orientation was not measured",
+                        "set PDK_ROOT to the PDK tree mounted in the shipped "
+                        "flow image"))
 def test_the_shipped_orientations_are_what_the_placer_produces(tmp_path):
     """THE ONLY TEST HERE THAT CAN FALSIFY THE EIGHT CONSTANTS.
 
@@ -2115,7 +2126,10 @@ def test_the_shipped_orientations_are_what_the_placer_produces(tmp_path):
     """
     lib = _find_io_library(_PDK_ROOT)
     if lib is None:
-        pytest.skip("no installed kit carries an IO cell library with a corner")
+        skip_not_verified(
+            "the selected PDK tree carries no discoverable IO library with "
+            "a corner cell; the live placer orientation was not measured",
+            "select a PDK tree with the IO LEF/GDS views used by the flow")
     sides, corners = _measure_placer_orientations(lib, tmp_path,
                                                   PR.ROTATION_DEFAULT)
     assert sides == dict(PR.SIDE_ORIENT), (

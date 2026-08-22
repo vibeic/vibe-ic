@@ -19,9 +19,10 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
-
 PROGRAMS = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROGRAMS))
+from not_verified_tier import skip_not_verified  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location("_pad_ring_pin",
                                                PROGRAMS / "_pad_ring.py")
 PR = importlib.util.module_from_spec(_spec)
@@ -50,6 +51,15 @@ def _upstream_tcl() -> Path:
         return None
     cand = Path(librelane.__file__).parent / tail
     return cand if cand.is_file() else None
+
+
+def _skip(rel: str):
+    skip_not_verified(
+        f"upstream {rel} is not on this host: VIBEIC_LIBRELANE_ROOT does not "
+        "carry it and librelane is not importable; the upstream contract was "
+        "not checked",
+        "set VIBEIC_LIBRELANE_ROOT to a complete librelane source tree or "
+        "run this test in the shipped flow image")
 
 
 def test_the_declaration_is_well_formed():
@@ -92,11 +102,7 @@ def test_upstream_side_arithmetic_measures_the_master_width():
     """
     tcl = _upstream_tcl()
     if tcl is None:
-        pytest.skip(
-            f"upstream {PR.UPSTREAM_MIRROR['upstream']} is not on this host: "
-            f"$VIBEIC_LIBRELANE_ROOT is unset or does not carry it and "
-            f"`librelane` is not importable. The question could not be put "
-            f"here; it is put in the container image that ships the flow.")
+        _skip(PR.UPSTREAM_MIRROR["upstream"])
     text = tcl.read_text(errors="replace")
 
     # The side loop is where the per-side arithmetic lives. Bound the search to
@@ -141,9 +147,7 @@ def test_upstream_still_declares_the_variables_this_module_borrows_verbatim():
     one config drives both. That is checkable against upstream's own file."""
     tcl = _upstream_tcl()
     if tcl is None:
-        pytest.skip(
-            f"upstream {PR.UPSTREAM_MIRROR['upstream']} is not on this host — "
-            f"see the skip reason on the arithmetic pin above.")
+        _skip(PR.UPSTREAM_MIRROR["upstream"])
     text = tcl.read_text(errors="replace")
     borrowed = [v for v in PR.REQUIRED_VARS if v.startswith("PAD_")]
     missing = [v for v in borrowed if v not in text]
