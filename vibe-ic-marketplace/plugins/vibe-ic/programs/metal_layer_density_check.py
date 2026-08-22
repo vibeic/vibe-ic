@@ -227,8 +227,21 @@ def check(report: Path, windows: Dict[str, Window],
           windows_provenance: Optional[Dict[str, object]] = None
           ) -> Dict[str, object]:
     if report.is_dir():
+        # `.log` LAST, and it is load-bearing. MEASURED: a KLayout density deck
+        # writes its per-layer ratios ONLY into its run transcript —
+        #     `... : Metal1 ratio: 43.811811093445066 %`
+        # — while the `.json` beside it is a per-RULE violation tally
+        # (`{"DCF.1b": 0, ...}`) carrying no per-layer density at all. Handed the
+        # project directory, this scan found neither and returned
+        #     {"verdict": "IO_ERROR", "error": "no density report at <dir>"}
+        # i.e. rc 2, which the caller reads as "could not measure" — on a project
+        # whose densities were sitting in that same directory. Ordered last so
+        # every existing preference still wins; a transcript that carries no
+        # per-layer density still FAILs on the "no per-layer metal density found"
+        # branch rather than passing, so widening the scan cannot fabricate a
+        # verdict.
         for pat in ("*density*layer*.json", "*metal*density*.json",
-                    "*density*.rpt", "*density*.txt"):
+                    "*density*.rpt", "*density*.txt", "*density*.log"):
             hits = sorted(report.rglob(pat))
             if hits:
                 report = hits[0]
