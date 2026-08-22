@@ -4070,3 +4070,61 @@ resolve it ([[protected-tuple-on-main-is-already-mixed]]). So the measurement is
 and the edit is not made. **An honest UNDETERMINED with a named missing input beats a
 manufactured PASS**, and the missing input here is named: the pending transition
 `activated-at-lane-parallel-window` has to settle first.
+
+## 59. The gate fixtures: one red closed, seven fixture-debt rows cleared
+
+Branch: `next/ppa-head-to-head-fixture-declares-a-contract`, off `main`
+`a4caccefea`, four commits.
+
+`test_fixture_pair_discriminates[ppa_head_to_head_records]` was red on clean main
+because the gate's own CAN-PASS input — the good record it must accept — was
+REJECTED rc 2. A gate that cannot pass its own good input is not discriminating,
+it is stuck, and nothing it says about a real record means anything while that
+holds.
+
+The fixture's INTENT was right and its SCHEMA had drifted **five generations**
+behind the checker. Each repair moved the refusal rather than clearing it, and
+the failure count stayed at 1 the whole way:
+
+    CONTRACT_UNDECLARED -> SCOPE_UNDECLARED -> SCOPE_* -> feasibility
+      NOT_CHECKED -> TUNING_UNDECLARED -> ACCEPTED
+
+Then four more gates' worth of fixtures, all descending from ONE producer
+(`_ppa.contract.build`) and one schema, because three hand-maintained copies
+drift three ways — which is exactly how the first one died.
+
+    gate_mutation_fixture_check debt      14 findings -> 7
+    gates carrying BOTH directions        10 -> 17
+    every step verified by NAME-SET diff, never by count
+
+**The filename is the key.** The checker looks each gate up by
+`F.slug(label)` against the fixture FILENAME; the `GATE` constant inside is only
+cross-checked afterwards. My first two variant modules loaded fine, reported the
+right label, and were invisible — 14 findings before and 14 after, with the two
+rows still listed. Renaming them to the slugs the labels produce was the entire
+difference. The full recipe is in [[writing-a-vibe-ic-gate-fixture]].
+
+### The measurement I got wrong, and what fixed it
+
+The full-lane diff against clean main showed **22 failed on both arms** with
+different name sets: my fix removed one and one was ADDED —
+`test_hermetic_candidate_runner::test_malformed_progress_is_norecord_and_cleanup
+_is_owned`. I re-ran it three times on the branch (2f/1p, 2f/1p, 3f) and three
+times on clean main (3 passed, three times), and concluded I had caused a
+regression. Six runs, cleanly separated, and wrong.
+
+Twenty minutes later the SAME main commit gave 2f/1p. Interleaved:
+
+    main   3f      2f/1p   3f
+    branch 2f/1p   1f/2p   3f
+
+Main is if anything worse. The test is environment-flaky and the tree never
+mattered. **The six clean runs lied because they were CONSECUTIVE** — all three
+main runs sat in one window where whatever varies happened to be passing, and
+all three branch runs in another. Repetition samples one moment three times;
+only interleaving separates "the tree differs" from "the hour differs". Three
+interleaved pairs cost exactly what six consecutive runs cost.
+
+It also means main's red count in the repo-tools lane drifts between 22 and 24
+depending on that single test, so any future arm comparison there must interleave
+or it will manufacture a finding out of the clock.
