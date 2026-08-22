@@ -41,7 +41,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("step", choices=sorted(_VALID_STEPS.keys()))
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--top-name", default="chip_top")
     args = p.parse_args()
     project = args.project.resolve()

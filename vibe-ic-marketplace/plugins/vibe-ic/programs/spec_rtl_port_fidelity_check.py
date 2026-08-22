@@ -42,11 +42,13 @@ from typing import Dict, List, Optional, Tuple
 # _specrtl_common). load_spec now auto-handles NL prompts + markdown so the
 # `--spec` port-list need not be hand-built.
 try:
-    from _specrtl_common import (Port, extract_spec_contract, parse_rtl_ports,
+    from _specrtl_common import (Port, WIDTH_UNKNOWN, extract_spec_contract,
+                                 parse_rtl_ports,
                                  parse_verilog_ports, strip_comments)
 except ImportError:  # allow running from another cwd
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from _specrtl_common import (Port, extract_spec_contract, parse_rtl_ports,
+    from _specrtl_common import (Port, WIDTH_UNKNOWN, extract_spec_contract,
+                                 parse_rtl_ports,
                                  parse_verilog_ports, strip_comments)
 
 
@@ -130,7 +132,11 @@ def compare_to_spec(rtl: List[Port], spec: List[Port], path: str) -> List[Findin
         if rp.direction != sp.direction:
             findings.append(Finding(path, 'ERROR', 'port-direction-mismatch', nm,
                 f"port '{nm}' direction RTL={rp.direction} vs spec={sp.direction}."))
-        if rp.width != sp.width:
+        # Skip when EITHER side is WIDTH_UNKNOWN (an unresolved parameterized /
+        # symbolic bound) — asserting against an unknown fabricates a false
+        # width-mismatch. Only compare two known literal widths.
+        if (rp.width != WIDTH_UNKNOWN and sp.width != WIDTH_UNKNOWN
+                and rp.width != sp.width):
             findings.append(Finding(path, 'ERROR', 'port-width-mismatch', nm,
                 f"port '{nm}' width RTL={rp.width} vs spec={sp.width}."))
     for nm in rmap:
