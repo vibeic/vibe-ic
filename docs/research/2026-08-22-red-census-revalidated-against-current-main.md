@@ -137,3 +137,65 @@ diagnosis held and the list of available moves was too short.
     30 of the 34 still stand on `a4caccefe`; **4 are closed**, 3 of them by a
     decision the census asked for and one by an independent fix that agreed with
     the census's diagnosis.
+
+---
+
+# Part 3 — a THIRD path for the 5-red vacuity decision, and why it is unreachable today
+
+Twice now the census's remedy-list was too short (the flow-gate token; "publish a
+run tree"). **So I went looking for a third option on the largest remaining
+decision — the vacuity conditional that owns 5 reds — instead of restating the two
+I had.**
+
+**THE MACHINERY FOR A THIRD OPTION ALREADY EXISTS**, at
+`flow_compliance_check.py:10168`, and its comment states the design intent
+exactly:
+
+> *"the tier is a per-STEP word and a partially vacuous step has no such word:
+> some of its clauses examined the design and some examined nothing. **Both facts
+> are true and one label can carry only one.** Whichever tier resolved above, the
+> clauses that disclosed emptiness [...] are named HERE [...] **rather than being
+> dropped for failing to be unanimous.**"*
+
+```python
+if result.status != "VACUOUS_PASS" and json_vacuous_hints:
+    result.partial_vacuity_disclosed = True
+```
+
+**That is precisely what the five failing tests want**: resolve the waiver AND
+disclose the vacuity, rather than choosing between them.
+
+**AND IT IS UNREACHABLE FOR STEP 4. MEASURED, not reasoned:**
+
+| | |
+|---|---|
+| Step 4's vacuity arrives on the **LEGACY** channel | `_VACUOUS_HINT_PREFIX`, branch at `:10120` |
+| the disclosure requires the **STRUCTURED** channel | `json_vacuous_hints`, `_JSON_VACUOUS_HINT_PREFIX` |
+| and it is guarded on | `status != "VACUOUS_PASS"` — which the legacy branch has just set |
+
+**So M46's standing warning is CONFIRMED, and now has a mechanism rather than an
+instinct.** Dropping `and not vacuous_hints` from the waiver condition would
+resolve Step 4 as WAIVED **and lose the vacuity entirely**, because
+`partial_vacuity_disclosed` does not fire for legacy-channel emptiness. The guard
+is the only thing carrying that fact.
+
+**THE THIRD PATH, stated as a candidate and NOT as a recommendation:** have
+`professional_tb_check` disclose through the STRUCTURED channel — its `--json`
+report — rather than (or as well as) the legacy one. `_json_report_signals_vacuous`
+reads that file, and the hint is *"recorded unconditionally alongside whatever the
+legacy channels say"*. If Step 4's emptiness arrived that way, the waiver branch
+could resolve and the disclosure would fire on its own.
+
+**WHAT I HAVE NOT ESTABLISHED, and it is the load-bearing half:** whether the two
+channels are semantically interchangeable. The legacy hint appears to say *the
+GATE was vacuous*; the JSON hint says *this CLAUSE disclosed emptiness*. **Those
+may not be the same claim**, and `professional_tb_check.py` is NOT protected — so
+this is a change someone could make quickly and wrongly. **I am naming the path,
+the mechanism, and the exact reason it is blocked today. I am not recommending
+it**, because I did not measure whether the swap preserves what the legacy channel
+means.
+
+**What this changes for the owner:** the decision is no longer "should `:10057`
+decline the waiver branch". It is **"should Step 4's emptiness be disclosed on the
+structured channel, which would make the conditional moot"** — a question about a
+gate program, not about the flow's tiering logic.
