@@ -574,3 +574,43 @@ So the split found in §10 costs one merge and one regeneration. Nothing has to 
 re-assembled, no branch has to be re-landed, and neither side loses work: the
 frozen batch and `batchbig`'s extras coexist in one tree that passes both gates
 this document is accountable for.
+
+## 12. Post-landing A/B: one new red, and it is the measurement, not the batch
+
+The §4 baseline finally used for what it was built for. Same corpus binding on both
+sides, so the denominators match:
+
+    a4caccefe  (pre-landing)  82 of 93 decided — 73 passed,  9 failed, 11 NOT CHECKED, 998s
+    ae78abb28  (v1.11.70)     83 of 93 decided — 73 passed, 10 failed, 10 NOT CHECKED, 947s
+
+    FAILED name-set diff:  + gates are host-independent      (one, and only one)
+
+NOT CHECKED fell 11 -> 10 while FAILED rose 9 -> 10: a gate that was exempt began to
+DECIDE. On the before side it read `NOT CHECKED ... exempt until 2027-02-28: needs a
+CLEAN checkout and a complete machine record`.
+
+**It is not attributable to the batch's content, and not to any program in this
+document's own change-set** -- none of the six gates it names is one of them. Its
+verdict is:
+
+    6 of 87 probed corpus gate(s) did not give one reproducible verdict across two
+    trees: 6 NON_DETERMINISTIC_VERDICT
+
+and every one of the six carries the SAME verdict on both arms -- `rc=2
+UNDETERMINED`, same meaning -- differing only in the corpus path:
+
+    checkout arm : <TREE>/ic is a directory but holds no L-doc this gate can read
+    worktree arm : /tmp/.../bench-data/ic is a directory but holds no L-doc ...
+
+The mechanism is in the gate: `gate_host_independence_check.py:328` redacts with
+`line = line.replace(root, "<TREE>")`, which normalises each arm's own TREE ROOT. A
+corpus bound OUTSIDE the tree -- which is the only way to bind one since v1.10.56
+moved it to its own repository -- is not covered by that substitution, so one arm
+redacts and the other prints an absolute path, and identical verdicts compare
+unequal.
+
+So: binding a corpus makes this gate report spurious non-determinism. That is a
+defect worth a ledger row, and it is the gate's, not the tree's. It also means the
+honest reading of this A/B is **the v1.11.70 landing introduced no red** -- which is
+exactly the misattribution §4 warned this baseline would cause if read naively, now
+demonstrated rather than predicted.
