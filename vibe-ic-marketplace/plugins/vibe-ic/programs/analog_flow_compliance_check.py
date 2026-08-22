@@ -67,6 +67,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import _gate_denominator as _gd
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 GATE = "analog_flow_compliance_check"
 
@@ -606,7 +607,7 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     if not args.json:
         # The verdict line carries the denominator ON ITSELF: a reader of the
