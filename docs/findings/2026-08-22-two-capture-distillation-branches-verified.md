@@ -2,6 +2,13 @@
 
 **Host** 8hd-3 · **date** 2026-08-22 · **agent** `jverify`
 
+**Two copies, and this is the canonical one.** The brief asked for
+`/tmp/jverify_done.txt`; that file sat unchanged through a day of corrections
+and was actively misleading by the end — wrong F12 and F9 figures, a standing
+line that had become false, and no knowledge that the branches had landed. It
+has been refreshed to a copy of this document with a header naming what it had
+got wrong. If the two ever disagree again, this one is right.
+
 **Standing:** an independent read of `origin/jdistmat/matrix-distil` and
 `origin/capture/jdistchip-chip-path-rules`, asked for by the person about to land
 them. The brief's hard rules were: report only, do not push to `main`, do not bump
@@ -10,9 +17,270 @@ was later pushed on a branch of its own, on the requester's explicit instruction
 so that the report has a home other than `/tmp` — it adds this one file and
 nothing else, and neither `main` nor either verified branch was touched.
 
-**Verdicts** — `jdistmat` LAND with F14 + F15 + F9 + F12 fixed;
+**Verdicts, as given** — `jdistmat` LAND with F14 + F15 + F9 + F12 fixed;
 `jdistchip` LAND with F1 fixed. F14 is the only finding that stops anything.
 
+**Both branches landed on main (v1.11.70, `ae78abb28`) during this work** — but
+**neither TIP landed.** Five commits were left behind, every one of them
+test- or gate-hardening, including the fix that made `signoff_report_states_its_
+stage` detect the incident it was written for. That gate is green on main
+because main has the OLD one. F14 was fixed the right way — converted, not
+registered — and main's wired suite is byte-identical to before. F15, F1, F9,
+F12 and F17 landed unfixed; none is wired, so none blocks. **The first section
+below is the live status and supersedes the branch verdicts.**
+
+
+## THEY LANDED WHILE I WAS WRITING — status at main ae78abb28
+
+```text
+This report was asked for BEFORE a landing. The landing happened during it. Both
+branches are now merged into main at v1.11.70 — `86dd1d463 Merge ...
+jdistmat/matrix-distil` and `b06d52715 Merge ... capture/jdistchip-chip-path-
+rules`. All 32 checkers are on main; 1272 programs parse where 1240 did. Read
+everything below as a record of what was true of the branches, and this section
+as what is true of main now.
+
+F14 WAS FIXED, AND FIXED THE RIGHT WAY. It was the only finding that stopped
+anything, and it is gone:
+
+    atomic_artifact_write_check on ae78abb28 ....... rc 0
+    1272 programs parsed; 513 non-atomic, baseline 515 — main's own numbers
+    all 20 matrix programs now use the helper
+    _atomic_artefact_residual.json ................. 0 rows
+
+    So they were CONVERTED, not registered. The route this report warned
+    against — "the gate permits it, the suite refuses it" — was not taken. The
+    idiom is `import _atomic_artefact as _aa` rather than the
+    `from _atomic_artefact import write_text` form I recommended; both are house
+    style and the outcome is identical.
+
+    MY FIRST READING OF THIS SAID 0 OF 20 CONVERTED. I grepped for
+    `_atomic_artefact import`, which the module-alias form does not match, and
+    for about a minute I had a fixed finding recorded as unfixed. Same
+    imprecise-grep error as the `write_json` mis-citation, twice in one day.
+
+THE WIRED LANDING SUITE IS UNCHANGED. 28 invocations replayed on ae78abb28:
+rc0=26, rc1=0, rc2=2, and diffing row by row against a4caccefe it is IDENTICAL.
+The two rc 2 are the same tolerated pair main always had. The landing did not
+regress the suite.
+
+F15 AND F1 LANDED UNFIXED, and both are red on main right now:
+
+    gate_proof_vocabulary_has_a_producer ....... rc 1   F15, the FALSE red
+    only_the_declaring_step_writes_its_output .. rc 1   F1, six real findings
+    layer_membership / metric_constant ......... rc 1   declared, expected
+
+    Neither F15's nor F1's gate appears anywhere in repo_hygiene_gates.sh — 0
+    wired mentions — so consistent with F5b they cannot fail the landing suite.
+    F15 is the one I would still raise: a gate on MAIN now ships a verdict I
+    measured as false, pinned by three of its own tests, one of which no passing
+    tree can satisfy. It blocks nothing mechanically. It is now main's false
+    statement rather than a branch's.
+
+    AND ITS REMEDY RE-VALIDATES ON THE LANDED TREE, so the fix is not a claim
+    about a branch that no longer exists. The gate itself is unchanged by the
+    landing except for the F14 conversion — same 38 emitting modules, same 143
+    names, same one unprovable axis — and both producers it says do not exist
+    are still in main: drv_records.py declares timing.drv keys on seven lines,
+    signoff_records.py:204 emits timing.drv.violations. Applying the two-part
+    remedy to ae78abb28:
+
+        emitting modules   38 -> 50      names declared   143 -> 191
+        axes with no produced name  1 -> 0       gate rc 1 -> 0
+        its own suite: 3 failed, 5 passed — THE SAME THREE, on the same tree
+        the gate now ships on
+
+    So the cost quoted for the branch is the cost on main, unchanged: the fix
+    clears the verdict, and three tests have to be rewritten because three tests
+    encode a false one. One of those three
+    (`test_the_consumer_is_excluded_and_that_is_what_makes_it_discriminate`)
+    cannot pass on ANY tree where the gate passes, and its repair is named in
+    F15 — assert that excluding the consumer removes NAMES, which it still does
+    (191 against 195), rather than that some axis stays unprovable.
+
+NEITHER BRANCH TIP ACTUALLY LANDED — FIVE COMMITS WERE LEFT BEHIND, ALL OF
+THEM TEST-STRENGTHENING. `git merge-base --is-ancestor` says so for both:
+
+    chip   c0e19ace9  NOT an ancestor of main   2 commits missing
+    matrix facc28860  NOT an ancestor of main   3 commits missing
+
+        4445f34a2  fix(signoff gate): it passed on the incident that motivated it
+        c0e19ace9  test(rc contract): a vacuity guard, because my own
+                   registration proved nothing
+        ddd0a6e91  test: no instrument may let a traceback escape — the sweep
+        634a96a71  test(declared_invocation): guard the corpus sweep, the one
+                   suite that did not
+        facc28860  test: a real verdict owes a denominator
+
+    Every one hardens a test or a gate. Nothing was lost from the RULES; what
+    was lost is the part of each branch that stops those rules going vacuous —
+    which is precisely the part this report spent the day arguing matters.
+
+    BRINGING THEM OVER IS MEASURED, NOT RECOMMENDED. I first wrote that the five
+    "cost nothing", which was an untested claim of exactly the kind this report
+    keeps punishing. Measured on a throwaway tree at ae78abb28:
+
+        merge the chip tip  ..... 0 CONFLICTS. 4 files, +571 / -19, and
+            `sibling_stamp_gaps` goes 0 -> 2: the signoff gate gets its second
+            scanning arm back.
+        merge the matrix tip .... 3 conflicts, and my "costs nothing" was wrong
+            about this half. All three are COUNTS, not judgements — a test-file
+            count and a program count in two READMEs, and a count plus a
+            `sha256_of_sorted_paths` in PROGRAM_INVENTORY.json. Running the
+            repo's own `gen_program_inventory.py` (rc 0) and
+            `tools/gen_programs_index.py` (rc 0) settles them; after staging,
+            nothing else differs. That is the F4 class, three files rather than
+            four.
+
+        THE WIRED LANDING SUITE ON THE RESULT: rc0 = 26, rc1 = 0, rc2 = 2, and
+        diffed row by row against main alone it is IDENTICAL. Bringing the five
+        over does not move a single wired gate.
+
+        THE COVERAGE COMES BACK: the three affected test files collect 74 passing
+        on main today and 83 on the brought-over tree. Nine tests recovered, all
+        green, including the four that cover a gate's second scanning arm.
+
+    So the honest form of the recommendation is: the chip half is free, the
+    matrix half costs two generator runs, the landing suite does not notice, and
+    nine tests come back.
+
+    MEASURABLE CONSEQUENCE, not an inference. `test_chip_path_rules_rc_contract`
+    collects 40 tests on the chip tip and 36 on main. The four that vanished are
+    the ones covering a gate's SECOND scanning arm: the tip maps each rule to a
+    TUPLE of every scanning function, main maps it to one string, and the tip's
+    comment says why — "an arm that is not in this map is an arm whose traceback
+    can still escape ... `signoff_report_states_its_stage` is the live case".
+    Main's copy of that file is byte-identical to the branch at 317cef847, two
+    commits before its tip.
+
+    AND IT CORRECTS SOMETHING I WROTE THIS MORNING. I recorded that
+    `signoff_report_states_its_stage` "went GREEN in landing, its three unstamped
+    reports having been stamped". That is FALSE and it is false in the flattering
+    direction. The gate is green on main because main has the OLD gate: the fix
+    that gave it a sibling-stamp arm is 4445f34a2, which did not land.
+    `grep -c sibling_stamp_gaps` returns 2 on the chip tip and 0 on main. Main
+    ships the version whose own commit message says it "passed on the incident
+    that motivated it", and I read its silence as success.
+
+IT IS NOT JUST MY TWO — AND THIS PART IS BEYOND THE BRIEF, SO READ THE
+EVIDENCE FOR IT CAREFULLY. Having found two tips missing, I asked whether the
+batch dropped tips systematically. `land/one-assembled` merged seventeen
+branches. Of the fifteen still on the remote:
+
+    4 landed at their tip
+    10 have commits on the branch and not on main — SIXTY commits in total
+     1 (fix/routed-def-corpus-adjudication) is not an ancestor but is 0 ahead:
+       main holds the same content under a different commit, so nothing is lost
+
+    EVERY ONE OF THE 60 HAS A COMMITTER DATE BEFORE THE LANDING COMMIT
+    (ae78abb28, 2026-08-22 18:47:18 +0800). NONE came after. So this is not
+    branches carrying on afterwards; at landing time those commits existed and
+    were not taken.
+
+    HOW STRONG IS THAT. For my two subjects it is direct: I recorded jdistmat at
+    facc28860 and jdistchip at c0e19ace9 hours BEFORE the landing, and both are
+    still those SHAs. For the other eight the evidence is the committer date,
+    which a rebase rewrites — so a branch force-pushed after the landing with
+    older-dated commits would look the same. I have not audited the other eight
+    beyond that, and I am not claiming their content matters as much as mine;
+    what I am claiming is that the shape recurs.
+
+    WHAT THE OTHERS LOOK LIKE, by way of sample — the same character as my five:
+        fix/jwire2-hygiene-wiring   "make the two wired checkers able to refuse
+                                     correctly"
+        fix/jpolarity-emitter-polarity  "three reads of non-ASCII content were
+                                     relying on the interpreter's default
+                                     encoding"
+        jcap-ppa                    "two stated counts in this report went
+                                     stale, so both are now bound"
+        ptmo/main-red-triage-v11166 "retract 'D's channel is not confirmed' --
+                                     it is, and D was mis-filed"
+
+    Corrections, encoding fixes, refusal paths, retracted claims. The late
+    commits on a branch are where its author fixed what they had got wrong, and
+    a landing that takes the branch but not its last few commits takes the work
+    and leaves the corrections.
+
+AND THE REPO HAS NO GATE FOR IT, WHICH I CHECKED RATHER THAN ASSUMED. I said
+in passing that no gate can detect this. That is a claim about a repository that
+gates its own process heavily, so it needed testing. It holds, and the gap is
+exact:
+
+    gatekeeper_stale_branch_check.py  EXISTS and is the MIRROR of this. Its
+        predicate is `merge-base(base, head) == base tip` — is the BRANCH
+        current with respect to MAIN — and it runs at REVIEW time. It was
+        written for PRs #246/#247, where a branch cut from an old base would
+        phantom-revert main's newer work. It guards the landing REMOVING main's
+        work.
+    landing_collateral_revert_check.py  EXISTS and guards a squash reverting
+        work landed BESIDE it in the same push (five stacked PRs, 2026-08-03).
+
+    Neither asks the question this finding turns on, which is the other
+    direction entirely:
+
+        DOES MAIN NOW CONTAIN THE BRANCH'S TIP?
+        merge-base(main, branch) == branch tip
+
+    One predicate, the mirror of a predicate the repository already trusts
+    enough to have fossilized. `git merge-base --is-ancestor <branch> main` is
+    the whole implementation.
+
+    ITS DRY RUN, on the landing that prompted it: 4 branches PASS, 10 FAIL with
+    60 commits between them, and 1 (fix/routed-def-corpus-adjudication) needs the
+    0-ahead case handled — not an ancestor, but nothing ahead, because main holds
+    the same content under a different commit. So the rule needs "not an ancestor
+    AND commits ahead > 0", and that third case is exactly the kind of exemption
+    this repository asks a rule to state rather than discover later.
+
+    WHY NO EXISTING GATE COULD HAVE CAUGHT IT, stated as the reason rather than
+    the observation: the five commits I traced in full are ALL test-hardening.
+    They add no rule and change no verdict, so the wired suite is green with them
+    and green without them. They ARE the detection, which is precisely why their
+    absence cannot be detected by running the detectors.
+
+ALL 32 ON THE LANDED MAIN: rc0 = 26, rc1 = 5, rc2 = 1 (the branch tips were
+25 / 6 / 1), and the single difference is that regression, not an improvement.
+The five that are red:
+
+    gate_proof_vocabulary_has_a_producer ....... F15, and the verdict is FALSE
+    only_the_declaring_step_writes_its_output .. F1, findings true, undisposed
+    layer_membership_is_declared_... ........... declared and true
+    metric_constant_across_differing_arms ...... declared and true
+    every_required_metric_key_has_a_producer ... declared and true
+
+AND A CHECKER IMPROVED IN LANDING, which I nearly reported as a regression.
+`declaration_searched_only_inside_a_truncated_window` now finds ELEVEN sites
+where it found ten, because it gained `_module_int_constants` and resolves a
+NAMED bound: `text[:DECL_WINDOW_BYTES]` in flow_gate_enforcement_audit.py:1538
+is now reported as `text[4000]`. Its own docstring records the change —
+"omitted, the rule reads literals only, which is what it did before".
+
+    MY SCANNER WENT THE OTHER WAY, 10 direct sites to 9, and for a minute I had
+    a finding drafted saying a refactor had hidden a site from the rule. The
+    opposite happened: the rule got better and my scanner did not. Third
+    instrument error of the day, second in one turn where I nearly filed a
+    fixed-or-improved thing as broken.
+
+    F9 STILL STANDS, and the distinction is worth keeping straight: naming the
+    BOUND (`text[:NAME]`) is now resolved; binding the SLICE to a name
+    (`head = text[:4000]`, then search `head`) is still invisible. Those are
+    different blindnesses. The checker's 11 against 40 name-bound sites is the
+    same gap as before, one site wider on its side.
+
+F12 AND F17 LANDED UNCHANGED. The same three gates still certify an empty scan.
+And F17 is exactly as warned: 1 of 20 matrix test files exercises `--json`, while
+all 20 had that write path REWRITTEN by the F14 conversion.
+
+SO I RAN THE PATH NOBODY TESTS, against the landed main, because that is the
+whole point of having said so in advance:
+
+    20 of 20 programs run with `--json`:  17 rc 0, 3 rc 1 (the declared reds)
+    artefacts written: 20 of 20, valid JSON: 20 of 20, 137 B to 4755 B
+
+    The conversion is sound. That is a measurement and not a reassurance — the
+    same harness returns rc 2 with a NameError on a conversion applied wrongly,
+    which is how this report established the check discriminates at all.
+```
 
 ## ACT ON THIS — the whole answer in one screen. Evidence for every line is below.
 
