@@ -12,29 +12,59 @@ ROM became stuck-at-zero, all OTP-derived ID bytes were 0, and the
 host tester padded byte[6]=0x02. Sim PASSed (sim used $readmemh),
 hardware FAILed.
 
+The decision: an OBSERVABLE, never the warning wording
+======================================================
+The question this gate answers is "did the memory image actually land?",
+and that is measurable from Quartus's own RESOURCE NUMBERS — independent
+of how any warning happens to be phrased. Authority order:
+
+  (A) ALLOCATED MEMORY BITS — the decision. Every memory resource line
+      Quartus reports (`Total memory bits : N / M`, `Total block memory
+      bits`, `Total RAM Blocks`, `M9K/M10K/M20K blocks`, in `:`- or
+      `;`-delimited form) is harvested as a NUMBER. `used > 0` is
+      positive evidence the memory landed; `used == 0` means nothing
+      landed and is a FAIL.
+  (B) QUARTUS MESSAGE IDs — structural corroboration. `Info (276013)` /
+      `(276014)` are the uninferred-RAM IDs and are stable across
+      wording, Quartus version and locale; the prose that follows them
+      is not. An uninferred-RAM ID is a FAIL whatever words trail it.
+  (C) WARNING PROSE — kept only as an explanation of a verdict already
+      reached, and as a last-resort corroborator. It decides nothing on
+      its own, because a phrasing this table has not seen is exactly the
+      silent miss that bit us before (see the v0.119.48 history below).
+
+FAIL-SAFE: a PASS requires POSITIVE evidence that memory bits were
+allocated. When Quartus outputs exist but no memory-resource number can
+be recovered from any of them, the image cannot be shown to have landed
+and the verdict is FAIL (BRAM_LOAD_UNVERIFIABLE) — never PASS.
+
+Scope, honestly stated: allocated memory bits prove the RAM/ROM was
+INFERRED and given storage — which is precisely the silent failure this
+gate exists to catch. It does not by itself prove every init WORD is
+correct; the QSF reachability cross-check (step 4) covers whether the
+init file can be found at all.
+
 Detection
 =========
 1. Find Quartus build outputs in `<project>/fpga/output_files/` AND
    `<project>/fpga/`. Required files: `*.fit.summary`, `*.map.rpt`
    (or `.map.summary`).
-2. Parse `*.fit.summary` for `Total memory bits` line. **FAIL** when
-   the project has any RTL with `ram_init_file` / `$readmemh` /
-   `$readmemb` / explicit BRAM declaration AND
-   `Total memory bits` reports `0 /` (zero memory bits used).
-3. Parse `*.map.rpt` (or `.map.summary`) for warning patterns:
-     - `RAM logic ".*" is uninferred because MIF is not supported`
-     - `Stuck at GND` / `Stuck at VCC` on memory output ports
-     - `unable to use M9K block`
-     - `not initialized to specified values`
-   When any present AND RTL has BRAM init declaration → **FAIL**
-   with the exact warning verbatim.
+2. Harvest memory-resource NUMBERS from every build report. **FAIL**
+   when the project has RTL with `ram_init_file` / `$readmemh` /
+   `$readmemb` / a ROM-named module AND the allocated memory is 0.
+3. Scan `*.map.rpt` (or `.map.summary`) for an uninferred-RAM MESSAGE ID
+   (276013 / 276014), then for the legacy warning phrases. Either →
+   **FAIL** with the exact message verbatim.
 4. Cross-check QSF: if RTL has `$readmemh("X.hex")`, verify Quartus
    QSF has `set_global_assignment -name SEARCH_PATH <dir>` covering
    the directory containing X.hex. **FAIL** when missing.
 5. **WARN** when RTL declares BRAM init but no Quartus output
-   reports exist yet (build hasn't run).
+   reports exist yet (build hasn't run — nothing to check, and this
+   never claims the image loaded).
 6. **SKIP** when project has no RTL BRAM init declarations.
-7. Honors waiver `bram_init_runtime_loaded_intentional` (≥40 chars).
+7. **FAIL** when build outputs exist but allocation cannot be
+   established (the fail-safe).
+8. Honors waiver `bram_init_runtime_loaded_intentional` (≥40 chars).
 
 Chip-AGNOSTIC. Works on any FPGA family with the MIF-not-supported
 pattern (MAX 10, Cyclone IV in some configs, etc.).
@@ -120,6 +150,33 @@ _ROM_LIKE_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# (B) STRUCTURAL — Quartus message IDs for uninferred RAM. The ID is stable
+# across Quartus versions, wording changes and locale; the prose after it is
+# not. `Info (276013): RAM logic "..." is uninferred ...` and its
+# `Info (276014): Found N instances of uninferred RAM logic` companion are the
+# exact messages behind the v0.119.48 field failure.
+_QUARTUS_MSG_ID_RE = re.compile(
+    r"\b(?:Info|Warning|Critical Warning|Error)\s*\((\d{5,6})\)", re.IGNORECASE)
+_UNINFERRED_RAM_MSG_IDS = frozenset({"276013", "276014"})
+
+# (A) THE DECISION — memory resource numbers, in whatever label Quartus uses.
+# Real forms seen across families/versions:
+#     "Total memory bits : 1024 / 1,677,312 ( 0 % )"
+#     "Total block memory bits : 0 / 1,677,312"
+#     "Total RAM Blocks : 3 / 182"
+#     "; Total memory bits ; 0 / 1,677,312 ;"        (table form in .rpt)
+#     "M9K blocks : 3 / 182"
+# The label must carry a memory-ish word so logic/pin/DSP rows are not
+# mistaken for memory. The NUMBER is the observable — the label is not.
+_MEM_LABEL = r"(?:memory|mem\b|ram\b|rom\b|m4k|m9k|m10k|m20k|mlab|esb|block\s+bits)"
+_MEM_RESOURCE_RE = re.compile(
+    r"(?P<label>[^:;|\n]*" + _MEM_LABEL + r"[^:;|\n]*?)\s*[:;=]\s*"
+    r"(?P<used>\d[\d,]*)\s*/\s*(?P<total>\d[\d,]*)",
+    re.IGNORECASE,
+)
+
+# Retained for the legacy `Total memory bits` form (kept so the historical
+# shape is still recognised verbatim); the general harvester above supersedes it.
 _TOTAL_MEM_BITS_RE = re.compile(
     r"Total memory bits\s*:\s*([\d,]+)\s*/\s*([\d,]+)",
     re.IGNORECASE,
@@ -224,21 +281,78 @@ def _parse_total_memory_bits(fit_summary: Path) -> Optional[Tuple[int, int]]:
     return used, total
 
 
+def parse_memory_resources(text: str) -> List[Tuple[str, int, int]]:
+    """(A) THE OBSERVABLE — every memory resource line as (label, used, total).
+
+    Harvests the NUMBERS whatever label Quartus prints them under, so a
+    version that renames "Total memory bits" to "Total block memory bits"
+    cannot silently disable the check (which is exactly how a 0-bit build
+    slipped through as PASS)."""
+    out: List[Tuple[str, int, int]] = []
+    for m in _MEM_RESOURCE_RE.finditer(text or ""):
+        label = " ".join(m.group("label").split()).strip(" ;|")
+        if not label:
+            continue
+        try:
+            used = int(m.group("used").replace(",", ""))
+            total = int(m.group("total").replace(",", ""))
+        except ValueError:
+            continue
+        out.append((label, used, total))
+    return out
+
+
+def _collect_memory_allocation(report_paths: List[Path]) -> dict:
+    """Aggregate the memory-allocation observable across every build report.
+
+    Returns {established, used_max, rows}. `established` is True only when a
+    memory-resource number was actually recovered — its absence is never read
+    as evidence that memory landed."""
+    rows: List[dict] = []
+    used_max: Optional[int] = None
+    for p in report_paths:
+        try:
+            text = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        for label, used, total in parse_memory_resources(text):
+            rows.append({"file": p.name, "label": label,
+                         "used": used, "total": total})
+            used_max = used if used_max is None else max(used_max, used)
+    return {"established": used_max is not None,
+            "used_max": used_max, "rows": rows}
+
+
 def _scan_map_for_warnings(map_path: Path) -> List[Tuple[str, str]]:
-    """Return [(rule, verbatim_line)] for each matching map.rpt warning."""
+    """Return [(rule, verbatim_line)] for each uninferred-RAM signal.
+
+    (B) MESSAGE ID first — an uninferred-RAM ID condemns the line whatever
+    prose trails it. (C) the legacy phrase table second, as corroboration for
+    a report that carries no ID."""
     out: List[Tuple[str, str]] = []
     try:
         text = map_path.read_text(errors="ignore")
     except OSError:
         return out
     seen: set = set()
+
+    def _emit(rule: str, line: str) -> None:
+        key = (rule, line.strip())
+        if key not in seen:
+            seen.add(key)
+            out.append((rule, line.strip()))
+
     for line in text.splitlines():
+        # (B) structural: a known uninferred-RAM message ID.
+        ids = {g for g in _QUARTUS_MSG_ID_RE.findall(line)}
+        hit_id = ids & _UNINFERRED_RAM_MSG_IDS
+        if hit_id:
+            _emit(f"UNINFERRED_RAM_MSG_ID_{sorted(hit_id)[0]}", line)
+            continue
+        # (C) legacy prose fingerprints.
         for rule, pat in _MAP_FAILURE_PATTERNS:
             if pat.search(line):
-                key = (rule, line.strip())
-                if key not in seen:
-                    seen.add(key)
-                    out.append((rule, line.strip()))
+                _emit(rule, line)
                 break
     return out
 
@@ -344,6 +458,60 @@ def _waived(project: Path) -> Tuple[bool, str]:
     return False, ""
 
 
+_REMEDY_MAX10 = (
+    "\n"
+    "  For MAX 10, the working pattern is altsyncram\n"
+    "  Megafunction with init_file parameter. Vendor reference\n"
+    "  uses ram128x8.v wrapper (see rig spec Layer 11).\n"
+    "\n"
+    "  Replace the inferred-BRAM register array with:\n"
+    "    altsyncram #(\n"
+    "      .operation_mode(\"ROM\"),\n"
+    "      .init_file(\"X.mif\"),  // .mif file, NOT .hex\n"
+    "      .init_file_layout(\"PORT_A\"),\n"
+    "      .lpm_type(\"altsyncram\"),\n"
+    "      ...\n"
+    "    ) u_otp ( ... );\n"
+    "\n"
+    "  Plus: place X.mif in a directory referenced by\n"
+    "  SEARCH_PATH in QSF, or use MISC_FILE assignment.\n"
+    "\n"
+    "  Alternative (vendor-proven): keep `$readmemh(\"X.hex\")`\n"
+    "  AND add the three QSF pragmas that DISABLE Quartus auto-\n"
+    "  RAM/ROM inference — `AUTO_RAM_RECOGNITION OFF`,\n"
+    "  `AUTO_ROM_RECOGNITION OFF`,\n"
+    "  `BLOCK_RAM_TO_MLAB_CELL_CONVERSION OFF`. Vendor's\n"
+    "  ram128x8.v relies on this pattern."
+)
+
+
+def _offender_citation(project: Path, rtl_scan: dict,
+                       rom_like_modules: List[Tuple[Path, str]]) -> str:
+    """Cite the RTL construct whose image failed to land."""
+    def _rel(f: Path) -> Path:
+        try:
+            return f.relative_to(project)
+        except ValueError:
+            return f
+
+    if rtl_scan["ram_init_attrs"]:
+        f, ln, mif = rtl_scan["ram_init_attrs"][0]
+        return (f"  Module: {_rel(f)}:{ln}\n"
+                f"  Pattern: (* ram_init_file = \"{mif}\" *)")
+    if rtl_scan["readmem_calls"]:
+        f, ln, hexf = rtl_scan["readmem_calls"][0]
+        return (f"  Module: {_rel(f)}:{ln}\n"
+                f"  Pattern: $readmemh(\"{hexf}\", ...)")
+    if rom_like_modules:
+        f, why = rom_like_modules[0]
+        return (f"  Module: {_rel(f)} ({why} matches OTP/ROM/RAM naming)\n"
+                "  Pattern: register-array ROM (case-statement / LUT-style) "
+                "without altsyncram or $readmemh — Quartus tried to lift it as "
+                "BRAM, hit the MIF restriction, and demoted it to zero-init "
+                "logic.")
+    return "  Module: (not cited)"
+
+
 def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
     """Return (failures, warnings, summary)."""
     failures: List[str] = []
@@ -414,87 +582,51 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
         )
         return failures, warnings, summary
 
-    # Step 2: Parse fit.summary for `Total memory bits: 0 /`
-    for fs in quartus["fit_summary"]:
-        parsed = _parse_total_memory_bits(fs)
-        if parsed is None:
-            continue
-        used, total = parsed
-        try:
-            rel = fs.relative_to(project)
-        except ValueError:
-            rel = fs
-        summary.setdefault("fit_summary_results", []).append({
-            "file": str(rel),
-            "used_bits": used,
-            "total_bits": total,
-        })
-        if used == 0 and total > 0 and (has_init_intent or rom_like_modules):
-            # Cite first RTL pattern as the offender
-            offender = ""
-            if rtl_scan["ram_init_attrs"]:
-                f, ln, mif = rtl_scan["ram_init_attrs"][0]
-                try:
-                    f_rel = f.relative_to(project)
-                except ValueError:
-                    f_rel = f
-                offender = (
-                    f"  Module: {f_rel}:{ln}\n"
-                    f"  Pattern: (* ram_init_file = \"{mif}\" *)"
-                )
-            elif rtl_scan["readmem_calls"]:
-                f, ln, hexf = rtl_scan["readmem_calls"][0]
-                try:
-                    f_rel = f.relative_to(project)
-                except ValueError:
-                    f_rel = f
-                offender = (
-                    f"  Module: {f_rel}:{ln}\n"
-                    f"  Pattern: $readmemh(\"{hexf}\", ...)"
-                )
-            elif rom_like_modules:
-                f, why = rom_like_modules[0]
-                try:
-                    f_rel = f.relative_to(project)
-                except ValueError:
-                    f_rel = f
-                offender = (
-                    f"  Module: {f_rel} ({why} matches OTP/ROM/RAM "
-                    "naming)\n"
-                    f"  Pattern: register-array ROM (case-statement / "
-                    "LUT-style) without altsyncram or $readmemh — Quartus "
-                    "tried to lift it as BRAM, hit the MIF restriction, "
-                    "and demoted it to zero-init logic."
-                )
-            failures.append(
-                "FAIL — OTP_NOT_LOADED_ON_FPGA\n"
-                f"{offender}\n"
-                f"  Quartus output: {rel}\n"
-                f"    Total memory bits: {used} / {total:,}\n"
-                "\n"
-                "  For MAX 10, the working pattern is altsyncram\n"
-                "  Megafunction with init_file parameter. Vendor reference\n"
-                "  uses ram128x8.v wrapper (see rig spec Layer 11).\n"
-                "\n"
-                "  Replace the inferred-BRAM register array with:\n"
-                "    altsyncram #(\n"
-                "      .operation_mode(\"ROM\"),\n"
-                "      .init_file(\"X.mif\"),  // .mif file, NOT .hex\n"
-                "      .init_file_layout(\"PORT_A\"),\n"
-                "      .lpm_type(\"altsyncram\"),\n"
-                "      ...\n"
-                "    ) u_otp ( ... );\n"
-                "\n"
-                "  Plus: place X.mif in a directory referenced by\n"
-                "  SEARCH_PATH in QSF, or use MISC_FILE assignment.\n"
-                "\n"
-                "  Alternative (vendor-proven): keep `$readmemh(\"X.hex\")`\n"
-                "  AND add the three QSF pragmas that DISABLE Quartus auto-\n"
-                "  RAM/ROM inference — `AUTO_RAM_RECOGNITION OFF`,\n"
-                "  `AUTO_ROM_RECOGNITION OFF`,\n"
-                "  `BLOCK_RAM_TO_MLAB_CELL_CONVERSION OFF`. Vendor's\n"
-                "  ram128x8.v relies on this pattern."
-            )
+    # Step 2: THE OBSERVABLE — how many memory bits did Quartus actually
+    # allocate? Harvested from EVERY build report under whatever label the
+    # tool used, so a renamed resource line cannot silently skip the check.
+    all_reports = (list(quartus["fit_summary"]) + list(quartus["map_summary"])
+                   + list(quartus["map_rpt"]))
+    alloc = _collect_memory_allocation(all_reports)
+    summary["memory_allocation"] = {
+        "established": alloc["established"],
+        "used_max": alloc["used_max"],
+        "rows": alloc["rows"][:20],
+    }
+
+    if alloc["established"] and alloc["used_max"] == 0 \
+            and (has_init_intent or rom_like_modules):
+        rel_names = ", ".join(sorted({r["file"] for r in alloc["rows"]}))
+        cited = "; ".join(
+            f"{r['label']}: {r['used']} / {r['total']}" for r in alloc["rows"][:4])
+        failures.append(
+            "FAIL — OTP_NOT_LOADED_ON_FPGA\n"
+            f"{_offender_citation(project, rtl_scan, rom_like_modules)}\n"
+            f"  Quartus output: {rel_names}\n"
+            f"    Allocated memory: {cited}\n"
+            "    -> ZERO memory bits allocated: the image did not land.\n"
+            + _REMEDY_MAX10
+        )
+
+    # Step 2b: FAIL-SAFE — build outputs exist but NO memory-resource number
+    # could be recovered from any of them. We cannot show the image landed,
+    # and a PASS requires positive evidence, so this is a FAIL rather than a
+    # silent clean. (Before this, an unrecognised resource label simply
+    # skipped the check and the run reported PASS.)
+    if not alloc["established"] and (has_init_intent or rom_like_modules):
+        failures.append(
+            "FAIL — BRAM_LOAD_UNVERIFIABLE\n"
+            f"{_offender_citation(project, rtl_scan, rom_like_modules)}\n"
+            f"  Quartus outputs present ({len(all_reports)} report(s)) but NO\n"
+            "  memory-resource line could be parsed from any of them, so the\n"
+            "  allocated memory bits are unknown.\n"
+            "\n"
+            "  A PASS here requires POSITIVE evidence that memory was\n"
+            "  allocated; absence of a recognised warning is not evidence.\n"
+            "  Check that the fit/map report carries a resource line such as\n"
+            "  `Total memory bits : <used> / <total>`, or re-run the build so\n"
+            "  the summary is emitted."
+        )
 
     # Step 3: Parse map.rpt / map.summary for verbatim warnings
     map_files = list(quartus["map_rpt"]) + list(quartus["map_summary"])
@@ -512,27 +644,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
                 f"  Quartus map: {rel}\n"
                 f"  Rule: {rule}\n"
                 f"  Verbatim: {verbatim!r}\n"
-                "\n"
-                "  For MAX 10, the working pattern is altsyncram\n"
-                "  Megafunction with init_file parameter. Vendor reference\n"
-                "  uses ram128x8.v wrapper (see rig spec Layer 11).\n"
-                "\n"
-                "  Replace the inferred-BRAM register array with:\n"
-                "    altsyncram #(\n"
-                "      .operation_mode(\"ROM\"),\n"
-                "      .init_file(\"X.mif\"),  // .mif file, NOT .hex\n"
-                "      .init_file_layout(\"PORT_A\"),\n"
-                "      .lpm_type(\"altsyncram\"),\n"
-                "      ...\n"
-                "    ) u_otp ( ... );\n"
-                "\n"
-                "  Plus: place X.mif in a directory referenced by\n"
-                "  SEARCH_PATH in QSF, or use MISC_FILE assignment.\n"
-                "\n"
-                "  Alternative (vendor-proven): keep `$readmemh(\"X.hex\")`\n"
-                "  AND add `AUTO_RAM_RECOGNITION OFF`,\n"
-                "  `AUTO_ROM_RECOGNITION OFF`, and\n"
-                "  `BLOCK_RAM_TO_MLAB_CELL_CONVERSION OFF` to QSF."
+                + _REMEDY_MAX10
             )
 
     # Step 4: Cross-check QSF SEARCH_PATH covers $readmemh files

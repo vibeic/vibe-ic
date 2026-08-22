@@ -1,4 +1,4 @@
-# PM Agent Q-bank (K2)
+# IC Expert Agent Q-bank (K2)
 
 Per-fact question library with variants at three user expertise levels plus
 follow-up strategies. Organised by class then by layer.
@@ -72,7 +72,7 @@ follow_ups:
 
 ## Fallback rule (v0.74 — previously implicit)
 
-When PM Agent looks up `<class>_<layer>.yaml` and the file doesn't
+When the IC Expert Agent looks up `<class>_<layer>.yaml` and the file doesn't
 exist, walk the K1 template's `parent:` chain:
 
 ```
