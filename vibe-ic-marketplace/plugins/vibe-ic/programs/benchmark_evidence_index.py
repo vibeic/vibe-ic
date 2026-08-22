@@ -81,17 +81,66 @@ The third bucket is deliberately not folded into either of the others. "No
 audit was run" and "an audit ran and failed" are different states, and
 collapsing them is the same error as deleting the failures.
 
+WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (vibe-ic#1710 shape)
+=================================================================
+The published corpus moved to `vibeic/benchmark-data`, so `<repo>/benchmark-data/ic`
+does not exist in this repository. This program used to answer that with
+
+    [benchmark_evidence_index] no such directory: <repo>/benchmark-data/ic   rc=1
+
+and rc=1 in this program MEANS "the index disagrees with the artefacts it
+describes" — a claim about the index. There was no such disagreement: the tree
+had moved and the gate had not been told. A gate that reports a defect it did
+not measure is the same false certificate as a gate that reports a pass it did
+not measure, just pointed the other way.
+
+So the corpus is RESOLVED rather than hardcoded, and the three outcomes that
+were one word are kept apart — the shape `benchmark_evidence_structure_check`
+landed for the same event, spelling `VIBE_IC_BENCHMARK_DATA` the same way,
+because a gate and a test suite that disagree about where the corpus lives will
+disagree about whether it was checked:
+
+    $VIBE_IC_BENCHMARK_DATA set, no readable
+      `<it>/ic`                        -> UNDETERMINED (rc=2). Somebody said where
+                                          the corpus is and was wrong. NEVER excused,
+                                          with or without the flag below.
+    nothing set, none in this repo,
+      caller passed --corpus-may-be-absent
+                                       -> NO_CORPUS (rc=0). Nothing was scanned, and
+                                          NOTHING IS CLAIMED to have been scanned. No
+                                          INDEX.md is generated or compared.
+    nothing set, none in this repo,
+      nobody said so                   -> UNDETERMINED (rc=2). Unchanged.
+
+The override is ANNOUNCED: an index built from a different tree than the one
+named on the command line, silently, is how a stale index would be certified
+fresh. The opt-in is a FLAG THE CALL SITE PASSES, never a default — that is the
+only thing keeping the rc=0 row from becoming the general answer.
+
+AND WHEN THE CORPUS IS THERE BUT EMPTY, THAT IS A MEASUREMENT
+=============================================================
+`<corpus>/ic` present with no cell in it is "I looked, there is nothing", which
+is a different fact from "there was nowhere to look" — collapsing them is the
+same error in the other direction. The rendered index says which one it is in
+words, so a reader of an empty INDEX.md can tell an empty CLASSIFICATION from an
+absent CORPUS without knowing how the file was produced. Under NO_CORPUS no
+INDEX.md is written at all, precisely so that an index full of empty sections
+can never be mistaken for a corpus that published nothing.
+
 chip-AGNOSTIC: no IC, PDK, vendor or SKU literal appears in this program. Cells
 are discovered by walking the published tree; their identity lives only in the
-generated Markdown and the curated sidecar, both under `benchmark-data/`.
+generated Markdown and the curated sidecar, both under the corpus root.
 
-Exit: 0 = PASS, 1 = FAIL (drift, or a curated entry naming no cell).
+Exit: 0 = PASS or NO_CORPUS, 1 = FAIL (drift, or a curated entry naming no
+cell), 2 = UNDETERMINED (the corpus could not be resolved, so nothing was
+scanned — which is not a pass).
 """
 from __future__ import annotations
 
 import argparse
 import difflib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -101,6 +150,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _published_tree  # noqa: E402  (the ONE tracked-ness resolver — never re-implement)
 
 GATE = "benchmark_evidence_index"
+
+#: Where a caller may point us at a clone of the published-corpus repository.
+#: Spelled exactly as `benchmark_evidence_structure_check.CORPUS_ENV` and
+#: `programs/tests/_published_corpus.CORPUS_ENV` spell it — one name for one
+#: thing. Two spellings would mean two answers to "was the corpus checked?".
+CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
 
 IC_SUBDIR = "benchmark-data/ic"
 INDEX_NAME = "INDEX.md"
@@ -366,6 +421,22 @@ def render(rows: List[Dict[str, str]], retention: Dict[str, str],
         out.append(f"| {s} | {len(by_section[s])} |")
     out.append(f"| **total** | **{n}** |")
     out.append("")
+    if n == 0:
+        # AN EMPTY RESULT IS NOT A ZERO UNLESS IT SAYS WHICH ONE IT IS.
+        # A reader who opens an index with three empty sections cannot
+        # otherwise tell "the corpus was walked and published nothing" from
+        # "the corpus was not there" — and only the first of those is a
+        # measurement. The second never reaches this renderer at all: with no
+        # resolvable corpus the gate prints NO_CORPUS and writes no file, so
+        # the mere EXISTENCE of this document means a corpus was walked.
+        out.append(
+            "**Zero published cells were discovered.** This index is generated "
+            "only from a corpus that was resolved and walked, so this is a "
+            "MEASUREMENT — the corpus was read and it publishes nothing — and "
+            "not a missing corpus. When no corpus can be resolved the generator "
+            "writes no index at all and reports `NO_CORPUS`, naming the location "
+            "it did not find; see the regenerate command above.")
+        out.append("")
 
     for s in SECTIONS:
         sec = by_section[s]
@@ -374,7 +445,12 @@ def render(rows: List[Dict[str, str]], retention: Dict[str, str],
         out.append(_SECTION_BLURB[s])
         out.append("")
         if not sec:
-            out.append("_none._")
+            # Not a bare "_none._": an empty CLASSIFICATION and an absent CORPUS
+            # are different facts and the reader gets the one that is true.
+            out.append("_None — the corpus was walked and no published cell "
+                       "falls into this classification. This is not the corpus "
+                       "being unavailable; an index is generated only from a "
+                       "corpus that was read._")
             out.append("")
             continue
         out.append("| cell | audit verdict | steps | orchestrator | "
@@ -438,9 +514,61 @@ def render(rows: List[Dict[str, str]], retention: Dict[str, str],
 # Driver
 # ─────────────────────────────────────────────────────────────────────
 
-def build(repo_root: Path) -> Tuple[str, List[str]]:
+def resolve_ic_root(repo_root: Path,
+                    announce: bool = False) -> Tuple[Path, str]:
+    """(the `ic/` directory to walk, where that path came from).
+
+    `env` when `$VIBE_IC_BENCHMARK_DATA` named it, `repo` when it is this
+    repository's own `benchmark-data/ic`. The path is returned WHETHER OR NOT it
+    exists — deciding what an absent one means is `main`'s job, and it is a
+    different decision per origin: an absent env-named tree is a broken pointer,
+    an absent repo-local one is a corpus that lives elsewhere.
+
+    THE POINTER REPLACES A MISSING CORPUS; IT DOES NOT REPLACE A PRESENT ONE.
+    `benchmark_evidence_structure_check` lets the pointer win outright, and there
+    that is right: its `--tree benchmark-data` is a hardcoded literal nobody
+    chose. `--root` here is different — a caller who names a root that DOES carry
+    `benchmark-data/ic` has named a readable corpus, and walking a different one
+    instead is precisely the "scanned a tree other than the one on the command
+    line" failure the announcement exists to prevent. MEASURED: letting the
+    pointer win unconditionally turned 15 of the 21 tests in
+    `test_issue440_benchmark_evidence_index.py` red for every developer who has
+    the pointer set — each fixture builds its own corpus under a tmp root and
+    every one of them was silently redirected at the real one.
+
+    Either way the choice is ANNOUNCED, including when the pointer is set and NOT
+    followed: a pointer a reader believes is in force, that is not, is the same
+    ambiguity in the other direction.
+
+    The clone carries `ic/` at its top (`vibeic/benchmark-data`), which is why
+    the env value gets `/ic` appended rather than `/benchmark-data/ic`.
+    """
+    local = repo_root / IC_SUBDIR
+    env = os.environ.get(CORPUS_ENV)
+    if local.is_dir():
+        if env and announce:
+            print(f"[{GATE}] note: walking the corpus at the named root "
+                  f"({local}); {CORPUS_ENV}={env} is set and NOT followed, "
+                  f"because the named root carries a corpus of its own.",
+                  file=sys.stderr)
+        return local, "repo"
+    if env:
+        ic_root = Path(env) / "ic"
+        if announce:
+            # ANNOUNCED, ALWAYS. An index re-derived from a tree other than the
+            # one the command line names, in silence, would let a stale index be
+            # certified fresh against whatever tree happened to be handy.
+            print(f"[{GATE}] note: {CORPUS_ENV} overrides "
+                  f"{local} -> {ic_root}", file=sys.stderr)
+        return ic_root, "env"
+    return local, "repo"
+
+
+def build(repo_root: Path,
+          ic_root: Optional[Path] = None) -> Tuple[str, List[str]]:
     """(rendered index, findings). Findings are non-render problems."""
-    ic_root = repo_root / IC_SUBDIR
+    if ic_root is None:
+        ic_root, _ = resolve_ic_root(repo_root)
     if not ic_root.is_dir():
         raise SystemExit(f"[{GATE}] no such directory: {ic_root}")
     tracked = _published_tree.published_paths(ic_root)
@@ -465,7 +593,17 @@ def main(argv=None) -> int:
                     "published cells converged and which are a retained "
                     "failure record.")
     ap.add_argument("--root", default=None,
-                    help="repo root (default: infer from this file)")
+                    help="repo root (default: infer from this file). "
+                         f"${CORPUS_ENV} OVERRIDES the corpus this resolves to, "
+                         "because the published corpus now lives in its own "
+                         "repository; the override is announced.")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the corpus. "
+                         "Turns 'no corpus discoverable anywhere' from UNDETERMINED "
+                         "(rc=2) into NO_CORPUS (rc=0), which generates and compares "
+                         "NOTHING and says so. It does NOT excuse a corpus pointer "
+                         f"that is set and broken: ${CORPUS_ENV} naming a tree with "
+                         "no readable ic/ is UNDETERMINED with or without this.")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--write", action="store_true",
                    help="regenerate the index in place")
@@ -475,20 +613,58 @@ def main(argv=None) -> int:
 
     repo_root = (Path(args.root).resolve() if args.root
                  else Path(__file__).resolve().parents[4])
-    index_path = repo_root / IC_SUBDIR / INDEX_NAME
+    ic_root, origin = resolve_ic_root(repo_root, announce=True)
+    index_path = ic_root / INDEX_NAME
 
-    want, findings = build(repo_root)
+    if not ic_root.is_dir():
+        # THREE OUTCOMES, AND COLLAPSING ANY TWO OF THEM IS THE DEFECT.
+        # Before this branch all three were the one line "no such directory",
+        # exiting 1 — the code this program uses for "the index disagrees with
+        # the artefacts", which was a finding against an index that was fine.
+        if origin == "env":
+            print(f"[{GATE}] UNDETERMINED: {CORPUS_ENV}="
+                  f"{os.environ.get(CORPUS_ENV)} is set and has no readable "
+                  f"{ic_root}, so this gate walked no corpus and generated no "
+                  f"index. A pointer that is set and wrong is a broken "
+                  f"configuration, not an absent corpus.", file=sys.stderr)
+            return 2
+        if args.corpus_may_be_absent:
+            print(f"[{GATE}] NO_CORPUS: nothing at {ic_root} and {CORPUS_ENV} "
+                  f"is unset. The published corpus lives in its own repository "
+                  f"and this repo is not required to carry it. NOTHING WAS "
+                  f"SCANNED, no {INDEX_NAME} was generated, and no committed "
+                  f"{INDEX_NAME} was compared — point {CORPUS_ENV} at a clone "
+                  f"to make this gate check something.", file=sys.stderr)
+            return 0
+        print(f"[{GATE}] UNDETERMINED: no such directory: {ic_root}, so this "
+              f"gate walked no corpus and generated no index. A check that "
+              f"could not look has not passed. Point {CORPUS_ENV} at a clone "
+              f"of the published-corpus repository, or pass "
+              f"--corpus-may-be-absent if this repo is not required to carry "
+              f"one.", file=sys.stderr)
+        return 2
+
+    want, findings = build(repo_root, ic_root)
+
+    # The index can now live OUTSIDE this repository (a clone named by the
+    # pointer), so it is named by a path that is relative when it can be and
+    # absolute when it cannot. `Path.relative_to` raises on the env case, and a
+    # traceback where a verdict belongs is not a verdict.
+    try:
+        shown = index_path.relative_to(repo_root)
+    except ValueError:
+        shown = index_path
 
     if args.write:
         index_path.parent.mkdir(parents=True, exist_ok=True)
         index_path.write_text(want, encoding="utf-8")
-        print(f"[{GATE}] wrote {index_path.relative_to(repo_root)}")
+        print(f"[{GATE}] wrote {shown}")
         for f in findings:
             print(f"  [FINDING] {f}")
         return 1 if findings else 0
 
     if not index_path.is_file():
-        print(f"[{GATE}] FAIL: {index_path.relative_to(repo_root)} does not "
+        print(f"[{GATE}] FAIL: {shown} does not "
               f"exist. The tree publishes cells whose verdicts a reader cannot "
               f"see. Run with --write.")
         return 1
@@ -496,11 +672,11 @@ def main(argv=None) -> int:
     have = index_path.read_text(encoding="utf-8", errors="replace")
     if have == want and not findings:
         n = have.count("\n| `")
-        print(f"[{GATE}] PASS: {index_path.relative_to(repo_root)} matches the "
+        print(f"[{GATE}] PASS: {shown} matches the "
               f"tree ({n} cell row(s)).")
         return 0
 
-    print(f"[{GATE}] FAIL: {index_path.relative_to(repo_root)} disagrees with "
+    print(f"[{GATE}] FAIL: {shown} disagrees with "
           f"the artefacts it describes.")
     for f in findings:
         print(f"  [FINDING] {f}")
