@@ -5,57 +5,43 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 
 ## IF YOU READ ONE SCREEN, READ THIS
 
-> **AND THE UNKNOWN IS BOUNDED — AND THE FIRST BOUND WAS WRONG.** Having stated
-> that a red outside these ten files "was never looked for", I sampled. **Twice,
-> and the second sample overturned the first.**
+> **AND THE UNKNOWN IS BOUNDED — after two corrections, both mine.** Having said a
+> red outside these ten files "was never looked for", I sampled. **The bound moved
+> twice before it settled, and the second move was my own instrument.**
 >
->     sample 1   40 files (seed 20260822)    989 passed,  16 skipped,  0 FAILED
->     sample 2  120 files (disjoint, same)  1672 passed,  45 skipped,  7 FAILED
->     ---------------------------------------------------------------------
->     combined  160 of 2737 out-of-census files -> 2 FILES carry 7 reds
+>     WITH the corpus pointer set (CONTAMINATED — see below):
+>       40 files (seed 20260822)     989 passed, 16 skipped,  0 FAILED
+>      120 files (disjoint, same)   1672 passed, 45 skipped,  7 FAILED
+>     WITHOUT it, as CI runs them — THE FIGURE TO USE:
+>       40 files                     989 passed, 16 skipped,  0 FAILED
+>      120 files                    1678 passed, 45 skipped,  1 FAILED
+>     ------------------------------------------------------------------
+>     CLEAN BOUND: 1 red file in 160 of the 2737 out-of-census files
 >
-> **So there IS an unseen population, and the 0-of-40 result was a small-sample
-> artefact** — exactly what its own caveat said it could not rule out. **A
-> file-level rate of 2/160 (1.25%) over 2737 files suggests on the order of
-> THIRTY MORE FILES carrying reds outside this census**, and that estimate is
-> rough: 2 events is a wide interval, not a figure to plan with.
+> **Six of the seven were manufactured by my own measurement.** The failure said so:
+> *"note: `VIBE_IC_BENCHMARK_DATA` overrides `--tree`"*. The pointer I set so D3
+> could be measured **overrides the tree those tests supply**, so the checker
+> inspects the wrong tree and reports "nothing to enforce". `test_issue1538...`
+> gives **6 failed with the pointer, 12 passed without**. **It was never main's red.**
 >
-> **The seven, named so someone can pick them up:**
->
->     test_issue1538_added_vs_pre_existing_ic_level_entries.py   6 reds (whole file)
->     test_v1_9_63_issue693_repo_process_family_wiring.py        1 red
->       ::test_the_checker_population_covers_checker_shaped_names
->
-> **CORRECTED — SIX OF THE SEVEN WERE MY OWN INSTRUMENT.** Run in isolation, the
-> failure names the cause: *"note: **VIBE_IC_BENCHMARK_DATA overrides `--tree`**"*.
-> The pointer I set so D3 could be measured **overrides the tree those tests
-> supply**, so the checker inspects the wrong tree and reports "nothing to
-> enforce". Measured both ways:
->
->     test_issue1538...      WITH pointer  6 failed  |  WITHOUT  12 passed  -> ARTEFACT
->     test_v1_9_63...        WITH pointer  1 failed  |  WITHOUT   1 failed  -> REAL
->
-> **So the out-of-census population is ONE red, not seven**, and the sample rate
-> falls to 1 file in 160.
->
-> **THE CENSUS ITSELF IS NOT AFFECTED, and that is measured, not asserted:**
-> **zero** census failures cite the override, and the D3 reds the pointer revealed
-> go **skipped → failed**, not **passed → failed**:
->
->     D3 revealed pair       WITH pointer  failed  |  WITHOUT  SKIPPED
->
-> **That is the whole distinction.** The pointer SUPPLIES a corpus D3 needs — it
-> turns "could not look" into "looked, and it is red". It OVERRIDES a tree
-> `issue1538` already had — it turns "looked at the right thing" into "looked at
-> the wrong one". **Same variable, opposite effects, and only one of them is a
+> **THE CENSUS IS UNAFFECTED, measured not asserted:** zero census failures cite
+> the override, and the D3 reds the pointer revealed go **skipped → failed**, not
+> **passed → failed**. **The pointer SUPPLIES what D3 lacks; it OVERRIDES what
+> `issue1538` already had. Same variable, opposite effects, and only one is a
 > measurement.**
 >
-> **The remaining real red is named and NOT diagnosed** —
+> **So: a small unseen population exists.** 1/160 (0.6%) over 2737 files suggests
+> of the order of **seventeen** more files — on ONE event, an interval wide enough
+> that it means *"a small population exists"*, not a number. The one real red:
 > `test_v1_9_63_issue693_repo_process_family_wiring.py::test_the_checker_population_covers_checker_shaped_names`
-> — out of this census's scope, and naming without root-causing is the honest
-> stopping point. **What changes is the framing:
-> the inherited list is NOT main's red set, and this document must not be read as
-> if it were.**
+> — **named, reproducible in isolation both ways, and deliberately NOT diagnosed**
+> (outside this census's scope).
+>
+> **OPERATIONAL WARNING FOR ANY FUTURE SWEEP — the reusable part:**
+> `VIBE_IC_BENCHMARK_DATA` is **REQUIRED** for D3 (61 cells report nothing without
+> it) and **HARMFUL** elsewhere. **A whole-suite run WITH it manufactures false
+> reds; WITHOUT it, 61 real cells go silent. No single setting measures this suite
+> correctly — D3 must be run separately.**
 
 > **⚠ SCOPE, STATED BEFORE ANY NUMBER: THIS IS NOT A SWEEP OF MAIN.**
 >
