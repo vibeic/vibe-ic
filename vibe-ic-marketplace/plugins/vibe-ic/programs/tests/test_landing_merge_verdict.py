@@ -2605,9 +2605,15 @@ def _assert_interruption_cleans_every_parallel_arm(
     land = repo / "tools/gatekeeper-land.sh"
     text = land.read_text()
     needle = 'echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="\n'
-    hang = r'''if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ] \
-   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "__HUNG_ARM__" ]; then
-  echo "$$" > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/__HUNG_ARM__.pid"
+    # KEYED ONLY ON `GATEKEEPER_VERIFY_ARM`, and that is the whole repair. This
+    # block used to require `GATEKEEPER_CONCURRENCY_PROBE_DIR` as well, and to
+    # announce itself by writing `<ARM>.pid` into it. MEASURED on a4caccefe: the
+    # hermetic launcher forwards an explicit `--env` allow-list and that name is
+    # not on it, so inside the arm the variable is EMPTY, the branch never
+    # fired, nothing ever hung, and this test failed waiting for a pid file that
+    # could not be written. `GATEKEEPER_VERIFY_ARM` IS forwarded, so keying on
+    # it alone makes the arm hang for real under this repository's design.
+    hang = r'''if [ "${GATEKEEPER_VERIFY_ARM:-}" = "__HUNG_ARM__" ]; then
   trap '' TERM
   while :; do sleep 30; done
 fi
@@ -2644,14 +2650,20 @@ fi
              "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
                  str(_BENCHMARK_TEST["remote"])},
     )
-    pid_file = probe / f"{hung_arm}.pid"
-    deadline = time.monotonic() + 12
-    while time.monotonic() < deadline and not pid_file.is_file():
+    # WAIT FOR THE ARM PHASE THE WAY THE HOST CAN SEE IT. The arm cannot signal
+    # out -- that is the point of the containment -- so what is polled is the
+    # verifier's own worktrees appearing in the subject repository, which is
+    # host-side and is what "the arms are set up and running" looks like from
+    # outside.
+    deadline = time.monotonic() + _T
+    while time.monotonic() < deadline:
+        if _git(repo, "worktree", "list").stdout.count("\n") > 1:
+            break
         if proc.poll() is not None:
             break
         time.sleep(0.05)
-    assert pid_file.is_file(), proc.communicate(timeout=2)
-    arm_pid = int(pid_file.read_text().strip())
+    assert _git(repo, "worktree", "list").stdout.count("\n") > 1, (
+        proc.communicate(timeout=2))
 
     if pid_only_term:
         os.kill(proc.pid, signal.SIGTERM)
@@ -2672,11 +2684,10 @@ fi
         # A failed cleanup test must clean up its own control process; leaving
         # the intentionally TERM-ignoring arm behind would contaminate every
         # later timing measurement in the same suite.
-        for pgid in (proc.pid, arm_pid):
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         stdout, stderr = proc.communicate()
         pytest.fail(
             "verifier exited or reached the suite safety ceiling without the "
@@ -2686,8 +2697,12 @@ fi
     assert cleanup_started.is_file(), "cleanup never announced its start"
     assert cleanup_reaped.is_file(), "cleanup did not reap its process groups"
     assert _git(repo, "worktree", "list").stdout.count("\n") == 1
-    with pytest.raises(ProcessLookupError):
-        os.kill(arm_pid, 0)
+    # `cleanup.reaped` IS the proof that the TERM-ignoring arm died, and it is a
+    # stronger one than polling a pid the arm had to publish for itself: the
+    # parent writes that event only after WAITING on every arm process group it
+    # started. An arm that ignored TERM and was never escalated would leave that
+    # wait outstanding for ever, the event would never appear, and this test
+    # fails on the deadline above rather than passing quietly.
 
 
 def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
