@@ -4473,6 +4473,65 @@ same thing — a channel from the host into a container-era test — and the
 difference I drew between them was not real.**
 
 
+## M84 — the liar census: I still will not bump it, and the owner's decision is now two names
+
+The literal is red for the FIFTH time. **I am not bumping it** (M54 stands: it is
+a number whose own comment calls it *"prose wearing an assertion"*). But leaving a
+correct refusal without doing the work behind it is its own kind of laziness, so
+here is the work.
+
+**MEASURED — the census itself is CLEAN:**
+
+    swept 181   declared 181   unswept []   unrecognised {}
+    by_kind: program_exit_zero 115, advisory 37, optional 29
+
+**Nothing the flow declares is unswept.** The test's NAMED property
+(`test_nothing_the_flow_declares_is_left_unswept`) passes. It fails on a second,
+unnamed property riding in the same test: an equality against a hand-maintained
+floor.
+
+**CLAUSE SETS diffed, not counts** — the file's own discipline, and the rule that
+matching totals hide two-in/two-out swaps:
+
+    vs main 053eecd27:   180 -> 181   ADDED 3   REMOVED 2
+      + 1.6x     program_exit_zero  crosslayer_rewrite_equivalence_check
+      + 15.5ic   program_exit_zero  pad_assignment_gen
+      + 37.5ic   program_exit_zero  tapeout_precheck
+      - 37.5ic   program_exit_zero  tapeout_readiness_check
+      - 37.5self program_exit_zero  general_precheck
+
+**The two REMOVED are already authorised, in writing, in this very file** — they
+stopped being flow clauses without stopping being run, and are now arms that
+`tapeout_precheck` dispatches. `+ tapeout_precheck` is that fold's target. So of
+five moves, **three are one already-authorised refactor.**
+
+**The owner's decision is therefore TWO NAMES**, not a re-derivation:
+
+    crosslayer_rewrite_equivalence_check   (step 1.6x)
+    pad_assignment_gen                     (step 15.5ic)
+
+Both are additions, `unswept` is empty, and the literal exists to catch SHRINKS.
+**This is a grow with nothing uncovered** — the benign case.
+
+**And the open question the comment poses has an answer inside the same comment.**
+It defers the cure because deriving the floor from the previous flow blob *"would
+leave a DELIBERATE shrink no way to be authorised."* Then, forty lines later, the
+file **performs a deliberate shrink and authorises it** — by naming the two
+clauses, stating that both are still reached, and citing the venue that proves it.
+**The authorisation path already exists in practice; what it lacks is a
+machine-readable form.** That is a smaller question than the one written down, and
+it is the one worth answering: the cure is not blocked on inventing a policy, only
+on giving the existing policy a shape a program can read.
+
+**Why I am still not implementing it.** Making the detector derive its own floor
+is a change to what the gate MEANS, and the file's author deferred that
+deliberately rather than by oversight — the comment reasons about it and declines.
+**M78 and M79 were oversights I mistook for decisions; this is the opposite, and
+the same skepticism has to run both ways.** Overriding a reasoned deferral because
+I happen to be here is not the same kind of act as finishing something nobody
+decided.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4566,7 +4625,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. **M71: blocker VERIFIED** — `closed_loop_edge_check` is referenced in the flow yaml and the hygiene script, but both are COMMENTS, not invocations; the other two appear nowhere. All three genuinely unwired. | **wiring decision (verified)** |
 | **`declaration scans strip comments`** | **FIXED (M78) — this row was WRONG to be here.** The analyser did not propagate stripped status through `for`/comprehension targets. Fixed: 10-case A/B 0 wrong, repo 175->168, **0 newly flagged**, 5 regression tests of which 4 go red on revert. Blocking list 5 -> 3 names, and the two that left are verified false. **Remaining: 2 real candidates** (`crosslayer` scans raw `rtl_text`) **+ 1 false positive of a SECOND class** (`declared_io_delay_fraction` scans MARKDOWN, not HDL — a subject-kind error). Baseline deliberately NOT written though the gate asks. | **fixed; 2 real candidates remain** |
-| **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
+| **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump (M54 stands). M84: the decision is now TWO NAMES.** Census is CLEAN — `swept 181 = declared 181`, `unswept []`, `unrecognised {}`. Clause SETS vs main: ADDED 3, REMOVED 2, and **3 of those 5 are one already-authorised refactor** (the two removals are written up in the file itself; `+tapeout_precheck` is the fold target). Genuinely new: `crosslayer_rewrite_equivalence_check` (1.6x) and `pad_assignment_gen` (15.5ic). A GROW with nothing uncovered. **The comment's blocker — 'a deliberate shrink has no way to be authorised' — is answered in the same comment**, which performs one and authorises it in prose; what is missing is a machine-readable form, not a policy. | **owner's call, now a 2-name confirmation** |
 
 ## D. Corrections to my own earlier reports — 26 of them
 
