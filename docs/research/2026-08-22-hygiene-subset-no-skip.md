@@ -2999,3 +2999,51 @@ which needed the AST to avoid a false alarm about a skip button) and the batch
 moving twice, ending in this deletion. Scoping it to refs I never write is what
 made all three events legible; the first version, which included my own
 branches, would have buried them under my own pushes.
+
+## 46. §39 was too broad — the gap is a NARROW-diff gap, and it is still open on `main`
+
+Checked whether §39's escape route is still live on `main` `a4caccefea`, and the
+check refined the finding against me. §39 said the no-skip test "is NOT selected
+for a change to `gatekeeper_review.py`". That is true of a NARROW diff and false
+in general.
+
+**Measured on `main`, two diffs, both touching `gatekeeper_review.py`:**
+
+```
+base d9322cdab^  (gatekeeper_review.py + its own test)   119 selected   test_issue538: 0
+base 8105c37f4a^ (12 files, incl. gatekeeper_review.py)  165 selected   test_issue538: 1
+```
+
+**What pulls it in.** The 12-file diff also changes `hygiene_finding_delta.py`
+and `repo_hygiene_parallel.py`, and `test_issue538` is reachable from those by
+the selector's ordinary rules. So a change that touches the hygiene machinery
+BROADLY drags the no-skip test in; a change that touches only the reviewer's
+CLI does not.
+
+**That makes the gap narrower and, if anything, worse-shaped.** The diff that
+escapes is precisely the focused one — edit `gatekeeper_review.py`, add a flag,
+change nothing else. That is the shape of `4232a7301`, and it is the shape of
+any future re-regression, because adding a CLI option requires editing exactly
+one file (§40's AST check: the parser is a local of `main()`; 17 `add_argument`
+calls, all in that file). **The selection is widest for diffs that need it least
+and narrowest for the one that needs it most.**
+
+**Still open on `main` today**, all three legs re-measured there rather than
+carried over from my branch:
+
+```
+test_issue538 still path-loads gatekeeper_review   yes
+default mode still import-edge                     yes
+narrow diff selects the no-skip test               no
+```
+
+**And §40's mitigation still holds, which is why this refinement is not a
+retraction of the fix.** The seam guard is selected in BOTH diffs above — 1 and
+1 — because it plain-imports. So the property is still policed by a test the
+landing runs, under either diff shape. What §46 corrects is the SIZE of the hole
+in the older test's coverage, not whether the guarantee is guarded.
+
+**Correction owed and recorded:** §39's sentence should have read "for a diff
+touching `gatekeeper_review.py` and little else". I generalised from one
+measurement — the n=1 error §31 already caught me making, in the section whose
+subject is a selector that generalises wrongly.
