@@ -1825,6 +1825,52 @@ def test_the_detectors_two_failure_modes_both_stay_visible(tmp_path):
         + json.dumps(doc, indent=2))
 
 
+def test_the_lower_bound_set_does_not_leak_between_programs(tmp_path):
+    """`lower_bound` is computed per program, inside the loop. Hoisting it out
+    -- an ordinary-looking refactor -- would let one program's helper excuse
+    another program's genuine disagreement, silently.
+
+    Both files declare the SAME counter name, which is what makes a leak
+    possible at all: `aa_helper.py` is helper-assembled and undecidable,
+    `zz_inline.py` is inline with a real disagreement (3 sites against a
+    denominator of 2) and must still be REFUSED. Alphabetical order puts the
+    undecidable one first, so a set carried forward from it reaches the other.
+
+    This is the cross-contamination shape that WAS a defect once on this branch,
+    between two counters in one script. It is structural here rather than
+    accidental, and the test says so."""
+    aa = ('def _repair(name):\n'
+          '    return "  if {[catch {%s}]} { incr _n }\\n" % name\n\n\n'
+          'def script():\n    return ("  set _n 0\\n" + _repair("a")\n'
+          '            + _repair("b") + _repair("c")\n'
+          '            + "  if {$_n >= 3} { puts ALL }\\n")\n')
+    # ONE site against a denominator of 2 -- deliberately `sites < denominator`.
+    # A leak only CHANGES a verdict in that relation: `sites > denominator`
+    # stays decidable even for a lower-bound counter, so a fixture built that
+    # way cannot detect the leak at all. Measured: the first version of this
+    # test used 3 sites and its negative control PASSED.
+    zz = ('def script():\n    return (\n'
+          '        "  if {[catch {a}]} { incr _n }\\n"\n'
+          '        "  if {$_n >= 2} { puts ALL }\\n")\n')
+    progs = tmp_path / "p"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    (progs / "aa_helper.py").write_text(aa, encoding="utf-8")
+    (progs / "zz_inline.py").write_text(zz, encoding="utf-8")
+    (tests / "test_x.py").write_text("def test_x():\n    assert True\n",
+                                     encoding="utf-8")
+
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_FAIL, (
+        "one program's helper excused another program's disagreement:\n"
+        + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert [(f["program"], f["increment_sites"], f["denominator"])
+            for f in doc["findings"]] == [("zz_inline.py", 1, 2)], doc
+    assert [(d["program"], d["counter"]) for d in doc["not_determined"]] == [
+        ("aa_helper.py", "_n")], doc
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
