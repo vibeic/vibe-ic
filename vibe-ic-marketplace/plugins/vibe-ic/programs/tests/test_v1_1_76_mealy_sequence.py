@@ -17,6 +17,7 @@ steal the Moore solver's problem), an incomplete table, an unstated overlap, an
 unstated reset, a latched 'forever' output, a multi-bit non-clk/reset port, or a
 non-FSM prompt — never guessing.
 """
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,13 @@ if str(PROG_DIR) not in sys.path:
 import mealy_sequence_synth as M  # noqa: E402
 import full_moore_fsm_synth as F  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
+
+import pytest
+
+#: The repo's existing tool gate (197 files use this shape). Without
+#: it this module raises FileNotFoundError on a host that lacks the
+#: tool, instead of disclosing a skip.
+_HAVE_TOOLS = bool(shutil.which("iverilog") and shutil.which("vvp"))
 
 _DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
@@ -57,6 +65,8 @@ MEALY_SEQ = _HDR + (
 
 # --------------------------------------------------------------------------- #
 def _compiles(rtl, tmp_path):
+    if not _HAVE_TOOLS:
+        pytest.skip("iverilog/vvp not installed on this host")
     f = tmp_path / "m.sv"
     f.write_text(rtl)
     cp = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "a.out"), str(f)],
@@ -67,6 +77,8 @@ def _compiles(rtl, tmp_path):
 def _host_score(prob, tmp_path):
     """Emit from the real prompt, compile vs ref+test, return mismatch count (int)
     or None when the dataset isn't present / the problem doesn't emit."""
+    if not _HAVE_TOOLS:
+        pytest.skip("iverilog/vvp not installed on this host")
     pr = _DS / f"{prob}_prompt.txt"
     rf = _DS / f"{prob}_ref.sv"
     ts = _DS / f"{prob}_test.sv"

@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "IEC 60958 type II (S/PDIF) does not specify DFT / scan / BIST. Concrete S/PDIF transmitter / receiver IPs from modern vendors add standard scan + JTAG at the integrator level. Useful design-for-test hooks for S/PDIF specifically include: a loopback path from internal TX BMC stream into RX clock-recovery for self-test, a PRBS / sine-wave PCM test pattern generator, a BMC bit-error injector for receiver tolerance test, and snapshot registers for the 192-bit channel-status word."
-  }
-}

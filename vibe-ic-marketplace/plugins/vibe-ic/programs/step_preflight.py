@@ -148,6 +148,7 @@ apart, which is the whole point.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -743,6 +744,114 @@ def _confirm_identity(project: Path, dec: Decision,
 # --------------------------------------------------------------------------- #
 # The gate itself
 # --------------------------------------------------------------------------- #
+#: THERE IS DELIBERATELY NO SWITCH FOR THIS (vibe-ic#1097 S7).
+#:
+#: The first version of this carried `VIBE_IC_REPRO_BUNDLE=0` as an opt-out.
+#: `test_there_is_no_switch_that_turns_a_refusal_into_a_pass` failed it, and
+#: that test is right: it bans EVERY `os.environ.get` in this module except
+#: `STRICT_ENV`, on the grounds that "a weakening switch would make the refusal
+#: decorative". My knob did not weaken the refusal — it only suppressed a
+#: diagnostic — but the ban is deliberately blanket, and blanket is the correct
+#: shape: it means nobody has to adjudicate "is THIS knob a weakening one?" per
+#: knob, which is the judgement call that eventually goes wrong. Moving the
+#: switch into `step_repro_bundle` to satisfy the ban's letter would be routing
+#: around a gate.
+#:
+#: So there is no switch. The bundle is produced only on a refusal — already an
+#: abnormal outcome someone is about to investigate — it is wrapped in the
+#: never-raises guard below, and it writes under `reports/repro/`. If it ever
+#: does need suppressing, that is a reviewed change, not a hidden knob.
+def _emit_repro_bundle(project: Path, dec: "Decision") -> Optional[str]:
+    """Bundle the refused span's declared inputs. Returns a path, or None.
+
+    NEVER RAISES AND NEVER CHANGES A VERDICT. This runs on the refusal path, so
+    every failure mode here — no flow, unwritable reports dir, a step with no
+    `required_inputs` — must leave the refusal exactly as it was. A diagnostic
+    that can convert a clean refusal into a crash is worse than no diagnostic:
+    the caller would lose the finding it came to report.
+
+    An INCOMPLETE bundle is still returned. On this path the inputs are absent
+    BY CONSTRUCTION — that is what was refused — so "some of it is missing" is
+    the evidence, not a reason to withhold it. The manifest inside the archive
+    names every unresolved input, so the bundle states its own completeness.
+    """
+    steps = [str(s) for s in (dec.flow_steps or []) if str(s)]
+    if not steps:
+        return None
+    try:
+        from step_repro_bundle import write_bundle, DEFAULT_REL  # type: ignore
+        out = (Path(project) / DEFAULT_REL /
+               f"refused-{dec.site}-{'-'.join(steps)}.tar.gz")
+        rep = write_bundle(Path(project), steps, out)
+        if rep.get("verdict") == "REFUSED":
+            return None
+        print(f"[preflight] {dec.site}: repro bundle -> {out} "
+              f"({len(rep.get('files', []))} input(s) present, "
+              f"{len(rep.get('missing', []))} absent)",
+              file=sys.stderr, flush=True)
+        return str(out)
+    except Exception as exc:                            # noqa: BLE001
+        # Named, never silent — and never fatal.
+        print(f"[preflight] {dec.site}: repro bundle NOT produced: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return None
+
+
+# ── vibe-ic#1079 / #1221 — the §4.05 boundary, where every step passes ──────
+# `step_input_scope` imposes the boundary on a CHILD process. Measured on
+# `origin/main` 75776dbbb, that reaches nothing in production: no caller of
+# `_watchdog.run_supervised` passes `scope_step`, and all three that exist
+# launch a non-Python child the audit hook cannot cover. Meanwhile the read
+# §4.05 is most about never forks — `phase1_one_shot_runner` ingests documents
+# into L1-L27 in-process — so a child-only mechanism cannot see it.
+#
+# Installed HERE rather than at each runner's call sites, because `gate()` is
+# the one function every dispatch already goes through and
+# `test_every_declared_site_is_wired_at_a_real_call_site` ALREADY pins that.
+# Wiring it here inherits that guarantee instead of adding a second thing to
+# keep in step with it.
+#
+# OFF unless `VIBEIC_STEP_SCOPE` is set, and OBSERVE rather than DENY unless
+# `VIBEIC_STEP_SCOPE_INPROC=deny`. With the switch unset this costs one dict
+# lookup and changes nothing. Failure to import is NOT fatal and NOT silent: it
+# degrades to no enforcement and says so, because an enforcement that vanished
+# quietly is worth less than none.
+def _scoped_dispatch(project: Path, site: str, flow_def: Any,
+                     fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+    """Dispatch `fn` with the §4.05 input scope imposed on this process."""
+    try:
+        import step_input_scope as _sis  # noqa: PLC0415
+    except Exception as exc:             # noqa: BLE001
+        print(f"[preflight] {site}: §4.05 input-scope enforcement UNAVAILABLE "
+              f"({type(exc).__name__}: {exc}) — this dispatch is not bounded "
+              f"by it", file=sys.stderr, flush=True)
+        return fn(*args, **kwargs)
+    if not _sis.enforcement_enabled():
+        return fn(*args, **kwargs)       # the default: byte-for-byte as before
+    # `enter_context` and not `with _sis.scoped(...)`: a @contextmanager runs
+    # its body at __enter__, so a try/except around the CONSTRUCTOR alone would
+    # catch nothing and the degrade path below would be dead code. The stack
+    # enters inside the try and still unwinds with correct exception
+    # propagation, so a step that raises does not leave the scope armed.
+    stack = contextlib.ExitStack()
+    try:
+        rec = stack.enter_context(
+            _sis.scoped(Path(project), step_id=site, flow_def=flow_def))
+    except Exception as exc:             # noqa: BLE001
+        print(f"[preflight] {site}: §4.05 input-scope enforcement FAILED TO "
+              f"INSTALL ({type(exc).__name__}: {exc}) — this dispatch is not "
+              f"bounded by it", file=sys.stderr, flush=True)
+        return fn(*args, **kwargs)
+    with stack:
+        result = fn(*args, **kwargs)
+    for msg in (rec.get("violations") or []):
+        # OBSERVE mode's whole product. Printed, never swallowed: a boundary
+        # that recorded a crossing and told nobody has not observed anything.
+        print(f"[preflight] {site}: §4.05 OBSERVED: {msg}",
+              file=sys.stderr, flush=True)
+    return result
+
+
 def gate(project: Path, runner: str, site: str,
          refusal_factory: Callable[[str, Dict[str, Any]], Any],
          fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -792,7 +901,8 @@ def gate(project: Path, runner: str, site: str,
             dec.notes.append(str(note))
         print(f"[preflight] {site}: NOT-APPLICABLE — {not_applicable}",
               file=sys.stderr, flush=True)
-        result = fn(*args, **kwargs)
+        result = _scoped_dispatch(Path(project), site, flow_def,
+                                  fn, args, kwargs)
         record(Path(project), dec)
         return result
 
@@ -803,14 +913,27 @@ def gate(project: Path, runner: str, site: str,
     if not dec.allow:
         print(f"[preflight] {site}: {dec.detail}", file=sys.stderr, flush=True)
         record(Path(project), dec)
-        return refusal_factory(dec.detail, {
+        extras = {
             "finding": REFUSAL_FINDING,
             "preflight_verdict": dec.verdict,
             "flow_steps": dec.flow_steps,
             "absent_inputs": [i for i in dec.inputs
                               if i.get("state") == "absent"],
             "preflight_ledger": LEDGER_REL,
-        })
+        }
+        # vibe-ic#1097 (S7) — THE ONE MOMENT A REPRO BUNDLE IS WORTH MOST.
+        # This is the single place the flow says "this step cannot read what
+        # it was promised", and it is exactly the state a field agent then
+        # spends a round trip reconstructing by hand. ORFS emits its issue
+        # tarball on the same event (`flow/util/makeIssue.sh`).
+        #
+        # Wired HERE and not at the ~11 dispatch sites for the reason this
+        # module exists: `gate()` is the ONE shared decision point, and it
+        # appends nothing, so `plan[-1]` keeps meaning what it meant.
+        bundle = _emit_repro_bundle(Path(project), dec)
+        if bundle:
+            extras["repro_bundle"] = bundle
+        return refusal_factory(dec.detail, extras)
 
     if dec.verdict != "READY":
         # Never silent: UNDECLARED / NOT-YET-DUE / UNAVAILABLE are all "this
@@ -818,7 +941,7 @@ def gate(project: Path, runner: str, site: str,
         print(f"[preflight] {site}: {dec.verdict} — {dec.detail}",
               file=sys.stderr, flush=True)
 
-    result = fn(*args, **kwargs)
+    result = _scoped_dispatch(Path(project), site, flow_def, fn, args, kwargs)
 
     status = getattr(result, "status", None)
     if status is None and isinstance(result, (list, tuple)):

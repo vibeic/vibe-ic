@@ -1,0 +1,36 @@
+{
+  "_schema_version": "1",
+  "_comment": "FIXTURE. Shape copied from a real published waivers.json (benchmark-data ic/edge_llm_accel/waivers.json). Three entries: one correctly owned, and two that are not owned in two different ways. A gate that accepts any of the last two has no owner requirement.",
+  "waived_steps": [
+    {
+      "id": 36,
+      "reason": "tapeout sign-off reached the evidence threshold but a DRC/LVS slot was credited via a waiver (verdict_tier=PASS_WITH_WAIVERS) - NOT a bare PASS. Production tapeout review must close the waived slot before mask order.",
+      "approver": "tapeout-review-pending",
+      "ticket": "ORGANIC-20260613-tapeout-drc-waiver",
+      "verdict_tier": "PASS_WITH_WAIVERS",
+      "review_required": true,
+      "evidence": ["reports/phase3/drc_signoff.rpt"],
+      "_fixture_note": "VERBATIM from the real published run. The approver key is PRESENT and names nobody: 'tapeout-review-pending' is a state, not a person or a role that can be asked. This is the harder of the two failures because a presence check passes it."
+    },
+    {
+      "id": 41,
+      "reason": "Setup timing at the ss corner is short of the target by 0.08 ns. Waived for this release.",
+      "ticket": "PPA-FIXTURE-NO-OWNER-1",
+      "verdict_tier": "PASS_WITH_WAIVERS",
+      "review_required": true,
+      "evidence": ["sta/known_answer/views/setup_ss_125c_4v50.rpt"],
+      "_fixture_note": "The approver key is ABSENT. Nobody accepted this risk; the waiver simply exists. This is the blunt form and any owner check catches it."
+    },
+    {
+      "id": 42,
+      "reason": "Antenna ratio exceeded on two nets; the router's diode insertion is deferred to the next revision.",
+      "approver": "j.okonkwo@example.org (physical design lead)",
+      "ticket": "PPA-FIXTURE-OWNED-1",
+      "verdict_tier": "PASS_WITH_WAIVERS",
+      "review_required": true,
+      "expires": "2026-12-31",
+      "evidence": ["reports/phase3/antenna.rpt"],
+      "_fixture_note": "The control. A named accountable party, a ticket, an expiry. A gate that rejects this one is over-strict and will be turned off, which is its own failure mode."
+    }
+  ]
+}
