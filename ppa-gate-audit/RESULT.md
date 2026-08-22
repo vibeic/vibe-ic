@@ -1433,3 +1433,146 @@ superseded is worth more than a corrected one they must take on trust.
 
 No program, no gate, no test and no wiring line. Part 13 is prose in an audit
 document; every verdict above is the one the pushed commit already produced.
+
+---
+
+# Part 14 — the exact-path rows, and an rc 2 that was hiding an rc 1
+
+Part 12's guard enforces one rule: a gate that returns rc 2 over a population it
+opened must name what is missing. It enforces it on the four `--corpus` gates.
+**Two wired rows refuse over a non-empty population through an EXACT PATH**, not
+a corpus — `--coverage` and `--candidates` — so the guard never reached them and
+the rule went unenforced on a third of the family. Applying it by hand found
+three things, and the third is the most serious defect this lane has produced.
+
+## The two refusals, as they stood
+
+    PPA measurement coverage      148-row bundle
+      [CANNOT CHECK] NO_EXPECTATION_SET: ... neither --expect nor the bundle
+      declares what should have been measured. ...
+
+    PPA frontier recomputes       1 candidate set, 148 metric records
+      [CANNOT CHECK] the contract declares no objective, so there is no
+      trade-off to compute a frontier over
+
+The first names a flag and never the BUNDLE it opened. The second names nothing
+at all — no document, no key, no flag — over a set it had already read and
+counted. Both now name the document, the population they read, and the artefact
+they need; `ppa_pareto_check` names BOTH of the two Part 9 identified, because a
+reader told to declare objectives and not told a published frontier is also
+required will build the self-marking pass that gate exists to refuse.
+
+**Neither rc changed. Both are still 2, and both are still correct.**
+
+## AND AN rc 2 WAS HIDING AN rc 1
+
+`run_coverage` states its own severity rule, twenty lines below the defect:
+
+    # An invalid record is a finding about the record set and outranks a
+    # coverage gap, for the same reason 1 outranks 2 everywhere else here.
+
+That rule could never fire. `_index_from` establishes the record refusals on the
+function's FIRST line — fully, with no further input needed, because a record
+that is invalid is invalid whatever a denominator says — and then
+`_expected_from` RAISES over a completely independent absent input, so the report
+carrying `record_refusals` is never built and the rule never runs.
+
+Measured on the wired row, `ppa-crosslayer/records/trials/b000/records_flat.json`
+— **148 rows, 54 refused, and the gate reported NOT_CHECKED and named none of
+them**:
+
+    44 x SCOPE_SENTINEL           `scope.clock` is None
+     8 x SAME_ARTEFACT_TWO_VALUES one artefact, read twice, two values
+     2 x CONFLICTING_RECORD       one metric+scope, two MEASURED values
+
+The two CONFLICTING_RECORDs are not a shape complaint. They are two artefacts of
+the same run stating different numbers for the same fact:
+
+    route.wirelength.um   openroad.log 16511.0   vs   openroad.metrics.json 16522
+    route.via.count       openroad.log 4151      vs   openroad.metrics.json 4159
+
+A claim citing either binds to neither number. That had been sitting in a
+published campaign record set, behind an rc 2, for as long as the row has been
+wired.
+
+**These are two INDEPENDENT questions over one bundle** — "are these records
+valid" (answered: no, 54 times) and "did the run measure what it was required
+to" (undecidable: nothing declares the requirement). Answering the second with
+silence about the first is this lane's defect in its more dangerous direction: an
+unearned PASS at least looks like a claim, while an unearned NOT_CHECKED looks
+like diligence.
+
+The ordering is fixed. `PPA measurement coverage` is now **rc 1**, it prints all
+54 refusals, and it STILL SAYS the coverage question is separately undetermined —
+an rc 1 about the records is not an answer about coverage, and the row says so.
+
+### This is the one verdict change in the lane, and it is stated loudly
+
+    PPA measurement coverage    rc 2  ->  rc 1
+
+Nothing was made green. A row that reported NOT_CHECKED now reports a finding it
+had already computed and discarded. The suite was ALREADY red from the
+acknowledged `h2h_F` row, so this does not flip the batch; it adds a second red.
+`gate_red_since.json` is NOT edited — a NEW red passes that ledger by its own
+rule, and acknowledging a red found an hour ago would be taking on a deadline to
+avoid stating a finding.
+
+### A defect introduced while fixing it, and caught by this branch's own rule
+
+The first version of the ordering fix returned `"coverage": None`, and `main`
+read `report["coverage"]["rows"]` unconditionally. `TypeError`, traceback,
+interpreter exit **1** — a crash publishing itself as a finding, which is the
+exact defect Part 12 repaired in `ppa_head_to_head_check` and Part 7 in
+`ppa_problem_integrity_check`. It is recorded rather than quietly corrected
+because it is evidence about the class: this shape is easy to reintroduce, three
+programs in this family have now carried it, and only a test catches it.
+`test_a_refused_record_is_rc_1_even_when_the_denominator_is_absent` asserts
+`"Traceback" not in output` for that reason.
+
+## The eleven wired rows, final
+
+    rc=2  PPA head-to-head records                      published corpus, other repo
+    rc=1  PPA head-to-head records (cross-layer)        15 records, 1 refused, NAMED
+    rc=2  PPA head-to-head records (end-to-end)          2 records, both NAMED
+    rc=0  PPA measurement contract (cross-layer)        21 contracts
+    rc=0  PPA measurement contract (end-to-end)         61 contracts
+    rc=2  PPA measurement contract                      published corpus, other repo
+    rc=1  PPA measurement coverage                      54 of 148 records REFUSED  <- CHANGED
+    rc=2  PPA promotion feasibility (cross-layer)       21 sets, artefacts NAMED
+    rc=2  PPA frontier recomputes                       both missing artefacts NAMED
+    rc=0  PPA arms solved one problem (cross-layer)      210 pair(s)
+    rc=0  PPA arms solved one problem (end-to-end)      1830 pair(s)
+
+## Negative controls
+
+    D — the denominator refusal put back in front of the record refusals
+        1 failed, 30 passed
+          test_a_refused_record_is_rc_1_even_when_the_denominator_is_absent
+
+        AssertionError: a conflicting record is a finding about the record set
+        and this returned 2
+          [CANNOT CHECK] NO_EXPECTATION_SET: ... 1 record(s) indexed, 1 refused
+          ... rc=2.
+        assert 2 == 1
+
+    E — the frontier refusal returned to its one-sentence form
+        1 failed, 30 passed
+          test_a_frontier_refusal_names_the_document_and_BOTH_missing_artefacts
+
+        AssertionError: [CANNOT CHECK] the contract declares no objective, so
+        there is no trade-off to compute a frontier over
+        assert '.../candidates.json' in '[CANNOT CHECK] the contract declares
+        no objective, so there is no trade-off to compute a frontier over\n'
+
+And the paired half, so the rc-1 rule cannot be satisfied by a gate that refuses
+everything: `test_the_paired_half_a_clean_bundle_with_no_denominator_is_still_rc_2`
+pins a VALID bundle with no denominator at rc 2. The STILL-CANNOT verdict this
+row has carried all along is untouched where it is earned.
+
+## Regression
+
+Same targeted selection as Part 12, plus the five files covering the two programs
+changed here:
+
+    31 failed, 769 passed, 104 skipped, 4 xfailed
+    failures on this branch and not the base: (none)

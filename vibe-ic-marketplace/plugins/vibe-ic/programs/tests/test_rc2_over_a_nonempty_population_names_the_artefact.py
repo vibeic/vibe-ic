@@ -523,6 +523,124 @@ def test_every_wired_corpus_gate_that_refuses_names_what_is_missing(
         proc, subjects, f"{checker} --corpus {corpus.name}")
 
 
+# ===========================================================================
+# THE EXACT-PATH ROWS. Two wired gates refuse over a NON-EMPTY population
+# through `--coverage` / `--candidates`, not a corpus, so the corpus arm above
+# never reached them and the rule went unenforced on a third of the family.
+# ===========================================================================
+def _bundle(rows):
+    return [{"schema": "vibeic.ppa.metric.v1", "metric": m, "status": "MEASURED",
+             "unit": "u", "value": v, "scope": {"stage": "post_route"},
+             "source": {"path": src, "sha256": "sha256:" + h * 64,
+                        "tool": "TOOL_UNDER_TEST"}}
+            for m, v, src, h in rows]
+
+
+def test_a_coverage_refusal_names_the_bundle_it_read(tmp_path):
+    """RED before this branch: the refusal said "the bundle" and never which.
+
+    An rc 2 that names no document is indistinguishable from the same sentence
+    over a file that is not there, and only one of those is fixed by looking
+    somewhere else.
+    """
+    b = tmp_path / "records_flat.json"
+    b.write_text(json.dumps(_bundle([("area.die.um2", 1.0, "r/a.log", "a")])),
+                 encoding="utf-8")
+    proc = _run("ppa_measurement_check.py", ["--coverage", b])
+    assert proc.returncode == RC_UNDETERMINED, proc.stdout + proc.stderr
+    text = proc.stdout + proc.stderr
+    assert str(b) in text, (
+        "the coverage refusal does not name the bundle it opened:\n" + text)
+    assert "`expected`" in text, (
+        "the coverage refusal does not name the artefact it needs:\n" + text)
+    assert_rc2_names_the_missing_artefact(proc, [b], "coverage bundle")
+
+
+def test_a_frontier_refusal_names_the_document_and_BOTH_missing_artefacts(tmp_path):
+    """RED before this branch: one sentence, no document, no key, no flag.
+
+    Both artefacts must be named, not just the objectives list: with only the
+    objectives this gate would recompute a frontier and check it against its own
+    recomputation, so naming one of the two would send a reader to manufacture
+    exactly the pass the gate exists to refuse.
+    """
+    c = tmp_path / "candidates.json"
+    c.write_text(json.dumps({
+        "schema": "vibeic.ppa.candidates.v1",
+        "required_views_by_axis": {"em": [{"stage": "post_route"}]},
+        "required_views": [{"stage": "post_route"}], "limits": {},
+        "allow_waivers": False,
+        "candidates": [{"candidate_id": "c1", "metrics": _bundle(
+            [("area.die.um2", 1.0, "r/a.log", "a")]), "waivers": []}]}),
+        encoding="utf-8")
+    proc = _run("ppa_pareto_check.py", ["--candidates", c])
+    assert proc.returncode == RC_UNDETERMINED, proc.stdout + proc.stderr
+    text = proc.stdout + proc.stderr
+    assert str(c) in text, text
+    assert "`objectives`" in text, text
+    assert "--frontier" in text, (
+        "only ONE of the two missing artefacts is named; a reader told to "
+        "declare objectives and not told a published frontier is also required "
+        "will build the self-marking pass this gate refuses:\n" + text)
+    assert_rc2_names_the_missing_artefact(proc, [c], "frontier candidates")
+
+
+def test_a_refused_record_is_rc_1_even_when_the_denominator_is_absent(tmp_path):
+    """AN rc 2 WAS HIDING AN rc 1, and this is the one that matters most here.
+
+    `run_coverage` states its own severity rule -- "An invalid record is a
+    finding about the record set and outranks a coverage gap" -- and the rule
+    could never fire when no denominator was declared, because `_expected_from`
+    raised before the report carrying `record_refusals` was ever built.
+
+    The two questions are INDEPENDENT. A record that is invalid is invalid
+    whatever the denominator says. Answering "I could not check coverage" while
+    silent about a conflicting record is the more dangerous direction of this
+    lane's defect: an unearned PASS at least looks like a claim, an unearned
+    NOT_CHECKED looks like diligence.
+
+    MEASURED on the wired row: 148 rows, 54 refused -- 44 SCOPE_SENTINEL,
+    8 SAME_ARTEFACT_TWO_VALUES, 2 CONFLICTING_RECORD -- reported as NOT_CHECKED
+    and naming none of them.
+    """
+    b = tmp_path / "records_flat.json"
+    # One metric, one scope, TWO different measured values from TWO artefacts.
+    b.write_text(json.dumps(_bundle([
+        ("route.wirelength.um", 16511.0, "r/pnr.log", "a"),
+        ("route.wirelength.um", 16522.0, "r/pnr.metrics.json", "b")])),
+        encoding="utf-8")
+    proc = _run("ppa_measurement_check.py", ["--coverage", b])
+    text = proc.stdout + proc.stderr
+    assert "Traceback" not in text, (
+        "a traceback escaped; rc 1 is reserved for a finding and a crash must "
+        "never publish itself as one:\n" + text)
+    assert proc.returncode == 1, (
+        f"a conflicting record is a finding about the record set and this "
+        f"returned {proc.returncode}\n{text}")
+    assert "CONFLICTING_RECORD" in text, text
+    # ...and the undecidable half is still SAID, not swallowed by the finding.
+    assert "NO_EXPECTATION_SET" in text, (
+        "the coverage question is still undecidable and the run must say so; "
+        "an rc 1 about the records is not an answer about coverage:\n" + text)
+
+
+def test_the_paired_half_a_clean_bundle_with_no_denominator_is_still_rc_2(tmp_path):
+    """Without this, the test above is satisfied by a gate that returns 1 always.
+
+    A bundle whose records are all VALID and which still declares no denominator
+    has nothing to report as a finding, so it must stay rc 2 -- the STILL-CANNOT
+    verdict this row has carried all along, and which this branch does not touch.
+    """
+    b = tmp_path / "records_flat.json"
+    b.write_text(json.dumps(_bundle([("area.die.um2", 1.0, "r/a.log", "a")])),
+                 encoding="utf-8")
+    proc = _run("ppa_measurement_check.py", ["--coverage", b])
+    assert proc.returncode == RC_UNDETERMINED, (
+        "a clean bundle with no declared denominator must stay NOT CHECKED; "
+        "turning it into a finding would be inventing one\n"
+        + proc.stdout + proc.stderr)
+
+
 def _wired_ppa_invocations():
     """Every PPA gate line in the wiring, as the argv the dispatcher will run.
 
