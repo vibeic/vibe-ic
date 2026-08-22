@@ -188,7 +188,7 @@ def synth(prompt_text, fsm_table_text, top="TopModule"):
     port_lines = [f"input {clk}", f"input {rst}"] + fsm_ports \
         + [f"output reg {n}" for n in outputs]
     L = [
-        "// program-EMITTED Moore FSM from an AI-extracted complete table; the table",
+        "// program-EMITTED Moore FSM from a parsed/extracted complete table; the table",
         "// was validated complete + interface-matched before emit (deterministic).",
         f"module {top}(",
         "    " + ",\n    ".join(port_lines),
