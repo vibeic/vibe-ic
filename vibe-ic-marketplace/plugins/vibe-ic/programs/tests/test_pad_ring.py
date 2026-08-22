@@ -1503,3 +1503,29 @@ def test_the_header_count_matches_what_the_module_actually_names():
     assert len(actually) == named_claim, (
         f"header claims {named_claim} named; the modules name "
         f"{len(actually)}: {sorted(actually)}")
+
+
+def test_north_pads_are_mirrored_not_rotated(tmp_path):
+    """THE DEFECT, STATED AS A VALUE THE OLD CODE CAN PRODUCE.
+
+    Deliberately uses NO constant this change introduces, so the pre-fix tree
+    runs it and answers WRONGLY rather than raising AttributeError. An
+    AttributeError control observes nothing: it proves a rename happened, not
+    that a defect existed.
+
+    MEASURED, OpenROAD 26Q3-1581, librelane's default rotations, north pad:
+    orient MX, whose DEF spelling is FS. The pre-fix step computed NORTH as
+    rotate_cw(PAD_ROTATION_HORIZONTAL, 2) = S (R180). S and FS share a bounding
+    box and differ by a mirror, so the fit arithmetic cannot see the difference
+    and a DEF reader deriving pin positions can."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    north = sorted({p["orient"] for p in rep["pads"] if p["side"] == "N"})
+    assert north == ["FS"], (
+        f"north pads carry {north}; the placer produces MX -> 'FS'. "
+        f"'S' is a 180-degree ROTATION where the tool applies a MIRROR")
+    # and the DEF agrees with the report, since that is the whole point
+    text = _ring_def(root).read_text()
+    for pad in (p for p in rep["pads"] if p["side"] == "N"):
+        assert f"( {pad['x']} {pad['y']} ) FS ;" in text
