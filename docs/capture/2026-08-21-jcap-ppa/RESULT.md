@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 34 records, and the seventeen already-program claims of which sixteen hold
+# The PPA cluster, DISTILLED — 35 records, and the seventeen already-program claims of which sixteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 34 records](#the-34-records)
+- [The 35 records](#the-35-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -84,7 +84,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 31 | deterministic rules — the default, and every one names its predicate |
+| **A** | 32 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -225,7 +225,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 34 records
+## The 35 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1036,7 +1036,7 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            31     (22 when the rule was written)
+    Bucket-A records            32     (22 when the rule was written)
     distinct target programs    16
     targets that are unwired     0
 
@@ -1337,6 +1337,36 @@ existing examples do not anticipate, which is exactly when it is needed.
 
 ---
 
+### A-33 · an ingested input records who declared it · `phase3.reference_flow_ingest`
+
+The last unmined request in the cross-layer source, and the evidence is in two
+places that disagree.
+
+    knobs the runner exposes on its command line            3   (all place-and-route)
+    synthesis actuators it exposes                          0
+    the only synthesis input it reads     a directory inside the design's input tree
+    what its audit header names                             that path, and nothing else
+    fields recording who authored that input                0   (9 candidates, all unrelated)
+
+So a lever admitted as *changing no design* can only be turned by writing into
+the design's own inputs — after which the runner's own audit line reports it as
+the design's declaration.
+
+**What makes this a rule rather than a complaint is what the search did about
+it.** It compensated by hand: nine files staged, and the disclosure written into
+the comment header of six of them. The first line of one reads that the strategy
+is declared by the cross-layer search and *not by the design*. That is exactly
+the right fact, recorded in the one place no consumer parses, by an author who
+happened to be careful — and the next author is one omitted comment away from a
+run that looks like the design asked for a synthesis strategy it never mentioned.
+
+**(o)** yes — it is the request, and the request exists because the author had to
+write the comment.
+**(d)** yes: the predicate is a declarer per ingested input, so it covers every
+ingest the runner performs, not the one directory this search happened to need.
+
+---
+
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1440,8 +1470,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **nine** steps. Without them **10 of the
-34 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **10** steps. Without them **11 of the
+35 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -1690,7 +1720,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          31     (26 when the rubric was applied)
+    Bucket-A records                          32     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1744,9 +1774,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 34 records**:
+the patterns were unchecked by anything. Over **all 35 records**:
 
-    pairs compared                      561
+    pairs compared                      595
     maximum similarity                 0.38
     pairs above 0.40                      0
 
@@ -2127,7 +2157,7 @@ what it contains. Mapped properly:
 
 | # | request | this batch |
 |---|---|---|
-| 1 | give the runner a first-class synthesis-strategy flag | **unmined** — and it carries a rule: a lever with no actuator has to be turned by writing into the design's own input tree, and the runner's ingest line then reports it as *the design's* declaration |
+| 1 | give the runner a first-class synthesis-strategy flag | **now recorded as A-33** — verified: the runner exposes 3 place-and-route knobs and no synthesis actuator, and the search that hit this compensated by hand in 6 of 9 staged files |
 | 2 | state that an artefact the search may rewrite cannot sit in the `problem` identity | **now recorded as A-32**, and measured wider than the request: the scheme declares five identities and exactly one states what may not sit in it |
 | 3 | the timing module should omit scope keys it cannot establish, not write null | partly **A-2**, from the producer side |
 | 4 | fix the Phase-3 power session or stop the report claiming post-PnR | the class is **F-7** in the eighteen |
@@ -2577,7 +2607,7 @@ rather than in a command line that would fail for whoever tried it.
 
 ## Summary
 
-**STATUS**: 34 records emitted and validated — 31 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 35 records emitted and validated — 32 Bucket A, 2 C, 1 T, zero B,
 zero D. 17 ALREADY-PROGRAM claims examined, 16 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -2605,7 +2635,7 @@ bucket. My 27 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 17 claims, **16 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 8 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32 |
+| **EXTRACT-NEW** | 9 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -2747,6 +2777,7 @@ gap was non-empty every single time it was measured.
 | A-30 | 1 raise site | **guard cannot fail** | proven by mutation; stated over semantics, not the syntax |
 | A-31 | 52 of 52 | **29 + 13 + 10** | the emitter's own template, across three lanes; not one step takes those inputs |
 | A-32 | 5 identities | **1 states its rule** | the prohibition exists in bold, one identity over, in the same section |
+| A-33 | 3 knobs, **0 synthesis actuators** | **6 of 9 staged files** carry a hand-written disclosure | the correct fact, in the one place no consumer parses |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |

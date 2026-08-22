@@ -1,7 +1,7 @@
 {
   "date": "2026-08-22",
   "totals": {
-    "A": 31,
+    "A": 32,
     "B": 0,
     "C": 2,
     "D": 0,
@@ -25,7 +25,8 @@
       "programs/_ppa/cli_exit.py",
       "programs/tracked_json_yaml_parses_check.py",
       "programs/_ppa/schema_validation.py",
-      "programs/ppa_problem_integrity_check.py"
+      "programs/ppa_problem_integrity_check.py",
+      "programs/phase3_one_shot_runner.py"
     ],
     "bucket_T": [
       "OpenROAD"
@@ -48,7 +49,8 @@
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_cli_exit_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_tracked_json_yaml_parses_check_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_schema_validation_rule_sketches.py",
-    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_problem_integrity_check_rule_sketches.py"
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_problem_integrity_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_phase3_one_shot_runner_rule_sketches.py"
   ],
   "bucket_C_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs",
   "bucket_C_files": [

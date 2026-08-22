@@ -270,6 +270,10 @@
     "ppa.problem_identity": {
       "bucket_A_program": "programs/ppa_problem_integrity_check.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "phase3.reference_flow_ingest": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     }
   },
   "default_routing": {
