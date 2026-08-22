@@ -57,6 +57,7 @@ from pathlib import Path
 
 import pytest
 
+import _corpus_location as _corpus_loc
 import _pytest_progress_plugin
 import citation_routing_is_true_check as _routing_gate
 import evidence_citation_resolves_check as _evidence_gate
@@ -94,9 +95,15 @@ def _arg_value(args: tuple[str, ...], option: str, default: str) -> str:
 def _resolved_ic_corpus(module_file: str, supplied: Path | None
                         ) -> Path | None:
     here = Path(module_file).resolve()
-    named = next((base / "benchmark-data" / "ic" for base in here.parents
-                  if (base / "benchmark-data" / "ic").is_dir()), None)
-    if named is not None:
+    # vibe-ic#1710 — THE PARENT'S PLAN MUST USE THE CHILD'S RESOLUTION. This
+    # re-implemented the gates' unbounded `here.parents` walk, so on a host whose
+    # $HOME carries a `benchmark-data/` the pytest-side manifest was computed over
+    # THAT tree while the (now bounded) gate worked over the supplied corpus. The
+    # counts then disagreed and the run died as a progress-protocol violation
+    # (`child reached natural return before completing its finite manifest
+    # (1146/1366)`) rather than as anything about the corpus. One seam, both sides.
+    named = _corpus_loc.default_named(here, "benchmark-data/ic")
+    if named.is_dir():
         return named
     candidate = supplied / "ic" if supplied is not None else None
     return candidate if candidate is not None and candidate.is_dir() else None
@@ -642,3 +649,62 @@ def test_the_hygiene_sweep_actually_passes_the_flag(prog):
     assert all("--corpus-may-be-absent" in ln for ln in lines), (
         f"the sweep invokes {prog} without the flag, so a repo with no corpus is "
         f"still blocked:\n" + "\n".join(lines))
+
+
+# ── vibe-ic#1710 — the resolution must be a fact about the REPOSITORY ───────
+def _fake_repo(tmp_path: Path) -> Path:
+    """A checkout-shaped tree, with a corpus sitting ABOVE it."""
+    outer = tmp_path / "outer"
+    (outer / "benchmark-data" / "ic").mkdir(parents=True)     # the stranger
+    repo = outer / "checkout"
+    (repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs").mkdir(
+        parents=True)
+    return repo
+
+
+def test_default_named_never_leaves_the_repository(tmp_path):
+    """THE HOST-DEPENDENCE THIS FILE IS NAMED FOR.
+
+    The three corpus-reading gates resolved their default root with an
+    UNBOUNDED `here.parents` walk, which does not stop at the checkout. On a
+    machine whose $HOME happens to carry a `benchmark-data/`, the gate scanned
+    THAT tree and `resolve()` then declined the caller's pointer in favour of
+    it — so the same commit produced different verdicts on different machines.
+    MEASURED on main a4caccefe, same host, two clones: 15 failed under a
+    checkout below $HOME (which carried a benchmark-data/) and 42 passed under
+    one below /var/tmp (which did not).
+
+    Bounded at the repository root, the stranger above the checkout is
+    invisible and the answer depends only on the repository.
+    """
+    repo = _fake_repo(tmp_path)
+    start = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    got = _corpus_loc.default_named(start, "benchmark-data/ic")
+    assert not got.is_absolute() or repo in got.parents, (
+        f"resolution escaped the repository: {got}")
+    assert (tmp_path / "outer" / "benchmark-data" / "ic") != got, (
+        "the corpus ABOVE the checkout was adopted — this is the host "
+        "dependence the bound exists to remove")
+    assert got == Path("benchmark-data/ic"), (
+        "a repo that carries no corpus must return the LITERAL relative path, "
+        "so resolve() follows the pointer and refuse() can name what it looked "
+        f"for; got {got}")
+
+
+def test_default_named_prefers_the_repositorys_OWN_corpus(tmp_path):
+    """The bound must not break the in-repo case: a checkout that DOES carry
+    the tree resolves to its own copy, not to the stranger above it."""
+    repo = _fake_repo(tmp_path)
+    (repo / "benchmark-data" / "ic").mkdir(parents=True)
+    start = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    got = _corpus_loc.default_named(start, "benchmark-data/ic")
+    assert got == repo / "benchmark-data" / "ic", got
+
+
+def test_repo_root_stops_at_the_marker(tmp_path):
+    """`vibe-ic-marketplace/` is the marker, not `.git` — a tarball export and
+    a worktree without its gitdir are still the tree the gate is about."""
+    repo = _fake_repo(tmp_path)
+    start = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    assert _corpus_loc.repo_root(start) == repo
+    assert _corpus_loc.repo_root(tmp_path) is None
