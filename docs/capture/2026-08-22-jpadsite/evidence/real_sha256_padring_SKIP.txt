@@ -74,3 +74,24 @@ the evidence look weaker than it is: 0 of 28 is a stronger statement than 0 of
 9. That is the third correction in this session that made a claim STRONGER --
 the pattern being that an unmeasured figure is not biased toward flattering
 me, it is just unmeasured.
+
+THE PAIRING THAT IS A CELL, AND IT IS THE TREE MEASURED HERE
+=============================================================
+`benchmark-data/ic/CELL_MATRIX.md` verified verbatim 2026-08-22:
+
+  * `sha256 x gf180mcuD` is the FIRST of FOUR rows under "Combinations that are
+    NOT cells": "sha256 declares SKY130 only; zero gf180 mentions anywhere.
+    Dispatched 2026-08-09 in error and stopped mid-run." Exact.
+  * `sha256 | sky130A` is ROW 6 OF THE CELLS TABLE: `L19 pdk_target: sky130;
+    L1 "SKY130 主目標"`. A legitimate pairing.
+
+THE REPORT HAD ONLY THE FIRST HALF. The design is not a design without a valid
+PDK -- it has one, and `_bm_sha256_sky130A_121` is a real run under it. What
+that run is, measured here for the first time: 15 DEFs through routed and
+post_hold, ZERO GDS, general_precheck NOT_DETERMINED, pad ring SKIP for want of
+a pad_assignment.json, and the site fix resolving sky130A's two pad sites
+through the TECH view.
+
+So the honest shape of the row is not "this design has no valid pairing". It is
+"this design has a valid pairing, it has a real unfinished run under it, and
+this brief measured the OTHER pairing -- the one recorded as a non-cell".

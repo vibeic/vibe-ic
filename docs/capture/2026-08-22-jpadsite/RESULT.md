@@ -169,6 +169,15 @@ in the section headed SCOPE OF THE DEFAULT_ROTATION_RERUN PASS below, and the
 number must not be quoted without it.)
 
 STATUS OF THE PAIRING: sha256 x gf180mcuD IS A RECORDED NON-CELL.
+AND `sha256 x sky130A` IS A CELL — row 6 of the same document's CELLS table,
+`L19 pdk_target: sky130; L1 "SKY130 主目標"`. That completes a picture the
+report had only half of: the pairing this brief measured is a recorded
+non-cell, and the pairing that IS a cell is the very tree whose pre-check and
+pad ring were finally run on 2026-08-22 (`_bm_sha256_sky130A_121`: 15 DEFs,
+zero GDS, NOT_DETERMINED, pad ring SKIP, site fix resolving
+['sky130_io','sky130_io_corner'] through the tech view). So the design has a
+valid pairing, it has a real run under it, and that run is unfinished rather
+than absent.
 `benchmark-data/ic/CELL_MATRIX.md`, table "Combinations that are NOT cells",
 first row: "sha256 declares SKY130 only; zero gf180 mentions anywhere.
 DISPATCHED 2026-08-09 IN ERROR AND STOPPED MID-RUN." This brief dispatched it
