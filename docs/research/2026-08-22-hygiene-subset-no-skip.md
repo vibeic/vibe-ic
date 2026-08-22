@@ -4548,3 +4548,33 @@ A JSON array of acknowledgements is exactly the shape where "resolve both sides"
 silently keeps a row that should have gone — which would restore a stale
 acknowledgement, the defect §64 exists to remove, in the act of resolving the
 change that removes it.
+
+### §57 correction — "the 12 that pass are the 12 that never drive it" was asserted, not measured
+
+Sweeping my own sections for claims I stated rather than measured (the habit
+[[unmeasured-reads-as-a-measured-zero]] exists for) turned up one, in §57:
+
+> The 12 that pass are the 12 that never drive the script.
+
+I measured that all 16 FAILURES died at the missing program. I never checked the
+other side. Classifying the file's test functions by whether their body reaches
+the driver gives **18 that do and 11 that do not** — and 11 is not 12, so the
+sentence's tidy symmetry was never true. (Function count is not test count here:
+one test is parametrised twice, and two of the functions are the guards this
+branch adds.)
+
+What is measured and stands: **16 failed → 30 passed**, every failure at the same
+missing-program error, and `−16 / +0` against clean main across the whole
+746-test lane. The passing dozen's composition is not part of that and should not
+have been stated as if it were.
+
+**And the same sweep confirmed the neighbouring claim rather than breaking it.**
+§58's "eight times cheaper and lands on the same two files" — I had verified
+`test_issue538` was selected by `reference` mode, and asserted the second file
+without looking. Checked now: both `test_issue538_merge_gate_covers_ci_hygiene.py`
+and `test_v1_1_6_core_agent_pr_method.py` are in the reference selection and in
+neither default selection. The claim holds.
+
+Two claims, same sweep, one wrong and one right — which is the argument for
+running the sweep rather than trusting that a document written carefully is
+therefore correct.
