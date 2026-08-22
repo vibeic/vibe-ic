@@ -1257,11 +1257,20 @@ looking for the written decision instead of asserting its absence. Item 3 is
 restated as an explicit SCOPE decision rather than an impossibility, because
 that is what it is.
 
-The brief says "Decide, write down why, keep going." Five things surfaced that I
-could have taken and did not. Each was decided in situ and the reasoning was
-scattered across this report; collected here because a reader looking for "what
-is left" should not have to find five paragraphs. The owner is asleep and will
-read this cold.
+The brief says "Decide, write down why, keep going." SIX things surfaced.
+FIVE I did not take (items 1-5). ONE I took, after first deciding not to and
+reversing within the hour (item 0), and it is listed here rather than among the
+work because the reversal is the instructive part.
+
+(This paragraph said "five things ... and did not" while heading a six-item list
+whose first entry is one I DID take. It was true when written and stopped being
+true when I added item 0 above it -- a summary counted against its own list,
+which is the defect this report hunts elsewhere, in the section about what I
+decided. Found by counting the items rather than re-reading the sentence.)
+
+Each was decided in situ and the reasoning was scattered across this report;
+collected here because a reader looking for "what is left" should not have to
+find six paragraphs. The owner is asleep and will read this cold.
 
 0. LAND THIS REPORT AS A CAPTURE BUNDLE — DECIDED "NO", THEN REVERSED WITHIN
    THE HOUR, AND THE REVERSAL IS THE PART WORTH READING.
