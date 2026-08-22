@@ -33,6 +33,23 @@ axis is declared and inert.
 `test_finding_*` pins that behaviour so it cannot change by accident. If the
 route gap is closed, those tests must be updated DELIBERATELY -- which is the
 point of pinning it rather than leaving it as a sentence in a report.
+
+WHICH COMMITS ON THIS BRANCH CHANGE SHIPPED BEHAVIOUR
+=====================================================
+Three, and a reviewer should scrutinise exactly these:
+
+    4ca6b6eaf  ppa_search_run.py gains --project
+    9f693090c  _ppa/search.py: audit_manifest refuses eligibility on an
+               undeclared ECO stance
+    72f1543b4  ppa_search_run.py: the build warning names its consequence
+
+Everything else adds tests or files backlog items.
+
+CORRECTION TO 9f693090c's OWN MESSAGE, which cannot be edited once pushed: it
+says "THIS IS THE ONE COMMIT ON THIS BRANCH THAT CHANGES CALLER-VISIBLE
+BEHAVIOUR" and "it is last". Both were true when written and neither is now --
+4ca6b6eaf preceded it and 72f1543b4 followed it. It IS still self-contained and
+revertable on its own; it is not the only one, and it is not last.
 """
 import json
 import pathlib
