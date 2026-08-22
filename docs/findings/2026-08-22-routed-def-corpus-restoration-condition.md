@@ -326,7 +326,32 @@ nested directly inside a same-named parent is refused at publish time. It is a
 new refusal on an unprotected checker that `benchmark_evidence_publish.py`
 already runs before staging and `gatekeeper-land.sh` already runs over the tree,
 so it needs no new wiring, and it is strictly tightening — it can turn no red
-green. It closes the gap between "a cell is published" and "the routed-DEF loop
+green.
+
+**[re-measured @ a4caccefe] — and the reach of "no new wiring" stated exactly.**
+The wiring is there: `benchmark_evidence_publish.py:1800` invokes the checker,
+and `gatekeeper-land.sh:456` runs
+`benchmark_evidence_structure_check.py --tree benchmark-data
+--corpus-may-be-absent`. The pre-push hook no longer runs it at all — it says so
+itself ("BENCHMARK EVIDENCE IS A LANDING CONCERN — AND IT ALREADY RUNS THERE"),
+so landing is the only path, which is the right one.
+
+That landing invocation names the IN-REPO path, and there is no in-repo
+`benchmark-data/` on `main` any more, so what it actually does was measured
+rather than assumed:
+
+| landing invocation, verbatim | what it scanned |
+|---|---|
+| pointer unset | `NO_CORPUS … NOTHING WAS SCANNED and nothing is claimed`, rc 0 |
+| pointer bound at a clone | follows it, enumerates the 9 IC units, rc 0 |
+
+So the rule runs on the published corpus exactly when the corpus is bound —
+which is the landing path's normal state, since `gatekeeper_review` binds it
+before the gates run, and is why the routed-DEF row reads MEASURED EMPTY rather
+than NOT FOUND. The unbound rc 0 is not a hole this change should close:
+`--corpus-may-be-absent` is the argued opt-in for a gate whose rc 0 IS a green
+row, and it is the same distinction #1764 drew from the other side. Stated here
+so nobody reads "no new wiring" as "runs unconditionally". It closes the gap between "a cell is published" and "the routed-DEF loop
 can see it", which is what makes the restoration condition above true rather
 than hopeful.
 
