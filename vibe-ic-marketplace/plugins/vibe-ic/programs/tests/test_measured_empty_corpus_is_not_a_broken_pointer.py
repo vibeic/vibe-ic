@@ -43,6 +43,7 @@ cell, and the reason says so in its own words rather than borrowing the
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -273,3 +274,149 @@ def test_a_corpus_that_carries_cells_is_unchanged(tmp_path):
     assert state == C.PRESENT
     assert root == tmp_path
     assert names == ["v1.0.0_pdk"], names
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE HOLE THE FOURTH STATE OPENED, and it was opened by this very change.
+# ══════════════════════════════════════════════════════════════════════
+
+def _git(root: Path, *argv: str) -> None:
+    subprocess.run(["git", "-C", str(root), *argv], check=True,
+                   capture_output=True, text=True, timeout=60)
+
+
+def _committed_corpus(root: Path) -> Path:
+    """A corpus whose cells are COMMITTED, so the index and the tree can differ."""
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.invalid")
+    _git(root, "config", "user.name", "t")
+    _corpus_tree(root, cells=True)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "publish one cell")
+    return root
+
+
+def test_a_corpus_checkout_missing_its_committed_cells_REFUSES(tmp_path):
+    """A DAMAGED CHECKOUT IS NOT A CORPUS THAT PUBLISHES NOTHING.
+
+    `_has_cells` walks the filesystem, so a clone whose cells were deleted,
+    half-checked-out or never materialised is byte-identical to a corpus that
+    publishes none — and the fourth state would then call it a MEASUREMENT of
+    zero, which is false: it publishes cells you do not have.
+
+    This was a REGRESSION INTRODUCED BY THE FOURTH STATE ITSELF. Measured on a
+    checkout of the publisher at 146d665 with `ic/*/v*` removed from the working
+    tree: 0 cells on disk, 1384 cell files still tracked in the index — and the
+    first version of this repair reported `measured-empty` over it.
+    """
+    corpus = _committed_corpus(tmp_path / "corpus")
+    for cell in (corpus / "ic" / "somedesign").glob("v*"):
+        shutil.rmtree(cell)
+    assert not list((corpus / "ic" / "somedesign").glob("v*")), "fixture did not delete"
+    _pointed_at(corpus)
+    try:
+        with pytest.raises(C.CorpusPointerBroken) as e:
+            C.corpus_state()
+    finally:
+        _unpointed()
+    assert "index" in str(e.value), str(e.value)
+
+
+def test_a_genuinely_empty_committed_corpus_is_still_measured_empty(tmp_path):
+    """The paired half: index and tree AGREE that there is no cell.
+
+    Without this, the guard above could be satisfied by refusing every git
+    checkout, which would put the real corpus back into the broken-pointer row
+    that this whole repair exists to get it out of.
+    """
+    corpus = tmp_path / "corpus"
+    corpus.mkdir(parents=True)
+    _git(corpus, "init", "-q")
+    _git(corpus, "config", "user.email", "t@example.invalid")
+    _git(corpus, "config", "user.name", "t")
+    _corpus_tree(corpus, cells=False)
+    _git(corpus, "add", "-A")
+    _git(corpus, "commit", "-qm", "no cells published")
+    _pointed_at(corpus)
+    try:
+        state, root = C.corpus_state()
+    finally:
+        _unpointed()
+    assert state == C.MEASURED_EMPTY, state
+    assert root is None
+
+
+def test_an_archive_export_with_no_git_is_still_measured_empty(tmp_path):
+    """Git is NOT required, and the index cross-check must not smuggle it in.
+
+    A tarball or `git archive` export of the corpus has no index to contradict
+    the filesystem. `_index_publishes_cells` returns None there — not False —
+    and None must leave the filesystem answer standing.
+    """
+    corpus = _corpus_tree(tmp_path / "export", cells=False)
+    assert not (corpus / ".git").exists()
+    _pointed_at(corpus)
+    try:
+        state, _ = C.corpus_state()
+    finally:
+        _unpointed()
+    assert state == C.MEASURED_EMPTY, state
+    assert C._index_publishes_cells(corpus) is None, (
+        "a tree git cannot be asked about must answer None, not False — False "
+        "would be a claim about a population nobody read")
+
+
+def test_the_index_and_the_filesystem_share_one_definition_of_a_cell(tmp_path):
+    """The cross-check is only meaningful if both sides mean the same thing.
+
+    AN EARLIER DRAFT OF THIS TEST ASSERTED THE OPPOSITE and failed, correctly.
+    It claimed `ic/<design>/verification/` must not count as a cell in the index
+    — but `_has_cells` accepts ANY directory whose name starts with `v`, so the
+    filesystem counts it too. Demanding a stricter rule of the index would have
+    manufactured a disagreement between the two sides out of nothing, and a
+    disagreement is exactly what this module now treats as a damaged checkout.
+
+    So the property is AGREEMENT, not strictness: whatever `_has_cells` calls a
+    cell, the index pathspec must call a cell as well. A `v*` directory that is
+    not really a cell is a separate question, and it belongs to whatever defines
+    a cell — not to the tree/index reconciliation.
+    """
+    corpus = tmp_path / "corpus"
+    corpus.mkdir(parents=True)
+    _git(corpus, "init", "-q")
+    _git(corpus, "config", "user.email", "t@example.invalid")
+    _git(corpus, "config", "user.name", "t")
+    _corpus_tree(corpus, cells=False)
+    odd = corpus / "ic" / "somedesign" / "verification"
+    odd.mkdir(parents=True)
+    (odd / "notes.md").write_text("a v-named directory\n", encoding="utf-8")
+    _git(corpus, "add", "-A")
+    _git(corpus, "commit", "-qm", "a v-named directory")
+    assert C._has_cells(corpus) == C._index_publishes_cells(corpus), (
+        "the filesystem and the index disagree about what a cell is, so the "
+        "damaged-checkout guard would fire on a healthy tree")
+
+
+def test_the_pathspec_is_anchored_at_one_design_level(tmp_path):
+    """A cell nested deeper than `ic/<design>/v*/` must not be counted.
+
+    Without `:(glob)` a bare `*` in a git pathspec matches `/` too, so
+    `ic/a/b/c/v1.0_pdk/f` would satisfy `ic/*/v*` and a tree the filesystem walk
+    never looks that deep into would read as publishing cells.
+    """
+    corpus = tmp_path / "corpus"
+    corpus.mkdir(parents=True)
+    _git(corpus, "init", "-q")
+    _git(corpus, "config", "user.email", "t@example.invalid")
+    _git(corpus, "config", "user.name", "t")
+    _corpus_tree(corpus, cells=False)
+    deep = corpus / "ic" / "somedesign" / "nested" / "deeper" / "v9.9.9_pdk"
+    deep.mkdir(parents=True)
+    (deep / "RESULT.md").write_text("PASS\n", encoding="utf-8")
+    _git(corpus, "add", "-A")
+    _git(corpus, "commit", "-qm", "a cell-shaped directory three levels down")
+    assert C._index_publishes_cells(corpus) is False, (
+        "a cell-shaped directory nested below ic/<design>/ was counted — the "
+        "pathspec lost its :(glob) magic and * is matching '/'")
+    assert C._has_cells(corpus) is False, "the filesystem walk should not see it either"

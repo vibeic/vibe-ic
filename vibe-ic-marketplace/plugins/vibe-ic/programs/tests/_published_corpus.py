@@ -93,6 +93,7 @@ tree carrying `PUBLISHING.md` beside an `ic/` directory.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -159,6 +160,40 @@ def is_published_corpus(root: Path) -> bool:
     return (root / CORPUS_CONTRACT).is_file() and (root / "ic").is_dir()
 
 
+#: Cell CONTENTS as git's index spells them: one design level, a cell directory
+#: whose name starts with `v`, anything beneath. `:(glob)` magic is required —
+#: without it a bare `*` in a git pathspec matches `/` too, and `ic/*/v*` would
+#: count `ic/<design>/verification/...` as a published cell.
+_INDEX_CELL_PATHSPEC = ":(glob)ic/*/v*/**"
+
+
+def _index_publishes_cells(root: Path) -> Optional[bool]:
+    """Does git's INDEX under `root` carry published cells? None = cannot ask.
+
+    THE WORKING TREE AND THE INDEX CAN DISAGREE, AND THE DIFFERENCE IS A STATE.
+    :func:`_has_cells` walks the filesystem, so a corpus clone whose cells were
+    deleted, half-checked-out, or never materialised looks identical to a corpus
+    that publishes none. MEASURED on a checkout of the publisher at `146d665`
+    with `ic/*/v*` removed from the working tree: **0** cells on disk, **1384**
+    cell files still in the index. Calling that "the corpus publishes 0 cells"
+    is a false measurement, and it is the loosening this module exists to refuse.
+
+    None — not False — when git cannot be asked, because git is deliberately not
+    required here (an archive export of the corpus is a readable corpus for these
+    tests). The caller treats None as "no contradiction available", which leaves
+    the filesystem answer standing rather than inventing one.
+    """
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--", _INDEX_CELL_PATHSPEC],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if probe.returncode != 0:
+        return None
+    return bool(probe.stdout.strip())
+
+
 def corpus_state() -> Tuple[str, Optional[Path]]:
     """`(state, root)` — which of the THREE answers applies, and the path if any.
 
@@ -204,6 +239,16 @@ def corpus_state() -> Tuple[str, Optional[Path]]:
         if is_published_corpus(p):
             # READ, not merely looked for. Do not launder this into NOT_OFFERED:
             # the two get different reasons precisely so they stay distinguishable.
+            if _index_publishes_cells(p):
+                raise CorpusPointerBroken(
+                    f"{CORPUS_ENV}={env!r} IS the published corpus, but its "
+                    f"working tree carries no cell under "
+                    f"ic/<design>/v<version>_<PDK>/ while git's index still "
+                    f"tracks some. The checkout is incomplete or damaged — a "
+                    f"half-finished clone, an interrupted checkout, or files "
+                    f"removed by hand. This is NOT a corpus that publishes "
+                    f"nothing: it publishes cells you do not have. Restore the "
+                    f"working tree (`git -C {env} checkout -- ic`) or re-clone.")
             return MEASURED_EMPTY, None
         raise CorpusPointerBroken(
             f"{CORPUS_ENV}={env!r} names a corpus with no published cell under "
@@ -220,6 +265,12 @@ def corpus_state() -> Tuple[str, Optional[Path]]:
     if _has_cells(here):
         return PRESENT, here
     if is_published_corpus(here):
+        if _index_publishes_cells(here):
+            raise CorpusPointerBroken(
+                f"{here} IS the published corpus, but its working tree carries "
+                f"no cell while git's index still tracks some — the checkout is "
+                f"incomplete or damaged. It publishes cells this tree does not "
+                f"have, which is not the same as publishing none.")
         return MEASURED_EMPTY, None
     return NOT_OFFERED, None
 
