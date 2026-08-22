@@ -66,3 +66,58 @@ the owner should choose deliberately rather than discover.
 bytes and declares the eight `land/batchbig-assembled` moves. Verified with the
 shipped validator at both ends, and re-verified after the batch moved. Because
 batchbig is a strict superset of 67 and 70, that one PREPARE covers all three.
+
+---
+
+## THE MACHINERY IS DEADLOCKED ON MAIN, AND THE WAY OUT IS MEASURED
+
+Run the shipped verifier — `protected_landing_transition.py verify` — with
+`--base origin/main` and EVERY candidate on offer:
+
+    candidate = the batchbig PREPARE   rc 2  protected tuple matches neither authorised atomic state
+    candidate = land/batchbig-assembled rc 2  (same)
+    candidate = agent/jrows-eight-rows  rc 2  (same)
+
+Nothing can verify against today's main. The reason is in `build_receipt`: it
+establishes `base_state_id = _match_state(base_files, base_manifest)` BEFORE it
+looks at the candidate at all, and main's own manifest recognises neither of
+main's two possible states. So the refusal is about the BASE, and no candidate
+can route around it.
+
+`bootstrap` is not the escape: `:598` refuses a base that already carries a
+manifest, and main carries one. It is for first adoption, not repair.
+
+**So the protected-landing machinery has been unusable on main since the first
+drift — which is exactly why three queued batches were assembled without
+transitions. The mechanism was not ignored; it was unavailable.**
+
+### THE WAY OUT, PROVEN
+
+The PREPARE must land through the plain lander, which does not verify. That is
+not a bypass — it is the only door, and it is the same door the drift came
+through. After it lands:
+
+    the PREPARE commit, under the manifest it carries
+        -> reauthorised-at-81cd5321b        (main is a RECOGNISED state again)
+
+and then batchbig, rebased onto it, verifies as a legitimate ACTIVATE. Measured,
+with real candidate worktrees and the shipped verifier writing a receipt:
+
+    [PASS] protected landing transition: ACTIVATE reauthorised-at-81cd5321b
+                                                  -> batchbig-assembled
+        operation : ACTIVATE
+        from      : reauthorised-at-81cd5321b
+        to        : batchbig-assembled
+
+One correction to how I first tested this, because it is an easy trap: verifying
+`--base <PREPARE> --candidate <batchbig branch as it stands>` refuses with
+"PREPARE changed live protected bytes with the manifest". That is the harness,
+not the transition — the raw branch still carries the OLD manifest, so
+`build_receipt` reads it as a PREPARE rather than an ACTIVATE. The candidate has
+to be batchbig REBASED onto the new base, which is what a landing actually does.
+
+### ORDER
+
+    1. agent/jrows-prepare-for-batchbig   via the plain lander (breaks the deadlock)
+    2. land/batchbig-assembled            rebased onto it — verifies as ACTIVATE
+    3. agent/jrows-on-batchbig            no protected paths, no pair needed
