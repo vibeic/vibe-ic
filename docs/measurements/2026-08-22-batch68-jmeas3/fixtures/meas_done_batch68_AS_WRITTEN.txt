@@ -1052,3 +1052,86 @@ TOTALS repo_hygiene_gates: at least one gate FAILED (76 of 87 decided — 70 pas
 #   docs/measurements/2026-08-22-batch68-jmeas3/fixtures/
 #     NOTES.md  (+ census both sides, mutation check, tools-region runs,
 #                hygiene runs, gate-name lists, finding-delta output)
+
+# ============================================================================
+# CONTINUATION 17:5x — same fourth incarnation, same brief. NO ROW ABOVE MOVES
+# and TREE_SHA is unchanged. The batch68 rows were already discharged, so this
+# closes the item this report has named FOUR TIMES and diagnosed zero times:
+# `PPA measurement coverage`, the one measured instance of harm from v1.11.69.
+# ============================================================================
+#
+# THE RED IS REAL AND EARNED, AND IT IS NOT A DATA REGRESSION. The gate's
+#   SUBJECT was repointed in v1.11.69:
+#     81cd5321b  --coverage "$ROOT/benchmark-data/ppa/coverage.json"
+#     a4caccefe  --coverage "$ROOT/ppa-crosslayer/records/trials/b000/records_flat.json"
+#   `benchmark-data/` is NOT TRACKED in either tree. At the landing tip the gate
+#   opened nothing — "[CANNOT CHECK] INPUT_ABSENT ... rc=2", NOT CHECKED,
+#   non-fatal. The records file is UNCHANGED in v1.11.69 and already existed at
+#   81cd5321b. So no data got worse: A GATE THAT HAD NEVER OPENED A CORPUS WAS
+#   AIMED AT A REAL ONE. Confirmed by exit code on a clean tree:
+#     rc with the new subject = 1        rc with the old (absent) one = 2
+#
+# THE REPOINT WAS DELIBERATE AND HONEST — credit where it is due. Its author
+#   rewrote the exemption to say so ("the record sets ... are committed and this
+#   row now reads one, so rc 2 is NO_EXPECTATION_SET and not INPUT_ABSENT") and
+#   DECLINED to fabricate the missing denominator: "Writing one HERE would be
+#   composing the answer key after the exam". That is the right call.
+#   THE DEFECT IS NOT THE REPOINT. `uncheckable_until` tolerates rc 2 ONLY, and
+#   the repoint activated a second, CHECKABLE half of the gate that returns rc 1.
+#   The repo's own convention, verbatim in two sibling exemptions, settles it:
+#   "a record that CAN be decided and fails is rc 1." The gate is right to block.
+#
+# THE DECIDABLE DEFECTS, READ OUT OF THE COMMITTED DATA RATHER THAN OFF THE GATE
+#   (148 records, 91 identities, 54 refused — all verified directly):
+#   1 `worst_path_slack_ns` IS UNDER-SCOPED. The parser emits the top-N worst
+#     paths from ONE STA report and files every one under a BYTE-IDENTICAL scope
+#     — no rank, no endpoint, no path id. sha256:4c1f7d31, one identity, three
+#     facts: 5.2 / 5.32 / 5.36. Four groups of this shape. The metric's own name
+#     concedes it: a worst PATH slack is per-path and the scope carries no path.
+#   2 CROSS-ARTEFACT DISAGREEMENT, one run against itself:
+#       route.wirelength.um  openroad.log 16511.0 vs openroad.metrics.json 16522
+#       route.via.count      openroad.log 4151    vs openroad.metrics.json 4159
+#       timing.setup.worst_slack_ns  sta_mcorner_ocv 1.98 vs sta_spef_based 3.58
+#   3 ONE ARTEFACT INDEXED UNDER TWO PATHS. Records #60 and #88 differ in
+#     exactly one field, and it is not the value:
+#       #60 phase3/stage3/sta/sta_mcorner_ocv.rpt
+#       #88 reports/phase3/sta_mcorner_ocv.rpt
+#     Same sha256, same value. Harmless to any number, but it files every record
+#     from that report twice and is most of the 148-vs-91 gap.
+#
+# THE 62 SCOPE_SENTINEL ROWS HAVE A CAUSE THIS REPO ALREADY WROTE DOWN, on the
+#   sibling row `PPA head-to-head records (end-to-end campaign)`: sta_spef_based.rpt
+#   "names no RC corner anywhere in this corpus — 490 of 490 metric rows sourced
+#   from it carry rc_corner null". 32 records here carry rc_corner null and 30
+#   carry clock null — EXPLICIT nulls, not omitted keys, which is the distinction
+#   the gate refuses on. Those 62 are undecidable (rc 2 territory); the rc 1 is
+#   carried by the ~10 decidable ones above.
+#
+# WHAT I DID NOT DO. Did not touch records_flat.json — editing committed
+#   measurement data to turn a gate green is the same class as rewriting a
+#   baseline. Did not widen the exemption to tolerate rc 1; it would swallow
+#   every real finding above. Did not write the missing `expected` list; the
+#   v1.11.69 author already refused that for the correct reason. Did not repoint
+#   the gate back at the absent file — that would restore a dormant gate and
+#   re-hide ten real defects. Did not change the parser or the scope schema:
+#   adding a path discriminator changes what a record MEANS and what the
+#   committed set would have to be regenerated from, which is a producer/schema
+#   decision with an owner, the same class of call this line has declined before.
+#
+# WHAT IS OWED, AND BY WHOM — none of it batch68's, none of it mine:
+#   1 `_ppa/backends/` — give worst_path_slack_ns a per-path discriminator in
+#     scope, or stop emitting more than one per scope.
+#   2 `_ppa/contract.py` — declare which artefact wins when a run's log and its
+#     own metrics JSON disagree. Two refusals wait on exactly that.
+#   3 the double-path indexing of one artefact — a producer or collector bug,
+#     and the cheapest of the three.
+#
+# The red now has a MECHANISM instead of four sightings. It is still red on main
+#   and I did not make it green, because every route to green from here is one
+#   the rules forbid.
+#
+# No --write-baseline. Nothing relaxed, widened, deleted or rebaselined. No
+# measurement data edited. Nothing pushed to main. No version bumped.
+# Evidence: fix/batch68-gate-fixture-debt @ 72661b888,
+#   docs/measurements/2026-08-22-batch68-jmeas3/fixtures/
+#     PPA_MEASUREMENT_COVERAGE_DIAGNOSED.md
