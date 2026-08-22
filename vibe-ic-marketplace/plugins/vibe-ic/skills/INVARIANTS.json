@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "package": "vibe-ic-marketplace/plugins/vibe-ic/skills",
+  "role": "The skill corpus. One directory per skill; the skill itself is SKILL.md at that directory's root.",
+  "invariants": [
+    {
+      "id": "skills.every-skill-directory-has-a-skill-md",
+      "statement": "Every directory directly under this package contains SKILL.md.",
+      "why": "A skill directory is discovered by its position, not by its contents. One without SKILL.md is offered to the agent and then loads nothing, which surfaces as a skill that mysteriously does not apply rather than as a missing file.",
+      "rule": {
+        "kind": "require_companion",
+        "for_each": [
+          "*"
+        ],
+        "for_each_kind": "dir",
+        "companion": "{path}/SKILL.md"
+      },
+      "counterexample": {
+        "path": "half-written-skill",
+        "is_dir": true
+      }
+    },
+    {
+      "id": "skills.skill-declares-name-and-description",
+      "statement": "Every SKILL.md opens with a YAML frontmatter fence and declares both name and description.",
+      "why": "The description is the entire basis on which a skill is selected for a task. A skill with no description is never chosen, and a skill with no name cannot be invoked by /<name>; both fail as silence rather than as an error.",
+      "rule": {
+        "kind": "require_regex",
+        "include": [
+          "*/SKILL.md"
+        ],
+        "regex": "\\A---\\n(?=(?:.*\\n)*?name:)(?=(?:.*\\n)*?description:)"
+      },
+      "counterexample": [
+        {
+          "path": "drc-fix/SKILL.md",
+          "proves": "a missing description is caught",
+          "content": "---\nname: drc-fix\n---\n\nFix DRC violations.\n"
+        },
+        {
+          "path": "drc-fix/SKILL.md",
+          "proves": "a missing name is caught",
+          "content": "---\ndescription: fix DRC violations\n---\n\nFix them.\n"
+        },
+        {
+          "path": "drc-fix/SKILL.md",
+          "proves": "a missing frontmatter fence is caught",
+          "content": "# drc-fix\n\nname: drc-fix\ndescription: fix DRC violations\n"
+        }
+      ]
+    },
+    {
+      "id": "skills.no-absolute-host-path",
+      "statement": "No SKILL.md may contain an absolute /home/<user> path; the placeholder form /home/<your-user> is the way to show one.",
+      "why": "Skills are read verbatim by the agent as instructions. An author's home path in a skill becomes a path the agent tries to use on someone else's machine.",
+      "rule": {
+        "kind": "forbid_regex",
+        "include": [
+          "*/SKILL.md"
+        ],
+        "regex": "/home/(?!<)"
+      },
+      "counterexample": {
+        "path": "sta-review/SKILL.md",
+        "content": "---\nname: sta-review\ndescription: review timing\n---\n\nOpen /home/someuser/reports/sta.rpt.\n"
+      }
+    }
+  ]
+}
