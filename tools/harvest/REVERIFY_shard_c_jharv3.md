@@ -589,3 +589,74 @@ measurement exists and the evidence does not say so — which is jharv2's own
 My gate cannot tell a measured-and-unwritten row from an unmeasured one, and should
 not pretend to: it detects **silence**. A row could also claim `untracked checked: 0`
 falsely and pass. It is a disclosure gate; the measurement still needs a host.
+
+---
+
+## Eighth round: the guard that refuses every ABANDON, and the alarm I nearly published
+
+jharv2 pushed `predelete_guard.sh` — the last check before deletion, failing closed.
+Run over shard C's 19 deletion-bound rows from this host: **7 ALLOW, 12 REFUSE.**
+Eleven refusals are correct and expected — paths on hosts it cannot reach, refusing
+because *unmeasured* and *clean* are otherwise identical in its output. That is the
+same limit I disclosed in round four, now enforced by a gate rather than a sentence.
+
+The twelfth is structural:
+
+```
+  REFUSE  /home/reyerchu/wt-j63x8c  committed_differing=9
+```
+
+That row is an **ABANDON**, and ABANDON does not claim "already on main". The contract
+defines it as a superseded intermediate, an empty tree, or *a duplicate of another
+worktree you name*. **A duplicate holds non-main content by definition**, so the
+LANDED question refuses every duplicate-type ABANDON that will ever be written.
+Safe — it fails closed — but it means nothing in this tree can authorise the 34
+ABANDON rows across the corpus. A verdict nothing can ever authorise is one step from
+an executor waiving the guard, which is the dangerous move.
+
+`bin_jharv3/abandon_survivable.py` asks the ABANDON question instead: **if this
+directory were deleted, what still holds its content?** R1 the commit is reachable
+from a ref *live on origin*, asked of origin rather than the tracking cache; R2 a
+named twin on this host with the same tree **and a superset of untracked content** —
+tree identity alone is what produced this shard's one wrong verdict.
+
+Shard C's two ABANDONs both resolve under R1, re-checked live:
+
+```
+  ALLOW  wt-j63x8c  R1 commit 3ab7fc723e49 reachable from origin/jmatrix/63x8-main-reds, live
+  ALLOW  _v1126     R1 commit a7b1ed913e21 reachable from origin/harvest/rescue-8HD-d-v1126, live
+```
+
+### The alarm I nearly published
+
+The first run of that gate returned **32 REFUSE** across the other files. I was one
+step from reporting 32 unsafe ABANDON rows. Checking what they actually say first:
+
+- `duplicate: ... byte-for-byte identical to <path>` — a twin claim my regex only
+  matched as "same tree as";
+- `superseded intermediate: ... reverse-apply cleanly onto main` — a **different
+  valid justification**, not a weaker one: the content is not preserved elsewhere, it
+  is already *on main*;
+- `registration was pruned, so it has no HEAD` — neither rule applies.
+
+Three lanes write "duplicate" three ways, and I read only my own. **That is the
+unreadable-claim-filed-as-no-claim defect, committed twenty minutes after I wrote the
+warning against it** — and this time it would have manufactured a danger rather than
+hidden one.
+
+Corrected, the honest picture is:
+
+```
+  ABANDON rows examined: 34   survivable: 3   refused: 0   unread/unmeasured: 31
+```
+
+**Zero refused. Not one ABANDON row in the corpus is shown unsafe.** The 31 are 21
+superseded-onto-main claims, 5 pruned registrations and 5 twin claims — every one
+needing the host that holds the files, which is the same limit as everything else
+this session could not reach.
+
+`UNKNOWN` is now counted apart from `REFUSE`, and neither authorises deletion, so
+failing closed is preserved either way. The distinction is the whole point: a row
+whose grammar I cannot read has not been shown unsafe, it has not been read, and
+collapsing the two inflates a danger count with rows that are probably fine while
+hiding any that are not.
