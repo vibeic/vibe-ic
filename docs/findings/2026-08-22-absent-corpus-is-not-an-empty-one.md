@@ -41,9 +41,13 @@ nobody took, which is the same class of defect as calling rc 2 a pass.
 | `a4caccefe` (after) | UNSET (state A) | **`NO_CORPUS`** | **`corpus "…" was NOT FOUND — nothing was opened to check`** |
 | `a4caccefe` (after) | SET (state B) | `EXPANDED` | `corpus "…" is EMPTY — nothing was checked over it` |
 
-The pointer used for the SET arm is a real clone of the published tree whose
-`ic/` subtree carries **0** files matching `*/*/phase3/stage3/pnr/routed.def` —
-i.e. the genuine #1763 population. **Row B is byte-identical before and after.**
+The pointer used for the SET arm is a git checkout whose `ic/` subtree is
+tracked in the index and carries **0** files matching
+`*/*/phase3/stage3/pnr/routed.def` — the shape of the genuine #1763 population,
+which is what state B is. It has to be a real checkout, not a loose directory:
+the producer reads git's INDEX, and over a directory git does not know it
+answers rc 2 UNDETERMINED rather than 0, which is a third state again.
+**Row B is byte-identical before and after.**
 
 The producer now says which state it is in, and names the thing that makes it
 that state:
