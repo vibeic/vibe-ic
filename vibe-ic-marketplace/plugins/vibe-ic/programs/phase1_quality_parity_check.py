@@ -29,6 +29,10 @@ from __future__ import annotations
 import argparse, json, sys
 from pathlib import Path
 
+import _spec_floor_keys as _sfk   # noqa: E402  (re #495 Stage 0)
+import _class_template_resolve as _ctr   # noqa: E402  (re #495 Stage 3)
+from _class_template_resolve import resolve as resolve_class_template  # noqa: E402
+
 try:
     import yaml
 except ImportError:
@@ -56,27 +60,34 @@ def find_class_template(class_path: str, class_kb_dir: Path) -> tuple[dict, bool
     chain defaulted to ``cable-side-id-ic`` first, so any leaf not in the KB
     (an accelerator, a DSP block, a bridge …) was scored against SERIAL-ID-IC
     floors (opcode-count >= 8 / CRC-8 whitelist / 64-byte OTP) that do not
-    apply to it. The chain now falls back to ``generic-ic`` — a small
+    apply to it. The chain falls back to ``generic-ic`` — a small
     CLASS-AGNOSTIC floor — and finally to the vacuous ``any-ic`` only if that
-    neutral template is somehow absent. chip-AGNOSTIC."""
+    neutral template is somehow absent. chip-AGNOSTIC.
+
+    re #495 Stage 3 — that neutral fallback was ALSO catching the 20 class-tree
+    nodes that have no template of their own, which is a different case with a
+    real answer: in an inheritance tree, "no template" means "adds nothing
+    beyond my parent". `generic-ic` is not any node's ancestor (it is not a node
+    at all), so substituting it was applying a sibling's floor, silently, and
+    not even consistently in one direction — LOOSER than the taxonomy for
+    `hash-function` / `spi-peripheral` / `i2c-peripheral` / `protocol-bridge`
+    (2 floor keys instead of 7-10) and STRICTER for `dsp-block` /
+    `analog-mixed-ic` / `debug-block` and the other digital-ic children (whose
+    ancestors carry NO floor at all). Resolution now goes own -> nearest
+    templated ANCESTOR -> neutral, matching what
+    `gap_detect._spec_floor_from_chain` has always done, and `fallback_applied`
+    keeps meaning only the genuine unknown-class case."""
     templates_dir = class_kb_dir / "templates"
     if not templates_dir.exists():
         raise FileNotFoundError(f"class_kb/templates not found at {templates_dir}")
-    candidate = templates_dir / f"{class_path}.yaml"
-    fallback_applied = False
-    if not candidate.exists():
-        fallback_applied = True
-        # NEUTRAL fallback chain — never a protocol-specific class. generic-ic
-        # carries the class-agnostic floor; any-ic is the last-resort vacuous
-        # template so a missing generic-ic degrades to a WARN, not a hard error.
-        for fallback in ("generic-ic", "any-ic"):
-            c = templates_dir / f"{fallback}.yaml"
-            if c.exists():
-                candidate = c
-                break
-    if not candidate.exists():
+    r = resolve_class_template(class_path, class_kb_dir)
+    if r["template"] is None:
         raise FileNotFoundError(f"no class template found for {class_path}")
-    return load_yaml(candidate), fallback_applied
+    # `fallback_applied` keeps its original meaning — "an unknown class was
+    # given a NEUTRAL floor" — and therefore stays False for the inheritance
+    # case added in #495 Stage 3, which is not a fallback but the tree's own
+    # answer. `check()` reports the inheritance separately.
+    return r["template"], r["how"] == _ctr.NEUTRAL
 
 
 def load_layer(docs_dir: Path, layer: str) -> dict | None:
@@ -104,22 +115,25 @@ def count_opcodes(l3: dict) -> int:
 
 
 def extract_crc_poly(l3: dict) -> str | None:
-    """Find the CRC polynomial string."""
+    """Find the CRC polynomial string.
+
+    re #495 Stage 0 — the incumbent read was ``{crc,crc8,crc_config}.{poly,
+    polynomial}``, none of which any producer writes: the doc-extraction
+    producers emit ``crc.poly_hex`` and ``crc_parameters.polynomial_hex``.
+    The incumbent container/field order is preserved and the producer
+    spellings appended, so a doc that does carry ``crc.poly`` still resolves
+    to exactly the same value."""
     if not l3:
         return None
-    for key in ("crc", "crc8", "crc_config"):
-        v = l3.get(key)
-        if isinstance(v, dict):
-            p = v.get("poly") or v.get("polynomial")
-            if p:
-                # normalise — accept "0x31", "0x07", "0x8c" mirror-of-0x31
-                return str(p).lower()
+    for key in _sfk.L3_CRC_CONTAINER_KEYS:
+        p = _sfk.first_crc_poly(l3.get(key))
+        if p:
+            # normalise — accept "0x31", "0x07", "0x8c" mirror-of-0x31
+            return p
     # Also check nested under frame_format etc.
     ff = l3.get("frame_format")
     if isinstance(ff, dict):
-        v = ff.get("crc")
-        if isinstance(v, dict):
-            return str(v.get("poly", "")).lower() or None
+        return _sfk.first_crc_poly(ff.get("crc"))
     return None
 
 
@@ -181,26 +195,26 @@ def count_l9_ports(l9: dict) -> int:
     `top_level_ports` / `ports` / `dtop_ports` at the JSON root. v0.56
     descends into the orchestrator-mandated nested location too, so the
     floor check actually fires (regression caught by B1 multi-IC run —
-    prior version always returned 0 for orchestrator-shaped L9 docs)."""
+    prior version always returned 0 for orchestrator-shaped L9 docs).
+
+    re #495 Stage 0: the root-key list read only the LEGACY mirror ``ports``
+    and missed ``top_ports`` — the CANONICAL spelling per #490, which the L9
+    emitter writes alongside ``ports`` / ``top_module_pins`` and which every
+    other port consumer in the tree reads first. Selection is now
+    first-NON-EMPTY rather than first-PRESENT, so an empty ``ports: []`` can
+    no longer shadow a populated ``top_ports``."""
     if not l9:
         return 0
     # Nested orchestrator locations (preferred — current schema)
-    for parent_key in ("dtop_top_level", "dtop", "top_level"):
+    for parent_key in _sfk.L9_TOP_PORT_NESTED_PARENT_KEYS:
         parent = l9.get(parent_key)
-        if isinstance(parent, dict):
-            for sub in ("ports", "top_level_ports"):
-                v = parent.get(sub)
-                if isinstance(v, list):
-                    return len(v)
-                if isinstance(v, dict):
-                    return len(v)
-    # Legacy root-level keys
-    for key in ("top_level_ports", "ports", "dtop_ports"):
-        v = l9.get(key)
-        if isinstance(v, list):
+        _sub, v = _sfk.first_nonempty(parent, _sfk.L9_TOP_PORT_NESTED_SUB_KEYS)
+        if isinstance(v, (list, dict)):
             return len(v)
-        if isinstance(v, dict):
-            return len(v)
+    # Root-level keys (legacy spellings first, canonical + mirrors appended)
+    _key, v = _sfk.first_nonempty(l9, _sfk.L9_TOP_PORT_ROOT_KEYS)
+    if isinstance(v, (list, dict)):
+        return len(v)
     return 0
 
 
@@ -217,7 +231,15 @@ def count_l9_wires(l9: dict) -> int:
 
 
 def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
-    tpl, fallback_applied = find_class_template(class_path, class_kb)
+    # One resolution, reused: `how` drives the disclosures below, and
+    # `fallback_applied` keeps its original narrow meaning (unknown class ->
+    # NEUTRAL floor) so the incumbent `unknown_class_generic_floor` warning is
+    # unchanged. re #495 Stage 3.
+    _res = resolve_class_template(class_path, class_kb)
+    if _res["template"] is None:
+        raise FileNotFoundError(f"no class template found for {class_path}")
+    tpl = _res["template"]
+    fallback_applied = _res["how"] == _ctr.NEUTRAL
     floor = (tpl or {}).get("spec_floor") or {}
 
     l3 = load_layer(docs_dir, "L3")
@@ -378,6 +400,60 @@ def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
                         "instead of a protocol-specific one. Add a dedicated "
                         "class template if this IC needs tighter floors."),
         })
+    # re #495 Stage 3 — when the floor came from an ANCESTOR rather than the
+    # class's own template, say so. This is the case that used to be silently
+    # served a sibling orphan's floor; naming it is what stops a template-less
+    # node from "reading as success". Disclosure only — no finding is added.
+    if _res["how"] == _ctr.INHERITED:
+        warnings.append({
+            "severity": "WARN",
+            "rule": "class_floor_inherited_from_ancestor",
+            "class_path": class_path,
+            "template_used": _res["used"],
+            "message": (
+                f"class `{class_path}` is a class-tree node with no template of "
+                f"its own, so the floor was INHERITED from its nearest "
+                f"templated ancestor `{_res['used']}` — the same walk "
+                f"gap_detect._spec_floor_from_chain performs. Before #495 "
+                f"Stage 3 this case was served the `generic-ic` floor instead, "
+                f"which is not an ancestor of any node. Give "
+                f"`{class_path}` its own template if it needs a tighter "
+                f"floor than `{_res['used']}`."),
+        })
+    # re #495 Stage 2 — a class_path written in the REGISTRY taxonomy cannot be
+    # resolved by the class-tree taxonomy: the two share no names. Until now
+    # that mismatch was silent — the class simply fell through to the neutral
+    # floor above and nothing said why. Each registry entry now declares which
+    # tree node it belongs to and what that declaration is worth, so say it.
+    # This is DISCLOSURE ONLY: `findings` is untouched, so no verdict moves.
+    # The mapping is deliberately NOT applied here — measured over the corpus,
+    # applying it adds 21 findings of which 0 are defects (11 sit on floors no
+    # doc-set can satisfy, 10 on fields the document explicitly declares absent
+    # from its source). Applying it is gated on the floors first learning to
+    # read the honest-absence sentinels the producers already emit.
+    if fallback_applied:
+        try:
+            from ic_class_profile import class_tree_node_for as _ctn
+            m = _ctn(class_path)
+        except Exception:
+            m = None
+        if m and m.get("registry_matched"):
+            warnings.append({
+                "severity": "WARN",
+                "rule": "registry_class_not_in_class_tree",
+                "class_path": class_path,
+                "class_tree_node": m.get("node"),
+                "class_tree_node_status": m.get("status"),
+                "message": (
+                    f"`{class_path}` is a name from programs/"
+                    f"ic_class_registry.json, which shares no names with "
+                    f"agents/class_kb/class-tree.yaml, so the class tree could "
+                    f"not resolve it and the neutral floor above was used "
+                    f"instead. The registry declares its tree node as "
+                    f"{m.get('node')!r} (status "
+                    f"{m.get('status')!r}); that declaration is recorded, not "
+                    f"applied. Basis: {m.get('basis')}"),
+            })
     if tpl is not None and not floor:
         warnings.append({
             "severity": "WARN",
