@@ -106,9 +106,9 @@
       "bucket_B_skill_file": "skills/ppa-predict/SKILL.md"
     },
     "phase3.pad_ring": {
-      "description": "Pad Ring (chip/IC path only) — the flow declares this step (flow/phase1_phase2_phase3.yaml:2986) and CAPTURE_ROUTING carried no entry for it, so every capture from it fell through to default_routing, whose bucket_A_program is null.",
+      "description": "Step 15.5ic pad-ring placement: the DECLARED pad ring is placed by upstream's own algorithm, or the config variables it went without are named. Its producer and its gate are pad_ring_gen.py / pad_ring_check.py, which is why this step does NOT route to phase3_one_shot_runner.py like its floorplan neighbour.",
       "bucket_A_program": "programs/pad_ring_gen.py",
-      "bucket_B_skill_file": "skills/tapeout-checklist/SKILL.md"
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "phase3.synth": {
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
