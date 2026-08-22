@@ -1396,9 +1396,18 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **eight** steps. Without them every
-record here emits UNROUTED — a routing table that cannot express the layer it is
-asked to route — and the emitter's own warning says to add the entry.
+`benchmark/CAPTURE_ROUTING.json` gains **eight** steps. Without them **9 of the
+33 records** here emit UNROUTED — the ones routed at those eight — and the
+emitter's own warning says to add the entry. The other 24 route against entries
+main already carries, because half of the sixteen steps this lane wrote landed
+with the earlier snapshot.
+
+*This read "every record here" until the universal claims in this report were
+audited against their denominators. It was true when written — all sixteen steps
+were new then and every record did depend on them — and the merge turned it into
+a threefold overstatement, sitting in the paragraph that justifies the one plugin
+file this branch touches. A reader deciding whether to accept that file is
+exactly the reader it would have misled.*
 
     ppa.feasibility           programs/ppa_feasibility_check.py
     ppa.head_to_head          programs/ppa_head_to_head_check.py
