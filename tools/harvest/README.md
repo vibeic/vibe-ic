@@ -65,4 +65,14 @@ rather than coincidental: "every file matched" is exactly what produces LANDED.
   can turn RECOVER into LANDED but never the reverse; a force-push would invalidate that and the
   rows would need re-judging, not re-labelling.
 
-Counts in this file are checked by `bin_jharv2/readme_numbers_check.py`.
+## 6. Verifying all of it
+
+    bash tools/harvest/bin_jharv2/check_all.sh
+
+Seven gates, runnable from a fresh checkout, no fleet access needed. Each declares the exit code it
+is **expected** to produce — `extras_coverage.py` is expected to FAIL, because those 1083 rows really
+are absent from `verdicts_joined.tsv`. A stub that makes it pass is reported as a failure, so a
+known-open item cannot be quietly closed. The runner asserts its own denominator: fewer gates run
+than declared is itself a failure, because a loop that stops early reports no failures.
+
+Counts in this file are checked by `bin_jharv2/readme_numbers_check.py`, which is one of the seven.
