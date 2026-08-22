@@ -32,7 +32,36 @@ DISCOVERY, NOT ENUMERATION
 * Run dirs are scraped from ``git ls-files`` (published == tracked), not typed.
 * Checkers are scraped by AST from ``programs/*.py``: a program qualifies when it
   has an ``ArgumentParser``, takes a directory-shaped positional, and reads file
-  CONTENT -- intersected with "appears nowhere in the canonical flow YAML".
+  CONTENT -- intersected with "the flow does not DRIVE it".
+
+WIRED MEANS DRIVEN, NOT MENTIONED
+---------------------------------
+"The flow drives it" is decided STRUCTURALLY, by walking the parsed gate spec
+and reading the program name out of each gate clause's command string.  It is
+NOT a substring test over the YAML text, and the difference is not academic:
+
+* vibe-ic#1012.  A step-36 comment naming ``l20_dft_scan_topology_actionable_check``
+  -- written to explain why that checker was NOT wired -- made the substring test
+  call it wired, so ``--only l20_…`` REFUSED with a zero denominator.  Documenting
+  a hold made the held checker invisible to the instrument that measures holds.
+* A gate clause's PATH ARGUMENT counted too: the string
+  ``reports/analog/mixed_signal/signoff_audit.json`` inside a
+  ``mixed_signal_signoff_check`` command made ``signoff_audit`` read as wired.
+* So did being a PREFIX of a wired name: ``si_mcf_sta`` matched because
+  ``si_mcf_sta_check`` is wired.
+
+A step-level ``programs:`` roster is deliberately NOT wiring either.  It is a
+declaration of what a step runs, not a gate that can fail -- and this
+instrument's whole output column is "would redden if PROMOTED TO BLOCKING",
+which is a question about gates.  Producers already populate the baseline
+(``lec_run``, ``qsf_gen``, ``analog_mc_yield_run``, ``l21_to_upf_emit``), so
+keeping the roster-only programs in the denominator is consistent with the
+existing population, not a new class of entrant.
+
+The wiring predicate is the HOUSE one -- ``flow_compliance_check
+._declared_gate_commands``, the same walk the flow runner itself uses to decide
+which gate programs a step declares -- imported rather than re-implemented, so
+the instrument and the flow can never drift into two dialects of "wired".
 * A small BESPOKE table covers the candidates whose CLI is not run-dir shaped
   (they take a report path, or require ``--spec``).  Each bespoke entry declares
   its own pre-flight locator, so "the artefact is not here" is decided by this
@@ -56,13 +85,17 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import shlex
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
+
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
@@ -77,6 +110,19 @@ CLEAN, FINDING, NO_INPUT, ERROR = "CLEAN", "FINDING", "NO-INPUT", "ERROR"
 # same rule.  Degrades LOUDLY: if the import ever breaks, every CLEAN cell is
 # marked `discloses=None` ("not measured") rather than silently `False`.
 sys.path.insert(0, str(PROGRAMS))
+
+# The shared isolation harness (#996). NOT wrapped in a soft try/except like
+# the disclosure import below: a degraded `discloses` costs a column, and a
+# degraded isolation harness costs the published corpus. If this import breaks
+# the sweep must not start.
+import _run_isolation                                        # noqa: E402
+
+# The HOUSE wiring predicate (#1012). Also a hard import, and for the same
+# reason as `_run_isolation`: a degraded wiring test does not cost a column, it
+# silently re-decides the DENOMINATOR of every number this instrument prints.
+# There is deliberately no substring fallback -- the substring test IS the bug.
+from flow_compliance_check import _declared_gate_commands    # noqa: E402
+
 try:
     from gate_discloses_denominator_check import discloses as _discloses
 except Exception as _exc:                                    # pragma: no cover
@@ -177,9 +223,47 @@ def program_shape(path: Path) -> Optional[Dict[str, object]]:
                                    and _NONZERO_EXIT.search(src))}
 
 
+def flow_driven_programs(flow_yaml: Path) -> Set[str]:
+    """Program names the flow ACTUALLY DRIVES — read from the parsed gate spec.
+
+    Wiring lives in exactly two places in this YAML and nowhere else:
+
+      * a per-step gate clause -- ``program_exit_zero`` /
+        ``optional_program_exit_zero`` / ``advisory_program_exit_zero``,
+        each holding either a bare command string or a ``{command: ...}`` dict,
+        nested under ``all_of`` / ``any_of``;
+      * the ``final_gate``, whose shape is ``{program: …, args: …}``.
+
+    Only the FIRST token of a command string is a program name.  Everything
+    else in that string is an argument, and an argument that happens to contain
+    a program's name (``reports/analog/mixed_signal/signoff_audit.json``) is not
+    a wiring.  Comments never reach here at all -- PyYAML has already dropped
+    them by the time this walks the document, which is the structural reason
+    #1012 cannot recur rather than a promise that it will not.
+
+    Raises on an unparseable flow YAML.  Degrading to "nothing is wired" would
+    silently inflate the denominator by the whole program directory; degrading
+    to "everything is wired" would silently empty it.  Both are worse than a
+    stack trace.
+    """
+    doc = yaml.safe_load(flow_yaml.read_text(errors="replace")) or {}
+    names: Set[str] = set()
+    for step in doc.get("steps") or []:
+        if isinstance(step, dict):
+            names.update(_declared_gate_commands(step.get("gate")))
+    final_gate = doc.get("final_gate")
+    if isinstance(final_gate, dict):
+        # `final_gate` may carry gate clauses AND/OR the {program, args} shape.
+        names.update(_declared_gate_commands(final_gate))
+        prog = final_gate.get("program")
+        if isinstance(prog, str) and prog.strip():
+            names.add(shlex.split(prog)[0])
+    return names
+
+
 def discover_checkers(programs: Path, flow_yaml: Path) -> List[Dict[str, object]]:
-    """Verdict-shaped, content-reading, run-dir-drivable programs the flow
-    YAML never names.
+    """Verdict-shaped, content-reading, run-dir-drivable programs that no gate
+    clause in the canonical flow YAML drives.
 
     Programs carrying an extra REQUIRED option are KEPT.  The generic run-dir
     invocation cannot satisfy them, so they land in ERROR with argparse's own
@@ -187,13 +271,13 @@ def discover_checkers(programs: Path, flow_yaml: Path) -> List[Dict[str, object]
     denominator to flatter the result, the exact move
     ``extraction_coverage_denominator_audit`` exists to catch.
     """
-    yaml_text = flow_yaml.read_text(errors="replace")
+    driven = flow_driven_programs(flow_yaml)
     found: List[Dict[str, object]] = []
     for p in sorted(programs.glob("*.py")):
         if p.name.startswith("_"):
             continue                      # shared helper, not a CLI
-        if p.stem in yaml_text:
-            continue                      # already driven by the flow
+        if p.stem in driven:
+            continue                      # a gate clause really invokes it
         shape = program_shape(p)
         if not shape or not shape["verdict_shaped"]:
             continue
@@ -443,15 +527,15 @@ def _head(text: str, n: int = 200) -> str:
 # The writer set is DISCOVERED by probing, never typed, so a program that starts
 # writing tomorrow is caught tomorrow rather than silently corrupting a rerun.
 def _snapshot(root: Path) -> Dict[str, Tuple[int, int]]:
-    snap: Dict[str, Tuple[int, int]] = {}
-    for p in root.rglob("*"):
-        if p.is_file():
-            try:
-                st = p.stat()
-                snap[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
-            except OSError:
-                pass
-    return snap
+    """DELEGATED to :func:`_run_isolation.snapshot` (#996).
+
+    Narrowed to the ``(size, mtime_ns)`` pair the comparisons below use, so
+    they keep meaning exactly what they did. The shared helper also records
+    ``dev``/``ino`` — dropped here because this probe asks "did the program
+    write?", not "is this a hardlink of something else"; that second question
+    is asked by :func:`_run_isolation.copy_run` when the copy is made.
+    """
+    return {k: (s.size, s.mtime_ns) for k, s in _run_isolation.snapshot(root).items()}
 
 
 def probe_mutators(runs: List[str], checkers: List[Dict[str, object]],
@@ -503,19 +587,90 @@ def probe_mutators(runs: List[str], checkers: List[Dict[str, object]],
 
 
 # ---------------------------------------------------------------------- driving
+def _kill_process_group(proc: "subprocess.Popen") -> None:
+    """SIGTERM then SIGKILL the timed-out cell's whole process group.
+
+    Best-effort by construction: the group may already be gone (ESRCH), and a
+    platform without ``killpg`` falls back to killing the direct child, which
+    is exactly the pre-existing behaviour rather than a new failure mode.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (OSError, AttributeError):
+        proc.kill()
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except (OSError, AttributeError):
+            break
+        try:
+            proc.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _rmtree_stubborn(path: Path, tries: int = 4) -> Optional[str]:
+    """Remove a throwaway copy.  Returns None, or the REASON it survived.
+
+    A leaked scratch directory is a FINDING, not a crash and not a silence: it
+    costs disk under ``--scratch`` and says an orphan outlived its cell, but it
+    cannot touch the corpus (that is what `assert_corpus_pristine` proves), so
+    withdrawing 9202 measured cells over it would be the wrong trade.
+    """
+    last: Optional[BaseException] = None
+    for attempt in range(tries):
+        try:
+            shutil.rmtree(path)
+            return None
+        except OSError as exc:
+            last = exc
+            time.sleep(0.25 * (attempt + 1))
+    return f"{type(last).__name__}: {last}"
+
+
 def run_cell(program: Path, argv: List[str], timeout: int) -> Dict[str, object]:
+    """Drive ONE cell, and on timeout kill the whole PROCESS GROUP.
+
+    `subprocess.run(timeout=…)` kills the direct child and nothing below it.
+    That was survivable while the population was checkers; it is not once the
+    population is honest, because the corrected wiring test (#1012) admitted
+    the runner-class programs — every one of which had been excluded by a
+    substring hit — and a runner spawns children.
+
+    MEASURED: a timed-out runner left grandchildren writing into the throwaway
+    copy, and the copy's cleanup then raised
+    ``OSError: [Errno 39] Directory not empty: 'reports'`` — which propagated
+    out of the worker and killed the sweep at cell 8500 of 9202. So the cell
+    is started in its OWN session and the group is signalled, which ends the
+    orphans rather than leaving them racing the cleanup.
+    """
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     cmd = [sys.executable, str(program)] + argv
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, env=env, cwd=str(PROGRAMS))
-        rc, out, err = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired:
-        rc, out, err = "TIMEOUT", "", ""
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=env, cwd=str(PROGRAMS),
+                             start_new_session=True)
     except OSError as exc:
         rc, out, err = "SPAWN", "", str(exc)
+    else:
+        try:
+            out, err = p.communicate(timeout=timeout)
+            rc = p.returncode
+        except subprocess.TimeoutExpired:
+            _kill_process_group(p)
+            # Drain, so the pipes close and no writer is left mid-write. The
+            # group is already signalled, so this cannot block on the timeout
+            # again -- but it is bounded anyway rather than trusted.
+            try:
+                out, err = p.communicate(timeout=15)
+            except subprocess.TimeoutExpired:      # pragma: no cover
+                p.kill()
+                out, err = "", ""
+            rc = "TIMEOUT"
     bucket, why = classify(rc, out, err)
     cell = {"rc": rc, "bucket": bucket, "why": why,
             "secs": round(time.time() - t0, 2)}
@@ -670,6 +825,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             todo.append(cell)
 
+    #: Throwaway copies an orphaned grandchild kept alive past its cell.
+    #: Reported, never swallowed -- see `_rmtree_stubborn`.
+    leaked: List[Dict[str, str]] = []
+
     def drive(cell: Dict[str, object]) -> Dict[str, object]:
         """Run ONE cell against a pristine throwaway copy of the run.
 
@@ -689,21 +848,39 @@ def main(argv: Optional[List[str]] = None) -> int:
         """
         name = cell["checker"]
         cell["isolated"] = True
-        with tempfile.TemporaryDirectory(dir=str(scratch)) as td:
-            dst = Path(td) / "run"
+        # mkdtemp + explicit teardown, NOT `with TemporaryDirectory(...)`: its
+        # cleanup raises out of the worker, and one raised cleanup killed a
+        # 9202-cell sweep at cell 8500 (see `_rmtree_stubborn`).
+        td = Path(tempfile.mkdtemp(dir=str(scratch)))
+        try:
+            dst = td / "run"
             shutil.copytree(REPO / cell["run"], dst, symlinks=True)
             argv, _reason = _bespoke(dst).get(name, ([str(dst)], ""))
             if argv is None:
                 return {"rc": None, "bucket": NO_INPUT, "secs": 0.0,
                         "why": "pre-flight (isolated): required artefact absent"}
             return run_cell(PROGRAMS / f"{name}.py", argv, args.timeout)
+        finally:
+            why = _rmtree_stubborn(td)
+            if why:
+                leaked.append({"checker": name, "run": cell["run"],
+                               "scratch": str(td), "why": why})
 
     done = 0
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futs = {pool.submit(drive, c): c for c in todo}
         for fut in as_completed(futs):
             cell = futs[fut]
-            cell.update(fut.result())
+            try:
+                cell.update(fut.result())
+            except Exception as exc:            # noqa: BLE001 -- see below
+                # ONE cell that the HARNESS could not drive is one ERROR cell,
+                # not a dead sweep. It stays in the denominator carrying the
+                # harness's own reason, which is the same rule this instrument
+                # already applies to a checker that cannot run.
+                cell.update({"rc": None, "bucket": ERROR, "secs": 0.0,
+                             "why": f"could not measure: harness raised "
+                                    f"{type(exc).__name__}: {exc}"})
             results.append(cell)
             done += 1
             if done % 500 == 0:
@@ -717,6 +894,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "checkers": sorted(discovered, key=lambda c: c["name"]),
         "unmeasurable": UNMEASURABLE,
         "writers_isolated": mutators,
+        "scratch_copies_leaked": leaked,
         "cells": len(results),
         "elapsed_secs": elapsed,
         "table": sorted(results, key=lambda c: (c["checker"], c["run"])),
@@ -729,11 +907,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     tally: Dict[str, int] = {CLEAN: 0, FINDING: 0, NO_INPUT: 0, ERROR: 0}
     for c in results:
         tally[c["bucket"]] += 1
+    if leaked:
+        print(f"\n[FINDING] {len(leaked)} throwaway copy(ies) survived their "
+              f"cell -- an orphan was still writing. The CORPUS is unaffected "
+              f"(the tripwire below proves it); the scratch dirs are left in "
+              f"place under --scratch so the orphan is inspectable:",
+              file=sys.stderr)
+        for lk in leaked[:10]:
+            print(f"    {lk['checker']} on {lk['run']}: {lk['why']}",
+                  file=sys.stderr)
+        if len(leaked) > 10:
+            print(f"    ... and {len(leaked) - 10} more (see "
+                  f"corpus_baseline.json:scratch_copies_leaked)", file=sys.stderr)
+
     print(f"\nCLEAN={tally[CLEAN]} FINDING={tally[FINDING]} "
           f"NO-INPUT={tally[NO_INPUT]} ERROR={tally[ERROR]}  "
           f"(denominator {len(results)} = {len(runs)} runs x "
           f"{len({c['checker'] for c in results})} measurable checkers)")
     print(f"elapsed {elapsed}s -> {args.out / 'corpus_baseline.json'}")
+
+    # THE TRIPWIRE (#996). This sweep drove every measurable checker over every
+    # published run; if isolation held, the corpus it read is byte-identical to
+    # the corpus it started from. The first version of this sweep left 2336
+    # tracked files modified, and nothing said so until somebody ran
+    # `git status` by hand. It is not left to somebody.
+    #
+    # A CONTAMINATED SWEEP IS NOT A SWEEP WITH A CAVEAT. The verdicts above
+    # depend on scheduling order once anything has been rewritten underneath
+    # them, so the numbers are withdrawn rather than published with a warning.
+    try:
+        st = _run_isolation.assert_corpus_pristine(
+            REPO, what="the corpus baseline sweep")
+    except _run_isolation.Perturbation as exc:
+        print(f"\n[FAIL] {exc}", file=sys.stderr)
+        print("The table above is WITHDRAWN: a checker that ran after a "
+              "rewrite read different content from one that ran before, so "
+              "these verdicts depend on scheduling order.", file=sys.stderr)
+        return RC_FAIL
+    print(f"tripwire: {st.describe()}")
     return RC_PASS
 
 

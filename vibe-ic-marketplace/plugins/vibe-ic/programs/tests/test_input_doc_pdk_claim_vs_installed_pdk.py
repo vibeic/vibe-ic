@@ -17,6 +17,8 @@ these names exist anywhere but in this file.
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +30,7 @@ _PROGRAMS = _HERE.parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
+import _container_exec  # noqa: E402
 import input_doc_pdk_claim_vs_installed_pdk_check as gate  # noqa: E402
 
 
@@ -243,15 +246,307 @@ def test_a_requirement_is_not_an_assertion_about_the_pdk(tmp_path):
 
 # ── silence must never read as agreement ───────────────────────────────────
 
-def test_unreadable_installed_pdk_root_is_not_a_pass(tmp_path):
-    """No image mounted means nothing was checked — not that all is well."""
+def test_an_absent_installed_pdk_root_is_not_a_pass(tmp_path):
+    """No image mounted means nothing was checked — not that all is well.
+
+    The reason token is `absent`, not `unreadable`: this root was never opened,
+    so nothing about its readability was learned (#1491). The tier is what
+    matters and it is unchanged — NOT_APPLICABLE, nothing corroborated.
+    """
     tree = project_with(tmp_path / "proj", ABSENCE_DOC)
 
     rep = run_gate(tree, tmp_path / "does_not_exist")
 
     assert rep["verdict"] == "NOT_APPLICABLE", rep
-    assert rep["reason"] == "installed_pdk_root_unreadable"
+    assert rep["reason"].startswith("installed_pdk_root_absent"), rep
+    assert rep["installed_pdk_root_state"] == gate.ROOT_ABSENT, rep
     assert rep["counts"]["corroborated"] == 0
+
+
+def test_the_vacuous_run_names_the_backend_that_never_ran(tmp_path):
+    """#981: the WIRED call site passes no `--container`, so on a host with no
+    local PDK tree this branch is the only one that ever fires — and the
+    container backend, with the `-L` dereference #964 exists for, is not merely
+    undecided, it is NOT EXECUTED. Measured 2026-08-11 on the wired invocation
+    at tools/ci/repo_hygiene_gates.sh: rc 2, VACUOUS, 0 documents scanned.
+
+    A rc-2 that says only "I could not look" lets a reader assume the gate is
+    whole and merely idle. It says which half never ran, so the untested half
+    is a fact in the report rather than something a reviewer has to notice.
+    """
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    rep = run_gate(tree, tmp_path / "does_not_exist")
+
+    assert rep["installed_pdk_source"] == "local", rep
+    assert rep["backend_not_exercised"] == ["container"], rep
+    assert "container backend was NOT exercised" in rep["reason"], rep
+
+
+def test_a_container_run_does_not_claim_an_unexercised_backend(tmp_path):
+    """PAIRED GUARD: the disclosure is a measurement, not a decoration. A run
+    that DID go through the container backend must not carry it."""
+    calls = []
+
+    def lister(path):
+        calls.append(path)
+        return []
+
+    rep = gate.run(project_with(tmp_path / "proj", ABSENCE_DOC),
+                   "/nowhere", container="a-container",
+                   lister=lister, reader=lambda p: None, walker=lambda p: [])
+
+    assert calls, "the injected backend was never consulted"
+    assert rep["installed_pdk_source"] == "container:a-container", rep
+    assert rep["backend_not_exercised"] == [], rep
+    assert "NOT exercised" not in rep["reason"], rep
+
+
+# ── #1491: four environments printed one sentence ──────────────────────────
+#
+# `entries()` returns [] for a root that is absent, for a root that is present
+# and holds no PDK, for a root that cannot be opened, and for a backend that
+# never ran at all. Measured on one host at one commit before the fix, all four
+# printed `installed_pdk_root_unreadable` and all four were VACUOUS_PASS — so a
+# reader comparing two verdicts of the same tree had nothing in either output
+# telling them what differed.
+#
+# These fixtures build the four environments directly. No container is needed:
+# the backend-unavailable arm injects the gate's OWN failure shape rather than
+# asking whether this host happens to run docker, which is the property under
+# test rather than an obstacle to it.
+
+
+def test_a_root_that_holds_no_pdk_is_not_reported_as_unreadable(tmp_path):
+    """The 8HD-9 environment from the issue: `/foss/pdks` EXISTS, is readable,
+    and holds no PDK. It was read. Saying "unreadable" of a directory that was
+    successfully listed is a false statement in the gate's own report."""
+    empty_root = tmp_path / "pdks"
+    empty_root.mkdir()
+    (empty_root / "versions.txt").write_text("x\n")
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    rep = run_gate(tree, empty_root)
+
+    assert rep["installed_pdk_root_state"] == gate.ROOT_READ, rep
+    assert rep["reason"].startswith("installed_pdk_root_holds_no_pdk"), rep
+    assert "unreadable" not in rep["reason"], rep
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="mode 000 does not stop root, so the stimulus this "
+                           "asserts on cannot be created here")
+def test_the_local_prober_separates_a_read_error_from_an_empty_directory(
+        tmp_path):
+    """`_local_file_lister` returns [] for both. Only the prober can tell them
+    apart, and it carries the OS's own message so "I could not look" names its
+    reason instead of being a category."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o000)
+    try:
+        assert gate._local_file_lister(str(locked)) == []
+        assert gate._local_file_lister(str(empty)) == []
+        state, detail = gate._local_prober(str(locked))
+    finally:
+        locked.chmod(0o755)
+
+    assert state == gate.ROOT_UNREADABLE, (state, detail)
+    assert detail, "a read error that names no reason is not a disclosure"
+    assert gate._local_prober(str(empty)) == (gate.ROOT_READ, "")
+
+
+def test_a_root_that_cannot_be_opened_says_so_and_says_why(tmp_path):
+    """The genuine read error, which now has the `unreadable` token to itself.
+
+    The state is injected through the gate's own `prober` seam rather than
+    through file modes, so this asserts the same thing whether or not the run
+    happens to be root — a test whose verdict moves with the environment is
+    the defect it would be guarding.
+    """
+    rep = gate.run(project_with(tmp_path / "proj", ABSENCE_DOC),
+                   str(tmp_path / "pdks"),
+                   prober=lambda p: (gate.ROOT_UNREADABLE, "Permission denied"))
+
+    assert rep["installed_pdk_root_state"] == gate.ROOT_UNREADABLE, rep
+    assert rep["reason"].startswith("installed_pdk_root_unreadable"), rep
+    assert "Permission denied" in rep["reason"], rep
+    assert rep["installed_pdk_root_probe"] == "Permission denied", rep
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+
+
+def _unreachable_container_backends(monkeypatch, rc=125,
+                                    stderr="Error: No such container: c"):
+    """The gate's REAL container backend against a `docker exec` that fails.
+
+    Substituting at `subprocess.run` means the gate's own command strings, its
+    own rc handling and its own probe parsing are all exercised — the failure
+    is injected where docker would produce it, not where the gate would be
+    convenient to fake.
+    """
+    def fake_run(cmd, **kw):
+        assert cmd[:2] == ["docker", "exec"], cmd
+        return subprocess.CompletedProcess(cmd, rc, "", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def test_a_container_that_never_answered_is_not_an_empty_pdk_root(tmp_path,
+                                                                  monkeypatch):
+    """#1491's core defect. `docker exec` never ran; the gate reported the
+    installed PDK ROOT as unreadable and exited 2, so a `--container` naming a
+    container that is down, misnamed or absent was indistinguishable from a
+    host that simply has no PDK."""
+    _unreachable_container_backends(monkeypatch)
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    rep = gate.run(tree, "/foss/pdks", container="c")
+
+    assert rep["installed_pdk_root_state"] == gate.ROOT_BACKEND_UNAVAILABLE, rep
+    assert rep["reason"].startswith("container_backend_unavailable"), rep
+    assert "No such container" in rep["reason"], rep
+
+
+def test_a_named_backend_that_never_ran_is_not_reported_as_exercised(
+        tmp_path, monkeypatch):
+    """The disclosure #981 added was computed from the ARGV — "a container was
+    named, therefore the container backend ran". It is computed from what
+    actually ran now, so wiring `--container` cannot be inert and look
+    exercised at the same time."""
+    _unreachable_container_backends(monkeypatch)
+
+    rep = gate.run(project_with(tmp_path / "proj", ABSENCE_DOC),
+                   "/foss/pdks", container="c")
+
+    assert rep["backend_not_exercised"] == ["container"], rep
+
+
+def test_a_named_backend_that_could_not_be_reached_refuses_rather_than_skips(
+        tmp_path, monkeypatch):
+    """A host with no installed PDK is NOT_APPLICABLE — a fact about the
+    machine. A caller passing `--container <name>` has ASSERTED an environment,
+    and when that environment does not answer the gate has not found nothing
+    applicable, it has failed to run. Same call `cvdp_gate` made for an absent
+    `iverilog` (#1345): the check that COULD NOT RUN must not be the quieter of
+    the two."""
+    _unreachable_container_backends(monkeypatch)
+
+    rep = gate.run(project_with(tmp_path / "proj", ABSENCE_DOC),
+                   "/foss/pdks", container="c")
+
+    assert rep["verdict"] == "FAIL", rep
+    assert rep["failure_kind"] == "environment", rep
+
+
+def test_a_pdkless_host_still_skips_rather_than_failing(tmp_path):
+    """PAIRED GUARD for the refusal above, and the reason it is narrow. The
+    WIRED call site passes no `--container`, so this is the branch every CI run
+    takes; turning it red would be a verdict about the machine. It stays rc 2,
+    exactly as before."""
+    rep = run_gate(project_with(tmp_path / "proj", ABSENCE_DOC),
+                   tmp_path / "does_not_exist")
+
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+    assert "failure_kind" not in rep, rep
+
+
+def test_every_uncheckable_environment_gets_its_own_reason_token(tmp_path,
+                                                                 monkeypatch):
+    """The defect stated as one assertion: four environments, four tokens.
+
+    Before #1491 this collected `{'installed_pdk_root_unreadable'}` — one
+    element for four worlds, which is the whole finding.
+    """
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    absent = run_gate(tree, tmp_path / "nope")
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    holds_no_pdk = run_gate(tree, empty)
+
+    unreadable = gate.run(
+        tree, str(tmp_path / "locked"),
+        prober=lambda p: (gate.ROOT_UNREADABLE, "Permission denied"))
+
+    _unreachable_container_backends(monkeypatch)
+    unreached = gate.run(tree, "/foss/pdks", container="c")
+
+    tokens = {r["reason"].split(" (")[0]
+              for r in (absent, holds_no_pdk, unreadable, unreached)}
+    assert len(tokens) == 4, tokens
+
+
+def test_the_container_round_trip_carries_a_container_side_deadline():
+    """A client-side `timeout=` bounds the local docker client only; the tool
+    inside keeps running as an orphan. #1491 routed this gate's round trip
+    through `_container_exec`, so the deadline runs as the tool's parent INSIDE
+    the container and can signal it — and the total client bound stays under
+    the 60s per-call ceiling `ci_harness_timeout_ceiling_check` derives from
+    the 180s session bound, so one wedged container cannot take the session
+    down with it."""
+    argv = _container_exec.container_deadline_argv(
+        "c", "true", gate._CONTAINER_DEADLINE_S)
+
+    assert argv[:3] == ["docker", "exec", "c"], argv
+    assert "timeout" in argv, argv
+    assert str(gate._CONTAINER_DEADLINE_S) in argv, argv
+    assert (gate._CONTAINER_DEADLINE_S
+            + _container_exec.CLIENT_GRACE_S) <= 60, gate._CONTAINER_DEADLINE_S
+
+
+def test_a_container_deadline_expiry_is_not_an_empty_pdk_root(tmp_path,
+                                                              monkeypatch):
+    """The same conflation one exit code over: coreutils `timeout` reports 124
+    when it killed the tool. A killed run has no verdict, so it must not be
+    recorded as a root that was read and found empty."""
+    _unreachable_container_backends(
+        monkeypatch, rc=_container_exec.TIMEOUT_EXPIRED_RC, stderr="")
+
+    rep = gate.run(project_with(tmp_path / "proj", ABSENCE_DOC),
+                   "/foss/pdks", container="c")
+
+    assert rep["installed_pdk_root_state"] == gate.ROOT_BACKEND_UNAVAILABLE, rep
+    assert rep["verdict"] == "FAIL", rep
+    assert "deadline" in rep["reason"], rep
+
+
+def test_the_environment_is_printed_on_a_run_that_decides_something(tmp_path):
+    """#1491 measured `[FAIL]` over 134 documents and `VACUOUS_PASS` over 0
+    from one tree on one host, with nothing in either output naming what
+    differed. The line is printed on EVERY run, including the ones that go
+    well: a disclosure that appears only with bad news teaches a reader to
+    read its absence as good news."""
+    pdks = sectioned_pdk(tmp_path / "pdks")
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    proc, rep = _cli(tree, pdks, tmp_path)
+
+    assert proc.returncode == 1, proc.stdout
+    env = [ln for ln in proc.stdout.splitlines()
+           if ln.startswith("[ENVIRONMENT]")]
+    assert len(env) == 1, proc.stdout
+    assert f"root={pdks}" in env[0], env
+    assert "backend=local" in env[0], env
+    assert f"state={gate.ROOT_READ}" in env[0], env
+    assert "installed_pdks=1" in env[0], env
+
+
+def test_the_environment_is_printed_on_a_run_that_decides_nothing(tmp_path):
+    """PAIRED GUARD: the arm the issue actually compared against."""
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    proc, rep = _cli(tree, tmp_path / "does_not_exist", tmp_path)
+
+    assert proc.returncode == 2, proc.stdout
+    env = [ln for ln in proc.stdout.splitlines()
+           if ln.startswith("[ENVIRONMENT]")]
+    assert len(env) == 1, proc.stdout
+    assert f"state={gate.ROOT_ABSENT}" in env[0], env
+    assert "not_exercised=container" in env[0], env
 
 
 def test_claim_about_an_uninstalled_pdk_is_silence_not_agreement(tmp_path):
@@ -438,14 +733,23 @@ def test_installed_pdk_list_comes_from_the_directory_listing(tmp_path):
 
 def _shell_backends(monkeypatch):
     """The gate's own container backend, with `docker exec` swapped for a
-    local shell. Same commands, same parsing, a tree the test can build."""
+    local shell. Same commands, same parsing, a tree the test can build.
+
+    Patches `subprocess.run` on the MODULE OBJECT rather than through a
+    re-export on the gate. #1491 routed the gate's `docker exec` through
+    `_container_exec.run_in_container` — the repo's sanctioned site, which puts
+    the deadline container-side so an expiry kills the tool instead of
+    orphaning it — so the call no longer issues from this gate's own namespace.
+    Patching the module both of them import keeps the substitution in exactly
+    one place and keeps these tests driving the gate's REAL command strings.
+    """
     real_run = subprocess.run
 
     def fake_run(cmd, **kw):
         assert cmd[:2] == ["docker", "exec"], cmd
         return real_run(["bash", "-lc", cmd[-1]], **kw)
 
-    monkeypatch.setattr(gate.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     return gate.docker_backends("container-name-is-never-used")
 
 
@@ -530,8 +834,31 @@ def test_a_symlinked_subdirectory_inside_a_pdk_is_walked(tmp_path):
     assert any(p.endswith("cornerBlk.lib") for p in claim["evidence"]), claim
 
 
-def test_the_walk_terminates_when_a_link_points_back_up_the_tree(tmp_path):
-    """Following links can cycle; the walk must still return."""
+def test_the_walk_visits_each_real_directory_once_when_a_link_points_back_up(
+        tmp_path):
+    """The realpath visited-set, asserted on the property it actually has.
+
+    THIS TEST USED TO BE UNABLE TO FAIL. It was named for the cycle guard and
+    asserted only that `cornerBlk.lib` appeared somewhere in the result, which
+    is true whether the guard is there or not. Measured 2026-08-11 on this very
+    fixture: delete the visited-set, leave `followlinks=True` and every other
+    line intact, and the whole file was still 33 passed / rc 0.
+
+    It terminated for a reason that has nothing to do with this repo. Linux
+    refuses at about forty symlink levels, `os.walk` swallows the resulting
+    error, and the recursion stops there. Same fixture, both walkers:
+
+        shipped         1 path
+        guard deleted  42 paths, the deepest 171 components long
+
+    So the property is not "the call returns" — an unguarded walk returns too.
+    It is that a directory already walked under one name is not walked again
+    under another, and the observable form of that is that EVERY REAL FILE
+    APPEARS EXACTLY ONCE. The 42 paths are 42 readings of one file, so
+    resolving them collapses the set and the duplicates are the defect made
+    visible. That assertion does not care where the OS gives up, which is the
+    point: it is about the guard, not about the kernel's patience.
+    """
     pdks = tmp_path / "pdks"
     models = pdks / "alphanode" / "libs.tech" / "ngspice" / "models"
     _write(models / "cornerBlk.lib", ".lib grade_nom\n.endl\n")
@@ -540,6 +867,13 @@ def test_the_walk_terminates_when_a_link_points_back_up_the_tree(tmp_path):
     found = gate._local_walker(str(pdks / "alphanode"))
 
     assert any(p.endswith("cornerBlk.lib") for p in found), found
+    reals = [os.path.realpath(p) for p in found]
+    repeated = sorted({r for r in reals if reals.count(r) > 1})
+    assert not repeated, (
+        f"{len(found)} path(s) resolve to {len(set(reals))} real file(s) — the "
+        f"walk re-entered a directory it had already visited: {repeated}")
+    # and the cycle was cut at the link, not tens of levels down inside it
+    assert len(found) == 1, found
 
 
 # ── #965: a lookup that cannot settle a claim must not settle it ───────────
@@ -662,6 +996,184 @@ def test_the_report_says_it_refuses_a_denial_about_an_empty_directory(tmp_path):
                for s in rep["does_not_decide"]), rep["does_not_decide"]
 
 
+# ── #981: a check that narrows its population and reports over the whole ──
+#
+# The docstring promises a UNIVERSAL — "every DIRECTORY the claim named holds
+# files of that format" — and the code narrowed with an INTERSECTION against the
+# UNION of those directories. One productive qualifier therefore kept the gate
+# answering while another named directory held nothing of the format at all, and
+# the answer was CORROBORATED, which is the only route to rc 0.
+
+
+def _two_directory_pdk(tmp_path: Path, corner_dir: str) -> Path:
+    """A PDK whose `.lib` sits in exactly one of the two directories a claim
+    of the form "no <a> <b> corner lib" names. `ngspice/` always exists and
+    always holds a file, so it is a real directory either way — what varies is
+    whether it holds one of the CLAIMED FORMAT."""
+    pdks = tmp_path / "pdks"
+    _write(pdks / "betanode" / "libs.tech" / "ngspice" / "models"
+           / "devices_blk.spice", "* models\n")
+    _write(pdks / "betanode" / corner_dir / "BetaCells_typical.lib",
+           "library (t) { }\n")
+    return pdks
+
+
+_TWO_DIR_CLAIM = "- BetaNode has no public ngspice corner lib -> standin.\n"
+
+
+def test_agreement_is_withheld_when_one_named_directory_holds_none_of_it(
+        tmp_path):
+    """#981: the union let one productive qualifier answer for both.
+
+    `public/` holds the only `.lib`; `ngspice/` holds none. The claim names
+    BOTH, so agreeing with it is a statement about both — and the gate never
+    read one of them. Measured on origin/main: CORROBORATED / PASS / rc 0.
+    """
+    pdks = _two_directory_pdk(tmp_path, "public")
+    tree = project_with(tmp_path / "proj", _TWO_DIR_CLAIM)
+
+    proc, rep = _cli(tree, pdks, tmp_path)
+
+    assert rep["counts"]["corroborated"] == 0, rep["claims"]
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "UNDECIDED"]
+    assert claim["directory_qualifiers"] == ["ngspice", "public"], claim
+    assert claim["directory_qualifiers_without_that_format"] == ["ngspice"], claim
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+    assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+    combined = proc.stdout + proc.stderr
+    assert any(ln.startswith("VACUOUS_PASS") for ln in combined.splitlines())
+
+
+def test_the_withheld_agreement_is_still_shown_to_the_reader(tmp_path):
+    """A refusal that hides what it would have said is a refusal nobody can
+    check. The reason the gate declined to give is kept under its own key, and
+    it is not counted anywhere."""
+    pdks = _two_directory_pdk(tmp_path, "public")
+    rep = run_gate(project_with(tmp_path / "proj", _TWO_DIR_CLAIM), pdks)
+
+    (claim,) = rep["claims"]
+    assert claim["corroboration_withheld"], claim
+    assert "never checked there" in claim["reason"], claim
+    assert claim["examined_by_directory"] == {"ngspice": 0, "public": 1}, claim
+
+
+def test_a_claim_over_two_populated_directories_is_still_corroborated(tmp_path):
+    """PAIRED GUARD, and the one that decides whether #981 is a fix or a ban.
+    Same sentence, same two directories, and now BOTH hold files of the claimed
+    format and neither names the denied word. The universal is satisfied, so
+    the claim must still be CORROBORATED and still rc 0."""
+    pdks = _two_directory_pdk(tmp_path, "public")
+    _write(pdks / "betanode" / "libs.tech" / "ngspice" / "models"
+           / "devices_blk.lib", "library (d) { }\n")
+    tree = project_with(tmp_path / "proj", _TWO_DIR_CLAIM)
+
+    proc, rep = _cli(tree, pdks, tmp_path)
+
+    assert rep["verdict"] == "PASS", rep
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CORROBORATED"]
+    assert "directory_qualifiers_without_that_format" not in claim, claim
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+
+
+def test_a_contradiction_in_a_sibling_directory_survives_the_universal(tmp_path):
+    """The asymmetry, pinned. A denial is FALSIFIED by one artefact in any ONE
+    named directory and CONFIRMED only by having read all of them, so the
+    universal may gate agreement and may NOT gate contradiction.
+
+    This is not hypothetical. Measured against the real installed PDKs
+    2026-08-11, the corpus' own false claim names two directories, one of which
+    holds ZERO files of the claimed format (`{'library': 0, 'ngspice': 32}`).
+    Applying the universal before the verdict would have converted a true
+    CONTRADICTED into UNDECIDED and stopped the gate reporting a false claim.
+    """
+    pdks = tmp_path / "pdks"
+    _write(pdks / "betanode" / "library" / "notes.txt", "prose\n")
+    _write(pdks / "betanode" / "libs.tech" / "ngspice" / "models"
+           / "cornerBlk.lib", ".lib grade_nom\n.endl\n")
+    tree = project_with(
+        tmp_path / "proj",
+        "- BetaNode has no public ngspice corner library -> standin.\n")
+
+    proc, rep = _cli(tree, pdks, tmp_path)
+
+    assert rep["verdict"] == "FAIL", rep
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CONTRADICTED"]
+    assert claim["examined_by_directory"] == {"library": 0, "ngspice": 1}, claim
+    assert any(p.endswith("cornerBlk.lib") for p in claim["evidence"]), claim
+    assert proc.returncode == 1, (proc.returncode, proc.stdout, proc.stderr)
+
+
+def test_the_pass_reason_counts_every_directory_it_names(tmp_path):
+    """#981b: the PASS reason was built from ALL of `dir_quals` and carried ONE
+    total, so it printed "the claim holds over the 1 file(s) of that format
+    under ngspice/public" when ngspice contributed zero — a sentence whose
+    subject is a set the gate never examined.
+
+    A PASS must say how much it looked at, so it says so PER DIRECTORY: every
+    directory the reason names carries its own count, and a zero is therefore
+    written down where the reader is instead of being averaged away.
+    """
+    pdks = _two_directory_pdk(tmp_path, "public")
+    _write(pdks / "betanode" / "libs.tech" / "ngspice" / "models"
+           / "devices_blk.lib", "library (d) { }\n")
+    rep = run_gate(project_with(tmp_path / "proj", _TWO_DIR_CLAIM), pdks)
+
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CORROBORATED"]
+    by_dir = claim["examined_by_directory"]
+    assert set(by_dir) == set(claim["directory_qualifiers"]), claim
+    for name, count in by_dir.items():
+        assert count > 0, claim
+        assert re.search(rf"\b{re.escape(name)} \({count}\)", claim["reason"]), (
+            f"{name} is named in the reason without the count it contributed: "
+            f"{claim['reason']!r}")
+
+
+def test_a_single_directory_claim_still_states_its_denominator(tmp_path):
+    """The one-directory case keeps the disclosure the house rule requires —
+    the count is stated, not implied by the absence of a second name."""
+    pdks = bare_pdk(tmp_path / "pdks")
+    rep = run_gate(project_with(tmp_path / "proj", ABSENCE_DOC), pdks)
+
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CORROBORATED"]
+    assert claim["examined_by_directory"] == {"ngspice": 1}, claim
+    assert "ngspice (1)" in claim["reason"], claim
+
+
+# ── #981: two more decisions on this file that no test could kill ──────────
+
+
+def test_a_one_letter_acronym_fragment_is_not_a_word_anyone_denies(tmp_path):
+    """`_MIN_LOOKUP_FRAGMENT` had no test: set it to 0 and the file was still
+    33 passed. It is the rule that stops a single stray letter of an uppercase
+    run from matching a claim — `lookup_tokens` deliberately emits BOTH
+    readings of an ambiguous boundary, so without a floor the left reading of
+    `ABat` contributes the bare letter `a` to the vocabulary a denial is
+    matched against."""
+    frags = gate.lookup_tokens("cornerABat")
+
+    assert {"abat", "bat"} <= frags, frags
+    assert "a" not in frags, frags
+
+
+def test_a_qualifier_must_come_from_inside_the_pdk_not_from_where_it_is_mounted(
+        tmp_path):
+    """`_rel_components` taking components RELATIVE to the PDK directory had no
+    test either: make it absolute and the file was still 33 passed. The mount
+    path is chosen by whoever installed the image, so a word in it is not a
+    word the claim supplied — and with #981 it would additionally read as a
+    directory that holds every file, silently satisfying the universal."""
+    pdks = bare_pdk(tmp_path / "public" / "pdks")
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    (claim,) = rep["claims"]
+    assert claim["directory_qualifiers"] == ["ngspice"], (
+        "a component of the mount path was taken for a qualifier the claim "
+        f"supplied: {claim.get('directory_qualifiers')}")
+    assert claim["examined_by_directory"] == {"ngspice": 1}, claim
+
+
 def test_no_pdk_library_name_is_hardcoded_in_the_gate():
     """The gate's source may carry assertion grammar; it may not carry a PDK's
     vocabulary. A library name typed here would be the very claim the gate
@@ -672,3 +1184,135 @@ def test_no_pdk_library_name_is_hardcoded_in_the_gate():
                   "sky130", "gf180", "sg13", "asap7", "freepdk",
                   "mos_tt", "mos_ss", "mos_ff", "typical.lib"):
         assert token not in lowered, f"{token!r} hardcoded in the gate"
+
+
+# ── vibe-ic#1491: how much was READ is part of the environment ──────────────
+#
+# `files_under` caps one PDK's walk at `_MAX_PDK_FILES`. That cap is a fact
+# about the machine, and it moved verdicts: `truncated_at` was written onto the
+# record one line after the walk and read by NOTHING, so CORROBORATED — the
+# gate's only route to rc 0 — could be reached over a listing that stopped.
+#
+# Measured on origin/main with the REAL bound, one host, one claim, the same
+# two artefacts installed either way: 20000 filler files ahead of the
+# falsifying artefact gave `[PASS]` rc 0; the filler removed gave rc 2. The
+# claim is false both times.
+#
+# The bound is monkeypatched here so the tests cost nothing. It is the module
+# global the production walk reads at CALL time, so a test that moves it drives
+# the same code path a 20000-file install does.
+
+def _pdk_hiding_a_sibling_past_the_cut(root: Path, visible_filler: int) -> Path:
+    """A PDK whose SECOND library sits in a subdirectory the walk never reaches.
+
+    `os.walk` yields the top directory first, so `visible_filler` files beside
+    the first library are what the bounded walk returns; `extra/` is never
+    visited. Both libraries are installed either way — only the listing differs.
+    """
+    fam = root / "alphanode"
+    _write(fam / "AlphaCells_typical.lib", "library (t) { }\n")
+    _write(fam / "extra" / "AlphaCells_swift.lib", "library (s) { }\n")
+    for i in range(visible_filler):
+        _write(fam / f"pad{i:04d}.dat", "x")
+    return root
+
+
+_ONLY_DOC = "# constraints\n\n| Corner | alphanode ships only the typical corner lib |\n"
+
+
+def test_agreement_over_a_truncated_pdk_listing_is_withheld(tmp_path,
+                                                            monkeypatch):
+    """The defect: a FALSE exclusivity claim bought rc 0 from a stopped walk.
+
+    The tree ships two libraries. With the bound at 2 the walk returns the top
+    directory only, so the gate sees exactly one library and the claim reads as
+    true. Agreement is a universal over every artefact installed, and this
+    listing never covered that set.
+    """
+    monkeypatch.setattr(gate, "_MAX_PDK_FILES", 2)
+    pdks = _pdk_hiding_a_sibling_past_the_cut(tmp_path / "pdks", 1)
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    (claim,) = rep["claims"]
+    assert claim["truncated_at"] == 2, claim
+    assert claim["verdict"] == "UNDECIDED", claim
+    assert "never fully listed" in claim["reason"], claim
+    # what it WOULD have said is kept, so the reader can see the withheld yes
+    assert "exactly one artefact" in claim["corroboration_withheld"], claim
+    assert rep["counts"]["corroborated"] == 0, rep["counts"]
+    # rc 2 with the sentinel, never rc 0
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+    assert gate._vacuous_exit.exit_code(True, True) == 2
+
+
+def test_the_truncated_walk_is_named_in_the_environment_line(tmp_path,
+                                                             monkeypatch):
+    """#1491's rule: a verdict states the environment it was taken in. HOW MUCH
+    was read is part of that, and it belonged beside the root and the backend
+    rather than only inside a per-claim record nothing prints."""
+    monkeypatch.setattr(gate, "_MAX_PDK_FILES", 2)
+    pdks = _pdk_hiding_a_sibling_past_the_cut(tmp_path / "pdks", 1)
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    assert rep["population_truncated"] == ["alphanode"], rep
+    assert rep["population_truncated_at"] == 2, rep
+    assert "truncated_at_2=alphanode" in gate._environment_line(rep)
+
+
+def test_the_same_two_artefacts_listed_in_full_are_not_agreed_with_either(
+        tmp_path):
+    """PAIRED CONTROL, and the point of the whole test: the content is
+    identical to the case above. Only the bound moved. With the real bound the
+    walk reaches `extra/`, the gate sees both libraries, and it does not agree
+    — so the old rc 0 was bought by the cap and by nothing in the tree."""
+    pdks = _pdk_hiding_a_sibling_past_the_cut(tmp_path / "pdks", 1)
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    (claim,) = rep["claims"]
+    assert "truncated_at" not in claim, claim
+    assert claim["verdict"] != "CORROBORATED", claim
+    assert rep["verdict"] != "PASS", rep
+
+
+def test_a_complete_listing_still_corroborates_a_true_claim(tmp_path):
+    """THE OTHER DIRECTION. The refusal is bound to truncation, not to
+    exclusivity: a tree that really does ship one library still buys the YES
+    branch, so this change tightens the gate without deleting its only route to
+    rc 0."""
+    pdks = tmp_path / "pdks"
+    _write(pdks / "alphanode" / "AlphaCells_typical.lib", "library (t) { }\n")
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CORROBORATED"]
+    assert "truncated_at" not in claim, claim
+    assert rep["verdict"] == "PASS", rep
+
+
+def test_a_contradiction_still_stands_under_truncation(tmp_path, monkeypatch):
+    """The asymmetry, stated by #981 for directories and applied here to the
+    population. A denial is falsified by ONE artefact in the part that WAS
+    listed and the unread tail cannot put it back, so truncation must not
+    quieten the NO branch — only the YES branch."""
+    monkeypatch.setattr(gate, "_MAX_PDK_FILES", 2)
+    fam = tmp_path / "pdks" / "alphanode"
+    _write(fam / "AlphaCells_swift.lib", "library (s) { }\n")
+    _write(fam / "pad0000.dat", "x")
+    tree = project_with(
+        tmp_path / "proj",
+        "# constraints\n\n| Corner | alphanode ships no swift lib at all |\n")
+
+    rep = run_gate(tmp_path / "proj", tmp_path / "pdks")
+
+    (claim,) = rep["claims"]
+    assert claim["truncated_at"] == 2, claim
+    assert claim["verdict"] == "CONTRADICTED", claim
+    assert rep["verdict"] == "FAIL", rep
+    assert tree.exists()

@@ -181,7 +181,7 @@ def _run_track(project: Path):
     env["VIBE_IC_DISABLE_LLM_CONFIRM"] = "1"     # force the no-backend path
     cp = subprocess.run(
         [sys.executable, str(_PROGRAMS / "phase1_expert_parse_track.py"),
-         str(project)], capture_output=True, text=True, timeout=120, env=env)
+         str(project)], capture_output=True, text=True, timeout=60, env=env)
     return cp.returncode, cp.stdout, cp.stderr
 
 
