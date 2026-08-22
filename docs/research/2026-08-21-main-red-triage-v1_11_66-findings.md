@@ -6248,6 +6248,38 @@ check that matters least is the one you run; the check that matters most is the
 one you remember the result of.**
 
 
+## M120 — re-ran the number I quote most, and the two protected-file mutations left nothing behind
+
+M119 ended on *"the check that matters most is the one you remember the result
+of."* **The most-quoted number in this document is the host lane's `6 failed`,
+and since measuring it I have mutated two files — one PROTECTED — and restored
+them.** Checksums matched both times. **A checksum proves the bytes; it does not
+prove the suite.**
+
+    test_hermetic_candidate_runner.py    17 passed   (mutated at :852, restored)
+    test_hdl_declaration_scan_...py      16 passed   (my 5 regression tests)
+    hdl_declaration_scan_..._check.py    exit 1      (the 3 real candidates, as recorded)
+    test_landing_merge_verdict.py         6 failed, 128 passed  (490s)
+
+**And the failing set is IDENTICAL to the recorded six** — `diff`ed by node id,
+not compared by count, because this document has twice been caught by two sets
+agreeing on a total and differing in membership.
+
+**So the mutation experiments left nothing behind.** Both were run by
+mutate → measure → restore with a checksum on each side, and `git status` clean
+afterwards; this is the independent confirmation that the restores were real and
+not merely byte-identical at one path.
+
+**Why this was worth eight minutes at the end.** I ran a destructive experiment
+against a protected authority file to verify someone else's claim, and the
+verification of my own cleanup was a hash comparison — **the same kind of evidence
+I have rejected all week when other people's checks offered it.** A hash says the
+file is what it was. It says nothing about whether the file I restored was the
+right file, or whether anything else moved while I was working.
+
+**The suite says both. It is the only thing that does.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
