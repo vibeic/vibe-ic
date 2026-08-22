@@ -217,3 +217,54 @@ means.
 decline the waiver branch". It is **"should Step 4's emptiness be disclosed on the
 structured channel, which would make the conditional moot"** — a question about a
 gate program, not about the flow's tiering logic.
+
+---
+
+# Part 4 — the frozen branch's ONLY program change, re-characterised against current main
+
+`hdl_declaration_scan_strips_comments_check.py` is the one file in
+`ptmo/main-red-triage-v11166` that is a PROGRAM rather than a test, doc or
+fixture. **Its value proposition has changed, and the batch should know before it
+lands.**
+
+**On the frozen branch's base (`a00f53f20`):** the gate FAILED. 175 sites against
+a 170 baseline, a BLOCKING list of 5 names of which 2 were verified false
+positives. The fix closed a red.
+
+**On current main (`a4caccefe`) — measured:**
+
+    current main's analyser on current main :  170  (baseline 170)  -> exit 0, PASSES
+    MY analyser             on current main :  165
+    false positives removed                 :    5
+    newly flagged                           :    0
+
+**THE GATE ALREADY PASSES. The fix no longer closes a red.**
+
+**What it still is, stated exactly:**
+
+* a **precision fix** — it removes 5 verified false positives and flags nothing
+  new. Two of that class were checked in source on the frozen branch
+  (`slot_pad_budget_check` strips on its first two lines;
+  `memory_read_pipeline_check` reaches its scan through a for-target chain).
+* **5 regression tests**, of which 4 go red when the analyser is reverted — pure
+  additions, and the suite had NO coverage for this before (11 tests passed
+  identically with and without the fix).
+* **NOT redundant.** Current main's `stripped_locals` contains **zero**
+  occurrences of `ast.For` or `comprehension`, and the 244 commits **never touched
+  this file** — so there is no conflict and no independent fix.
+
+**ONE CONSEQUENCE A LANDER MUST DECIDE:** applying it takes the population
+**170 → 165**, which is BELOW the recorded baseline. The gate treats a shrink as a
+`[NOTE] baseline shrank by 5. Re-run with --write-baseline.` — **a note, not a
+failure**, so it still exits 0. **The frozen branch declined to write that
+baseline and still does** (standing instruction: never `--write-baseline`, including
+when the gate asks). **Re-recording it is the lander's call, and it is now the only
+action this change requires.**
+
+**Why the count moved from 175 to 170 without anyone fixing the analyser:** other
+work removed or rewrote 5 of the scan sites. **That is worth noticing rather than
+waving at — a gate whose population drifts by 5 in 244 commits is measuring a
+moving subject, and its baseline is a pin in sand.** The frozen branch's M54
+argument about the liar census — that a hand-maintained number an author must
+remember is *"prose wearing an assertion"* — applies here with the same force, and
+neither gate has had that cure.
