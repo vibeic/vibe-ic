@@ -1,0 +1,34 @@
+WHY THE GATE CANNOT CATCH F3d -- read out of the gate, not asserted.
+
+The producer's own gate is the only thing in this step that looks at a pad's
+orientation at all. What it does with it:
+
+    lw, lh = PR.footprint(size, comp.orient or "N", ring.units)
+    if (w, h) != (lw, lh):
+        -> PAD_FOOTPRINT_DISAGREES_WITH_LIBRARY
+
+It converts the orientation into an EXTENT and compares extents. And
+`footprint()` swaps the axes for exactly one set:
+
+    _ROTATED = ("E", "W", "FE", "FW")
+
+`S` (a half turn) and `FS` (a mirror) are both OUTSIDE that set, so both yield
+the same unswapped (w, h). The comparison is satisfied by either.
+
+So the gate is not merely silent about the difference -- it is STRUCTURALLY
+incapable of seeing it, because it reduces the orientation to the one quantity
+in which a half turn and a mirror are identical. Every other check in the step
+(fit sum, spacing, abutment, BTerm coverage) is bounding-box arithmetic and is
+blind for the same reason.
+
+THE FIX THIS IMPLIES, and it is one line of principle: the test that pins this
+must compare the ORIENTATION TOKEN against upstream's, never the extents. Any
+extent-based assertion will pass under both and will read as coverage.
+
+SCOPE OF F3d ITSELF, stated so it is not read as more general than it was
+measured to be. This is ONE site: the opposite-side derivation in one function.
+I have NOT swept for other places in the repo that derive one member of a
+symmetric pair from the other -- and the comparable sweep for the arithmetic pin
+earlier in this capture found the shape at 224 sites, which is what ordinary
+code looks like. So F3d is a single-site finding, like F1 and F4, and its value
+is in the DEFECT it names rather than in a class it heads.

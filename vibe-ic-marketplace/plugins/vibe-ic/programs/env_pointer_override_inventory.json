@@ -1,0 +1,9 @@
+{
+  "_comment": "Environment pointers that overrule a location the caller named, as they stand on the tree explicit_argument_outranks_the_environment_pointer.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Closes by inverting the guard to the absent form and routing the consumer through the resolver that already states the rule. Hand-authored from --json; there is no --write-baseline.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_evidence_structure_check.py::tree",
+      "reason": "The live instance the 2026-08-21 chip capture measured, still present. `if _env_tree and args.tree: args.tree = _env_tree` fires precisely BECAUSE the caller named a tree, so a caller who points at a two-path fixture is answered about the shared corpus — measured once at a pass over 8309 tracked paths of a tree nobody asked about. The site DOES announce the override, which is half the record's remedy and is why it reads as deliberate; announcing is not sufficient, because the verdict is still about the wrong tree. Recorded, not repaired: inverting the guard changes which corpus every caller of that gate scans, and that is a behaviour change belonging to the lane that owns the corpus binding. The sibling branch four lines below (`elif _env_tree and not args.tree`) is already the correct shape and is correctly not flagged."
+    }
+  ]
+}

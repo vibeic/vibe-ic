@@ -191,6 +191,31 @@ def toolchain_record(path: pathlib.Path, doc: Dict[str, Any],
     a fact: two runs citing `policy.json` may have adjudicated against two
     different documents, and a reader comparing them has no way to tell.
     """
+    #: THE DESIGN-FOR-ECO STANCE, PUBLISHED WHATEVER IT IS.
+    #:
+    #: `eco_readiness` is the one axis whose APPLICABILITY the design declares,
+    #: so a manifest that printed only the axis NAME left a reader unable to
+    #: tell an ECO finding from the absence of one. Both read as a row that did
+    #: not fail. Measured: on a contract carrying neither `eco_readiness` nor
+    #: `delivery_path` -- the shape every trial contract in the shipped
+    #: cross-layer campaign carries -- a candidate that deleted the design's
+    #: whole spare population is ELIGIBLE, and the only thing in the manifest
+    #: that said so was a per-candidate term reading NOT_APPLICABLE.
+    #:
+    #: So the stance goes in the toolchain block, where a reader looks ONCE to
+    #: find out what this run was in a position to decide. It is derived from
+    #: the policy rather than restated, so it cannot disagree with the verdicts.
+    eco_state = F.eco_applicability(policy.eco_requirement,
+                                    policy.delivery_path)[0]
+    route = str((policy.delivery_path or {}).get("path") or "NOT_SUPPLIED")
+    eco_note = (
+        f"design-for-ECO stance {eco_state} (delivery path {route}). "
+        + ("no spare/ECO requirement was declared and no route was "
+           "established, so this run made NO ECO-readiness finding: a "
+           "candidate that deleted this design's spare population would be "
+           "published as eligible by it"
+           if eco_state == F.ECO_NOT_DECLARED else
+           "the ECO-readiness axis adjudicated every trial that RAN"))
     return {
         "feasibility_source": SOURCE_SHIPPED,
         "feasibility_policy_path": str(path),
@@ -199,11 +224,15 @@ def toolchain_record(path: pathlib.Path, doc: Dict[str, Any],
         "feasibility_limits_declared": sorted(policy.limits),
         "feasibility_axes": [a.name for a in policy.axes],
         "feasibility_waivers_supplied": False,
+        "feasibility_eco_state": eco_state,
+        "feasibility_eco_declared": policy.eco_requirement is not None,
+        "feasibility_delivery_path": route,
+        "feasibility_eco_note": eco_note,
         "feasibility_note": (
             f"every trial that RAN was adjudicated by {SOURCE_SHIPPED} "
             f"against {len(policy.required_views)} declared required view(s) "
             f"from {path}; no waiver was supplied, so each verdict rests on "
-            "the trial's own measured records alone"),
+            f"the trial's own measured records alone. {eco_note}"),
     }
 
 

@@ -65,6 +65,7 @@ chip-AGNOSTIC: no IC, vendor, SKU, process or PDK appears in this file.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -74,6 +75,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 from _ppa import canonical_json as cj  # noqa: E402
+from _ppa import delivery_path as dpath  # noqa: E402
+from _ppa import feasibility as feas  # noqa: E402
 from _ppa import search as S  # noqa: E402
 from _ppa import search_feasibility as SF  # noqa: E402
 
@@ -189,6 +192,7 @@ def _apply_trial(cand: S.Candidate, trial: Dict[str, Any]) -> List[str]:
 def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
           explicit: Dict[str, List[str]], frontier_stage: Optional[str],
           policy_path: Optional[Path] = None,
+          project: Optional[str] = None,
           ) -> Tuple[int, Dict[str, Any], List[str]]:
     """(rc, manifest_or_report, human lines).
 
@@ -196,6 +200,22 @@ def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
     stub runs and every candidate is UNDETERMINED -- which stays the default
     because a search that was never told what its required views are has not
     been given the information a promotion verdict rests on.
+
+    `project` is the design tree the trials came from. Its DELIVERY PATH is
+    resolved by the flow's own router and stamped onto the policy, which is
+    what decides whether an ABSENT design-for-ECO declaration is a finding.
+
+    WHY THIS LANE NEEDED IT. `ppa_feasibility_check.py` and
+    `ppa_pnr_search_space.py` both take `--project`; this program did not, so
+    a campaign's only lever was whatever the policy document happened to say.
+    MEASURED: every trial contract in the shipped cross-layer campaign carries
+    neither `eco_readiness` nor `delivery_path`, and on that shape a candidate
+    that deleted the design's whole spare/ECO population adjudicates FEASIBLE
+    and is published ELIGIBLE. The axis was landed and could not be reached
+    from the one lane it was written for.
+
+    Nothing here changes what an absent declaration MEANS. It supplies the
+    route, and the route is what the gate was already asking for.
     """
     lines: List[str] = []
 
@@ -284,8 +304,47 @@ def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
                          "policy was applied, so nothing is published.")
             return RC_UNDETERMINED, {"program": PROGRAM,
                                      "undetermined": why}, lines
+        # `--project` WINS over a route stamped in the policy document, for
+        # the reason `ppa_feasibility_check.py` gives: the route is a
+        # measurement over a tree, and a tree in front of us outranks a string
+        # somebody wrote about one. With no `--project` the policy keeps
+        # whatever it declared -- including nothing, which stays NOT_SUPPLIED
+        # and is not a finding about the design.
+        if project:
+            policy = dataclasses.replace(
+                policy, delivery_path=dpath.resolve(project))
         ledger.evaluate_feasibility(SF.feasibility_fn(policy))
         toolchain = SF.toolchain_record(policy_path, doc or {}, policy)
+        # The one axis whose applicability the DESIGN declares says so out
+        # loud, exactly as the feasibility CLI does. A run that made no
+        # ECO-readiness finding must not leave that to a reader who thought to
+        # look at a per-candidate term.
+        eco_state = feas.eco_applicability(policy.eco_requirement,
+                                           policy.delivery_path)[0]
+        if eco_state == feas.ECO_NOT_DECLARED_ON_CHIP_PATH:
+            lines.append(
+                f"{MARK_CANNOT_CHECK} this design is on the CHIP path and is "
+                f"therefore tape-out-bound, and no design-for-ECO requirement "
+                f"was declared for it. Nothing in this manifest says whether "
+                f"its layout could be repaired by a metal-only ECO.")
+        elif eco_state == feas.ECO_NOT_DECLARED and not project:
+            # The warning names the CONSEQUENCE, not just the condition. It
+            # fires whenever the stance is undeclared; `audit_manifest` refuses
+            # only when a candidate is actually published ELIGIBLE on that
+            # stance, so the two are not the same set and this says "any", not
+            # "this manifest". A warning that stopped at "no finding was made"
+            # reads as informational, and the reader would not learn that
+            # `--verify` is about to refuse what they just built.
+            lines.append(
+                f"{MARK_CANNOT_CHECK} no design-for-ECO requirement was "
+                f"declared and no --project was given, so the route this "
+                f"design took was not established and this search made NO "
+                f"ECO-readiness finding. A candidate that deleted this "
+                f"design's spare/ECO population is published ELIGIBLE by it, "
+                f"and `--verify` REFUSES this manifest "
+                f"(ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE) if any candidate is. "
+                f"Pass --project to have the flow's own route decide, or "
+                f"declare the requirement.")
     else:
         ledger.evaluate_feasibility(None)   # the stub: never ELIGIBLE
         toolchain = SF.stub_toolchain_record()
@@ -390,6 +449,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cache-policy", default=S.CACHE_IGNORE,
                     choices=list(S.CACHE_POLICIES))
+    ap.add_argument("--project", default=None, metavar="DIR",
+                    help="the design tree these trials came from. Its "
+                         "DELIVERY PATH is resolved from the route the flow "
+                         "took, and that decides what an ABSENT "
+                         "design-for-ECO declaration means: on the chip path "
+                         "a tape-out-bound design with no stated spare/ECO "
+                         "requirement is [CANNOT CHECK], not a pass. Without "
+                         "it no route is established and this search makes no "
+                         "ECO-readiness finding.")
     ap.add_argument("--json", default=None, help="write the JSON report here")
     args = ap.parse_args(argv)
 
@@ -435,7 +503,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc, report, lines = build(
             Path(args.space), Path(args.trials) if args.trials else None,
             budget, explicit, args.frontier_stage,
-            Path(args.feasibility_policy) if args.feasibility_policy else None)
+            Path(args.feasibility_policy) if args.feasibility_policy else None,
+            args.project)
 
     stream = sys.stderr if rc in (RC_REFUSED, RC_UNDETERMINED) else sys.stdout
     for line in lines:

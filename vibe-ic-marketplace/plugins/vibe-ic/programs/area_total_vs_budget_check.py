@@ -66,7 +66,18 @@ re-derives the same figure on any of the five:
 
     library A   229 of 229 cells    liberty_area / lef_um2:
                                       min 1.000000  median 1.000000  max 1.000000
-    library B   405 of 405 cells    min 0.999547  median 1.000000  max 1.000000
+    library B   428 of 428 cells    min 0.999547  median 1.000000  max 1.000000
+
+RE-MEASURED, because this file now leans on those counts as the IDENTITY of the
+two libraries and an identifier nobody can reproduce is not one. Inside the same
+image the paragraph names, over the `liberty_glob` and `cell_lef_glob` the registry
+already carries: library A reproduces exactly, and so does every ratio figure above
+-- including the 0.999547 the tolerance clause below rests on. Library B's COUNT did
+not: it was stated as 405 and measures 428, cross-checked three ways in the liberty
+(`cell (` lines, distinct cell names, and lines carrying an `area`, all 428) and
+against 437 LEF macros, the surplus being LEF-only physical cells with no timing
+model. The conclusion is untouched -- it rests on the ratio, not on the census --
+but the number is now the one a reader re-derives.
 
 So the Liberty area IS um^2 on both, and — the part that matters here — it is
 DERIVABLE PER PDK from assets the flow already resolves, rather than assumed for

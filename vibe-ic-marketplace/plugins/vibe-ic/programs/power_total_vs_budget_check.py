@@ -249,7 +249,8 @@ def _disclosure(rep: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _worst_record(reports: List[Dict[str, Any]],
-                  requirement: Optional[Dict[str, Any]]
+                  requirement: Optional[Dict[str, Any]],
+                  project: Optional[Path] = None
                   ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]],
                              Optional[str]]:
     """The total-power record the requirement is entitled to judge.
@@ -280,7 +281,12 @@ def _worst_record(reports: List[Dict[str, Any]],
     for rep in reports:
         if rep.get("unreadable") or not rep.get("total_row"):
             continue
-        rec = _pw.total_record(rep, stage="phase3_signoff", scenario="default")
+        # `project` is what lets `_ppa/power` resolve the scope's `mode`
+        # from `pvt_matrix.json`. Without it the record comes back one
+        # required scope key short and no downstream comparison of it can
+        # be decided -- which is what every power record did until now.
+        rec = _pw.total_record(rep, stage="phase3_signoff",
+                               scenario="default", project=project)
         if rec is None:                                # pragma: no cover
             continue
         eligible.append((rep["total_row"]["total_w"], rec, rep))
@@ -342,7 +348,8 @@ def evaluate(project: Path, budget_override: Optional[float]
                               if requirement and requirement.get("max_w")
                               else None)
 
-    record, source_rep, basis_conflict = _worst_record(reports, requirement)
+    record, source_rep, basis_conflict = _worst_record(reports, requirement,
+                                                       project)
     rep["selected_total"] = (
         {"file": source_rep["file"], "record": record} if record else None)
     rep["activity_basis_conflict"] = basis_conflict

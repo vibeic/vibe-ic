@@ -1,0 +1,49 @@
+"0 OF 4 CARRY IT AS A MACHINE-READABLE RECORD" IS WRONG ON HALF (a).
+Found by RUNNING the instance, after the same claim survived a grep.
+
+WHAT I PUBLISHED. F3b's population evidence said none of the four instances
+carries the non-honouring as a machine-readable record -- all four wrote the
+lesson as prose. That was a grep for a dict KEY containing one of
+inert / not_honoured / unhonoured / ignored / no_op / not_applied / unapplied.
+
+WHAT THE INSTANCE ACTUALLY EMITS, run with a real map and a real tool log in
+which the tool used a DIFFERENT template:
+
+    {
+      "applied": false,
+      "reason": "staged map was NOT used; yosys instantiated _90_alu,
+                 _90_lcu_brent_kung instead (declared modules:
+                 _80_lcu_kogge_stone)",
+      "note":   "ADDER_MAP_FILE NOT APPLIED (map.v): ..."
+    }
+
+That is exactly half (a) of the contract: the non-honouring is machine-readable,
+it NAMES the input, and it carries the tool's own evidence for why. My grep
+could not see it because the key is spelled POSITIVELY -- `applied: false`, not
+`not_applied: true`. A predicate that enumerates the negative spellings of a
+concept cannot find the concept spelled positively, and there is no list of
+spellings that closes that hole.
+
+HALF (b), MEASURED, and this half does hold:
+
+    declared map NOT honoured, tool log proves it     rc = 1
+    declared map honoured (control)                   rc = 0
+    NO log supplied -- it cannot tell either way      rc = 0
+
+The contract asks for rc 2 NOT DETERMINED when a declaration cannot be honoured,
+because that is neither a pass nor a finding about the design. This returns 1 --
+a finding -- and, when it has no evidence at all, returns 0 with the `applied`
+key simply absent.
+
+THE CORRECTED CLAIM:
+    (a) machine-readable record   1 of 4 modules  -- and it is the
+                                                     best-developed one
+    (b) exit-code tier            0 of 4 modules
+
+WHAT THIS COSTS F3b, STATED. "Discovered four times and absorbed zero times" was
+the strongest sentence I wrote about this rule and it is not true. One instance
+absorbed half the contract by hand. The honest argument is weaker and still
+real: one module did it, three did not, none inherits it, and nothing in the repo
+makes them agree -- which is what a shared contract is for.
+
+HOW IT SURVIVED UNTIL NOW. It survived a grep. It did not survive being run.

@@ -1,0 +1,47 @@
+F3b's POPULATION IS ONE, AND THAT ONE ALREADY DOES HALF THE CONTRACT.
+The rule I called the most valuable item in this capture does not survive being
+read at the level of its own definition.
+
+THE RULE, in its own terms: a step that ACCEPTS a config variable the tool
+underneath does not honour must degrade loudly. So an instance is a step that
+OWNS such a knob -- not a module that happens to mention the phenomenon.
+
+THE FOUR MODULES THE GREP FOUND, read one by one:
+
+  adder_map_techmap.py                     INSTANCE.
+      Owns `ADDER_MAP_FILE`, the tool can silently ignore it, and the module
+      verifies against the tool's own log and discloses. Half (a) done by hand;
+      half (b) not -- rc 1 rather than rc 2, and rc 0 when it has no evidence.
+
+  iterative_recurrence_timing_diagnosis.py NOT AN INSTANCE.
+      Its docstring MENTIONS that a delay target the mapper ignored produced a
+      byte-identical netlist -- as the justification for a remedy it recommends.
+      It owns no such knob. It is a CONSUMER of the lesson.
+
+  analog_hardmacro_gds_emit.py             NOT AN INSTANCE.
+      The mention sits in a rationale comment weighing two remedies: declaring
+      `FOREIGN` "depends on a sign convention and OpenROAD's stream-out does not
+      honour FOREIGN uniformly". That is a reason NOT to pick that remedy. The
+      module accepts no FOREIGN knob.
+
+  analog_lef_gds_outline_check.py          NOT AN INSTANCE. Same rationale.
+
+SO: population 1, and that 1 already implements half the contract.
+
+WHAT THIS COSTS. I called F3b "the item most worth someone's time" and "a real
+class with instances and zero absorbed". Neither holds. It is a rule with ONE
+instance, and that instance is the one that already did half of it by hand. Its
+motivating case -- the pad rotation -- was already withdrawn as not a member,
+for a different reason. A rule whose only instance already implements it is not
+a gap; it is a description of something that works.
+
+WHAT IS LEFT, AND IT IS A DIFFERENT AND WEAKER CLAIM. All four modules DO share
+something: each encodes a fact about a tool not honouring something, in PROSE, in
+whichever module happened to discover it, and nothing shares those facts between
+them. That is a real pattern about where tool-behaviour knowledge lives. It is
+NOT the degradation contract, it has no exit-code tier and no report key, and it
+should not be argued as if it were the same rule -- which is exactly what my
+earlier population count did by counting consumers as instances.
+
+HOW IT SURVIVED. The grep matched a phrase. Reading the four modules at the
+level of the rule's own definition took ten minutes and refuted the count.

@@ -1,0 +1,27 @@
+programs scanned                                        : 1232
+an input a NAMED TOOL does not honour                   : 12
+
+  adder_map_techmap.py
+      no-op was reported as an adopted knob. A knob that silently does nothing is
+  analog_hardmacro_gds_emit.py
+      #     sign convention and OpenROAD's stream-out does not honour FOREIGN
+  analog_lef_gds_outline_check.py
+      sign convention and OpenROAD's stream-out does not honour FOREIGN
+  analog_pdk_deck_context.py
+      "farm at the same time, or the farm is inert; (d) re-state the "
+  analog_real_corner_sweep.py
+      Comment-only: ngspice ignores it, so a deck's electrical content is
+  hspice_lib_ngspice_normalize.py
+      NO-OP: the ORIGINAL path is returned unchanged.
+  iterative_recurrence_timing_diagnosis.py
+      back down). Measured: a delay target the mapper silently ignored produced a
+  lec_run.py
+      # PRE-flatten placement is load-bearing (0/8 vs 136/0). No-op when the
+  phase3_one_shot_runner.py
+      An SDC comment is inert to OpenSTA / create_clock collection. chip-AGNOSTIC."""
+  port_convention_corpus.py
+      # that ALREADY declares the param is UNAFFECTED (no-op). chip-AGNOSTIC: the
+  rtl_hygiene_lint.py
+      the tool, not by a caller/prompt that can forget or be told to ignore it.
+  shape_b_sample_export.py
+      #      fail-safe NO-OP (ship the verbatim leaf, no worse than pre-fold).

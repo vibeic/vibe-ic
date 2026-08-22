@@ -201,6 +201,15 @@ _DECL_RE = re.compile(
 # WHOLE right-hand side, not just a leading string literal — see
 # `declared_intent` for why a value-only match reads a conditional expression
 # as an unconditional declaration.
+#: How far into a gate's source the ENFORCEMENT declaration is looked for.
+#: NAMED because it is a rule two places have to agree on, and a number that
+#: exists in two places is a number that will disagree. A declaration past this
+#: point is PRESENT AND UNREAD -- correctly spelt, opening its own line, and
+#: reported as UNDECLARED -- so the tests that guard a gate's declaration
+#: import this rather than re-typing it. Measured 2026-08-22: two paragraphs of
+#: prose added above a declaration moved it to byte 4371 and silently undid it.
+DECL_WINDOW_BYTES = 4000
+
 _VERDICT_MODE_RE = re.compile(r'"verdict_mode":\s*([^,\n}]+)')
 _LONE_MODE_RE = re.compile(r'^"(BLOCKS|ADVISES)"$')
 
@@ -1526,7 +1535,7 @@ def declared_intent(programs: Path, gate: str) -> Optional[str]:
     if not p.is_file():
         return None
     text = p.read_text(errors="replace")
-    m = _DECL_RE.search(text[:4000])
+    m = _DECL_RE.search(text[:DECL_WINDOW_BYTES])
     if m:
         return m.group(1).lower()
     # SECOND DECLARATION CHANNEL, measured 2026-07-26. Some gates state their

@@ -71,7 +71,7 @@ chip, PDK, vendor, foundry or part number appears here or ever should.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 #: Words that DENY. Split into two tiers because they are not interchangeable:
 #: a bare "no"/"not" negates the clause it sits in, while "removed"/"superseded"
@@ -212,3 +212,106 @@ def sentence_scope(text: str, start: int, end: int,
         if j != -1:
             hi = min(hi, lo0 + j)
     return lo, hi
+
+
+# ── CONSTITUTIVE denials: where the denial IS the value ──────────────────────
+#
+# Everything above treats a denial as a NEGATION of the value beside it, and
+# for `pdk_target` and `die_area_budget_um` that is right. It is not always
+# right, and applying it uniformly is the same disease pointing the other way.
+#
+# A specification saying a quantity "is not stated" is GRANTING FREEDOM, not
+# withholding a number. An extractor whose subject IS that freedom must read
+# the sentence as a POSITIVE. MEASURED: adding the blanket denial check to a
+# line classifier broke FOUR previously passing tests, because the fixture
+# sentence granting freedom spells that freedom with a denial. The change was
+# reverted and the finding left open rather than closed with a repair that
+# inverts the sentences the function exists to read.
+#
+# So the table is keyed by THE CONCEPT THE CALLING EXTRACTOR EXTRACTS, not by
+# the idiom alone. The same words mean opposite things to two extractors:
+#
+#     "the clock period is not specified"
+#         to an extractor of clock_period_ns      -> DENIAL. No value.
+#         to an extractor of unconstrained_paths  -> CONSTITUTIVE. The value.
+#
+# A caller that cannot say which concept it extracts cannot use this table, and
+# that is the correct outcome: the ambiguity is real and a guess would be a
+# confident wrong answer.
+
+#: concept -> the idioms in which a denial CONSTITUTES that concept's value.
+CONSTITUTIVE_IDIOMS: Dict[str, Tuple[str, ...]] = {
+    # The specification declines to bound something, and that declining is the
+    # fact being extracted.
+    "freedom": (
+        r"\bnot\s+(?:specified|stated|given|constrained|bounded|fixed)\b",
+        r"\bno\s+(?:constraint|requirement|bound|limit|minimum|maximum)\b",
+        r"\bunconstrained\b", r"\bunspecified\b", r"\bunbounded\b",
+        r"\bany\s+value\b", r"\bdon'?t\s+care\b", r"\bfree\s+to\s+choose\b",
+        r"未(?:指定|規定)", r"不限",
+    ),
+    # The thing is permitted to be absent, and the permission is the fact.
+    "optionality": (
+        r"\bnot\s+required\b", r"\bnot\s+mandatory\b", r"\boptional\b",
+        r"\bneed\s+not\b", r"\bmay\s+be\s+omitted\b",
+        r"\bat\s+the\s+implementer'?s?\s+discretion\b",
+        r"非(?:必要|必須)", r"可省略",
+    ),
+    # The extracted concept IS an absence: "this design has no reset" is a
+    # complete positive statement about the reset architecture.
+    "absence": (
+        r"\bno\b", r"\bnone\b", r"\bnot\s+present\b", r"\babsent\b",
+        r"\bomitted\b", r"\bdoes\s+not\s+(?:exist|apply)\b",
+        r"\bn/a\b", r"無", r"没有", r"沒有",
+    ),
+    # The extracted concept IS the exclusion: "excluding the seal ring" names
+    # the members of the exclusion set.
+    "exclusion": (
+        r"\bexcluding\b", r"\bexcept\b", r"\bother\s+than\b",
+        r"\bnot\s+including\b", r"\bapart\s+from\b", r"除外", r"不含",
+    ),
+}
+
+_CONSTITUTIVE_RE: Dict[str, "re.Pattern[str]"] = {
+    concept: re.compile("(?:" + "|".join(idioms) + ")", re.IGNORECASE)
+    for concept, idioms in CONSTITUTIVE_IDIOMS.items()
+}
+
+
+def concept_is_constitutive(concept: str) -> bool:
+    """True when a denial can CONSTITUTE the value this concept names.
+
+    A blanket denial check must not be applied to such an extractor: it would
+    convert a false negative into a false positive and read as a fix."""
+    return concept in CONSTITUTIVE_IDIOMS
+
+
+def constitutive_idiom(concept: str, span: str,
+                       *, ignore_bracketed: bool = True) -> Optional[str]:
+    """The constitutive idiom `span` carries for `concept`, or None.
+
+    Returns the matched TEXT and not a bool, for the same reason `is_denied`
+    does: a classification that names its evidence is checkable."""
+    pat = _CONSTITUTIVE_RE.get(concept)
+    if pat is None:
+        return None
+    hay = blank_bracketed(span) if ignore_bracketed else (span or "")
+    m = pat.search(hay)
+    return m.group(0) if m else None
+
+
+def classify_denial(concept: str, span: str,
+                    *, ignore_bracketed: bool = True) -> Tuple[str, Optional[str]]:
+    """("constitutive"|"negating"|"none", the word that decided it).
+
+    THE ORDER IS THE POINT. Constitutive is tested FIRST, because every
+    constitutive idiom also matches `NEGATION_RE` — that is what makes the
+    blanket check wrong here. Testing negation first would classify every one
+    of them as a negation and the table would change nothing."""
+    hit = constitutive_idiom(concept, span, ignore_bracketed=ignore_bracketed)
+    if hit is not None:
+        return "constitutive", hit
+    word = is_denied(span, ignore_bracketed=ignore_bracketed)
+    if word is not None:
+        return "negating", word
+    return "none", None
