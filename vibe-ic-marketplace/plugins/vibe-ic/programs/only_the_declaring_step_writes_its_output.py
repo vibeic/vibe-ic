@@ -179,9 +179,10 @@ def _shell_writers(text: str, by_basename: Dict[str, Set[str]]) -> Set[str]:
 
 
 def writers_of(programs: Path, by_basename: Dict[str, Set[str]]
-               ) -> Dict[str, Set[str]]:
-    """`{declared path: {file basenames that write it}}` — Python and shell."""
+               ) -> Tuple[Dict[str, Set[str]], int]:
+    """`({declared path: {writing file basenames}}, unparseable file count)`."""
     found: Dict[str, Set[str]] = collections.defaultdict(set)
+    unparsed = [0]
     for dirpath, dirnames, filenames in os.walk(programs, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in ("__pycache__", "tests")
                        and not os.path.islink(os.path.join(dirpath, d))]
@@ -204,6 +205,14 @@ def writers_of(programs: Path, by_basename: Dict[str, Set[str]]
                 tree = ast.parse(path.read_text(encoding="utf-8",
                                                 errors="replace"))
             except (OSError, SyntaxError, ValueError):
+        # A file this scan cannot parse is COUNTED, not dropped in
+        # silence. Measured today: 0 such files in this population — so
+        # the exposure is latent, not live. But a gate that skips input
+        # without saying how much has an undisclosed boundary, and this
+        # lane's whole finding is that the undisclosed boundary is the
+        # one that bites. The count goes on the DENOMINATOR line, never
+        # the verdict line.
+                unparsed[0] += 1
                 continue
             for scope in ast.walk(tree):
                 if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef,
@@ -244,7 +253,7 @@ def writers_of(programs: Path, by_basename: Dict[str, Set[str]]
                     for bn in names:
                         for full in by_basename[bn]:
                             found[full].add(fn)
-    return dict(found)
+    return dict(found), unparsed[0]
 
 
 class Finding:
@@ -270,7 +279,7 @@ def audit(root: Path) -> Tuple[List[Finding], List[str], int, int]:
     by_basename: Dict[str, Set[str]] = collections.defaultdict(set)
     for p in declared:
         by_basename[p.rsplit("/", 1)[-1]].add(p)
-    writers = writers_of(root / PROGRAMS_REL, by_basename)
+    writers, unparsed = writers_of(root / PROGRAMS_REL, by_basename)
     findings: List[Finding] = []
     exempt: List[str] = []
     for path, mods in sorted(writers.items()):
@@ -280,7 +289,7 @@ def audit(root: Path) -> Tuple[List[Finding], List[str], int, int]:
             exempt.append(path)          # the flow itself declares two steps
             continue
         findings.append(Finding(path, declared[path], mods))
-    return findings, exempt, len(declared), len(writers)
+    return findings, exempt, len(declared), len(writers), unparsed
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -297,7 +306,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return 3
     try:
-        findings, exempt, declared, with_writer = audit(root)
+        findings, exempt, declared, with_writer, unparsed = audit(root)
     except Exception as exc:                        # noqa: BLE001
         print(f"[{NAME}] NOT CHECKED — the flow's declarations could not be "
               f"read, so no path was judged: {type(exc).__name__}: {exc}",
@@ -310,7 +319,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"two steps produce it and this rule does not overrule it.",
               file=sys.stderr)
     print(f"examined {declared} flow-declared output(s), {with_writer} with an "
-          f"identified writer, {len(exempt)} exempt")
+          f"identified writer, {len(exempt)} exempt, {unparsed} source file(s) "
+          f"skipped as unparseable")
     if declared == 0:
         print(f"[{NAME}] NOT CHECKED — the flow declares no outputs, so this "
               f"gate walked an empty set. That is not a pass.", file=sys.stderr)
