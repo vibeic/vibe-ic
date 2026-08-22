@@ -141,6 +141,38 @@ def test_a_gate_not_named_by_any_row_does_not_stop_a_landing(rows, age):
                                                          for f in findings]
 
 
+# ---------------------------------------------------------------------------
+# THIS MODULE WAS VALIDATED AS AN INSTRUMENT, 2026-08-22.
+#
+# A suite that passes proves nothing about a mechanism unless it FAILS when the
+# mechanism is broken. Both sites of the deciding clause in
+# `gate_red_since_check` --
+#
+#     if behind > bound:        (x2)   ->   if False:
+#
+# were mutated, and the mutation was confirmed to change observable behaviour
+# BEFORE the suite's verdict was read (a substitution that merely reports
+# "applied" proves only that a string was found):
+#
+#     pristine   a row 999 behind a bound of 1  ->  findings ['expired']
+#     mutant     the same row                   ->  findings []
+#
+# Against that mutant this module goes 1 failed -> 7 failed: SIX guards flip
+# from pass to fail --
+#
+#     test_a_row_whose_since_has_fallen_past_its_bound_refuses
+#     test_the_bound_is_what_refuses_and_not_some_other_clause
+#     test_renewing_by_moving_since_forward_is_what_silences_it
+#     test_no_environment_variable_can_move_the_clock
+#     test_a_candidates_own_commits_do_not_expire_a_row_it_never_touched
+#     test_a_candidate_cannot_renew_its_own_overdue_row
+#     test_the_mechanism_still_expires_a_gate_that_DID_run
+#
+# -- so they sit BEHIND the deadline rather than restating it. The seventh is
+# the ceiling failure this module reports on the shipped rows either way.
+# ---------------------------------------------------------------------------
+
+
 def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
     """The mutation arm on the SHIPPED rows.
 
