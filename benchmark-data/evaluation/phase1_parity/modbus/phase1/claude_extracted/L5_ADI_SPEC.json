@@ -1,5 +1,0 @@
-{
-  "ic_name": "Modbus Application Protocol V1.1b3 (Modbus.org)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Not applicable at the application-protocol level. MODBUS is OSI layer 7; all wire-level signaling (voltage levels, line drivers, differential pairs, optical interfaces, Ethernet PHY) is delegated to the chosen transport layer — EIA/TIA-232, EIA/TIA-422, EIA/TIA-485, fiber, radio, MODBUS PLUS, or TCP/IP-over-Ethernet. The MODBUS specification only constrains the byte sequence on the wire and the framing markers (3.5-char silence for RTU, ':' + CR LF for ASCII, MBAP Length for TCP)."
-}
