@@ -908,3 +908,40 @@ findings survive 244 commits, four of its five requests have been answered
 upstream, and the remaining 30 reduce to **four decisions and two environment
 facts** — of which one decision (the vacuity count) has its fix already written
 twelve lines from the defect.
+
+---
+
+# Part 18 — two corrections: the counts WERE measured, and the 30 is not main's number
+
+**FIRST, a correction in the unusual direction.** Part 17's commit said four counts
+were *"safe because their causes are settled, not because I re-checked them"* —
+**an admission of unverified reasoning, and it was false.** All four were measured
+against `a4caccefe` in Parts 1–2 and the run outputs still hold them:
+
+    vacuity   = issue901(3) + coverage_bridge(2)  =  5   MEASURED
+    magic     = digital_hardmacro_gen             =  1   MEASURED
+    flow-gate = organic900 + issue490 + issue306  =  0   MEASURED (closed)
+    landing-verdict                               =  9   MEASURED
+
+**Understating one's own evidence is still misreporting it.** This document has
+corrected overclaims five times; this is the first correction in the other
+direction, and it deserves the same treatment — **a claim about what was measured
+is checkable either way.**
+
+**SECOND, and more useful to a reader: the census total of 30 describes the FROZEN
+BRANCH'S TREE, not current main.** The two differ by exactly the frozen branch's
+own effect:
+
+    landing-verdict on current main            9
+      − 4  closed by the frozen branch (designs A and C)
+      + 1  the deliberate green→red (section B)
+      = 6  the census's figure
+
+**So `a4caccefe` carries 33 of these reds, and the frozen branch's tree carries
+30.** Every other group is identical on both trees; only landing-verdict moves,
+because it is the only file the frozen branch changes that also holds census reds.
+
+**Stated because "30 open" invites the reading "main has 30".** It does not.
+**A reader deciding whether to land the frozen branch should know the number
+already includes its effect** — the branch is not 30-reds-worth of remaining work,
+it is what remains *after* the branch has done what it does.
