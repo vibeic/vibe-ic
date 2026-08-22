@@ -1,0 +1,91 @@
+path	differ_at_tip	found_in_main_history	never_in_main	example_hit	example_miss
+/home/reyerchu/advA	5	0	5		vibe-ic-marketplace/plugins/vibe-ic/programs/checker_execution_wiring_audit.py
+/home/reyerchu/advC	8	2	6	.claude-plugin/marketplace.json@8111b161b	tools/ci/gatekeeper_status_poller.py
+/home/reyerchu/advD	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/adv_planted_untested_program.py
+/home/reyerchu/_advVD/wtB	2	0	2		vibe-ic-marketplace/plugins/vibe-ic/programs/_pytest_progress_plugin.py
+/home/reyerchu/_agentjob_1550/wt	3	0	3		tools/ci/repo_hygiene_gates.sh
+/home/reyerchu/_agentjob_i1015/wt2	147	0	147		README.md
+/home/reyerchu/_agentjob_i1028fix/wt-branch	29	0	29		README.md
+/home/reyerchu/_agentjob_i1028fix/wt-scratch	45	0	45		README.md
+/home/reyerchu/_agentjob_i1028fix/wt-work	49	0	49		README.md
+/home/reyerchu/_agentjob_i1424/reb	8	0	8		tools/ci/_gate_dispatch.sh
+/home/reyerchu/_agentjob_i1544/wt	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1916_the_tree_must_not_move_under_the_gates.py
+/home/reyerchu/_agentjob_j63b/drop	12	0	12		vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
+/home/reyerchu/_agentjob_j63b/wt	14	0	14		vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
+/home/reyerchu/_agentjob_jeco/wt	0	0	0		
+/home/reyerchu/_agentjob_jf63c/wt	6	0	6		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_coverage.py
+/home/reyerchu/_agentjob_jf63x8b/wt	11	0	11		vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
+/home/reyerchu/_agentjob_jf63x8e/trial	11	0	11		vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
+/home/reyerchu/_agentjob_jf63x8g/dr2	8	5	3	vibe-ic-marketplace/plugins/vibe-ic/programs/tapeout_docs_gen.py@8e35c6439	vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
+/home/reyerchu/_agentjob_jf63x8h/revert	9	0	9		vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
+/home/reyerchu/_agentjob_jfind63x8/wt	6	0	6		vibe-ic-marketplace/plugins/vibe-ic/programs/scratch_root_guard.py
+/home/reyerchu/_agentjob_jmut/wt	24	0	24		tools/ci/run_plugin_self_audit.sh
+/home/reyerchu/_agentjob_jreq/wt	3	2	1	vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md@33af4b9c6	RESULT.md
+/home/reyerchu/_agentjob_w7b/wt	5	0	5		docs/research/2026-08-19-deepseek-harness-source-study.md
+/home/reyerchu/_c_sha4_scratch/wt_dftcap	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/design_one_shot_runner.py
+/home/reyerchu/_d9_blind	9	0	9		vibe-ic-marketplace/plugins/vibe-ic/programs/eda_report_audit.py
+/home/reyerchu/_gk1347	4	0	4		vibe-ic-marketplace/plugins/vibe-ic/programs/checker_execution_wiring_audit.py
+/home/reyerchu/_gk_p855/ctl	3	0	3		vibe-ic-marketplace/plugins/vibe-ic/programs/sta_corner_record_completeness_check.py
+/home/reyerchu/_hygiene_shipped_path/wt2	5	2	3	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_d7_outputs_list_complete.py@018be73dc	vibe-ic-marketplace/plugins/vibe-ic/programs/flow_compliance_check.py
+/home/reyerchu/_jsearch2/wt	11	3	8	vibe-ic-marketplace/plugins/vibe-ic/programs/_ppa/search.py@a4a5e4357	vibe-ic-marketplace/plugins/vibe-ic/programs/INDEX.md
+/home/reyerchu/_pg_pair	3	3	0	tools/ci/repo_hygiene_gates.sh@211384efe	
+/home/reyerchu/prcheck/iso	4	0	4		tools/liar_census.py
+/home/reyerchu/prcheck/pr2	3	1	2	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_gate_discloses_denominator.py@6d93fd6a8	vibe-ic-marketplace/plugins/vibe-ic/programs/gate_discloses_denominator_check.py
+/home/reyerchu/prcheck/pr3	1	0	1		benchmark-data/ic/spm/v1.9.96_gf180mcuD/reports/write_ledger.json
+/home/reyerchu/_racecheck/wt	7	1	6	vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py@6dfe15a32	tools/ci/protected_landing_transition.json
+/home/reyerchu/_spmslot2	3	0	3		docs/research/2026-08-20-shuttle-slot-die-and-the-walls-behind-it.md
+/home/reyerchu/vibe-ic-w3-1745	4	0	4		vibe-ic-marketplace/plugins/vibe-ic/programs/harness_verdict_forgery_gate.py
+/home/reyerchu/vibe-ic-wt-caravel-final	0	0	0		
+/home/reyerchu/vibe-ic-wt-caravel-rerun	0	0	0		
+/home/reyerchu/vibe-ic-wt-caravel-tap	2	1	1	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_3_52_r6_sparse_die_welltie.py@e8beb35be	vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py
+/home/reyerchu/vibe-ic-wt-caravel_user_project-fix-lvs-poweraware	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/eda_report_audit.py
+/home/reyerchu/vibe-ic-wt-caravel_user_project-fix-sta-mcorner-drv	2	1	1	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_sta_multicorner_drv_query.py@29c598e28	vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py
+/home/reyerchu/vibe-ic-wt-drv-repeater	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py
+/home/reyerchu/vibe-ic-wt-falsecert86	7	2	5	vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml@198768083	HANDOFF_FALSECERT86.md
+/home/reyerchu/vibe-ic-wt-gate2-drv	2	1	1	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spef_corner_drv_group_path_count.py@7a0d0de77	vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py
+/home/reyerchu/vibe-ic-wt-gdssubstance	6	2	4	vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml@198768083	HANDOFF_TO_GATEKEEPER.md
+/home/reyerchu/vibe-ic-wt-ibex-l9scope	3	0	3		vibe-ic-marketplace/plugins/vibe-ic/programs/l9_rtl_pin_consistency_check.py
+/home/reyerchu/vibe-ic-wt-nvmpinpath	10	0	10		HANDOFF_TO_GATEKEEPER.md
+/home/reyerchu/vibe-ic-wt-progsupply	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/hardmacro_supply_intent.py
+/home/reyerchu/_vq/cl1441	4	0	4		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_shapec_emit_blocking_rules.py
+/home/reyerchu/_vq/v1393	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_tools_and_integration.py
+/home/reyerchu/_vq/v1395	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_tools_and_integration.py
+/home/reyerchu/_vq/v1396	4	0	4		tools/phase1_engine/tests/test_typical_scaffolds_retired.py
+/home/reyerchu/_vq/v1418	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/kmap_truth_table_oracle_check.py
+/home/reyerchu/_vq/v1428	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_prompt_example_selftest.py
+/home/reyerchu/_vq/v1430	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_shapec_emit_blocking_rules.py
+/home/reyerchu/_vq/v1440	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_1_26_sync_reset_next_state_redundant_gate.py
+/home/reyerchu/_vq/wd7	2	0	2		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/matrix_d7_artifact_graph.py
+/home/reyerchu/_w5b	21	0	21		tools/ci/repo_hygiene_gates.sh
+/home/reyerchu/_wt_1518	3	1	2	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_landing_merge_verdict.py@2faecffe8	tools/gatekeeper-verify-merge.sh
+/home/reyerchu/_wt_1527	3	0	3		tools/ci/repo_hygiene_gates.sh
+/home/reyerchu/_wt_1566	2	2	0	benchmark-data/ic/u_hawaii_adc/BENCHMARK_VERIFICATION_REPORT.md@f89c1dc62	
+/home/reyerchu/_wt_1621	9	8	1	.claude-plugin/marketplace.json@01b6845e5	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_d3_outputs_produced.py
+/home/reyerchu/_wt905	2	0	2		vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_evidence_structure_check.py
+/home/reyerchu/_wt905_927	13	1	12	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_scan_chain_insert_image_follows_the_anchor.py@018be73dc	.image-version-ignore
+/home/reyerchu/_wt_a1520	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_d3_outputs_produced.py
+/home/reyerchu/_wt_armA	1	0	1		tools/gatekeeper-verify-merge.sh
+/home/reyerchu/_wt_assembleB	59	35	24	benchmark-data/evidence_citation_baseline.json@018be73dc	.image-version-ignore
+/home/reyerchu/_wt_c2	59	37	22	benchmark-data/ic/INDEX.md@c72e82c4d	tools/ci/_gate_dispatch.sh
+/home/reyerchu/_wt_c3	56	33	23	benchmark-data/ic/INDEX.md@6d93fd6a8	tools/ci/_gate_dispatch.sh
+/home/reyerchu/_wt_ckwiring_fix	7	2	5	vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py@018be73dc	tools/ci/repo_hygiene_gates.sh
+/home/reyerchu/_wt_compose	16	14	2	.github/PULL_REQUEST_TEMPLATE.md@c72e82c4d	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_d3_outputs_produced.py
+/home/reyerchu/_wt_f1386	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_tool_gate_opens_when_the_tool_is_present.py
+/home/reyerchu/_wt_fix1431	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1431_gate_identity_is_not_a_tree_measurement.py
+/home/reyerchu/_wt_gband	3	0	3		vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py
+/home/reyerchu/_wt_hyghead	15	1	14	vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_scan_chain_insert_image_follows_the_anchor.py@018be73dc	.image-version-ignore
+/home/reyerchu/wt-i903	3	0	3		vibe-ic-marketplace/plugins/vibe-ic/programs/analog_a3_netlist_emit.py
+/home/reyerchu/wt-i903-905-914	331	0	331		benchmark-data/ic/INDEX.md
+/home/reyerchu/_wt_lmv	4	1	3	vibe-ic-marketplace/plugins/vibe-ic/programs/ci_harness_timeout_ceiling_check.py@c72e82c4d	tools/gatekeeper-verify-merge.sh
+/home/reyerchu/_wt_n2	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_tool_gate_opens_when_the_tool_is_present.py
+/home/reyerchu/_wt_pair	6	4	2	vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py@7455bffb5	tools/gatekeeper-land.sh
+/home/reyerchu/_wt_r4_digest	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/design_one_shot_runner.py
+/home/reyerchu/_wt_r5_author	2	0	2		vibe-ic-marketplace/plugins/vibe-ic/programs/design_one_shot_runner.py
+/home/reyerchu/_wt_r5_stasta	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py
+/home/reyerchu/_wt_spm_ihp_atpg	2	2	0	vibe-ic-marketplace/plugins/vibe-ic/programs/fault_atpg_run.py@a586886c8	
+/home/reyerchu/_wt_spmpass	9	0	9		vibe-ic-marketplace/plugins/vibe-ic/programs/metal_fill/metal_fill.py
+/home/reyerchu/_wt_union	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1916_the_tree_must_not_move_under_the_gates.py
+/home/reyerchu/_wt_v1610	9	9	0	.claude-plugin/marketplace.json@01b6845e5	
+/home/reyerchu/_wt_v1618	1	0	1		vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_tool_gate_opens_when_the_tool_is_present.py
+/home/reyerchu/_wt_x	2	2	0	tools/liar_census.py@6d93fd6a8	
+/tmp/claude-1000/-home-reyerchu-vibe-ic/cae97484-8cd7-4a28-80f8-0c7e0f17cfec/scratchpad/wt-gdrc	3	0	3		docs/research/seal-ring-drc-origin.md
