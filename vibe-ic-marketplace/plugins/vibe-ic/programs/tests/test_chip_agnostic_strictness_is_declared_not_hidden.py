@@ -381,12 +381,21 @@ def test_the_control_the_disclosure_never_changes_the_verdict(tmp_path):
     v1, f1 = mod.audit(clean)
     assert v1 == "PASS" and not f1, (v1, f1)
     # The token is taken from the gate's OWN list rather than guessed. The
-    # first guess here was a commercial foundry name, and the control failed
-    # green: MEASURED, `audit()` returns PASS on that name — the repo-wide
-    # panel carries 8 chip/SKU tokens and no vendor name at all. That is not a
-    # defect in this gate (a separate NDA panel owns foundry names) but it IS
-    # why the disclosure matters: for these five programs the program-local ban
-    # is the only thing standing between the tree and a vendor literal.
+    # first guess here was a commercial foundry name and the control failed
+    # GREEN, which sent me to measure what actually bans what:
+    #
+    #   source_chip_agnostic_check._FORBIDDEN_TOKENS   8 tokens, no vendor name
+    #   source_chip_agnostic_check._NDA_TOKENS         8 tokens, no vendor name
+    #   nda_diff_scan_check --diff-file <adds a vendor name>          rc 0, PASS
+    #
+    # So NO repo-wide guard bans a public foundry name, and that is CORRECT
+    # rather than a hole: those 8 tokens are confidential chip / customer
+    # identifiers, and naming a public company is not a leak. Keeping a vendor
+    # name out of a GATE'S LOGIC is a different concern with a different owner —
+    # and its owner is exactly the five program-local bans this file makes
+    # discoverable. For those five programs the local ban is the ONLY thing
+    # standing between the tree and a vendor literal, which is why a PASS from
+    # the repo-wide gate must stop reading as their verdict.
     tok = sorted(mod._FORBIDDEN_TOKENS)[0]
     dirty = _tree(tmp_path / "d", {
         "d.py": '"""x\n\nCHIP_AGNOSTIC: strict — whole file.\n"""\n'
