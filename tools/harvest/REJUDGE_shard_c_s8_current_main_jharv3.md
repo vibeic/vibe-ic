@@ -84,11 +84,39 @@ Main took that work in this window — `f26a5ccd9 Merge remote-tracking branch
 `.github/PULL_REQUEST_TEMPLATE.md` at sha256 `860199c9d2cd6e17`, is now content main
 has held at that path.
 
-**The verdict is NOT flipped on this evidence alone.** This row's own history records
-its HEAD moving three times (`ba95320314e` -> `a65d80b34ec` -> `4c77f7f0ae4` ->
-`4b1285a1865e`), and a tree measurement decides only what the *judged* head held. The
-directory on disk is the thing a deletion would destroy. Re-probing `.121` is the
-remaining input and is tracked below.
+It was not flipped on that evidence alone — this row's HEAD has moved four times now,
+and a tree measurement decides only what the *judged* head held, while the directory on
+disk is what a deletion destroys. So `.121` was re-read, read-only through the `.102`
+hop:
+
+* HEAD has moved **again**, `4b1285a1865e` -> **`c190bf024bc21567aeeea2d3ed7fbc0d3cc5c716`**
+* its **tree is unchanged** at `f8b97313740e04d9adac9776194cd5f3cd609cc5`, so the
+  snapshot this row is about is the one session 5 measured — the commit was rebased,
+  the content was not touched
+* that tree's **6504 files are 6504 pairs main's history holds**; 0 it never held
+* **6510 files on disk against 6504 tracked**: the 6 extra are 5 `.pytest_cache/`
+  entries (main's own `.gitignore:7`) and the `.git` worktree-pointer file
+* `git status --porcelain -uall` reports **0** entries; 0 symlinks; 0 tracked paths
+  missing from disk
+
+**Verdict flipped RECOVER -> LANDED.** The 13 files that landed are named in the row,
+each attributed to the main commit that took it. One of those commits is
+`4b1285a1865e` — the head session 5 found on this disk is now a commit on main.
+
+The independent gate agrees: `bin_jharv3/contract_check.py` reports, against the
+pre-flip file, `line 80 (/home/reyerchu/AI_IC_design/wt_jwire2):
+.github/PULL_REQUEST_TEMPLATE.md is IDENTICAL to main — RECOVER unsupported`. It found
+the same defect from the row's own citation, without the history map.
+
+### A trap this run hit: path-limited `git log` prunes history the full walk shows
+
+12 of the 13 landed blobs attributed immediately. The thirteenth,
+`benchmark/CAPTURE_ROUTING.json` blob `44575d4a2a1a`, is **in** the history map yet
+`git log -m --raw ae78abb285 -- <path>` shows it nowhere. The blob entered main through
+`f26a5ccd9`, a **merge**, and path-limited `git log` without `--full-history` prunes
+exactly that. The map is built with no pathspec at all, which is why it has the pair.
+A sweep that attributed landings with a path-limited log would report this file as
+never landed. It is the same family as the four failure modes in the script header.
 
 ### Three RECOVER rows whose committed content was already landed before this run
 
@@ -100,9 +128,60 @@ are correctly RECOVER and the deliverable already says why, in each row's own ev
   as `harvest/rescue-108-v1123-staged`.
 * `_a1456` — value is **one uncommitted edit**, on no commit; preserved as
   `harvest/rescue-112-a1456-staged`.
-* `_ld/wt` — committed content qualifies as LANDED and was **deliberately not flipped**:
-  14 gitignored entries under `benchmark-data/ic/*/clean_run_*/` were never examined,
-  and a verdict that authorises deleting unexamined bytes is a manufactured pass. That
-  named missing input is what session 8 goes after next.
+* `_ld/wt` — committed content qualified as LANDED but was **deliberately not flipped**
+  by session 5: gitignored entries under `benchmark-data/ic/*/clean_run_*/` had never
+  been examined, and a verdict that authorises deleting unexamined bytes is a
+  manufactured pass. **Session 8 supplied that named missing input — see below.**
 
-Nothing was deleted. Nothing was written on any other host.
+## Closing the named missing input on `/home/reyerchu/_ld/wt` (host .121)
+
+The hold was specific, so the answer had to be specific: read the bytes.
+
+Measured on `.121` today, read-only: **22061 files on disk, 21786 tracked**, so **405
+files exist that no commit holds**. 391 are `__pycache__/` and `.pytest_cache/` (main's
+own `.gitignore`, lines 2 and 7), one is the `.git` worktree-pointer file, and **13 are
+content**. All 13 were copied off the host and read; each one's `sha256` read back
+byte-identical to the `sha256` measured on the host, so the examination is of the bytes
+that are actually there.
+
+| file (×2 run dirs unless noted) | what it is |
+|---|---|
+| `lessons.md` | git blob `b94a8a1847…`, which main's history holds at **8 committed paths** — byte-identical, not similar |
+| `ic_expert_db.md` | five design-class lessons, **verbatim** in committed `agents/ic_expert_db/ic_expert_db.json` (checked with `git grep -F` on three distinct sentences; each hits that file and only that file) |
+| `ic_expert_agent_handoff.json` | the prompt pack committed `programs/phase1_expert_parse_track.py` assembles from that DB |
+| `expert_parse_track.json` | the two runs differ in **4 hunks, every one an embedded absolute run-directory path**; verdict `VACUOUS_PASS`, 0 examined expectations |
+| `phase1_planned_consumer_starved_check.json` | the two runs differ in **1 hunk**, the `"project"` path string |
+| `cross_layer_reference_check.json` | byte-identical across both runs; `VACUOUS_PASS`, `elements_examined` 0, `findings` `[]` |
+| `docs/reports/wave76_skill_md_audit.json` (1 copy) | `skills_with_hits` `[]`, all four totals 0, `files_modified` `[]`, `allowlisted` `[]` |
+
+Not one of the 13 holds a finding, a measurement, or authored prose that is not either
+byte-identical to committed content, verbatim-derived from committed content by a
+committed program, or empty.
+
+**A count I got wrong mid-run, corrected before it was published.** `find` reports 646
+files under those `clean_run_*` directories, and for a while I read that as 646
+unexamined files against the 13 `git status` listed — a 50× undercount by the earlier
+session. It is not. **712 files under those paths are tracked**: git's ignore rules do
+not apply to files already in the index, so almost all of that content is in the tree
+and was already covered by the content sweep. Only 12 of them sit outside the index.
+The gap between `git status --ignored` (404 entries), `--ignored=matching` (17) and
+`find` (646) is that arithmetic, not missing evidence.
+
+The committed side, re-judged against **current** main rather than the stale one: HEAD
+unmoved at `31fb2c1efe49`, 21782 files, **0** pairs main never held under either main.
+Clean on disk — `git status --porcelain -uall` reports 0 entries, and the 130 index
+entries that are not regular files resolve to **126 symlinks and 4 gitlinks, 0 truly
+missing**.
+
+**Verdict flipped RECOVER -> LANDED.**
+
+## Shard C after session 8
+
+**110 rows — 73 RECOVER, 36 LANDED, 1 ABANDON.** Two rows moved, both RECOVER -> LANDED,
+both in the direction main's advance created. `bin_jharv3/contract_check.py` reports
+`CONTRACT OK` on the amended file, with `landed_since_judging: 0` and the one
+outstanding contract problem resolved.
+
+Nothing was deleted. Nothing was written on any other host — every probe was piped in on
+stdin and every temporary file it made was under `/tmp` on the far host and removed by
+the script itself.
