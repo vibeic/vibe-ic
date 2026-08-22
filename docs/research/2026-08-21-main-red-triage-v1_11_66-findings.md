@@ -3876,6 +3876,38 @@ thing about it**, which is the same defect as "the six blocking FAILs" turning
 out to be three distinct defects.
 
 
+## M73 — the 12 IMAGE-ONLY reds: what is established, what is not, and why I stopped
+
+Applying M72's decomposition test to the largest remaining count. **It does not
+decompose further, and the honest report is a boundary rather than a finding.**
+
+**Established (measured three times, identical ID set):**
+
+* All **12** are IMAGE-ONLY — red in the pinned image, green on the host.
+* All **12** return **`rc 2 = RC_CANNOT_MEASURE`** — 8 assert against `0`, 4
+  against `1`. That is the substantive property: the verifier reports *"I could
+  not decide"* rather than passing or refusing.
+* **`command -v docker` returns nothing** in the image, verified directly.
+
+**NOT established:** a per-test attribution of the docker error. I observed **10
+occurrences** of `No such file or directory: 'docker'` across the 12, and
+occurrences are not tests — one test can emit it twice. So "all twelve fail
+*because of* docker" is an inference from 10 occurrences and one direct
+capability check, not a per-test measurement.
+
+**I am stopping here deliberately, and the reason is not a blocker.** The
+substantive claim — all 12 return `CANNOT_MEASURE` in a lane with no Docker CLI —
+is established and is what every decision about this row turns on. **A per-test
+attribution would change nothing**: the row's disposition (a lane decision, with
+the third `--docker-bin` option and its security cost) is identical whether the
+count is 10 or 12.
+
+**That is a judgement about diminishing returns, stated as one.** It is
+categorically different from the seven false blockers above, which claimed work
+was *impossible*. This claims it is *not worth doing*, and says what would change
+if someone disagreed: run the 12 individually and read each traceback.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
