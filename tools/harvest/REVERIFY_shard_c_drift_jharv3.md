@@ -258,6 +258,26 @@ corrections, and every one of those rows now also carries a path that resolves �
 `recovery_resolves.py` checks and passes. The evidence is append-only, so the dead names stay
 visible as the audit trail of the repair rather than being edited out of the record.
 
+## 10. Closing check, and the reason it is not a formality
+
+Measuring shards A and B with the same method (`HANDOVER_shards_a_b_landed_by_history_jharv3.md`)
+turned up 38 rows there in the same condition — and two of them, `_jrows/rows` and
+`_agentjob_jeco/wt`, are landed **at the head they were judged at** while holding **15 and 29
+paths main has never held at the head on disk**. Their HEADs moved after judging. Flipping those
+on the judged head would have authorised deleting 44 files of live work.
+
+That is the argument for one last read, so the closing state of this file is measured rather than
+assumed. All **36 deletion-bound rows** — 34 LANDED and 2 ABANDON — re-read on their hosts after
+every change in this document:
+
+**36 of 36: HEAD exactly where it was judged, 0 untracked and 0 modified files under
+`--untracked-files=all`. 0 moved, 0 gone.**
+
+Raw: `raw_final_drift_deletionbound_s5_jharv3.tsv`.
+
+Every flip in §8 was made on the head that was on disk, and every one of them is still on that
+head now.
+
 ## What was not done
 
 Nothing was deleted, on any host. No working tree, index or HEAD was modified anywhere — the
