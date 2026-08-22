@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 45 records, and the twenty already-program claims of which nineteen hold
+# The PPA cluster, DISTILLED — 46 records, and the twenty already-program claims of which nineteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 45 records](#the-45-records)
+- [The 46 records](#the-46-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -92,7 +92,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 42 | deterministic rules — the default, and every one names its predicate |
+| **A** | 43 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -236,7 +236,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 45 records
+## The 46 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1041,8 +1041,8 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            42     (22 when the rule was written)
-    distinct target programs    23
+    Bucket-A records            43     (22 when the rule was written)
+    distinct target programs    24
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
@@ -1784,6 +1784,44 @@ sites, and **nothing connects them.**
 **(d)** yes — it keys on reducing a search to one result without a count, and
 names no lookup.
 
+### A-45 · an alternative proof admits nothing the proof it stands in for would refuse · `ppa.proof_group_equivalence`
+
+The feasibility lane admitted a second way to prove the timing axes and refused
+to call it a relaxation on trust:
+
+    wns = min(0, worst_slack)   =>   wns >= 0  <=>  worst_slack >= 0
+
+Same predicate, so it admits no candidate the original would refuse — argued in
+a comment that also states what the substitution may **not** do (rescue a view
+nobody analysed) and names the test that sweeps the range *"rather than trusting
+this comment"*. That is the model. It is also, measured across the layer, the
+**only** one:
+
+    axes declared                                        10
+      admitting more than one proof group                 6
+        whose groups MIX predicate kinds                  5
+      equivalence arguments anywhere in the layer         1   ← covers the one pair that does NOT mix
+
+The mixed pairs are a zero-count beside a non-negative-slack (twice), a
+verdict-membership beside a zero-count, and a zero-count beside a
+magnitude-under-limit (twice). A count is zero against a threshold **the tool
+chose**; a magnitude is under a limit **the contract states**. Those agree only
+when the thresholds do, and nobody has said they do.
+
+**The aggregation makes it reachable, and I read it rather than assuming it:**
+
+    VIOLATED in any group   ->  VIOLATED      a violation cannot be outvoted — safe
+    SATISFIED in any group  ->  SATISFIED     beats UNDETERMINED — this is the widening
+
+So the group that happens to carry data on a given run decides the verdict, on
+its own predicate, and the output does not record which group did it. An axis
+proven the strong way and the same axis proven the weak way are indistinguishable
+afterwards.
+
+**(o)** yes — five axes declare mixed-kind groups today with no stated equivalence.
+**(d)** yes — it keys on alternatives under one subject with differing predicates
+and no licence, and names no axis.
+
 
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
@@ -1888,8 +1926,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **16** steps. Without them **19 of the
-45 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **17** steps. Without them **20 of the
+46 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -2140,7 +2178,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          42     (26 when the rubric was applied)
+    Bucket-A records                          43     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -2221,9 +2259,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 45 records**:
+the patterns were unchecked by anything. Over **all 46 records**:
 
-    pairs compared                      990
+    pairs compared                      1035
     maximum similarity                 0.41
     pairs above 0.40                      0
 
@@ -2511,7 +2549,7 @@ instead of the text.
 **This is where the ladder ends.** Figures that are projections of repository
 data can be bound, and now are. What a binding proves can be tested, and was.
 Whether a name is honest can be read, and was, for the verifier's 54 checks. The
-same question about 45 records needs 45 readings, and the honest report is the
+same question about 46 records needs 46 readings, and the honest report is the
 three that were done rather than a number that would look derived.
 
 ## Three check NAMES promised more than their predicates deliver
@@ -3390,7 +3428,7 @@ names, is how they were.
 
 ## Summary
 
-**STATUS**: 45 records emitted and validated — 42 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 46 records emitted and validated — 43 Bucket A, 2 C, 1 T, zero B,
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -3418,7 +3456,7 @@ bucket. My 37 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 20 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43, A-44 |
+| **EXTRACT-NEW** | 21 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43, A-44, A-45 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -3578,6 +3616,7 @@ gap was non-empty every single time it was measured.
 | A-42 | 3 tracked-set generators | **2 unguarded** | guards the query FAILING but not the query answering about the previous commit |
 | A-43 | 3 tests reference the hook | **0 assert installation** | the tracked hook is present, the installed one is absent, and 9 pushes this batch went ungated |
 | A-44 | 14 reduce-to-one sites | **4 unsorted** | the same glob is sorted in one program and unsorted in another; a repaired instance let a nested snapshot certify the outer project |
+| A-45 | 6 multi-group axes | **5 mix kinds** | 1 equivalence argument exists and it covers the one pair that does not mix; a SATISFIED group beats an UNDETERMINED one |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |

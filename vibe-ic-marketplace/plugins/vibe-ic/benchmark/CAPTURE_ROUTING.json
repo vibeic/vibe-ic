@@ -303,6 +303,11 @@
       "description": "Resolving an artefact a caller expects to be unique, when the search returns several",
       "bucket_A_program": "programs/_ppa_corpus.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "ppa.proof_group_equivalence": {
+      "description": "Admitting an alternative way to establish an axis alongside the original",
+      "bucket_A_program": "programs/_ppa/feasibility.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
