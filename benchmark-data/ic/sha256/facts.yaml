@@ -1,6 +1,0 @@
-# Honest IC-class facts (human-asserted escapes for l_doc_structured_field_count).
-# This IC has NO opcode command protocol: its control is register-mapped / datapath,
-# not an opcode encoding (the L3 cmd_protocol layer is genuinely N/A). Register/
-# memory map, if any, lives in L4. Not a calibrated/analog-trimmed part.
-no_command_protocol: true
-no_calibration: true
