@@ -3763,7 +3763,24 @@ deal of it states more than any detector I wrote ever credited:
 |---|---|---|
 | ~~a scope key the producer cannot establish is omitted~~ | **closed** — reproduces exactly, by parse | needed an AST parse; a grep finds **zero** of five, see below |
 | ~~layer membership is declared not inferred from a filename prefix~~ | **closed** — carries a stated, re-runnable screen | the original 32 could **not** be recovered; a supplied screen replaces it, see below |
-| a verdict reachable by exhaustion must say whether it exhausted | *measured on the program and on two of its own runs* | which two runs, and what was compared across them |
+| ~~a verdict reachable by exhaustion must say whether it exhausted~~ | **closed** — the screen is the emitted field list; the two runs are now named by their published figures | — |
+
+**The third closed too, so all three named gaps are shut.** Its screen is the
+emitted vocabulary: list every field name the equivalence program writes — there
+are **23** — and look for one saying how far the inductive method got or whether
+a budget ended it. There are **0**. It *does* emit a depth for the other half of
+its method, the bounded-refutation depth, which is what makes the omission
+legible rather than merely absent: the author knew a depth was worth publishing
+and published the one belonging to the cheap pass.
+
+The two runs are now named by their published figures — a latency-offset arm
+that proved **201 of 202** points and stopped in **3.8 s** with one point
+neither proved nor refuted, and a non-redundant-accumulator arm that reached
+**36 of 37** after **1795 s** when its budget expired, at induction step 19 of
+an estimated 33. Same verdict, same result shape. **The first needs a different
+relation and more time would not help it; the second needs only more time** —
+and a consumer choosing between those responses has nothing in the emitted
+fields to choose on but elapsed seconds, which is a heuristic, not a statement.
 
 **A second closed, and it reproduces exactly — but only by parsing.** The
 module's eight-key scope constructor is called 5 times. Two pass a literal null
