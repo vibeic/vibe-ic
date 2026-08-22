@@ -1747,3 +1747,80 @@ pass on the merged tree.
 counters), 13 under `programs/tests/`, 4 under `docs/capture/`, and the two
 READMEs. **It does not touch `tools/` at all**, so the CI tooling and its own tests
 are outside its blast radius.
+
+## CORRECTION — one of the three findings I published is a false positive
+
+Going to determine what `STA_BASIS` value each of the three emitters *should*
+carry, so the adjudicator could rule on facts, produced a finding about my own
+gate instead. **`sta_mcorner_ocv_posteco.rpt` is stamped. My gate said it was not.**
+
+    EMITTER                            stamps?  one-hop callee that stamps
+    _measure_posteco_mcorner_ocv       False    ['_emit_mcorner_ocv_sta']   <-- FALSE POSITIVE
+    _emit_power_report                 False    NONE                        <-- real
+    _emit_si_crosstalk_report          False    NONE                        <-- real
+
+`_measure_posteco_mcorner_ocv(..., sta_out: Path, ...)` writes nothing with a
+stamp in its own body, so a scope-local reading calls its report unstamped. It
+hands that path to `_emit_mcorner_ocv_sta(..., rpt_out: Path, ...)`, whose
+generated session writes into that very file:
+
+    puts $_f "STA_BASIS: ...
+    puts $_f "STA_BASIS_LIBERTY: ...
+    puts $_f "STA_BASIS_NETLIST: ...
+    puts $_f "STA_BASIS_SPEF: ...
+
+The report carries the stamp. The stamp is one call away.
+
+**This is the same defect arm B was written to repair, one level down.** Arm A was
+keyed on `required_outputs` and could not see a report the flow never declared;
+arm B was keyed on the scope in front of it and could not see a stamp the scope
+delegates. Both times the gate read the wrong surface and reported confidently.
+
+**And the corroboration I noted was coincidence.** I wrote that arm B found three
+emitters while the capture states the remedy as "three added statements", flagging
+that I had not verified they were the same three. They were not. The real count is
+two. A matching number is not evidence, and I should not have printed it next to
+the capture's sentence without the check.
+
+### Fixed here: arm B follows one-hop delegation
+
+If a scope that writes a report calls a same-module function whose own body emits
+the stamp, the report is stamped. Pinned in both directions — a wrapper delegating
+to a stamping helper is green, a wrapper delegating to one that does not stamp is
+still red — and proven load-bearing: reverting the delegation fails the fixture
+test AND the real-history set pin.
+
+    arm B on this tree: 2 unstamped beside a stamped sibling
+      power.rpt          _emit_power_report        — real
+      si_crosstalk.rpt   _emit_si_crosstalk_report — real
+
+### DECISION FOR THE ADJUDICATOR
+
+**The frozen branch `c0e19ace9` ships this false positive**, and a test pinning the
+wrong set of three. It does not break the batch: the gate is UNWIRED, nothing
+consumes its output, and 61 of 61 wired gates are verdict-identical with it merged.
+What it does is publish an incorrect claim about the tree, and pin it.
+
+* **(A) Take the correction into this batch.** Cost: the frozen branch moves, which
+  is the thing the freeze exists to prevent, and `jone` re-measures.
+* **(B) Ship as frozen; the correction rides in `next/`.** Cost: for one batch, a
+  shipped gate reports a report as unstamped when it is stamped, and a test asserts
+  that. Nothing reads it.
+
+**I recommend (B)** and have implemented it that way — the gate is unwired, so the
+wrong claim reaches no decision, and the batch landing is worth more than the
+correction is urgent. Ruling welcome; (A) is one cherry-pick.
+
+### What the STA_BASIS values would be, which is what I set out to find
+
+* `power.rpt` — `_emit_power_report` builds its own session (`read_verilog`,
+  `link_design`, `read_spef`, `read_liberty` x2, `report_power` x11) over
+  `_pnr.v`/`_synth.v` and ALREADY TAKES `basis: str` ("pre_pnr"/"post_pnr").
+  Its stamp is mechanically derivable from an argument it already has. **No
+  silicon claim required.**
+* `si_crosstalk.rpt` — `_emit_si_crosstalk_report` builds no session; it calls
+  `_parse_spef_caps`, so it is parasitics-derived, and `_merge_si_timing_aware`
+  references `_synth.v` and stamps nothing. Its basis is inferable but NOT from an
+  argument it holds, so authoring it is a judgement rather than a transcription.
+
+So the earlier "the other two need their sessions read first" is now one, not two.

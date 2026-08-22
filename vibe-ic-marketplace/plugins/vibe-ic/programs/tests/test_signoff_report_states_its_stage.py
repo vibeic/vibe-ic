@@ -268,8 +268,13 @@ def test_absent_root_is_bad_invocation(tmp_path):
 #
 # This test pins the SET. It goes red if a new unstamped sibling appears AND if
 # one is fixed — at which point the fixer edits this test, which is the point.
+# WAS THREE. `sta_mcorner_ocv_posteco.rpt` was removed after it was checked
+# rather than assumed: `_measure_posteco_mcorner_ocv` stamps nothing itself, but
+# hands the report path to `_emit_mcorner_ocv_sta`, whose generated session writes
+# STA_BASIS / _LIBERTY / _NETLIST / _SPEF into that file. It was a FALSE POSITIVE
+# published by a scope-local reading, and the count coinciding with the capture's
+# "three added statements" was coincidence, not corroboration.
 _KNOWN_UNSTAMPED = {
-    "sta_mcorner_ocv_posteco.rpt",
     "power.rpt",
     "si_crosstalk.rpt",
 }
@@ -382,6 +387,47 @@ def test_arm_b_a_bare_read_is_not_a_copy(tmp_path):
             '    raw = log.read_text()\n'
             '    q = project / "sta" / "si_crosstalk.rpt"\n'
             '    q.write_text("slack " + raw.split()[0])\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 1, out
+    assert "si_crosstalk.rpt" in out, out
+
+
+def test_arm_b_follows_one_hop_delegation_to_a_stamper(tmp_path):
+    """A wrapper that hands its report to a stamping helper is NOT a finding.
+
+    This is the false positive that shipped: the wrapper stamps nothing in its own
+    body, so a scope-local reading calls the report unstamped when the stamp is
+    written one call away, into that very file.
+    """
+    body = ('def emit_a(project, body):\n'
+            '    p = project / "sta" / "post_route_timing.rpt"\n'
+            '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def _session(rpt_out, body):\n'
+            '    rpt_out.write_text("STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def wrapper(project, body):\n'
+            '    out = project / "sta" / "sta_mcorner_ocv_posteco.rpt"\n'
+            '    _session(out, body)\n'
+            '    out.write_bytes(b"")\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 0, out
+    assert "sta_mcorner_ocv_posteco.rpt" not in out.split("examined")[0], out
+
+
+def test_arm_b_still_reddens_a_wrapper_whose_callee_does_not_stamp(tmp_path):
+    """The other direction — delegation is not a blanket excuse."""
+    body = ('def emit_a(project, body):\n'
+            '    p = project / "sta" / "post_route_timing.rpt"\n'
+            '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def _plain(rpt_out, body):\n'
+            '    rpt_out.write_text(body)\n'
+            '\n'
+            'def wrapper(project, body):\n'
+            '    out = project / "sta" / "si_crosstalk.rpt"\n'
+            '    _plain(out, body)\n'
+            '    out.write_bytes(b"")\n')
     rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
     assert rc == 1, out
     assert "si_crosstalk.rpt" in out, out

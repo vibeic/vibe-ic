@@ -411,6 +411,36 @@ def _scope_reports(scope: ast.AST) -> Set[str]:
     return out
 
 
+def _stamping_callees(tree: ast.AST) -> Set[str]:
+    """Names of functions in THIS module whose own body emits the stamp."""
+    out: Set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and _emits_stamp(n):
+            out.add(n.name)
+    return out
+
+
+def _delegates_to_a_stamper(scope: ast.AST, stampers: Set[str]) -> bool:
+    """The scope hands its work to a same-module function that stamps.
+
+    MEASURED, AND IT COST A PUBLISHED FINDING. `_measure_posteco_mcorner_ocv`
+    writes `sta_mcorner_ocv_posteco.rpt` and stamps nothing itself, so a
+    scope-local reading calls it unstamped. It is not: it passes the report path
+    to `_emit_mcorner_ocv_sta`, whose generated session writes STA_BASIS,
+    STA_BASIS_LIBERTY, STA_BASIS_NETLIST and STA_BASIS_SPEF into that very file.
+    The report carries the stamp; the stamp is simply one call away.
+
+    A gate that reads only the scope in front of it reports the wrapper and misses
+    the truth one hop down — the same shape as keying arm A on `required_outputs`,
+    which is what this arm was added to repair.
+    """
+    for n in ast.walk(scope):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                and n.func.id in stampers:
+            return True
+    return False
+
+
 def sibling_stamp_gaps(root: Path) -> Tuple[List[Emitter], int, int]:
     """(findings, modules with a stamping convention, reports judged)."""
     findings: List[Emitter] = []
@@ -428,6 +458,7 @@ def sibling_stamp_gaps(root: Path) -> Tuple[List[Emitter], int, int]:
                     encoding="utf-8", errors="replace"))
             except (OSError, SyntaxError, ValueError):
                 continue
+            stampers = _stamping_callees(tree)
             emitted: List[Tuple[str, str, bool]] = []
             for scope in ast.walk(tree):
                 if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -435,7 +466,8 @@ def sibling_stamp_gaps(root: Path) -> Tuple[List[Emitter], int, int]:
                 reports = _scope_reports(scope)
                 if not reports:
                     continue
-                stamped = _emits_stamp(scope)
+                stamped = (_emits_stamp(scope)
+                           or _delegates_to_a_stamper(scope, stampers))
                 for base in sorted(reports):
                     emitted.append((base, scope.name, stamped))
             if not any(s for _, _, s in emitted):
