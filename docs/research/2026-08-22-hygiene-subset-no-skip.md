@@ -2061,3 +2061,59 @@ new is attributable to this branch anywhere in that union.
 went five sections without applying it. Naming the right denominator is not the
 same as computing it, which is the same gap in a different costume — §22 caught
 the first half of it, and only the enumeration habit from §33 caught the second.
+
+## 35. The other changed file's denominator, and the pattern that halved it
+
+§34 computed the importers of the CHECKER. It did not compute them for
+`gatekeeper_review.py` — the file whose CLI this branch actually changes. Doing
+that turned up two things.
+
+**The first scan was wrong, and the known-case check caught it before the list
+was trusted.** Screening for `import gatekeeper_review` and friends returned 10
+files, and `test_gatekeeper_review.py` — the most obviously relevant file in the
+repository — was **nomatch**. It reaches the module by
+
+```python
+_spec = importlib.util.spec_from_file_location("gatekeeper_review", _PROG)
+sys.modules["gatekeeper_review"] = gk
+```
+
+Widening for that form and for a literal `gatekeeper_review.py` path takes the
+set from **10 to 19**. The narrow pattern missed nine files, including the one
+named after the module. Per §33: a scan whose output contradicts something you
+already know is a broken instrument, and testing it against a known positive
+FIRST is what turned a wrong answer into a right one before it was acted on.
+
+**Of the 19, twelve had never been run.** Run in full:
+
+```
+1 failed, 205 passed, 3 skipped   (400s)
+FAILED test_orphan_scan_reads_the_landing_gate_runner.py
+       ::test_the_shipped_audit_no_longer_calls_the_coordinator_unreachable
+```
+
+That name is as close to this branch as a failure can get — a test about the
+LANDING GATE RUNNER, and this branch edits the landing gate runner. Attributed
+immediately against the batch base `546487a8a3`:
+
+```
+1 failed in 23.06s
+```
+
+**Pre-existing.** Not this branch's.
+
+**A bookkeeping error of mine, caught by reading the output.** The first
+`comm` reported 13 unrun files and listed
+`test_hygiene_handover_is_in_process_only.py` among them — this branch's OWN
+seam guard, run perhaps a dozen times tonight. The "already run" set had been
+built from the 17-file selection file and never included the tests I ran
+individually. One row I could personally falsify was enough to catch it; the
+corrected figure is 12. **A set difference is only as good as both sets, and the
+one you assemble by hand is the one that is wrong.**
+
+**Cumulative denominator, now stated once so it can be checked:** the *adds
+none* half of the headline has been measured over the 17-file token selection,
+the 4 relevant repo-root files (§33), the 5 checker-importers (§34), and these
+19 `gatekeeper_review` reachers — 12 of them run here for the first time.
+Everything red anywhere in that union is red on the batch base too. Nothing new
+is attributable to this branch.
