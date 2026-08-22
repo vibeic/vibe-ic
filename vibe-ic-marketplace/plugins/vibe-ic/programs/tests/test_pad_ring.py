@@ -1716,6 +1716,18 @@ def test_the_doctrine_this_probe_broke_is_cited_by_a_name_that_exists():
         f"pad_ring_gen cites {cited!r} and no such program exists — the "
         f"citation was not updated when the program moved or was renamed")
 
+    # `_pad_ring` points the next author at the test that re-derives the eight
+    # orientations from the placer. That pointer is the difference between a
+    # constant somebody must trust and one anybody can re-check, so it is not
+    # allowed to name a test that has been renamed away.
+    named = "test_the_shipped_orientations_are_what_the_placer_produces"
+    assert named in Path(PR.__file__).read_text(), (
+        "_pad_ring no longer points at the test that re-derives SIDE_ORIENT "
+        "and CORNER_ORIENT from the tool")
+    assert named in globals(), (
+        f"_pad_ring points at {named!r} and this module defines no such test "
+        f"— the pointer rotted when the test was renamed")
+
 
 # --------------------------------------------------------------------------- #
 # the eight orientations, asked of the PLACER rather than of ourselves
