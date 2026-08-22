@@ -180,14 +180,26 @@ def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
     bound raised to the ceiling. If a row refuses in both arms, something other
     than the deadline is failing it and the row's number is decorative.
     """
+    # EVERY arm collects, and the assertions come after the loop.
+    #
+    # An `assert` inside this loop stops at the FIRST offending row, so a
+    # failure can only ever say "a row" and never "how many" -- and the second
+    # offender is reachable only by deleting the first from the ledger and
+    # re-running. Found by another lane (next/bound-test-names-every-row) while
+    # I had fixed exactly ONE of the four arms here, the ceiling one below;
+    # this is the union of their three and mine. A check that under-reports by
+    # a factor of two is the same defect this test exists to catch, in the test
+    # itself.
     unboundable = []
+    never_expires = []
+    decorative = []
     for row in rows:
         red = _record({row["gate"]: "FAIL"})
         tight, _, _ = G.adjudicate(red, [dict(row, max_commits=1)], age)
         loose, _, _ = G.adjudicate(
             red, [dict(row, max_commits=G.MAX_BOUND_COMMITS)], age)
-        assert any(f.kind == "expired" for f in tight), (
-            f"{row['gate']!r} does not expire even at a bound of 1")
+        if not any(f.kind == "expired" for f in tight):
+            never_expires.append(row["gate"])
 
         behind = age(row["since"])
         if behind is not None and behind > G.MAX_BOUND_COMMITS:
@@ -204,15 +216,21 @@ def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
             # no legal `max_commits` covers it -- so it is collected and failed
             # BELOW, with the two numbers that make it actionable, rather than
             # reported as the generic "some other clause" defect it is not.
-            assert any(f.kind == "expired" for f in loose), (
-                f"{row['gate']!r} is {behind} behind, past the ceiling of "
-                f"{G.MAX_BOUND_COMMITS}, so it must expire even at the ceiling")
+            if not any(f.kind == "expired" for f in loose):
+                never_expires.append(
+                    f"{row['gate']} (past the ceiling, must still expire)")
             unboundable.append((row["gate"], behind))
             continue
 
-        assert not any(f.kind == "expired" for f in loose), (
-            f"{row['gate']!r} still expires at the ceiling while only "
-            f"{behind} behind -- its stated bound is not what is deciding this")
+        if any(f.kind == "expired" for f in loose):
+            decorative.append(f"{row['gate']} ({behind} behind)")
+
+    assert not never_expires, (
+        f"{len(never_expires)} row(s) do not expire when they must: "
+        + ", ".join(never_expires))
+    assert not decorative, (
+        f"{len(decorative)} row(s) still expire at the ceiling, so their "
+        "stated bound is not what is deciding them: " + ", ".join(decorative))
 
     assert not unboundable, (
         "these acknowledged row(s) have aged past the "
