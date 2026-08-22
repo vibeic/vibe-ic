@@ -1715,3 +1715,35 @@ programs called mis-named when the routing that matters already worked, and now 
 timeout read as a regression. **A finding without its control is a guess with a
 number attached**, and the number is what makes it persuasive.
 
+
+### Extending the sweep to the gates that take an argument: 61 of 61
+
+The 52 above are the gates invoked as a bare `$PG/<program>.py`. Nine more are
+invoked with `$ROOT`, `$PLUGIN` or `$PJSON`, and a sweep that silently omits them
+is the kind of partial coverage this lane keeps writing about. Run with the
+argument the dispatcher actually passes:
+
+    bundled_attribution_notice_check    $ROOT     main=0  merged=0
+    ci_harness_timeout_ceiling_check    $ROOT     main=0  merged=0
+    container_exec_deadline_check       $PLUGIN   main=0  merged=0
+    gate_discloses_denominator_check    $ROOT     main=0  merged=0
+    gate_skip_routing_check             $PLUGIN   main=0  merged=0
+    plugin_version_prose_sync_check     $ROOT     main=0  merged=0
+    retired_pytest_plugin_request_check $ROOT     main=0  merged=0
+    shipped_path_portability_check      $PLUGIN   main=0  merged=0
+    source_chip_agnostic_check          $PLUGIN   main=0  merged=0
+
+**61 of 61 wired gates verdict-identical between bare main and the merged tree.**
+
+Two of those nine matter specifically to this brief rather than generally:
+`source_chip_agnostic_check` (the brief forbids a commercial foundry name, process
+node, SKU or codename anywhere in repo artefacts) and
+`shipped_path_portability_check` (one of the thirteen rules was repointed onto its
+sibling `emitted_script_portability_check` after the duplicate was found). Both
+pass on the merged tree.
+
+**Footprint, for whoever assembles.** The frozen branch touches 16 files under
+`programs/` (twelve new checkers, two repaired programs, two regenerated
+counters), 13 under `programs/tests/`, 4 under `docs/capture/`, and the two
+READMEs. **It does not touch `tools/` at all**, so the CI tooling and its own tests
+are outside its blast radius.
