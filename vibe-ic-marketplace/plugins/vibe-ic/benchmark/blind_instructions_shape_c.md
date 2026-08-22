@@ -137,7 +137,7 @@ it staged.
 
 5. Run the deterministic gate (emits the scoreable sample on hard-PASS):
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/benchmark-harness/gates_atomic.py \\
+   python3 ${CLAUDE_PLUGIN_ROOT}/benchmark/gates_atomic.py \\
        --prob <Prob> \\
        --workdir <RUNDIR>/work \\
        --dataset <DATASET> \\
@@ -170,7 +170,7 @@ it staged.
 ## After the batch — DO NOT run the scorer
 
 The host orchestrator scores via the canonical scorer at
-`${CLAUDE_PLUGIN_ROOT}/benchmark-harness/score_iverilog_tb.py` AFTER all batches
+`${CLAUDE_PLUGIN_ROOT}/benchmark/score_iverilog_tb.py` AFTER all batches
 finish. Generation must stay blind; only the scorer touches the hidden TB/ref.
 
 ## Final report (compact table)
