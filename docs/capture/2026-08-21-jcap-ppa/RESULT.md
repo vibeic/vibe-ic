@@ -83,6 +83,7 @@ Accepted with no refusal and no unrouted record.
 - [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
 - [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
 - [Two classes checked this pass and deliberately NOT recorded](#two-classes-checked-this-pass-and-deliberately-not-recorded)
+- [Six refusals, one principle: two absences compare EQUAL](#six-refusals-one-principle-two-absences-compare-equal)
 - [Summary](#summary)
 - [Next](#next)
 
@@ -3345,6 +3346,47 @@ and caught several times over. The class stays unrecorded until somebody
 measures it with a screen that can tell an external artefact from a locally
 built dictionary — which is the honest statement of what is missing, and is
 itself the harder half of the rule.
+
+## Six refusals, one principle: two absences compare EQUAL
+
+Three separate readings this pass landed on the same sentence written three
+different ways, so the family is worth stating once rather than three times.
+
+**The principle.** Wherever a verdict is reached by comparing two things, an
+absence must not be an admissible value — because *two absences compare equal*,
+and equality is read as agreement. A blank is not a wildcard; it is the one
+value that makes any two subjects look identical.
+
+| enforcement point | what it refuses | how I know |
+|---|---|---|
+| `PPA-C-007` | GROUPING two runs on an identity that is `NOT_MEASURED` | **driven** — four UNDETERMINED rows, each naming the identity it cannot support a claim about |
+| `VERDICT_SENTINEL` | COMPARING a verdict metric whose value is `""` | **driven** — *"two of them compare EQUAL, so two circuits nobody compared would read as agreeing"* |
+| `VERDICT_NOT_A_STRING` | the same field in the OTHER direction — a number wearing `unit: verdict` | **driven** — *"a verdict encoded as a number is a number downstream"* |
+| `SCOPE_UNDECLARED` | an arm carrying a number with no scope at all | **driven, by accident** — a malformed probe of mine tripped it |
+| `SCOPE_INCOMPLETE` | required scope keys absent, *"both arms declaring nothing would otherwise satisfy equality"* | cited |
+| `SCOPE_SENTINEL` | required scope keys present but `null` or `""` | cited — *"State the field or omit the key."* |
+
+**And the remedy is layered, which is the part worth copying.** One function
+carries four of these, each closing the degenerate case the previous one opens:
+
+    compare the scope dicts for EQUALITY      no blind spot by construction
+      ...but both arms could declare nothing  -> require a key list
+      ...but both could declare it null       -> refuse the sentinel
+      ...but one could carry no scope at all  -> refuse the undeclared
+
+Its docstring argues the first line better than I can: *a checker with three
+hand-written comparisons acquires a fourth blind spot the day somebody adds a
+fifth scope key, whereas requiring the dicts to be equal has none — a key that
+exists is compared, and a key that does not exist yet is compared the moment it
+does.*
+
+That is the same shape as **A-3**, one level up: assert the whole structure
+rather than enumerate the fields, and the guard covers what has not been
+invented yet. Three of the six are logged above as ALREADY-PROGRAM claims; the
+value of naming the family is that an implementer building any new comparison
+now has all four layers in one place instead of rediscovering them in the order
+they were originally discovered — which, judging by the three distinct code
+names, is how they were.
 
 ## Summary
 
