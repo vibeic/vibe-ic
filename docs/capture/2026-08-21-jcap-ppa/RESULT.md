@@ -369,6 +369,26 @@ the floor with declared-versus-discovered equality.
 **(o)** yes. **(d)** yes, and in the direction a floor can never see — an entry
 left behind for a member since deleted.
 
+*An in-tree exemplar of the correct form, found while chasing a sibling lane's
+un-actioned baseline note.* A shipped wiring gate ratchets on the **name set**,
+not the count:
+
+    gates: 624   unwired: 58 (baseline 59)   [PASS]
+    [NOTE] baseline shrank — now wired: <one program>. Re-run with --write-baseline.
+
+I read that as a defect first. A ceiling one larger than the measurement looks
+like slack a future regression could hide in — one new unwired program returns
+the count to 59 and nothing goes red. **It is not slack.** The comparison is
+`set(now) - set(base)`, so a newly unwired program is a *name* absent from the
+baseline and fails immediately whatever the count does; a second clause catches
+the count growing with no new name, which is the stale-baseline case the first
+cannot see.
+
+Both directions matter for whoever builds this record. A *count* ratchet really
+would have that hole, so this name-set-plus-count-backstop is the shape to copy
+rather than re-derive. And the un-actioned shrink is tidiness, not an open hole
+— nobody should write the baseline believing they are closing one.
+
 ### A-4 · layer membership is declared not inferred from a filename prefix · `benchmark.verify_claim_done`
 
 The prefix glob reaches 19 executables; the layer is 25. Run the layer's own
