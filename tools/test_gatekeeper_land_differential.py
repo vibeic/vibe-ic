@@ -222,6 +222,70 @@ def _write_stub_tree(root: Path) -> None:
     (root / "tools" / "stub_hygiene_record.py").write_text(_HYGIENE_RECORD)
 
 
+def _programs_invoked_by_the_differential() -> set:
+    """Every `programs/<name>.py` the differential names.
+
+    THE PREDICATE, stated rather than left implicit: a program counts as INVOKED
+    when the script names it as `programs/<name>.py` on a line that is not a
+    comment. That covers both spellings the script uses — the absolute
+    `"$REPO/$PLUGIN_REL/programs/x.py"` form and the `cd`-relative
+    `programs/x.py` form — and it counts the paths handed to the verdict's
+    `--gate-edited` seam, which must exist in the tree for the same reason.
+    """
+    invoked = set()
+    for line in DIFFERENTIAL.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        invoked.update(re.findall(r"programs/([A-Za-z0-9_]+\.py)", line))
+    return invoked
+
+
+def test_every_program_the_differential_invokes_is_provided_by_the_fixture():
+    """The binding that was missing, and whose absence cost 16 tests.
+
+    `d5646372f` wired three new gates into the differential and added none of
+    them to the stub tree above. This suite went 28 green -> 16 red and reported
+    it as `python3: can't open file ...` from inside a temp directory, naming
+    only the FIRST of the three — the other two latent behind it, so the repair
+    would have looked like it half-worked twice.
+
+    The stub tree was CORRECT before that commit: every invoked program present,
+    zero missing. That is the problem this test exists for. A list that must be
+    extended by hand, in lockstep with every new invocation in the script, with
+    nothing that fails when it is not, stays correct right up to the moment it
+    silently is not. This is the thing that fails.
+    """
+    holder = Path(tempfile.mkdtemp(prefix="gk_fixture_census."))
+    try:
+        root = holder / "repo"
+        root.mkdir()
+        _write_stub_tree(root)
+        provided = {q.name for q in (root / PLUGIN_REL / "programs").glob("*.py")}
+    finally:
+        shutil.rmtree(holder, ignore_errors=True)
+
+    invoked = _programs_invoked_by_the_differential()
+    # BOTH PREDICATES ARE PRINTED, not merely applied. Two honest censuses of
+    # this same fixture disagreed 6 vs 3 on 2026-08-22 and the disagreement was
+    # never in the data — it was that one counted only `shutil.copy` and the
+    # fixture also provides by `write_text`. A count whose predicate is printed
+    # can be reconciled against someone else's; one whose predicate is implicit
+    # gets reconciled by argument instead.
+    print("invoked  (:= named as programs/<x>.py on a non-comment line of "
+          f"{DIFFERENTIAL.name}): {len(invoked)}")
+    print("provided (:= any .py under the stub tree's programs/ after "
+          f"_write_stub_tree, copied or written): {len(provided)}")
+
+    missing = sorted(invoked - provided)
+    assert not missing, (
+        "gatekeeper-land-differential.sh invokes programs the synthetic fixture "
+        "does not provide, so every behavioural case in this file dies on "
+        "`can't open file` before it tests anything:\n  "
+        + "\n  ".join(missing)
+        + "\nProvide each in _write_stub_tree: copy it when a case needs its "
+          "real verdict, stub it when it does not."
+    )
+
 @pytest.fixture()
 def synthetic():
     """A repo with a base commit and one candidate commit on top of it.
