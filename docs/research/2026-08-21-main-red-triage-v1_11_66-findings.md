@@ -5730,6 +5730,63 @@ question was always "what does this code refuse".** Counting occurrences is not
 reading a contract.
 
 
+## M108 — ALREADY_RED is not NOT_FALSIFIABLE, and 16 of the 34 trace to one root
+
+Last cause swept. The ledger states a doctrine that looks like an action I could
+take, and reading it precisely shows it does not apply — which then collapses
+three more reds into an existing group.
+
+**THE DOCTRINE**, `matrix_mutation_ledger.py`:
+
+> **NOT-FALSIFIABLE IS A VERDICT, NOT AN ERROR.** A cell for which no mutation
+> could be constructed is recorded in `NOT_FALSIFIABLE` with the shapes that were
+> tried [...] **It is never a reason to weaken a predicate, widen a waiver, or
+> edit a fixture.**
+
+**IT DOES NOT COVER MY MEASUREMENT, AND THE DIFFERENCE MATTERS.** The declaration
+is exact: *"Cells no constructed mutation could redden."* What I measured was
+
+    --replay D3-UNDECLARED-ARTEFACT --step 0.5ic  ->  ALREADY_RED (baseline_rc=1)
+      "red before the edit, so this pair proves nothing either way"
+
+**A mutation EXISTS and is constructed. It cannot be MEASURED, because the cell is
+already red.** Filing that under NOT_FALSIFIABLE would assert "nothing can redden
+this" when the truth is "this is already red, so nothing can be shown to redden
+it" — **a claim about the gate, made from a fact about the fixture.** The module
+even separates a nearby case for the same reason: `CANNOT_REDDEN` for artefact
+content is *"something narrower and newer [...] counted separately for exactly
+that reason."*
+
+(The file is also PROTECTED, so the entry was never mine to add. **The category
+error is the more useful finding**, because it would have survived the permission
+check as a request.)
+
+**SO THE THREE LEDGER REDS ARE DOWNSTREAM OF D3.** `0.5ic` and `1.6x` carry no
+measured mutation *because their d3 cell is red at baseline*, and the d3 cell is
+red because the corpus does not carry those outputs. That is the same root as the
+eleven, reached one hop further along.
+
+**THE CENSUS CONSOLIDATES ONE LAST TIME:**
+
+    11  D3 cells                       ROOT
+     3  mutation ledger (0.5ic, 1.6x)  downstream of D3   <- new
+     2  63x8 nested-outcome pair       downstream of D3   (M99)
+    ---------------------------------------------------------
+    16 of 34 reds trace to ONE root: the corpus/record situation
+
+     6  the exact-set env contract (M107)
+     5  the vacuity conditional (M100)
+     3  the enforcement audit (M80/M95)
+     1  magic, environment (M60)
+     3  63x8 remainder (1 anti-skip gate, 1 in-file interaction, 1 shared)
+
+**Six causes became five roots covering 31, with 16 under one of them.** The
+document opened by grouping 22 reds in one file under one cause. **The finished
+grouping is 34 reds, 5 roots, and the largest root is nearly half the total —
+which is a different shape from the one I started reporting, and only measurement
+moved it.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
