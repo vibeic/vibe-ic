@@ -696,3 +696,58 @@ commit changed the finding's tone rather than its content** (the first was the
 flow-gate token, where the author answered an objection I had framed as a binary).
 **A red line and a considered decision look identical from the outside; the
 difference is one `git log -1` away, and the census took the shortcut both times.**
+
+---
+
+# Part 14 — the vacuity guard is not a wrong decision. It is an OLD one that a later change made half-unnecessary
+
+Part 13 named the shortcut: *a red line and a considered decision look identical
+from the outside, and the difference is one `git log` away.* **Applied to the
+5-red vacuity item, which the census has characterised three times without ever
+reading the guard's origin.**
+
+**MEASURED — the two halves are two months apart:**
+
+    and not vacuous_hints        2026-06-14   v1.0.38, #651
+                                              "PASS_WITH_WAIVERS distinct rc 3 + waivers.json"
+    partial_vacuity_disclosed    2026-08-11   #901
+                                              "count the clauses that RAN, so a structured
+                                               NOT_APPLICABLE reaches the step tier"
+
+**In June, one label had to carry one fact**, so the waiver branch was written to
+stand down when a vacuous hint was present. **That was correct: there was no way to
+say "waived, and partially vacuous".**
+
+**In August, #901 BUILT that way** — and its own comment says exactly why:
+
+> *"a partially vacuous step has no such word: some of its clauses examined the
+> design and some examined nothing. **Both facts are true and one label can carry
+> only one.** [...] named HERE [...] rather than being dropped for failing to be
+> unanimous."*
+
+**But #901's disclosure covers the STRUCTURED channel only** (`json_vacuous_hints`),
+**and the June guard was never revisited for the LEGACY one.** Step 4's emptiness
+arrives on the legacy channel, so it still falls under the June rule, in a codebase
+that has since built the August answer.
+
+**So the item's real shape, at last:**
+
+* not *"the fixture drifted"* (the census's first reading),
+* not *"one decision: should `:10057` decline the waiver branch"* (its second),
+* not *"switch `professional_tb_check` to the structured channel"* (its third,
+  Part 3 — that is a consequence, not the question),
+* **but: `#901` built the disclose-both machinery two months after the guard that
+  exists because it did not. Should the guard be revisited now that the machinery
+  exists?**
+
+**That is a question with an answer already half-written in the repository**, and
+it is the fourth time on this branch that reading the history turned an
+"open decision" into "someone already solved most of this, in a place I had not
+looked".
+
+**What I have NOT established:** whether the legacy channel can carry a structured
+disclosure at all, or whether #901 deliberately scoped itself to the JSON channel.
+**Its title — "so a structured NOT_APPLICABLE reaches the step tier" — suggests
+deliberate scope**, which would make the remaining gap intentional rather than
+overlooked. **I am not guessing which; the commit body would say, and the owner
+will know without reading it.**
