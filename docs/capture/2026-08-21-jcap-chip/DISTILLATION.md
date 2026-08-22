@@ -1649,3 +1649,31 @@ by `--write-baseline`, which is forbidden here and is exactly the instrument tha
 would paper over the twelve rather than register them. The honest repair belongs to
 that gate's owner, who can widen the population and re-record the baseline in one
 commit. Recorded here with the measurement so it is not rediscovered.
+
+### How far the suffix blind spot reaches: one gate, not the convention
+
+The wiring audit cannot see this lane's twelve because they carry no `*_check.py`
+suffix. The obvious next thought is that the twelve should be renamed. Before
+recommending that, I measured how much else is keyed on the same convention,
+because renaming twelve shipped programs to satisfy one register would be a large
+change made on an assumption.
+
+**`ci_targeted_test_select.py` is NOT suffix-keyed.** It is the selector that
+decides which tests CI runs for a diff, so if it mapped programs to tests by
+filename convention, every future edit to these twelve would silently skip their
+own tests — a far worse defect than an understated register.
+
+Measured, by committing a real edit and asking it:
+
+    one checker touched      -> its own test selected, 53 tests total
+    all twelve touched       -> own test selected 12/12, 64 tests total
+
+So the routing that matters for correctness works, and the suffix convention is
+load-bearing in exactly one place: `checker_execution_wiring_audit`'s population.
+
+**That bounds the repair.** The fix is to widen `_CHECKER_SUFFIXES` (or key that
+audit on shape rather than name) in the gate that owns it — NOT to rename twelve
+programs whose names come from the capture's own rule sentences and which every
+other mechanism already handles correctly. A rename would trade a one-commit fix
+in one register for churn across the whole lane, and would lose the property the
+brief asked for: that each program is named for the rule it enforces.
