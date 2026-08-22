@@ -17,7 +17,7 @@ def rule_explicit_argument_outranks_the_environment_pointer(sample_text, ports):
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
 
-def rule_test_aggregate_carries_its_runtime_identity(sample_text, ports):
+def rule_pytest_aggregate_carries_its_runtime_identity(sample_text, ports):
     """An aggregate of test results records the tree it measured but not the runtime it ran in, so a failure caused by a dependency the runtime cannot import is charged to the tree. Two aggregates produced by different runtimes are then differenced as if they were one measurement, and the difference is read as a change in the code."""
     # Expected signal: ERROR
     # Suggested fix action: Stamp the aggregate with the runtime's identity — the image reference actually executed, the interpreter version, and the set of plugins the selection requests that the runtime cannot import — and refuse to difference two aggregates whose runtime stamps differ, naming the difference instead of subtracting across it.

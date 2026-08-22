@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
-_TOOL = _PROGRAMS / "test_aggregate_carries_its_runtime_identity.py"
+_TOOL = _PROGRAMS / "pytest_aggregate_carries_its_runtime_identity.py"
 
 _spec = importlib.util.spec_from_file_location("tacri", _TOOL)
 tacri = importlib.util.module_from_spec(_spec)

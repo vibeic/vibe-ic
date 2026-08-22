@@ -50,7 +50,7 @@ present, every one in a gate written to catch that very class of defect:
 | `generated_values_state_whether_they_were_read_or_defaulted` | `# we deliberately ignore matched_key / source / line here` |
 | `provenance_value_is_resolved_not_constant` | the typed path held in a constant |
 | `measurement_only_artefact_is_not_a_verdict_source` | the disclaimer nested one level down |
-| `test_aggregate_carries_its_runtime_identity` | `{"image": "unknown", "interpreter": "n/a"}` |
+| `pytest_aggregate_carries_its_runtime_identity` | `{"image": "unknown", "interpreter": "n/a"}` |
 | `declared_basis_matches_the_session_inputs` | a corpus where NOT ONE pair declares a stage — a vacuous pass |
 | `only_the_declaring_step_writes_its_output` | a shell writer beside a Python one |
 | `every_required_metric_key_has_a_producer` | (opposite direction) declared a WORKING axis unprovable, because producers build metric names by format and no literal scan can see them |
@@ -140,3 +140,36 @@ population is rc=2 with zero finding lines. It is proven able to fail.
    the pointer replaces a MISSING corpus only; three consumers deliberately say
    the opposite. This lane enforces only the half both sides already do — the
    announcement — and pins that neutrality with a test.
+
+## Ruling F13 — four rules that shared a name with another lane
+
+An independent verifier found four programs existing under the SAME filename on
+this branch and on the matrix lane's, as independent rewrites (360-529 lines
+differing each), with different CLIs and — on two of them — OPPOSITE verdicts
+about the same tree. The split was a policy difference, not a bug in either lane:
+a WIDE population with an inventory of recorded waivers, versus a NARROW
+population with no inventory.
+
+The ruling, which is the owner's and is recorded here rather than argued:
+
+* **The four filenames are the GATES, and the gate is the refusing one.** An
+  instrument that cannot go red on a real defect is not a gate, and a gate that
+  is green because its own inventory absorbed the findings is the shape this
+  whole capture exists to remove. These four are unchanged.
+* **The other lane's work becomes a CENSUS** under its own names, keeping its
+  inventories, wired to nothing blocking. A census over 1273 modules is more
+  informative than a gate over 2; letting it stand in for the gate is what is
+  refused.
+* **`phase3_one_shot_runner`'s typed `Source:` path** — the repair stands. The
+  verifier reproduced it as a true positive by reverting it. A defect with a
+  reproduced red gets fixed, not inventoried.
+* **`reports/spare_cell_coverage.json` stays a LIVE FAIL**, and the other lane's
+  reason for not repairing it was upheld: "fixing the clobber alone would turn
+  the cell green while leaving the real gap invisible." That earns a LEDGER ROW,
+  not a waiver — which of the two writers is the declaring producer is a
+  flow-ownership decision, decided in the open, with the gate red until it is.
+  This is why `only_the_declaring_step_writes_its_output` exits 1 here BY DESIGN.
+* **The checker whose filename began with `test_` was renamed** to
+  `pytest_aggregate_carries_its_runtime_identity`. pytest collected it as a test
+  module, and — worse — several of its own sibling gates exclude `test_*` from
+  their populations, so the checker was invisible to the family it belongs to.

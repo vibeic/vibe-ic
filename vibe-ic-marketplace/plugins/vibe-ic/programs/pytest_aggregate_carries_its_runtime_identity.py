@@ -2,6 +2,16 @@
 """test_aggregate_carries_its_runtime_identity.py — a failure count names the
 runtime that produced it, or it may not be subtracted from another.
 
+WHY IT IS NOT CALLED `test_aggregate_...`
+=========================================
+The rule's subject is a TEST AGGREGATE, so that is what the record calls it. The
+FILE may not: a program under `programs/` whose name begins with `test_` is
+collected by pytest as a test module, and — measured — it was also skipped by
+this rule's own sibling gates, several of which exclude `test_*` from their
+populations. The checker was therefore invisible to the family it belongs to.
+`pytest_per_file_junit.py` is the existing precedent for naming a pytest-domain
+program without the collection prefix.
+
 WHY THIS EXISTS
 ===============
 MEASURED: a selection asked the test runtime to load a plugin that runtime does
@@ -55,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-NAME = "test_aggregate_carries_its_runtime_identity"
+NAME = "pytest_aggregate_carries_its_runtime_identity"
 REQUIRED = ("image", "interpreter", "unimportable_plugins")
 SKIP_DIRS = {".git", "docs/capture", "node_modules", "__pycache__"}
 

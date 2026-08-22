@@ -56,7 +56,7 @@ SCANNERS = {
     "prepared_checkout_states_the_revision_it_holds": "audit_source",
     "printed_remedy_runs_as_printed": "audit",
     "declared_basis_matches_the_session_inputs": "audit",
-    "test_aggregate_carries_its_runtime_identity": "_walk",
+    "pytest_aggregate_carries_its_runtime_identity": "_walk",
     "explicit_argument_outranks_the_environment_pointer": "audit",
     "provenance_value_is_resolved_not_constant": "audit",
     "only_the_declaring_step_writes_its_output": "audit",

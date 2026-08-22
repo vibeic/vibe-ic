@@ -123,7 +123,7 @@
     "step": "benchmark.verify_claim_done",
     "design": "n/a — a repository gate tier",
     "bucket": "A",
-    "rule_name": "test_aggregate_carries_its_runtime_identity",
+    "rule_name": "pytest_aggregate_carries_its_runtime_identity",
     "docstring": "An aggregate of test results records the tree it measured but not the runtime it ran in, so a failure caused by a dependency the runtime cannot import is charged to the tree. Two aggregates produced by different runtimes are then differenced as if they were one measurement, and the difference is read as a change in the code.",
     "pattern": "A selection asks the runtime to load a plugin the runtime does not carry, every test in those files dies at load rather than at assertion, and the resulting failures are counted against the revision under test because nothing in the record names the runtime that produced them.",
     "expected_signal": "ERROR",
@@ -132,7 +132,7 @@
     "measured_after": "Not fixed; the attribution exists only in that lane's write-up.",
     "fires_on_original": "Yes — the aggregate carried no runtime identity, which is what made the five arms necessary.",
     "fires_on_a_different_instance": "Yes — any dependency the runtime lacks, and any comparison of two arms run in different places.",
-    "notes": "ALREADY-PROGRAM for the flow's own container: a program records and can enforce which image a run actually executed, for exactly this reason. The test aggregate is the population it does not cover."
+    "notes": "ALREADY-PROGRAM for the flow's own container: a program records and can enforce which image a run actually executed, for exactly this reason. The test aggregate is the population it does not cover. RENAMED at distillation: the FILE may not begin with `test_` — pytest collects such a program as a test module, and it was also skipped by this rule's own sibling gates, which exclude `test_*` from their populations, so the checker was invisible to the family it belongs to. The rule's subject is still a test aggregate; only the filename changed."
   },
   {
     "step": "benchmark.verify_claim_done",
