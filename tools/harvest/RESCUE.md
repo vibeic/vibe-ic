@@ -663,3 +663,37 @@ the checker named the file and exited 1.
 **A negative control that does not actually break anything is indistinguishable from a checker
 that works.** That is the whole night in one sentence, arriving for the last time in my own test
 harness rather than in anyone's data.
+
+## .120 — the host nobody owned, and the denominator
+
+`.120` hosts shard A. jharv3 rescued the four working states behind its false LANDED rows but
+nobody had swept it for the systematic classes, and its agent is unreachable from either of our
+sessions. So the host was swept from here, read-only except for rescue refs.
+
+**The denominator first, because a zero without one is silence:** a `find` to depth 4 reports
+**17** clones. The filesystem holds **288**. Everything below is against 288.
+
+Progress at the time of writing — the sweep is detached and still running, and this is reported
+partial rather than rounded up:
+
+| | |
+|---|---|
+| clones swept | **242 of 288** |
+| ref findings | 18,299 |
+| **distinct commits** behind them | **171** |
+| in-progress rebase / merge / cherry-pick | **0** |
+| already held by origin when found | 66 |
+| **needing rescue** | **105** |
+| **covered after rescue** | **171 / 171, 0 uncovered** |
+
+18,299 findings collapsing to 171 distinct commits is the shape of this host: the same commits
+appear in dozens of clones. Counting findings rather than commits would have reported a
+catastrophe and produced 18,299 units of work for 171 units of content.
+
+208 anchors, 203 pushed and confirmed on origin. The 5 that failed are **redundant, not lost** —
+each holds 19 parents that other anchors already carry, which is why coverage reads 171/171 with
+them absent. That is stated rather than left as "5 failures", because a failure count without a
+consequence is the same kind of noise as a finding count without a denominator.
+
+The remaining 46 clones will add to this. Whatever they add, the number will be reported —
+including if it is zero.
