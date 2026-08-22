@@ -21587,10 +21587,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         (rpt_dir / "sta.rpt").write_text(sta_file.read_text())
 
     # === Design-for-ECO Step 18 artefacts ===
-    # Emit phase3/stage3/pnr/spare_cells.json (the inserted spare set,
-    # consumed by spare_cell_preservation_check) and
-    # reports/spare_cell_coverage.json (the readiness verdict, consumed
-    # by spare_cell_coverage_check). Best-effort: a write failure logs
+    # Emit phase3/stage3/pnr/spare_cells.json — the inserted spare set,
+    # consumed by spare_cell_preservation_check AND by
+    # spare_cell_coverage_check, which recomputes the readiness verdict
+    # from it. This step emits the MEASUREMENT; the verdict belongs to
+    # the gate (see the block below). Best-effort: a write failure logs
     # to the step detail but never fails PnR.
     spare_note = ""
     try:
@@ -21619,46 +21620,36 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         }
         _aa.write_text(out_dir / "spare_cells.json",
             json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
-        # Coverage readiness JSON. distribution_ok is derived from the
-        # grid spread (>1 distinct grid cell occupied); tie_off_ok from
-        # the plan's tied_off flag. The dedicated checker recomputes
-        # these from spare_cells.json — this is a convenience summary.
+        # reports/spare_cell_coverage.json is deliberately NOT written
+        # here. Step 18 declares ONE producer for that path —
+        # `spare_cell_coverage_check` — and this block used to write it
+        # too. The two payloads graded the SAME run against DIFFERENT
+        # floors: this one against the run's own `--spare-density`, the
+        # gate's against its fixed readiness minimum. A run invoked with
+        # `--spare-density 0.005` (or 0) therefore published
+        # `status: PASS` from here and `status: FAIL` from the gate, at
+        # one path, and whichever ran last decided what
+        # `benchmark_verify_report` Pillar 6 read. `distribution_ok`
+        # disagreed the same way: this block asked only for >1 distinct
+        # site, the gate for half the spare count.
+        #
+        # Nothing is lost. Every MEASUREMENT this block published —
+        # count, placed_cells_est, target_density, actual_density,
+        # tie_off, tied_off, and the instance coordinates the spread is
+        # derived from — is in the spare_cells.json written above, which
+        # is the gate's input. Only the self-grade is gone, and a
+        # self-grade against a self-chosen floor is precisely what the
+        # gate exists to refuse.
+        #
+        # docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md
         distinct_xy = {(i.get("llx"), i.get("lly"))
                        for i in spare_plan.get("instances", [])}
-        distribution_ok = (spare_plan.get("count", 0) <= 1
-                           or len(distinct_xy) > 1)
-        # Same MEASURED tie-off value the spare_cells.json carries — never the
-        # pre-run claim, so this convenience summary cannot disagree with the
-        # artefact the dedicated checker recomputes from.
-        _cov_tie_ok = bool(spare_payload.get("tied_off"))
-        cov_verdict = ("PASS" if (actual_dens >= spare_dens
-                                  and distribution_ok
-                                  and _cov_tie_ok)
-                       else "FAIL")
-        coverage_payload = {
-            "program": "spare_cell_coverage (runner-emit)",
-            "target_density": round(spare_dens, 6),
-            "actual_density": actual_dens,
-            "count": spare_plan.get("count", 0),
-            "placed_cells_est": placed_cells_est,
-            "distribution_ok": distribution_ok,
-            "tie_off_ok": _cov_tie_ok,
-            # The measurement behind `tie_off_ok`, so a FAIL says which of
-            # "raised", "never ran" or "partial" happened.
-            "tie_off": _tie_measured,
-            "verdict": cov_verdict,
-            # `status` mirrors `verdict` for the documented Pillar-6 schema.
-            "status": cov_verdict,
-        }
-        # Literal flow-declared path (not the report auto-router, which
-        # would file an unknown name under reports/audit/).
-        cov_path = project / "reports" / "spare_cell_coverage.json"
-        cov_path.parent.mkdir(parents=True, exist_ok=True)
-        cov_path.write_text(
-            json.dumps(coverage_payload, indent=2, ensure_ascii=False) + "\n")
+        # The step detail reports the MEASUREMENT (how many distinct
+        # sites the spares occupy), never a verdict on it — grading the
+        # spread is the gate's job and it applies a stricter rule.
         spare_note = (f" | spares={spare_plan.get('count', 0)} "
                       f"(target_d={spare_dens:g} actual_d={actual_dens:g} "
-                      f"dist_ok={distribution_ok})")
+                      f"distinct_sites={len(distinct_xy)})")
     except Exception as _sp_exc:  # nosec — artefact emit is best-effort
         spare_note = f" | spare_emit_failed: {_sp_exc}"
     if spare_warn:
