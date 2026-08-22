@@ -161,6 +161,37 @@ uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY po
 run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-e2e"
 
+# THE ABLATION KIND, WHICH UNTIL NOW HAD A SCHEMA AND NO GATE.
+#
+# `schemas/ppa/ablation.v1.schema.json` exists because a WITHIN-PROJECT
+# comparison was filed as `vibeic.ppa.comparison.v2` and `ppa_head_to_head_check`
+# refused it BASELINE_TUNED_BY_US. The record was honest; the document kind was
+# the lie. The new kind was the right repair -- and nothing that RUNS ever read
+# it. Measured on a4caccefe (v1.11.69): one pytest driving one hardcoded path,
+# and in this file the word `ablation` appeared in a comment and nowhere else.
+#
+# WHY THAT IS NOT A COSMETIC GAP. The three rows above refuse a comparison whose
+# baseline this project tuned. This kind is where such a document legitimately
+# goes -- and with no gate behind it, it is also where an ILLEGITIMATE one could
+# go to escape those same conditions. The schema closes that from the other side
+# (`tuned_by_this_project: const true` on EVERY arm, so a real head-to-head
+# cannot satisfy it), but a schema nothing applies refuses nothing.
+#
+# `run`, NOT `run_tolerating_uncheckable`, AND THE REASON IS MEASURED. This gate
+# PASSES today: 633 JSON file(s) opened under ppa-crosslayer, 1 ablation record
+# selected, 0 refused, 0 undetermined, 1 accepted -> rc=0. It needs no exemption,
+# so it gets none. And its rc 2 arm must stay FATAL: rc 2 here means the corpus
+# was absent, vacuous or unreadable, and "the only ablation record disappeared"
+# is exactly the state that must stop a landing rather than roll up as NOT
+# CHECKED. An empty corpus is never a pass.
+#
+# AIMED AT ppa-crosslayer AND NOT AT benchmark-data, deliberately: this is where
+# the kind lives (`records/ablations/`), and it is the directory a SECOND
+# ablation would be filed into tomorrow -- the case that was validated by
+# nothing before this row existed.
+run "PPA ablation records (within-project)" "$ROOT" \
+    python3 "$PG/ppa_ablation_check.py" --corpus "$ROOT/ppa-crosslayer"
+
 # THE REST OF THE PPA RECORD FAMILY, wired on the ruling three lines above.
 #
 # The v1.11.19..v1.11.32 PPA stack landed five more gates over PPA campaign
