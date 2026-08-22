@@ -286,20 +286,25 @@ def test_not_applicable_that_still_names_a_process_is_a_declaration(tmp_path):
 
 
 def test_a_named_declaration_with_no_load_is_not_accused(tmp_path):
-    """FAIL, but for the true reason.
+    """REFUSED, for the true reason — vibe-ic#1002 moved the rc, not the point.
 
     With no library loaded, every named process in the declaration is trivially
     "uncorroborated", so the contradiction branch would fire on every run that
     names a process and has not run a tool yet — printing "no loaded library
     carries that identity" above `loaded : 0`. That is the unsupported
-    accusation the no-load branch exists to remove.
+    accusation the no-load branch exists to remove, and it still is.
+
+    What changed is the VERDICT this state earns. It asserted rc 1 through
+    #710; a state whose own output says "nothing to compare" is a zero
+    denominator, and the house rule (`gate_zero_denominator_refuses_check`) is
+    that a zero denominator REFUSES. Every other assertion below is unchanged.
     """
     _write(_canonical_l19_path(tmp_path), {"fields": {"pdk_target": "sky130A"}})
     rc, rec, out = _gate(tmp_path)
-    assert rc == 1, out
+    assert rc == 2, out
+    assert rec["verdict"] == "NOT CHECKED"
     assert rec["no_library_load_recorded"] is True
-    assert rec["contradicting_named_pdks"] == [], rec
-    assert "no cell-library load at all" in out, out
+    assert rec.get("contradicting_named_pdks", []) == [], rec
     assert "no loaded library carries that identity" not in out, out
 
 

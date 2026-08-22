@@ -47,6 +47,7 @@ from typing import Dict, List, Optional, Tuple
 
 import _spef_coupling as SC
 import pdk_dielectric_fit as PF
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 UM_TO_M = 1e-6
 DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
@@ -669,7 +670,7 @@ def extract(def_path: str, lef_path: str, spef_path: str,
                                     field_solve_banner(eps_r, len(field_cc)))
         dst = out_path or _default_out_path(spef_path)
         os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
-        with open(dst, "w") as f:
+        with atomic_writing(dst) as f:
             f.write(new_spef)
         result["out_path"] = dst
         result["cc_written"] = n
@@ -929,7 +930,7 @@ def extract_whole_design(
                                       len(uncovered)))
         dst = out_path or _default_out_path(spef_path)
         os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
-        with open(dst, "w") as f:
+        with atomic_writing(dst) as f:
             f.write(new_spef)
         result["out_path"] = dst
         result["cc_written"] = n

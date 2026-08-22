@@ -69,6 +69,10 @@ def test_tag_differs_but_resolves_to_same_id_passes(monkeypatch):
 
 
 # ---------------------------------------------------------------- defect 2 --
+#: The ceiling the hint carries — see
+#: test_the_hint_does_not_teach_operators_to_create_an_unbounded_container.
+_CEIL = "--memory 48g --memory-swap 48g"
+
 def test_image_ref_passed_as_container_name_fails_with_actionable_hint(monkeypatch):
     """An image ref matches no container. The verdict must be FAIL (not a soft
     fallback), and must say WHY so the operator is not sent hunting a phantom
@@ -80,7 +84,8 @@ def test_image_ref_passed_as_container_name_fails_with_actionable_hint(monkeypat
     rec = cip.verify("vibeic-eda:0.2.30")
     assert rec["verdict"] == "FAIL", rec
     assert "IMAGE ref" in rec["reason"]
-    assert "docker run -d --init --name" in rec["reason"]
+    assert "docker run -d --init" in rec["reason"]
+    assert "--name <name>" in rec["reason"]
 
 
 def test_the_actionable_hint_is_a_command_that_would_actually_run(monkeypatch):
@@ -100,9 +105,29 @@ def test_the_actionable_hint_is_a_command_that_would_actually_run(monkeypatch):
                         lambda n: {"status": "not_found", "container": n})
     ref = "ghcr.io/vibeic/vibeic-eda:0.2.30"
     reason = cip.verify(ref)["reason"]
-    assert "docker run -d --init --name <name> %s sleep infinity" % ref in reason
-    assert "docker run -d --init --name <name> %s --skip sleep infinity" % ref in reason
+    assert "docker run -d --init %s --name <name> %s sleep infinity" % (_CEIL, ref) in reason
+    assert "docker run -d --init %s --name <name> %s --skip sleep infinity" % (_CEIL, ref) in reason
     assert "restart-eda.sh" in reason
+
+
+def test_the_hint_does_not_teach_operators_to_create_an_unbounded_container():
+    """The hint is a copy-paste line; whatever it says becomes the fleet.
+
+    MEASURED 2026-08-19: 45 EDA containers across seven machines were running
+    with `HostConfig.Memory == 0`, and a yosys in one of them reached 109 GB of
+    a 125 GB host and got the desktop session OOM-killed. A container with no
+    cgroup limit does not share the host's memory, it IS the host's memory. A
+    hint that omits the ceiling reproduces that configuration every time
+    somebody follows it, which is the most likely way it got reproduced 45
+    times.
+
+    Both flags, or neither: `--memory` alone still lets the container reach the
+    host's swap, and the freeze that preceded the crash was swap thrash.
+    """
+    import container_image_provenance as _cip
+    src = Path(_cip.__file__).read_text(encoding="utf-8")
+    for form in ("--memory ", "--memory-swap "):
+        assert form in src, f"the container-start hint omits {form.strip()}"
 
 
 def test_the_hint_covers_the_entrypoint_launcher_case(monkeypatch):

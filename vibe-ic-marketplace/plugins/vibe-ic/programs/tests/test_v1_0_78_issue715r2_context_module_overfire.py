@@ -28,6 +28,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS.parent / "benchmark"))
 import cvdp_gate as G  # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 
 # the gf_multiplier_0013 shape from the reopen: author writes top `gf_mac`,
 # instantiates the context-provided `gf_multiplier`.
@@ -93,6 +94,7 @@ def test_load_context_modules_from_dataset(tmp_path):
     assert "no_ctx" not in cm  # empty context → not recorded
 
 
+@NEEDS_SIM
 def test_end_state_gate_does_not_block_context_module(tmp_path):
     """END-STATE via the real gate: a completion instantiating a context-provided
     module is NOT blocked (rc=0) when --prompts carries its input.context."""
