@@ -40,14 +40,6 @@
   ],
   "acknowledged": [
     {
-      "gate": "flow-gate enforcement audit",
-      "since": "69ce9260dfd461cacf3c31d9cec2bbafa846e0fd",
-      "max_commits": 70,
-      "owner": "repo-gatekeeper",
-      "why": "area_total_vs_budget_check and tapeout_docs_gen are AUDIT_ONLY and declare no intent, so nothing invokes them where they could block and nothing says that was the decision.",
-      "bound_because": "The engineering is one declaration per program; what is slow is the ruling on whether these two block, which is a person's decision and not a build. 70 commits is one day at the measured rate of 72-83 commits/day over 2026-08-19..21. A decision that needs longer than a day is a decision nobody is making."
-    },
-    {
       "gate": "L-doc field producer",
       "since": "c5d7f2d00e1df23c35a8e289bc1dc3d29b62eee9",
       "max_commits": 210,
@@ -64,46 +56,6 @@
       "why": "113 baseline entries now resolve and must be shrunk out of the baseline before it becomes a standing waiver, and 4 documents cite proofs they do not ship.",
       "bound_because": "Two halves with different costs: shrinking the baseline is one --write-baseline run, and the 4 dangling citations need someone to decide whether the document or the missing file is wrong. 140 commits is two days at the measured rate, which is the decision half; the mechanical half could be done today. || FIGURES SUPERSEDED 2026-08-22: the corpus moved (b971220) and shrank from 1037 enumerated files to 70. It is now 66 contributing documents of 70, 28 citations, 132 baseline entries resolving and 5 dangling — not the 113 and 4 above. The SHAPE of the reasoning stands (a mechanical half and a decision half) and so does the bound; only the counts moved.",
       "adjudicated": "REAL FINDING — stays red until fixed, NOT renewed. docs/research/2026-08-21-corpus-gate-adjudication.md"
-    },
-    {
-      "gate": "checker execution wiring",
-      "since": "41bfd8a126db6cb0473b8d4bec2296ffa2dfd4a6",
-      "max_commits": 70,
-      "owner": "repo-gatekeeper",
-      "why": "closed_loop_edge_check, ppa_pr_scope_check and slot_pad_budget_check are run by nothing but their own tests, so a fixture the author wrote proves the logic and never the artefacts.",
-      "bound_because": "Wiring three checkers into a real runner is a known, cheap edit -- pre_commit_check.sh is the established home for exactly this. 70 commits is one day at the measured rate. This bound is deliberately not padded for the fact that the same three programs also redden the next row: one cause does not earn two graces."
-    },
-    {
-      "gate": "gates are wired to something",
-      "since": "41bfd8a126db6cb0473b8d4bec2296ffa2dfd4a6",
-      "max_commits": 70,
-      "owner": "repo-gatekeeper",
-      "why": "the same three programs -- closed_loop_edge_check, ppa_pr_scope_check, slot_pad_budget_check -- are consulted by no automatic verdict, so the tree looks identical whether they would pass or fail.",
-      "bound_because": "Same cause and same fix as the row above, so the same one-day bound. Two rows rather than one because the gate labels are two and a row whose label matches nothing is failed as stale."
-    },
-    {
-      "gate": "declaration scans strip comments",
-      "since": "9cc09b8637318c3984e0d7350896050e12739a97",
-      "max_commits": 70,
-      "owner": "repo-gatekeeper",
-      "why": "5 declaration regexes scan text no stripper touched, across crosslayer_rewrite_equivalence, declared_clock_period and slot_pad_budget_check, so a comment sentence can mint a module that does not exist.",
-      "bound_because": "Five call sites, each a one-line change to strip the value that reaches the scan rather than a sibling. 70 commits is one day at the measured rate, and this is generous for five one-line edits -- the bound is set by review, not by typing."
-    },
-    {
-      "gate": "d3 declaration/manifest parity",
-      "since": "d976999c4668f69b2c6253c7e8daa1534b59bd2a",
-      "max_commits": 60,
-      "owner": "repo-gatekeeper",
-      "why": "step 31 declares reports/phase3/drc_signoff.json and the d3 evidence manifest has never measured it, so the flow and fixtures/matrix_d3_output_manifest.json are out of step.",
-      "bound_because": "MEASURED, not estimated: this gate went red at origin/main~85 and was green again by origin/main~25, so the previous instance of this exact defect was repaired in under 60 commits by the people who repair it. The bound is that observed repair time, which is the only number here that is a measurement of the fix rather than a judgement about it."
-    },
-    {
-      "gate": "liar census controls still fire",
-      "since": "41bfd8a126db6cb0473b8d4bec2296ffa2dfd4a6",
-      "max_commits": 35,
-      "owner": "repo-gatekeeper",
-      "why": "the shrink-detector literal in test_liar_census.py lags the flow's declared clause count again -- the fourth time (169->170, 170->175, 175->178, and now).",
-      "bound_because": "MEASURED from the three previous instances: the literal was repaired in 2 commits between origin/main~249 and ~247, and in under 15 commits between origin/main~85 and ~70. 35 commits is half a day and more than twice the worst observed repair. The bound intentionally does NOT cover the structural fix the test's own docstring asks for -- deriving the floor from the flow -- because what closes this red is the bump, and pricing the bound at the structural fix would be buying four days of silence for a five-minute edit."
     }
   ]
 }
