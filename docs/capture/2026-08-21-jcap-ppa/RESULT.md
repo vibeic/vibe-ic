@@ -61,6 +61,7 @@ Accepted with no refusal and no unrouted record.
 - [The ALREADY-PROGRAM claims — can the guards they name actually fail?](#the-already-program-claims--can-the-guards-they-name-actually-fail)
 - [The brief's own requirements, audited against the finished records](#the-briefs-own-requirements-audited-against-the-finished-records)
 - [The verifier audited as an artefact, not used as one](#the-verifier-audited-as-an-artefact-not-used-as-one)
+- [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -1942,6 +1943,31 @@ Re-run on the slow arm, the population is real, so the check had been doing its
 work all along and simply had no guard proving it. That distinction is the point:
 this did not find a wrong answer, it found **an answer that was not entitled to
 be trusted**.
+
+## Does any commit describe a change it does not carry?
+
+A prose edit raised an exception and the commit ran anyway, because the edit and
+the commit were separated by a newline rather than by `&&`. The report lagged the
+verifier by one commit. That is a process failure worth knowing about, and the
+question it raises is bigger than the instance: **can the commit history be
+trusted to describe the tree?** A landing reviewer reads the messages.
+
+Audited across the whole branch, with the screen validated before the result was
+believed:
+
+    commits examined                                          107
+    messages claiming a change to the report or a record       65
+    of those, not carrying that change                          0
+
+The screen was checked both ways first — it matches a message that claims prose
+and does not match one that only describes a code repair — because a phrase-set
+that matches nothing returns a clean answer indistinguishable from a clean
+branch. That validation also corrected me: I had accused the offending commit of
+describing a section it did not ship, and re-reading its message, it does not.
+It describes an audit and a repair, and both are in it. **The real fault was
+narrower than the accusation** — the edit failed silently, so the report trailed
+by one commit, and no message was ever false. The overstatement stands in the
+git history, which is not rewritten; it is corrected here instead.
 
 ## The honest sentences, checked verbatim against the records
 
