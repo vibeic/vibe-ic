@@ -1599,3 +1599,53 @@ wired rule agree.
 **Also passing, unwired-but-relevant:** `ci_harness_timeout_ceiling_check` rc=0
 against this branch — the thirteen test files introduce no inner subprocess bound
 at or above the harness ceiling.
+
+## Does this branch redden an ALREADY-WIRED gate? No — and the audit cannot see it
+
+`checker_execution_wiring_audit` is wired, and its subject is precisely this
+lane's situation: *a checker only its own TEST runs*. Twelve new unwired checkers
+is exactly what it exists to catch, so it was worth measuring rather than hoping.
+
+**Measured, and the control matters more than the reading.**
+
+    bare main            a4caccefe   rc=0   test-only 34, baseline 34
+    frozen branch        c0e19ace9   rc=1   test-only 37 — 3 named
+    its own merge-base   81cd5321b   rc=1   test-only 37 — THE SAME 3 named
+    merged + regenerated             rc=0   test-only 34
+
+The frozen branch reads rc=1 against current main, and that is **not this branch's
+red**. The identical failure, with the identical three names
+(`closed_loop_edge_check`, `ppa_pr_scope_check`, `slot_pad_budget_check`), is
+already present at the branch's own merge-base. Main WIRED those three in the 214
+commits since. Charging a stale branch with main's progress is the error the
+merge-base control exists to prevent, and without it this reads as a batch
+breakage that does not exist.
+
+**The state that actually lands passes: rc=0, test-only 34, identical to main.**
+
+### But the count did not move, and it should have
+
+Twelve test-only checkers entered the tree and the audit's population went 34 to
+34. They are invisible to it, and the reason is filenames:
+
+    _CHECKER_SUFFIXES = ("*_check.py", "*_audit.py", "*_guard.py", "*_lint.py",
+                         "*_gate.py")
+
+    of my twelve, matching a checker suffix: 0
+
+Every one is named after its rule sentence — `signoff_report_states_its_stage.py`,
+`local_clone_does_not_borrow_objects.py` — because the capture named the rules that
+way and the brief kept the names. Not one carries a checker suffix.
+
+So the register of "checkers nothing but their own test runs" is understating by
+twelve, and it will understate by more every time a lane names its programs after
+its rules rather than after the suffix convention. That is the same defect this
+whole lane keeps finding: a gate keyed on a shape the thing it is looking for no
+longer has.
+
+**Disclosed, not fixed, and the reason is not deference.** Widening
+`_CHECKER_SUFFIXES` would move that audit's population, and its baseline is closed
+by `--write-baseline`, which is forbidden here and is exactly the instrument that
+would paper over the twelve rather than register them. The honest repair belongs to
+that gate's owner, who can widen the population and re-record the baseline in one
+commit. Recorded here with the measurement so it is not rediscovered.
