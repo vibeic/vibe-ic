@@ -3558,8 +3558,8 @@ number and not the question.
     records                                            47
       fix text quotes a figure                         35
         names a literal command                         6
-        describes HOW the count was taken              27
-        neither — a bare number                         8
+        describes HOW the count was taken              28
+        neither — a bare number                         7
 
 The brief is explicit about this: *the command, the number, the before and
 after.* On the strict reading, 29 figure-bearing records fall short.
@@ -3601,6 +3601,8 @@ was wrong":
 | commands the layer presents | 19 | **20** | the tree grew by one |
 | emitter sites writing a basis stamp | 16 | **15** | **does not fully reproduce — see below** |
 | evidence artefacts carrying a digest | 525 of 525 | **525 of 525** | **reproduces exactly** |
+| schema files in the layer's schema directory | 14 | **15** | the tree grew by one |
+| document types emitted | 29 | **≥25** | a literal screen cannot settle it — see below |
 
 **Six re-derivations. Five are small growths and none is a screen mismatch.** The numbers
 were sound; what was missing was the question that produced them. That is a
@@ -3647,7 +3649,21 @@ which cannot move without a commit that changes it. So a figure over published
 artefacts is worth quoting without a date and a figure over a working tree is
 not — which is a cheaper rule than re-checking everything.
 
-Eight records remain, and that is the first thing I would do next. A figure
+**And one re-derivation produced a number that is smaller than the record, which
+cannot be growth.** A literal match for the type identifier assigned to a
+document's schema field gives 25 against 29 recorded. Fewer is not growth, so it
+is the screen — and the same search shows why: many producers assign the
+identifier from a module constant rather than writing it inline, so a literal
+match misses them and **25 is a floor, not a count.** It is consistent with 29
+and does not confirm it.
+
+Re-deriving that side properly means resolving constants to their values, which
+means reading the modules rather than grepping them. Worth knowing before
+starting, **because the grep looks like it worked.** The rule itself is
+unaffected: the floor already exceeds the schema count, so types without a
+schema exist whichever figure is right.
+
+Seven records remain, and that is the first thing I would do next. A figure
 without its question is a memory, which is the brief's own word for what this
 loop exists to stop producing.
 
