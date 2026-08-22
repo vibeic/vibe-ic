@@ -1,1 +1,0 @@
-<results><verdict>PASS</verdict><evidence>phase2/stage1/sim_full_stack/oracle_run/oracle.log</evidence><source>step_reference_tb oracle TB transcript (#460)</source><vectors_passed>28</vectors_passed><vectors_total>28</vectors_total><verification_track>oracle_tb</verification_track></results>
