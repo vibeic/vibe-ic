@@ -591,3 +591,44 @@ constructed. The pattern deserves its name: **a test that reaches into the
 shipped artefact for its fixture asserts today's contents, and fails the day
 the artefact legitimately changes — which is the day the register is doing its
 job.**
+
+
+---
+
+## F1 closed: three predicates, three wrong, and the third refuses the exemplar
+
+The previous section ended by prescribing a rule for whoever writes it. I wrote
+that one too (`evidence/F1_three_predicates_three_wrong.md`,
+`evidence/F1_rule_population_probe2.py`): walk from the refusal up to the `if`
+that guards it, require the message to name that condition's subject.
+
+On main it flags all four `PAD_SITE_NOT_FOUND` sites — the original defect,
+which the word-list predicate passed. That looked like the answer. Then I read
+what it refuses, and it refuses `pad_ring_gen.py:712` — the POST-FIX message
+that F1's own fix wrote, which names BOTH PDK views with counts of each and is
+the gold standard for this rule. It is rejected because the guard's subject is
+`site` while the message names `lib.sites`, `lefs`, `lib.declared_sites`.
+
+| attempt | asks | why it is wrong |
+|---|---|---|
+| 1 (prior lane's) | message mentions a locus WORD | passes the pre-fix refusal; 2 false positives |
+| 2 (mine) | interpolates something the FUNCTION iterated | attributes unrelated iterations; refuses paths that name themselves |
+| 3 (mine) | names the SUBJECT of the guarding condition | refuses the exemplar |
+
+Three different wrong questions, not three bugs. The subject is the thing
+SOUGHT; the disclosure is about where it was SOUGHT. What a reader needs lives
+one hop back, inside the lookup that produced the subject — a
+reaching-definitions walk across a method boundary. Deterministic, still Bucket
+A in principle, well past what a predicate over one call site decides.
+
+**No fourth shape was tried.** After three failures that were each invisible
+from inside the implementation and obvious within ten minutes of reading its
+output, a fourth would be selected by whether it comes out green on today's 25
+call sites — fitting to the corpus, not to the rule. That is the thing this
+whole branch is about.
+
+F1's status is therefore a measured verdict and not a deferral. The rule is
+correct, and its exemplar is already in the tree at `pad_ring_gen.py:712` — a
+rule with a working instance and no checker is in better shape than a checker
+with no working instance, which is what the other two attempts would have
+shipped.
