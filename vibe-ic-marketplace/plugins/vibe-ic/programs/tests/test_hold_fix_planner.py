@@ -1,6 +1,7 @@
 """Unit tests for `hold_fix_planner.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("hold_fix_planner")
 
 
@@ -46,7 +47,8 @@ class TestBuildPlan:
 
     def test_attribution(self):
         plan = mod.build_plan([])
-        assert "v0.1.50" in plan["emitted_by"]
+        assert plan["emitted_by"] == \
+            f"hold_fix_planner v{shipped_plugin_version()}"
 
 
 class TestMarkdownEmit:

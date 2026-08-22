@@ -172,5 +172,5 @@ def test_host_pass_parsed_latency(sub, top):
             capture_output=True, text=True, cwd=str(d))
         assert ce.returncode == 0, ce.stderr[:400]
         r = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True,
-                           timeout=120, cwd=str(d))
+                           timeout=60, cwd=str(d))
         assert "your design passed" in (r.stdout + r.stderr).lower()

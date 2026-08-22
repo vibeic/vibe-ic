@@ -97,6 +97,66 @@ def read_plugin_version(plugin_root: Path) -> Optional[str]:
         return None
 
 
+# ─────────────────────────────────────────────────────────────────────
+# The RUNNING plugin's version, and the attribution string built from it
+# ─────────────────────────────────────────────────────────────────────
+# vibe-ic#800. Twenty-odd programs stamped an ``emitted_by`` naming the
+# release that produced an artefact, and every one of them stated it as a
+# STRING LITERAL: ``"pnr_doctor v0.1.96"``, ``"phase1_post_process
+# .emit_l_doc_skeleton v0.1.51"``. A literal is correct for exactly the
+# release it was typed in; at v1.9.78 all of them were eighteen minor
+# versions stale, and 1436 tracked artefacts carry the stale value.
+#
+# The defect was never the strings. It was that a fact with ONE owner —
+# ``.claude-plugin/plugin.json``, which ``gatekeeper_assign_version --write``
+# is the sole writer of — was RESTATED in twenty-odd places instead of being
+# READ from one. Replacing each literal with today's number re-creates the
+# defect at the next bump. So the version is not stated here either: this
+# module, already the repo's ONE manifest reader, exposes it, and every
+# emitter asks.
+#
+# ``_THIS_PLUGIN_ROOT`` is read at CALL time, not import time, so it is also
+# the seam a test points at a manifest declaring an absurd version to prove
+# the emitted value FOLLOWS the manifest rather than a constant.
+_THIS_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+
+# Not a version. A visibly-non-data token for "the manifest was unreadable",
+# chosen so it can never be mistaken for, or sorted alongside, a measurement.
+UNRESOLVED_VERSION = "UNRESOLVED"
+
+
+def running_plugin_version() -> str:
+    """The version of the plugin THIS module is installed in, or
+    ``UNRESOLVED_VERSION`` when the manifest cannot be read.
+
+    Never raises and never returns a plausible default: an emitter must not fail
+    to write a design artefact because a manifest is missing, and it must not
+    claim a version it did not read.
+
+    It returns the SENTINEL rather than ``""`` because eighteen call sites
+    interpolate this directly (``f"(v{running_plugin_version()})."``). With an
+    empty string those render ``(v).`` and ``v;`` — silently version-less, which
+    is a third answer to the same question and not the one the module documents.
+    One unreadable manifest, one marker, at every site.
+    """
+    v = read_plugin_version(_THIS_PLUGIN_ROOT)
+    return UNRESOLVED_VERSION if v is None else str(v)
+
+
+def emitted_by(tool: str, note: str = "") -> str:
+    """The canonical ``emitted_by`` attribution: ``"<tool> v<running version>"``.
+
+    ``note`` appends a parenthesised qualifier for the few emitters that carry
+    one (``"signoff_ladder_run v1.9.78 (release-gate-wired)"``).
+
+    When the version cannot be read the string is ``"<tool> vUNRESOLVED"`` — it
+    still names the tool, and it fails loudly the first time anyone sorts or
+    compares by it, which a plausible-looking constant never does.
+    """
+    core = f"{tool} v{running_plugin_version()}"
+    return f"{core} ({note})" if note else core
+
+
 def _write_plugin_json_version(pj: Path, version: str) -> None:
     """String-replace the plugin.json ``version`` field (preserves formatting);
     fall back to a JSON round-trip if the field is not found verbatim."""
