@@ -771,13 +771,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                            "matched": matched, "denial": word})
         for name, sites, dens in rows:
             for kind, value in dens:
-                if value != sites and name in lower_bound and sites < value:
-                    # K IS A LOWER BOUND HERE, so `sites < denominator` is not a
-                    # disagreement -- the shortfall is exactly what a helper
-                    # called more than once produces. `sites > denominator`
-                    # still is one, and is left to the comparison below: a lower
-                    # bound that EXCEEDS the stated population cannot be
-                    # explained by emitting more.
+                if name in lower_bound and sites <= value:
+                    # K IS A LOWER BOUND HERE, so ONLY `sites > denominator` is
+                    # decidable: a lower bound that EXCEEDS the stated
+                    # population cannot be explained by emitting more, and is
+                    # left to the comparison below.
+                    #
+                    # EQUALITY IS NOT AGREEMENT EITHER, which the first version
+                    # of this rule got wrong by testing `value != sites` first.
+                    # The script emits sites x multiplier; two literal sites in
+                    # a helper called three times emit SIX against a denominator
+                    # of 2, and equality of the LITERAL count with the
+                    # denominator was read as "agrees" -- measured, rc=0 with no
+                    # finding. A number that cannot be compared cannot match.
                     undecidable.append({
                         "program": sources[stem].name, "counter": name,
                         "increment_sites": sites, "denominator": value,

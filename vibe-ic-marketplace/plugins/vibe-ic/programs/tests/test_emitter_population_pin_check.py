@@ -1731,6 +1731,53 @@ def test_a_NOT_DECIDABLE_line_names_where_and_why(tmp_path):
     assert doc["counters_examined"] == 1, doc
 
 
+def _helper_emitter(sites_inside, denominator):
+    """A helper called 3x containing `sites_inside` increments, so the script
+    emits `sites_inside * 3` against `denominator`."""
+    body = "".join('            "  if {[catch {%%s_%d}]} { incr _n }\\n"\n' % i
+                   for i in range(sites_inside))
+    return ('def _repair(name):\n    return (\n' + body
+            + '    ) %% tuple([name] * %d)\n\n\n' % sites_inside
+            + 'def script():\n    return ("  set _n 0\\n" + _repair("a")\n'
+              '            + _repair("b") + _repair("c")\n'
+              '            + "  if {$_n >= %d} { puts ALL }\\n")\n' % denominator)
+
+
+def test_equality_is_not_agreement_when_K_is_a_lower_bound(tmp_path):
+    """A FALSE PASS the lower-bound rule shipped with, and the reason the rule
+    is now stated as "only `sites > denominator` is decidable" rather than as
+    three cases.
+
+    The first version tested `value != sites` FIRST, so equality of the LITERAL
+    count with the denominator fell through to the ordinary comparison and was
+    read as agreement. But a lower-bound counter emits `sites x multiplier`:
+    TWO literal increments in a helper called THREE times emit SIX against a
+    denominator of 2, and the guard said "every population stated twice agrees".
+    MEASURED: rc=0, no finding, no undecidable. A number that cannot be compared
+    cannot match.
+
+    All three relations swept, because the bug lived in the one nobody thinks to
+    write a case for -- and the two undecidable rows land on the VACUOUS tier
+    here, since these fixtures state exactly one counter and declining it leaves
+    nothing compared at all."""
+    for sites, denom, want_rc, want in ((1, 3, RC_VACUOUS, "not_determined"),
+                                        (2, 2, RC_VACUOUS, "not_determined"),
+                                        (4, 3, RC_FAIL, "findings")):
+        progs, tests = _tree(tmp_path / f"s{sites}d{denom}",
+                             _helper_emitter(sites, denom),
+                             "def test_x():\n    assert True\n")
+        r = _run(progs, tests, "--json", tmp_path / f"r{sites}{denom}.json")
+        doc = json.loads((tmp_path / f"r{sites}{denom}.json").read_text())
+        assert r.returncode == want_rc, (
+            f"sites={sites} denominator={denom}: rc={r.returncode}, "
+            f"expected {want_rc}\n{r.stdout}")
+        assert len(doc[want]) == 1, (
+            f"sites={sites} denominator={denom}: expected one {want}: {doc}")
+        other = "findings" if want == "not_determined" else "not_determined"
+        assert doc[other] == [], (
+            f"sites={sites} denominator={denom}: {other} should be empty: {doc}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
