@@ -191,6 +191,52 @@ UPSTREAM_REFUSALS_MADE_MACHINE_READABLE: Tuple[Tuple[str, str], ...] = (
 )
 
 
+#: The upstream text this step's arithmetic is PINNED to, checked by
+#: `upstream_reimplementation_pin_check`. A citation in a comment is prose a
+#: human reads; a pin is a claim a machine can lose.
+#:
+#: Both defects this step was corrected for were the same shape: our
+#: re-derivation and upstream's computation were never compared by anything.
+#: The first read one PDK view where upstream reads two; the second took a
+#: cell's along-the-row extent from its oriented footprint where upstream takes
+#: the master's width. Each anchor below is EXACT TEXT rather than a line
+#: number, because a line number drifts and still looks precise.
+UPSTREAM_PINS: Tuple[Dict[str, str], ...] = (
+    {"upstream": "librelane/scripts/openroad/common/pad_cfg.tcl",
+     "anchor": "set width  [expr [[$inst getMaster] getWidth] / $units]",
+     "quantity": "a pad's along-the-row extent is its MASTER'S WIDTH",
+     "why": "this binding is what makes the two anchors below width-valued. "
+            "Without it upstream could rebind the same name to the height and "
+            "both of them would still read as present."},
+    {"upstream": "librelane/scripts/openroad/common/pad_cfg.tcl",
+     "anchor": "incr sum_of_cell_widths $width",
+     "quantity": "the per-side FIT SUM is the sum of master widths, on every "
+                 "side including the vertical ones",
+     "why": "taking the ORIENTED extent here summed the master's height on a "
+            "vertical side -- 19 x 350 um against a 1500 um side, refusing a "
+            "ring upstream places."},
+    {"upstream": "librelane/scripts/openroad/common/pad_cfg.tcl",
+     "anchor": "set cur_pos [expr $cur_pos + $space_between_pads_min_filler "
+               "+ $width]",
+     "quantity": "the ALONG-THE-ROW STEP between adjacent pads is the master's "
+                 "width, on every side",
+     "why": "the fit sum and the placement step must measure the same "
+            "quantity, or a ring that fits is laid out overlapping."},
+    {"upstream": "librelane/scripts/openroad/common/io.tcl",
+     "anchor": "if { [info exists ::env(PAD_FAKE_SITES)] } {",
+     "quantity": "the tech-view site declaration is consumed BEFORE the two "
+                 "site lookups, so a site declared there is found",
+     "why": "this step read only the LEF view and refused a site the PDK had "
+            "declared in the other one. The refusal was about where we looked."},
+    {"upstream": "librelane/config/flow.py",
+     "anchor": '"PAD_FAKE_SITES",',
+     "quantity": "the tech-view declaration is a declared, PDK-scoped variable "
+                 "of the same upstream config contract this step borrows",
+     "why": "it is a documented part of the contract, not a workaround "
+            "somebody left in a PDK tree."},
+)
+
+
 #: `PAD_ROTATION_VERTICAL` is NOT honoured by this step, and this is the
 #: evidence, carried in the report so a reader is told rather than left to find
 #: out. It is NOT "inert" — an earlier version of this constant said so and was

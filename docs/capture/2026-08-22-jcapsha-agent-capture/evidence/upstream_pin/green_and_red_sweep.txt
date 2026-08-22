@@ -1,0 +1,69 @@
+cd /work/vibe-ic-marketplace/plugins/vibe-ic/programs
+echo "######## GREEN: corpus sweep, real upstream tree ########"
+PYTHONDONTWRITEBYTECODE=1 python3 upstream_reimplementation_pin_check.py 2>&1; echo "RC=$?"
+echo
+echo "######## RED: the historical drift injected into a COPY of upstream ########"
+F=/tmp/fakeroot/librelane/scripts/openroad/common; mkdir -p $F /tmp/fakeroot/librelane/config
+U=/usr/local/lib/python3.12/dist-packages/librelane
+cp $U/scripts/openroad/common/pad_cfg.tcl $U/scripts/openroad/common/io.tcl $F/
+cp $U/config/flow.py /tmp/fakeroot/librelane/config/
+sed -i "s/incr sum_of_cell_widths \$width/incr sum_of_cell_widths \$height/" $F/pad_cfg.tcl
+grep -n "incr sum_of_cell_widths" $F/pad_cfg.tcl
+PYTHONDONTWRITEBYTECODE=1 python3 upstream_reimplementation_pin_check.py --upstream-root /tmp/fakeroot 2>&1; echo "RC=$?"
+echo
+echo "######## driven the way the population probes drive a *_check.py ########"
+mkdir -p /tmp/ep/input/docs /tmp/ep/reports && cd /tmp/ep
+PYTHONDONTWRITEBYTECODE=1 python3 /work/vibe-ic-marketplace/plugins/vibe-ic/programs/upstream_reimplementation_pin_check.py . 2>&1 | tail -4; echo "RC=$?"
+echo
+echo "######## the tests, in the image ########"
+cd /work/vibe-ic-marketplace/plugins/vibe-ic/programs/tests && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest test_upstream_reimplementation_pin.py test_refusal_names_its_search_space.py -q --basetemp=/tmp/pt3 2>&1 | tail -4
+'
+######## GREEN: corpus sweep, real upstream tree ########
+<unknown>:166: SyntaxWarning: invalid escape sequence '\s'
+[CENSUS] 5 program(s) cite an upstream flow file BY PACKAGE PATH in prose and declare no UPSTREAM_PINS. This is reported, not judged:
+    _pad_ring.py: librelane/config/flow.py, librelane/scripts/openroad/pad.tcl, librelane/steps/openroad.py
+    die_finishing_gen.py: librelane/steps/klayout.py
+    digital_hardmacro_check.py: librelane/flows/chip.py, librelane/scripts/magic/, librelane/scripts/magic/lef.tcl
+    digital_hardmacro_gen.py: librelane/flows/chip.py, librelane/scripts/magic/lef.tcl
+    phase3_one_shot_runner.py: librelane/config.tcl, librelane/config/pdk_compat.py, librelane/drc_exclude, librelane/openlane
+[POPULATION] 5 pin(s) declared across 1241 program(s)
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/io.tcl
+    PRESENT     pad_ring_gen.py -> librelane/config/flow.py
+[PASS] 5 pin(s) resolved; every anchor is present in the upstream file it names
+RC=0
+
+######## RED: the historical drift injected into a COPY of upstream ########
+103:        incr sum_of_cell_widths $height
+<unknown>:166: SyntaxWarning: invalid escape sequence '\s'
+[FAIL] UPSTREAM_ANCHOR_ABSENT in pad_ring_gen.py: the text this re-implementation is pinned to is not in the file it names — upstream changed, or the pin is wrong. Either way ours is no longer known to agree with anything.
+       anchor: 'incr sum_of_cell_widths $width'
+       file:   /tmp/fakeroot/librelane/scripts/openroad/common/pad_cfg.tcl
+[CENSUS] 5 program(s) cite an upstream flow file BY PACKAGE PATH in prose and declare no UPSTREAM_PINS. This is reported, not judged:
+    _pad_ring.py: librelane/config/flow.py, librelane/scripts/openroad/pad.tcl, librelane/steps/openroad.py
+    die_finishing_gen.py: librelane/steps/klayout.py
+    digital_hardmacro_check.py: librelane/flows/chip.py, librelane/scripts/magic/, librelane/scripts/magic/lef.tcl
+    digital_hardmacro_gen.py: librelane/flows/chip.py, librelane/scripts/magic/lef.tcl
+    phase3_one_shot_runner.py: librelane/config.tcl, librelane/config/pdk_compat.py, librelane/drc_exclude, librelane/openlane
+[POPULATION] 5 pin(s) declared across 1241 program(s)
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    ABSENT      pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/io.tcl
+    PRESENT     pad_ring_gen.py -> librelane/config/flow.py
+RC=1
+
+######## driven the way the population probes drive a *_check.py ########
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/io.tcl
+    PRESENT     pad_ring_gen.py -> librelane/config/flow.py
+[PASS] 5 pin(s) resolved; every anchor is present in the upstream file it names
+RC=0
+
+######## the tests, in the image ########
+  <unknown>:166: SyntaxWarning: invalid escape sequence '\s'
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+15 passed, 1 warning in 6.84s

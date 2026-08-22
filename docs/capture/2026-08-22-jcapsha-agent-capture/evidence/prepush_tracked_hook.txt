@@ -1,0 +1,14 @@
+PASS: no NDA foundry / SKU / process token in 7 commit message(s)
+hook rc=0
+
+--- how to read this ---
+`run_gate` prints only when a gate fails or when the gate itself emits, so
+the hook's EXIT CODE is the verdict over all 7 gates, not the line count.
+THE CONTROL: the same command over the same range exited 1 earlier and named
+its finding (COLLATERAL REVERT, two commits of mine publishing and then
+un-publishing a paragraph). So this file is not silent-by-construction --
+it has been seen red, on this branch, by this command.
+
+Run via the BRANCH'S OWN tracked hook (core.hooksPath), over the whole
+origin/main..HEAD range -- not over a single push's interval, which is the
+interval that could not see the collateral revert.

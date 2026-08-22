@@ -1,0 +1,18 @@
+{
+  "date": "2026-08-22",
+  "totals": {
+    "A": 3,
+    "B": 0,
+    "C": 0,
+    "D": 0,
+    "T": 0
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/pad_ring_gen.py"
+    ]
+  },
+  "bucket_A_files": [
+    "docs/capture/2026-08-22-jcapsha-agent-capture/candidates/bucket_A_programs_pad_ring_gen_rule_sketches.py"
+  ]
+}
