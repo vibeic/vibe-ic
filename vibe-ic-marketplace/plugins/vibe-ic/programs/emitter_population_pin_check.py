@@ -158,7 +158,11 @@ need not read the source:
                          substitution mangles goes unmatched, and an unmatched
                          population is silently narrower reach. Reported, not
                          absorbed. REACH, not verdict.
-    unparsed             sources this guard could not read: "<name>:<line>: <msg>"
+    unparsed             sources nothing was examined in, either shape:
+                         "<name>:<line>: <msg>" for one that would not parse,
+                         "<path>: <reason>" for one that would not OPEN --
+                         `rglob` yields broken symlinks, directories named
+                         `*.py`, and files the runner may not read
 
 The last three are REACH, not verdict: they say what was withheld. A consumer
 that reads `findings` alone and ignores them is reading exit 0 as "the tree is
@@ -840,14 +844,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ── CHECK A — the emitter against itself ────────────────────────────────
     text_cache: Dict[str, str] = {}
 
+    seen_unparsed: Set[str] = set()
+
+    def record_unreadable(name: str, e: OSError) -> None:
+        """A path `rglob` yielded that will not OPEN.
+
+        `rglob("test_*.py")` matches whatever bears the name: a broken symlink,
+        a DIRECTORY called `test_x.py`, a file the runner has no permission on.
+        Every one of them raised out of the read and took the whole census down
+        with a traceback -- and out of a program whose refusal exit code is
+        also 1, so a broken symlink in someone's tree was indistinguishable
+        from a population disagreement, sending a reader hunting for a finding
+        that did not exist.
+
+        Recorded as `unparsed` rather than a tier of its own, because that list
+        already means exactly this: nothing in it was examined. What differs is
+        only WHY, and the message says which."""
+        if name not in seen_unparsed:
+            seen_unparsed.add(name)
+            unparsed.append(f"{name}: {e.strerror or e}")
+
     def body(stem: str) -> str:
         if stem not in text_cache:
-            text, n = read_source(sources[stem])
-            record_substitution(sources[stem].name, n)
-            text_cache[stem] = text
+            try:
+                text, n = read_source(sources[stem])
+            except OSError as e:
+                record_unreadable(sources[stem].name, e)
+                text_cache[stem] = ""
+            else:
+                record_substitution(sources[stem].name, n)
+                text_cache[stem] = text
         return text_cache[stem]
-
-    seen_unparsed: Set[str] = set()
 
     def record_unparsed(name: str, e: SyntaxError) -> None:
         """Say once that a PROGRAM could not be read.
@@ -942,7 +969,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     stems = set(sources)
     for test in sorted(args.tests.rglob("test_*.py")):
-        text, n_sub = read_source(test)
+        try:
+            text, n_sub = read_source(test)
+        except OSError as e:
+            record_unreadable(str(test), e)
+            continue
         record_substitution(test.name, n_sub)
         try:
             tree = ast.parse(text)

@@ -2328,6 +2328,71 @@ def test_the_vacuous_reason_does_not_deny_a_population_it_could_not_read(
         "read through byte substitution:\n" + out)
 
 
+# ── paths rglob yields that will not OPEN ───────────────────────────────────
+# `rglob("test_*.py")` and `glob("*.py")` match whatever bears the NAME. Each of
+# these raised out of the read and took the census down with a traceback, out of
+# a program whose refusal exit code is also 1 -- so a broken symlink in someone
+# else's tree was indistinguishable from a population disagreement.
+
+def _clean_pair():
+    emitter = ('def s():\n    return ("  set _m 0\\n"\n'
+               '            + "  if {[catch {a}]} { incr _m }\\n"\n'
+               '            + "  if {[catch {b}]} { incr _m }\\n"\n'
+               '            + "  if {$_m >= 2} { puts M }\\n")\n')
+    return emitter, "def test_x():\n    assert True\n"
+
+
+@pytest.mark.parametrize("kind", ["broken-symlink", "directory", "unreadable"])
+def test_an_unopenable_path_is_reach_not_a_traceback(tmp_path, kind):
+    emitter, pin = _clean_pair()
+    progs, tests = _tree(tmp_path, emitter, pin)
+    victim = tests / "test_hostile.py"
+    if kind == "broken-symlink":
+        victim.symlink_to(tmp_path / "nowhere" / "gone.py")
+    elif kind == "directory":
+        victim.mkdir()
+    else:
+        if os.geteuid() == 0:
+            pytest.skip("root reads a mode-000 file, so this cannot be staged")
+        victim.write_text("def test_y():\n    pass\n", encoding="utf-8")
+        victim.chmod(0o000)
+
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert "Traceback" not in out, (
+        f"one {kind} took the whole census down:\n" + out)
+    assert r.returncode == RC_PASS, out
+    assert "[UNPARSED]" in r.stdout and "test_hostile.py" in r.stdout, (
+        "the path was skipped without saying so, which is reach claimed over "
+        "something never read:\n" + out)
+
+
+def test_an_unopenable_PROGRAM_is_reach_too(tmp_path):
+    """`glob("*.py")` on the program side has the same exposure, and that side
+    reads through a cache -- a different code path from the test loop."""
+    emitter, pin = _clean_pair()
+    progs, tests = _tree(tmp_path, emitter, pin)
+    (progs / "broken_emit.py").symlink_to(tmp_path / "nowhere" / "gone.py")
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert "Traceback" not in out, out
+    assert r.returncode == RC_PASS, out
+    assert "broken_emit.py" in r.stdout, out
+
+
+def test_an_unopenable_path_is_named_once(tmp_path):
+    """Two readers reach each program. A reach report that counts one file
+    twice is its own small lie -- the rule `record_unparsed` already follows."""
+    emitter, pin = _clean_pair()
+    progs, tests = _tree(tmp_path, emitter, pin)
+    (progs / "broken_emit.py").symlink_to(tmp_path / "nowhere" / "gone.py")
+    j = tmp_path / "r.json"
+    _run(progs, tests, "--json", str(j))
+    rep = json.loads(j.read_text())
+    hits = [u for u in rep["unparsed"] if "broken_emit" in u]
+    assert len(hits) == 1, rep["unparsed"]
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
