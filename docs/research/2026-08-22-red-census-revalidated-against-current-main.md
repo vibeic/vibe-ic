@@ -184,6 +184,13 @@ diagnosis held and the list of available moves was too short.
 
 ## Revised standing of the 34
 
+> **THIS BLOCK GROUPS BY FILE. Part 17 groups BY CAUSE.** Both total 30 and
+> neither is wrong — but read `4  63x8 coverage` here against Part 17's
+> `1  63x8 anti-skip` and it looks like a contradiction. It is not: **3 of those
+> 4 are downstream of D3 and Part 17 counts them under the corpus root**, which
+> is why its corpus figure is 14 and this one says 11. **Two axes over one set;
+> the by-cause axis is the actionable one.**
+
     11  D3 cells                     unchanged on current main
      6  landing-verdict              confirmed, accounting closes exactly
      4  63x8 coverage                one FIXED upstream (was 5)
