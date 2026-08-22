@@ -1022,25 +1022,37 @@ So the honest final state of the row:
 No pad was hand-placed. No GDS was touched. No site definition was invented —
 every number in the fix is parsed out of a PDK file at run time. No pitch was
 hard-coded. No assertion relaxed, no regex widened, no test deleted, no
-baseline written, `--write-baseline` never used. I pushed nothing to `main`
-— and note that sentence no longer implies what it once did: the work IS on
-main, put there by the lander merging this branch into `land/batch70-assembled`.
-"I did not push to main" and "this is not on main" were the same statement when
-this section was written and are now different ones. Nothing was pushed to `main`
-and no version was bumped. The full `programs/tests` suite was not run
+baseline written, `--write-baseline` never used. I pushed nothing to `main`,
+and no version was bumped.
+
+(THAT SENTENCE NO LONGER IMPLIES WHAT IT ONCE DID, and it is left standing
+rather than deleted because the shift is the point: the work IS on main, put
+there by the lander merging this branch into `land/batch70-assembled`. "I did
+not push to main" and "this work is not on main" were the SAME statement when
+this section was written and are now different ones. Every word stayed true
+while the implication reversed -- nothing greppable changed, only the world.
+An earlier repair of this paragraph left the claim stated TWICE; that is
+cleaned up here.) The full `programs/tests` suite was not run
 (measured load constraint); `programs/tests/test_pad_ring.py` was, both with
 and without the fix.
 
 ---
 
-## Re-verified against a MOVED main (v1.11.68)
+## Re-verified against a MOVED main — THE FIRST MOVE (v1.11.68)
+
+MAIN HAS SINCE MOVED AGAIN, to `a4caccefe` (v1.11.69), and that second move is
+the one covered at the top of this file — it is where the fix landed. This
+section is the FIRST move and is kept as written, because the re-verification it
+records was real and its figures are anchored to it.
 
 `main` advanced from `a00f53f20` to `81cd5321b` (v1.11.68, a batch landing) while
 this lane was idle, which makes every green above stale as a statement about
 landing. Re-checked rather than assumed, on a merge preview of
 `jpadsite/pad-site` onto the new main (first at 3c2ebe8d7, and re-run at the
-then-current head 495350370 after the docstring correction — both clean; the
-head has since moved to b95dd8a9f, re-verified there):
+then-current head 495350370 after the docstring correction — both clean. The
+head moved twice more after that, to b95dd8a9f and then 41e6562d2, and was
+re-verified at each; the merge preview in the evidence index is the one against
+CURRENT main):
 
     merge                    0 conflicts; main brought in 52 files
     my 4 files               NONE touched by the batch
