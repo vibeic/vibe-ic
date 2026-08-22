@@ -41,6 +41,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import re
 import json
 import sys
 from pathlib import Path
@@ -230,3 +231,72 @@ def test_every_registered_scanner_exists():
             assert hasattr(mod, fn), (
                 f"{rule} has no {fn}() — the map drifted from the source and a "
                 f"drifted map tests nothing")
+
+
+# ── A VERDICT OWES A DENOMINATOR, AND SO DOES AN ADMISSION ──────────────────
+# Two rules, folded into one sweep over the whole family:
+#
+#   * a real verdict (rc 0 or 1) owes the population it judged, on its own line,
+#     so a PASS is legible as "looked at N and found none" rather than "found
+#     none"; and
+#   * rc=2 is not a verdict, it is an admission, and it must NAME what it could
+#     not read. "NOT CHECKED" with nothing after it is indistinguishable from a
+#     gate that decided not to bother.
+#
+# The empty-tree case above already builds the cheap fixture for the second, and
+# it asserted only that no FINDING was printed — never that the gate said what it
+# had failed to look at.
+
+@pytest.mark.parametrize("rule", sorted(SCANNERS))
+def test_not_checked_names_what_it_could_not_read(rule, tmp_path):
+    mod = _load(rule)
+    (tmp_path / "unrelated.py").write_text("x = 1\n")
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = mod.main([str(tmp_path)])
+    assert rc == 2, f"{rule}: empty tree returned rc={rc}, expected 2"
+    both = out.getvalue() + err.getvalue()
+    assert "NOT CHECKED" in both.upper(), (
+        f"{rule}: returned 2 without saying NOT CHECKED, so a caller reading the "
+        f"text cannot tell an admission from a pass:\n{both[:300]}")
+    # NAMING TAKES TWO SHAPES, AND DEMANDING THE WRONG ONE BREAKS A CORRECT GATE.
+    #
+    # When a population was established and turned out empty, the gate owes the
+    # COUNT: "examined 0 X". When the declaration source itself was unreadable no
+    # population was ever established, and "examined 0" would be a lie of a
+    # familiar kind — it reads as "looked and found nothing" when the truth is
+    # "could not look at all". Those two states are the whole subject of this
+    # lane and must not be collapsed into one line.
+    #
+    # MEASURED: this assertion first demanded the count from all twelve and
+    # reddened `only_the_declaring_step_writes_its_output` and
+    # `signoff_report_states_its_stage`, both of which correctly name the flow
+    # file they could not read. The gates were right and the assertion was wrong.
+    denominator = [ln for ln in out.getvalue().splitlines()
+                   if ln.strip().startswith("examined")]
+    named_subject = re.search(r"(?:[\w./-]+\.(?:yaml|yml|json|py|rpt|sdc)"
+                              r"|[\w-]+/[\w./-]+)", both)
+    assert denominator or named_subject, (
+        f"{rule}: said NOT CHECKED and named NEITHER the population it counted "
+        f"nor the subject it could not read. A bare admission is "
+        f"indistinguishable from a gate that decided not to bother:\n"
+        f"{both[:300]}")
+    if denominator:
+        assert re.search(r"examined\s+\d", denominator[0]), (
+            f"{rule}: the population line carries no count: {denominator[0]!r}")
+
+
+def test_the_denominator_sweep_can_fail():
+    """PROVE THE SWEEP FIRES — a bare NOT CHECKED must satisfy NEITHER shape."""
+    def shapes(text):
+        den = [ln for ln in text.splitlines()
+               if ln.strip().startswith("examined")]
+        sub = re.search(r"(?:[\w./-]+\.(?:yaml|yml|json|py|rpt|sdc)"
+                        r"|[\w-]+/[\w./-]+)", text)
+        return bool(den), bool(sub)
+
+    assert shapes("[g] NOT CHECKED — nothing to see here\n") == (False, False), (
+        "a bare NOT CHECKED satisfied one of the two naming shapes, so the "
+        "sweep above could never fail")
+    assert shapes("examined 0 widget(s)\n[g] NOT CHECKED — none\n")[0]
+    assert shapes("[g] NOT CHECKED — flow/phase1.yaml is absent\n")[1]
