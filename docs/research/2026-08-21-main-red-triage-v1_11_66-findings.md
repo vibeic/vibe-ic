@@ -5999,12 +5999,28 @@ into the arm **through the subject tree**. Design A's would need to suppress a
 wave, which means reaching the arm through its environment — and that is the
 exact-set contract that refuses (M107).
 
-**Design C is the working proof of M91's thesis, and it has been passing the whole
-time.** I spent this branch establishing that *the tree crosses and the environment
-does not*, built a sentinel to demonstrate it (M92), reverted it at the next
-layer — **while three tests already in the file were doing precisely that, every
-run, in both lanes.** The pattern I proposed as a remedy was sitting in the same
-file as the tests that need it.
+**Design C is the working proof of M91's thesis — but NOT because it "has been
+passing the whole time", which is what this paragraph used to say and is false.**
+On `origin/main` those three tests assert `r.returncode == 2` and `doc is None`;
+they were **RED** until design C re-founded them (section A: 3 RED -> GREEN).
+
+**What was always true is narrower and is the real point: C's control always
+CROSSED.** Its tamper is a commit, so delivery was never its problem — the tests
+were red on their ASSERTIONS (a retired `rc == 2` contract), not on their channel.
+**A and C differ from B and D on delivery; C differed from itself only on what it
+asserted.**
+
+**AND "THE TREE IS THE ONLY CHANNEL" IS ALSO WRONG — MEASURED.** The arm receives
+FIVE read-only mounts, every one of which crosses:
+
+    /subject   /runtime   /corpus   /input/selection   /input/progress-plan.json
+
+**So the thesis is not "only the tree crosses". It is: the ENVIRONMENT does not
+cross, and several MOUNTS do.** That distinction matters for D specifically —
+**D's proposed channel was the CORPUS, and the corpus crosses.** D is therefore
+not blocked on channel availability at all; it is blocked on what the corpus
+CONTAINS and on the arms computing the transition themselves (M96, M105). **I had
+folded D in with B under "the channel refuses", and that was wrong about D.**
 
 **So the ranking in the proposal was upside down.** C was listed third and is the
 only one of the four with a complete, self-delivering mutation arm. **A, B and D
