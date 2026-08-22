@@ -14,7 +14,8 @@ carries fifteen of the sixteen frozen branches; `land/batchbig-assembled` carrie
 `fix/jppafind-inert-ppa-gates` plus work the other lacks. Neither ships the whole
 batch, and they must be reconciled before either lands.
 
-**The one thing still open:** the two assemblies must be reconciled -- see §10.
+**The one thing still open:** the two assemblies must be reconciled -- and §11
+shows it costs ONE MERGE AND ONE REGENERATION, verified end to end.
 (§9 called `fix/jppafind-inert-ppa-gates` an unintended omission; §10 corrects
 that: it is assembled into `land/batchbig-assembled`.)
 
@@ -528,3 +529,31 @@ four of its distinctive added lines are present). A LOW ratio proves nothing on 
 own. What is load-bearing here is the column of ZEROS: fourteen branches at 0/N in
 `batchbig` is not a merge artefact, because merging leaves most files untouched and
 identical. Use the zeros; distrust the fractions.
+
+## 11. Reconciling the two assemblies is mechanical -- performed, not proposed
+
+    git checkout land/one-assembled
+    git merge land/batchbig-assembled
+    # conflicts, ALL of them generated indices:
+    #   vibe-ic-marketplace/README.md
+    #   vibe-ic-marketplace/plugins/vibe-ic/README.md
+    #   vibe-ic-marketplace/plugins/vibe-ic/programs/PROGRAM_INVENTORY.json
+    # resolve by taking either side, then:
+    python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py
+
+No content file conflicts at all. The three that do conflict are the same generated
+indices §1 says to rebuild rather than merge, and regenerating afterwards changed
+exactly ONE file.
+
+Verified on the reconciled tree:
+
+    jppafind files identical to its branch   13 of 24   (3 of 24 in one-assembled alone)
+    CAPTURE_ROUTING.json "steps"             64 entries, both jwire2 keys present
+    checker_execution_wiring_audit           rc 0
+    hdl_declaration_scan_strips_comments     rc 0
+    five modules incl. gatekeeper_review     200 passed, 9 skipped
+
+So the split found in §10 costs one merge and one regeneration. Nothing has to be
+re-assembled, no branch has to be re-landed, and neither side loses work: the
+frozen batch and `batchbig`'s extras coexist in one tree that passes both gates
+this document is accountable for.
