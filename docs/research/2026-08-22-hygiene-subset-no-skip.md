@@ -3079,3 +3079,58 @@ and is unfixed; the guarantee survives it because a second test now covers the
 property by a route the selector can follow.
 
 Scratch commit and worktree deleted; `main` untouched.
+
+## 47. The escape route was NOT only the selector — one of the two reds WAS selectable
+
+I have been repeating that §39's selector gap explains how `4232a7301` got in.
+Tested it against the actual commit rather than against the shape I assumed, and
+the answer is half right in a way that matters.
+
+**`4232a7301`'s diff is BROAD, not narrow** — 12 files, including the lander,
+`gatekeeper_review.py`, `evidence_citation_resolves_check.py`,
+`gate_is_wired_check.py` and four test files. So the §46 "narrow diffs escape"
+framing does not describe it.
+
+**Run the selector at that commit, base = its own parent:**
+
+```
+selected                                          122
+test_issue538  (the no-skip test)                   0   NOT selected
+test_issue1498 (the variable test)                  1   SELECTED
+```
+
+**And both were already red there:**
+
+```
+test_the_land_script_still_honours_the_variable        FAILED
+test_the_cli_offers_no_way_to_skip_the_hygiene_set     FAILED
+2 failed
+```
+
+**So the selector gap explains ONE of the two reds and not the other.**
+`test_issue538` was invisible — that part of §39 holds even for a broad diff,
+which is stronger evidence than the narrow-diff case I built it on.
+`test_issue1498` was SELECTED and was RED. A targeted run over that diff would
+have printed a failure.
+
+**Which means the interesting question moved.** It is no longer "why did the
+gate not see it" — for one of the two it did see it, or would have. It is: was a
+targeted run performed on that commit at all? `4232a7301` is a commit on
+`agent/jrows-eight-rows`, which reached `main` by being merged into a batch and
+landed with it. A per-commit patch-cadence gate and a batch landing are
+different events, and I have no evidence about which ran here.
+
+**Recorded as a correction and left there.** §39's claim — the no-skip test is
+unreachable by the default selector — stands and is now better evidenced. The
+CAUSAL story I attached to it — "that is how `4232a7301` got in" — is not
+established: half the evidence points the other way, since the sibling test was
+selectable and red. Whether anything ran it is a question about an event I did
+not observe, which is §42's territory and closed for the same reason: I can keep
+probing and cannot reach the evidence, and that combination builds a case rather
+than a finding.
+
+**What I would have published without this check:** a clean causal story that is
+half wrong, in the section a reader is told to read first. It survived four
+retellings before being tested — including in a message to a peer — which is the
+strongest argument in this document for testing the claims you are most
+confident about, rather than the ones that feel shaky.
