@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "MIL-STD-1553B does not specify silicon-level DFT / scan / BIST. Protocol-level self-checking (parity + Manchester + sync polarity + word-count + 4-12 µs response window + Status Word condition bits + mandatory BIT word mode code) plus dual-bus retry plus passive Bus Monitor + SAE AS4111 (Validation) / AS4112 (Production) industry test plans provide system-level diagnostics. SoC-integrated 1553 controllers from Data Device Corporation, Holt, UTMC, etc. add standard scan / JTAG insertion at the integrator level."
-  }
-}
