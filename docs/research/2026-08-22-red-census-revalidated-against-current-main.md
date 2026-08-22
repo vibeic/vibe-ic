@@ -28,6 +28,28 @@ branch's tree, 33 on main; the difference is the branch's own effect, Part 18):
 | 1 | 63x8 anti-skip | a considered disagreement between two rules, both defensible (Part 13) |
 | 1 | `magic` | environment, not a defect |
 
+**RE-DERIVE, DO NOT QUOTE.** Every figure above was re-run on 2026-08-22 and each
+is one command. **A number in a document is a claim about a tree, and the tree
+moves** — this document exists because that happened to its predecessor:
+
+```sh
+F=ptmo/main-red-triage-v11166
+git diff --name-only origin/main...$F | wc -l          # files            -> 11
+git rev-list --count a00f53f20..origin/main            # commits since base -> 244
+# the merge, in a throwaway worktree — verify by RUNNING it, not by exit 0:
+git worktree add -q --detach /tmp/mt origin/main && cd /tmp/mt \
+  && git merge --no-commit --no-ff $F                  # conflicts        -> none
+# the census, with the pointer set — WITHOUT it, 61 D3 cells report nothing:
+VIBE_IC_BENCHMARK_DATA=<a benchmark-data checkout> python3 -m pytest \
+  programs/tests/test_matrix_d3_outputs_produced.py \
+  programs/tests/test_matrix_63x8_coverage.py \
+  programs/tests/test_landing_merge_verdict.py -q      # main            -> 24 failed
+```
+
+**The pointer line is the one that matters.** Every red count taken without
+`VIBE_IC_BENCHMARK_DATA` — including every count in the frozen branch before
+Part 1 — was measured over a denominator missing 61 cells.
+
 **Nothing here is closable by an agent under this brief.** Every one needs a
 protected file, a product decision, a corpus publication, or an infrastructure
 call — **and the one that is technically available (the waiver) is the one the
