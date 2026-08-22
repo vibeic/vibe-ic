@@ -5682,6 +5682,54 @@ difference between a request and an admission**, and I have filed enough of the
 second as the first in this document to want the line drawn explicitly.
 
 
+## M107 — the allowlist is an EXACT-SET contract. The six are blocked harder than I said, and the tree remedy is the only one
+
+M91 said the six reds are blocked because their test controls *"cannot cross"* the
+7-name allowlist. **Read properly, the mechanism is stronger, and it settles a
+question I left open.**
+
+`_reviewed_process_env` (`hermetic_candidate_runner.py:242-292`) does not filter
+unknown names. It requires the passed set to equal the arm's set **exactly**:
+
+```python
+expected = (_TEST_REVIEWED_ENV_NAMES if arm in {"A1","B1"}
+            else _LAND_REVIEWED_ENV_NAMES)
+missing = sorted(expected - set(out))
+excess  = sorted(set(out) - expected)
+if missing or excess:
+    raise Refusal(f"reviewed --env set differs for arm {arm}; ...")
+```
+
+**An EXTRA name is a Refusal. A MISSING one is a Refusal.** And every value is
+shape-checked before that: `GATEKEEPER_BASE` must be a 40/64-char lowercase
+digest, nonces must be 64 hex, the three progress/report paths must be canonical
+and under `/evidence` with bounded components, `GATEKEEPER_VERIFY_ARM` must be one
+of exactly four literals.
+
+**So "the control cannot cross" understates it: passing a test control ABORTS THE
+ARM.** There is no silent drop to work around and no partial delivery to detect —
+the runner refuses to start.
+
+**That closes the question I never asked out loud: could the allowlist just be
+extended?** Mechanically yes — but it needs (a) an edit to `_LAND_REVIEWED_ENV_NAMES`
+in a PROTECTED file, (b) a value validator alongside the six that exist, and
+(c) the *same* set on the verifier side, because the check is symmetric.
+**Three coordinated changes across an authority file, to give a test a knob.**
+
+**And it makes M92's remedy the only one the design permits**, rather than the one
+I happened to try. The subject tree is not an alternative channel — **it is the
+channel**, because the environment is a closed, validated, exact-set contract and
+the tree is the thing the arm is given. **When I called the allowlist "the security
+property, not an obstacle" (M91) I was righter than my evidence: I had counted
+occurrences of three names; the contract refuses on set inequality in both
+directions.**
+
+**Fourth time the code said more than my measurement of it.** The pattern is
+consistent enough to name: **`grep -c` answers "is this name here", and the
+question was always "what does this code refuse".** Counting occurrences is not
+reading a contract.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
