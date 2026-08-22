@@ -18,16 +18,90 @@ Failure modes
 2. PROVENANCE_HASH_SHAPE_INVALID — an output value is not a
    `sha256:<64-hex>` string. Audit chain unreadable.
 3. PROVENANCE_OUTPUT_FILE_MISSING — the declared output path does
-   not exist on disk. Tool claimed to produce something it didn't.
+   not exist on disk AND nothing in the ledger accounts for that.
+   A reader following the pointer finds nothing and is told nothing.
 4. PROVENANCE_HASH_MISMATCH — declared SHA256 does not match the
    on-disk file. Output was tampered or claim is fabricated.
+4a. PROVENANCE_RELOCATION_UNVERIFIED (#434) — a row discloses that a
+   declared output ships under a different name, but the target is
+   absent or does not carry the declared digest. See below.
+4b. PROVENANCE_PRUNE_UNEXPLAINED (#434) — a not-shipped disclosure
+   with no stated reason. See below.
+4c. PROVENANCE_PRUNE_CONTRADICTED (#434) — a row discloses an output
+   as not shipped, and exactly that artefact is at that path. See
+   below.
 5. PROVENANCE_PATH_OUTSIDE_PROJECT (v1.6.32) — declared output path
    resolves outside the project root (absolute path or `..` traversal).
    Audit chain only attests artefacts owned by the project; outside
    paths can be fabricated externally.
-6. PROVENANCE_HASH_INCONSISTENT (v1.6.32) — same output path appears
-   in two entries with different declared hashes. The audit chain
-   contradicts itself; one of the two is wrong.
+6. PROVENANCE_OUTPUT_SUPERSEDED (DISCLOSED, non-fatal) — an entry
+   declares an output path that a LATER entry declares again. The
+   ledger is append-only and chronological, so the later record
+   describes the artefact's present state and the earlier one
+   describes a state that no longer exists. An earlier record is
+   therefore not a claim about the bytes on disk now, and is not
+   verified against them.
+
+   This replaces PROVENANCE_HASH_INCONSISTENT (v1.6.32), which read
+   two records of the same path with different hashes as a
+   self-contradicting audit chain. On any flow that iterates — every
+   flow with a `🔁` step — a re-run rewrites its outputs in place and
+   appends a fresh record, so that shape is the NORMAL one and the
+   rule fired on it every time. Combined with rule 4 (which compared
+   every historical record against the one current on-disk state),
+   this check was unsatisfiable after the first re-run: N re-runs of a
+   step produced 2N-1 guaranteed faults on an untouched, honest ledger.
+
+   What it still catches is unchanged and is the question this file
+   exists to answer: the NEWEST record of a path is verified against
+   disk exactly as before, so an artefact whose bytes are not the bytes
+   its producer recorded still FAILs rule 4. Superseded records are
+   reported, not silently dropped — see the census on the verdict line.
+6a. PROVENANCE_OUTPUT_UNPRODUCED (DISCLOSED, non-fatal) — the entry
+   declares an output and the entry's own `exit_code` is non-zero.
+   `_log_invocation` hashes every path the CALL SITE declared, whatever
+   the exit code, and it cannot know whether that invocation put those
+   bytes there. So a run that exited 1 having written nothing declares
+   the digest of whatever the previous run — or a hand edit — left
+   behind.
+
+   Such a record is an OBSERVATION, not a production claim, and rule 6
+   must not let it supersede anything: measured, an honest ledger whose
+   artefact is then hand-edited FAILs rule 4, and appending one rc=1
+   invocation that merely NAMES that path made the identical ledger
+   PASS. It is equally not verified against disk, because a later
+   honest run may legitimately have replaced those bytes and faulting
+   on that would punish an honest ledger. Neither authoritative nor
+   verified is its own state, so it gets its own outcome and its own
+   census column rather than being folded into either.
+
+   THOSE TWO ARE THE WHOLE EXEMPTION: it does not supersede, and it is
+   not compared against disk. A failed row remains subject to every
+   check that asks whether the LEDGER IS WELL-FORMED — hash shape,
+   `PROVENANCE_PATH_OUTSIDE_PROJECT`, `PROVENANCE_OUTPUT_FILE_MISSING`
+   and the publish-time disclosure rules — because no exit code answers
+   those questions. A dangling pointer is dangling and a path outside
+   the project root is outside it however the run that wrote the row
+   ended. Rule 6a first shipped as one `continue` placed ahead of the
+   entire on-disk block, which made it a general amnesty for the row
+   instead: a failed invocation that ALSO declared an artefact outside
+   the project boundary became the one row this gate could not report.
+   The exemption is now applied at each of its two points, and the
+   structural checks sit between them.
+
+Known limit (stated because it is real, not because it is fixed)
+----------------------------------------------------------------
+Rule 6 cannot distinguish an honest re-run from a hand-edited artefact
+that a later SUCCESSFUL invocation merely named. Both produce exactly
+one superseded record and a newest record that matches disk, so both
+end PASS with `1 SUPERSEDED`. Closing it needs a fact this ledger does
+not record — whether the invocation actually WROTE the path — and the
+only cheap proxy (a filesystem mtime window) is precisely the
+attribution-by-what-moved shortcut `_hash_declared_outputs` refuses as
+fabrication. So the census discloses that some part of the ledger was
+not verified; it does not claim to say why. Rule 6a closes the half of
+this that IS recorded: a non-zero exit code.
+
 8. PROVENANCE_REMOVAL_EMPTY (v0.2.102) — an entry marked as a removal /
    supersede event but with an empty `removed` / `superseded` list. A
    removal must reference what it removed.
@@ -60,6 +134,105 @@ PROVENANCE_REMOVAL_FILE_STILL_PRESENT). A removal marker with empty
 weaken the gate for NORMAL entries: an entry without a removal marker
 that has empty `outputs` still FAILs with PROVENANCE_OUTPUTS_MISSING.
 
+Publish-time disclosures: a THIRD outcome, not a waiver (#434)
+--------------------------------------------------------------
+#414 gave `provenance_declared_output_check --reconcile` two additive
+row-level disclosures, written when a deliverable is published:
+
+    outputs_relocated_at_publish  {declared path: shipped path}
+    outputs_pruned_at_publish     [declared paths]
+    outputs_pruned_reason         why they are not here
+
+This gate then ERRORed on exactly the rows those disclosures describe:
+102 PROVENANCE_OUTPUT_FILE_MISSING across the 21 tracked ledgers, every
+one of them a row #414 had deliberately annotated. So the cheapest way
+to make this gate green was to DELETE the disclosure — restoring the
+dangling pointer #414 removed. That is the trap #434 was filed about.
+
+    A MARKER THAT SUPPRESSES A CHECK IS A WAIVER.
+    A MARKER THAT CHANGES THE CHECK'S QUESTION IS A FACT.
+    THIS IS THE SECOND. Here is what that costs the row, concretely:
+
+* A RELOCATION MAKES THE GATE DO MORE WORK, NOT LESS. Before #434 the
+  row was one existence test that failed. Now the gate follows the
+  pointer, checks the target is inside the project, hashes it, and
+  requires the digest to EQUAL the declared one. Only then is the
+  output VERIFIED — the bytes really are here, under another name.
+  A relocation to a file that is absent, outside the project, or
+  carrying any other digest is PROVENANCE_RELOCATION_UNVERIFIED
+  (ERROR) — strictly harder to satisfy than the absence it replaced,
+  and it cannot launder a changed artefact into a passing one.
+
+* A NOT-SHIPPED DISCLOSURE MUST BE (a) EXPLAINED, (b) TRUE, and (c)
+  BACKED BY A DIGEST. `outputs_pruned_at_publish` with no non-empty
+  `outputs_pruned_reason` is a bare silencer, and the gate refuses it:
+  PROVENANCE_PRUNE_UNEXPLAINED (ERROR). The declared digest still has
+  to pass the sha256 shape and cross-entry consistency checks — those
+  run BEFORE any of this. And PRESENCE IS TESTED FIRST, ALWAYS: if the
+  path exists, the file is hashed and a mismatch is reported exactly
+  as before, so adding a pruned marker can never silence a
+  PROVENANCE_HASH_MISMATCH. If the path exists AND hashes as declared
+  AND the row says it was not shipped, the disclosure is provably
+  false — PROVENANCE_PRUNE_CONTRADICTED (ERROR).
+
+Only after all of that does an absent, explained, digest-carrying,
+uncontradicted output become the third outcome:
+
+    PROVENANCE_OUTPUT_NOT_VERIFIABLE_HERE, severity DISCLOSED
+
+which is non-fatal and is NOT silent: the count appears in the PASS
+line and every instance is listed in the `--json` report. "PASS" on
+this gate has never meant "every claim was exercised", and after #434
+it says so in words.
+
+There is a SECOND DISCLOSED outcome, added for #365:
+
+    PROVENANCE_INVOCATION_NO_DECLARED_OUTPUT, severity DISCLOSED
+
+a per-invocation COMMAND-AUDIT row (`record == "invocation"`, written by
+`phase3_one_shot_runner._log_invocation`) whose call site declared no
+output. Such a row makes no artefact claim, so there is nothing to
+verify — but it is recorded rather than skipped, for the same reason as
+above. `--require-outputs-present` does NOT promote this one: that flag
+asks whether a DECLARED output is present on disk, and a row that
+declared nothing is outside the question. Promoting it would simply
+restore the FAIL that #365 was filed for. The narrowness that keeps it
+honest is at the check itself: the row must also carry the probe fields
+that writer always emits, so asserting the class alone buys nothing.
+
+WHY THIS GATE STILL RUNS ON A PUBLISHED DELIVERABLE
+---------------------------------------------------
+#432 established that the run directory is the right population for
+the PRODUCER-side question ("did the run make this?"). The obvious
+next move was to say this gate is producer-side too and should not run
+on curated cells at all. Measured across the 21 tracked ledgers (156
+declared outputs) that answer is wrong:
+
+    present at the declared path, hashes as declared        54
+    absent, disclosed as relocated, hashes at the target    12
+    absent, disclosed as not shipped, digest recorded       90
+    absent, no disclosure of any kind                        0
+
+Dropping the gate on published cells would discard 66 real byte-level
+verifications — the only place the SHIPPED bytes of a deliverable are
+checked against the run's own record, from the deliverable's own
+directory — to remove 102 findings that were never wrong about the
+facts, only about the verdict. The consumer-side question ("is what I
+received what was made?") is at its MOST meaningful on the curated
+tree, because that tree is what a reader actually receives. So the
+gate stays and the outcome splits.
+
+`--require-outputs-present` exists for the other population: on a RUN
+directory nothing has been published yet, so a not-shipped disclosure
+is itself suspicious, and the flag promotes every DISCLOSED finding
+back to ERROR. Population is chosen by an explicit flag, never guessed
+from the presence of a marker.
+
+Read alongside `provenance_declared_output_check` (#414), which asks
+the same question of the git INDEX at repo scope. This gate reads the
+WORKING TREE, because on a live run directory nothing is tracked at
+all; the two populations differ and that is deliberate.
+
 VACUOUS_PASS
 ------------
 * `<project>/provenance.jsonl` does not exist. Audit chain has not
@@ -75,6 +248,7 @@ Usage
                                                           [--json <out>]
                                                           [--strict-timing]
                                                           [--max-entries N]
+                                                          [--require-outputs-present]
 
 Exit codes
     0  PASS / VACUOUS_PASS
@@ -89,10 +263,13 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
+
+import _published_tree
 
 
 _RE_SHA256 = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
@@ -108,7 +285,17 @@ class ProvenanceFinding:
     tool: str
     rule: str
     detail: str
-    severity: str = "ERROR"   # ERROR / WARNING
+    # ERROR    — fatal, the audit chain is broken here.
+    # WARNING  — non-fatal, something looks wrong about the record.
+    # DISCLOSED (#434) — non-fatal, and nothing is wrong: the ledger
+    #   itself states this output is not in this tree and says why.
+    #   A THIRD severity rather than a WARNING because there is no
+    #   defect to act on, and rather than silence because 90 of 156
+    #   declared outputs across the tracked corpus land here — a
+    #   reader who is not told that would take "PASS" to mean all 156
+    #   were exercised. Fatality is computed from ERROR alone, so
+    #   adding this severity cannot change any existing verdict.
+    severity: str = "ERROR"   # ERROR / WARNING / DISCLOSED
 
 
 def _file_sha256(path: Path, max_bytes: Optional[int] = None) -> str:
@@ -264,6 +451,69 @@ def _removal_list(entry: dict) -> Optional[list]:
     return refs
 
 
+def _is_failed_invocation(entry: dict) -> bool:
+    """True when this row records an invocation that EXITED NON-ZERO.
+
+    `_log_invocation` hashes whatever sits at each path the CALL SITE
+    declared — it cannot know whether THIS invocation put it there. So a
+    run that exited 1 having written nothing still declares the digest of
+    whatever the previous run (or a hand edit) left at that path. Such a
+    row is an OBSERVATION, not a production claim, and the two must not
+    be read alike; see `PROVENANCE_OUTPUT_UNPRODUCED`.
+
+    A row with NO `exit_code` key is not a failed invocation: the other
+    writer of this ledger (`provenance_logger.py`) omits the key entirely,
+    and every such row predates this rule. Absence stays production.
+    """
+    if "exit_code" not in entry:
+        return False
+    try:
+        return int(entry["exit_code"]) != 0
+    except (TypeError, ValueError):
+        # An unreadable exit_code is not evidence of success. Treat it as
+        # a production row (unchanged behaviour) rather than inventing a
+        # failure — the shape rules elsewhere own malformed records.
+        return False
+
+
+def _latest_declaration_index(entries: List[dict]) -> Dict[str, int]:
+    """Map each declared output path to the index of the LAST entry
+    that PRODUCED it.
+
+    provenance.jsonl is append-only (`provenance_logger.py` opens it
+    with mode "a" and no runner truncates it), so ledger order is
+    production order. When a step re-runs and rewrites an output in
+    place, it appends a new record; the newest record for a path is the
+    one that describes the bytes now on disk.
+
+    Removal / supersede events are skipped: they declare no outputs and
+    are handled by their own rules.
+
+    FAILED invocations are skipped too, and that exclusion is load-
+    bearing rather than tidy. Without it a run that exited non-zero
+    having written nothing becomes the newest record of every path it
+    declared — carrying the digest of whatever was already there — and
+    so vouches for bytes it did not produce, retiring the honest
+    declaration of the run that did. Measured: an honest ledger whose
+    artefact was then hand-edited FAILs; append one rc=1 invocation
+    naming that path and the same ledger PASSes. A failed invocation
+    supersedes nothing.
+    """
+    latest: Dict[str, int] = {}
+    for i, e in enumerate(entries):
+        if _removal_list(e) is not None:
+            continue
+        if _is_failed_invocation(e):
+            continue
+        outs = e.get("outputs")
+        if not isinstance(outs, dict):
+            continue
+        for rel in outs:
+            if isinstance(rel, str) and rel:
+                latest[rel] = i
+    return latest
+
+
 # A13 (#173) — `ip_catalog_pull` (ip_catalog_pull.py) records the RTL files it
 # copied as an `outputs_sha256` LIST of bare sha256 hex digests plus a
 # `files_pulled` count. That is a legitimate AGGREGATE provenance shape, distinct
@@ -287,6 +537,50 @@ def _ip_catalog_pull_aggregate(entry: dict) -> Optional[list]:
         return None
     lst = entry.get("outputs_sha256")
     return lst if isinstance(lst, list) else []
+
+
+# #434 — publish-time disclosures written by
+# `provenance_declared_output_check --reconcile` (#414). The key names are
+# matched EXACTLY, with no aliases and no fuzzy suffix matching, unlike the
+# removal-event recognizer above. That recognizer is loose because it has to
+# accept ledgers written by tools it does not own; these three keys have
+# exactly one writer in the tree, and every additional spelling accepted here
+# would be one more way to spell "stop asking".
+_RELOCATED_KEY = "outputs_relocated_at_publish"
+_PRUNED_KEY = "outputs_pruned_at_publish"
+_PRUNED_REASON_KEY = "outputs_pruned_reason"
+
+
+def _ellipsis(text: str, limit: int) -> str:
+    """Quote the head of a stated reason. The full text stays in the ledger
+    and in `--json`; the finding only has to show the reader that a reason
+    was given and roughly what it says."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def _publish_disclosures(entry: dict) -> Tuple[Dict[str, str], set, str]:
+    """Return (relocated {declared -> shipped}, pruned {declared}, reason).
+
+    Scoped to THIS row: a row that declares an output must itself disclose
+    it. A disclosure in a neighbouring row says nothing about this row's
+    claim, and letting one leak across rows would mean a single marker
+    anywhere in the ledger could account for a path everywhere in it.
+
+    Non-dict / non-list / non-string values degrade to empty, so a malformed
+    disclosure accounts for nothing and the output falls through to
+    PROVENANCE_OUTPUT_FILE_MISSING — never the other way round.
+    """
+    rel_raw = entry.get(_RELOCATED_KEY)
+    relocated = {k: v for k, v in rel_raw.items()
+                 if isinstance(k, str) and isinstance(v, str) and v} \
+        if isinstance(rel_raw, dict) else {}
+    pruned_raw = entry.get(_PRUNED_KEY)
+    pruned = {p for p in pruned_raw if isinstance(p, str) and p} \
+        if isinstance(pruned_raw, list) else set()
+    reason = entry.get(_PRUNED_REASON_KEY)
+    reason = reason.strip() if isinstance(reason, str) else ""
+    return relocated, pruned, reason
 
 
 def _is_inside_project(project: Path, candidate: Path) -> bool:
@@ -324,23 +618,86 @@ def _load_provenance(project: Path) -> Tuple[Optional[List[dict]], Optional[str]
     return entries, None
 
 
+def _published_paths(project: Path) -> Optional[FrozenSet[str]]:
+    """The set of paths this deliverable actually SHIPS, or None if that is
+    not a meaningful question here.
+
+    Found by the gatekeeper landing #434, on the very corpus the change was
+    measured against. "Is this output shipped?" was answered by asking the
+    LOCAL DISK, but shipped-ness is a property of the published tree, which is
+    what git tracks. Measured on 21 tracked ledgers: 37 declared outputs exist
+    on disk while being UNTRACKED — leftover run artefacts on the author's
+    machine that no reader who clones this repository ever receives. Their
+    presence turned three cells' honest `not shipped` disclosures into
+    PROVENANCE_PRUNE_CONTRADICTED, so the SAME commit passed in a fresh
+    worktree (tracked files only) and failed in a working checkout.
+
+    A gate whose verdict depends on untracked leftovers is not measuring the
+    artefact; it is measuring the machine.
+
+    The discriminator is the LEDGER ITSELF. A deliverable is published exactly
+    when its `provenance.jsonl` is part of the published tree; then shipped
+    means tracked. A raw run directory — outside a repository, or inside one
+    but not committed — has published nothing yet, so the question does not
+    apply and presence on disk remains the answer.
+    """
+    return _published_tree.published_paths(project, require="provenance.jsonl")
+
+
 def audit(project: Path, strict_timing: bool = False,
-          max_entries: Optional[int] = None
+          max_entries: Optional[int] = None,
+          require_outputs_present: bool = False,
           ) -> Tuple[str, List[ProvenanceFinding]]:
+    """Verdict + findings. Thin wrapper over `audit_counted` so that every
+    existing 2-tuple caller keeps working; #434 needed the per-outcome
+    counts as well, and a verdict line that cannot state them is how "PASS"
+    comes to mean "all 156 declared outputs were exercised"."""
+    verdict, findings, _counts = audit_counted(
+        project, strict_timing=strict_timing, max_entries=max_entries,
+        require_outputs_present=require_outputs_present)
+    return verdict, findings
+
+
+def audit_counted(project: Path, strict_timing: bool = False,
+                  max_entries: Optional[int] = None,
+                  require_outputs_present: bool = False,
+                  ) -> Tuple[str, List[ProvenanceFinding], Dict[str, int]]:
+    """As `audit`, plus the #434 outcome census:
+
+        declared              every path in every entry's `outputs`
+        verified_present      present at the declared path, hashes
+        verified_relocated    absent, disclosed relocated, target hashes
+        not_verifiable_here   absent, disclosed not shipped, digest kept
+    """
+    _counts = {"declared": 0, "superseded": 0, "unproduced": 0,
+               "verified_present": 0,
+               "verified_relocated": 0, "not_verifiable_here": 0}
+    # #434 follow-up (gatekeeper): "shipped" is a property of the PUBLISHED
+    # tree, not of this machine's disk. None -> not a published deliverable,
+    # so presence on disk remains the honest answer.
+    published = _published_paths(project)
+
+    def _shipped(rel: str) -> bool:
+        return (project / rel).is_file() if published is None else rel in published
+
     entries, err = _load_provenance(project)
     if err:
         return "FAIL", [ProvenanceFinding(
             entry_index=-1, tool="-", rule="PROVENANCE_PARSE_ERROR",
-            detail=err)]
+            detail=err)], _counts
     if entries is None:
-        return "VACUOUS_PASS", []
+        return "VACUOUS_PASS", [], _counts
     if not entries:
-        return "VACUOUS_PASS", []
+        return "VACUOUS_PASS", [], _counts
     findings: List[ProvenanceFinding] = []
+    verified_present = 0
+    verified_relocated = 0
     to_check = entries[:max_entries] if max_entries else entries
-    # Track hashes per relative output path to flag cross-entry
-    # contradictions (PROVENANCE_HASH_INCONSISTENT, v1.6.32).
-    seen_hashes: Dict[str, Tuple[int, str]] = {}
+    # Newest record per output path. An append-only ledger records a
+    # SEQUENCE of production events; only the newest record of a path
+    # is a claim about the bytes on disk now. Computed over exactly the
+    # audited slice so --max-entries stays self-consistent.
+    latest_decl: Dict[str, int] = _latest_declaration_index(to_check)
     # v0.2.102 — for #493 part 3. Pre-scan removal/supersede events so a
     # NORMAL pull entry's output that was legitimately removed by a later
     # prune event is not flagged PROVENANCE_OUTPUT_FILE_MISSING. The
@@ -444,13 +801,66 @@ def audit(project: Path, strict_timing: bool = False,
             # possible without paths (that is what the v1.0.74 `outputs` dict
             # adds, verified above when present).
             continue
+        # #365 — a per-invocation COMMAND-AUDIT record (record == "invocation",
+        # written by phase3_one_shot_runner._log_invocation) whose call site
+        # DECLARED no output legitimately carries none. The writer's own
+        # contract: "Declared by the CALL SITE, hashed here. Absent when the
+        # caller declared nothing or nothing it declared was produced — empty is
+        # honest." Such a row makes NO artefact claim, so it cannot hide an
+        # unverified artefact. Regression fixed: the #365 invocation records
+        # POST-DATE this gate, which was written for the one-row-per-artefact
+        # model, so every phase-3 run with report/probe tool invocations (sta
+        # report runs, yosys lib-probe / post-layout LEC, klayout grid-snap,
+        # tap-geometry measurement) FAILed the completion audit even with clean
+        # sign-off.
+        #
+        # §4.05 — this is a guard RELAXATION, so it is narrow in BOTH axes:
+        #   * The class must be EXPLICITLY DECLARED (`record == "invocation"`),
+        #     never inferred from which keys happen to be present — that
+        #     inference is what charged the probe row in the first place, and
+        #     `record` exists precisely so "a consumer can tell the two writers
+        #     apart" (the writer's own docstring).
+        #   * The row must ALSO carry the probe fields `_log_invocation` ALWAYS
+        #     emits (`command`, `exit_code`, `version_capture`), so a bare
+        #     `{"record": "invocation"}` — hand-written, truncated, or forged —
+        #     CANNOT buy an exemption. Verified against the writer: all three
+        #     are unconditional in its entry dict, `outputs` alone is
+        #     conditional.
+        #   * A row that DOES carry a usable `outputs` dict falls THROUGH to the
+        #     normal on-disk + hash verification below, so the exemption never
+        #     suppresses verification of outputs that were actually declared.
+        #   * An ARTEFACT-declaration row (no `record`, or any other class) with
+        #     empty outputs still FAILs PROVENANCE_OUTPUTS_MISSING.
+        # And it is NOT SILENT: skipping the row without saying so would be a
+        # hidden decision, the thing this file's DISCLOSED severity exists to
+        # prevent, so the exemption is RECORDED (and counted in
+        # `disclosed_count` on the verdict line) rather than dropped.
+        if (e.get("record") == "invocation"
+                and not (isinstance(outputs, dict) and outputs)
+                and "command" in e and "exit_code" in e
+                and "version_capture" in e):
+            _mk = e.get("marker")
+            _mk = _ellipsis(str(_mk), 80) if _mk else "-"
+            findings.append(ProvenanceFinding(
+                entry_index=i, tool=tool,
+                rule="PROVENANCE_INVOCATION_NO_DECLARED_OUTPUT",
+                severity="DISCLOSED",
+                detail=("command-audit invocation record declared no output "
+                        f"(marker={_mk}) — empty is honest per the "
+                        "_log_invocation writer contract; the row makes no "
+                        "artefact claim to verify")))
+            continue
         if not outputs or not isinstance(outputs, dict):
             findings.append(ProvenanceFinding(
                 entry_index=i, tool=tool,
                 rule="PROVENANCE_OUTPUTS_MISSING",
                 detail="entry has no 'outputs' key or it is empty/non-dict"))
             continue
+        # #434 — this row's publish-time disclosures, if any. Read once per
+        # row; consulted ONLY after presence and hash have been decided.
+        relocated_map, pruned_set, pruned_reason = _publish_disclosures(e)
         for rel_path, claimed in outputs.items():
+            _counts["declared"] += 1
             if not isinstance(claimed, str) or not _RE_SHA256.match(claimed):
                 findings.append(ProvenanceFinding(
                     entry_index=i, tool=tool,
@@ -459,20 +869,65 @@ def audit(project: Path, strict_timing: bool = False,
                            f"a 'sha256:<64-hex>' string"))
                 continue
             declared_hex = claimed.split(":", 1)[1].lower()
-            # Cross-entry consistency: same rel_path must declare same
-            # hash. (Different tools producing the same artefact would
-            # be unusual; the audit chain should reflect a single owner.)
-            prev = seen_hashes.get(rel_path)
-            if prev is not None and prev[1] != declared_hex:
+            # A FAILED invocation declares what it FOUND, not what it
+            # made. `_log_invocation` hashes each path the call site
+            # declared regardless of the exit code, so a run that exited
+            # non-zero having written nothing still carries the digest of
+            # whatever was already at that path. Reading that as a
+            # production claim is how a broken artefact gets vouched for
+            # by the very run that failed over it.
+            #
+            # So: not authoritative (it superseded nothing — see
+            # `_latest_declaration_index`) and not verified against disk
+            # either, because a later honest run may legitimately have
+            # replaced those bytes and faulting on that would punish an
+            # honest ledger. Which leaves it in neither state, so it gets
+            # its own: DISCLOSED and counted, never silence and never
+            # folded into "verified".
+            #
+            # THAT IS THE WHOLE OF THE EXEMPTION, AND IT IS DELIBERATELY
+            # NOT AN AMNESTY FOR THE ROW. It first shipped as a blanket
+            # `continue` here, ahead of everything below, so a failed
+            # row's outputs skipped the path-boundary check and the
+            # existence check too — questions about whether the LEDGER is
+            # well-formed, which no exit code answers. A dangling pointer
+            # is dangling and a path outside the project root is outside
+            # it however the run that wrote the row ended; a failed
+            # invocation that also escaped the project boundary was the
+            # one row the audit could not name. So the exemption is
+            # applied where each half of it belongs: the supersession
+            # decision immediately below, and the on-disk digest
+            # comparison further down, with the ERROR-class structural
+            # checks between them reached exactly as any other row
+            # reaches them.
+            failed_invocation = _is_failed_invocation(e)
+            # Supersession. The ledger is append-only, so a LATER entry
+            # declaring this same path describes the artefact's present
+            # state and this record describes a state that no longer
+            # exists. An earlier record is not a claim about the bytes
+            # on disk now, so it is not verified against them — it is
+            # DISCLOSED (non-fatal, and nothing is wrong) rather than
+            # dropped in silence, and it is counted on the verdict line.
+            #
+            # Only the newest record of a path reaches the on-disk
+            # verification below, and it reaches it UNCHANGED. Tampering
+            # is still caught there: editing the bytes without producing
+            # a new record leaves the newest record declaring the
+            # pre-tamper digest, which mismatches.
+            latest_i = latest_decl.get(rel_path)
+            if (not failed_invocation
+                    and latest_i is not None and latest_i != i):
+                _counts["superseded"] += 1
                 findings.append(ProvenanceFinding(
-                    entry_index=i, tool=tool,
-                    rule="PROVENANCE_HASH_INCONSISTENT",
+                    entry_index=i, tool=tool, severity="DISCLOSED",
+                    rule="PROVENANCE_OUTPUT_SUPERSEDED",
                     detail=f"output '{rel_path}' declared sha256:"
-                           f"{declared_hex} here, but entry#{prev[0]} "
-                           f"declared sha256:{prev[1]}"))
-                # Continue with on-disk verification anyway.
-            else:
-                seen_hashes[rel_path] = (i, declared_hex)
+                           f"{declared_hex} here, and declared again by "
+                           f"the later entry#{latest_i}; the ledger is "
+                           f"append-only, so entry#{latest_i} is the "
+                           f"record of the bytes now on disk and this "
+                           f"one records a superseded state"))
+                continue
             on_disk = project / rel_path
             # v1.6.32 path-traversal guard
             if not _is_inside_project(project, on_disk):
@@ -483,17 +938,140 @@ def audit(project: Path, strict_timing: bool = False,
                            f"the project root; audit chain only attests "
                            f"project-owned artefacts"))
                 continue
-            if not on_disk.exists():
+            if not _shipped(rel_path):
+                # Deliberate non-verification made visible: the file is right
+                # there but is not part of what this deliverable publishes, so
+                # its bytes are not the reader's bytes. Silently skipping it
+                # would be a hidden decision.
+                untracked_leftover = on_disk.is_file()
+                if untracked_leftover:
+                    findings.append(ProvenanceFinding(
+                        entry_index=i, tool=tool, severity="DISCLOSED",
+                        rule="PROVENANCE_OUTPUT_PRESENT_BUT_UNTRACKED",
+                        detail=f"declared output '{rel_path}' is on this disk "
+                               f"but is NOT tracked by the published tree; a "
+                               f"reader who clones does not receive it, so it "
+                               f"is judged as not shipped rather than "
+                               f"verified from a local leftover"))
                 # v0.2.102 — for #493 part 3. A path legitimately removed
                 # by a later prune/supersede event is expected to be
                 # absent; do not flag it as a missing-output fault.
                 if rel_path in removed_paths:
                     continue
+                # #434 — an absence the ledger accounts for. Order matters:
+                # relocation is tried FIRST and, if it is present but broken,
+                # it ERRORs rather than falling through to the pruned branch.
+                # A row that claims the file ships elsewhere does not get to
+                # fall back on "it does not ship" when the claim fails.
+                if rel_path in relocated_map:
+                    tgt_rel = relocated_map[rel_path]
+                    tgt = project / tgt_rel
+                    if not _is_inside_project(project, tgt):
+                        findings.append(ProvenanceFinding(
+                            entry_index=i, tool=tool,
+                            rule="PROVENANCE_PATH_OUTSIDE_PROJECT",
+                            detail=f"declared output '{rel_path}' is disclosed "
+                                   f"as relocated to '{tgt_rel}', which "
+                                   f"resolves outside the project root"))
+                        continue
+                    try:
+                        tgt_hex = (_file_sha256(tgt)
+                                   if (_shipped(tgt_rel) and tgt.is_file())
+                                   else None)
+                    except OSError:
+                        tgt_hex = None
+                    if tgt_hex is None:
+                        findings.append(ProvenanceFinding(
+                            entry_index=i, tool=tool,
+                            rule="PROVENANCE_RELOCATION_UNVERIFIED",
+                            detail=f"declared output '{rel_path}' is disclosed "
+                                   f"as relocated to '{tgt_rel}', which is not "
+                                   f"a readable file here; the disclosure does "
+                                   f"not account for the absence"))
+                        continue
+                    if tgt_hex.lower() != declared_hex:
+                        findings.append(ProvenanceFinding(
+                            entry_index=i, tool=tool,
+                            rule="PROVENANCE_RELOCATION_UNVERIFIED",
+                            detail=f"declared output '{rel_path}' is disclosed "
+                                   f"as relocated to '{tgt_rel}', but that file "
+                                   f"is sha256:{tgt_hex}, not the declared "
+                                   f"sha256:{declared_hex}; a relocation may "
+                                   f"only repoint at the SAME bytes"))
+                        continue
+                    # Verified — the bytes the run recorded are here, under
+                    # the name the disclosure gives. Counted, not flagged.
+                    verified_relocated += 1
+                    continue
+                if rel_path in pruned_set:
+                    if not pruned_reason:
+                        findings.append(ProvenanceFinding(
+                            entry_index=i, tool=tool,
+                            rule="PROVENANCE_PRUNE_UNEXPLAINED",
+                            detail=f"declared output '{rel_path}' is listed in "
+                                   f"'{_PRUNED_KEY}' with no non-empty "
+                                   f"'{_PRUNED_REASON_KEY}'; a marker that "
+                                   f"states no reason silences the check "
+                                   f"instead of answering it, and is refused"))
+                        continue
+                    findings.append(ProvenanceFinding(
+                        entry_index=i, tool=tool,
+                        severity=("ERROR" if require_outputs_present
+                                  else "DISCLOSED"),
+                        rule="PROVENANCE_OUTPUT_NOT_VERIFIABLE_HERE",
+                        detail=(f"declared output '{rel_path}' is not in this "
+                                f"tree and the ledger says so: sha256:"
+                                f"{declared_hex} was recorded by the run and "
+                                f"cannot be checked here. Reason given: "
+                                f"{_ellipsis(pruned_reason, 120)}")
+                               + (" — --require-outputs-present: on a run "
+                                  "directory nothing has been published yet, "
+                                  "so a not-shipped disclosure is itself the "
+                                  "fault." if require_outputs_present else "")))
+                    continue
+                if untracked_leftover:
+                    # NOT "does not exist on disk" — it plainly does, and this
+                    # gate said so one finding earlier. Two contradictory
+                    # verdicts on one row is the defect #434 was filed about,
+                    # reproduced by the fix for it. Still a FAULT: the ledger
+                    # declares an output the deliverable does not ship and
+                    # nothing accounts for that. Only the REASON changes.
+                    findings.append(ProvenanceFinding(
+                        entry_index=i, tool=tool,
+                        rule="PROVENANCE_OUTPUT_NOT_SHIPPED_UNDISCLOSED",
+                        detail=f"declared output '{rel_path}' is on this disk "
+                               f"but the published tree does not carry it, and "
+                               f"no disclosure accounts for that; a reader who "
+                               f"clones receives nothing and is told nothing, "
+                               f"while the author sees a file and believes it "
+                               f"shipped"))
+                    continue
                 findings.append(ProvenanceFinding(
                     entry_index=i, tool=tool,
                     rule="PROVENANCE_OUTPUT_FILE_MISSING",
                     detail=f"declared output '{rel_path}' does not exist on "
-                           f"disk; tool claim cannot be verified"))
+                           f"disk, and no disclosure in this entry accounts "
+                           f"for it; a reader following the ledger finds "
+                           f"nothing and is told nothing"))
+                continue
+            # The path is inside the project and the deliverable ships it.
+            # Everything a failed row can still be held to has now been
+            # asked of it; what remains is the digest comparison, and that
+            # is the half of the exemption that belongs here — the row
+            # recorded what it FOUND, so disagreeing with disk is not
+            # evidence of tampering. Reported, counted, never verified.
+            if failed_invocation:
+                _counts["unproduced"] += 1
+                findings.append(ProvenanceFinding(
+                    entry_index=i, tool=tool, severity="DISCLOSED",
+                    rule="PROVENANCE_OUTPUT_UNPRODUCED",
+                    detail=f"output '{rel_path}' is declared by an "
+                           f"invocation that exited "
+                           f"{e.get('exit_code')!r}; a failed run did not "
+                           f"produce these bytes, it only hashed what was "
+                           f"already at that path, so this record neither "
+                           f"supersedes an earlier declaration nor is "
+                           f"verified against disk"))
                 continue
             try:
                 actual = _file_sha256(on_disk)
@@ -509,6 +1087,21 @@ def audit(project: Path, strict_timing: bool = False,
                     rule="PROVENANCE_HASH_MISMATCH",
                     detail=f"output '{rel_path}': declared sha256:{declared_hex} "
                            f"vs on-disk sha256:{actual}"))
+                # NOTE the fall-through: a pruned marker on a path that DOES
+                # exist never suppresses the mismatch above, because presence
+                # is tested before any disclosure is read. That ordering is
+                # the whole anti-gaming property — "mark it pruned" must not
+                # be a way to silence a changed artefact.
+            else:
+                verified_present += 1
+                if rel_path in pruned_set:
+                    findings.append(ProvenanceFinding(
+                        entry_index=i, tool=tool,
+                        rule="PROVENANCE_PRUNE_CONTRADICTED",
+                        detail=f"'{rel_path}' is listed in '{_PRUNED_KEY}' as "
+                               f"not shipped, but a file with exactly the "
+                               f"declared sha256:{declared_hex} is at that "
+                               f"path; the disclosure is false"))
     # Synthetic-timing detection (warning-only by default)
     pattern = _detect_synthetic_timing(entries)
     if pattern is not None:
@@ -517,8 +1110,17 @@ def audit(project: Path, strict_timing: bool = False,
             entry_index=-1, tool="-",
             rule="ATTEST_TIMING_SUSPICIOUS",
             severity=sev, detail=pattern))
+    _counts["verified_present"] = verified_present
+    _counts["verified_relocated"] = verified_relocated
+    _counts["not_verifiable_here"] = sum(
+        1 for f in findings
+        if f.rule == "PROVENANCE_OUTPUT_NOT_VERIFIABLE_HERE")
+    # Fatality is still ERROR-only. DISCLOSED is deliberately outside this
+    # set — and `--require-outputs-present` does not add a case here, it
+    # raises the severity at the point of emission, so there is exactly one
+    # definition of "fatal" in this file.
     fatal = [f for f in findings if f.severity == "ERROR"]
-    return ("FAIL" if fatal else "PASS"), findings
+    return ("FAIL" if fatal else "PASS"), findings, _counts
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -533,6 +1135,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--max-entries", type=int,
                     help="audit only the first N provenance entries "
                          "(default: all)")
+    ap.add_argument("--require-outputs-present", action="store_true",
+                    help="#434: upgrade PROVENANCE_OUTPUT_NOT_VERIFIABLE_HERE "
+                         "from DISCLOSED to ERROR. For auditing a RUN "
+                         "directory, where nothing has been published yet and "
+                         "a not-shipped disclosure is itself suspicious. On a "
+                         "curated deliverable this is the wrong question — see "
+                         "the module docstring for the measurement.")
     args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
@@ -540,18 +1149,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: project dir not found: {project}", file=sys.stderr)
         return 2
 
-    verdict, findings = audit(project,
-                              strict_timing=args.strict_timing,
-                              max_entries=args.max_entries)
+    verdict, findings, counts = audit_counted(
+        project,
+        strict_timing=args.strict_timing,
+        max_entries=args.max_entries,
+        require_outputs_present=args.require_outputs_present)
 
     report = {
         "gate": "provenance_output_hash_completeness_check",
         "verdict": verdict,
         "project": str(project),
         "strict_timing": args.strict_timing,
+        "require_outputs_present": args.require_outputs_present,
         "findings_count": len(findings),
         "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
         "warnings_count": sum(1 for f in findings if f.severity == "WARNING"),
+        # #434 — the outcome census. `declared` is the denominator a reader
+        # needs to know what a PASS did and did not cover; without it,
+        # "PASS" reads as "all of it".
+        "disclosed_count": sum(1 for f in findings
+                               if f.severity == "DISCLOSED"),
+        "outcome_census": counts,
         "findings": [asdict(f) for f in findings],
     }
     if verdict == "VACUOUS_PASS":
@@ -566,21 +1184,40 @@ def main(argv: Optional[List[str]] = None) -> int:
     if verdict == "VACUOUS_PASS":
         print(f"VACUOUS_PASS: {report['reason']}")
         return 0
+
+    # #434 — the census goes on the verdict line itself, on PASS and on
+    # FAIL alike. A bare "PASS: on-disk verifiable" over a ledger where 7 of
+    # 17 outputs were never opened is the sentence this issue exists to stop.
+    census = (f"{counts['declared']} declared output(s): "
+              f"{counts['verified_present']} verified on disk, "
+              f"{counts['verified_relocated']} verified through a disclosed "
+              f"relocation, {counts['not_verifiable_here']} NOT VERIFIABLE "
+              f"HERE (absent, disclosed as not shipped, digest recorded), "
+              f"{counts['superseded']} SUPERSEDED by a later record of the "
+              f"same path (not a claim about the bytes on disk now), "
+              f"{counts['unproduced']} UNPRODUCED (declared by an invocation "
+              f"that exited non-zero; it hashed what was already there)")
     if verdict == "PASS":
         warn = report['warnings_count']
-        msg = f"PASS: provenance.jsonl is on-disk verifiable"
+        msg = f"PASS: provenance.jsonl — {census}"
         if warn:
-            msg += f" ({warn} non-fatal warning(s))"
+            msg += f"; {warn} non-fatal warning(s)"
         print(msg)
         for f in findings:
-            print(f"  WARN [{f.rule}]: {f.detail}", file=sys.stderr)
+            tag = "WARN" if f.severity == "WARNING" else f.severity
+            print(f"  {tag} [{f.rule}]: {f.detail}", file=sys.stderr)
         return 0
-    print(f"FAIL: {report['errors_count']} provenance fault(s):", file=sys.stderr)
-    for f in findings[:10]:
+    print(f"FAIL: {report['errors_count']} provenance fault(s) — {census}",
+          file=sys.stderr)
+    # ERRORs first: the fatal findings are what the exit code is about, and
+    # a DISCLOSED row filling the first ten lines would bury them.
+    ordered = ([f for f in findings if f.severity == "ERROR"]
+               + [f for f in findings if f.severity != "ERROR"])
+    for f in ordered[:10]:
         print(f"  [{f.severity}] [{f.rule}] entry#{f.entry_index} ({f.tool}): "
               f"{f.detail}", file=sys.stderr)
-    if len(findings) > 10:
-        print(f"  … and {len(findings) - 10} more", file=sys.stderr)
+    if len(ordered) > 10:
+        print(f"  … and {len(ordered) - 10} more", file=sys.stderr)
     return 1
 
 

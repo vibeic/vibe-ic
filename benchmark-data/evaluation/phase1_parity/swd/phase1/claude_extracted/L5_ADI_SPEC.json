@@ -1,5 +1,0 @@
-{
-  "ic_name": "ARM Serial Wire Debug (SWD) — ADIv5 (ARM IHI 0031C)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Pure digital protocol. SWCLK and SWDIO are CMOS- or TTL-compatible digital signals at the target SoC's I/O voltage (typically 1.8 V / 2.5 V / 3.3 V / 5 V tolerant depending on the device family). ADIv5 does not specify absolute voltage levels at the protocol layer; per-device datasheets define VIH / VIL / VOH / VOL for the SWD pins. SWDIO is a bidirectional pin with an open-drain or push-pull driver depending on the implementation; many cheap debug probes use a 3.3 V push-pull driver with a series resistor (typically 0 Ω to 22 Ω) for level matching and protection. The optional SWO trace pin is a target-driven output (asynchronous serial at ~1.8-50 MHz typical) carrying CoreSight ITM/DWT trace packets — separate from the SWD protocol and not part of the 46-bit transaction."
-}

@@ -61,7 +61,7 @@ caller-side rules are REQUIRED (full doctrine + rationale in
 For each `<design>` you may read ONLY `<DATASET>/<design>/design_description.txt`.
 NEVER open / cat / grep / list `testbench.v` / `verified_*.v` / any
 `LLM_generated_verilog.v`. The hidden TB / golden ref are touched ONLY by the host
-scorer (`benchmark-harness/score_iverilog_tb.py`), at scoring time, not generation.
+scorer (`benchmark/score_iverilog_tb.py`), at scoring time, not generation.
 
 **CROSS-PROBLEM PROHIBITION (ORGANIC-20260605-blindness-rule-cross-problem-refs).**
 The rule binds for the WHOLE dataset: you may NOT read ANY dataset file other
