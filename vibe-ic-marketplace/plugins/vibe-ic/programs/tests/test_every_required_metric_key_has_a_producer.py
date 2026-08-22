@@ -74,8 +74,8 @@ def test_an_axis_with_no_producible_group_goes_red(tmp_path):
     root = _corpus(tmp_path, keys - hold_keys)
     rc, out = _run(root)
     assert rc == 1, f"the defect did not go red:\n{out}"
-    assert "'hold'" in out and "STRUCTURALLY UNPROVABLE" in out
-    assert "on any design, forever" in out
+    assert "'hold'" in out
+    assert "IS NOT PROVEN BY ANY RUN IN THIS CORPUS" in out
 
 
 def test_the_same_corpus_with_the_axis_restored_passes(tmp_path):
@@ -122,18 +122,33 @@ def test_a_format_built_metric_name_is_still_a_producer():
         "the format-built producer this gate must not mis-read has moved")
     _axes, keys = _axis_keys()
     assert "timing.setup.wns_ns" in keys
-    # And the real tree must show it as EMITTED, not missing.
+    # The real tree must show a format-built name as EMITTED...
     prod = erkhap.producers(_REPO, keys)
-    assert prod.get("timing.drv.violations"), (
-        "timing.drv.violations reads as unproduced — the static false positive "
-        "that declared the drv axis unprovable has returned")
+    assert prod.get("timing.setup.wns_ns"), (
+        "timing.setup.wns_ns reads as unproduced — the static false positive "
+        "that could not see format-built names has returned")
+    # ...and must NOT credit timing.drv.violations, which appears ONLY in
+    # NOT_MEASURED records and in the consumer's own report of what it failed to
+    # find. An earlier version of this test asserted the opposite, encoding a
+    # belief this lane later disproved: 0 MEASURED rows against 370 NOT_MEASURED.
+    assert not prod.get("timing.drv.violations"), (
+        "a key carried only by NOT_MEASURED records is being credited again")
 
 
-def test_the_repository_emits_every_axis_key():
-    _axes, keys = _axis_keys()
-    prod = erkhap.producers(_REPO, keys)
-    missing = sorted(k for k in keys if not prod.get(k))
-    assert not missing, missing
+def test_a_not_measured_canonical_record_is_not_evidence():
+    """The sibling gate `measurement_only_artefact_is_not_a_verdict_source`
+    refuses a NOT_MEASURED record as verdict evidence. This one used to accept
+    it, so two gates in one family gave the same records opposite treatment and
+    the flattering one won."""
+    import json, tempfile, pathlib as _pl
+    with tempfile.TemporaryDirectory() as d:
+        root = _pl.Path(d)
+        (root / "r.json").write_text(json.dumps([
+            {"schema": "vibeic.ppa.metric.v1", "metric": "timing.setup.wns_ns",
+             "status": "NOT_MEASURED"}]))
+        prod = erkhap.producers(root, {"timing.setup.wns_ns"})
+    assert not prod.get("timing.setup.wns_ns"), (
+        "a canonical record with status NOT_MEASURED was counted as evidence")
 
 
 # -------------------------------------------------------------- verdicts
@@ -180,6 +195,21 @@ def test_absent_root_is_bad_invocation(tmp_path):
     assert rc == 3, out
 
 
-def test_repository_itself_is_clean():
+def test_the_repository_has_two_axes_with_no_measured_evidence():
+    """rc=1 here is a TRUE POSITIVE and is asserted as one.
+
+    MEASURED across the published records: `equivalence.verdict` and
+    `reliability.em.*` have ZERO rows with status MEASURED against 370
+    NOT_MEASURED, while `physical.drc.violations` has 227 MEASURED and
+    `timing.setup.wns_ns` has 485. Two axes are carried by records that never
+    measured anything.
+
+    This was found only by composing with another lane whose source-level gate
+    reached a related verdict; before that, this gate credited the CONSUMER's own
+    report — which lists every proof name it failed to find — as evidence a
+    producer had emitted it.
+    """
     rc, out = _run(_REPO)
-    assert rc == 0, out
+    assert rc == 1, out
+    assert "'em'" in out and "'equivalence'" in out
+    assert "IS NOT PROVEN BY ANY RUN IN THIS CORPUS" in out

@@ -62,7 +62,7 @@ The consequence is honest and stated: this gate answers only about runs it can
 see. With no records it returns NOT CHECKED, never PASS.
 
     rc 0   N>0 axes, each provable by at least one fully-produced group.
-    rc 1   an axis is structurally unprovable.
+    rc 1   an axis has no MEASURED evidence in any run this gate can see.
     rc 2   NOT CHECKED — the axis table could not be read, declares no axis,
            or NO metric record was found to judge it against.
     rc 3   bad invocation.
@@ -102,10 +102,56 @@ def producers(tree_root: Path, keys: Set[str]) -> Dict[str, Set[str]]:
     """
     found: Dict[str, Set[str]] = collections.defaultdict(set)
 
+    def _is_evidence(obj) -> bool:
+        """True only when this row shows a PRODUCER emitted the key.
+
+        MEASURED FAIL-OPEN, and found by composing with another lane whose gate
+        reached the opposite verdict on the same axis. The consumer writes its
+        OWN report listing every proof name it looked for, including the ones it
+        could not find:
+
+            {"metric": "timing.drv.violations",
+             "state": "NO_RECORD",
+             "reason": "no record in this candidate names this metric"}
+
+        Counting that as a producer makes the adjudicator its own evidence — the
+        exact defect this rule exists to catch, committed by the rule. It is why
+        this gate answered PASS on a tree whose `drv` axis is structurally
+        unprovable, across 205+ record files that all trace back to the
+        consumer.
+
+        A row counts when it is a canonical metric record (it carries the metric
+        SCHEMA), or when an adjudication row reports it as actually seen —
+        state not NO_RECORD, and at least one backing record.
+        """
+        state = str(obj.get("state", obj.get("status", ""))).upper()
+        if str(obj.get("schema", "")).startswith("vibeic.ppa.metric"):
+            # A canonical record still cannot prove an axis it never measured.
+            #
+            # MEASURED: `signoff_bridge_records.json` emits a canonical
+            # `timing.drv.violations` record with status NOT_MEASURED, in 61
+            # files. Accepting it here made this gate say the drv axis is
+            # provable while its SIBLING gate,
+            # `measurement_only_artefact_is_not_a_verdict_source`, refuses a
+            # NOT_MEASURED record as verdict evidence by name. Two gates in one
+            # family, the same records, opposite treatment — and the flattering
+            # one winning.
+            #
+            # The wiring question and the provability question are different and
+            # both are answered here: a producer DOES emit the name (so this is
+            # not the "no producer at all" shape), and it has never once
+            # measured it (so no group containing it can be satisfied).
+            return state not in ("NOT_MEASURED", "NO_RECORD")
+        
+        if state in ("NO_RECORD", "NOT_MEASURED", ""):
+            return False
+        recs = obj.get("records")
+        return recs is None or (isinstance(recs, int) and recs > 0)
+
     def walk_json(obj, where: str) -> None:
         if isinstance(obj, dict):
             name = obj.get("metric")
-            if isinstance(name, str) and name in keys:
+            if isinstance(name, str) and name in keys and _is_evidence(obj):
                 found[name].add(where)
             for v in obj.values():
                 walk_json(v, where)
@@ -198,10 +244,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"metric key(s); 0 key(s) observed in emitted records")
         return 2
     for name, groups in unprovable:
-        print(f"axis {name!r} is STRUCTURALLY UNPROVABLE — no group of proofs "
-              f"is fully present in any metric record under this tree: {groups}. "
-              f"Every run will report its own evidence as missing rather than "
-              f"the wiring, on any design, forever.")
+        print(f"axis {name!r} IS NOT PROVEN BY ANY RUN IN THIS CORPUS — no "
+              f"group of its proofs has a MEASURED record anywhere under this "
+              f"tree: {groups}. Every run reports its own evidence as missing "
+              f"rather than the wiring. This gate is EMPIRICAL, so it says what "
+              f"the runs it can see did; whether the flow COULD ever measure it "
+              f"is a source question, and `gate_proof_vocabulary_has_a_producer` "
+              f"is the instrument for that.")
     for key, axis in dead:
         print(f"DISCLOSED — {key!r} (axis {axis!r}) has no producer; the axis is "
               f"still provable by another group, so this proof path is dead "

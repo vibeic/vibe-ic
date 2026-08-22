@@ -460,3 +460,51 @@ drift, 216 of this lane's tests passing, and the twelve gates returning their
 branch verdicts with `only_the_declaring_step`'s six-path finding set
 byte-identical.
 
+### The census lane's gate disagreed with mine, and mine was wrong
+
+Their branch moved to `f55027d18` and added `gate_proof_vocabulary_has_a_producer`,
+which BLOCKS and says the `drv` axis is unprovable. My
+`every_required_metric_key_has_a_producer` said PASS on the same tree. One of us
+had to be wrong; measuring it showed it was me, twice over.
+
+**1. The consumer was counted as its own producer.** My gate credited any JSON row
+carrying `"metric": <key>`. The feasibility checker writes its OWN report listing
+every proof name it looked for, including the ones it could not find:
+
+    {"metric": "timing.drv.violations", "state": "NO_RECORD",
+     "reason": "no record in this candidate names this metric"}
+
+205+ record files carry the drv names for exactly that reason. Crediting them made
+the adjudicator its own evidence — the defect this rule exists to catch,
+committed by the rule.
+
+**2. My two gates contradicted each other.** After fixing (1) the axis still
+passed, on canonical `vibeic.ppa.metric.v1` records with `status: NOT_MEASURED` —
+61 files. Meanwhile my sibling gate,
+`measurement_only_artefact_is_not_a_verdict_source`, refuses a NOT_MEASURED record
+as verdict evidence BY NAME. Same family, same records, opposite treatment, and
+the flattering one winning. Now consistent.
+
+**The corrected verdict, counted exactly:**
+
+    equivalence.verdict          MEASURED 0    NOT_MEASURED 370
+    reliability.em.violations    MEASURED 0    NOT_MEASURED 370
+    reliability.em.worst_ratio   MEASURED 0
+    physical.drc.violations      MEASURED 227
+    timing.setup.wns_ns          MEASURED 485
+
+So `em` and `equivalence` have no measured evidence in any published run, and this
+gate now exits 1 — a second true positive, reached independently of the other
+lane and by a different route.
+
+**And the wording was an overclaim.** It said "STRUCTURALLY UNPROVABLE … on any
+design, forever" — a claim about all possible runs, from a corpus. This gate is
+EMPIRICAL: it can say what the runs it can see did. It now says exactly that, and
+names `gate_proof_vocabulary_has_a_producer` as the instrument for the source-level
+question. The two are complementary, not rivals, and the disagreement was worth
+more than either verdict.
+
+One caution from doing it: I nearly dismissed my own finding because a grep
+reported "408 MEASURED rows" for `reliability.em.violations`. It was counting
+`NOT_MEASURED`, which contains `MEASURED`. Fourth substring trap of this lane, and
+the first that would have reversed a correct conclusion.
