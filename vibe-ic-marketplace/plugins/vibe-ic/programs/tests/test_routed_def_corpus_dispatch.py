@@ -724,3 +724,115 @@ def test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND(tmp_path)
         "the shipped hygiene script still reports a corpus that nothing opened "
         "under the row for a corpus that WAS read and holds none — this is the "
         "exact sentence vibe-ic#1764 was filed about, on the real wiring")
+
+
+# --- vibe-ic#1764: the ONE place the refusal could become a pass ------------
+#
+# `gate_dispatch_finish` refuses rc 2 in both states, and the issue said so. But
+# `repo_hygiene_parallel._summary_rc` — the CLOSING rc of the parallel hygiene
+# DAG — waives exactly one unexempted NOT_CHECKED: the phase-1 bootstrap row for
+# a corpus that was READ and publishes nothing. Because an absent corpus arrived
+# wearing that row's label and that row's `expansion`, the waiver covered it too,
+# and the DAG closed GREEN over a corpus nothing opened.
+#
+# MEASURED 2026-08-22, this host, real producer through real `_gate_dispatch.sh`:
+#
+#     origin/main   corpus ABSENT      -> _summary_rc 0    <- a PASS
+#     origin/main   corpus read-empty  -> _summary_rc 0    <- intended bootstrap
+#     this branch   corpus ABSENT      -> _summary_rc 2    <- refused
+#     this branch   corpus read-empty  -> _summary_rc 0    <- unchanged
+#
+# This is the assertion that makes "do not make either state a pass" true, so it
+# is driven end to end. A hand-built record cannot show it: on `origin/main` the
+# defect is precisely that the absent state is HANDED the empty row's label, and
+# a fixture that types the right label in has already fixed the bug it is testing.
+
+_REAL_CORPUS = "published cells carrying a routed DEF"
+
+
+def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None):
+    """A real dispatch record over the REAL corpus name, plus one green gate.
+
+    The green gate is load-bearing: `_summary_rc` returns 2 for a run that
+    decided nothing at all, which would mask the waiver either way.
+    """
+    import repo_hygiene_parallel as P
+
+    subject = _subject_repo(tmp_path / stem)
+    root = tmp_path / f"run-{stem}"
+    root.mkdir()
+    script = root / "gates.sh"
+    script.write_text(textwrap.dedent(f"""\
+        set -euo pipefail
+        ROOT={str(root)!r}
+        . {str(DISPATCH)!r}
+        gate_dispatch_init "$@"
+        run 'a green gate' "$ROOT" python3 -c "print('[PASS] 1 item')"
+        _body() {{ run "per cell ($1)" "$ROOT" true; }}
+        GATE_DISPATCH_ATTEST_POPULATION=1 gate_dispatch_over \\
+          {_REAL_CORPUS!r} _body python3 {str(HELPER)!r} --repo {str(subject)!r}
+        gate_dispatch_finish
+        """), encoding="utf-8")
+
+    labels = root / "own.labels"
+    summary = root / "summary.json"
+    env = os.environ.copy()
+    env.pop(ENV, None)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
+    if pointer is not None:
+        env[ENV] = pointer
+    env.update({
+        "GATEKEEPER_HYGIENE_JOBS": "1",
+        "GATE_DISPATCH_ATTESTATION_HELPER": str(ATTEST),
+        "GATE_DISPATCH_ATTESTATION_FILE": str(root / "a.jsonl"),
+        "GATE_DISPATCH_PROGRESS_FILE": str(root / "p.jsonl"),
+        "GATE_DISPATCH_OWNED_LABELS_FILE": str(labels),
+    })
+    # Discover the row the dispatcher records, then own every gate, so this
+    # single-shard run is complete and `_summary_rc` judges coverage, not
+    # ownership.
+    labels.write_text("", encoding="utf-8")
+    subprocess.run(["bash", str(script), "--list", "--summary-json",
+                    str(summary)], env=env, capture_output=True, text=True)
+    listed = json.loads(summary.read_text(encoding="utf-8"))
+    labels.write_text(
+        "\n".join(g["label"] for g in listed["gates"]) + "\n", encoding="utf-8")
+
+    proc = subprocess.run(["bash", str(script), "--summary-json", str(summary)],
+                          env=env, capture_output=True, text=True)
+    doc = json.loads(summary.read_text(encoding="utf-8"))
+    return proc, doc, P._summary_rc(doc)
+
+
+def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
+    """Both states through the real wiring, and only one of them is waivable."""
+    corpus = _read_but_empty_corpus(tmp_path)
+
+    a_proc, a_doc, a_rc = _hygiene_dag_record(tmp_path, "absent", None)
+    b_proc, b_doc, b_rc = _hygiene_dag_record(tmp_path, "empty", str(corpus))
+
+    # Preconditions: both really are the zero-population, refused-at-finish row.
+    assert a_proc.returncode == b_proc.returncode == 2
+    assert a_doc["decided"] == b_doc["decided"] == 1
+    for doc in (a_doc, b_doc):
+        row = [c for c in doc["corpora"] if c["name"] == _REAL_CORPUS]
+        assert len(row) == 1 and row[0]["items"] == 0, row
+
+    # THE CRUX, asserted before any detail about HOW the two are told apart:
+    # #1763's row keeps EXACTLY the phase-1 closing rc it has today...
+    assert b_rc == 0, b_proc.stdout + b_proc.stderr
+    # ...and the corpus nothing opened does not inherit that waiver.
+    assert a_rc == 2, (
+        "the parallel hygiene DAG closed GREEN (rc 0) over a corpus that was "
+        "NEVER OPENED. The phase-1 bootstrap waiver in `_summary_rc` is written "
+        "for a corpus that WAS read and publishes nothing; an absent corpus "
+        "reached it wearing that row's label and that row's expansion, so the "
+        "run reported enforcement over a measurement nobody took "
+        f"(vibe-ic#1764). Got rc {a_rc}.\n{a_proc.stdout}{a_proc.stderr}")
+    assert a_rc != b_rc
+
+    # …and this is the distinction the waiver keys off.
+    assert [c for c in a_doc["corpora"]
+            if c["name"] == _REAL_CORPUS][0]["expansion"] == "NO_CORPUS"
+    assert [c for c in b_doc["corpora"]
+            if c["name"] == _REAL_CORPUS][0]["expansion"] == "EXPANDED"
