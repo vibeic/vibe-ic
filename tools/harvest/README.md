@@ -106,7 +106,7 @@ unjudged checkout is untouched — a wrong verdict is what deletes.
 |---|---|
 | `RESCUE_REANCHOR.md` | every `harvest/rescue-*` ref was **deleted from origin** mid-session; 2945 commits re-anchored, nine worktrees' commits were briefly the only copy in existence |
 | `REFLOG_SWEEP_INCIDENT.md` | **I pushed refs to 15 repositories outside this brief.** All 16 removed, each verified first to hold nothing that repo already had. A GitHub secret-scanning rule caught the scope error before I did. Also the three bugs behind it. |
-| `SCOPE.md` | 1439 verdicts is not 13,308 checkouts — and the untracked-file sweep, the one category no rescue anchor can reach |
+| `SCOPE.md` | 1439 verdicts is not ~14,196 checkouts — and the untracked-file sweep, the one category no rescue anchor can reach |
 | `RECOVER_DRIFT.md` | what +214 commits of main did to 1103 RECOVER rows (answer: 2) |
 
 These are in the index deliberately. A reader deciding whether to trust the verdicts should be able

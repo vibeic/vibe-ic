@@ -28,7 +28,7 @@ The total below therefore **understates** the fleet.
 A checkout counts if it has a `.git` and either `vibe-ic-marketplace/` or `.claude-plugin/`.
 `.107` answers ICMP with every TCP port filtered, so it cannot be censused at all.
 
-**1416 of 13308 is 11%.** The harvest was never an enumeration of the fleet — it was a roster of
+**1,453 of at least 14,196 is about 10%.** The harvest was never an enumeration of the fleet — it was a roster of
 477, and 1084 rows beyond it that two hosts happened to surface.
 
 ## Why the gap is scope, not failure
