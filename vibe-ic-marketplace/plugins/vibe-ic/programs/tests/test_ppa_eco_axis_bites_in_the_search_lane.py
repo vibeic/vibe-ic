@@ -913,3 +913,97 @@ def test_the_published_manifest_still_validates_with_the_eco_stance(tmp_path):
     assert added == ["feasibility_delivery_path", "feasibility_eco_declared",
                      "feasibility_eco_note", "feasibility_eco_state"], added
     assert SV.engine_or_skip(schema).errors(man) == []
+
+
+# ---------------------------------------------------------------------------
+# WHAT THE DELETE-THE-SPARES KNOB ACTUALLY COST THE CAMPAIGN
+# ---------------------------------------------------------------------------
+# The open question the axis raises is whether `spare_cell_density` should stay
+# in the search space at all. The argument for keeping it -- that the budget
+# wasted on points which can never promote is small -- is an EMPIRICAL claim,
+# and it was made here without a measurement. Measured, over the shipped
+# campaign's own run records:
+#
+#     77 trials state the knob:  42 at 0.02, 30 at 0.00, 5 at 0.05
+#     10.16 CPU-hours total, 3.44 of them at density 0.00
+#     -> 33.9% of the campaign's compute ran the arm that deletes the spares
+#
+# A THIRD, not "a few percent". That is the number the keep-it argument has to
+# survive, and it is why `ppa_pnr_search_space.py --eco-declaration` refusing
+# density 0 at SPACE-GENERATION time is the load-bearing part: with the guard in
+# the loop the cost is zero because the points are never generated, and 33.9% is
+# the cost of the guard being AVAILABLE rather than WIRED.
+#
+# These trials were not themselves unpromotable -- they ran before the axis
+# existed, against contracts that declared no requirement. The conditional is
+# the finding: re-run this campaign with the requirement declared and the space
+# guard bypassed, and a third of the budget buys candidates the gate must
+# refuse.
+def test_knob_the_zero_spare_arm_took_a_third_of_the_campaign_budget():
+    """The empirical half of the knob recommendation, measured not asserted.
+
+    Skipped, never silently passed, when the campaign tree is absent.
+    """
+    import pytest
+    trials = _campaign_trials()
+    if not trials.is_dir():
+        pytest.skip("the cross-layer campaign records are not in this tree; "
+                    "NOT OBSERVED")
+
+    total_cpu = zero_cpu = 0.0
+    seen = zero_n = 0
+    for run in sorted(trials.glob("*/run.json")):
+        doc = json.loads(run.read_text(encoding="utf-8"))
+        density = (doc.get("pnr_knobs") or {}).get("spare_cell_density")
+        cpu = (doc.get("cost") or {}).get("cpu_seconds")
+        if density is None:
+            continue
+        seen += 1
+        cpu = cpu if isinstance(cpu, (int, float)) else 0.0
+        total_cpu += cpu
+        try:
+            deletes_spares = float(density) == 0.0
+        except (TypeError, ValueError):
+            continue
+        if deletes_spares:
+            zero_n += 1
+            zero_cpu += cpu
+
+    assert seen > 0 and total_cpu > 0, (
+        "no trial states both the knob and a CPU cost; the denominator is "
+        "empty and this row measured nothing")
+
+    share = zero_cpu / total_cpu
+    # Pinned as a BAND, not a point: the claim is "a third of the budget", and
+    # a test that demanded 33.9% exactly would break on one re-run without the
+    # finding having changed.
+    assert 0.25 <= share <= 0.45, (
+        f"{zero_n} of {seen} trials ran at spare density 0.00 and took "
+        f"{share:.1%} of {total_cpu/3600:.2f} CPU-hours; the knob recommendation "
+        f"in this lane was argued from 'a third', and that number moved")
+    assert zero_n >= 2, zero_n
+
+
+def test_knob_the_space_guard_is_what_makes_that_cost_zero(tmp_path):
+    """And the reason the answer is still "keep the lever, bounded below".
+
+    With a declaration supplied, the space program REFUSES the zero value
+    before a single place-and-route trial is spent -- so the 33.9% above is the
+    cost of the guard being available rather than wired, not the cost of the
+    lever existing. Run, not asserted: the negative control is the same
+    invocation without the declaration.
+    """
+    decl = tmp_path / "eco.json"
+    decl.write_text(json.dumps({"eco_readiness": dict(DECL)}), encoding="utf-8")
+    space = _PROGRAMS / "ppa_pnr_search_space.py"
+    args = [sys.executable, str(space), "--json", str(tmp_path / "space.json"),
+            "--values", "spare_cell_density=0.00,0.02"]
+
+    without = subprocess.run(args, capture_output=True, text=True,
+                             cwd=str(tmp_path))
+    withd = subprocess.run(args + ["--eco-declaration", str(decl)],
+                           capture_output=True, text=True, cwd=str(tmp_path))
+
+    assert without.returncode == 0, without.stderr      # the control
+    assert withd.returncode == 1, withd.stdout + withd.stderr
+    assert "metal-only ECO" in withd.stderr
