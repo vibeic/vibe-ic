@@ -33,6 +33,20 @@ host 8hd-3 · started 2026-08-21 · **69 sections (M0–M74); read this header b
 >
 > **Diff the failing IDs, never the totals** — two runs matching on count with
 > different sets is a trap this document fell into twice.
+>
+> **AND THE SAME RULE COVERS EVERY OTHER NUMBER HERE, because they are all
+> duplicated.** Counted: the image lane's `22 failed, 112 passed` appears **6**
+> times, the lease ratio `1/8` **7**, the harness flake `4/10` **6**, the `magic`
+> determinism `10/10` **5**, the measured artefact size `1919` **3**. I am NOT
+> adding a pointer per number — seven hand-maintained cross-references would be
+> the same defect one level up, and `test_liar_census.py` already names it:
+> *"a hand-maintained number that must be remembered by an author who is editing
+> a different file is **prose wearing an assertion**"*.
+>
+> **THE RULE: for any measured number in this document, the section that FIRST
+> MEASURED it is the authority. Every later mention is a reference.** If two
+> disagree, the earlier measurement wins until someone re-runs it — and the
+> re-run, not the argument, settles it.
 
 **SCOPE HAS GROWN PAST THE TITLE IT STARTED WITH.** This began as RUN 8 —
 "v1.11.62 and the ownership question" — and M0 below still states that premise,
