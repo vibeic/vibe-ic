@@ -201,15 +201,31 @@ moved.
 - **It does not touch the routed-DEF verdict.** That corpus is still empty, the
   gate still reports NOT CHECKED, and nothing here publishes anything to make it
   non-empty. An empty corpus stays rc 2 / NOT CHECKED and never becomes a pass.
-- **It does not take the other named-and-not-taken item.** Over a corpus with
-  zero published cells, `benchmark_evidence_structure_check --tree` prints
-  `9/9 conformant, 0 nonconformant` and the cell count appears nowhere in that
-  line. It is a disclosure defect, not a false verdict. The summary string is
-  parsed by `tools/gatekeeper-land.sh` and `tools/gatekeeper-verify-merge.sh`
-  and read by tests under `programs/tests/`; changing a string the landing path
-  parses, without running the landing path, is how a fix becomes an outage. It
-  stays measured, named and left — see the routed-DEF restoration-condition
-  record for its reproduction.
+- **The other named-and-not-taken item IS taken, and the reason I first gave for
+  leaving it was wrong.** I wrote here that the summary string is *"parsed by
+  `tools/gatekeeper-land.sh` and `tools/gatekeeper-verify-merge.sh` and read by
+  25 test files"*, inherited from the earlier record and repeated without being
+  checked. Measured: **neither shell script parses it** — every `conformant` hit
+  in both is an unrelated comment about PRs — and of the 25 test files that
+  contain the word, **2** mention the summary line, one of them as a fixture
+  literal. The real blast radius is substring assertions in
+  `test_issue967_empty_ic_unit_examined_nothing.py`, runnable in seconds.
+
+  With the reach actually measured, the repair is in this branch:
+
+  | tree | before | after |
+  |---|---|---|
+  | `146d665`, 4 published cells | `13/13 conformant, 0 nonconformant` | `… — over 4 published cell(s) and 9 IC-level root(s)` |
+  | `3b58ccd42`, 0 published cells | `9/9 conformant, 0 nonconformant` | `… — over 0 published cell(s) and 9 IC-level root(s)` |
+
+  Disclosure, not a verdict change: no gate that said PASS stops saying it, no rc
+  moves, the fraction is byte-identical and the clause is appended after it. The
+  zero is printed *especially* when it is zero — a clause that appeared only when
+  there are cells would leave the empty corpus with exactly the silence being
+  disclosed. Across the 15 test files that exercise this checker: 235 passed / 62
+  skipped on the branch vs 230 / 62 on `main` (the +5 are the new cases), and the
+  6 failures in `test_matrix_d3_outputs_produced.py` are the SAME test-ids on both
+  trees — pre-existing, none introduced.
 - **`benchmark evidence structure` reports NOT CHECKED on this branch's
   pre-push, and it does so identically on clean `main`.** Run on a clean
   `a4caccefe` worktree with the same arguments the hook uses, it prints
