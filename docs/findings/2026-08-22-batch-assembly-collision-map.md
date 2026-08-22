@@ -17,9 +17,9 @@ order-independent, unlike a merge sequence.
 | `.../programs/PROGRAM_INVENTORY.json` | 3 | REGENERATE |
 | `.../programs/INDEX.md` | 2 | REGENERATE |
 | `.../benchmark/CAPTURE_ROUTING.json` | 3 | UNION -- see §2 |
-| `.../programs/phase3_one_shot_runner.py` | 2 | real content merge |
-| `.../programs/gatekeeper_review.py` | 2 | merges clean, verified |
-| `docs/capture/2026-08-21-jcap-ppa/recoveries.json` | 2 | needs its authors |
+| `.../programs/phase3_one_shot_runner.py` | 2 | shared touch, MERGES CLEAN (measured) |
+| `.../programs/gatekeeper_review.py` | 2 | shared touch, MERGES CLEAN (measured) |
+| `docs/capture/2026-08-21-jcap-ppa/recoveries.json` | 2 | REAL conflict -- needs its authors |
 
 Four of the eight are generated indices. Reconciling their hunks by hand is wasted
 work and can produce a file that matches neither tree: rebuild them once, after all
@@ -29,6 +29,27 @@ sixteen are in.
 `a4caccefe` reported up to 10-of-13 file overlaps with one branch. That was the
 instrument, not the batch: several branches sit up to 244 commits behind main, so
 the diff counts everything that landed since. Merge-base gave the true figure.
+
+### Pairwise results, measured
+
+Sharing a file is not the same as conflicting on it. Every shared file above was
+merged pairwise onto `a4caccefe`:
+
+    capture/jdistchip-chip-path-rules x fix/jppafind-inert-ppa-gates
+        CONFLICT -- but only on the four GENERATED indices.
+        `phase3_one_shot_runner.py`, which both touch, merged clean.
+    jdistmat/matrix-distil x jcap-ppa
+        CONFLICT on docs/capture/2026-08-21-jcap-ppa/recoveries.json (real content)
+    agent/jrows-on-batchbig x fix/jwire2-hygiene-wiring
+        CLEAN on gatekeeper_review.py
+    fix/jwire2-hygiene-wiring x jcap-ppa
+        CONFLICT on CAPTURE_ROUTING.json -- union, see below
+
+So the batch has exactly TWO real content conflicts -- `CAPTURE_ROUTING.json` and
+`recoveries.json` -- and everything else that collides is a generated index. An
+earlier revision of this document listed `phase3_one_shot_runner.py` as a content
+merge on the strength of two branches touching it. Touching is not colliding, and
+the difference is one merge command.
 
 ## 2. `CAPTURE_ROUTING.json`: take the union, and the check is 64
 
