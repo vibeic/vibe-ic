@@ -1,7 +1,0 @@
-{
-  "fields": {
-    "ic_name": "MIPI I3C Basic Specification v1.0",
-    "constraints_present": false,
-    "notes": "MIPI I3C Basic v1.0 is a wire-level protocol spec; no PDK / SDC / floorplan constraints at the protocol layer. Per-device integration constraints (pad type, pull-up sizing, clock-tree budget for SCL, dual Push-Pull / Open-Drain driver implementation, Failsafe pad design for Hot-Join, High-Keeper sizing, 12.5 MHz SCL routing) live in the SoC-level integration spec, not in the I3C Basic spec. Section 6 of the spec does define electrical characteristics (Tables 54, 55) that constrain the pad cell — these are characterized at the device level, not as SoC backend constraints."
-  }
-}

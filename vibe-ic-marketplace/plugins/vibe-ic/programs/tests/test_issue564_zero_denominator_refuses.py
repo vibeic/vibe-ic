@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -149,19 +150,57 @@ def test_an_empty_population_refuses_rather_than_passing(tmp_path):
     assert r.returncode == G.RC_CANNOT_PROBE, r.stdout + r.stderr
 
 
-def test_the_exemption_list_is_empty_today():
-    assert G._ZERO_IS_A_PASS == {}, (
-        "an exemption was added; it must carry a measured date and a reason "
-        "for why its zero is a CORRECT pass")
+#: The exemptions this repository has actually granted. PINNED, so adding or
+#: removing one still costs a visible edit here — the property
+#: `_ZERO_IS_A_PASS == {}` was really enforcing.
+EXEMPTED_TODAY = {"professional_tb_check"}
+
+
+def test_the_exemption_inventory_is_pinned_dated_and_reasoned():
+    """`_ZERO_IS_A_PASS == {}` was not the property; it was the population.
+
+    That assertion was written at v1.9.28 (`d00a58d27`) when nothing had been
+    exempted, so "empty" and "every entry is justified" were indistinguishable.
+    v1.10.40 (`75776dbbb`) granted the first exemption and the two came apart:
+    the test's own failure message asks for "a measured date and a reason",
+    which the new entry carries, while its assertion demanded there be no entry
+    at all.
+
+    So this pins the SET — adding one still requires a visible edit here, which
+    is the ratchet the old assertion actually bought — and additionally checks
+    the shape the old message only described. Strictly more is checked than
+    before, not less.
+
+    That an exemption is still TRUE is a different question, and it is not
+    asserted here on purpose: `STALE_INVENTORY_ENTRY` decides it against the
+    real 543-gate population at gate-run time, which no unit test can afford.
+    """
+    assert set(G._ZERO_IS_A_PASS) == EXEMPTED_TODAY, (
+        "the exemption inventory moved. An exemption is a gate whose zero is a "
+        "CORRECT pass; adding one must be a deliberate, reviewed edit, so "
+        "update EXEMPTED_TODAY in the same commit and say why in the entry.")
+    for name, entry in G._ZERO_IS_A_PASS.items():
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry.get("measured", "")), (
+            f"{name}: an exemption must record the DATE it was measured — an "
+            f"undated one cannot be re-checked")
+        reason = entry.get("reason", "")
+        # A reason short enough to be a label is not an argument. The one real
+        # entry runs to ~500 characters and cites the source line it came from.
+        assert len(reason) >= 80, (
+            f"{name}: the reason must argue why this zero is a CORRECT pass, "
+            f"not merely name the gate again (got {len(reason)} chars)")
 
 
 def test_a_stale_exemption_is_a_finding(monkeypatch, tmp_path):
-    """EXERCISED, not asserted by substring. The inventory is empty today, so
-    its machinery is otherwise never run — and the first version of this test
+    """EXERCISED, not asserted by substring. The first version of this test
     checked that the string `_MEASURED_ON` appeared in the source, which a
     rename to `_MEASURED_ON_X` satisfies. Drive it instead: an entry naming a
     gate that does NOT state a zero-and-exit-0 must raise
     STALE_INVENTORY_ENTRY, so the list can only shrink by a visible edit.
+
+    It substitutes its own inventory rather than reading the real one — which
+    since v1.10.40 is no longer empty — so the entry under test is the only one
+    in play and the assertion cannot be satisfied by an unrelated exemption.
     """
     monkeypatch.setattr(G, "_ZERO_IS_A_PASS", {
         "a_gate_that_does_not_exist": {"measured": "2026-01-01",
@@ -175,7 +214,33 @@ def test_a_stale_exemption_is_a_finding(monkeypatch, tmp_path):
     assert "STALE_INVENTORY_ENTRY" in kinds, (verdict, findings, stats)
 
 
-def test_a_gate_that_states_a_zero_and_exits_zero_is_a_finding(tmp_path):
+@pytest.fixture
+def synthetic_population(monkeypatch):
+    """Audit a SYNTHETIC population without the real inventory bleeding in.
+
+    `_ZERO_IS_A_PASS` is module-global and describes the real 543-gate
+    registry, but `audit()` flags every entry it does not observe stating
+    zero-and-rc-0 in the population it was handed. A tmp_path population of one
+    made-up gate never contains `professional_tb_check`, so the moment the
+    inventory stopped being empty EVERY synthetic audit began emitting
+    `STALE_INVENTORY_ENTRY` — which is what turned main red at v1.10.40, not
+    anything about the predicate these tests exist to check.
+
+    `test_a_stale_exemption_is_a_finding` already isolates the inventory for
+    exactly this reason; the two below only omitted it because an empty dict
+    made the difference invisible. Isolating asserts nothing weaker: each test
+    keeps its own assertion in full, over the population it actually built.
+
+    (That `audit()` reads "this entry's gate was not in the population" as
+    "this exemption went stale" is a real defect in the gate — an absence of
+    observation reported as an observation of absence. It is out of scope for
+    this main-red fix and is recorded on the PR rather than changed here.)
+    """
+    monkeypatch.setattr(G, "_ZERO_IS_A_PASS", {})
+
+
+def test_a_gate_that_states_a_zero_and_exits_zero_is_a_finding(
+        tmp_path, synthetic_population):
     """The prober's own positive control — without it, a PASS here could mean
     the predicate never matches anything."""
     (tmp_path / "silent_check.py").write_text(
@@ -185,7 +250,8 @@ def test_a_gate_that_states_a_zero_and_exits_zero_is_a_finding(tmp_path):
     assert findings[0]["kind"] == "ZERO_DENOMINATOR_EXITS_ZERO"
 
 
-def test_a_gate_that_states_a_zero_and_REFUSES_is_not(tmp_path):
+def test_a_gate_that_states_a_zero_and_REFUSES_is_not(
+        tmp_path, synthetic_population):
     """THE ACCEPT CASE, and 20 of the 22 real ones are in it."""
     (tmp_path / "honest_check.py").write_text(
         "import sys\nprint('VACUOUS_PASS: analyzed 0 file(s)')\n"
