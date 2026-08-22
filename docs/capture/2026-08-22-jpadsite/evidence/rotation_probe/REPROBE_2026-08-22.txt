@@ -1,0 +1,34 @@
+RE-PROBE 2026-08-22 — THE ORIGINAL PROBE VARIED THE WRONG PARAMETER
+====================================================================
+
+OpenROAD in ghcr.io/vibeic/vibeic-eda:0.3.16 is 26Q3-1581-ga47e38e03f.
+The original probe recorded 26Q3-1165-g58dbde489f -- an image I can no
+longer name; none of 0.3.16 / 0.3.13 / 0.3.6 reports 1165. That version
+mismatch is what prompted this re-run.
+
+THE FOUR-PROCESS RESULT REPRODUCES EXACTLY in the current image:
+  ROTV = R0 / R90 / R180 / MX  ->  WEST MXR90, EAST R90, 350x75, all four.
+
+BUT THE INFERENCE DRAWN FROM IT WAS WRONG. Varying rotation_vertical while
+watching WEST/EAST is the wrong pairing. Holding one parameter and varying
+the other, all four sides observed:
+
+  H=R0 V=R0  ps0=R0  pn0=MX  pw0=MXR90  pe0=R90
+  H=R90 V=R0  ps0=R0  pn0=MX  pw0=MX  pe0=R180
+  H=R0 V=R90  ps0=R90  pn0=MYR90  pw0=MXR90  pe0=R90
+  H=R0 V=MX  ps0=MX  pn0=R0  pw0=MXR90  pe0=R90
+
+  -rotation_horizontal  moves WEST and EAST  (the VERTICAL sides)
+  -rotation_vertical    moves SOUTH and NORTH (the HORIZONTAL sides)
+
+THE PARAMETERS ARE NAMED FOR THE ROW AXIS, NOT THE SIDE. So
+PAD_ROTATION_VERTICAL is NOT inert: it rotates the N/S pads. The shipped
+constant ROTATION_VERTICAL_INERT says 'the placer does not read it' and
+'the vertical-side orientation is a constant of the placer, not a function
+of this variable'. The second half is TRUE and the first is FALSE -- the
+vertical sides are a function of the OTHER variable, and this one has its
+own effect elsewhere.
+
+SAME ERROR CLASS AS THE BUG THIS BRANCH FIXES: the measurement was correct
+and the inference was not. The original header said upstream 'would exit 1'
+from a correct count; this said 'inert' from a correct four-process run.

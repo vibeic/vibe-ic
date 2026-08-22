@@ -857,7 +857,7 @@ those numbers.
 **Why I escalated instead of patching.** The extent and the DEF orientation are
 one decision, and every correction forced a second choice a program has no
 authority to make — adopt the tool's convention and `PAD_ROTATION_VERTICAL`
-becomes silently inert, or keep the declared orientation beside a footprint
+goes silently unhonoured, or keep the declared orientation beside a footprint
 that contradicts it. The third option, adjusting geometry until the ring
 passes, is the forbidden one.
 
@@ -870,12 +870,42 @@ passes, is the forbidden one.
    manufactured pass.
 2. **`PAD_ROTATION_VERTICAL` degrades LOUDLY**, in both directions. At
    librelane's default (indistinguishable from never having set it): PROCEED,
-   and record `rotation_vertical_inert` — with the measurement — in EVERY
-   report including the skips, because a disclosure only on the happy path is
-   not a disclosure. Declared non-default: refuse **rc 2 NOT DETERMINED**,
-   naming the variable. Never rc 0, never rc 1 — "I cannot honour what you
-   asked" is neither a pass nor a finding about the design. An author who sets
-   a knob is entitled to be told the knob does nothing.
+   and record it — with the measurement — in EVERY report including the skips,
+   because a disclosure only on the happy path is not a disclosure. Declared
+   non-default: refuse **rc 2 NOT DETERMINED**, naming the variable. Never
+   rc 0, never rc 1 — "I cannot honour what you asked" is neither a pass nor a
+   finding about the design.
+
+   **AND THE REASON I GAVE THE FLOW OWNER FOR THIS WAS WRONG.** I reported the
+   variable as INERT — "the placer does not read it" — and the record shipped
+   under the key `rotation_vertical_inert`. RE-MEASURED 2026-08-22 in OpenROAD
+   26Q3-1581, holding one rotation parameter and varying the other while
+   watching ALL FOUR sides:
+
+       H=R0  V=R0    ps0=R0    pn0=MX      pw0=MXR90  pe0=R90
+       H=R90 V=R0    ps0=R0    pn0=MX      pw0=MX     pe0=R180
+       H=R0  V=R90   ps0=R90   pn0=MYR90   pw0=MXR90  pe0=R90
+       H=R0  V=MX    ps0=MX    pn0=R0      pw0=MXR90  pe0=R90
+
+   `-rotation_horizontal` moves WEST and EAST — the VERTICAL sides.
+   `-rotation_vertical` moves SOUTH and NORTH — the HORIZONTAL sides. THE
+   PARAMETERS ARE NAMED FOR THE ROW AXIS, NOT THE SIDE. My probe varied
+   PAD_ROTATION_VERTICAL while watching only WEST and EAST — the wrong pairing
+   — so it correctly saw nothing change across four separate processes, and I
+   drew the wrong conclusion from a correct measurement. THE SAME ERROR CLASS
+   AS THE BUG THIS BRANCH FIXES: that header had a correct COUNT and a wrong
+   INFERENCE.
+
+   THE RULING SURVIVES INTACT AND IS BETTER FOUNDED. The behaviour does not
+   change; only the justification does, and it gets stronger. "An author who
+   sets a knob is entitled to be told the knob does nothing" was the weak
+   version. The true one: the knob HAS an effect — it rotates the N/S pads —
+   and THIS STEP does not implement it, so honouring the declaration silently
+   would give an author geometry they did not ask for. Refusing is more clearly
+   right than when the flow owner ruled it. Fixed in `c56b8e1b1`:
+   `rotation_vertical_inert` -> `rotation_vertical_not_honoured`, because the
+   KEY asserted inertness in the schema itself. Evidence:
+   `evidence/rotation_probe/REPROBE_2026-08-22.txt`.
 3. **The DEF must not contradict itself** — the vertical sides now carry the
    orientation the placer actually produces (`MXR90`/`R90`, DEF spelling
    `FW`/`W`), so the footprint a DEF reader derives matches the recorded
@@ -1609,6 +1639,16 @@ THE BLOCKER, BEFORE AND AFTER, AT THE FLOW'S OWN GATE CLAUSE
      harness is a green manufactured on the CONSUMER side.
 
 THE SECOND DEFECT — measurement, ruling, and the superseded run
+  rotation_probe/REPROBE_2026-08-22.txt  THE PROBE VARIED THE WRONG PARAMETER.
+  rotation_probe/four_sides.tcl          Re-run in OpenROAD 26Q3-1581, holding
+                                         one rotation parameter and varying the
+                                         other across ALL FOUR sides:
+                                         -rotation_horizontal moves W/E,
+                                         -rotation_vertical moves S/N. The
+                                         original four-process result
+                                         reproduces exactly; the INFERENCE
+                                         drawn from it ("inert") was wrong.
+                                         Fixed in c56b8e1b1.
   rotation_probe/MEASURED.txt            four SEPARATE OpenROAD processes,
   rotation_probe/one.tcl                 one per PAD_ROTATION_VERTICAL value;
   rotation_probe/probe.tcl               the reproduction, and the note that the
