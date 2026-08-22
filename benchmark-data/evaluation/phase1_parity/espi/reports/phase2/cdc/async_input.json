@@ -1,9 +1,0 @@
-{
-  "verdict": "PASS",
-  "async_inputs": [
-    {
-      "signal": "id_bus",
-      "synchroniser": "3-FF id_rx_syn1/2/3"
-    }
-  ]
-}
