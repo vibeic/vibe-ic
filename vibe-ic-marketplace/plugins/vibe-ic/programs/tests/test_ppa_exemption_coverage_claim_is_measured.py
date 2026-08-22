@@ -42,8 +42,32 @@ REPO = Path(__file__).resolve().parents[5]
 PROGRAMS = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
 WIRING = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 
-#: "over 20 pairs", "over 1830 pairs", "over 61 contracts"
-_CLAIM = re.compile(r"\bover\s+(\d+)\s+(pair|record|contract|set)s?\b")
+#: The units a coverage claim can be stated in.
+_UNITS = ("pair", "record", "contract", "set", "candidate")
+#: A claim opens with "over N" and the unit noun may sit behind adjectives:
+#: "over 1830 pairs", but also "over 21 adjudicated candidate sets".
+_CLAIM_OPEN = re.compile(r"\bover\s+(\d+)\s+((?:[a-z]+\s*){0,4})")
+
+
+def _claim(text):
+    """(N, unit) for a coverage claim, or None.
+
+    THE UNIT IS THE LAST ONE IN THE TAIL, NOT THE FIRST WORD AFTER THE NUMBER.
+    An earlier version of this file took the word immediately following, which
+    matched "over 1830 pairs" and silently did not match "over 21 adjudicated
+    candidate sets" -- so the guard skipped one of the five numbered rows while
+    reading as though it covered them all. That is the defect this whole file
+    is about, committed by the file itself.
+    """
+    m = _CLAIM_OPEN.search(text)
+    if not m:
+        return None
+    unit = None
+    for w in m.group(2).split():
+        w = w[:-1] if w.endswith("s") else w
+        if w in _UNITS:
+            unit = w
+    return (int(m.group(1)), unit) if unit else None
 #: what a corpus gate prints: "21 contract(s), 0 refused" / "210 pair(s) compared"
 _REPORTED = re.compile(r"\b(\d+)\s+(pair|record|contract|set)\(s\)")
 
@@ -67,7 +91,7 @@ def _rows():
             j -= 1
         if j < 0 or not lines[j].startswith("uncheckable_until"):
             continue
-        claim = _CLAIM.search(lines[j])
+        claim = _claim(lines[j])
         if not claim:
             continue
         argv, want_corpus = [], False
@@ -81,7 +105,31 @@ def _rows():
                 argv.append(str(REPO / t.replace("$ROOT/", ""))); want_corpus = False
         if len(argv) >= 3:
             out.append((label.group(1) if label else "?",
-                        int(claim.group(1)), claim.group(2), argv))
+                        claim[0], claim[1], argv))
+    return out
+
+
+def _numbered_exemptions():
+    """Every exemption that states a number at all, however it is worded.
+
+    Deliberately LOOSER than `_claim`: this is the population the guard must
+    cover, and it is measured from the file rather than from the guard's own
+    parser, so the two can be compared.
+    """
+    lines = _logical_lines(WIRING.read_text(encoding="utf-8"))
+    out = []
+    for i, l in enumerate(lines):
+        if not l.startswith("uncheckable_until"):
+            continue
+        if not re.search(r"\bover\s+\d+\s+[a-z]", l):
+            continue
+        j = i + 1
+        while j < len(lines) and (lines[j].lstrip().startswith("#")
+                                  or not lines[j].strip()):
+            j += 1
+        nxt = lines[j] if j < len(lines) else ""
+        lab = re.search(r'"([^"]*)"', nxt)
+        out.append(lab.group(1) if lab else nxt[:60])
     return out
 
 
@@ -152,3 +200,27 @@ def test_every_stated_coverage_number_is_the_one_the_gate_reports():
     assert wrong == [], (
         "an exemption states a coverage its gate does not:\n  "
         + "\n  ".join(wrong))
+
+
+def test_the_guard_covers_every_exemption_that_states_a_number():
+    """THE GUARD'S OWN BLIND SPOT, closed the same way the gates' were.
+
+    RED BEFORE THIS TEST: the claim parser took the word immediately after the
+    number, so "over 21 adjudicated candidate sets" did not match and
+    `PPA promotion feasibility` was skipped in silence. Four of five rows were
+    checked by a file that reads as though it checks all of them.
+
+    A numbered claim this guard cannot verify is a FAILURE, not a skip. If a
+    coverage figure is worth stating in a declaration a reader will trust, it is
+    worth being machine-checkable; and a guard that quietly narrows its own
+    population is the exact shape every gate in this family exists to refuse.
+    """
+    declared = set(_numbered_exemptions())
+    covered = {label for label, _, _, _ in _rows()}
+    missed = sorted(declared - covered)
+    assert not missed, (
+        "an exemption states a coverage number this guard does not verify:\n  "
+        + "\n  ".join(missed)
+        + "\n(either make the claim parseable, or make the row runnable here — "
+          "silently skipping it is what this file exists to prevent)")
+    assert declared, "no numbered exemption found at all; the parser has gone dark"
