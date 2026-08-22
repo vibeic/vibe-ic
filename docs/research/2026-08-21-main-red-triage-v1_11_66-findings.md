@@ -4700,6 +4700,62 @@ time. The unknown survived one commit because I wrote it down instead of
 answering it.
 
 
+## M88 — "which of four homes" is already answered, by a criterion the repo states out loud
+
+The row said the gate *"names four possible homes"* and called it a wiring
+decision. **It is three decisions, not one, and the repo already contains the rule
+that settles them.**
+
+**First, M71 re-verified — and it had checked two homes, not four:**
+
+| checker | flow yaml | hygiene sh | CAPTURE_ROUTING | other sh/py |
+|---|--:|--:|--:|--:|
+| `closed_loop_edge_check` | 1 (comment) | 1 (comment) | 0 | 2, **both prose** |
+| `ppa_pr_scope_check` | 0 | 0 | 0 | 0 |
+| `slot_pad_budget_check` | 0 | 0 | 0 | 0 |
+
+All three genuinely unwired. **The two Python hits M71 never looked at are
+docstrings**, so the conclusion survives — but it survived on evidence thinner
+than it claimed.
+
+**THE RULE, stated by `repo_hygiene_gates.sh` itself** (:398-403), explaining why
+the sibling `closed_loop_executable_coverage_check` lives there:
+
+> **ITS SUBJECT IS THE SHIPPED FLOW DOCUMENT**, which is what puts it in this file
+> rather than in a flow clause: a repo-wide invariant **needing no PR context and
+> no design run**.
+
+That is a membership test, and it sorts all three:
+
+| checker | subject | needs PR ctx? | needs a run? | home the rule gives |
+|---|---|---|---|---|
+| `closed_loop_edge_check` | the canonical flow's `closed_loop:` blocks | no | no | **hygiene, beside its sibling** |
+| `ppa_pr_scope_check` | *"the PR review checklist"* | **YES** | no | a PR-context runner — **NOT hygiene** |
+| `slot_pad_budget_check` | RTL ports vs operator slot pads | no | **YES** | a **flow clause, chip path** |
+
+**`closed_loop_edge_check` is the clean case.** Its sibling is wired at
+`repo_hygiene_gates.sh:424`, the comment about it sits at :403 — twenty lines
+above — and it meets the stated criterion exactly. **The home is not a choice, it
+is a precedent.** `repo_hygiene_gates.sh` is PROTECTED, so the one-line edit is
+the lander's, and the line to copy is directly above the gap.
+
+**`slot_pad_budget_check`'s objection is GONE (M85).** M52 explained the missing
+wiring charitably: *"wiring it today would create a gate with nothing to read."*
+**That was true and is no longer** — the template is acquired and the checker
+produced real verdicts on 18 designs, three of them DOES_NOT_FIT. What remains is
+a product call, because the gate would depend on an external fetch and would carry
+real blast radius on the chip path.
+
+**`ppa_pr_scope_check` is the one the rule EXCLUDES from hygiene**, and that is
+worth stating because it is the placement someone would most likely reach for by
+analogy. Twenty PR-review questions cannot be answered by a repo-wide invariant
+that has no PR in front of it.
+
+**What actually remains: two protected/product edits and one genuine open
+question** — where a PR-context runner lives at all, which is the only one of the
+three the repo does not already answer.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4791,7 +4847,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
-| **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. **M71: blocker VERIFIED** — `closed_loop_edge_check` is referenced in the flow yaml and the hygiene script, but both are COMMENTS, not invocations; the other two appear nowhere. All three genuinely unwired. | **wiring decision (verified)** |
+| **3 unwired checkers** | **THREE homes, and the repo already states the rule — M88.** M71 re-verified across FOUR homes (it had checked two; the 2 Python hits are docstrings): all three genuinely unwired. `repo_hygiene_gates.sh:398-403` states the membership test — *subject is the shipped flow document, no PR context, no design run* — which sorts them: **`closed_loop_edge_check` -> hygiene** (its sibling is wired at `:424`, twenty lines below the comment about it; PROTECTED file, lander's one-line edit); **`ppa_pr_scope_check` -> a PR-context runner, explicitly NOT hygiene**; **`slot_pad_budget_check` -> a flow clause on the chip path**, and **M52's objection ('a gate with nothing to read') is now FALSE** — it produced real verdicts on 18 designs. | **1 precedent, 1 product call, 1 real open question** |
 | **`declaration scans strip comments`** | **FIXED (M78) — this row was WRONG to be here.** The analyser did not propagate stripped status through `for`/comprehension targets. Fixed: 10-case A/B 0 wrong, repo 175->168, **0 newly flagged**, 5 regression tests of which 4 go red on revert. Blocking list 5 -> 3 names, and the two that left are verified false. **Remaining: 2 real candidates** (`crosslayer` scans raw `rtl_text`) **+ 1 false positive of a SECOND class** (`declared_io_delay_fraction` scans MARKDOWN, not HDL — a subject-kind error). Baseline deliberately NOT written though the gate asks. | **fixed; 2 real candidates remain** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump (M54 stands). M84: the decision is now TWO NAMES.** Census is CLEAN — `swept 181 = declared 181`, `unswept []`, `unrecognised {}`. Clause SETS vs main: ADDED 3, REMOVED 2, and **3 of those 5 are one already-authorised refactor** (the two removals are written up in the file itself; `+tapeout_precheck` is the fold target). Genuinely new: `crosslayer_rewrite_equivalence_check` (1.6x) and `pad_assignment_gen` (15.5ic). A GROW with nothing uncovered. **The comment's blocker — 'a deliberate shrink has no way to be authorised' — is answered in the same comment**, which performs one and authorises it in prose; what is missing is a machine-readable form, not a policy. | **owner's call, now a 2-name confirmation** |
 
