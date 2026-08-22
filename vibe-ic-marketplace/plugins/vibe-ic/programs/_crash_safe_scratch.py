@@ -72,6 +72,75 @@ from typing import Callable, List, NamedTuple, Optional, Tuple
 #: be obviously not a payload file.
 LOCK_NAME = ".owner.lock"
 
+#: Name of the sidecar that serialises REAPERS against each other, one per
+#: (root, prefix).  It is a FILE, so it is never a reap candidate.
+REAP_LOCK_SUFFIX = ".reap.lock"
+
+#: (root, prefix) pairs this PROCESS is already reaping.  `remover` is caller
+#: code and may reach `reap` again; without this the second call would block on
+#: a lock this same process holds, forever.
+_REAPING: set = set()
+
+
+def _reap_lock(base: "Path", prefix: str):
+    """Hold the reaper lock for ``(base, prefix)`` for the duration of a walk.
+
+    WHY A REAPER MUST NOT RACE ANOTHER REAPER, measured on this fleet with six
+    concurrent probes against one ``/tmp``:
+
+        3 of 6 runs ended with their OWN scratch still standing, and `reap`
+        reported it as "no lock sidecar and only 0s old -- it may be a peer
+        between mkdtemp and lock".
+
+    That sentence was FALSE about what had happened. The directory had a lock
+    sidecar; a PEER REAPER was part-way through `shutil.rmtree` on it, so the
+    sidecar had already been unlinked when this walk stat'ed it, and the
+    unlocked branch then read a half-removed directory as a peer that is just
+    starting up. `rmtree(..., ignore_errors=True)` from two processes over one
+    tree can also leave the directory itself standing. The caller is left
+    unable to tell "kept because someone may be starting" from "gone because
+    someone else removed it" -- and a test that asks "is my scratch gone?"
+    fails for a reason that belongs to a peer.
+
+    Serialised, the same six runs are 6 of 6 removed. The walk is short; the
+    lock is held only around it, and `flock` is released by the kernel if a
+    reaper dies, so a crashed reaper cannot wedge the next one.
+
+    IF THE LOCK CANNOT BE TAKEN AT ALL -- a read-only root, an exotic
+    filesystem -- the walk proceeds UNSERIALISED, which is exactly what shipped
+    before this. Refusing to reap would trade a rare race for a certain leak.
+    """
+    import contextlib
+
+    @contextlib.contextmanager
+    def _held():
+        key = (str(base), prefix)
+        if key in _REAPING:            # re-entered through `remover`
+            yield False
+            return
+        fd = None
+        try:
+            fd = os.open(str(base / (prefix + REAP_LOCK_SUFFIX)),
+                         os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+            yield False
+            return
+        _REAPING.add(key)
+        try:
+            yield True
+        finally:
+            _REAPING.discard(key)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    return _held()
+
+
 #: A directory with NO lock sidecar predates this module (or was made by hand).
 #: It is reaped only once it is this old, so a peer that is mid-``mkdtemp`` —
 #: created but not yet locked — cannot be swept out from under itself.  One hour
@@ -187,6 +256,14 @@ def reap(prefix: str, remover: Optional[Callable[[Path], None]] = None,
     # case across a subprocess boundary, and the first test written against
     # this module found exactly that shape raising AttributeError in the reap.
     base = Path(root) if root else _tmp_root()
+    with _reap_lock(base, prefix):
+        return _walk(base, prefix, remover, legacy_max_age_s, exclude,
+                     reap_unlocked)
+
+
+def _walk(base: Path, prefix: str, remover, legacy_max_age_s: int,
+          exclude: Optional[Path], reap_unlocked: bool) -> ReapReport:
+    """The candidate walk itself. Called with the reaper lock held."""
     reaped: List[str] = []
     live: List[str] = []
     kept: List[Tuple[str, str]] = []
