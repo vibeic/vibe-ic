@@ -358,3 +358,38 @@ This is the shape of loss this file is most exposed to. A recovery register does
 not fail loudly when a rule leaves it -- nothing goes red, the rule is simply never
 applied again. That is why this one row was worth chasing to the end instead of
 being folded into a union.
+
+## 9. Outcome, measured against the real assembly
+
+`land/one-assembled` at `e11626e28` (2026-08-22). Stamped, because that ref moves.
+
+**`recoveries.json` was resolved to 45 rows**, carrying the disputed rule under
+`jdistmat`'s renamed form, `optional_import_is_guarded_by_capability_not_exception_type`.
+That is the "rename survived" branch of §8 -- the `repo.host_independence`
+capability rule was KEPT, which is the outcome §8's evidence pointed to, since the
+rule `jcap-ppa` added covers test collection and not capability checking.
+
+**`CAPTURE_ROUTING.json` came out at exactly 64 entries**, the invariant this
+document published in §2, with both of `fix/jwire2-hygiene-wiring`'s keys and
+`jcap-ppa`'s present. No side was dropped -- the failure this document warned
+about did not happen.
+
+**The rc-3 pair stayed together**: the gate's `GateArgumentParser` and the runner's
+`elif rc == _usage_rc():` are both in the assembly. On that tree,
+`checker_execution_wiring_audit` and `hdl_declaration_scan_strips_comments_check`
+both exit 0, and the four modules that exercise this work pass 175 / 9 skipped.
+
+**FIFTEEN of the sixteen frozen branches are in it. The absent one is
+`fix/jppafind-inert-ppa-gates`** -- flagged here because it is on the freeze list
+and merged clean in every test this document ran, so its absence looks unintended
+rather than decided.
+
+TWO WRONG READINGS OF MY OWN, ON THE WAY TO THAT LIST, both from a weak detector:
+"is this branch in the assembly" was first answered by testing ONE added file
+(missed branches whose first file is shared), then by byte-identity across all
+changed files (missed branches whose files were legitimately merged with someone
+else's -- it reported `agent/jrows-on-batchbig` absent at 2-of-17 when four of four
+of its distinctive added LINES are present). Presence in a merged tree has to be
+tested by CONTENT THAT SURVIVES MERGING, not by whole-file equality. And §8
+predicted `jcap-ppa` would be the hold-out; the count was right and the name was
+wrong.
