@@ -1311,6 +1311,14 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         for name in (hygiene.get("empty_corpora") or [])[:8]:
             notes.append(f"hygiene loop corpus expanded over 0 item(s) on some "
                          f"arm — {name}")
+        # vibe-ic#1764. A corpus nothing OPENED gets its own sentence: "it
+        # expanded over 0 item(s)" says a population was measured, and none
+        # was. `.get` so a record from an older dispatcher simply has none.
+        for name in (hygiene.get("absent_corpora") or [])[:8]:
+            notes.append(f"hygiene loop corpus was NOT FOUND on some arm, so "
+                         f"nothing was opened and there is no population to "
+                         f"report — this is not a corpus that was read and "
+                         f"holds 0 item(s) — {name}")
         # THE CROSS-CHECK `hygiene_finding_delta`'s own docstring asks for: a
         # difference that explains nothing cannot excuse anything. If the suite
         # went from not-failing to failing and the finding list is empty, the

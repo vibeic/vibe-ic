@@ -398,7 +398,29 @@ def test_cli_rc2_and_a_marker_when_it_read_nothing(tmp_path):
     # ...and the artefact it wrote is honest too, not just the exit code.
     doc = json.loads((tmp_path / "out.json").read_text())
     assert doc["census"]["measured"] == 0
-    assert len(doc["records"]) == len(S.SOURCES)
+
+    # EVERY row is present and NOT_MEASURED -- §2: "a report prints the literal
+    # NOT_MEASURED row; it does not omit it". An omitted row and a met row look
+    # the same to anything that scans a table for violations and finds none.
+    #
+    # The denominator is `SOURCES` PLUS the design-for-ECO rows, which come
+    # from a second reader (`ppa_eco_spare_records.py` owns the spare plan;
+    # this program owns only where the flow writes it). It is asserted as a
+    # SET of metric names and not as a count: a count goes red when a row is
+    # legitimately added and stays green when one is swapped for another.
+    names = [r["metric"] for r in doc["records"]]
+    assert len(names) == len(set(names)), f"a metric is emitted twice: {names}"
+    assert {src.metric for src in S.SOURCES} <= set(names)
+    eco = [n for n in names if n.startswith("design_for_eco.")]
+    assert eco, (
+        "the bundle carries no design-for-ECO row at all. The eco_readiness "
+        "axis proves from these names, and an axis nothing produces evidence "
+        "for reads UNDETERMINED on every run however good the design is -- "
+        "which is the defect this whole program exists to have fixed.")
+    assert all(r["status"] != "MEASURED" and "value" not in r
+               for r in doc["records"]), (
+        "an empty tree produced a MEASURED row. Nothing was read, and a "
+        "number here would be one nobody measured.")
 
 
 def test_cli_rc3_on_a_bad_invocation(tmp_path):

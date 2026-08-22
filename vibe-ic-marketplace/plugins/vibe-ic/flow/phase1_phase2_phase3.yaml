@@ -1077,7 +1077,50 @@ steps:
         # `step_internal_fail_bubble_up_check` reads as an unacknowledged
         # step-internal FAIL. See the cascade recorded at Step 36.
         - advisory_program_exit_zero: "l9_submodule_conformance_check ."
-    blocks_on: [1]
+        # CAN THIS INTERFACE BE BONDED OUT AT ALL (vibe-ic#1347).
+        #
+        # WHY HERE. The measured failure this program exists to end is an
+        # arithmetic fact learned by BUILDING: five of nine benchmark ICs on
+        # the chip path cannot be bonded out on any purchasable slot, and each
+        # was discovered by running synthesis, placement and routing until it
+        # hit a wall. Both inputs exist long before that wall — step 0.5ic
+        # ingests the operator's slot files with their per-side pad lists, and
+        # step 1 writes the RTL whose top-level port list is the other half.
+        # This is the FIRST step where both are on disk, and it sits ahead of
+        # synthesis (9), DFT (11) and the whole of PnR.
+        #
+        # WHY NOT 15.5ic, WHICH IS THE STEP ABOUT PADS. Because 15.5ic runs
+        # after the floorplan, which is after synthesis — on the far side of
+        # exactly the hours this gate exists to refuse to spend. A pad-ring
+        # step is where a pin-out is BUILT; this is whether one can exist.
+        #
+        # BLOCKING, and the two non-fitting tiers are kept apart: rc 1 is
+        # DOES_NOT_FIT, a real answer that fails the step; rc 2 is UNDECIDED —
+        # no slots ingested (the cell/IP path, which has no operator and no
+        # slot) or no top module found — which the flow reads as its disclosed
+        # VACUOUS_PASS tier. A design that simply does not fit never reaches
+        # rc 2, so a refusal can never be mistaken for a skip.
+        #
+        # WIRED WITH `--json`, unlike `l9_submodule_conformance_check` two
+        # clauses up. That one is wired bare because its report declares
+        # `verdict: FAIL`, which Step 36's `step_internal_fail_bubble_up_check`
+        # reads as an unacknowledged step-internal FAIL. This program's verdict
+        # vocabulary is FITS / FITS_AFTER_FOLD / DOES_NOT_FIT / UNDECIDED —
+        # neither FAIL nor MISSING — so that cascade is not reachable and the
+        # evidence artefact is kept.
+        #
+        # NO GLOB IN THIS CLAUSE, DELIBERATELY. `_resolve_program_cmd` expands
+        # a clause glob into separate argv tokens, `--rtl` takes one, and the
+        # rest land as extra positionals — argparse then exits 2, which IS the
+        # vacuous-pass tier. The gate would skip on every multi-file design and
+        # the skip would be indistinguishable from the honest one. The program
+        # discovers `phase2/stage1/rtl` itself instead; see `_discover_rtl`.
+        - program_exit_zero: "slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json"
+    # 0.5ic ingests the slot files whose pad lists are one of this gate's two
+    # inputs. Without the edge the graph permits lint to run before the slot
+    # geometry exists, and the gate would read "no slots" and disclose a skip
+    # on a chip-path design that HAS an operator (D5-MISSING-EDGE, 2026-08-20).
+    blocks_on: [1, 0.5ic]
 
   - id: 3
     name: "🔁 CDC / RDC check"

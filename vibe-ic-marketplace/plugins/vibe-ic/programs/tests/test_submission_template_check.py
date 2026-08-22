@@ -664,9 +664,41 @@ def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
 
     MEASURED on the flow at the time this was written: `slots/*.yaml` makes the
     chip-path steps applicable and `NO_TEMPLATE.txt` makes the IP-path step
-    applicable, on `files_exist` and nothing else. Nothing blocks on this step
-    and nothing takes a required_input from it, so ITS OWN FAIL DOES NOT STOP
-    THE ROUTING — measured too, and it is why the file must not be written.
+    applicable, on `files_exist` and nothing else.
+
+    THE SENTENCE THAT USED TO SIT HERE IS NO LONGER TRUE, and it is corrected
+    rather than deleted because a reader who believes it reasons wrongly about
+    why this step matters. It said "Nothing blocks on this step and nothing
+    takes a required_input from it, so ITS OWN FAIL DOES NOT STOP THE ROUTING —
+    measured too". Both halves are now false; the 2026-08-20 D5-MISSING-EDGE
+    change added the edges, and "measured too" is exactly the phrase that stops
+    the next reader from re-measuring.
+
+    NO LIST OF STEP IDS APPEARS HERE ON PURPOSE — enumerating them is how the
+    sentence above rotted. The PROPERTY, re-derivable in one read of the flow
+    this file already parses:
+
+        every step whose `condition.files_exist` names a submission_template
+        router also declares `0.5ic` in its `blocks_on`; the chip-path ones
+        additionally take `input/submission_template/tapeout_declaration.json`
+        as a `required_input` from it.
+
+    So this step's FAIL now DOES stop the routing. Nothing is asserted here
+    about it: `test_matrix_d5_deps_correct.py`, in
+
+        test_d5_blocks_on_covers_the_real_dependency_graph
+
+    derives the edge set from the real dependency graph, one parametrised cell
+    per step. NOT quite "every step": measured on this tree it is 68 enforced
+    and 1 waived under `xfail(strict=True)`, so a waived cell XPASSes and goes
+    red the day its gap closes rather than being skipped. Every step this
+    docstring is about is in the ENFORCED set — measured, by dropping `0.5ic`
+    from `15.5ic`, `26.5ic` and `37.5ip` in a throwaway tree and watching the
+    matching D5 cell redden for each.
+
+    THE CONCLUSION IS UNCHANGED, because it never rested on that clause: the
+    router file must not be written by a run that did not look, because the
+    routers select terminals by `files_exist` and nothing else.
 
     A run that searched and found nothing and SAID SO, and a run where nobody
     looked, produce the same empty directory. If both wrote the router, both

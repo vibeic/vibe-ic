@@ -175,8 +175,23 @@ def _label_matcher(decl):
 #: The dispatcher's synthetic row for a corpus that expanded to nothing. Written
 #: by `gate_dispatch_over` in `tools/ci/_gate_dispatch.sh` (vibe-ic#1075), NOT by
 #: any `run` line — see `split_empty_corpus_records`.
-_EMPTY_CORPUS_LABEL_RE = re.compile(
-    r'\Acorpus "(?P<name>.+)" is EMPTY — nothing was checked over it\Z')
+#:
+#: THERE ARE THREE OF THEM, not one, and each is written out in full rather than
+#: reached by loosening the first. vibe-ic#1764 split the population refusal into
+#: the states it had been collapsing — a corpus that was READ and holds none, a
+#: corpus that was NOT FOUND so nothing was opened, and a producer that FAILED so
+#: the denominator is unknown. A `.+` in place of the differing clause would let
+#: any future dispatcher row walk past the fabrication control below, which is
+#: the one assertion in this file that catches an invented gate; so the price of
+#: a new row is a new anchored pattern here, deliberately.
+_POPULATION_REFUSAL_LABEL_RES = (
+    re.compile(r'\Acorpus "(?P<name>.+)" is EMPTY — nothing was checked over it\Z'),
+    re.compile(r'\Acorpus "(?P<name>.+)" was NOT FOUND — nothing was opened to check\Z'),
+    re.compile(r'\Acorpus "(?P<name>.+)" producer FAILED — denominator unknown\Z'),
+)
+#: The original name, kept because it is the shape the live hygiene script emits
+#: whenever its corpus is bound and holds no routed DEF.
+_EMPTY_CORPUS_LABEL_RE = _POPULATION_REFUSAL_LABEL_RES[0]
 
 
 #: Leading shell environment assignments on a command line, e.g. the
@@ -235,12 +250,22 @@ def split_empty_corpus_records(recorded_labels):
     caller must still prove each name is one the script DECLARES; a synthetic
     row naming a corpus no `gate_dispatch_over` line mentions is exactly the
     fabrication this file exists to catch, so it is returned, not swallowed.
+
+    IT PARTITIONS EVERY POPULATION REFUSAL, not only the empty one. vibe-ic#1764
+    gave a corpus that was NOT FOUND its own row, because "I read the index and
+    it holds none" and "there was no index to read" had been arriving here as
+    the same sentence; a producer that FAILED has had its own row since #1739.
+    All three are written by the dispatcher and none of them can ever trace to a
+    `run` line, so all three are set aside — and all three still have to name a
+    corpus the script declares.
     """
     invocations, empty = [], []
     for label in recorded_labels:
-        m = _EMPTY_CORPUS_LABEL_RE.match(label)
-        if m:
-            empty.append(m.group("name"))
+        matched = next(
+            (m for m in (rx.match(label)
+                         for rx in _POPULATION_REFUSAL_LABEL_RES) if m), None)
+        if matched:
+            empty.append(matched.group("name"))
         else:
             invocations.append(label)
     return invocations, empty
@@ -491,6 +516,65 @@ def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
     # …and a record that is not the synthetic shape at all is untouched by the
     # partition and reaches `reconcile` as before.
     assert split_empty_corpus_records(["something else"]) == (["something else"], [])
+
+
+def test_a_NOT_FOUND_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
+    """The same control for vibe-ic#1764's row, and it is a separate test.
+
+    Folding it into the sibling above would have let one shape stand in for
+    both, which is the exact substitution #1764 filed: a corpus NOTHING OPENED
+    reported under the row that says a corpus WAS READ. The two rows are pinned
+    apart here for the same reason they are pinned apart in the dispatcher.
+
+    Driven over a REAL script sourcing the REAL dispatch library, whose producer
+    exits `GATE_DISPATCH_ABSENT_RC` — the code `tools/ci/routed_def_corpus.py`
+    leaves with when no corpus resolves.
+    """
+    import tempfile
+    absent_rc = re.search(r'^GATE_DISPATCH_ABSENT_RC=(\d+)$',
+                          _LIB.read_text(encoding="utf-8"), re.MULTILINE)
+    assert absent_rc, (
+        "the dispatcher no longer declares GATE_DISPATCH_ABSENT_RC, so a corpus "
+        "nothing opened has no row of its own (vibe-ic#1764)")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", "import sys\nprint('[PASS] fine')\nsys.exit(0)\n")
+        script = _fixture_script(root, (
+            f'run "flat one" "$ROOT" python3 "{root}/p_ok.py"\n'
+            '_per_item() {\n'
+            f'  run "per cell ($(basename "$1"))" "$ROOT" '
+            f'python3 "{root}/p_ok.py"\n'
+            '}\n'
+            'gate_dispatch_over "cells nobody could open" _per_item '
+            f"bash -c 'exit {absent_rc.group(1)}'\n"))
+        decls = GD.parse_declarations(script)
+        doc = _list_record(script, root)
+        recorded = [g["label"] for g in doc["gates"]]
+        corpora = declared_corpora(script)
+
+    assert corpora == ["cells nobody could open"]
+
+    # 1. the dispatcher really does record the NOT FOUND corpus, and NOT under
+    #    the empty corpus's row.
+    not_found = ('corpus "cells nobody could open" was NOT FOUND — nothing was '
+                 'opened to check')
+    assert not_found in recorded, recorded
+    assert not any("is EMPTY" in label for label in recorded), recorded
+
+    # 2. with it set aside the reconciliation is clean.
+    invocations, empty = split_empty_corpus_records(recorded)
+    assert empty == ["cells nobody could open"], recorded
+    assert len(recorded) == len(invocations) + 1
+    assert reconcile(decls, invocations) == ([], [])
+    assert_invocations_decompose(decls, invocations)
+    assert reconcile(decls, recorded)[0] == [not_found]
+
+    # 3. the clause that keeps it honest: same phrasing, corpus the script never
+    #    declared, still caught.
+    forged = ('corpus "a corpus nobody declared" was NOT FOUND — nothing was '
+              'opened to check')
+    _inv, forged_empty = split_empty_corpus_records(recorded + [forged])
+    assert sorted(set(forged_empty) - set(corpora)) == ["a corpus nobody declared"]
 
 
 def test_a_continued_run_line_is_read_as_the_one_command_bash_runs():

@@ -376,16 +376,41 @@ def _resolves_outside_the_scan_root(cite: str, root: Path) -> bool:
     """
     if Path(cite).is_absolute():
         return False              # absolute is non-portable; already never resolvable
+    bases = []
     base = root.parent
-    for _ in range(4):            # benchmark-data/ic -> benchmark-data -> repo root
+    for _ in range(4):            # benchmark-data/ic -> benchmark-data -> ...
+        bases.append(base)
+        if base.parent == base:
+            break
+        base = base.parent
+    # THE ANCESTOR WALK STOPPED REACHING THE REPO AT c5d7f2d00 (measured
+    # 2026-08-21). The comment this loop used to carry read
+    # "benchmark-data/ic -> benchmark-data -> repo root", which was true while
+    # the published cells lived INSIDE this repository. `chore: move published
+    # benchmark results to vibeic/benchmark-data` made the scan root a sibling
+    # of the repo rather than a child of it, so walking up from the root now
+    # arrives at $HOME and / instead — and a citation naming a file this repo
+    # really ships was classified `dangling`. That is the gate reporting its
+    # own scope as the document's defect, which is the exact failure #1044 is
+    # about and which the `outside` class exists to prevent. The disclosed
+    # OUT OF SCOPE count fell from the 7 measured when that comment was
+    # written to 2, which is the visible half of the same loss.
+    #
+    # The repository is therefore named STRUCTURALLY, from the location of this
+    # program, rather than inferred from where the corpus happens to sit: this
+    # file ships inside the repo whose citations it is judging, and that stays
+    # true whether the corpus is a child, a sibling, or somewhere else again.
+    here = Path(__file__).resolve()
+    for anc in here.parents:
+        if (anc / ".git").exists():
+            bases.append(anc)
+            break
+    for base in bases:
         try:
             if (base / cite).is_file():
                 return True
         except OSError:
-            return False
-        if base.parent == base:
-            break
-        base = base.parent
+            continue
     return False
 
 def _is_citation(tok: str) -> bool:

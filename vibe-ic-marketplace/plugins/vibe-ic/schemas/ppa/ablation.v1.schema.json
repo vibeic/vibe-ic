@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vibeic.ai/schemas/ppa/ablation.v1.schema.json",
+  "title": "vibeic.ppa.ablation.v1",
+  "description": "A WITHIN-PROJECT ABLATION. Two or more configurations THIS PROJECT CHOSE, measured against each other under one contract, to isolate what one of our own decisions contributes. It is a legitimate and informative measurement and it is NOT a head-to-head. PROPOSED, NOT ASSUMED: no document kind for this existed when the first ablation was filed, so it was filed as `vibeic.ppa.comparison.v2` -- the kind whose entire claim is a comparison against an opponent we did NOT tune -- and `ppa_head_to_head_check` refused it BASELINE_TUNED_BY_US. The record was honest; the document kind was the lie. This schema is that missing kind, offered for review rather than slipped in: the argument for it is in ppa-gate-audit/RESULT.md Part 20, and if the reviewer prefers a different shape the RECORD is what matters and it re-files again. WHAT MAKES THE TWO KINDS NON-INTERCHANGEABLE, in both directions: comparison.v2 REQUIRES a baseline arm to declare `tuned_by_this_project: false`; this kind requires EVERY arm to declare `true`. A document cannot satisfy both, so a mis-filing is refusable by shape from either side rather than only by a checker that happens to read it.",
+  "type": "object",
+  "required": ["schema", "claim_scope", "arms"],
+  "properties": {
+    "schema": {
+      "const": "vibeic.ppa.ablation.v1",
+      "description": "First key of the document, per docs/PPA_INTERFACES.md section 5."
+    },
+    "claim_scope": {
+      "const": "within_project",
+      "description": "STATED, never inferred. The one sentence a reader of these numbers is entitled to before they read them: every arm here is a configuration this project chose, so the comparison ranks OUR OWN decisions against each other and says nothing about any other flow. A file that omits this is not this kind of document."
+    },
+    "isolates": {
+      "type": "string",
+      "minLength": 1,
+      "description": "WHAT DECISION this ablation is about -- the one thing that differs between the arms and whose contribution the numbers are meant to show. Without it a reader has two number sets and no question."
+    },
+    "provenance": {
+      "type": "object",
+      "description": "OPTIONAL, and it is for re-filed records. Where this document lived before, and why it moved. A record that changes document kind without saying so reads to the next person as one that was always this kind, and the refusal that caused the move is evidence worth keeping.",
+      "properties": {
+        "former_path": {"type": "string", "minLength": 1},
+        "former_schema": {"type": "string", "minLength": 1},
+        "refused_as": {"type": "string", "minLength": 1},
+        "why": {"type": "string", "minLength": 1}
+      }
+    },
+    "arms": {
+      "type": "array",
+      "minItems": 2,
+      "description": "At least two. One arm ablates nothing.",
+      "items": {"$ref": "#/$defs/arm"}
+    }
+  },
+  "$defs": {
+    "arm": {
+      "type": "object",
+      "required": ["flow", "role", "config_source", "tuned_by_this_project", "ppa"],
+      "properties": {
+        "flow": {"type": "string", "minLength": 1},
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A LABEL here, not the enum comparison.v2 uses. `baseline` and `subject` carry the head-to-head's meaning -- one side is the opponent -- and neither side of an ablation is an opponent. Whatever names the arms take, `claim_scope` and the tuned rule below are what decide the document's kind."
+        },
+        "config_source": {"type": "string", "minLength": 1},
+        "tuned_by_this_project": {
+          "const": true,
+          "description": "EVERY arm, and this is the clause that makes the kind refusable from the other side. An arm this project did NOT tune is an opponent, and a document holding one is a head-to-head -- file it as comparison.v2 and let ppa_head_to_head_check apply the fairness conditions to it. Requiring `true` here means a real head-to-head cannot be hidden in this kind to escape those conditions, which is the failure this schema would otherwise create."
+        },
+        "measurement_basis": {"enum": ["signed_off_gds", "post_route_sta", "silicon"]},
+        "design": {"type": "object"},
+        "contract": {"type": "object"},
+        "ppa": {"type": "object"},
+        "feasibility": {"type": "object"},
+        "tuning": {"type": "object"}
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["score"]}, {"required": ["ppa_score"]},
+          {"required": ["overall"]}, {"required": ["figure_of_merit"]},
+          {"required": ["fom"]}, {"required": ["composite"]}
+        ]
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {"required": ["verdict"]}, {"required": ["winner"]}, {"required": ["beats"]}
+    ]
+  }
+}
