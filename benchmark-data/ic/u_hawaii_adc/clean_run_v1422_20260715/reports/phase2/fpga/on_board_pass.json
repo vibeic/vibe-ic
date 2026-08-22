@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIP",
-  "evidence": "usb_hid_tester_verify not run",
-  "design_identity": {
-    "design": "clean_run_v1422_20260715",
-    "ic_name": "u_hawaii_adc",
-    "top": "u_hawaii_adc"
-  }
-}
