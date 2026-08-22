@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIPI SoundWire (Overview)",
-  "lab_calibration_present": false,
-  "notes": "MIPI SoundWire is a digital-bus protocol specification; there is no analog reference / trim / calibration loop defined at the protocol layer. Codec-side analog calibration (microphone bias trim, DAC gain trim, ADC offset, headphone amplifier output trim, oscillator trim) is documented in individual codec / microphone / amplifier datasheets and exposed through implementation-defined registers (0x2000-0xFFFF) or future MIPI Device Class registers (0x1000-0x17FF). The only spec-level concession to analog quality is the qualitative statement that 'Jitter needs to be limited for best audio quality' with the explicit caveat 'No requirements on jitter (ppm, ps) in SoundWire spec' — making jitter performance a differentiating system-design concern rather than a protocol-compliance gate."
-}

@@ -360,10 +360,23 @@ def test_gate_scoping_bare_known_empty_context_gets_wrappers():
 def test_gate_end_to_end_binds_harness_top_via_iverilog():
     """The measured recovery: gate the no-skeleton draft, extract the emitted
     completion the scorer way, and confirm `iverilog -s cvdp_copilot_bus_arbiter`
-    elaborates (rc=0). Skipped when iverilog is unavailable."""
-    if not _iverilog_available():
+    elaborates (rc=0). Skipped unless BOTH enforcement tools are present.
+
+    This test drives the real `cvdp_gate.py`, which refuses and returns 2 on
+    EITHER missing tool — iverilog (:3018, #528) or yosys (:3027, #531/#604) —
+    so guarding on iverilog alone let a yosys-absent host reach
+    `assert rc == 0` and report "gate blocked a correct no-skeleton draft".
+    Nothing was blocked and no draft was judged: the gate declined to run. The
+    three gate-driving tests above already use the both-tools idiom; this one
+    was the exception. (`test_reg_init_header_wrapper_compiles_and_elaborates`
+    keeps its iverilog-only guard, correctly — it never invokes the gate.)
+    """
+    _missing = [t for t, ok in (("iverilog", _iverilog_available()),
+                                ("yosys", _yosys_available())) if not ok]
+    if _missing:
         import pytest
-        pytest.skip("iverilog not on PATH")
+        pytest.skip("cvdp_gate refuses without iverilog AND yosys; "
+                    "missing on this host: " + ", ".join(_missing))
     with tempfile.TemporaryDirectory() as td:
         inp = os.path.join(td, "in.jsonl")
         outp = os.path.join(td, "out.jsonl")

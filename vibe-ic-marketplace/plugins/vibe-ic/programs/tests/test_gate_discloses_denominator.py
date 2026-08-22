@@ -113,6 +113,34 @@ def test_a_missing_ci_script_is_NOT_a_pass(tmp_path):
     assert verdict == "NOTHING_SCANNED"
 
 
+def test_a_host_excluded_gate_is_not_indirectly_launched_by_the_meta_sweep(
+        tmp_path):
+    """An adjacent host-independence exclusion is transitive.
+
+    The host probe drives this meta-gate.  If the meta-gate then launches the
+    excluded network subject, the supposedly hermetic two-tree comparison has
+    reached the network through one level of indirection.
+    """
+    root = tmp_path / "repo"
+    (root / "tools" / "ci").mkdir(parents=True)
+    marker = tmp_path / "remote-was-launched"
+    (root / "remote.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('x')\n"
+        "print('[PASS] remote response: 1 item')\n")
+    (root / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        "# host-independence: EXCLUDE — reaches a remote service whose answer "
+        "can move independently of this commit\n"
+        'run "remote report" "$ROOT" python3 "$ROOT/remote.py"\n')
+
+    res = G.audit_ci(root, timeout=10, budget=20,
+                     skip_host_excluded=True)
+    assert not marker.exists(), (
+        "the denominator meta-sweep launched a gate explicitly excluded from "
+        "host-independence")
+    assert any(label == "remote report" and "EXCLUDED" in why
+               for label, why in res.not_driven), res.not_driven
+
+
 def test_the_gate_list_is_PARSED_from_the_ci_script_not_duplicated():
     """A second hand-maintained list would drift, and a gate added to CI would
     silently escape this check."""
@@ -122,13 +150,55 @@ def test_the_gate_list_is_PARSED_from_the_ci_script_not_duplicated():
     assert "chip-AGNOSTIC source guard" in labels, sorted(labels)[:5]
 
 
+#: Aggregate wall-clock budget for the CI sweep in this suite (vibe-ic#1181).
+#: 600s against a measured 192.9s idle: generous enough that an ordinary run is
+#: never truncated, small enough that a pathological one cannot outlive the
+#: harness. It is a CEILING, not a target — a run that hits it is disclosed as
+#: NOT_CHECKED rather than quietly reported clean.
+_CI_SWEEP_BUDGET_S = 600.0
+
+
 def test_the_real_ci_gate_set_is_currently_clean():
     """The measured state at land time: every CI gate discloses what it
     examined. A zero baseline is the right shape for a regression guard — it
-    can only fire on a NEW instance."""
+    can only fire on a NEW instance.
+
+    BOUNDED, because unbounded it hung the whole suite (vibe-ic#1181).
+    `audit_ci` drives 74 declared gates with a 120s timeout EACH and nothing
+    capped the sum: measured on an idle host at a38902d1, 50 driven in 192.9s
+    — already past the suite's own `--timeout=180`, worst case 50 x 120s. The
+    wait is inside `subprocess.run`, which `--timeout-method=thread` cannot
+    interrupt, so pytest printed its stack dump and the invocation still never
+    finished. The whole run then produced NO SUMMARY LINE, which greps as
+    neither pass nor fail and silently unmeasured every other file in the
+    selection.
+
+    WHAT IS ASSERTED IS UNCHANGED, and is asserted more directly. `verdict ==
+    "PASS"` was a proxy for "no gate answered PASS without disclosing its
+    denominator"; `findings == []` is that claim itself, and it holds whether
+    or not the budget truncated the sweep. The truncation is then asserted to
+    be DISCLOSED rather than tolerated — a partial sweep may not read as a
+    clean one, which is why `audit_ci` returns NOT_CHECKED and not PASS.
+    """
     import pytest
     script = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
     if not script.is_file():
         pytest.skip("CI script not present")
-    verdict, findings = G.audit(_REPO)
-    assert verdict == "PASS", findings
+    res = G.audit_ci(_REPO, budget=_CI_SWEEP_BUDGET_S)
+
+    # THE CLAIM. Any gate that passes over an empty tree without disclosing it
+    # is a finding, and a finding is a finding however far the sweep got.
+    assert res.findings == [], res.findings
+
+    # NON-VACUITY. A budget so small that nothing ran would satisfy the line
+    # above by examining nothing — the exact shape this program exists to
+    # remove from everybody else.
+    assert res.declared >= 20, res.declared
+    assert res.probed >= 1, (res.probed, res.declared)
+
+    # AND THE TRUNCATION, IF ANY, IS DISCLOSED — never folded into a pass.
+    if res.truncated:
+        assert res.verdict == "NOT_CHECKED", res.verdict
+        assert any("aggregate budget" in w for _g, w in res.not_driven)
+    else:
+        assert res.verdict == "PASS", res.findings
