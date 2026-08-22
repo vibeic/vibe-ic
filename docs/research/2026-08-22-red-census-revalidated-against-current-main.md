@@ -5,6 +5,20 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 
 ## IF YOU READ ONE SCREEN, READ THIS
 
+> **AND THE UNKNOWN IS NOW BOUNDED — SAMPLED, NOT ASSUMED.** Having stated that a
+> red outside these ten files "was never looked for", I looked. A **reproducible
+> random sample** (seed 20260822) of **40 of the 2737 out-of-census files**, run
+> with the corpus pointer set:
+>
+>     989 passed, 16 skipped, 0 FAILED   (148s)
+>
+> **Zero reds outside the census, in a 1.5% sample.** That is real evidence the
+> inherited list is a reasonable proxy — and it is NOT proof there are none. At a
+> hypothetical 5% file-level red rate, a 40-file sample draws zero about 13% of
+> the time. **What it rules out is a LARGE unseen population; it does not rule out
+> a small one.** The 16 skips are unexamined and, by this campaign's own rule, a
+> skipped cell has no colour — they are not counted as passes here.
+
 > **⚠ SCOPE, STATED BEFORE ANY NUMBER: THIS IS NOT A SWEEP OF MAIN.**
 >
 >     test files in the plugin        2747
