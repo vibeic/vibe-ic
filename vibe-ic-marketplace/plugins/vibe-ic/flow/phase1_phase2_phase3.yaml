@@ -1111,10 +1111,16 @@ steps:
         #
         # NO GLOB IN THIS CLAUSE, DELIBERATELY. `_resolve_program_cmd` expands
         # a clause glob into separate argv tokens, `--rtl` takes one, and the
-        # rest land as extra positionals — argparse then exits 2, which IS the
-        # vacuous-pass tier. The gate would skip on every multi-file design and
-        # the skip would be indistinguishable from the honest one. The program
-        # discovers `phase2/stage1/rtl` itself instead; see `_discover_rtl`.
+        # rest land as extra positionals, which the program rejects.
+        #
+        # That rejection is now rc 3 and this runner reads an unsentinelled 3
+        # as FAIL, so a glob here would break the step LOUDLY. It was not always
+        # so: until the rc-3 tier was adopted (#712) the rejection was argparse's
+        # default exit 2 — this flow's VACUOUS_PASS — and the gate would have
+        # skipped on every multi-file design, indistinguishably from the honest
+        # "no slots ingested" skip. The clause still carries no glob, because a
+        # loud break is still a break; the program discovers
+        # `phase2/stage1/rtl` itself instead. See `_discover_rtl`.
         - program_exit_zero: "slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json"
     # 0.5ic ingests the slot files whose pad lists are one of this gate's two
     # inputs. Without the edge the graph permits lint to run before the slot
