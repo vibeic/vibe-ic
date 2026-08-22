@@ -6386,6 +6386,44 @@ anti-staleness section is not exempt):
     decay and publishes a command to re-derive exactly that number. It was 56
     sections stale.
 
+36. **"a third cause, distinct from the `home`-root group and the allowlist
+    group"** — FALSE (M99). It is the FIRST cause propagating; the assert payload
+    named two D3 reds I had already recorded. I grouped on the failure's headline.
+37. **"the pointer is not a fix and must never be quoted as one"** — WRONG (M105).
+    It takes 61 cells from reporting NOTHING to 54 measured passes. I was watching
+    the failure count, which went up.
+38. **"one publication decision closes six reds"** — FALSE (M96). Pointing at a
+    real corpus closes **zero** of them; `home` roots cannot become admissible by
+    publishing anywhere (M105). Right diagnosis, wrong remedy — and the remedy is
+    the half a lander would act on.
+39. **"the corpus and bootstrap four have no second blocker"** — FALSE (M92),
+    corrected within one commit of writing it.
+40. **"34 reds, 6 causes"** — superseded (M108). The mutation-ledger three are
+    DOWNSTREAM of D3, making it 5 roots with 16 under one.
+41. **`ALREADY_RED` filed as `NOT_FALSIFIABLE`** — a category error I nearly
+    published as a request (M108). "Nothing can redden this" is not "this is
+    already red, so nothing can be SHOWN to redden it."
+42. **"the assertions discriminate"** (design A) — an ARGUMENT presented as
+    evidence (M111). What is established is non-vacuity by construction and a
+    measured `6`; a live mutation arm is blocked by the same contract this branch
+    reports.
+43. **The proposal's B bound told a future builder to capture the run id from
+    `refs/gk-verify/*`** — those refs exist ONLY on the `--pr` path. **Not a stale
+    number: an instruction that would have sent someone down the exact dead end I
+    walked.** Corrected in place rather than deleted.
+44. **"kills a 4-in-10 flake"** — measured today at **9 in 10** (M116). Wrong in
+    magnitude, upward, and wrong in FORM: a flake rate is not a stable property of
+    code, and stating one without a date and a host reads as though it were.
+45. **The proposal's "none of this is implemented or run"** — false in both halves
+    once A and C landed and B was built and reverted.
+
+**AND THIS SECTION WENT STALE A SECOND TIME.** It was extended to 35 with the
+observation that a summary decays as work continues past it — **then nine more
+corrections landed and it did not move.** The rule was already written, already
+correct, already applied once, and it still needed applying again. **That is the
+strongest evidence in this document that the rule is real: it beat me twice in
+the same file, after I had named it.**
+
 **Six near-misses that measurement killed before publication**, listed because
 each would have been believed: "three tamper guards fail in the strong tier" (the
 tamper simply fails now); a `git stash` control that measured my own file and
