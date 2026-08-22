@@ -3576,3 +3576,68 @@ symptom count is one regardless of how many are missing. **The failure mode that
 "makes you find out" also understates its own size** — here by a factor of six
 against one. That is the version of the pin-versus-fixture argument worth
 keeping, and it is theirs.
+
+### RETRACTED: the fixture was NOT already incomplete — my census used the wrong predicate
+
+The subsection above is wrong and is retracted. `jmeas3` checked it before
+folding it in, which is the only reason it did not propagate.
+
+**What I claimed:** six of eight invoked programs absent from the fixture, three
+newly wired and three pre-existing — so the fixture was already six-eighths
+incomplete and the batch merely stepped in an open hole.
+
+**What is there.** My three "pre-existing absences" are provided, as STUBS
+written in rather than copied in:
+
+```
+tools/test_gatekeeper_land_differential.py:141  (prog / "landing_worktree_is_clean_check.py").write_text(…)
+                                          :149  (prog / "ci_targeted_test_select.py").write_text(…)
+                                          :154  (prog / "pytest_per_file_junit.py").write_text(…)
+```
+
+Verified. And the stubbing is deliberate design, not omission: copy the programs
+whose real behaviour the test wants, stub the ones whose it does not. Measured
+on both sides:
+
+```
+d5646372f^   invoked 5   provided 18   INVOKED BUT ABSENT = 0
+833e8493f    invoked 8   provided 18   INVOKED BUT ABSENT = 3
+```
+
+**Before the batch the fixture was COMPLETE.** There was no open hole; the batch
+made one.
+
+**The tell I had and did not use.** All 28 tests PASS at `d5646372f^` — I
+measured that myself, in §53, as the other arm of the single-variable revert. **A
+six-eighths-incomplete fixture cannot be green.** My own measurement contained
+the refutation of my own census and I wrote the census anyway, because the two
+lived in different sections and I never put them side by side.
+
+**And the consequence I nearly caused.** I asked `jmeas3` to replace its
+forward-looking argument for un-whitelisting — *the next wired gate will land in
+this hole* — with my present-tense one — *three programs are in it right now* —
+and to record MINE as the line for whoever picks this up. That sentence is false.
+It declined, checked, and did not carry it. **The forward-looking version is not
+the weaker argument; it is the only true one**, and the measurement sharpens it:
+the list was CORRECT until this batch, and a fixture that must be extended by
+hand in lockstep with every new invocation, with nothing that fails when it is
+not, stays correct right up to the moment it silently is not.
+
+So the defect is the missing BINDING between the two lists, not a count in
+either. Remedy as `jmeas3` records it: derive the fixture's set from what the
+script invokes, or add a check that fails when the script invokes something the
+fixture does not provide. Adding three entries restores today and rebuilds
+tomorrow's trap.
+
+**The method note, which is the transferable part and is theirs.** Our censuses
+disagreed 6 against 3 and neither was checkable against the other, because the
+disagreement was not in the data but in the PREDICATE — whether *provided* means
+copied, or copied-or-stubbed. **Two counts of the same tree are not two
+measurements of the same thing until the predicate is stated.** That is a sibling
+of the stale-pin point: my count reported a number and could not report which
+question it had answered.
+
+Nothing here touches §53's demonstrated mechanism, which stands as measured:
+`d5646372f`, reverting that one file turns all 16 green, and the three newly
+wired gates are the missing ones. Only the "was it already broken" half changes,
+and it changes to: **no.**
