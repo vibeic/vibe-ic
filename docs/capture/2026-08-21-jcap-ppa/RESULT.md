@@ -3557,7 +3557,7 @@ number and not the question.
 
     records                                47
       fix text quotes a figure             35
-      fix text names the command           10   (6 before this section was written)
+      fix text names the command           11   (6 before this section was written)
 
 The brief is explicit about this: *the command, the number, the before and
 after.* On the strict reading, 28 figure-bearing records fall short.
@@ -3587,18 +3587,31 @@ was wrong":
 | programs naming the split-out corpus | 98 | **99** | the tree grew by one |
 | programs directly under the program directory | 1238 | **1240** | the tree grew by two |
 | gates the wiring enumeration counts | 619 | **624** | the tree grew by five |
+| commands the layer presents | 19 | **20** | the tree grew by one |
+| emitter sites writing a basis stamp | 16 | **15** | **does not fully reproduce — see below** |
 
-**Four re-derivations, four small growths, zero screen mismatches.** The numbers
+**Six re-derivations. Five are small growths and none is a screen mismatch.** The numbers
 were sound; what was missing was the question that produced them. That is a
 better outcome than it looked when the first two disagreed, and it is only
 knowable because the screens are now written down.
 
-One of the four is taken from the gate itself rather than counted independently,
+**The sixth is the useful one, because it did not come out clean.** Counting the
+stamp as an emitted literal gives 15 against 16 recorded. That is the right
+order of magnitude and almost certainly the same question — but I cannot
+attribute the difference of one. It could be a site removed; it could be my
+pattern, because at least one occurrence in that file spaces the token
+differently from the others. What I *can* say is that the off-by-one is *inside*
+the right screen rather than *between* screens: a broader count of every mention
+of the token gives 41, and every mention that is not a read or a parse gives 37,
+both far enough away to prove they answer a different question. The record says
+all of that rather than quietly restating 16.
+
+One of the six is taken from the gate itself rather than counted independently,
 deliberately: an independent count would have to re-derive what counts as a
 gate, and a second definition of one population is exactly how two figures about
 one thing begin to disagree.
 
-The remaining 25 are work for whoever continues, and it is the first thing I
+The remaining 24 are work for whoever continues, and it is the first thing I
 would do: a figure without its question is a memory, which is the brief's own
 word for what this loop exists to stop producing.
 
