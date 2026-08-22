@@ -22,6 +22,9 @@ Usage:  recovery_resolves.py <verdicts.tsv> [repo]     |     recovery_resolves.p
 import re, subprocess, sys, os
 
 FETCH = re.compile(r'git fetch origin ([A-Za-z0-9._/-]+)')
+# the backticked form the other shards use; parsing it too is what keeps this gate from
+# being vacuous on their files, which is the failure it exists to catch
+BT = re.compile(r'reachable from `(?:origin/)?([^`]+)`')
 PLAIN = re.compile(r'reachable from (?:the LIVE origin branch |the live origin branch |origin/)([A-Za-z0-9._/#-]+)')
 HEADRE = re.compile(r'worktree HEAD (?:when judged|at re-verification):\s*([0-9a-f]{7,40})')
 # NOTE: this pattern was widened once, and the reason matters. It first matched only
@@ -37,7 +40,11 @@ def git(repo, *args, **kw):
     return subprocess.run(['git', '-C', repo, *args], capture_output=True, text=True, **kw)
 
 
+LIVE_SHAS = {}
+
+
 def live_refs(repo):
+    """ls-remote is the authority; refs/remotes is a cache that outlives refs origin deleted."""
     out = git(repo, 'ls-remote', 'origin', timeout=600)
     if out.returncode != 0:
         return None
@@ -45,10 +52,33 @@ def live_refs(repo):
     for line in out.stdout.splitlines():
         if '\t' not in line:
             continue
-        ref = line.split('\t')[1].strip()
+        sha, ref = line.split('\t')
+        ref = ref.strip()
         live.add(ref)
         live.add(ref.replace('refs/heads/', ''))
+        LIVE_SHAS[ref] = sha.strip()
     return live or None
+
+
+def contains(repo, ref, head):
+    """Does the LIVE ref still contain this head? Branches are walked from the namespace
+    fetched this run. A PR head is a ref origin serves that no branch namespace mirrors, so
+    it is resolved to its live sha and walked from there, fetched on demand if this clone
+    lacks the object. Returns True / False / None -- None is UNDETERMINED: never counted as
+    a pass, never reported as a defect."""
+    if ref.startswith('refs/pull/'):
+        sha = LIVE_SHAS.get(ref) or LIVE_SHAS.get(ref + '/head')
+        if not sha:
+            return None
+        if git(repo, 'cat-file', '-e', sha + '^{commit}').returncode != 0:
+            if git(repo, 'fetch', '-q', 'origin', ref + ':refs/tmp/recovery_check',
+                   timeout=600).returncode != 0:
+                return None
+            if git(repo, 'cat-file', '-e', sha + '^{commit}').returncode != 0:
+                return None
+        return git(repo, 'merge-base', '--is-ancestor', head, sha).returncode == 0
+    return git(repo, 'merge-base', '--is-ancestor', head,
+               'refs/remotes/origin-live/' + ref).returncode == 0
 
 
 def check(tsv, repo, live, fetch_ns=True):
@@ -58,8 +88,11 @@ def check(tsv, repo, live, fetch_ns=True):
     rows = [r for r in rows if len(r) == 3]
     cites = 0
     bad = []
+    undet = []
     for path, verdict, ev in rows:
-        named = {m.group(1) for m in FETCH.finditer(ev)} | {m.group(1).rstrip(',.') for m in PLAIN.finditer(ev)}
+        named = ({m.group(1) for m in FETCH.finditer(ev)} |
+                 {m.group(1).rstrip(',.') for m in PLAIN.finditer(ev)} |
+                 {m.group(1) for m in BT.finditer(ev)})
         named -= PLACEHOLDER
         cites += len(named)
         hm = HEADRE.search(ev)
@@ -67,14 +100,19 @@ def check(tsv, repo, live, fetch_ns=True):
         if not head:
             bad.append((path, verdict, 'no judged head this clone can resolve', sorted(named)))
             continue
-        resolves = [r for r in sorted(named) if r in live and
-                    git(repo, 'merge-base', '--is-ancestor', head, 'refs/remotes/origin-live/' + r).returncode == 0]
+        results = {r: contains(repo, r, head) for r in sorted(named) if r in live}
+        resolves = [r for r, v in results.items() if v is True]
+        if not resolves and any(v is None for v in results.values()):
+            undet.append((path, verdict, 'origin serves ' +
+                          ', '.join(r for r, v in results.items() if v is None) +
+                          ' but this clone could not read it', sorted(named)))
+            continue
         if not resolves:
             deadrefs = [r for r in sorted(named) if r not in live]
             why = 'every named ref is gone from origin' if deadrefs and len(deadrefs) == len(named) \
                   else 'no named ref both lives and contains this head'
             bad.append((path, verdict, why, sorted(named)))
-    return rows, cites, bad
+    return rows, cites, bad, undet
 
 
 def main():
@@ -84,13 +122,18 @@ def main():
     if live is None:
         print('  cannot reach origin -- refusing rather than judging against refs/remotes')
         return 2
-    rows, cites, bad = check(tsv, repo, live)
+    rows, cites, bad, undet = check(tsv, repo, live)
     print(f'  rows examined              : {len(rows)}')
     print(f'  recovery citations parsed  : {cites}')
     if not rows or not cites:
         print('  *** nothing examined -- this check is VACUOUS and refuses to report a pass ***')
         return 2
     print(f'  rows with NO instruction that resolves today : {len(bad)}')
+    if undet:
+        print(f'  rows UNDETERMINED from this clone            : {len(undet)}  '
+              f'(the ref lives; this clone could not read it -- neither a pass nor a defect)')
+        for path, verdict, why, named in undet[:5]:
+            print(f'      {verdict:8} {path}  --  {why}')
     for path, verdict, why, named in bad[:15]:
         print(f'      {verdict:8} {path}  --  {why}: {", ".join(named) if named else "(names no ref)"}')
     if len(bad) > 15:
@@ -126,11 +169,14 @@ def self_test():
     # 6. and the widened spelling still passes only when the ref really contains the head
     cases.append(('live containing ref, head written as "at re-verification"', 0,
         f'/x\tRECOVER\t[worktree HEAD at re-verification: {tip_head}] recover with git fetch origin main && git checkout {tip_head}\n'))
+    # 7. the backticked form the other shards use must be READ, and still RED on a dead ref
+    cases.append(('dead ref written in the backticked form', 1,
+        f'/x\tRECOVER\t[worktree HEAD when judged: {tip_head}] its head is reachable from `origin/harvest/rescue-does-not-exist`\n'))
     rc_all = 0
     for name, want, body in cases:
         with tempfile.NamedTemporaryFile('w', suffix='.tsv', delete=False) as fh:
             fh.write(HDR + body); p = fh.name
-        rows, cites, bad = check(p, repo, live, fetch_ns=False)
+        rows, cites, bad, _u = check(p, repo, live, fetch_ns=False)
         got = 2 if (not rows or not cites) else (1 if bad else 0)
         os.unlink(p)
         ok = got == want
