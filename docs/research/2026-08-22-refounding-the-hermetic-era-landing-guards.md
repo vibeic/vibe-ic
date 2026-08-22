@@ -401,9 +401,25 @@ verified in both lanes, with dependants checked. **Nine remain**, and the earlie
 | **D** | designed, mechanism fully traced | ~~a REAL published cell in the fixture's benchmark-data~~ — **FALSE.** One IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, 211 paths, carrying `routed.def`), and the sandbox fixture already creates `ic/tiny/v1/phase3/stage3/pnr/routed.def` — the producer's exact cell predicate. **Nothing needs authoring.** What blocks it is the same layer that blocks B. |
 | **B** | **BUILT, RUN, REVERTED** — the channel works | ~~sequencing and my measured error rate~~ — **that is no longer the reason.** The sentinel crosses and the arm hangs; it fails at container IDENTIFICATION, needing **one line in `gatekeeper-verify-merge.sh` (PROTECTED)** to announce `RUN_ID`. Reverted rather than ship a test whose final assertion would pass vacuously. |
 
-**Revised order for what REMAINS: D before B.** D is blocked on evidence somebody
-else can supply; B is blocked on a decision plus the largest edit of the four. The
-original "A, C, D, B" is spent for its first two entries.
+**REVISED AGAIN, AND REVERSED: B before D.** This line said *"D before B — D is
+blocked on evidence somebody else can supply; B is blocked on a decision plus the
+largest edit of the four."* **Both premises are now measured false, and the
+ordering they produced would send the next person to the harder item first.**
+
+* **D is NOT blocked on evidence.** A real published cell IS tracked
+  (`ic/spm/v1.5.58_ihp-sg13g2`, carrying `routed.def`) and the sandbox fixture
+  already creates the producer's exact cell predicate. D is blocked on whether a
+  fixture can satisfy the **trusted-parent-evidence integrity check** — a protocol
+  judgement across THREE protected files.
+* **B is NOT the largest edit.** It was BUILT and RUN (M92); the sentinel-commit
+  fixture works and the hang fires. It needs **ONE LINE** in
+  `gatekeeper-verify-merge.sh` to announce `RUN_ID` so the test can identify the
+  arm's container.
+
+**One line versus a protocol judgement. B first.** The original "A, C, D, B" is
+spent for its first two entries, and its last two were in the right order all
+along — I reversed them on reasoning and have now reversed them back on
+measurement.
 
 ## What I did NOT verify
 
