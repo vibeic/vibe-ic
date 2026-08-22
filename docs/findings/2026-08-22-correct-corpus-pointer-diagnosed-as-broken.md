@@ -83,6 +83,39 @@ Each link measured separately rather than inferred from the one before it.
    cell: 1345 collected, 0 errors. 1357 − 12 new cases in this branch = 1345.
    Two different corpora, same denominator.
 
+5. **And they RUN, not merely collect.** Collection is not execution, so ten of
+   the `needs_corpus` modules were executed rather than counted, pointer bound
+   at the same real landing checkout:
+
+   ```
+   196 passed, 20 skipped, 4 xfailed in 59.32s   (loadavg 18.16, nproc 32)
+   ```
+
+   On `main` those same ten modules yield zero executed tests: they are
+   collection errors. The 20 skips carry the new sentence verbatim —
+
+   > `VIBE_IC_BENCHMARK_DATA` names the published benchmark corpus and it was
+   > READ — it publishes 0 cells under `ic/<design>/v<version>_<PDK>/`, so this
+   > check has no published cell to examine. This is a MEASUREMENT of zero, not
+   > 'I could not look', and it is not a pass: nothing was verified about any
+   > cell. The pointer is correct; the corpus is empty.
+
+   — which is the point: 196 tests that have nothing to do with a published cell
+   now run, and the 20 that do are skipped over a **counted zero** rather than
+   erroring over a configuration that was never broken.
+
+### Targeted regression, both pointer states
+
+| tree | pointer | result |
+|---|---|---|
+| `origin/main` | unset | 20 passed, 1 skipped |
+| this branch | unset | 32 passed, 1 skipped |
+| this branch | real landing corpus | 32 passed, 1 skipped |
+
+20 + the 12 new cases = 32, and the skip count does not move. The default
+no-pointer path — the one every developer and the current landing pytest run use
+— is byte-for-byte the behaviour it had.
+
 **THE LIMIT OF THIS CLAIM, stated rather than left for a reader to assume.** The
 hermetic image was NOT run. What is measured is that every ingredient is
 present: the arm binds the pointer, the pointer resolves to the canonical
