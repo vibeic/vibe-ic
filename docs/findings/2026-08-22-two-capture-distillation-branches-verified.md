@@ -3239,14 +3239,23 @@ the same list, and the only one so far that ran the other way.
 ```text
 origin/jdistmat/matrix-distil  >> LAND WITH F15 + F14 + F9 + F12 FIXED
 
-    Fifteen of its sixteen programs are sound IN THEIR PREDICATE, verified
-    twice over in both directions (ten at the first tip, six more as they were
-    pushed). F9 below is the one predicate defect; F12 is a separate,
-    contract-level problem that affects eight of them and is not about whether
-    they detect the right thing:
+    Eighteen of its twenty programs are sound IN THEIR PREDICATE, verified
+    twice over in both directions (ten at the first tip, ten more as they were
+    pushed). TWO carry predicate defects, not one as this paragraph said until
+    2026-08-22: F9, whose implementation is narrower than its docstring, and
+    F15, whose scan root makes its verdict false of the repository. F12 is a
+    separate, contract-level problem affecting THREE of them (corrected down
+    from eight on 2026-08-22; the F12 paragraph below carries the measurement)
+    and is not about whether they detect the right thing:
     I reintroduced each defect myself and got a specific, correctly-reasoned
     red, and blinding each checker reddened its control on the assertion it is
-    named after. Every checker exits 0 on the tree it ships on. No duplicates —
+    named after. On the tree it ships on, every checker answers as its own
+    tests declare it should: 25 of the 32 exit 0, six exit 1 and one exits 2,
+    and of those seven exactly two are held against their branch (F15's false
+    red and F1's undisposed one) — the other five are declared in the verdict
+    line and pinned by the checker's own test. ("Every checker exits 0" is what
+    this sentence said until 2026-08-22; it was never true and the table two
+    thousand lines above always said otherwise.) No duplicates —
     the two rules that overlap an existing predicate IMPORT it, verified down to
     `classify_not_invocable` having exactly one definition in the repository.
     The recoveries.json rename moved content and deleted none, field by field.
@@ -3255,24 +3264,28 @@ origin/jdistmat/matrix-distil  >> LAND WITH F15 + F14 + F9 + F12 FIXED
     checker was right and I was wrong, twice against a documented and TESTED
     exclusion — that is a good sign about this branch, not a bad one.
 
-    The sixteenth, `declaration_searched_only_inside_a_truncated_window`, needs
-    one thing fixed first. Its docstring claims a predicate its implementation does
-    not have, and the difference is not academic: 31 live sites in the shipped
+    The first of the two, `declaration_searched_only_inside_a_truncated_window`,
+    needs one thing fixed first. Its docstring claims a predicate its
+    implementation does not have, and the difference is not academic: 31 live
+    sites in the shipped
     tree are invisible to it (40 raw, nine withdrawn as defensible, from a
     scanner positive-controlled against the checker's own ten) — including one
-    in a file whose direct-form twin it already inventories, and including an SPDX-header check that is verbatim the
-    failure the rule was written to end. Its PASS line asserts something about
+    in a file whose direct-form twin it already inventories, and including an
+    SPDX-header check that is verbatim the failure the rule was written to
+    end. Its PASS line asserts something about
     this tree that is not true. Either resolve one level of name binding, or say
     the limit out loud in the docstring, the verdict line and a test. Cheap
     either way, and the branch lands.
 
     F14 is the hard one and it is new: this branch turns an EXISTING main gate
     red. `atomic_artifact_write_check` is rc 0 on main and rc 0 on the sibling
-    branch, and rc 1 here, because sixteen of this branch's own new programs
-    write their `--json` output non-atomically. It is a ratchet, so it cannot be
+    branch, and rc 1 here, because TWENTY of this branch's own new programs
+    write their `--json` output non-atomically (sixteen when this paragraph was
+    written; the branch has added four since). It is a ratchet, so it cannot be
     waived by registering them — the remedy is `from _atomic_artefact import
-    write_json`, named by the gate itself, and two programs have already been
-    converted that way. Until it is fixed the COMPOSED tree is red too, and it
+    write_text as atomic_write_text`, since every one of the twenty sites writes
+    TEXT; `write_json` also exists in that helper and is what I first named here,
+    wrongly. Until it is fixed the COMPOSED tree is red too, and it
     is red entirely on this branch's account.
 
     F12 is the same failure mode as F9 in a second place: a PASS that claims
