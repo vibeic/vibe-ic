@@ -93,3 +93,46 @@ Verified by whole-index comparison, not just the owned files:
 | `_jlandpar/wttests` | `_jlandpar/dev` | identical, 5663 files | RECOVER |
 
 Both sides clean in every case.
+
+## The vacuous universal is not scattered — it is 100% deletion-bound
+
+`verdicts_joined.tsv` has 20 rows whose evidence reads *"all **0** file(s) this tree changed
+hash-match main byte for byte"*. A universal over an empty set is true and says nothing.
+
+**All 20 are deletion-bound. Not 20 of 48 at random — every single vacuous row is a LANDED.**
+
+That is causal, not coincidental: "every file matched" is exactly what produces LANDED, so a row
+whose file-enumeration returned nothing lands in the delete bucket by construction. The vacuity does
+not scatter across verdicts; it concentrates entirely on the one that destroys.
+
+Nine of the 20 are shard A and had not been measured by anyone. Measured with the corrected guard:
+
+| row | joined | measured |
+|---|---|---|
+| `_agentjob_i1015/wt` | LANDED | **98 uncommitted files differ from main** |
+| `_agent_scratch_whatif/wt_C` | LANDED | **37 uncommitted files differ** (clone was stale; fetched forward first) |
+| `_wt_1486` | LANDED | 8 uncommitted differ, incl. `flow/phase1_phase2_phase3.yaml` |
+| `_wt_1236` | LANDED | 5 uncommitted differ |
+| `_agentjob_jliar/wt` | LANDED | 2 files not contained in main |
+| `_wt_1390pg` | LANDED | 1 uncommitted differs |
+| `_agentjob_jeco/base`, `_jppa_prscope/base`, `_jsearch2/base` | LANDED | contained in main — correct, despite vacuous evidence |
+
+Six of nine hold real content. Three are right by luck of what the empty set happened to hide.
+
+## Nothing is unrecoverable — verified, not assumed
+
+Uncommitted content is held by no commit, so rescue anchors do not cover it by construction. That
+made these 149 files the only candidates for genuine loss in the whole audit. Checked properly:
+
+    149 uncommitted blobs (112 + 37)
+    present in the object store          149 / 149
+    reachable from a ref                 149 / 149   (comm AND an awk set-intersection, never comm alone)
+    reachable from an ORIGIN ref         149 / 149   (local refs die with the clone; origin is the authority)
+
+Presence in an object store is not reachability, and reachability in one clone is not survival — this
+repo warns of unreachable loose objects, and a blob a gc away from gone is not preserved. All three
+questions had to be asked separately. All 149 pass all three.
+
+**No unrecoverable loss exists in any deletion-bound row measured in this audit.** The verdicts are
+still false and should be corrected: a row that says "all 0 files matched" while its tree holds 98
+differing files is wrong regardless of whether the content survives elsewhere.
