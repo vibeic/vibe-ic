@@ -160,6 +160,45 @@ def test_a_shell_comment_is_not_a_writer(tmp_path):
     assert rc == 0, out
 
 
+def test_a_shutil_copy_second_writer_goes_red(tmp_path):
+    """MEASURED GAP: the enumeration was write_text / write_bytes / open(w)."""
+    root = _tree(tmp_path, _ONE_STEP, {"checker.py": _WRITER})
+    (tmp_path / _PROG_REL / "runner.py").write_text(
+        'import shutil\n'
+        'def emit(project, src):\n'
+        '    dst = project / "reports" / "coverage.json"\n'
+        '    shutil.copy(src, dst)\n')
+    rc, out = _run(root)
+    assert rc == 1, f"a shutil.copy writer was not seen:\n{out}"
+
+
+def test_an_os_replace_second_writer_goes_red(tmp_path):
+    """THE ONE THAT MATTERS. `os.replace` is this repository's OWN sanctioned
+    atomic-write idiom (`_atomic_output.py`): a declared output is supposed to
+    arrive by temp-file-then-rename so it only exists under its final name if the
+    step completed. The scan could not see it, so the MORE CORRECTLY a step wrote
+    its output, the more invisible it was to this gate."""
+    root = _tree(tmp_path, _ONE_STEP, {"checker.py": _WRITER})
+    (tmp_path / _PROG_REL / "runner.py").write_text(
+        'import os\n'
+        'def emit(project, tmp):\n'
+        '    dst = project / "reports" / "coverage.json"\n'
+        '    os.replace(tmp, dst)\n')
+    rc, out = _run(root)
+    assert rc == 1, f"an os.replace writer was not seen:\n{out}"
+
+
+def test_a_dest_call_to_an_undeclared_path_is_not_a_writer(tmp_path):
+    """BIDIRECTIONAL: widening the enumeration must not make every copy a hit."""
+    root = _tree(tmp_path, _ONE_STEP, {"checker.py": _WRITER})
+    (tmp_path / _PROG_REL / "runner.py").write_text(
+        'import shutil\n'
+        'def emit(project, src):\n'
+        '    shutil.copy(src, project / "scratch" / "other.json")\n')
+    rc, out = _run(root)
+    assert rc == 0, out
+
+
 def test_a_read_is_not_a_writer(tmp_path):
     reader = ('from pathlib import Path\n'
               'def load(project):\n'

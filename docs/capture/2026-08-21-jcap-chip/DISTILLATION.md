@@ -896,3 +896,36 @@ directions:
 than either lane had: their gate infers "not measured" from constancy, mine infers
 "cannot move" from the session's declared inputs, and the records show it was
 measured every time, of the wrong thing, sixty times over.
+
+### A gap I found by reading the other lane's commit log
+
+Their branch landed `fix(distil): the write enumeration missed shutil and the
+attribute form of open`, on a gate of theirs. Mine enumerates writes the same way,
+so I asked the same question of it. **It had the gap, and in the worst possible
+form.**
+
+`only_the_declaring_step_writes_its_output` recognised `write_text`,
+`write_bytes` and `open(..., 'w')`. A second writer using `shutil.copy` or
+`os.replace` returned rc=0 — no finding. And `os.replace` is **this repository's
+own sanctioned atomic-write idiom**: `_atomic_output.py` exists so a declared
+output arrives by temp-file-then-rename, appearing under its final name only if
+the step completed. So the more CORRECTLY a step wrote its output, the more
+invisible it was to the gate meant to police who writes it.
+
+Now recognised: `shutil.copy/copy2/copyfile/move`, `os.replace/rename/link/symlink`
+(destination argument resolved), and `Path.replace/rename/hardlink_to/symlink_to`.
+
+**Coverage rose and the verdict did not move**, which is the outcome worth
+reporting:
+
+    before   195 declared outputs, 55 with an identified writer, 6 findings
+    after    195 declared outputs, 57 with an identified writer, 6 findings
+    finding-set sha 200f1f446857 — BYTE-IDENTICAL
+
+So the ledger row is unaffected and everything this file says about those six
+paths still holds. Two more declared outputs are now covered that were not.
+
+The transferable part is not the fix. It is that the gap was found by **reading
+another lane's commit title and asking whether it applied here** — no verification
+pass over this branch would have surfaced it, because the gate was green and its
+tests passed. Cross-lane commit logs are an instrument.
