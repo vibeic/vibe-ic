@@ -5127,6 +5127,49 @@ regression check, not a discovery, and it is worth one line rather than a sectio
 of credit.
 
 
+## M95 — I triaged the wrong 24. The BOTH bucket has 14 live reds and three files I never opened
+
+The ruling said *group the BOTH-lane reds by cause*. **I grouped the 22 in
+`test_landing_merge_verdict.py` and treated that as the job.** The triage table's
+BOTH bucket is a DIFFERENT set — 24 ids over 12 files — and I never ran most of it.
+
+**Ran all 11 non-D3 files at HEAD: 14 failed, 414 passed (674s).** Three of those
+files are mentioned **zero times** anywhere in this document.
+
+**Grouped by cause, parsed from the failure sections rather than by eye:**
+
+| n | cause | already documented? |
+|--:|---|---|
+| **3** | `flow_gate_enforcement_audit` exits 1 | **the M80 item — and section C credits it with 3 reds + 1 hygiene FAIL, not these** |
+| 3 | `0.5ic` and `1.6x` are ENFORCED cells carrying no measured mutation | `0.5ic` is the artefact **acquired in M85** |
+| 3 | structured vacuity: a step labelled non-vacuous, a dropped clause, a tier granted without its count | **NO — undocumented** |
+| 2 | coverage bridge; one prints `[VACUOUS-PASS] Step 4` | M39/M45/M46/M69 — **and it is the same family as the row above** |
+| 2 | matrix 63x8 coverage: 2 NA problems; **55 of 621 cells** in a state their live precondition denies | partially |
+| 1 | `magic did not complete` | M60 — environment, not a defect |
+
+**THE FLOW-GATE ITEM IS BIGGER THAN I RECORDED.** Section C describes it as *"3
+reds + 1 blocking hygiene FAIL"*. **Three further reds, in three separate files,
+fail for no other reason than that audit exiting 1** — `test_a_shrink_is_still_allowed`,
+`test_the_docstring_does_not_claim_an_enforcement_tier_it_lacks`, and
+`test_306_shipped_tree_is_green_against_its_register` each invoke it and assert
+exit 0. **Declaring intent on those two gates closes six reds, not three.** That
+materially changes what the decision is worth, and I had priced it at half.
+
+**AND `0.5ic` MAY NOW BE CLOSABLE.** `test_the_coverage_is_complete_and_the_count_is_stated`
+fails with *"2 ENFORCED cell(s) carry no measured mutation: ['0.5ic', '1.6x']"* —
+and M85's whole point is that `0.5ic` no longer lacks its input. *"You cannot
+mutate a step that does not run"* (M36) was the reason it had no mutation; the
+step now runs. **I have NOT verified that a replay closes it** — that is a
+measurement, not an inference, and it is the obvious next one.
+
+**What this costs my own reporting.** I said "22 reds, one cause" and it was true
+of the file I looked at. **The honest statement is: of main's BOTH-lane reds, I
+grouped one file thoroughly and left eleven files unopened**, three of which
+turned out to share a cause I had already written up without knowing its reach.
+**A count I never took cannot be wrong, which is exactly why the omission
+survived every audit I ran on the numbers I did take.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
