@@ -38,6 +38,8 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 PROG = _PROGRAMS / "benchmark_evidence_publish.py"
 sys.path.insert(0, str(_PROGRAMS))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _pdk_revision_fixture as _pdk_fixture  # noqa: E402
 import size_policy_drift_check as D  # noqa: E402
 
 _REPO = _PROGRAMS.parents[3]
@@ -68,6 +70,11 @@ def _make_run(base: Path, gds_bytes: int = 800_000) -> Path:
     (run / "input/docs/L1.md").write_text("# spec\n")
     with (run / "phase3/stage4/gds/top.gds").open("wb") as fh:
         fh.truncate(gds_bytes)               # sparse: st_size without the disk
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6). The record is produced by the
+    # REAL resolver over a synthesized tree — never hand-written — so this
+    # fixture cannot drift from the program that writes it in production.
+    _pdk_fixture.write_run_pdk_revision(run)
     return run
 
 

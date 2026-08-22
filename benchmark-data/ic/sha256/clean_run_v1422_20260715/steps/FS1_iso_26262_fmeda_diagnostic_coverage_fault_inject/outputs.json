@@ -1,8 +1,0 @@
-{
-  "id": "FS1",
-  "name": "ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only)",
-  "status": "pending",
-  "phase": "phase2",
-  "folder": "FS1_iso_26262_fmeda_diagnostic_coverage_fault_inject",
-  "outputs": []
-}
