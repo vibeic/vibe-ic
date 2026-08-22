@@ -335,18 +335,22 @@ def test_the_gate_is_invoked_by_the_hygiene_dispatcher():
         f"verdict under two labels: {invocations}")
 
 
-def test_the_row_tolerates_rc_2_and_declares_no_exemption_for_it():
-    """The wrapper choice, pinned, because it was got wrong once.
+def test_the_row_tolerates_rc_2_and_BUYS_that_tolerance_with_a_declaration():
+    """The wrapper choice AND its exemption, pinned — both were got wrong once.
 
-    MEASURED: a landing that binds a corpus (`GATEKEEPER_BENCHMARK_DATA_SHA`)
-    redirects `--corpus` away from the named root to the bound clone, and a
-    clone that carries no ablation record answers rc 2. Under plain `run` that
-    fails a landing for a fact about the ENVIRONMENT, not about any record.
+    FIRST WRONG: plain `run`. MEASURED, a landing that binds a corpus
+    (`GATEKEEPER_BENCHMARK_DATA_SHA`) redirects `--corpus` away from the named
+    root to the bound clone, and a clone carrying no ablation record answers
+    rc 2. Under `run` that fails a landing for a fact about the ENVIRONMENT.
 
-    And NO `uncheckable_until`: an exemption would declare rc 2 expected here,
-    and it is not — this repository holds an ablation record and this gate
-    reads it. Undeclared, the roll-up prints `(NO EXEMPTION DECLARED)`, which
-    is the visibility "the only ablation record disappeared" deserves.
+    SECOND WRONG: `run_tolerating_uncheckable` with NO `uncheckable_until`, on
+    the reasoning that an undeclared row stays louder in the roll-up. The
+    dispatcher refuses that outright — "tolerance has to be bought, not
+    defaulted into" — and fails the WHOLE run as a wiring error, so the
+    reasoning was not merely stylistically wrong, it certified nothing.
+
+    So both halves are pinned here: the row tolerates rc 2, and it declares
+    WHY it can be unable to look.
     """
     if not DISPATCHER.is_file():                  # pragma: no cover - layout
         pytest.skip(f"{DISPATCHER} is not in this checkout")
@@ -354,20 +358,25 @@ def test_the_row_tolerates_rc_2_and_declares_no_exemption_for_it():
     idx = [i for i, ln in enumerate(lines)
            if "ppa_ablation_check.py" in ln and not ln.lstrip().startswith("#")]
     assert len(idx) == 1
-    # The wrapper is on the line that opens the invocation, one above the
-    # continued command line.
     window = "\n".join(lines[max(0, idx[0] - 3):idx[0] + 1])
     assert "run_tolerating_uncheckable" in window, (
         "the row must tolerate rc 2: a bound landing redirects this corpus and "
         f"an absent one is not a finding about a record. Saw:\n{window}")
-    # No exemption attached: `uncheckable_until` binds to the NEXT gate, so it
-    # would have to sit between the previous invocation and this one.
+    # `uncheckable_until` binds to the NEXT gate, so it sits between the
+    # previous invocation and this one.
     preceding = lines[max(0, idx[0] - 12):idx[0]]
-    attached = [ln for ln in preceding
+    declared = [ln for ln in preceding
                 if ln.lstrip().startswith("uncheckable_until")]
-    assert not attached, (
-        "an exemption is attached to this row; rc 2 is NOT expected here and "
-        f"declaring it expected makes the roll-up quiet about it: {attached}")
+    assert len(declared) == 1, (
+        "the tolerance must be BOUGHT: the dispatcher rejects a "
+        f"run_tolerating_uncheckable row with no exemption. Saw: {declared}")
+    # And the reason must name the state it is excusing, not merely exist —
+    # an exemption that says nothing is a skip button with a date on it.
+    assert "GATEKEEPER_BENCHMARK_DATA_SHA" in declared[0], (
+        "the exemption does not name the measured way rc 2 is reached")
+    assert "rc 1" in declared[0], (
+        "the exemption does not say that a record which IS read and fails "
+        "still fails this row")
 
 
 def test_a_bound_landing_redirects_the_corpus_and_says_so(tmp_path):

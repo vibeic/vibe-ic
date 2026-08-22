@@ -198,17 +198,27 @@ run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$RO
 # nobody asked, so rc 2 arrives as NOT CHECKED. rc 1 -- a record that WAS read
 # and does not hold -- still fails, which is the half that matters.
 #
-# AND NO `uncheckable_until` ON PURPOSE. An exemption would declare rc 2
-# EXPECTED here, and it is not: this repository holds an ablation record and
-# this gate reads it. Undeclared, the row prints `(NO EXEMPTION DECLARED)` in
-# the roll-up, which is exactly the visibility "the only ablation record
-# disappeared" deserves. An empty corpus is never a pass and it is never quiet
-# either.
+# AND THE EXEMPTION IS DECLARED, because the dispatcher refuses to let it be
+# defaulted into. Written first with no `uncheckable_until` -- on the reasoning
+# that rc 2 is not EXPECTED here and an undeclared row stays louder -- and
+# `_gate_dispatch.sh` rejected the whole run for it:
+#
+#   gate_dispatch: WIRING ERROR -- "PPA ablation records (within-project)" is
+#   wired with run_tolerating_uncheckable, so it can report NOT_CHECKED, but no
+#   `uncheckable_until <YYYY-MM-DD> <why>` line precedes it -- tolerance has to
+#   be bought, not defaulted into
+#   ... the set was not correctly declared, so this run certifies NOTHING
+#
+# That is the correct ruling and it cost nine test reds to learn. The routed-DEF
+# row that reports "BLOCKING; no exemption" is NOT a counter-example: it uses
+# the structural-refusal wrapper, a different mode, whose rc 2 is the only
+# truthful outcome it has.
 #
 # AIMED AT ppa-crosslayer AND NOT AT benchmark-data, deliberately: this is where
 # the kind lives (`records/ablations/`), and it is the directory a SECOND
 # ablation would be filed into tomorrow -- the case that was validated by
 # nothing before this row existed.
+uncheckable_until 2027-02-28 "rc 2 here is NOTHING OPENED or nothing of this kind found -- never a verdict about a record. Over THIS repository the gate DECIDES and PASSES today: 633 JSON file(s) opened under ppa-crosslayer, 1 ablation record selected, 0 refused, 0 undetermined, 1 accepted, rc 0. The reachable rc 2 is environmental and was MEASURED, not guessed: a landing that binds a corpus (GATEKEEPER_BENCHMARK_DATA_SHA) forces VIBE_IC_BENCHMARK_DATA and refuses the candidate-local ppa-crosslayer shadow, so this row then reads a clone that carries no ablation record and answers VACUOUS rc 2. A record that IS read and does not hold is rc 1 and still fails this row. WHAT THE REVIEW DATE IS FOR: if the corpus this repository carries ever stops holding an ablation record, this row goes NOT CHECKED and the exemption above becomes a false sentence -- that is the state to look for, not the date"
 run_tolerating_uncheckable "PPA ablation records (within-project)" "$ROOT" \
     python3 "$PG/ppa_ablation_check.py" --corpus "$ROOT/ppa-crosslayer"
 
