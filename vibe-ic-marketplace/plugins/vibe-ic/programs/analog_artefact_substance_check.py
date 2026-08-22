@@ -64,6 +64,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # Per-extension minimum file size in bytes. Conservative — a real
@@ -271,7 +272,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(report, indent=2) + "\n")
+        atomic_write_text(out_path, json.dumps(report, indent=2) + "\n")
 
     if verdict == "VACUOUS_PASS":
         print(f"VACUOUS_PASS: {report['reason']}")

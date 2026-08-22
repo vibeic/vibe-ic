@@ -73,6 +73,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 # Vacuum permittivity in pF/um : 8.854e-12 F/m -> 8.854e-6 pF/um.
 EPS0_PF_PER_UM = 8.854e-6
@@ -332,7 +333,7 @@ def emit_stack_json(lef_path: str, out_path: str,
         lef_text = f.read()
     stack = fit_stack(lef_text, eps_r_phys, p_fr)
     stack["lef_path"] = lef_path
-    with open(out_path, "w") as f:
+    with atomic_writing(out_path) as f:
         json.dump(stack, f, indent=2)
     stack["out_path"] = out_path
     return stack
