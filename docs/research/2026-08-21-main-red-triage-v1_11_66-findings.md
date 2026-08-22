@@ -5170,6 +5170,64 @@ turned out to share a cause I had already written up without knowing its reach.
 survived every audit I ran on the numbers I did take.**
 
 
+## M96 — I pointed the corpus. It closes ZERO of the six, reveals five, and un-skips sixty-one
+
+M95 named the next measurement: does `0.5ic` become replayable now that M85
+acquired the template? **Ran it. The answer is no, and the reason is a different
+blocker than I assumed — which then falsified M86/M87 as well.**
+
+**The replay, exactly as the failing test instructs:**
+
+    --replay D3-UNDECLARED-ARTEFACT --step 0.5ic
+      -> NOT_REPLAYABLE: "the published benchmark corpus is not in this checkout
+         [...] Point VIBE_IC_BENCHMARK_DATA at a clone. This is 'could not look',
+         not 'nothing was wrong'."
+
+**Not the shuttle template. The CORPUS.** So I pointed it at the 17210 tracked
+paths in this host's `benchmark-data/` and re-ran:
+
+    -> ALREADY_RED (baseline_rc=1): the cell is red BEFORE the edit, so the pair
+       proves nothing either way.
+
+The arm now RUNS. That is the whole difference between a skip and a measurement,
+and the ledger is explicit that scoring a skip as 0 would make "a mutant arm
+nobody ran read as STAYED_GREEN".
+
+**THEN THE PART THAT MATTERS, A/B on the whole D3 dimension:**
+
+    no pointer     6 failed,  52 passed, 61 SKIPPED
+    with pointer  11 failed, 106 passed,  0 skipped
+
+**Sets diffed, not counts:**
+
+    CLOSED by the pointer:    0
+    REVEALED by the pointer:  5   evidence_is_live_wherever_the_run_root_exists
+                                  required_outputs[step0.5ic]
+                                  required_outputs[step1.6x]
+                                  required_outputs[step31]
+                                  the_compliance_audit_does_not_create_declared_outputs
+
+**M86/M87 SAID "one publication decision closes six reds". IT CLOSES NONE.** The
+six cite SPECIFIC `home` roots — `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`
+and `AI_IC_design/4th_benchmark/*` — and a real corpus that does not contain
+*those runs* leaves them exactly as they were. **Publishing *a* run tree is not
+the ask. Publishing THOSE runs, or re-pointing the records, is.** I had the right
+diagnosis and the wrong remedy, and the remedy is the half a lander would act on.
+
+**And the pointer surfaces `0.5ic` and `1.6x` as d3 reds** — the same two cells
+`matrix_mutation_ledger` flags as ENFORCED with no measured mutation (M95). Their
+d3 cell is red at baseline, which is *why* no mutation can redden it. **That is
+one finding wearing two test failures, and neither the template nor the pointer
+closes it.**
+
+**THE BIGGEST NUMBER HERE IS THE ONE NOBODY WAS LOOKING AT: 61 skipped -> 0.**
+Without the pointer this dimension reports on **52 of 113 cells** and stays
+silent about the rest. 54 of those 61 pass and 5 are red. **A dimension that
+skips more cells than it passes is not a measurement of the flow**, and every red
+count I have quoted for D3 — including my own six — was taken over the smaller
+denominator.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -5276,7 +5334,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **REAL blocker, but REDESCRIBED — M80.** Audit exit 1: 172 gates, 19 can block, 153 AUDIT_ONLY (88%), 131 undeclared. Both named gates sit in the BLOCKING `program_exit_zero` slot and are still AUDIT_ONLY (no runner invokes them inline). **My note said `advisory` truthful for both; that is true of the WIRING and wrong as an action** — writing the line DECIDES rather than describes. For `area_total_vs_budget_check` `advisory` would ratify the exact defect it was written to remove (*'a figure produced and never compared'*): wire it, or declare `blocking` and stay red. `tapeout_docs_gen` is a GENERATOR, not a check — a classification question, same shape as (b) and as M70's hygiene gate. | **3 questions: 1 product, 2 classification** |
 | **Re-founding B and D** (2 + 2 reds) | **B: BUILT, RUN, REVERTED — M83.** The sentinel hang WORKS (33s -> 111s, reaches `hermetic Git subject PASS`), but the arm's container cannot be identified: label value is receipt-only, `refs/gk-verify` exists **only on the `--pr` path** and these tests use `--ref`, and every mount lives under an unannounced `mktemp -d`. **One line in `gatekeeper-verify-merge.sh` (PROTECTED) would fix it** — write `RUN_ID` into the probe dir it already writes cleanup markers to. Reverted rather than ship a vacuous pass. **D: blocker retired (M79)** — a real published cell IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, with `routed.def`), and the sandbox fixture already publishes one. **A and C are DONE.** | **one line, in a protected file** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
-| **Matrix family** (6 D3 reds measured) | **ONE group of six — M86 measured, M87 corrected.** All six cite `home`-kind run roots, and **5 of them cite the SAME root** (`campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`) — one unreproducible tree cited five times. **Their artefacts EXIST here** in other `home` trees (`_c3_adc_scratch/dehand*` carries all four PNR DEFs; 10+ trees carry `eco_trigger_decision.json`). **Step 30 joins them (M87)**: its outputs ARE declared, as GLOBS (`phase3/stage3/spice/*.sp`), produced by the EDA toolchain from external PDK models — `critical_path.sp` is just what satisfied the glob. **Not a production gap.** One publication-or-waiver decision closes all six. Never by widening the skip. | **ONE decision, six reds** |
+| **Matrix family** (6 D3 reds measured) | **M96 CORRECTS M86/M87: pointing at a real corpus closes ZERO of the six.** They cite SPECIFIC `home` roots; a corpus without *those runs* leaves them untouched. **The ask is publishing THOSE runs or re-pointing the records — not 'a published run tree'.** And the pointer **un-skips 61 cells** (6 failed/52 passed/61 skipped -> 11 failed/106 passed/0 skipped): 54 new passes, **5 new reds** incl. `[step0.5ic]` and `[step1.6x]`, the same two cells the mutation ledger flags (M95). **Every D3 red count, mine included, was taken over 52 of 113 cells.** | **re-point or publish THOSE runs; and set the pointer** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | **ACQUIRED — M85. The artefact is no longer absent.** Cloned `gf180mcu-project-template` at the pinned `0de7e394337a1f` (Apache-2.0, open PDK, scratch only, NOT vendored). **`0.5ic` has RUN**: `INGESTED, slots_shipped=4, fixtures=10`. **The checker has REPORTED**, across 18 tracked `chip_top` sources: 2 FITS, 3 FITS_AFTER_FOLD, **3 DOES_NOT_FIT** (usb_pd 109, ibex 262, opentitan_aes 515 bits), 10 UNDECIDED. `slot_1x1` is the LARGEST slot (74 pads vs 72/72/56), so those three fit NO slot this operator ships. It was never a network or permission blocker — it was a `git clone` nobody had run. | **acquired; wiring + fit are owner calls** |
 | **CI image has no Docker CLI** | **SOLVED WITH FLAGS — M90. The lanes now AGREE.** Adding `-v /tmp:/tmp` to the docker CLI + socket mounts takes the image lane from **22 failed -> 6 failed, 128 passed**, with all three blocker classes (CLI error / invalid-mount / NORECORD) at **zero**. **No image rebuild, no code change, no protected-file edit** — four invocation flags. Host lane and image lane are now **byte-identical by test ID** (`comm` empty both directions), the first clean two-lane agreement on record. The surviving 6 are exactly the documented blockers (2 corpus pair, 2 G4/design B, 2 bootstrap). **RETRACTS 'the repair is invisible to CI'** — the A/C repairs PASS in the image. Caution stands: socket + host `/tmp` is a large grant for an isolation lane. | **runnable today; the shape is the owner's call** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
