@@ -1,7 +1,0 @@
-{
-  "tool": "analog_hw_tb_de10lite_budget_check",
-  "target": "phase3/analog",
-  "status": "NO_DATA",
-  "message": "no .qsf file found at phase3/analog",
-  "findings": []
-}
