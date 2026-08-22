@@ -1461,9 +1461,13 @@ def test_the_reach_survives_a_REFUSAL(tmp_path):
     assert r.returncode == RC_FAIL, out + r.stderr
     fail = [l for l in out.splitlines() if l.startswith("[FAIL]")]
     assert len(fail) == 1, out
+    # EVERY field the head carries, derived from the head itself rather than
+    # listed by hand -- a reach field added later must not be able to slip in
+    # unchecked, which is exactly what happened to `NOT DECIDABLE`.
     for fragment in ("emitted counter denominator(s)", "test pin(s) examined",
                      "not counted because the statement DENIES them",
-                     "NOT examined because they would not parse"):
+                     "NOT examined because they would not parse",
+                     "population(s) NOT DECIDABLE"):
         assert fragment in fail[0], (
             f"the refusal does not state its reach ({fragment!r} missing) -- it "
             f"reads as a complete account of the tree:\n{fail[0]}")
@@ -1471,6 +1475,17 @@ def test_the_reach_survives_a_REFUSAL(tmp_path):
         "what polarity declined to count vanished behind the refusal:\n" + out)
     assert "[UNPARSED]" in out, (
         "a file that could not be read vanished behind the refusal:\n" + out)
+
+    # THE COUNT OF FIELDS, not just the ones named above. The list is a hand
+    # written thing and drifts; the head's own shape does not. A PASS run of the
+    # same guard states its reach in the same number of clauses, so a field
+    # added to one verdict and not the other shows up here.
+    clean = _run(*_tree(tmp_path / "clean"))
+    passing = [l for l in clean.stdout.splitlines() if l.startswith("[PASS]")]
+    assert passing, clean.stdout
+    assert fail[0].count(";") == passing[0].count(";"), (
+        "the refusal states fewer reach clauses than a pass does:\n"
+        f"  FAIL: {fail[0]}\n  PASS: {passing[0]}")
 
 
 # ── K: a COUNT, or a LOWER BOUND ─────────────────────────────────────────────
