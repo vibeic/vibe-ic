@@ -71,9 +71,24 @@ _INVENTORY_NAME = "dual_input_selector_inventory.json"
 
 #: `--json` and `--report` name OUTPUT in this repository. Including them was
 #: measured at four added candidates, all false.
-_SINGLE = re.compile(r"^--(file|record|path|target|input|doc|manifest)$")
-_COLLECTION = re.compile(
-    r"^--(dir|directory|tree|glob|all|batch|corpus|inputs|files|roots)$")
+#: SETS, NOT REGEXES, AND DELIBERATELY SO. Both of these were fully-anchored
+#: alternations of literal option names -- `^--(a|b|c)$` -- which is set
+#: membership written as a pattern. As a pattern the single-target one also
+#: contained `input` and `record`, so
+#: `hdl_declaration_scan_strips_comments_check` correctly classified it as a
+#: DECLARATION-shaped regex and reported it scanning text no stripper touched.
+#:
+#: Comments cannot in fact reach it: `opt` is an `ast.Constant` value out of
+#: `ast.parse`, which discards comments. So stripping comments here would be a
+#: no-op that made the code claim a safety it was not performing. The honest
+#: repair is to stop being a declaration-shaped regex at all -- the membership
+#: test is what was meant, it is exactly equivalent for anchored alternations,
+#: and it leaves that gate's detector untouched. Do not turn these back into
+#: `re.compile`.
+_SINGLE = frozenset({"file", "record", "path", "target", "input", "doc",
+                     "manifest"})
+_COLLECTION = frozenset({"dir", "directory", "tree", "glob", "all", "batch",
+                         "corpus", "inputs", "files", "roots"})
 
 
 def _mutually_exclusive_groups(tree: ast.AST) -> Set[str]:
@@ -105,9 +120,9 @@ def _selectors(tree: ast.AST) -> Tuple[List[str], List[str], Set[str]]:
         if isinstance(n.func.value, ast.Name) and n.func.value.id in mx:
             in_mx.add(opt.lstrip("-"))
         if opt.startswith("--"):
-            if _SINGLE.match(opt):
+            if opt[2:] in _SINGLE:
                 singles.append(opt.lstrip("-"))
-            if _COLLECTION.match(opt):
+            if opt[2:] in _COLLECTION:
                 colls.append(opt.lstrip("-"))
         elif not opt.startswith("-"):
             singles.append(opt)                  # a positional target

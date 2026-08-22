@@ -88,6 +88,25 @@ _BRANCH_SHAPED = re.compile(
 
 _SPAWNERS = ("run", "call", "check_call", "check_output", "Popen", "getoutput")
 
+#: `os.system` / `os.popen` are spawns too, and `os.system` is the archetypal
+#: DISCARDED status: it returns an exit code and has no `check=` at all. They
+#: are matched only on the `os` module, so an unrelated `.system()` method on
+#: some other object is not a spawn.
+#:
+#: ADDED 2026-08-22 by an audit of this file's OWN enumerations, prompted by
+#: six instrument errors in one session that were all the same shape: a list of
+#: the cases I expected, not of the cases the tree uses. There are ZERO real
+#: `os.system` call sites today — both occurrences are strings inside test
+#: fixtures — so this closes a latent gap and changes no finding.
+_OS_SPAWNS = ("system", "popen")
+
+
+def _is_os_spawn(node) -> bool:
+    f = getattr(node, "func", None)
+    return (isinstance(f, ast.Attribute) and f.attr in _OS_SPAWNS
+            and isinstance(f.value, ast.Name) and f.value.id == "os")
+
+
 
 def _const_str(node: ast.AST) -> Optional[str]:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -106,7 +125,7 @@ def _argv_strings(node: ast.AST) -> Optional[List[Optional[str]]]:
     f = node.func
     attr = f.attr if isinstance(f, ast.Attribute) else (
         f.id if isinstance(f, ast.Name) else None)
-    if attr not in _SPAWNERS:
+    if not (attr in _SPAWNERS or _is_os_spawn(node)):
         return None
     if not node.args:
         return None

@@ -200,3 +200,45 @@ def test_the_census_never_blocks_by_default():
     assert "[CENSUS]" in r.stdout
     assert "the gate is programs/%s.py" % _RULE in r.stdout, (
         "the census must name the gate that does the refusing")
+
+_SECOND_WRITER_SHUTIL = """\
+import shutil
+from pathlib import Path
+
+
+def publish(project, src):
+    shutil.copy2(src, project / "reports" / "coverage.json")
+"""
+
+_SECOND_WRITER_PATH_OPEN = """\
+import json
+from pathlib import Path
+
+
+def publish(project, data):
+    with (project / "reports" / "coverage.json").open("w") as fh:
+        json.dump(data, fh)
+"""
+
+
+def test_a_second_writer_via_shutil_copy2_is_seen():
+    """`shutil.copy2` is 67 uses in this tree and was NOT in the enumeration.
+
+    A second writer arriving through it would have been invisible. There is no
+    such site today, so without this test the widening is unfalsifiable.
+    """
+    r = _run(_tree({"emit_coverage.py": _DECLARING,
+                    "publish_coverage.py": _SECOND_WRITER_SHUTIL}), "--strict")
+    assert r.returncode == 1, (
+        f"shutil.copy2 to a declared path was not seen as a write "
+        f"(rc={r.returncode})\n{r.stdout}\n{r.stderr}")
+    assert "publish_coverage.py" in r.stdout
+
+
+def test_a_second_writer_via_path_open_w_is_seen():
+    """`p.open("w")` is an ATTRIBUTE call; the bare `open()` branch misses it."""
+    r = _run(_tree({"emit_coverage.py": _DECLARING,
+                    "publish_coverage.py": _SECOND_WRITER_PATH_OPEN}), "--strict")
+    assert r.returncode == 1, (
+        f"path.open('w') to a declared path was not seen as a write "
+        f"(rc={r.returncode})\n{r.stdout}\n{r.stderr}")

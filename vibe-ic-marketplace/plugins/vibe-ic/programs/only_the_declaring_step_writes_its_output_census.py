@@ -100,6 +100,19 @@ _FLOW_REL = "flow/phase1_phase2_phase3.yaml"
 
 _WRITE_ATTRS = ("write_text", "write_bytes", "writelines")
 
+#: Write forms the first version of this enumeration MISSED, added 2026-08-22
+#: by an audit of this file's own lists against what the tree actually uses:
+#:
+#:     shutil.copy2   67 uses      path.open("w")   the ATTRIBUTE form
+#:     shutil.copytree 43          shutil.copy      20
+#:
+#: The bare-`open(p, "w")` branch below catches `open()` as a NAME; it does not
+#: catch `p.open("w")`, which is an Attribute call and is how a Path writes.
+#: MEASURED: widening changes no finding today — the same two paths have two
+#: writers either way — so this closes a LATENT gap. A second writer arriving
+#: through `shutil.copy2(src, declared_path)` would have been invisible.
+_SHUTIL_WRITES = ("copy", "copy2", "copyfile", "copytree", "move")
+
 #: Paths that must still be recognised as flow-owned. If the flow document is
 #: reshaped and these stop resolving, the scan is measuring nothing and says so
 #: rather than passing.
@@ -193,6 +206,13 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int], Dict[str, Set[str]]]:
             tgt = None
             if isinstance(fn, ast.Attribute) and fn.attr in _WRITE_ATTRS:
                 tgt = fn.value
+            elif isinstance(fn, ast.Attribute) and fn.attr == "open" and n.args \
+                    and isinstance(n.args[0], ast.Constant) \
+                    and "w" in str(n.args[0].value):
+                tgt = fn.value                      # p.open("w")
+            elif isinstance(fn, ast.Attribute) and fn.attr in _SHUTIL_WRITES \
+                    and len(n.args) >= 2:
+                tgt = n.args[1]                     # shutil.copy2(src, DEST)
             elif isinstance(fn, ast.Name) and fn.id == "open" and len(n.args) >= 2:
                 m = n.args[1]
                 if isinstance(m, ast.Constant) and "w" in str(m.value):

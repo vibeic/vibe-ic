@@ -221,3 +221,31 @@ def test_the_shipped_tree_passes_its_own_rule():
     r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
                        capture_output=True, text=True, timeout=1800)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
+
+_DEFECT_OS_SYSTEM = """\
+import os
+
+
+def resign(project):
+    try:
+        # This BLOCKING re-run keeps the headline honest.
+        os.system("python3 programs/flow_compliance_check.py " + str(project))
+    except Exception:
+        pass
+    return True
+"""
+
+
+def test_os_system_is_a_spawn_too():
+    """`os.system` returns an exit code and has NO `check=` at all.
+
+    It is the archetypal discarded status, and this file's `_SPAWNERS` tuple
+    omitted it until an audit of the enumeration on 2026-08-22. There are zero
+    real `os.system` sites in the tree, so without this test the widening is
+    unfalsifiable — a latent gap closed with nothing proving it closed.
+    """
+    r = _run(_tree({"sample_runner.py": _DEFECT_OS_SYSTEM}))
+    assert r.returncode == 1, (
+        f"os.system in a swallowing handler was not seen as a spawn "
+        f"(rc={r.returncode})\n{r.stdout}\n{r.stderr}")
+    assert "flow_compliance_check.py" in r.stdout
