@@ -86,6 +86,21 @@ def test_orchestrator_discovery_is_not_empty_or_stale():
 
 TOP_LEVEL_GATE = PROGRAMS / "top_level_outputs_in_canonical_check.py"
 
+#: Bound for every launch in this file. NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed.
+#: The landed values were 300 (the two real orchestrator runs) and 120 (the
+#: top-level gate CLI). MEASURED here: a real `phase1_one_shot_runner` run over
+#: a tmp_path project with one staged prompt takes 1.01 s, the same run with
+#: `steps/` blocked takes 0.74 s, and the gate CLI takes 0.04 s worst of nine
+#: calls. 60 s is ~59x the slowest of them.
+_RUN_TIMEOUT_S = 60
+
 
 # --------------------------------------------------------------------------
 # 1. the shared helper exists and does the owner-specified thing
@@ -178,7 +193,7 @@ def test_real_orchestrator_run_leaves_the_tree(tmp_path):
     cp = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
          str(project), "--mode", "prompt", "--ic-name", "TST"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=_RUN_TIMEOUT_S)
     assert cp.returncode == 0, cp.stderr
 
     idx_path = project / "steps" / "index.json"
@@ -263,7 +278,7 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
     cp = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
          str(project), "--mode", "prompt", "--ic-name", "TST"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=_RUN_TIMEOUT_S)
 
     assert cp.returncode == 0, (
         "bookkeeping killed the run:\n" + cp.stdout + cp.stderr)
@@ -280,7 +295,8 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
 # --------------------------------------------------------------------------
 def _gate(project: Path) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(TOP_LEVEL_GATE), str(project)],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True,
+                          timeout=_RUN_TIMEOUT_S)
 
 
 def _canonical_project(tmp_path: Path, name: str) -> Path:
