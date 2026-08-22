@@ -34,8 +34,26 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 > of the order of **seventeen** more files — on ONE event, an interval wide enough
 > that it means *"a small population exists"*, not a number. The one real red:
 > `test_v1_9_63_issue693_repo_process_family_wiring.py::test_the_checker_population_covers_checker_shaped_names`
-> — **named, reproducible in isolation both ways, and deliberately NOT diagnosed**
-> (outside this census's scope).
+> — and it IS now characterised, because naming a red without one line about it is
+> a thin handoff:
+>
+>     assert not ['pad_assignment_gen.py', 'tapeout_docs_gen.py']
+>
+> **Two checker-shaped names the checker population does not cover.** Measured:
+> **fails identically at `a00f53f20` and at `a4caccefe`** — so it is
+> **LONG-STANDING, not a regression**, and both files predate this campaign's base.
+>
+> **I first guessed it was caused by the recent upstream work** — `tapeout_docs_gen`
+> is one of the two gates that just declared `ENFORCEMENT`, and `pad_assignment_gen`
+> is one of the two new flow clauses the liar census found. **That would have been a
+> satisfying story: the fix that closed three census reds opening a fourth. It is
+> false** — `git log --diff-filter=A` puts both files before the base. **Checked
+> before publishing, which is the only reason it is not in this document as a
+> finding.**
+>
+> **What it actually is: a red the inherited list simply never contained** — one
+> concrete instance of exactly what the scope statement above warns about. Root
+> cause not pursued further; it belongs to whoever owns the checker population.
 >
 > **OPERATIONAL WARNING FOR ANY FUTURE SWEEP — the reusable part:**
 > `VIBE_IC_BENCHMARK_DATA` is **REQUIRED** for D3 (61 cells report nothing without
