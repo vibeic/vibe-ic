@@ -213,3 +213,63 @@ def test_the_shipped_tree_runs_and_discloses_its_population():
         assert _count(r.stdout, label) >= 0, (
             f"{label} not disclosed\n{r.stdout}")
     assert _count(r.stdout, "visible to the audit") > 0
+
+
+_COMPOSED_BANNER = '''\
+import sys
+def main():
+    head = "[FAIL] composed" if True else "[PASS] composed"
+    print(head)
+    return 1
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+_DOCSTRING_ONLY = '''\
+"""This module merely DESCRIBES a [PASS] / [FAIL] banner."""
+import sys
+def main():
+    print("[CENSUS] nothing to report")
+    return 0
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+def test_a_composed_banner_counts_wide_but_not_as_a_literal():
+    """THE FALSE-NEGATIVE THE STRICT PREDICATE WOULD CAUSE.
+
+    `landing_merge_verdict.py:1803` assigns the banner to a name and prints the
+    name; `coverage_closure.py:105` returns it in a list. Both are real verdict
+    emitters that a literal-in-print match never sees, which is why the wide
+    figure is the one reported and the literal figure only sits beside it.
+    """
+    root = _tree({"zz_composed.py": _COMPOSED_BANNER})
+    try:
+        r = _run(root)
+        assert _count(r.stdout, "outside and emitting a verdict") == 1
+        assert _count(r.stdout, "of those with a literal banner in a print") == 0
+        assert _count(r.stdout, "outside and also refusing") == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_module_that_only_describes_a_banner_is_the_wide_overcount():
+    """The other side of the same coin, and it includes this census itself."""
+    root = _tree({"zz_doc.py": _DOCSTRING_ONLY})
+    try:
+        r = _run(root)
+        assert _count(r.stdout, "outside and emitting a verdict") == 1
+        assert _count(r.stdout, "of those with a literal banner in a print") == 0
+        assert _count(r.stdout, "outside and also refusing") == 0
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_literal_banner_is_counted_as_one():
+    root = _tree({"zz_literal.py": _LITERAL_REFUSER})
+    try:
+        r = _run(root)
+        assert _count(r.stdout, "of those with a literal banner in a print") == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

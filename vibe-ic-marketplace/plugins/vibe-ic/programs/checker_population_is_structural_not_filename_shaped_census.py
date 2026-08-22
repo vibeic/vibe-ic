@@ -28,7 +28,19 @@ THE PREDICATE, AND WHY IT IS A RANGE
 ====================================
 "Behaves like a checker" is reported two ways on purpose:
 
-  WIDE    emits `[PASS]` or `[FAIL]` and has a `__main__` entry.
+  WIDE    the verdict banner appears anywhere in the source, and the file has
+          a `__main__` entry. Over-counts by the files that only DESCRIBE a
+          banner: measured, 4 of 47, one of them this census, which prints
+          `[CENSUS]` and merely documents the others.
+  BANNER  the banner is a string literal inside a `print()`. Reads stricter and
+          is NOT better on its own -- it FALSE-NEGATIVES the programs that
+          compose the banner first, and two of the four it drops are real
+          verdict emitters:
+              landing_merge_verdict.py:1803  head = ("[PASS] ..." if v.ok
+                                                     else "[FAIL] ...")
+              coverage_closure.py:105        return 1, [f"[FAIL] ..."]
+          Both are printed through a name, which no literal-in-print match
+          sees. So both figures are disclosed and neither is called the answer.
   NARROW  that, and a REFUSING exit path -- `return 1` / `sys.exit(1)` as a
           literal, or an assignment `rc = 1` that is later returned.
 
@@ -117,6 +129,7 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     top = sorted(programs.glob("*.py"))
     wide: List[dict] = []
     narrow = 0
+    literal = 0
     for f in top:
         if f.name in visible:
             continue
@@ -134,7 +147,14 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
             continue
         r = _refuses(tree)
         narrow += 1 if r else 0
-        wide.append({"file": f.name, "refuses": r})
+        banner = any(
+            isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+            and any(v in sub.value for v in _VERDICT)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "print"
+            for sub in ast.walk(n))
+        literal += 1 if banner else 0
+        wide.append({"file": f.name, "refuses": r, "literal_banner": banner})
 
     denom = {
         "top_level_programs": len(top),
@@ -142,6 +162,7 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
         "visible_to_the_audit": len(visible),
         "outside_that_population": len(top) - len(visible),
         "outside_and_emitting_a_verdict": len(wide),
+        "of_those_with_a_literal_banner_in_a_print": literal,
         "outside_and_also_refusing": narrow,
     }
     return wide, denom
