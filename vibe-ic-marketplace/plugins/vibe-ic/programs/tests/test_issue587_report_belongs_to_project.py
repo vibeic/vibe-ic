@@ -37,7 +37,7 @@ import pathlib
 import subprocess
 import sys
 
-import pytest
+from _published_corpus import corpus_root, needs_corpus
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "report_belongs_to_project_check.py"
@@ -174,12 +174,21 @@ def test_a_report_outside_a_reports_directory_is_undecidable(tmp_path):
 
 
 # ── the corpus, so a parser regression is visible ────────────────────────────
+@needs_corpus
 def test_the_shape_exists_in_the_corpus():
     """Measured at 61 foreign of 303 attributed when this landed. A change that
-    made `audit` always return nothing would pass every test above."""
-    root = _PROGRAMS.parents[3] / "benchmark-data"
-    if not root.is_dir():
-        pytest.skip("benchmark-data not present in this checkout")
+    made `audit` always return nothing would pass every test above.
+
+    ITS SUBJECT IS THE PUBLISHED RESULT CELLS, which moved to
+    vibeic/benchmark-data. `benchmark-data/` still exists in this checkout — it
+    holds the design INPUT — so `root.is_dir()`, the guard that used to stand
+    here, is true on a tree that carries not one runner report: the old guard
+    could not tell "no foreign report anywhere" from "no report anywhere", and
+    reported the second as a defect. `_published_corpus` asks the question the
+    denominator actually depends on (is a published CELL readable?) and the
+    audit below now runs against the corpus the caller named.
+    """
+    root = corpus_root()
     findings, stats = M.audit(root)
     assert stats["attributed"] > 0, stats
     assert stats["foreign"] > 0, (
