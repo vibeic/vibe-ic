@@ -14,7 +14,7 @@ they disagree, this document is later and says why.
 | **3** — `flow_gate_enforcement_audit` exits 1 on two undeclared gates | **CLOSED.** The audit exits 0, both gates declare `ENFORCEMENT`, declared intent 41 → 44. **The decision it asked for was made** (Part 2) |
 | **3** — 63x8 remainder (1 anti-skip, 1 in-file interaction, 1 shared) | **now 2.** The in-file-interaction test is GREEN upstream, its cause independently confirmed (Part 1) |
 | **5** — the vacuity conditional | **unchanged, but the DECISION has moved** — see Part 3: the question is now about a gate program's disclosure channel, not the flow's tiering logic |
-| **16** — the corpus/record situation | **unchanged.** 11 D3 + 3 ledger untouched by 244 commits |
+| **16** — the corpus/record situation | **SPLIT to 13 + 3 (Part 16).** The 11 D3 + 2 nested-outcome reds are the corpus root and are untouched by 244 commits. **The 3 mutation-ledger reds are NOT downstream of it** — they are red BY DESIGN, because `applies_to` is frozen so a new step must redden the gate until someone measures its mutation |
 | **6** — landing-verdict | **unchanged**, and the arithmetic re-confirms the frozen branch's own count exactly |
 | **1** — `magic` | **unchanged** (environment) |
 
@@ -149,7 +149,8 @@ diagnosis held and the list of available moves was too short.
      4  63x8 coverage                one FIXED upstream (was 5)
      3  flow-gate audit              **CLOSED UPSTREAM** — decision made
      5  vacuity conditional          unchanged
-     3  mutation ledger              unchanged
+     3  mutation ledger              unchanged — but RE-GROUPED in Part 16: red BY
+                                      DESIGN (frozen `applies_to`), not downstream of D3
      1  magic                        unchanged
     ---
     30 of the 34 still stand on `a4caccefe`; **4 are closed**, 3 of them by a
