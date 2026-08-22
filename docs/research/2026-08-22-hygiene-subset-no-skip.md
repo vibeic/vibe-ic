@@ -3796,3 +3796,35 @@ machine-checked, or expect it to drift.* `ci_harness_timeout_ceiling_check`
 exists because someone reached that conclusion about the lander. The fixture,
 the header, the memory descriptions and this branch's own squashed twin have no
 such check, and all four drifted within a single session.
+
+### …and refreshing it was the wrong fix, twice over
+
+I refreshed the squashed branch so its claim held — and then falsified it again
+within the minute by pushing §55 itself. Which is the churn loop from §43 in a
+new costume: the artefact was not wrong because it was old, it was wrong because
+its claim could not survive the branch gaining a documentation commit, and a
+fourth refresh would only have scheduled a fifth.
+
+**Fixed structurally instead.** The message now reads:
+
+```
+SQUASHED PRESENTATION of fix/jland67-hygiene-subset-honoured **at 23afd827a3**,
+byte-identical to THAT COMMIT's tree.
+```
+
+A claim pinned to a sha stays true as the branch grows. `cc6adde56a` carries it,
+`landing_collateral_revert_check` over `546487a8a3..HEAD` is rc 0, and this
+section can be written without breaking it — which is the test that the fix is
+structural rather than another refresh.
+
+**That is §19 applied to the artefact's own message.** §19 pinned the remedy to
+the base/branch PAIR it was measured on, because "merge this and it goes green"
+is a fact about two things. "Byte-identical" is the same shape: a fact about two
+trees, stated as though it were a property of one.
+
+**And it completes the pattern of the five.** Four of them I repaired by
+re-syncing the pointer; only two — the header's volatile counts and this — were
+repaired by removing the drift's SOURCE. The re-synced ones will drift again the
+moment anything moves. The right question when a pointer goes stale is not *what
+does it say now* but **what would have to stop changing for this to stay true**,
+and if the answer is "the thing it points at", the claim is the wrong shape.
