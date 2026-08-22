@@ -4295,3 +4295,74 @@ goes RED without the fix: **8 of 60 races leaked**, sizes `[273]`.
 Sixty rounds rather than six because the guard must not inherit the flakiness it
 removes: at a ~20% per-round leak rate, P(a broken stub showing zero leaks) is
 about `0.8**60`, roughly one in seven hundred thousand.
+
+## 63. The protected tuple has drifted on ELEVEN paths, and the repair needs one decision that is already pending
+
+The last two reds in the repo-tools lane are
+`test_phase_b_activated_parity.py`'s pair. They are correct, they are not mine,
+and they are one authorisation away from being fixable.
+
+**Measured against the live tree at `main` a4caccefea**, every protected path
+digested and compared to both recorded states:
+
+    36 paths  both states agree AND the live bytes match
+    11 paths  match NEITHER state
+
+Of the eleven, only THREE are paths where `current` and `next` legitimately
+differ — `gatekeeper-land.sh`, `ci_harness_timeout_ceiling_check.py`,
+`landing_merge_verdict.py`. **The other eight are paths where the two states
+AGREE**: the manifest is simply stale for them, and each was edited by an
+ordinary landing on 2026-08-21/22 —
+`_gate_dispatch.sh`, `landing_completion_record.py`, `repo_hygiene_gates.sh`,
+`routed_def_corpus.py`, `_corpus_location.py`, `hygiene_finding_delta.py`,
+`repo_hygiene_parallel.py`, `test_matrix_63x8_coverage.py`.
+
+**Not my doing, and that is measured rather than claimed.** Two of the three
+transition paths were last touched by my own landed delta `377dd4e2ed`, so I
+checked its parent: all three already matched NEITHER state at `377dd4e2ed^`.
+
+**What the drift means.** The test states the state machine: PREPARE lands a new
+manifest and may not move protected bytes, so at a PREPARE the live tuple equals
+`current`; ACTIVATE moves the bytes and leaves the manifest alone, so afterwards
+it equals `next`; *"every later landing is STEADY."* Eight protected paths moved
+without a PREPARE. The gate is doing its job.
+
+### Why I could not simply repair it
+
+The recorded repair shape ([[protected-manifest-needs-a-prepare-activate-pair]])
+is a manifest-only PREPARE rendered by `protected_landing_manifest_author.py`.
+Two facts make that look unblocked: the manifest JSON is **not itself one of the
+47 protected paths**, and `--commit` chooses which tree becomes `current`, so
+authoring against main would make `current` the live bytes — which is not
+falsifying history, it is recording what main actually settled on.
+
+It is blocked by a non-vacuity guard, and the guard is right:
+
+    assert moved, "the manifest authorises a transition that moves nothing"
+
+A manifest whose `next` equals its `current` authorises nothing, so the PREPARE
+must carry a REAL forthcoming protected move. **Authoring an authorisation for a
+change nobody has approved is not a thing to do quietly**, which is where this
+stops.
+
+### The convergence worth noticing
+
+Two real protected moves are already waiting on a ruling, and either one supplies
+the non-empty move this PREPARE needs:
+
+  * §58 — the selector rule, `ci_targeted_test_select.py` (+2 files vs +16).
+  * §60 — an explicit `--repo` for the three self-locating gates, which lands in
+    `repo_hygiene_gates.sh`.
+
+So the parity reds, the selector hole and the three unfixturable gates are not
+three problems. They are one PREPARE, and the decision that unlocks any of them
+unlocks all three. That is worth saying because each looked separately blocked
+while it was written down separately.
+
+**One consequence to check before relying on this lane.** The test's own lineage
+warns that *"since `tools/gatekeeper-land.sh` runs this corpus, a file pinned to
+a spent transition blocks every landing including the one that would repair it"*
+— the reason it was widened from one transition to properties. The properties are
+now violated by accumulated drift, so the same blockage returns in a third form:
+main cannot pass its own repo-tools lane, while landings have continued. Whatever
+path those landings took did not run this corpus.
