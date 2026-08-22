@@ -2176,7 +2176,7 @@ def test_rc0_does_not_promise_the_whole_tree_was_checked(tmp_path):
 def test_the_json_report_carries_exactly_the_documented_keys(tmp_path):
     """`--json` is a machine-readable contract. This branch added THREE keys to
     it -- `denied_by_polarity`, `unparsed`, `not_determined` -- and the module
-    docstring documented none of the seven until now.
+    docstring documented none of them until now.
 
     A key added or removed silently breaks whatever reads it, and nothing here
     would have noticed. The set is pinned against the docstring itself, so the
@@ -2201,7 +2201,17 @@ def test_the_json_report_carries_exactly_the_documented_keys(tmp_path):
         "the JSON report and its documented schema have drifted\n"
         f"  emitted but undocumented: {sorted(emitted - documented)}\n"
         f"  documented but not emitted: {sorted(documented - emitted)}")
-    assert len(emitted) == 7, sorted(emitted)
+    # A SECOND assertion, because the first one passes if a key is dropped
+    # from the code and the docstring together -- drift detection cannot see
+    # a lockstep removal. These are named, not counted: a magic total goes
+    # stale the moment a key is legitimately added, which is how it read
+    # `== 7` and went red on `substituted` for the wrong reason.
+    required = {"tool", "counters_examined", "pins_examined", "findings",
+                "denied_by_polarity", "not_determined", "unparsed",
+                "substituted"}
+    assert required <= emitted, (
+        "a documented key has been removed from the report and its schema "
+        f"together: {sorted(required - emitted)}")
 
 
 def test_the_item_marker_is_not_the_verdict_marker(tmp_path):
@@ -2228,6 +2238,94 @@ def test_the_item_marker_is_not_the_verdict_marker(tmp_path):
     assert "CANNOT DETERMINE" not in out, (
         "a rc=0 run is printing this repo's verdict-level word for a per-item "
         "note, which tells a reader the whole check was inconclusive:\n" + out)
+
+
+# ── bytes that do not decode ────────────────────────────────────────────────
+# `errors="replace"` never raises, which is why a guard reads that way -- one
+# bad file cannot take the census down. The cost is that the text analysed is
+# not the file, and a population the substitution lands in goes unmatched with
+# nothing said. Silent narrowing is the failure this program exists to refuse.
+
+def _undecodable_tree(tmp_path):
+    emitter = ('def _r(n):\n'
+               '    return "  if {[catch {%s}]} { incr _m }\\n" % n\n\n\n'
+               'def s():\n    return ("  set _m 0\\n" + _r("a") + _r("b")\n'
+               '            + "  if {$_m >= 2} { puts M }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    (progs / "bad_bytes.py").write_bytes(
+        b'def s():\n    return "\xff\xfe caf\xe9 not utf8"\n')
+    return progs, tests
+
+
+def test_undecodable_bytes_are_reported_not_absorbed(tmp_path):
+    """Before this, the run above printed `0 source(s) NOT examined` -- full
+    reach over a file whose text it never read."""
+    progs, tests = _undecodable_tree(tmp_path)
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert "[SUBSTITUTED]" in r.stdout, (
+        "a file whose bytes had to be substituted was absorbed silently, so "
+        "this run claims reach over text it did not read:\n" + out)
+    assert "bad_bytes.py" in r.stdout, out
+    assert "SUBSTITUTED to be read at all" in r.stdout, out
+
+
+def test_substitution_is_in_the_json_reach(tmp_path):
+    progs, tests = _undecodable_tree(tmp_path)
+    j = tmp_path / "r.json"
+    _run(progs, tests, "--json", str(j))
+    rep = json.loads(j.read_text())
+    assert [b["source"] for b in rep["substituted"]] == ["bad_bytes.py"], rep
+    assert rep["substituted"][0]["characters"] > 0, rep
+
+
+def test_a_clean_tree_invents_no_substitution(tmp_path):
+    """A guard that manufactures reach caveats for clean sources trains its
+    reader to ignore them."""
+    emitter = ('def s():\n    return ("  set _m 0\\n"\n'
+               '            + "  if {[catch {a}]} { incr _m }\\n"\n'
+               '            + "  if {[catch {b}]} { incr _m }\\n"\n'
+               '            + "  if {$_m >= 2} { puts M }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests)
+    assert "[SUBSTITUTED]" not in r.stdout, r.stdout + r.stderr
+
+
+def test_a_legitimate_replacement_character_is_not_a_substitution(tmp_path):
+    """This is why the probe is a STRICT decode and not a count of U+FFFD in
+    the result: a source may legitimately contain that character, encoded as
+    perfectly valid UTF-8. Counting occurrences cannot tell the two apart and
+    would report a clean file as mangled."""
+    emitter = ('def s():\n    return ("  # � is a real character here\\n"\n'
+               '            + "  set _m 0\\n"\n'
+               '            + "  if {[catch {a}]} { incr _m }\\n"\n'
+               '            + "  if {[catch {b}]} { incr _m }\\n"\n'
+               '            + "  if {$_m >= 2} { puts M }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    assert "�" in (progs / "thing_emit.py").read_text(), "fixture is wrong"
+    (progs / "thing_emit.py").read_bytes().decode("utf-8")   # decodes strictly
+    r = _run(progs, tests)
+    assert "[SUBSTITUTED]" not in r.stdout, (
+        "a clean file containing U+FFFD was reported as mangled:\n"
+        + r.stdout + r.stderr)
+
+
+def test_the_vacuous_reason_does_not_deny_a_population_it_could_not_read(
+        tmp_path):
+    """`no-population-stated-twice` is a claim ABOUT THE TREE. It is false when
+    the only sources were read through substitution -- the tree may state one
+    twice in the bytes that did not survive."""
+    progs, tests = _tree(tmp_path, "def s():\n    return \"  set _m 0\\n\"\n",
+                         "def test_x():\n    assert True\n")
+    (progs / "thing_emit.py").write_bytes(
+        b'def s():\n    return "  set _m 0 \xff\xfe\\n"\n')
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_VACUOUS, out
+    assert "source-bytes-substituted" in out, out
+    assert "no-population-stated-twice" not in out, (
+        "this run denies the tree states a population twice, about a tree it "
+        "read through byte substitution:\n" + out)
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────

@@ -153,6 +153,11 @@ need not read the source:
     not_determined       populations declined because K is a LOWER BOUND, not a
                          count. `program` / `counter` / `increment_sites` /
                          `denominator` / `denominator_kind` / `emitted_per_site`
+    substituted          sources whose BYTES would not decode as UTF-8. Read with
+                         substitution, so the text analysed is not the file; what
+                         substitution mangles goes unmatched, and an unmatched
+                         population is silently narrower reach. Reported, not
+                         absorbed. REACH, not verdict.
     unparsed             sources this guard could not read: "<name>:<line>: <msg>"
 
 The last three are REACH, not verdict: they say what was withheld. A consumer
@@ -212,6 +217,30 @@ _DEN_TEMPLATES = (
 )
 
 #: Below this a literal is a presence test, not a population.
+def read_source(path: Path) -> Tuple[str, int]:
+    """The source, and how many bytes had to be SUBSTITUTED to obtain it.
+
+    `errors="replace"` is the right reader for a guard -- it never raises, so
+    one bad file cannot take the census down. But it means the text analysed
+    is NOT the file: undecodable bytes become U+FFFD, and a phrase, counter
+    name or denial word that substitution lands in stops matching. The
+    population it belonged to is then never compared, and nothing says so --
+    a run that read a mangled file reports the same full reach as one that
+    read a clean tree.
+
+    That is the silent narrowing this program exists to refuse, so the
+    substitution is measured here and printed with the rest of the reach.
+    Detected by a STRICT decode rather than by counting U+FFFD in the result,
+    because a file may legitimately contain that character and a guard that
+    cannot tell the two apart invents reach caveats for clean sources."""
+    raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8"), 0
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+        return text, text.count("\ufffd")
+
+
 MIN_POPULATION = 2
 
 #: What ends a RECORD in the text `counters` reads. The subject is an emitted
@@ -794,6 +823,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     #: Counters whose K is a LOWER BOUND, not a count -- see
     #: `multiplied_counters`. Printed, never silently skipped.
     undecidable: List[dict] = []
+    substituted: List[dict] = []
+    seen_substituted: Set[str] = set()
+
+    def record_substitution(name: str, n: int) -> None:
+        """Say once per FILE. Both readers on the program side reach the same
+        source, and a reach report that counts one file twice is its own
+        small lie -- the same rule `record_unparsed` follows."""
+        if n and name not in seen_substituted:
+            seen_substituted.add(name)
+            substituted.append({"source": name, "characters": n})
+
     counters_examined = 0
     pins_examined = 0
 
@@ -802,7 +842,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def body(stem: str) -> str:
         if stem not in text_cache:
-            text_cache[stem] = sources[stem].read_text(errors="replace")
+            text, n = read_source(sources[stem])
+            record_substitution(sources[stem].name, n)
+            text_cache[stem] = text
         return text_cache[stem]
 
     seen_unparsed: Set[str] = set()
@@ -900,7 +942,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     stems = set(sources)
     for test in sorted(args.tests.rglob("test_*.py")):
-        text = test.read_text(errors="replace")
+        text, n_sub = read_source(test)
+        record_substitution(test.name, n_sub)
         try:
             tree = ast.parse(text)
         except SyntaxError as e:
@@ -941,10 +984,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"{pins_examined} test pin(s) COMPARED; {len(denied)} match(es) "
             f"not counted because the statement DENIES them; {len(unparsed)} "
             f"source(s) NOT examined because they would not parse; "
-            f"{len(undecidable)} population(s) NOT DECIDABLE")
+            f"{len(undecidable)} population(s) NOT DECIDABLE; "
+            f"{len(substituted)} source(s) whose bytes were SUBSTITUTED to be "
+            f"read at all")
     report = {"tool": TOOL, "counters_examined": counters_examined,
               "pins_examined": pins_examined, "denied_by_polarity": denied,
               "unparsed": unparsed, "not_determined": undecidable,
+              "substituted": substituted,
               "findings": findings}
     if args.json:
         _atomic.write_json(args.json, report)
@@ -959,6 +1005,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     for u in unparsed:
         print(f"  [UNPARSED] {u} — this guard could NOT read it, so nothing in "
               f"it was examined")
+    for b in substituted:
+        print(f"  [SUBSTITUTED] {b['source']}: {b['characters']} character(s) "
+              f"of this file do NOT decode as UTF-8 and were replaced before "
+              f"it was read, so what was analysed is not the file — any "
+              f"population the replacement landed in went unmatched and is "
+              f"NOT in the counts above")
     for d in denied:
         print(f"  [POLARITY] {d['where']}: {d['what']} `{d['matched']}` sits "
               f"in a statement that DENIES it (\"{d['denial']}\") and is NOT "
@@ -971,6 +1023,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # thing a reader gets on a path where nothing else was printed.
         withheld = len(undecidable) + len(denied) + len(unparsed)
         reason = ("declined-every-comparison" if withheld
+                  else "source-bytes-substituted" if substituted
                   else "no-population-stated-twice")
         _vac.announce_vacuous(TOOL, reason)
         # THE REACH IS PRINTED ON THIS PATH TOO. A verdict of "nothing was
@@ -981,6 +1034,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # and not the cause.
         said = ("every population this tree states twice was WITHHELD from "
                 "comparison above" if withheld
+                else "no population survived the byte substitution above, so "
+                "this tree may well state one twice" if substituted
                 else "no emitted population is stated twice here")
         print(f"[VACUOUS] {TOOL}: {said}, so nothing was compared; this is NOT "
               f"a pass [{head}]")
