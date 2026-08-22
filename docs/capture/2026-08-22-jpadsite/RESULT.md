@@ -1474,7 +1474,9 @@ find six paragraphs. The owner is asleep and will read this cold.
 WHAT I DID TAKE, for contrast, and why those were different: the site fix (the
 brief's own instruction); the flow-owner's three-part ruling on the extent
 (explicitly delegated to me); opening PR #1765 (the brief said push a branch, and
-a PR is this repo's vehicle — reversible, and reasoned in the section below).
+a PR is this repo's vehicle — reversible, and reasoned in the section below);
+and ITEM 0 ABOVE, pushing this record as a capture-bundle branch, which this
+sentence omitted until the list was counted against the items it summarises.
 
 ## The PR, and why I opened one when the brief said "branch"
 
@@ -1492,6 +1494,13 @@ assumed:
     the monotonic version at merge, and merges. Nothing in this session showed a
     mechanism that DISCOVERS a bare branch, so a branch alone risks sitting
     unread — which is a worse failure than a PR nobody wanted.
+    EVENTS TESTED THIS AND IT HELD, which is worth recording because a
+    reasoned-but-unverified decision usually just stays unverified. The lander's
+    resync commit is titled "take the three open PRs at their CURRENT tips,
+    checked by file content" — the discovery set was OPEN PRs. A bare branch
+    would plausibly not have been in it. The work reached main through the PR's
+    existence and NOT through the PR being merged, which is a route I had not
+    imagined and which no part of the reasoning above depends on.
   * IT IS REVERSIBLE. A PR can be closed. The brief's prohibitions are about
     irreversible or dishonest acts — hand-placing a pad, editing a GDS,
     inventing a site, bumping the version, pushing to main. None of those is
