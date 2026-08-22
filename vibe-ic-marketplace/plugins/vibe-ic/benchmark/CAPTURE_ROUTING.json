@@ -122,6 +122,12 @@
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
+    "phase3.pad_ring": {
+      "description": "Phase 3 step 15.5ic: Pad Ring (chip/IC path only)",
+      "bucket_A_program": "programs/pad_ring_gen.py",
+      "bucket_B_skill_file": "skills/tapeout-checklist/SKILL.md",
+      "_comment": "The step existed in the flow with no routing entry, so every capture from it fell through to default_routing, whose bucket_A_program is null."
+    },
     "phase3.pnr_setup_repair": {
       "description": "PnR set_wire_rc + repair_design + repair_timing -setup (added in v0.1.26)",
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
@@ -243,6 +249,12 @@
     "repo.host_independence": {
       "bucket_A_program": "programs/gate_host_independence_check.py",
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "repo.upstream_parity": {
+      "description": "Where this plugin RE-IMPLEMENTS an upstream flow's computation or configuration contract",
+      "bucket_A_program": "programs/upstream_contract_parity_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md",
+      "_comment": "Deliberately NOT routed to the step a divergence was first found at: the rule is about re-implementation, not about the subsystem that happened to surface it."
     },
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",

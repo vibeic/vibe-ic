@@ -1,0 +1,11 @@
+# Complete row report from axis.tcl — all eight rows, unfiltered.
+# The four side rows are the control; the four corner rows are shown so the
+# denominator of this capture is the tool's whole answer and not a grep of it.
+    IO_CORNER_NORTH_WEST  site=GF_COR_Site
+    IO_CORNER_NORTH_EAST  site=GF_COR_Site
+    IO_CORNER_SOUTH_EAST  site=GF_COR_Site
+    IO_CORNER_SOUTH_WEST  site=GF_COR_Site
+    IO_NORTH  site=SITE_FED_TO_VERTICAL_FLAG
+    IO_EAST  site=SITE_FED_TO_HORIZONTAL_FLAG
+    IO_SOUTH  site=SITE_FED_TO_VERTICAL_FLAG
+    IO_WEST  site=SITE_FED_TO_HORIZONTAL_FLAG

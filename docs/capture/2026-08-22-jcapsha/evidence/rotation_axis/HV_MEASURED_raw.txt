@@ -1,0 +1,60 @@
+##### ROTH=R0 ROTV=R0
+  ROWS:
+    IO_CORNER_NORTH_WEST orient=GF_COR_Site/MX
+    IO_CORNER_NORTH_EAST orient=GF_COR_Site/R180
+    IO_CORNER_SOUTH_EAST orient=GF_COR_Site/MY
+    IO_CORNER_SOUTH_WEST orient=GF_COR_Site/R0
+    IO_NORTH orient=GF_IO_Site/MX
+    IO_EAST orient=GF_IO_Site/R90
+    IO_SOUTH orient=GF_IO_Site/R0
+    IO_WEST orient=GF_IO_Site/MXR90
+  PADS:
+    ps0 orient=R0 dx=75.0 dy=350.0
+    pn0 orient=MX dx=75.0 dy=350.0
+    pw0 orient=MXR90 dx=350.0 dy=75.0
+    pe0 orient=R90 dx=350.0 dy=75.0
+##### ROTH=R0 ROTV=R90
+  ROWS:
+    IO_CORNER_NORTH_WEST orient=GF_COR_Site/MX
+    IO_CORNER_NORTH_EAST orient=GF_COR_Site/R180
+    IO_CORNER_SOUTH_EAST orient=GF_COR_Site/MY
+    IO_CORNER_SOUTH_WEST orient=GF_COR_Site/R0
+    IO_NORTH orient=GF_IO_Site/MYR90
+    IO_EAST orient=GF_IO_Site/R90
+    IO_SOUTH orient=GF_IO_Site/R90
+    IO_WEST orient=GF_IO_Site/MXR90
+  PADS:
+    ps0 orient=R90 dx=350.0 dy=75.0
+    pn0 orient=MYR90 dx=350.0 dy=75.0
+    pw0 orient=MXR90 dx=350.0 dy=75.0
+    pe0 orient=R90 dx=350.0 dy=75.0
+##### ROTH=R90 ROTV=R0
+  ROWS:
+    IO_CORNER_NORTH_WEST orient=GF_COR_Site/MX
+    IO_CORNER_NORTH_EAST orient=GF_COR_Site/R180
+    IO_CORNER_SOUTH_EAST orient=GF_COR_Site/MY
+    IO_CORNER_SOUTH_WEST orient=GF_COR_Site/R0
+    IO_NORTH orient=GF_IO_Site/MX
+    IO_EAST orient=GF_IO_Site/R180
+    IO_SOUTH orient=GF_IO_Site/R0
+    IO_WEST orient=GF_IO_Site/MX
+  PADS:
+    ps0 orient=R0 dx=75.0 dy=350.0
+    pn0 orient=MX dx=75.0 dy=350.0
+    pw0 orient=MX dx=75.0 dy=350.0
+    pe0 orient=R180 dx=75.0 dy=350.0
+##### ROTH=R90 ROTV=R90
+  ROWS:
+    IO_CORNER_NORTH_WEST orient=GF_COR_Site/MX
+    IO_CORNER_NORTH_EAST orient=GF_COR_Site/R180
+    IO_CORNER_SOUTH_EAST orient=GF_COR_Site/MY
+    IO_CORNER_SOUTH_WEST orient=GF_COR_Site/R0
+    IO_NORTH orient=GF_IO_Site/MYR90
+    IO_EAST orient=GF_IO_Site/R180
+    IO_SOUTH orient=GF_IO_Site/R90
+    IO_WEST orient=GF_IO_Site/MX
+  PADS:
+    ps0 orient=R90 dx=350.0 dy=75.0
+    pn0 orient=MYR90 dx=350.0 dy=75.0
+    pw0 orient=MX dx=75.0 dy=350.0
+    pe0 orient=R180 dx=75.0 dy=350.0
