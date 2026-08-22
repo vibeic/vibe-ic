@@ -2204,6 +2204,32 @@ def test_the_json_report_carries_exactly_the_documented_keys(tmp_path):
     assert len(emitted) == 7, sorted(emitted)
 
 
+def test_the_item_marker_is_not_the_verdict_marker(tmp_path):
+    """`[CANNOT DETERMINE]` is this repo's VERDICT-level word: 34 uses across
+    the corpus, every one beside rc 2, and `prose_polarity_consulted_check`
+    prints it that way. `[NOT DECIDABLE]` is PER ITEM -- one population declined
+    while the run carries on and exits 0.
+
+    Swapping one for the other is a reasonable-looking "make the vocabulary
+    consistent" change that would make a rc=0 run announce itself as
+    inconclusive. Pinned so that change goes red instead of shipping."""
+    emitter = ('def _r(n):\n'
+               '    return "  if {[catch {%s}]} { incr _m }\\n" % n\n\n\n'
+               'def s():\n    return ("  set _m 0\\n" + _r("a") + _r("b") + _r("c")\n'
+               '            + "  if {$_m >= 3} { puts M }\\n"\n'
+               '            + "  if {[catch {y}]} { incr _k }\\n"\n'
+               '            + "  if {[catch {z}]} { incr _k }\\n"\n'
+               '            + "  if {$_k >= 2} { puts K }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_PASS, out
+    assert "[NOT DECIDABLE]" in r.stdout, out
+    assert "CANNOT DETERMINE" not in out, (
+        "a rc=0 run is printing this repo's verdict-level word for a per-item "
+        "note, which tells a reader the whole check was inconclusive:\n" + out)
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

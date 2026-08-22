@@ -159,6 +159,22 @@ The last three are REACH, not verdict: they say what was withheld. A consumer
 that reads `findings` alone and ignores them is reading exit 0 as "the tree is
 clean" when it may mean "what I could compare was clean".
 
+WHY `[NOT DECIDABLE]` AND NOT THIS REPO'S `[CANNOT DETERMINE]`
+--------------------------------------------------------------
+Because they are different tiers, and borrowing the established word would make
+this output lie. `[CANNOT DETERMINE]` is a VERDICT-level marker here -- 34 uses
+across the corpus, every one of them accompanying rc 2, "nothing was audited,
+which is not a clean pass"; `prose_polarity_consulted_check` itself prints it
+that way. `[NOT DECIDABLE]` is PER ITEM: one population was declined while the
+run carries on and may still exit 0.
+
+Printing the verdict-level word beside a rc=0 run would tell a reader the whole
+check was inconclusive when one line of it was. The item-level markers this
+program prints -- `[POPULATION]` (the original), `[POLARITY]`, `[UNPARSED]`,
+`[NOT DECIDABLE]` -- name the THING at issue and leave the verdict to the last
+line. Recorded because "make the vocabulary consistent" is a reasonable-looking
+change that would break this.
+
 chip-AGNOSTIC: Python and Tcl text structure. No design, PDK, vendor or SKU.
 """
 from __future__ import annotations
