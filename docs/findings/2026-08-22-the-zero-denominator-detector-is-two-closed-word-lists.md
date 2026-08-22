@@ -76,3 +76,37 @@ of thirty words somebody thought of. The current lists are what
 author had seen, and the case that escaped is the one nobody had seen yet.
 
 That change is a landing owner's call. Nothing here modifies the gate.
+
+## How much the two lists actually miss, measured
+
+The section above declined to assert a number, because establishing one means
+driving the whole population against empty projects. That was then done, reusing
+the gate's own `_population()` and its fresh-directory-per-gate discipline, with
+BOTH probers excluded (`gate_zero_denominator_refuses_check` and
+`gate_discloses_denominator_check` drive the population themselves; the first
+excludes only itself and survives the second on a timeout).
+
+    population driven                                   568
+    rc 0 with EVERY disclosed count == 0                 21
+      of those, the gate's own predicate recognises       2
+      of those, its predicate cannot see                  19
+
+**19 is not a defect count, and this document does not present it as one.** It
+is the number of cases the predicate cannot even consider. Whether each is a
+defect needs per-program judgement, and a four-program sample splits four ways:
+
+| program | verdict on an empty project | reading |
+|---|---|---|
+| `argparse_help_format_check` | `PASS — 0 bare-% argparse help string(s)` | **a clear instance** — it discloses a FINDING count and no population at all, so it cannot distinguish 0 bad strings in 500 from 0 because there were none |
+| `waiver_growth_check` | passes against `baseline: ABSENT — compared against an empty document` | arguable, and DISCLOSED in the same breath |
+| `policy_direction_pin_check` | `inventory only; pass --verify-pins to run the flip and block` | **not a defect** — rc 0 is its contract in that mode |
+| `tracked_symlink_portability_check` | `0 tracked symlink(s)` then `[PASS] every tracked symlink is relative` | vacuous but defensible: with no symlinks the property does hold |
+
+So the measured claim is narrow and still worth having: **of 21 programs whose
+every disclosed number is zero on an empty project, the gate's predicate sees
+2.** The remaining 19 are invisible to it regardless of what they turn out to
+be — and one of the four sampled is unambiguously the shape the gate exists to
+refuse, inside the gate's own population.
+
+That is the difference a derived predicate makes, stated without inflating it:
+not "19 defects", but "19 cases the current detector cannot rule on".
