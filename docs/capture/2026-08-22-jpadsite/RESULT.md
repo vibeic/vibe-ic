@@ -1102,6 +1102,57 @@ more on a side -- INCLUDING the 40 the design actually declares. It is not a
 substitute for a pin-out, and it is not a verdict on the declared grouping
 either; it is not offered as either one.
 
+WHERE THIS REPORT WAS WRONG, INDEXED
+=====================================
+Seventeen lines carry a correction, spread from line 106 to line 2349, each
+quoting what it replaced. Scattered, they read as diligence. Collected, they
+tell a reader WHICH KINDS OF CLAIM HERE WERE UNSTABLE -- which is the only
+honest basis for weighting the rest.
+
+  A FIGURE I NEVER MEASURED, published as if I had
+    "13 of 14" upstream PAD_* variables -> 11 of 20 -> 12 of 20 (twice wrong)
+    "the nine L-documents" -> twenty-eight, spanning L1-L27
+    "four commits" pending -> six
+    "eight files dropped by .gitignore" -> ten
+    +858/-35 for the branch -> withdrawn for a rule that re-derives it
+    Every one landed where a count was easy to estimate and cheap to run.
+
+  A CORRECT MEASUREMENT, A WRONG INFERENCE -- the costliest class here
+    "upstream's placer would exit 1" -> it would not; this is the defect the
+       whole brief was about, and I then made the same mistake three more times
+    PAD_ROTATION_VERTICAL "is INERT, the placer does not read it" -> it drives
+       the N/S rows; my probe varied it while watching the wrong two sides
+    NORTH pads rotated -> the placer MIRRORS
+    two of four CORNERS rotated -> the placer MIRRORS
+    In all four the number was right and the conclusion was not.
+
+  A PROXY STANDING IN FOR THE SUBJECT
+    general_precheck reported from `/gp`, a project I built, when the brief
+       asked what it says for sha256
+    "pad_ring_gen SKIP" on the real tree, claimed with no artefact
+    the omission generator diffed DIRECTORIES when the authority is `git`
+    "re-hashed" commits -> they are ancestors with their original hashes
+
+  A POINTER AT SOMETHING THAT IS NOT THERE
+    "the loop is in no_test_was_weakened.py's docstring" -- it is not, and that
+       script could not do the job
+    image "0.2.70" -- not on this host; and ":latest" is not a tag here
+    an elided path in a recipe, twice
+
+  A QUOTATION I ALTERED
+    capitalised "DERIVES NOTHING" inside a flow-owner sentence that already
+       contained the author's own emphasis
+    an alignment space inside a PDK config quote, which made it un-greppable
+
+WHAT THE PATTERN SAYS. Almost none of these was a careless reading. They cluster
+in two places: figures I estimated instead of running one command, and
+inferences drawn from measurements that were themselves correct. The second
+class is the dangerous one, because checking the measurement again confirms it.
+
+AND NONE OF THEM WAS FOUND BY THE INSTRUMENTS. The manifest, the citation audit
+and the arithmetic self-check were green through all seventeen. Every one came
+from reading, or from asking a question the instruments had no category for.
+
 HOW TO CHECK THIS REPORT WITHOUT TRUSTING IT
 =============================================
 Five things here are runnable. Each was executed immediately before being
