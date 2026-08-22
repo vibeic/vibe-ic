@@ -1,0 +1,163 @@
+EVERY VERIFIER IN THIS DIRECTORY HAS BEEN GRADED, NOT ONLY RUN
+==============================================================
+A verifier that has only ever been seen GREEN is an unmeasured instrument. Each
+one below was made to fail on purpose, and each was checked to REFUSE rather than
+pass when it could not see its subject. Recorded because "all checks pass" is
+worth exactly as much as the evidence that the checks CAN fail.
+
+  verifier                        PASS  FAIL, and what produced it            REFUSE (rc=2)
+  ----------------------------------------------------------------------------------------
+  arithmetic_selfcheck.py         19/19 die 2.262 -> 2.300 in RESULT.md:      pattern stops
+                                        4 failures, each naming computed      matching, or no
+                                        against published                     RESULT.md beside it
+                                                                              -- MEASURED both
+  no_test_was_weakened.py         0/0/0 one test deleted from the tip copy:   base revision parses
+                                  /0    rc=1                                  to ZERO tests
+  claims_with_no_file.sh          5/5   3 mutants, all rc=1 with the value    sha256 run tree
+                                        shown: wrong sha256, wrong file       unreachable from
+                                        count, flag-count 0 -> 1 (3 flagged)  this host
+  header-count guard              2/2   3 docstring mutants, all killed;      n/a (pure assertion)
+  (in the shipped suite)                see header_guard_kills_future_drift
+  code behaviour sweep            15/15 one inverted decision per behaviour,  n/a
+                                        each run separately
+
+THE REFUSE COLUMN IS THE ONE USUALLY MISSING. A checker that returns 0 when it
+cannot see its subject is the empty-denominator defect this whole branch is
+about, so each verifier here exits 2 and says NOT VERIFIED instead. That is the
+repo's own rule (gate_zero_denominator_refuses_check, #564) and the same shape
+the flow owner required of PAD_ROTATION_VERTICAL: refuse, never pass quietly.
+
+WHAT IS *NOT* CLAIMED: that these verifiers are complete. They are graded, which
+is a different and weaker property. Coverage of the CODE is the 15-behaviour
+sweep with its own stated denominator; coverage of the REPORT is bounded by the
+figures the self-check knows to read.
+
+HOW MUCH OF THE REPORT THE VERIFIERS ACTUALLY BIND -- MEASURED, NOT ASSERTED
+============================================================================
+"Graded is weaker than complete" was a caveat until it had a number. Counting
+distinct <figure, unit> pairs in RESULT.md:
+
+    66 distinct figures
+    34 bound by a standalone verifier here   (was 27 before this pass)
+    32 residue
+
+THE FIRST MEASUREMENT WAS WRONG AND SAID 25. It matched figures against the
+literal TEXT of the scripts -- but arithmetic_selfcheck.py READS its values out
+of the report rather than containing them, so 3.762 counted as unbound while
+being checked every run. Corrected by measuring what the verifiers PRINT (what
+they read and what they derived) instead of what they contain.
+
+THE +7 CAME FROM ACTING ON THE MEASUREMENT: the die table (376, 1510, 2.280,
+5.117, 1.425, 1194, 1946) was published as arithmetic and had no check. It was
+derivable all along, which is a different thing from unverifiable, and the gap
+was invisible until the coverage was counted.
+
+THE RESIDUE, CLASSIFIED -- because "32 unchecked" is not one thing:
+  bound ELSEWHERE, by re-running something rather than by a script here:
+      101/103/98/85/78/80  test counts        -> run the suite
+      1550 / 1238 / 569    gate denominators  -> run the gates
+      12                   pad-variable count -> the SHIPPED header test
+  constants with stated provenance, measured from the PDK:
+      75, 355, 710 (= 2 x 355), 0.1 and 5 (filler widths)
+  in an evidence JSON rather than a checker:
+      3.612 / 3612 / 3604 / 3608 / 473 / 204   the sky130A measurements,
+      in declared_grouping/sky130_*.json
+  genuinely not machine-bindable from this host:
+      0.285 mm^2  the cell area, REPORTED from 8HD-d and disclosed as reported
+      0.873 / 0.762  the real run's die, read from its floorplan.def
+  artefacts of the counting regex, not figures at all:
+      '000' (split out of 1500000), '2.300' (my own negative-control value,
+      quoted in the report), '3.7', '4.2', '21'
+
+NOT CHASING 100%. Binding a constant to itself is the tautology already removed
+from this file once. The number is here so a reader knows the bound rather than
+inferring one from "ALL CHECKS PASS".
+
+GRADING THE REFUSAL PATH FOUND A DEFECT IN THE GRADER ITSELF
+============================================================
+The sky130A checks read two evidence JSONs. When one was missing, the file
+printed "[NOT VERIFIED] ... a refusal, not a pass" -- and then EXITED 1, the same
+code as a real disagreement. It said refusal and scored failure.
+
+THAT IS THE #492 CONFLATION, IN MY OWN TOOL, ONE DAY AFTER I SENT THE PUBLISHING
+AGENT #492 AS A FINDING. flow_compliance_check.py:7220 records it: rc 2 carried
+"there was no input to check" and "you called me wrongly" at once, and treating
+them alike "is what let 39 registered gates be permanently silent while the
+umbrella advertised that all of them ran". I reproduced it by hand while writing
+a checker whose subject is that exact defect.
+
+Separated, and all three states now measured:
+
+    rc=0  ALL CHECKS PASS                       the report re-derives
+    rc=1  10 FAILED                             die 2.262 -> 2.300 in RESULT.md
+    rc=2  NOT VERIFIED: 1 could not see its     an evidence JSON removed
+          subject -- not a pass and not a
+          failure
+
+IT WAS ONLY VISIBLE BECAUSE THE REFUSAL PATH WAS GRADED. Running the file green,
+and even running its FAIL path, would never have shown it: both were correct. The
+bug lived entirely in the third state, which is the one nobody exercises.
+
+sky130A COVERAGE, WHICH THIS PASS ADDED: 14 checks binding the report's sky130A
+narrative to the runs behind it -- the two JSONs' verdict, die and grouping, the
+N/S overages, and the closed form WITH THE ROTATED CORNER (204 along the north
+side, not the 200 across it; using 200 on both axes is what made my first closed
+form under-predict by 12 um, so a check written with the square assumption would
+have reproduced the original error and passed).
+
+Report figures bound by a standalone verifier: 39 of 66 (27 -> 34 -> 39).
+
+A VACUITY AUDIT OF THE SELF-CHECK ITSELF, BY PERTURBING ITS SUBJECT
+===================================================================
+The file had grown to 50 checks by accretion, so: perturb the report (die,
+split, the five dies, both minima) and see which checks STILL PASS. 35 did.
+
+MOST OF THOSE 35 ARE CORRECT. They bind ARTEFACTS -- the sky130A JSONs, the
+pre/post ring comparison, the two DEFs -- and a report perturbation should not
+move them. Reading the number alone as "35 vacuous checks" would have been the
+same denominator error this file is about.
+
+THREE WERE GENUINELY TAUTOLOGICAL, comparing constants defined at the top of the
+file to each other, unable to fail whatever the PDK or the artefacts said:
+
+    PAD != DEPTH          75 != 350, always
+    CORNER != DEPTH       355 != 350, always
+    RING == 376           26 + 350, always
+
+That is the tautology already removed from the ratio section once, reintroduced
+three times while adding the section that WARNS about confusing the two
+dimensions. Fixed by DERIVING the constants from the artefact instead of
+asserting them: the pad master's width and height and the corner's width are now
+read out of the placed ring, plus a check that the vertical pads are the same
+cell rotated. GRADED: setting the placed pad width to 99000 in the artefact
+turns it red.
+
+    [FAIL] PAD is the pad master's width, as placed: {99000} (expected {75000})
+
+54 checks now, and the ring depth is read out of the report's own table rather
+than recomputed from the constants -- so the report and the artefact have to
+agree with each other, not merely each with me.
+
+THE CORPUS-CLAIM CHECKS, ADDED LAST AND GRADED LIKE THE REST
+============================================================
+The shipped header states a 7/4/3/2/2/0/0 breakdown of the PDK corpus. It was
+CORRECT when checked -- and so was the pad-variable count, right up until it
+shipped wrong. Nothing bound it, so it is bound now, against the sweep's own
+ROWS rather than against its prose summary.
+
+  rc=0  8 checks pass
+  rc=1  perturbing ONE row of the sweep (gf180mcuD declares in neither view)
+        trips THREE of them at once:
+            declare via the TECH view: 1 (expected 2)
+            declare in neither: 1 (expected 0)
+            the two halves account for every IO tree: 3 (expected 4)
+        the third is the one worth having -- it compares two figures BOTH
+        derived from the artefact, so it is not a literal comparison and it
+        catches a row that falls out of both halves.
+  rc=2  removing corpus_sweep.txt gives NOT VERIFIED, not a pass
+
+62 checks total. The audit that produced this was a REGEX THAT FOUND NOTHING:
+my first pattern reported no numeric claims in any sibling docstring. Listing
+EVERY numeric token instead surfaced this one, which the pattern could not have
+matched. A narrow instrument would have let me publish "siblings clean" -- true,
+and reached by something incapable of seeing otherwise.

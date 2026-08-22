@@ -1,0 +1,27 @@
+make_io_sites / place_pad, OpenROAD 26Q3-1165-g58dbde489f, gf180mcuD IO cells.
+Four SEPARATE openroad processes, one per PAD_ROTATION_VERTICAL value, so no
+row created by an earlier pass can be reused by a later one.
+
+  ROTV   WEST pad (pw0)                  EAST pad (pw1)
+  R0     orient=MXR90  350 x 75 um       orient=R90  350 x 75 um
+  R90    orient=MXR90  350 x 75 um       orient=R90  350 x 75 um
+  R180   orient=MXR90  350 x 75 um       orient=R90  350 x 75 um
+  MX     orient=MXR90  350 x 75 um       orient=R90  350 x 75 um
+
+The vertical-side pad is placed rotated in every case -- 75 um ALONG the row,
+350 um INTO the die -- and neither its orientation nor its extents depend on
+PAD_ROTATION_VERTICAL at all.
+
+Consistent with upstream pad_cfg.tcl, which sums the master's WIDTH on all four
+sides and steps along the row by that same WIDTH:
+    set width [expr [[$inst getMaster] getWidth] / $units]
+    incr sum_of_cell_widths $width
+    ...
+    set cur_pos [expr $cur_pos + $space_between_pads_min_filler + $width]
+There is no getHeight anywhere in the side arithmetic.
+
+SEPARATE OpenROAD oddity, observed and NOT chased: the SOUTH pad's orientation
+tracked the -rotation_vertical argument even though -rotation_horizontal was
+held at R0 for every run (R0->R0, R90->R90, R180->R180, MX->MX), and at R90 the
+south pad came out 350 um along a horizontal row. That is in the tool, not in
+this plugin, and is recorded here only so it is not lost.

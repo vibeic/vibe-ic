@@ -1,0 +1,243 @@
+{
+  "project": "/gp",
+  "verdict": "NOT_DETERMINED",
+  "reason": "no finished layout found under the project (searched 4 layout location(s) below /gp); nothing was examined, so nothing was determined",
+  "layouts_found": 0,
+  "layout": null,
+  "layout_sha256": null,
+  "declaration": "/gp/input/submission_template/tapeout_declaration.json",
+  "declaration_present": false,
+  "declaration_refusals": [],
+  "declaration_audit": {
+    "questions_total": 18,
+    "answered": 0,
+    "unanswered": 18,
+    "not_applicable": 0,
+    "sections": {
+      "2A_die_size": {
+        "questions": 7,
+        "answered": 0,
+        "unanswered": 7,
+        "not_applicable": 0,
+        "answered_keys": [],
+        "unanswered_keys": [
+          "deliverable",
+          "top_cell",
+          "die_area_um",
+          "core_area_um",
+          "fp_sizing",
+          "die_origin_um",
+          "database_unit_um"
+        ],
+        "not_applicable_keys": []
+      },
+      "2B_pad_ring": {
+        "questions": 8,
+        "answered": 0,
+        "unanswered": 8,
+        "not_applicable": 0,
+        "answered_keys": [],
+        "unanswered_keys": [
+          "pad_order_by_side",
+          "pad_site_name",
+          "pad_corner_site_name",
+          "pad_edge_spacing_um",
+          "pad_rotations",
+          "pad_corner_master",
+          "pad_fillers",
+          "pad_signal_map"
+        ],
+        "not_applicable_keys": []
+      },
+      "2C_seal_ring": {
+        "questions": 3,
+        "answered": 0,
+        "unanswered": 3,
+        "not_applicable": 0,
+        "answered_keys": [],
+        "unanswered_keys": [
+          "seal_ring_required",
+          "seal_ring_script",
+          "seal_ring_marker_layer"
+        ],
+        "not_applicable_keys": []
+      }
+    },
+    "forbidden_layers_answered": false,
+    "deliverable": "NOT_DETERMINED"
+  },
+  "deliverable": "NOT_DETERMINED",
+  "required_steps": 11,
+  "steps_with_evidence": 0,
+  "steps": [
+    {
+      "step_id": "KLayout.ReadLayout",
+      "label": "Read the Layout",
+      "order": 1,
+      "source": "OWN_GEOMETRY",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "the layout file cannot be read as GDSII",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": null,
+      "returncode": null,
+      "note": ""
+    },
+    {
+      "step_id": "General.DatabaseUnit",
+      "label": "Database Unit vs the Tech File",
+      "order": 2,
+      "source": "DECLARED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "the stream's UNITS record disagrees with the declared database unit",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": null,
+      "returncode": null,
+      "note": "OURS; upstream folds this into its reader. Separated because a stream written at a different grid than the tech file declares is off-grid everywhere at once and nothing downstream says so."
+    },
+    {
+      "step_id": "KLayout.CheckTopLevel",
+      "label": "Check Top-Level Name",
+      "order": 3,
+      "source": "DECLARED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "more than one top-level cell, or its name is not the declared top",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": null,
+      "returncode": null,
+      "note": ""
+    },
+    {
+      "step_id": "KLayout.CheckSize",
+      "label": "Check Origin and Die Size",
+      "order": 4,
+      "source": "DECLARED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "the origin is not where it was declared, or the die dimensions do not match the declared die area",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": null,
+      "returncode": null,
+      "note": "THE ORIGIN CHECK. Upstream folds origin into this step and needs its slot table to run it; this compares against the DECLARATION instead, which is the only source a design with no operator has."
+    },
+    {
+      "step_id": "General.SealRing",
+      "label": "Seal Ring Present",
+      "order": 5,
+      "source": "DELEGATED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "a seal ring was declared as required and the layout does not carry one",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": "die_finishing_check",
+      "returncode": null,
+      "note": "Placed here because this is where the live operator tool MEASURABLY refused a published layout (2026-08-18, ladder step 3 of 16, 'requires a seal ring (guard ring) around the die')."
+    },
+    {
+      "step_id": "General.ForbiddenLayers",
+      "label": "No Forbidden Layers Used",
+      "order": 6,
+      "source": "DECLARED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "the layout draws on a layer the declaration forbids",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": null,
+      "returncode": null,
+      "note": ""
+    },
+    {
+      "step_id": "Checker.KLayoutDensity",
+      "label": "Density Checker",
+      "order": 7,
+      "source": "DELEGATED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "layer density outside the accepted window",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": "metal_layer_density_check",
+      "returncode": null,
+      "note": ""
+    },
+    {
+      "step_id": "Checker.KLayoutZeroAreaPolygons",
+      "label": "Zero Area Polygons Checker",
+      "order": 8,
+      "source": "OWN_GEOMETRY",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "the layout contains zero-area polygons",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": null,
+      "returncode": null,
+      "note": ""
+    },
+    {
+      "step_id": "Checker.KLayoutAntenna",
+      "label": "Antenna Checker",
+      "order": 9,
+      "source": "DELEGATED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "antenna ratio violations",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": "antenna_report_check",
+      "returncode": null,
+      "note": ""
+    },
+    {
+      "step_id": "Checker.MagicDRC",
+      "label": "Magic DRC Checker",
+      "order": 10,
+      "source": "DELEGATED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "Magic DRC violations",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": "drc_report_check",
+      "returncode": null,
+      "note": ""
+    },
+    {
+      "step_id": "Checker.KLayoutDRC",
+      "label": "KLayout DRC Checker",
+      "order": 11,
+      "source": "DELEGATED",
+      "verdict": "NOT_DETERMINED",
+      "refuses_on": "KLayout DRC violations",
+      "evidence": "",
+      "measured": null,
+      "delegated_to": "drc_report_check",
+      "returncode": null,
+      "note": ""
+    }
+  ],
+  "failed_steps": [],
+  "undetermined_steps": [
+    "KLayout.ReadLayout",
+    "General.DatabaseUnit",
+    "KLayout.CheckTopLevel",
+    "KLayout.CheckSize",
+    "General.SealRing",
+    "General.ForbiddenLayers",
+    "Checker.KLayoutDensity",
+    "Checker.KLayoutZeroAreaPolygons",
+    "Checker.KLayoutAntenna",
+    "Checker.MagicDRC",
+    "Checker.KLayoutDRC"
+  ],
+  "operator_specific_excluded": [
+    {
+      "step_id": "KLayout.CheckPadMask",
+      "reason": "the pad mask is the OPERATOR's, published per purchasable slot. With no operator there is no mask to check the pad openings against, and a mask of our own invention would be a rule we wrote pretending to be theirs."
+    },
+    {
+      "step_id": "KLayout.GenerateID",
+      "reason": "the die-identification cells and their ID ENCODING are the OPERATOR's, shipped as pre-built fixtures in their project template. With no template there are no fixtures and no encoding to conform to."
+    }
+  ],
+  "geometry": {},
+  "emitted_by": "general_precheck v1.11.66"
+}

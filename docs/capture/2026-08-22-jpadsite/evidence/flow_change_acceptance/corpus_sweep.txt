@@ -1,0 +1,104 @@
+{
+  "root": "/foss/pdks",
+  "trees_swept": 7,
+  "trees_with_an_io_library": 4,
+  "false_positives": [],
+  "rows": [
+    {
+      "tree": "asap7",
+      "n_io_lefs": 0,
+      "lef_site_records": 0,
+      "lef_pad_class_sites": [],
+      "tech_view_configs": 0,
+      "declared_sites": [],
+      "resolvable_pad_sites": [],
+      "conflicts": {}
+    },
+    {
+      "tree": "ciel",
+      "n_io_lefs": 0,
+      "lef_site_records": 0,
+      "lef_pad_class_sites": [],
+      "tech_view_configs": 0,
+      "declared_sites": [],
+      "resolvable_pad_sites": [],
+      "conflicts": {}
+    },
+    {
+      "tree": "gf180mcuD",
+      "n_io_lefs": 15,
+      "lef_site_records": 0,
+      "lef_pad_class_sites": [],
+      "tech_view_configs": 2,
+      "declared_sites": [
+        "GF_COR_Site",
+        "GF_IO_Site"
+      ],
+      "resolvable_pad_sites": [
+        "GF_COR_Site",
+        "GF_IO_Site"
+      ],
+      "conflicts": {}
+    },
+    {
+      "tree": "ihp-sg13cmos5l",
+      "n_io_lefs": 2,
+      "lef_site_records": 2,
+      "lef_pad_class_sites": [
+        "sg13cmos5l_cornerSite",
+        "sg13cmos5l_ioSite"
+      ],
+      "tech_view_configs": 0,
+      "declared_sites": [],
+      "resolvable_pad_sites": [
+        "sg13cmos5l_cornerSite",
+        "sg13cmos5l_ioSite"
+      ],
+      "conflicts": {}
+    },
+    {
+      "tree": "ihp-sg13g2",
+      "n_io_lefs": 2,
+      "lef_site_records": 2,
+      "lef_pad_class_sites": [
+        "sg13g2_cornerSite",
+        "sg13g2_ioSite"
+      ],
+      "tech_view_configs": 0,
+      "declared_sites": [],
+      "resolvable_pad_sites": [
+        "sg13g2_cornerSite",
+        "sg13g2_ioSite"
+      ],
+      "conflicts": {}
+    },
+    {
+      "tree": "nangate45",
+      "n_io_lefs": 0,
+      "lef_site_records": 0,
+      "lef_pad_class_sites": [],
+      "tech_view_configs": 0,
+      "declared_sites": [],
+      "resolvable_pad_sites": [],
+      "conflicts": {}
+    },
+    {
+      "tree": "sky130A",
+      "n_io_lefs": 2,
+      "lef_site_records": 0,
+      "lef_pad_class_sites": [],
+      "tech_view_configs": 1,
+      "declared_sites": [
+        "sky130_io",
+        "sky130_io_corner"
+      ],
+      "resolvable_pad_sites": [
+        "sky130_io",
+        "sky130_io_corner"
+      ],
+      "conflicts": {}
+    }
+  ]
+}
+
+SWEEP VERDICT: CLEAN — 0 false positives over 7 tree(s), 4 of which ship an IO cell library and could have fired.

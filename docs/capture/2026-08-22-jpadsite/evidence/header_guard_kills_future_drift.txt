@@ -1,0 +1,33 @@
+THE HEADER-COUNT GUARD, MUTATED AGAINST FUTURE DRIFT
+====================================================
+Showing a test RED before the fix proves it caught THE PAST ERROR. It does not
+prove it will catch the NEXT one. These three mutants are edits a future author
+could plausibly make to the shipped docstring of `_pad_ring.py`.
+
+Run: pytest programs/tests/test_pad_ring.py -k header, in the container, at
+41e6562d2, file restored byte-clean between each (verified: git diff empty).
+
+  M1  "names 12" -> "names 13"          2 failed   BOTH tests fire:
+                                                   13 + 8 = 21, not 20, AND the
+                                                   modules name 12, not 13
+  M2  "The other 8" -> "The other 7"    1 failed   arithmetic breaks (12+7=19);
+                                                   the measured-count test still
+                                                   passes, correctly -- "names
+                                                   12" is still TRUE
+  M3  "names 11" AND "The other 9"      1 failed   THE ARITHMETIC CLOSES
+                                                   (11 + 9 = 20) and the
+                                                   arithmetic test PASSES. Only
+                                                   the test that re-derives the
+                                                   count from upstream's own
+                                                   pad_variables catches it.
+  restored                              2 passed
+
+M3 IS THE ONE THAT MATTERS. The first test's docstring says "the arithmetic
+closing is necessary and NOT SUFFICIENT -- two wrong numbers can still sum
+correctly". That was an assertion when written. M3 is the demonstration: a pair
+of wrong numbers that sums to 20, sails past the arithmetic check, and is caught
+only by the measurement against upstream. The two tests are non-redundant, and
+this is the evidence rather than the claim.
+
+M2 is worth reading too: ONE failure is the CORRECT outcome, not a gap. A test
+that fired there would be claiming something false.
