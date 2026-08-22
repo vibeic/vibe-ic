@@ -656,3 +656,61 @@ after landing.
 **And the two land together without interacting badly**, which was not a given:
 branch 2 edits a module that imports the helper branch 1 repairs. Merged, that
 pair is 52 green in both pointer states.
+
+## The brief's row, measured machine-readably — and a precondition nobody has stated
+
+`repo_hygiene_gates.sh --list --summary-json` declares every gate without running
+one. It costs seconds, not the 3750 a full sweep does, and it emits the corpus
+metadata as a record. That is a direct measurement of the row the brief quotes.
+
+**With `VIBE_IC_BENCHMARK_DATA` bound at a real clone of the publisher:**
+
+```json
+"corpora": [{"name": "published cells carrying a routed DEF",
+             "items": 0, "gates": 1, "expansion": "EXPANDED"}]
+```
+
+**With no pointer, on a checkout that carries no corpus:**
+
+```json
+"corpora": [{"name": "published cells carrying a routed DEF",
+             "items": 0, "gates": 1, "expansion": "NO_CORPUS"}]
+```
+
+Same `items: 0`; **different `expansion`**. This is #1764's rc 0 / rc 3
+distinction — *the index was read and holds none* versus *nothing was opened* —
+surviving all the way into the machine-readable record, which is where it has to
+survive if any consumer is to act on it. The stderr says the same in prose:
+*"1 blocking population gate(s) report that absence."*
+
+### And that turns into a landing precondition nobody has written down
+
+`hygiene_finding_delta._corpus_transition` — the sole sanctioned EMPTY→expanded
+path — requires of the BASE arm, in as many words, *"the exact structural EMPTY
+shape (`items=0`, `gates=1`, `expansion=EXPANDED`)"*, and refuses anything else.
+
+Only the first record above satisfies that. A base arm run **without** the corpus
+pointer produces `expansion: "NO_CORPUS"` and would be refused as *"not the exact
+structural EMPTY shape"*.
+
+**So publishing a cell is necessary and not sufficient.** The restoration also
+requires that the base arm was run with the pointer bound — otherwise the
+transition cannot be sanctioned no matter what is published. The landed
+adjudication states the publishing condition; the record above adds the one that
+is a property of how the *base* was measured, not of what exists. It is satisfied
+today only because `gatekeeper_review._published_corpus_binding` defaults to
+`$HOME/_matrix_benchmark_data`; a host without that checkout and without the
+variable would produce a base arm that can never transition.
+
+### Corroborated cheaply, and what it still does not settle
+
+The same record confirms by machine what was derived by `grep` above:
+`wiring_errors: []`, `exemptions_expired: []`, `today: "2026-08-22"`, and **93
+gates declared** at `a4caccefe` — worth stating because
+`programs/hygiene_gate_profile.json`, a committed record of an older run, still
+says `declared: 74`.
+
+What it does **not** settle is unchanged: `not_checked_unexempted` is `[]` here
+because `--list` runs nothing, so this cannot show the routed-DEF EMPTY row being
+*registered* as unexempted NOT_CHECKED — that needs verdicts, and verdicts need
+the full sweep. The declaration is measured; the run is not.
