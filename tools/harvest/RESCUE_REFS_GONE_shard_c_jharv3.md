@@ -83,9 +83,17 @@ ABANDON   /home/reyerchu/_v1126                         a7b1ed913e21  (content s
 `/home/reyerchu/vibe-ic` holds **530 stale `refs/remotes/origin/harvest/rescue-*`
 tracking refs and all 529 objects behind them**.
 
-> Do not `git fetch --prune`, `git remote prune`, or `git gc` that clone. A dry-run
-> prune deletes 530 refs, and those pointers are what keep the rescued commits
-> reachable there.
+> **UPDATE 2026-08-22T05:0xZ — the prune has already happened.** Those 530 stale
+> tracking refs are now **13**. All 529 rescued objects are nevertheless still present,
+> and they are reachable in that clone through exactly one thing: the local branch
+> `refs/heads/harvest/rescue-consolidated-8hd6-jharv3` (`ea622b988`), built earlier in
+> this session, whose 529 parents are those commits. Verified after the prune: 529
+> present, 0 missing.
+>
+> **So the rescued set now hangs on a single unpushed local ref on one host.** Do not
+> delete that branch and do not `git gc` this clone. This raises the urgency of the
+> denied push below from housekeeping to the only thing standing between that work and
+> a reaped machine.
 
 An anchor commit `ea622b9882936a3a275bfd0eb96c8e4d63e29ae7` with all 529 as parents was
 built to consolidate them onto one ref, and is held locally at
