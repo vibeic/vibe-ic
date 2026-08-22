@@ -492,3 +492,43 @@ a publisher carrying this repair, routed DEF under the 50 MB ceiling, into a tre
 with no `.gitignore` above the cell that excludes `*.def` — and then verified the
 only way that counts, by running `tools/ci/routed_def_corpus.py` against the
 committed result and seeing it print one path instead of `MEASURED EMPTY`.
+
+### The condition demonstrated in the real repository, not a synthetic one
+
+ARM D proves the producer counts a published cell in a tree the test builds. That
+leaves one thing unmeasured: whether it works in the tree that actually matters,
+with its real layout and its real ignore configuration. So it was done there.
+
+A **throwaway local clone** of `vibeic/benchmark-data` at its own `main`
+(`3b58ccd42`). One synthetic converged cell published into it by the repaired
+`benchmark_evidence_publish.py`, committed locally. **Nothing was pushed; the
+published corpus is untouched and still empty.**
+
+```
+baseline (before)   producer rc 0, 0 items, "MEASURED EMPTY"
+
+publish rc                       0
+staged into the real tree        True
+git check-ignore                 rc 1  (not ignored)
+tracked after commit             ic/widgetmul/v9.9.9_openpdkx/phase3/stage3/pnr/routed.def
+
+PRODUCER  rc 0
+population  ['…/bd2/ic/widgetmul/v9.9.9_openpdkx/phase3/stage3/pnr/routed.def']
+```
+
+One item instead of `MEASURED EMPTY`. `gate_dispatch_over` expands on exactly
+that population, so the loop that reports `EMPTY — nothing was checked over it`
+becomes three per-cell gate invocations over a real cell.
+
+This also **measures** the residual named in the previous section rather than
+leaving it as a caution: `git check-ignore` returns rc 1 against the real
+repository's configuration, so no `.gitignore` above the cell excludes the
+artefact today. The hazard is real in shape and absent in fact, which is the
+strongest thing that can honestly be said about it.
+
+**What this is not.** It is not a published cell and it is not evidence the
+corpus has a member. It is a reachability measurement: the satisfaction
+condition this document states can be met, in the repository it names, by the
+program it names. Before the repair the same procedure ends at
+`population: []` — which is what made the earlier version of this document
+wrong.
