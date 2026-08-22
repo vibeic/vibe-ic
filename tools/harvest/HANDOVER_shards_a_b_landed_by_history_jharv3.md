@@ -97,6 +97,26 @@ entries only in classes main declares generated (7 and 1 entries).
 **Shard A therefore has 20 RECOVER rows whose content main's history already holds, 14 of them
 ready to move today.** Per-row detail: `shard_a_undetermined_now_judged_jharv3.tsv`.
 
+## The dangerous direction: no false LANDED in either shard
+
+Everything above is the safe error — a row that keeps a directory it could release. The
+unrecoverable error is the other one: a row that authorises deletion of content main never had.
+Checked for every deletion-bound row in both shards, by content:
+
+- **Shard A: 12 LANDED rows, 12 confirmed.** Eleven hold no byte outside main's history; the
+  twelfth, `_jppa_prscope/mut`, was unreadable from here until its tree was read on `.120`, and
+  it confirms too.
+- **Shard B: 13 LANDED rows, 13 confirmed.** None holds a byte main's history lacks.
+- **Shard B has 3 ABANDON rows that do hold content main never had** — `_jcpath2/wt_new` (1
+  blob), `_jlandpar/wtgates` and `_jlandpar/wttests` (5 each). That is legitimate for ABANDON,
+  which claims worthlessness rather than landing, but only while the content survives somewhere.
+  It does: all three heads are contained by `harvest/worktree-triage-jharvest` and by a live
+  reanchor branch (`harvest/rescue-reanchor-3` and `harvest/rescue-reanchor-1`), verified by
+  walking the refs from `ls-remote` rather than from `refs/remotes`.
+
+So the exposure in shards A and B is entirely in the safe direction: **43 rows keeping work that
+already landed** (20 in A, 23 in B), and **zero rows releasing work that did not**.
+
 ## Data
 
 - `shard_a_b_landed_by_history_jharv3.tsv` — per row: shard, path, host, judged head, paths main
