@@ -13,6 +13,10 @@
 # For every distinct PRIOR head in the worktree's reflog: how many files it owned differ from
 # main, and whether any live origin ref contains it. A prior head owning differing files and on
 # no ref is unpreserved work sitting behind a LANDED row.
+# NO CAP on the reflog walk. This had `head -8`, and a reflog is not ordered by importance --
+# the cap silently dropped whatever was older. Measured 2026-08-22: 7 repos on one host had more
+# than 12 distinct reflog entries, 555 commits sat beyond the cap, and a sample of those found
+# commits on NO origin ref. A bounded search reports its own horizon.
 set -uo pipefail
 LIVE="${LIVE:?set LIVE to a file of live origin branch names}"
 while IFS=$'\t' read -r p repo head; do
@@ -42,7 +46,7 @@ while IFS=$'\t' read -r p repo head; do
               | grep -v '^origin/HEAD$' | while read -r c; do grep -qxF "${c#origin/}" "$LIVE" && { echo "$c"; break; }; done)
       if [ "$d" -gt 0 ] && [ -z "$ref" ]; then tag='**ORPHANED_WORK**'; elif [ "$d" -gt 0 ]; then tag="differs_but_on:$ref"; else tag="all_${n}_match_main"; fi
       prior="${prior}${prior:+; }${ph:0:11}(owned=$n differ=$d $tag)"
-    done < <(env -u GIT_INDEX_FILE git -C "$p" reflog --format='%H' 2>/dev/null | sort -u | head -8)
+    done < <(env -u GIT_INDEX_FILE git -C "$p" reflog --format='%H' 2>/dev/null | sort -u)
   fi
   printf '%s\t%s\t%s\t%s\n' "$p" "$form" "${nown}" "${prior:-no-prior-heads-recorded}"
 done

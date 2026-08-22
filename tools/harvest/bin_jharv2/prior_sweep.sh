@@ -7,6 +7,10 @@
 # its previous head behind, and a RECOVER row displaces work just as readily. Scoping a general
 # check to the population the example came from is the population being chosen by where I was
 # looking rather than by what the check is about.
+# NO CAP on the reflog walk. This had `head -12`, and a reflog is not ordered by importance --
+# the cap silently dropped whatever was older. Measured 2026-08-22: 7 repos on one host had more
+# than 12 distinct reflog entries, 555 commits sat beyond the cap, and a sample of those found
+# commits on NO origin ref. A bounded search reports its own horizon.
 set -uo pipefail
 LIVE="${LIVE:?}"; PULLS="${PULLS:?}"
 [ -s "$LIVE" ]  || { echo "REFUSING: empty live authority" >&2; exit 2; }
@@ -33,5 +37,5 @@ while IFS=$'\t' read -r p repo head; do
       n=$((n+1)); [ "$a" = "$b" ] || d=$((d+1))
     done < <(git -C "$repo" diff --name-only "$pmb" "$ph" 2>/dev/null)
     [ "$d" -gt 0 ] && printf '%s\t%s\t%s\towned=%s\tdiffer=%s\n' "$p" "$repo" "$ph" "$n" "$d"
-  done < <(env -u GIT_INDEX_FILE git -C "$p" reflog --format='%H' 2>/dev/null | sort -u | head -12)
+  done < <(env -u GIT_INDEX_FILE git -C "$p" reflog --format='%H' 2>/dev/null | sort -u)
 done
