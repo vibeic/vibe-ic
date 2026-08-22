@@ -294,3 +294,89 @@ def test_reserve_survives_a_peer_vanishing(tmp_path, monkeypatch):
         assert rep.vanished == [str(doomed)], rep
     finally:
         res.release()
+
+
+# ---------------------------------------------------------------------------
+# A REAPER MUST NOT RACE ANOTHER REAPER
+#
+# MEASURED, and this is why these two tests exist: six concurrent runs of
+# `test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical` against one
+# /tmp left 3 of 6 with their OWN scratch still standing, while five sequential
+# runs at the same load were 5 of 5 clean. Instrumented, each survivor had a
+# lock sidecar and an UNHELD lock, and `reap` filed it as "no lock sidecar and
+# only 0s old" — a peer reaper was mid-`rmtree` on that same directory, so the
+# sidecar was already unlinked when this walk stat'ed it. Two `rmtree(...,
+# ignore_errors=True)` calls over one tree can also leave the directory itself.
+# ---------------------------------------------------------------------------
+
+def _hold_the_reap_lock(root: Path, prefix: str, ready: Path, release: Path):
+    """A SUBPROCESS holding the reaper lock. It must be another process:
+    `flock` is per-open-file-description and this process could re-take its
+    own lock, which would test nothing."""
+    code = (
+        "import fcntl,os,sys,time,pathlib\n"
+        "lock=pathlib.Path(%r)/(%r %% %r)\n"
+        "fd=os.open(str(lock), os.O_RDWR|os.O_CREAT, 0o600)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+        "pathlib.Path(%r).write_text('held')\n"
+        "rel=pathlib.Path(%r)\n"
+        "while not rel.exists(): time.sleep(0.02)\n"
+        % (str(root), S.REAP_LOCK_NAME, prefix, str(ready), str(release))
+    )
+    return subprocess.Popen([sys.executable, "-c", code])
+
+
+def test_a_second_reaper_waits_for_the_first(tmp_path):
+    """The serialisation itself, driven rather than read out of the source.
+
+    Without the reaper lock this returns immediately while a peer is walking —
+    which is the state in which one reaper observes another's half-removed
+    directory and reports a reason that is false.
+    """
+    ready, release = tmp_path / "held", tmp_path / "go"
+    holder = _hold_the_reap_lock(tmp_path, "probe-", ready, release)
+    try:
+        deadline = time.time() + 30
+        while not ready.exists() and time.time() < deadline:
+            assert holder.poll() is None, "the lock holder died before it held"
+            time.sleep(0.02)
+        assert ready.exists(), "the lock holder never took the reaper lock"
+
+        done = []
+
+        def _reap():
+            S.reap("probe-", root=tmp_path, legacy_max_age_s=0)
+            done.append(True)
+
+        import threading
+        t = threading.Thread(target=_reap, daemon=True)
+        t.start()
+        t.join(timeout=1.5)
+        assert not done, (
+            "reap() completed while another process held the reaper lock, so "
+            "two reapers can walk the same root at once — the race that leaves "
+            "a directory standing and files it under a false reason")
+
+        release.write_text("go")
+        t.join(timeout=30)
+        assert done, "reap() did not finish after the reaper lock was released"
+    finally:
+        release.write_text("go")
+        holder.wait(timeout=30)
+
+
+def test_a_remover_that_reaps_again_does_not_deadlock_on_our_own_lock(tmp_path):
+    """`remover` is CALLER code and may reach `reap` again. A per-process
+    re-entrancy guard is the difference between that returning and the whole
+    run wedging on a lock this same process is holding."""
+    victim = tmp_path / "probe-x"
+    victim.mkdir()
+    seen = []
+
+    def remover(path):
+        # Re-enter. Without the guard this blocks forever on our own flock.
+        seen.append(S.reap("probe-", root=tmp_path, legacy_max_age_s=0))
+
+    rep = S.reap("probe-", root=tmp_path, remover=remover, legacy_max_age_s=0)
+    assert seen, "the remover never ran, so nothing was re-entered"
+    assert str(victim) in rep.reaped, rep
