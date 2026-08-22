@@ -1129,7 +1129,22 @@ So the honest final state of the row:
                                   of `VACUOUS-PASS marked done while dependency
                                   [N] = FAIL/MISSING` — the LABEL alone is what
                                   misleads.
-      general_precheck .......... NOT_DETERMINED, layouts_found=0 — no GDS and
+      general_precheck .......... NOT_DETERMINED, layouts_found=0 — AND NOW
+                                  MEASURED ON THE REAL sha256 TREE, not on the
+                                  project I built. The earlier figure came from
+                                  `/gp`, a constructed project; its own JSON
+                                  said so and I had not read it. Re-run on
+                                  `_bm_sha256_sky130A_121`: same verdict, and
+                                  the reason is now understood — that tree holds
+                                  15 DEFs (floorplan, placed, filled, routed)
+                                  and ZERO GDS, so the run stops before
+                                  stream-out. Undetermined because it is
+                                  unfinished, not because it is hollow. It also
+                                  carries 0 padring artefacts, the same fact
+                                  from a third direction.
+                                  `evidence/general_precheck/ON_THE_REAL_SHA256_TREE.txt`.
+      general_precheck (as first
+      reported) ................. NOT_DETERMINED, layouts_found=0 — no GDS and
                                   no declaration on this host. Named missing
                                   inputs, not our code. (Not the 8HD-d row
                                   re-run end to end; that host is unreachable.)
