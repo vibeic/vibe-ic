@@ -388,10 +388,17 @@ all four RED before the repair:
 | B | CONTROL — an oversize DEF is `ROUTED_AWAY`, not staged | recorded `NOT_PUBLISHED`; the ceiling never saw it |
 | C | CONTROL — the rest of the PnR scratch stays unpublished | staged `.def` set was `[]`, not `['routed.def']` |
 | D | `routed_def_corpus.py` itself COUNTS the published cell | producer rc 0, stdout `[]` |
+| E | CONTROL — a cell carrying it is still a LANDABLE cell | (green either way) |
 
 ARM D is the load-bearing one, and the reason this is not a file-copying test: it
 runs the gate's own producer over a real git checkout of the published tree. A
 file at a path is not a population member until the producer says it is.
+
+ARM E is green before the repair as well as after, which is what makes it a
+control rather than evidence. It is there because the failure it rules out is
+silent: a repair that made every future cell nonconformant to
+`benchmark_evidence_structure_check` would have traded an unreachable corpus for
+an unpublishable one — strictly worse, and invisible to ARMs A-D.
 
 ### The condition, restated so it is now true
 
