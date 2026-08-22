@@ -186,11 +186,11 @@ def test_cross_step_hard_gate_exonerates(tmp_path):
 
 def test_step_vs_predicate_own_output_are_judged_differently(tmp_path):
     """The ordering rule, pinned. `check_step` evaluates the step-level
-    `condition` (flow_compliance_check.py:5200) and returns SKIPPED-CONDITION
-    at :5219 BEFORE the required_outputs check at :5253 — so a STEP gated on
+    `condition` (flow_compliance_check.py:5598) and returns SKIPPED-CONDITION
+    at :5617 BEFORE the required_outputs check at :5651 — so a STEP gated on
     its own sole required_output never reaches the MISSING path and IS a hole
     (Step 44 / HTOL). A PREDICATE condition lives inside the gate, which runs
-    after :5253, so there required_outputs really does fire first and the same
+    after :5651, so there required_outputs really does fire first and the same
     shape is safe. Getting this backwards silently clears the textbook case.
     """
     step_level = {"steps": [{
