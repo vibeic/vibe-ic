@@ -1353,3 +1353,80 @@ def test_shipped_cli_cannot_tell_the_kept_arm_from_the_deleted_arm():
         f"the shipped CLI now distinguishes these two arms: {seen}. That is "
         f"the gap this file measures being CLOSED -- re-measure the report "
         f"rather than trusting it.")
+
+
+# ---------------------------------------------------------------------------
+# THE GATE'S OWN DECLARATION STILL DESCRIBES A NINE-AXIS WORLD
+# ---------------------------------------------------------------------------
+# `tools/ci/repo_hygiene_gates.sh` wires "PPA promotion feasibility" at the 21
+# real candidate sets, and its exemption text explains the rc=2 as a CONTENT
+# verdict:
+#
+#   "seven of nine feasibility axes are SATISFIED on every one and two
+#    (em, equivalence) carry no measurement at all"
+#
+# Seven plus two is nine. The axis table has TEN. The tenth -- eco_readiness --
+# is NOT_APPLICABLE on all 21 and is counted in neither half, so the gate's
+# stated reasoning is complete about a table that no longer exists.
+#
+# This is the same shape as everything else in this file, one level up: a
+# declaration that reads as total while a whole axis passes underneath it
+# uncounted. It is a DISCLOSURE, not a gate -- the rows below fail if the
+# numbers drift so somebody re-measures, and say which way.
+def _hygiene_script():
+    return _PROGRAMS.parents[3] / "tools" / "ci" / "repo_hygiene_gates.sh"
+
+
+def test_the_hygiene_declaration_and_the_axis_table_disagree_on_the_count():
+    """The axis table grew a tenth entry; the gate's exemption text did not."""
+    import pytest, re
+    script = _hygiene_script()
+    if not script.is_file():
+        pytest.skip(f"{script} is not in this checkout; NOT OBSERVED")
+    text = script.read_text(encoding="utf-8")
+    if "PPA promotion feasibility" not in text:
+        pytest.skip("the promotion-feasibility gate is not wired here")
+
+    assert len(F.DEFAULT_AXES) == 10, [a.name for a in F.DEFAULT_AXES]
+    assert F.ECO_AXIS == F.DEFAULT_AXES[-1].name
+
+    # The declaration's own arithmetic, read out of it rather than retyped.
+    m = re.search(r"(\w+) of (\w+) feasibility axes are SATISFIED", text)
+    assert m, ("the promotion-feasibility exemption no longer states its axis "
+               "arithmetic; re-measure rather than trusting this row")
+    words = {"seven": 7, "eight": 8, "nine": 9, "ten": 10}
+    satisfied, of = words.get(m.group(1)), words.get(m.group(2))
+    assert (satisfied, of) == (7, 9), (
+        f"the declaration now reads '{m.group(1)} of {m.group(2)}'; it was "
+        f"'seven of nine' when this was measured, so the gap may be closed")
+    assert of < len(F.DEFAULT_AXES), (
+        f"the declaration counts {of} axes and the table has "
+        f"{len(F.DEFAULT_AXES)}")
+
+
+def test_the_axis_the_declaration_omits_is_not_applicable_on_every_candidate():
+    """And it is omitted while being uniformly inert, which is why nothing
+    noticed: on all 21 real candidate sets the tenth axis reads
+    NOT_APPLICABLE, so it never appears in a failure anybody reads."""
+    import pytest
+    trials = _campaign_trials()
+    if not trials.is_dir():
+        pytest.skip("the cross-layer campaign records are not in this tree; "
+                    "NOT OBSERVED")
+    sets = sorted(trials.glob("*/candidates.json"))
+    if not sets:
+        pytest.skip("no candidate sets in this tree; NOT OBSERVED")
+
+    seen = []
+    for cands in sets:
+        p = subprocess.run(
+            [sys.executable, str(CHECK), "--candidates", str(cands)],
+            capture_output=True, text=True)
+        for line in p.stdout.splitlines():
+            if "[eco_readiness " in line:
+                seen.append(line.split("[eco_readiness ", 1)[1]
+                            .split("]", 1)[0].strip())
+    assert len(seen) >= len(sets), (len(seen), len(sets))
+    assert set(seen) == {"NOT_APPLICABLE"}, (
+        f"the tenth axis now reports {sorted(set(seen))} on the campaign; it "
+        f"was uniformly NOT_APPLICABLE when this was measured")
