@@ -6,21 +6,30 @@ it is a map for whoever assembles them.
 
 ## What this says, in short
 
-Read this first; the sections below are the working, and two of them were
-superseded by later measurement.
+Read this first. The sections below are the working, in the order it happened, and
+several were superseded by later measurement.
 
-* The batch's collision surface is **eight files**, four of them generated
-  indices that should be REBUILT after assembly, not merged (§1).
-* Exactly **two** files are real content conflicts: `CAPTURE_ROUTING.json`
-  (take the union -- the check is **64** entries under `steps`, §2) and
-  `recoveries.json` (§7-§8).
-* Merging all sixteen with those two rules **assembles 15 of 16** (§6).
-* The single blocker is **ONE ROW** of `recoveries.json`, not eleven -- §7 said
-  eleven and §8 corrects it by measuring content instead of keys.
-* That row is a genuine delete against a rename, and no other rule replaces it,
-  so it needs one yes/no from the `jcap-ppa` author: **was dropping the
-  `repo.host_independence` capability-check rule intended?** 44 rows if yes,
-  45 if incidental.
+**The one thing still open:** `fix/jppafind-inert-ppa-gates` is ON THE FREEZE LIST
+but is NOT in `land/one-assembled` (`e11626e28`). Verified two ways -- 5 of 5
+sampled files are byte-identical to MAIN rather than to the branch, so it was never
+applied. It merged clean in every test here, so this looks unintended (§9).
+
+**Already settled, do not redo:**
+
+* The collision surface is **eight files**; four are generated indices to REBUILD
+  after assembly, not merge (§1).
+* Only **two** files were real content conflicts: `CAPTURE_ROUTING.json` and
+  `recoveries.json` (§1, §8).
+* `CAPTURE_ROUTING.json` -- take the UNION. The check is **64** entries under
+  `steps`, and the real assembly came out at exactly 64 with no side dropped (§2, §9).
+* `recoveries.json` -- **RESOLVED at 45 rows**; the disputed rule was KEPT under
+  `jdistmat`'s renamed form. §7 said eleven entries needed two authors, §8 reduced
+  it to one row by measuring content instead of keys, and §9 records how it landed.
+* The batch **assembles**: fifteen of the sixteen frozen branches are in (§6, §9).
+
+**A caution on the numbers here:** the hygiene baseline in §4 is stamped
+`a4caccefe` and expires into a FALSE ACCUSATION if diffed after exemption work
+lands -- read §4 before using it.
 
 ## 1. The collision surface is eight files
 
