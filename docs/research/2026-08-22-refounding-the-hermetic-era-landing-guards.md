@@ -160,6 +160,17 @@ committed sentinel cannot.
 
 ### C. The three tamper guards
 
+> **C IS THE ONLY ONE OF THE FOUR THAT WORKS, AND LISTING IT THIRD WAS BACKWARDS
+> (M112).** Its control is a **COMMIT** — the test clones, plants a test file,
+> commits, and the tamper reaches the arm through the SUBJECT TREE. A, B and D all
+> try to reach the arm through its ENVIRONMENT, which is an exact-set contract
+> that REFUSES (M107). **C is the working proof of the thesis this whole document
+> argues toward, and it was already passing in both lanes while I wrote four
+> designs around it.** Its `new_failures` assertion is a self-delivering mutation
+> arm: a tamper that silently failed to apply cannot satisfy it — the exact defect
+> that left G4's injected hang unreachable for the entire hermetic era. **Read C
+> first; the other three are variations on a channel that does not carry.**
+
 The tamper is already defeated structurally. Two changes make the guards say so:
 
 1. Assert the **structural** property directly — the arm's binds are read-only.
