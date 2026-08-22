@@ -73,30 +73,45 @@ So this gate can see a figure at all ONLY because it is evaluated at
 the block above describes. An inline wiring at step 9 would run BEFORE the
 producer and read `chip_area: None` on every project ever built.
 
-THREE THINGS, in order, and none of them is in this file:
+TWO OF THE THREE ARE NOW DONE, and the declaration is re-decided rather than
+left standing (2026-08-22):
 
-  1. `emit_for_run(project, log_path, netlist)` must accept the LIBRARY path.
-     Its phase-3 caller already holds it — the same `liberty_c` it interpolates
-     into `stat -liberty` — and hands it to nothing, so the artefact never
-     records which library produced the figure it carries.
-  2. The unit must be ESTABLISHED from that library rather than assumed. Liberty
-     declares no area unit (its `units` group carries time, voltage, current,
-     capacitance, resistance and power; `area` is a bare number), so the
-     evidence is a CROSS-CHECK: a cell's LEF `SIZE w BY h` is in microns by the
-     LEF spec, and `pdk_registry.json` resolves `liberty_glob` and
-     `cell_lef_glob` for every PDK it carries. MEASURED in the shipped EDA image
-     over every standard cell present in both files:
+  1. DONE. `emit_for_run` now accepts the LIBRARY the synthesis loaded, and
+     `phase3_one_shot_runner.step_synth` passes it — the same one it
+     interpolates into `stat -liberty`, so the figure and the library its unit
+     is derived from cannot disagree.
+  2. DONE, from evidence rather than assumption. `_area_unit` establishes the
+     unit by cross-checking each cell's Liberty `area` against its LEF
+     `SIZE w BY h`, which is in microns by the LEF spec. MEASURED over all five
+     libraries the registry resolves in the shipped EDA image: every one
+     establishes um^2, on 42 to 405 cells apiece, median 1.000000. Two carry a
+     single per-cell outlier — a filler at exactly 0.5, one scan flop at
+     exactly 10/9 — which are DISCLOSED and do not unmake a library's unit: a
+     unit error is a COMMON factor across the population, never one cell.
+     A library at a common 1000x is refused, and so is one split between two
+     units; both refusals have a reachable test case.
+  3. REMAINS, and it is the product decision, not a technical gap. No runner
+     spawns this gate inline, so its verdict still cannot stop the step it
+     guards, and that is what `ENFORCEMENT: advisory` above records.
 
-         library A   229 of 229 cells   liberty_area / lef_um2:
-                                          min 1.000000 median 1.000000 max 1.000000
-         library B   405 of 405 cells   min 0.999547 median 1.000000 max 1.000000
+WHAT THE GATE CAN NOW DO, measured end to end through the real producer and this
+gate, on a library from the shipped image:
 
-     Derivable PER LIBRARY, never assumed for all of them, and with a TOLERANCE
-     rather than an equality: library B's worst cell is 0.999547, so an exact
-     test would reject a correct library.
-  3. Only then is there a verdict worth carrying inline, and the wiring belongs
-     AFTER the phase-3 synthesis that writes the figure — never at step 9. rc 1
-     returns a FAIL of that step; rc 2 stays disclosed and non-green.
+    stats.json    chip_area 2.5282e+04, chip_area_unit "um^2"
+                  established from 229 cells, median 1.000000, 0 outliers
+    die 10x10     rc 1 FAIL  — cell area exceeds the declared die by 252.8x
+    die 1000x1000 rc 0 PASS  — compared, and it fits
+
+Before this it could reach neither. That is the whole point of the change, and
+it is why this block no longer says the unit is what stands in the way.
+
+WHAT NOW STANDS IN THE WAY IS THE CEILING, NOT THE UNIT. rc 1 additionally needs
+`L19.die_area_budget_um`, and the measurement recorded above this — 177 L19
+copies in the published corpus, ONE declaring it, and zero overlap with the runs
+carrying an area figure — is unchanged by any of this. So on today's corpus the
+established unit converts a VACUOUS_PASS into an honest rc 2 "no ceiling
+declared", not into a red. An inline wiring today would therefore be safe and
+nearly inert; it becomes meaningful only when designs declare a die budget.
 
 That precondition is not left as prose. `test_two_gates_declare_where_their_
 verdict_is_consumed.py` re-measures it and FAILS when it stops holding, so this

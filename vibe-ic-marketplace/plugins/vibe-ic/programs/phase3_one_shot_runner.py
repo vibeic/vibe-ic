@@ -11786,7 +11786,12 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # area figure in a sign-off artefact is worse than no figure.
     _area_stats = None
     try:
-        _area_stats = _sas.emit_for_run(project, log, netlist)
+        # THE LIBRARY THIS SYNTHESIS ACTUALLY LOADED. It is the same one
+        # interpolated into `stat -liberty` above, so the area figure and
+        # the library its unit is derived from cannot disagree. The HOST
+        # path, not the container translation: the emitter runs here.
+        _area_stats = _sas.emit_for_run(project, log, netlist,
+                                        liberty=getattr(pdk, "liberty", None))
     except Exception:
         _area_stats = None
     _synth_evidence = [str(netlist), str(log)]

@@ -468,23 +468,79 @@ def test_the_producer_the_declaration_names_is_still_a_real_place():
         "area line and the whole promotion chain must be re-derived")
 
 
-def test_the_emitter_still_cannot_be_told_which_library_produced_the_figure():
-    """PRECONDITION 1 of the corrected promotion condition, and the actionable
-    one: the phase-3 caller HOLDS the library path and the emitter has no
-    parameter to receive it, so the artefact never records which library the
-    figure came from. When that changes, the unit becomes establishable and
-    this declaration has to be re-decided."""
+def test_the_emitter_can_now_be_told_which_library_produced_the_figure():
+    """RE-DECIDED, not edited to match (2026-08-22).
+
+    This assertion used to read the other way: `emit_for_run` took no library
+    parameter, and that was recorded as precondition 1 of the `advisory`
+    declaration — "when that changes, the unit becomes establishable and this
+    declaration must be re-decided". It changed, so it was re-decided, and this
+    now pins the state that replaced it.
+
+    The declaration stays `advisory` and the reason is DIFFERENT: the unit is no
+    longer what stands in the way. No runner spawns this gate inline, which is
+    the only axis that token names, and that is a product decision rather than a
+    technical gap.
+    """
     emit = (_PROGRAMS / "synth_area_stats_emit.py").read_text()
     fn = next((n for n in ast.walk(ast.parse(emit))
                if isinstance(n, ast.FunctionDef) and n.name == "emit_for_run"),
               None)
     assert fn is not None, "synth_area_stats_emit.emit_for_run is gone"
     params = [a.arg for a in fn.args.args] + [a.arg for a in fn.args.kwonlyargs]
-    assert not any("lib" in a.lower() for a in params), (
-        f"emit_for_run now takes {params}; it can be told which library "
-        f"produced the figure, so the unit is establishable and "
-        f"area_total_vs_budget_check's `advisory` declaration must be "
-        f"re-decided rather than left standing")
+    assert any("lib" in a.lower() for a in params), (
+        f"emit_for_run takes {params}; it can no longer be told which library "
+        f"produced the figure, so the unit is unestablishable again and the "
+        f"ENFORCEMENT block's account of what remains is wrong")
+
+
+def test_the_producer_actually_passes_the_library_it_synthesised_against():
+    """A parameter nothing supplies is the same as no parameter. The caller
+    must hand over the library it interpolated into `stat -liberty`, or the
+    figure and the unit could come from different libraries."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"), None)
+    assert fn is not None
+    body = ast.get_source_segment(src, fn) or ""
+    call = body.split("_sas.emit_for_run(", 1)
+    assert len(call) == 2, "step_synth no longer calls the emitter"
+    assert "liberty" in call[1][:400], (
+        "step_synth calls the emitter without handing over the library it "
+        "synthesised against, so the unit cannot be established on a real run")
+
+
+def test_the_gate_reaches_a_real_verdict_once_the_unit_is_established(tmp_path):
+    """THE CLOSURE, asserted end to end rather than described.
+
+    Before this chain existed the gate's only reachable verdict through the
+    flow was rc 2 INCOMPLETE. With the unit established it must reach BOTH real
+    verdicts on the same figure — and a test that only proved rc 1 would be
+    satisfied by a gate that fails everything."""
+    def _project(root: Path, budget: str) -> Path:
+        (root / "phase2/stage2/synth").mkdir(parents=True)
+        (root / "generated_docs").mkdir(parents=True)
+        (root / "phase2/stage2/synth/stats.json").write_text(json.dumps({
+            "schema": "vibeic.synth.stats.v1",
+            "netlist": "phase2/stage2/synth/netlist.v", "top_module": "t",
+            "chip_area": 25282.1184, "chip_area_unit": "um^2",
+            "cell_count": 349, "includes_submodules": False,
+            "selection": {"rule": "top", "why": "top module"}}))
+        (root / "generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
+            json.dumps({"fields": {"die_area_budget_um": budget}}))
+        return root
+
+    prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
+    over = _project(tmp_path / "over", "10x10")          # 100 um^2, far too small
+    cp = subprocess.run([sys.executable, prog, str(over)],
+                        capture_output=True, text=True, timeout=_TIMEOUT)
+    assert cp.returncode == 1, (cp.returncode, cp.stdout[-800:])
+    assert "AREA_TOTAL_OVER_DECLARED_DIE" in cp.stdout
+
+    fits = _project(tmp_path / "fits", "1000x1000")      # 1e6 um^2, roomy
+    cp2 = subprocess.run([sys.executable, prog, str(fits)],
+                         capture_output=True, text=True, timeout=_TIMEOUT)
+    assert cp2.returncode == 0, (cp2.returncode, cp2.stdout[-800:])
 
 
 def test_both_producers_write_to_the_same_artefact_path():
