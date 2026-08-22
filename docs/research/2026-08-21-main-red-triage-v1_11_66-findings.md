@@ -5045,6 +5045,57 @@ integrity check downstream needs its fixture taught" rather than from "can this 
 done at all".
 
 
+## M93 — closing regression: every remaining red is a documented item, and nothing is unexplained
+
+Ran every test file this branch touches, plus the two suites its changes could
+reach, on the host at the pushed commit.
+
+    test_hermetic_candidate_runner.py                        17 passed
+    test_hdl_declaration_scan_strips_comments.py  +
+    test_pad_and_seal_ring_on_the_chip_path.py    +
+    test_matrix_d3_outputs_produced.py            +
+    test_landing_merge_verdict.py                 ->  12 failed, 242 passed,
+                                                      61 skipped  (445s)
+
+**All 12 failures are accounted for, by name, with a root cause already written
+up. There is no residue.**
+
+| # | tests | cause | where |
+|--:|---|---|---|
+| 6 | `test_d3_required_outputs_are_produced[15,17,19,20,30,32]` | `home`-kind run roots nothing searches; **5 cite ONE root**; artefacts exist here in other `home` trees | M86, M87 |
+| 4 | `b2_corpus_mutation`, `relinked_parent_selection`, `trusted_verifier_..._bootstrap`, `post_bootstrap_equal_corpus` | test control cannot cross the closed 7-name env allowlist; remedy PROVEN to work, next layer PROTECTED | M91, M92 |
+| 2 | `interruption_kills_...`, `pid_only_term_kills_...` | same allowlist cause + a second blocker: the arm's container cannot be identified | M81, M82, M83 |
+
+**Six reds, one publication decision. Six reds, one defect.** That is the whole
+inventory of this suite.
+
+**No regression from anything this branch changed.** Every file it touches is
+green: the declaration-scan analyser and its five new tests, the pad/seal-ring
+test, the runner harness, and the four re-founded landing-verdict tests — the
+last of which also pass in the CONFIGURED image lane (M90).
+
+**What this branch actually leaves behind**, stated without inflation:
+
+* **Closed:** 7 reds by repair (4 landing-verdict re-foundings + 3 manifest
+  parity), plus a false-positive class in the declaration-scan gate that had a
+  BLOCKING list 40% wrong.
+* **Unblocked by measurement, not by argument:** the image lane runs today with
+  four invocation flags (M90); the shuttle template is acquired and `0.5ic` has
+  run for the first time (M85); design D's premise was false (M79).
+* **Reduced to a decision:** the matrix six (one publication call), the liar
+  census (two names), the three unwired checkers (a rule the repo already
+  states), the flow-gate pair (one product + two classification questions).
+* **Genuinely blocked, each behind a PROTECTED file, each with the exact line
+  named:** the interrupt pair, the corpus/bootstrap four.
+
+**And the thing I would most want the next reader to take:** most of the
+"blockers" in the first version of this document were descriptions of what I had
+decided was not my job. Two were fixes I had already diagnosed. One needed a
+`git clone`. One needed four flags on a `docker run`. **The ones that survived
+did so because somebody had reasoned about them and written the reason down —
+not because I had assumed them.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
