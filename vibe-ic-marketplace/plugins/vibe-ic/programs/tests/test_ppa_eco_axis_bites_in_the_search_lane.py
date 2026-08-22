@@ -252,8 +252,13 @@ def test_all_three_ppa_clis_can_resolve_the_route(tmp_path):
     CLI's own help text rather than asserted, so it goes red if any of them
     loses the flag again.
     """
-    for prog in ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
-                 "ppa_search_run.py"):
+    progs = ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
+             "ppa_search_run.py")
+    # The denominator, stated. This loop is over a literal so it cannot be
+    # empty, but a literal edited down to two entries would still pass while
+    # checking less -- and "all three CLIs" is the claim in the name.
+    assert len(progs) == 3, progs
+    for prog in progs:
         out = subprocess.run([sys.executable, str(_PROGRAMS / prog), "--help"],
                              capture_output=True, text=True,
                              cwd=str(tmp_path))
@@ -1287,7 +1292,9 @@ def test_publication_a_declared_stance_audits_clean(tmp_path):
     """Both proofs license eligibility, and the clause must not refuse them --
     otherwise it is not "eligibility may not rest on silence", it is "no design
     may ever be eligible"."""
-    for i, eco in enumerate(({"required": False}, dict(DECL))):
+    proofs = ({"required": False}, dict(DECL))
+    assert len(proofs) == 2, proofs      # both licensing shapes, stated
+    for i, eco in enumerate(proofs):
         sub = tmp_path / f"case{i}"
         sub.mkdir()
         d = _campaign(sub, eco=eco)
