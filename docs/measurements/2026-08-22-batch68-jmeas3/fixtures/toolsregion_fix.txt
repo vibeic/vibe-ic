@@ -1,0 +1,764 @@
+bringing up nodes...
+bringing up nodes...
+
+........................F............................................... [  8%]
+........................................................................ [ 16%]
+......................................F.....................F.F......... [ 24%]
+........................................................................ [ 32%]
+........................................................................ [ 40%]
+......F..F....F..F.FF..F..FF....F....sssssF...FF..F.s...F..F............ [ 48%]
+........................................................................ [ 56%]
+........................................................................ [ 64%]
+..........................................F............................. [ 72%]
+........................................................................ [ 80%]
+........................................................................ [ 88%]
+........................................................................ [ 96%]
+............................                                             [100%]
+=================================== FAILURES ===================================
+_________________ test_the_real_repo_is_clean_under_this_gate __________________
+[gw1] linux -- Python 3.10.12 /usr/bin/python3
+
+capsys = <_pytest.capture.CaptureFixture object at 0x79e736a92da0>
+
+    def test_the_real_repo_is_clean_under_this_gate(capsys):
+        """This is the assertion that blocks a landing."""
+        rc = CHECK.main([])
+        out = capsys.readouterr()
+>       assert rc == 0, out.out + out.err
+E       AssertionError: gate_mutation_fixture_check: 96 gate(s) declared in repo_hygiene_gates.sh; 12 carry a CAN-FAIL fixture; 12 carry BOTH.
+E           baseline (gate_fixture_debt.json) still excuses 72 gate(s); it may only shrink.
+E         [FAIL] gate_mutation_fixture_check: 12 finding(s)
+E           - NEW-OR-UNEXCUSED: 'PPA arms solved one problem (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA arms solved one problem (end-to-end campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA frontier recomputes' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA head-to-head records (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA head-to-head records (end-to-end campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA measurement contract' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA measurement contract (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA measurement contract (end-to-end campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA measurement coverage' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'PPA promotion feasibility (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'closed-loop edges resolve' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E           - NEW-OR-UNEXCUSED: 'closed-loop executable census' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+E         
+E       assert 1 == 0
+
+tools/ci/test_gate_mutation_fixture_check.py:249: AssertionError
+__________ test_fixture_pair_discriminates[ppa_head_to_head_records] ___________
+[gw0] linux -- Python 3.10.12 /usr/bin/python3
+
+fx = Fixture(slug='ppa_head_to_head_records', path=PosixPath('/home/reyerchu/wt/b68-fixtures/tools/ci/gate_fixtures/ppa_hea...re_ppa_head_to_head_records' from '/home/reyerchu/wt/b68-fixtures/tools/ci/gate_fixtures/ppa_head_to_head_records.py'>)
+
+    @pytest.mark.parametrize("fx", _FIXTURES, ids=[f.slug for f in _FIXTURES])
+    def test_fixture_pair_discriminates(fx):
+        decl = _DECLS.get(fx.gate)
+        assert decl is not None, f"{fx.path.name} names an undeclared gate {fx.gate!r}"
+        ok_pass, ok_fail = F.run_pair(decl, fx)
+>       assert ok_pass.ok, f"{fx.gate}: {ok_pass.detail}"
+E       AssertionError: PPA head-to-head records: CAN-PASS fixture was REJECTED with rc 2 — a gate that cannot pass its own good input is not discriminating, it is stuck:
+E                 ppa_head_to_head_check --corpus /tmp/gatefix-pass-j2byjffv/subject/benchmark-data: 1 head-to-head record(s) found in 1 JSON document(s) scanned
+E                 [UNDETERMINED] ppa_head_to_head_check: /tmp/gatefix-pass-j2byjffv/subject/benchmark-data/records/first_head_to_head.json: CONTRACT_UNDECLARED
+E                   arm 'subject-under-test' declares no `contract` object, so there is no identity to compare against the other arms'. Two flows that cannot be shown to have solved the same problem have not been compared.
+E                   [CANNOT CHECK] Could not decide. That is not a pass and it is not a win: a comparison that could not look must never reach a reader as one that looked and was favourable.
+E                 ppa_head_to_head_check --corpus /tmp/gatefix-pass-j2byjffv/subject/benchmark-data: 1 record(s), 0 refused, 1 undetermined, 0 accepted -> rc=2
+E       assert False
+E        +  where False = Verdict(ok=False, detail="CAN-PASS fixture was REJECTED with rc 2 — a gate that cannot pass its own good input is not ...check.py', '--corpus', '/tmp/gatefix-pass-j2byjffv/subject/benchmark-data'], cwd='/tmp/gatefix-pass-j2byjffv/subject')).ok
+
+tools/ci/test_gate_fixtures_discriminate.py:40: AssertionError
+_____ test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture _____
+[gw5] linux -- Python 3.10.12 /usr/bin/python3
+
+manifest = {'current': {'files': [{'blob_oid': '51e5aea2fb682b23c67e9927a8fe5c800eaeed4d', 'mode': '100644', 'path': 'tools/ci/_g...a14ef58c978c5a8a320beaf3a611522b97ec4725fb81873713dc8c3b', ...}, ...], 'id': 'activated-at-lane-parallel-window'}, ...}
+
+    def test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture(manifest):
+        """Invariant 3. `_match_state`, restated on the live bytes.
+    
+        Equal to `current` means PREPAREd and not yet activated; equal to `next`
+        means activated. Anything else -- one path drifted, one path left behind,
+        an activation applied by hand to half the tuple -- is the mixture the
+        landing verifier refuses, and it is refused here on every protected path by
+        mode, git blob oid, sha256 and byte length.
+        """
+        paths = _paths(manifest)
+        for path in paths:
+            assert (_ROOT / path).is_file(), (
+                f"{path} is named by the manifest but absent from the live tree")
+        observed = {path: _observed(path) for path in paths}
+    
+        matched: list[str] = []
+        drift: dict[str, list[str]] = {}
+        for side in ("current", "next"):
+            recorded = _state_map(manifest, side)
+            differing = sorted(path for path in paths if observed[path] != recorded[path])
+            drift[manifest[side]["id"]] = differing
+            if not differing:
+                matched.append(manifest[side]["id"])
+    
+>       assert len(matched) == 1, (
+            "the live protected tuple is not exactly one recorded state of "
+            f"`{manifest['transition_id']}`; paths differing from each state: {drift}")
+E       AssertionError: the live protected tuple is not exactly one recorded state of `landing-lane-parallel-window-v1`; paths differing from each state: {'eda-image-decouple-v1-next': ['tools/ci/_gate_dispatch.sh', 'tools/ci/landing_completion_record.py', 'tools/ci/repo_hygiene_gates.sh', 'tools/ci/routed_def_corpus.py', 'tools/gatekeeper-land.sh', 'vibe-ic-marketplace/plugins/vibe-ic/programs/_corpus_location.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/ci_harness_timeout_ceiling_check.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/hygiene_finding_delta.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_coverage.py'], 'activated-at-lane-parallel-window': ['tools/ci/_gate_dispatch.sh', 'tools/ci/landing_completion_record.py', 'tools/ci/repo_hygiene_gates.sh', 'tools/ci/routed_def_corpus.py', 'tools/gatekeeper-land.sh', 'vibe-ic-marketplace/plugins/vibe-ic/programs/_corpus_location.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/ci_harness_timeout_ceiling_check.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/hygiene_finding_delta.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py', 'vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_coverage.py']}
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tools/ci/test_phase_b_activated_parity.py:425: AssertionError
+________ test_the_move_is_exactly_the_paths_the_two_states_disagree_on _________
+[gw5] linux -- Python 3.10.12 /usr/bin/python3
+
+manifest = {'current': {'files': [{'blob_oid': '51e5aea2fb682b23c67e9927a8fe5c800eaeed4d', 'mode': '100644', 'path': 'tools/ci/_g...a14ef58c978c5a8a320beaf3a611522b97ec4725fb81873713dc8c3b', ...}, ...], 'id': 'activated-at-lane-parallel-window'}, ...}
+
+    def test_the_move_is_exactly_the_paths_the_two_states_disagree_on(manifest):
+        """A partial or widened activation is refused by the landing verifier.
+    
+        The moved set is read off the manifest rather than pinned, because the set
+        is a property of whichever transition is authorised; what is pinned is that
+        NOTHING ELSE may differ and that the moved paths may not straddle the two
+        states. That catches the half-applied activation, and it catches a live
+        edit to a protected file that the transition never authorised -- including
+        an edit to a file the manifest quietly widened the move to cover.
+        """
+        paths = _paths(manifest)
+        current = _state_map(manifest, "current")
+        nxt = _state_map(manifest, "next")
+        moved = sorted(_moved(manifest))
+        assert moved, "the manifest authorises a transition that moves nothing"
+    
+        role_map = {row["path"]: frozenset(row["roles"]) for row in manifest["paths"]}
+        for path in moved:
+            assert role_map.get(path), f"{path} moves but carries no role"
+    
+        for path in paths:
+            if path in set(moved):
+                continue
+            assert current[path] == nxt[path], path
+>           assert _observed(path) == current[path], (
+                f"{path} is outside the authorised move but its live bytes differ "
+                "from both recorded states")
+E           AssertionError: tools/ci/_gate_dispatch.sh is outside the authorised move but its live bytes differ from both recorded states
+E           assert ('100644', '9...198d', 100548) == ('100644', '5...5e67e', 96588)
+E             
+E             At index 1 diff: '9895a128d98d4bb6a87a48df9c180f181e1a0579' != '51e5aea2fb682b23c67e9927a8fe5c800eaeed4d'
+E             Use -v to get more diff
+
+tools/ci/test_phase_b_activated_parity.py:454: AssertionError
+_ test_a_host_that_rewrites_checked_out_bytes_cannot_unmeasure_the_tuple[global-config-file] _
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.ptccmt7t/repo'), '5c4c51055f362a624692273ce11ab3fa76e69548')
+mechanism = 'global-config-file'
+
+    @pytest.mark.parametrize("mechanism", ["global-config-file",
+                                           "env-injected-config"])
+    def test_a_host_that_rewrites_checked_out_bytes_cannot_unmeasure_the_tuple(
+            synthetic, mechanism):
+        """NEGATIVE CONTROL FOR THE FIXTURE, not a relaxation of the gate.
+    
+        `trusted_worktree_attest` compares the worktree's RAW BYTES against the
+        blob, deliberately, so that a clean/smudge filter cannot swap the
+        population out from under an attestation. A host whose GLOBAL git config
+        transforms bytes on checkout therefore breaks the receipt for every case in
+        this file — and the failure reads "PROTECTED LANDING SOURCE TRANSITION IS
+        UNMEASURED", which says nothing about the host.
+    
+        MEASURED: eleven of this file's cases were red on a maintainer's host and
+        all twenty-five green on two others (an interactive shell at git 2.55.0 and
+        the pinned landing image at git 2.43.0, the second also under
+        --read-only with a noexec /tmp). The whole difference was one line of
+        `~/.gitconfig`, and `core.autocrlf = true` reproduces it first try.
+    
+        So this drives the real driver with exactly that hostile config exported,
+        and requires the receipt to be built anyway. It FAILS against the fixture
+        as it was, because `harden()` did not exist. It does not make any assertion
+        tolerant of a REFUSE: the run must still pass, for the ordinary reason, and
+        the receipt must still be REAL — built by the shipped builder out of the
+        shipped validator.
+        """
+        root, base = synthetic
+        # NOT under `tmp_path`, for the reason the `synthetic` fixture documents:
+        # in the landing image `$USER` carries an embedded newline, and a
+        # `GIT_CONFIG_GLOBAL` path with a newline in it is its own separate bug.
+        if mechanism == "global-config-file":
+            # `--global`, which the repository's LOCAL config outranks.
+            hostile = root.parent / "hostile-gitconfig.ini"
+            hostile.write_text("[core]\n\tautocrlf = true\n\teol = crlf\n",
+                               encoding="utf-8")
+            env_extra = {"GIT_CONFIG_GLOBAL": str(hostile)}
+        else:
+            # COMMAND-LINE precedence, which no config file can outrank — so this
+            # one is answered by removing it from the harness's environment, not by
+            # out-ranking it. Both mechanisms, one property.
+            env_extra = {"GIT_CONFIG_COUNT": "1",
+                         "GIT_CONFIG_KEY_0": "core.autocrlf",
+                         "GIT_CONFIG_VALUE_0": "true"}
+        cp, _ = _run(root, base, env_extra=env_extra)
+        out = cp.stdout + cp.stderr
+        assert "raw bytes differ from expected blob" not in out, out
+        assert "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED" not in out, out
+>       assert "protected landing transition: STEADY" in out, out
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base 5c4c51055f36  candidate 5a6cdba6fcb2  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.ex1qTu
+E                   python3: can't open file '/tmp/gk_synthetic_repo.ptccmt7t/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         gatekeeper-land-differential: every path this branch touches is already byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it
+E         
+E       assert 'protected landing transition: STEADY' in '=== gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===\n--- base 5c4c51055f36  candidate 5a6cdba6fcb2  hos...dy byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it\n'
+
+tools/test_gatekeeper_land_differential.py:356: AssertionError
+_ test_a_host_that_rewrites_checked_out_bytes_cannot_unmeasure_the_tuple[env-injected-config] _
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.8ufp6opo/repo'), '5c4c51055f362a624692273ce11ab3fa76e69548')
+mechanism = 'env-injected-config'
+
+    @pytest.mark.parametrize("mechanism", ["global-config-file",
+                                           "env-injected-config"])
+    def test_a_host_that_rewrites_checked_out_bytes_cannot_unmeasure_the_tuple(
+            synthetic, mechanism):
+        """NEGATIVE CONTROL FOR THE FIXTURE, not a relaxation of the gate.
+    
+        `trusted_worktree_attest` compares the worktree's RAW BYTES against the
+        blob, deliberately, so that a clean/smudge filter cannot swap the
+        population out from under an attestation. A host whose GLOBAL git config
+        transforms bytes on checkout therefore breaks the receipt for every case in
+        this file — and the failure reads "PROTECTED LANDING SOURCE TRANSITION IS
+        UNMEASURED", which says nothing about the host.
+    
+        MEASURED: eleven of this file's cases were red on a maintainer's host and
+        all twenty-five green on two others (an interactive shell at git 2.55.0 and
+        the pinned landing image at git 2.43.0, the second also under
+        --read-only with a noexec /tmp). The whole difference was one line of
+        `~/.gitconfig`, and `core.autocrlf = true` reproduces it first try.
+    
+        So this drives the real driver with exactly that hostile config exported,
+        and requires the receipt to be built anyway. It FAILS against the fixture
+        as it was, because `harden()` did not exist. It does not make any assertion
+        tolerant of a REFUSE: the run must still pass, for the ordinary reason, and
+        the receipt must still be REAL — built by the shipped builder out of the
+        shipped validator.
+        """
+        root, base = synthetic
+        # NOT under `tmp_path`, for the reason the `synthetic` fixture documents:
+        # in the landing image `$USER` carries an embedded newline, and a
+        # `GIT_CONFIG_GLOBAL` path with a newline in it is its own separate bug.
+        if mechanism == "global-config-file":
+            # `--global`, which the repository's LOCAL config outranks.
+            hostile = root.parent / "hostile-gitconfig.ini"
+            hostile.write_text("[core]\n\tautocrlf = true\n\teol = crlf\n",
+                               encoding="utf-8")
+            env_extra = {"GIT_CONFIG_GLOBAL": str(hostile)}
+        else:
+            # COMMAND-LINE precedence, which no config file can outrank — so this
+            # one is answered by removing it from the harness's environment, not by
+            # out-ranking it. Both mechanisms, one property.
+            env_extra = {"GIT_CONFIG_COUNT": "1",
+                         "GIT_CONFIG_KEY_0": "core.autocrlf",
+                         "GIT_CONFIG_VALUE_0": "true"}
+        cp, _ = _run(root, base, env_extra=env_extra)
+        out = cp.stdout + cp.stderr
+        assert "raw bytes differ from expected blob" not in out, out
+        assert "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED" not in out, out
+>       assert "protected landing transition: STEADY" in out, out
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base 5c4c51055f36  candidate 5a6cdba6fcb2  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.y2b9Cf
+E                   python3: can't open file '/tmp/gk_synthetic_repo.8ufp6opo/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         gatekeeper-land-differential: every path this branch touches is already byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it
+E         
+E       assert 'protected landing transition: STEADY' in '=== gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===\n--- base 5c4c51055f36  candidate 5a6cdba6fcb2  hos...dy byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it\n'
+
+tools/test_gatekeeper_land_differential.py:356: AssertionError
+______ test_a_receipt_that_cannot_be_built_is_named_and_not_merely_absent ______
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.s_740br7/repo'), '5c4c51055f362a624692273ce11ab3fa76e69548')
+
+    def test_a_receipt_that_cannot_be_built_is_named_and_not_merely_absent(
+            synthetic):
+        """The DIAGNOSABILITY half, and it is a separate property.
+    
+        When the receipt cannot be built the verdict refuses as UNMEASURED — right,
+        and unchanged. But the driver used to decide that in a bare `if`, so its own
+        log carried no statement that a receipt had been ATTEMPTED and refused;
+        "the transition is bad" and "this host could not look at it" reached the
+        reader as the same sentence. That is the one thing this repository refuses
+        to let a check do.
+    
+        Driven by taking the manifest away from the base commit, so the builder
+        genuinely cannot answer — no test-only flag in the shipped driver, because
+        a switch that only a test throws proves the switch, not the driver.
+        """
+        root, base = synthetic
+        _git(root, "rm", "-q", "--cached", protected.MANIFEST_REL)
+        (root / protected.MANIFEST_REL).unlink()
+        _git(root, "commit", "-q", "-m", "no manifest")
+        unmeasurable = _git(root, "rev-parse", "HEAD")
+        (root / "after_marker").write_text("y\n")
+        _git(root, "add", "-f", "after_marker")
+        _git(root, "commit", "-q", "-m", "candidate without a measurable base")
+        cp, _ = _run(root, unmeasurable)
+        out = cp.stdout + cp.stderr
+>       assert "protected-source transition receipt: NOT BUILT" in out, out
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base 4cc0ff7eaec5  candidate e90fdd3db8d6  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.xmrVEP
+E                   python3: can't open file '/tmp/gk_synthetic_repo.s_740br7/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         gatekeeper-land-differential: every path this branch touches is already byte-identical to 4cc0ff7eaec54008096d42ff3a00b7d9b8efb674 — there is nothing to land, and ancestry cannot see it
+E         
+E       assert 'protected-source transition receipt: NOT BUILT' in '=== gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===\n--- base 4cc0ff7eaec5  candidate e90fdd3db8d6  hos...dy byte-identical to 4cc0ff7eaec54008096d42ff3a00b7d9b8efb674 — there is nothing to land, and ancestry cannot see it\n'
+
+tools/test_gatekeeper_land_differential.py:385: AssertionError
+_______ test_a_failure_the_base_also_has_lands_and_is_named_as_inherited _______
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.649azvsk/repo'), '5c4c51055f362a624692273ce11ab3fa76e69548')
+
+    def test_a_failure_the_base_also_has_lands_and_is_named_as_inherited(synthetic):
+        """THE WHOLE POINT. Red on both arms is not this push's regression — and it
+        is still PRINTED, because silence is how a permanent red becomes
+        invisible."""
+        root, base = synthetic
+        cp, _ = _run(root, base, cand_test="failed", base_test="failed")
+>       assert cp.returncode == 0, cp.stdout + cp.stderr
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base 5c4c51055f36  candidate 5a6cdba6fcb2  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.c5aO7q
+E                   python3: can't open file '/tmp/gk_synthetic_repo.649azvsk/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         gatekeeper-land-differential: every path this branch touches is already byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:400: AssertionError
+____________ test_a_gate_red_on_the_base_is_named_as_inherited_too _____________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.0p8_9g_6/repo'), '5c4c51055f362a624692273ce11ab3fa76e69548')
+
+    def test_a_gate_red_on_the_base_is_named_as_inherited_too(synthetic):
+        """The gate tier, not only the test tier."""
+        root, base = synthetic
+        # Red on the candidate and GREEN on the base: the branch's, and refused.
+        cp, _ = _run(root, base, gate_line="FAIL  repo tools tests (3 file(s))")
+>       assert cp.returncode == 1
+E       AssertionError: assert 2 == 1
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:412: AssertionError
+____________ test_a_failure_the_base_does_not_have_is_still_refused ____________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.hm8197sy/repo'), '5c4c51055f362a624692273ce11ab3fa76e69548')
+
+    def test_a_failure_the_base_does_not_have_is_still_refused(synthetic):
+        """THE TRAP. Unlocking `main` by accepting more is not the job."""
+        root, base = synthetic
+        cp, _ = _run(root, base, cand_test="failed", base_test="passed")
+>       assert cp.returncode == 1
+E       AssertionError: assert 2 == 1
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to 5c4c51055f362a624692273ce11ab3fa76e69548 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:428: AssertionError
+_____________ test_silencing_an_inherited_failure_is_still_refused _____________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.o_ln_e5a/repo'), 'f2bbabe6bcdc7640f6090c1ccd73a909bb326847')
+
+    def test_silencing_an_inherited_failure_is_still_refused(synthetic):
+        root, base = synthetic
+        cp, _ = _run(root, base, cand_test="skipped", base_test="failed")
+>       assert cp.returncode == 1
+E       AssertionError: assert 2 == 1
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to f2bbabe6bcdc7640f6090c1ccd73a909bb326847 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:436: AssertionError
+____________ test_a_refusal_removes_the_stamp_and_a_pass_writes_it _____________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.ul1mfyfk/repo'), 'f2bbabe6bcdc7640f6090c1ccd73a909bb326847')
+
+    def test_a_refusal_removes_the_stamp_and_a_pass_writes_it(synthetic):
+        root, base = synthetic
+        head = _git(root, "rev-parse", "HEAD")
+        stamp = Path(_git(root, "rev-parse", "--absolute-git-dir")) / "gatekeeper-stamp"
+        stamp.write_text("stale\n")
+    
+        cp, _ = _run(root, base, cand_test="failed", base_test="passed")
+>       assert cp.returncode == 1
+E       AssertionError: assert 2 == 1
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to f2bbabe6bcdc7640f6090c1ccd73a909bb326847 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:447: AssertionError
+____________________ test_no_stamp_is_written_with_no_stamp ____________________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo._xujl4do/repo'), 'f2bbabe6bcdc7640f6090c1ccd73a909bb326847')
+
+    def test_no_stamp_is_written_with_no_stamp(synthetic):
+        root, base = synthetic
+        stamp = Path(_git(root, "rev-parse", "--absolute-git-dir")) / "gatekeeper-stamp"
+        cp, _ = _run(root, base, extra=("--no-stamp",))
+>       assert cp.returncode == 0, cp.stdout
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base f2bbabe6bcdc  candidate b80af1a4c077  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.butzkJ
+E                   python3: can't open file '/tmp/gk_synthetic_repo._xujl4do/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to f2bbabe6bcdc7640f6090c1ccd73a909bb326847 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:465: AssertionError
+_____ test_a_range_scoped_gate_that_fails_on_the_empty_base_range_refuses ______
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.9d4l8j5_/repo'), 'f2bbabe6bcdc7640f6090c1ccd73a909bb326847')
+
+    def test_a_range_scoped_gate_that_fails_on_the_empty_base_range_refuses(synthetic):
+        """THE LAUNDERING HOLE, checked rather than asserted.
+    
+        `gatekeeper-land.sh:202-208`: a range-scoped gate asked over `X..X` sees
+        ZERO commits. If it answers FAIL instead of SKIP it enters the base's
+        failing set and is excused on EVERY candidate thereafter — including a real
+        NDA or collateral-revert violation. So the base arm's own log is inspected
+        for exactly that, every run.
+        """
+        root, base = synthetic
+        cp, _ = _run(root, base, a2_range_line="FAIL  NDA — commit messages")
+>       assert cp.returncode == 1, cp.stdout
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base f2bbabe6bcdc  candidate b80af1a4c077  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.zDBIuH
+E                   python3: can't open file '/tmp/gk_synthetic_repo.9d4l8j5_/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         
+E       assert 2 == 1
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to f2bbabe6bcdc7640f6090c1ccd73a909bb326847 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:509: AssertionError
+______ test_the_same_gate_passing_on_the_empty_base_range_does_not_refuse ______
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.qtwvzufr/repo'), 'f2bbabe6bcdc7640f6090c1ccd73a909bb326847')
+
+    def test_the_same_gate_passing_on_the_empty_base_range_does_not_refuse(synthetic):
+        """The paired control: the check must be able to NOT fire, or it says
+        nothing when it does."""
+        root, base = synthetic
+        cp, _ = _run(root, base)
+>       assert cp.returncode == 0, cp.stdout
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base f2bbabe6bcdc  candidate b80af1a4c077  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.dbr17L
+E                   python3: can't open file '/tmp/gk_synthetic_repo.qtwvzufr/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to f2bbabe6bcdc7640f6090c1ccd73a909bb326847 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:518: AssertionError
+______________________ test_the_four_arms_overlap_in_time ______________________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.ccv4a0mh/repo'), 'f2bbabe6bcdc7640f6090c1ccd73a909bb326847')
+tmp_path = PosixPath('/tmp/pytest-of-reyerchu/pytest-8763/popen-gw7/test_the_four_arms_overlap_in_0')
+
+    def test_the_four_arms_overlap_in_time(synthetic, tmp_path):
+        """Two arms is two ~31-minute runs. Serialised, that is an hour, and an
+        hour-long gate is a bypassed gate. Measured from the arms' own clocks, not
+        from the script's structure."""
+        root, base = synthetic
+        probe = tmp_path / "probe"
+        cp, elapsed = _run(root, base, dwell=3.0, probe=probe)
+>       assert cp.returncode == 0, cp.stdout + cp.stderr
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base f2bbabe6bcdc  candidate b80af1a4c077  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.73xkmk
+E                   python3: can't open file '/tmp/gk_synthetic_repo.ccv4a0mh/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         gatekeeper-land-differential: every path this branch touches is already byte-identical to f2bbabe6bcdc7640f6090c1ccd73a909bb326847 — there is nothing to land, and ancestry cannot see it
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to f2bbabe6bcdc7640f6090c1ccd73a909bb326847 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:532: AssertionError
+______ test_base_arm_only_publishes_a_bundle_and_skips_the_candidate_arms ______
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.x3qiz1ow/repo'), '1b0adffc36b566e8bc5111dda40bf68d3c9417d2')
+tmp_path = PosixPath('/tmp/pytest-of-reyerchu/pytest-8763/popen-gw7/test_base_arm_only_publishes_a0')
+
+    def test_base_arm_only_publishes_a_bundle_and_skips_the_candidate_arms(
+            synthetic, tmp_path):
+        """The two-host split: the base arm can be measured on a second machine
+        while this one measures the candidate."""
+        root, base = synthetic
+        out = tmp_path / "evidence"
+        probe = tmp_path / "probe2"
+        cp, _ = _run(root, base, dwell=0.2, probe=probe,
+                     extra=("--base-arm-only", str(out)))
+>       assert cp.returncode == 0, cp.stdout + cp.stderr
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base 1b0adffc36b5  candidate 44d0441a4e9c  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.MIYrt4
+E                   python3: can't open file '/tmp/gk_synthetic_repo.x3qiz1ow/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         gatekeeper-land-differential: every path this branch touches is already byte-identical to 1b0adffc36b566e8bc5111dda40bf68d3c9417d2 — there is nothing to land, and ancestry cannot see it
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to 1b0adffc36b566e8bc5111dda40bf68d3c9417d2 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:554: AssertionError
+________________ test_base_evidence_for_another_base_is_refused ________________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.8tg9xhi0/repo'), '1b0adffc36b566e8bc5111dda40bf68d3c9417d2')
+tmp_path = PosixPath('/tmp/pytest-of-reyerchu/pytest-8763/popen-gw7/test_base_evidence_for_another0')
+
+    def test_base_evidence_for_another_base_is_refused(synthetic, tmp_path):
+        root, base = synthetic
+        out = tmp_path / "evidence"
+        out.mkdir()
+        (out / "base_sha").write_text("f" * 40 + "\n")
+        cp, _ = _run(root, base, extra=("--base-evidence", str(out)))
+        assert cp.returncode == 2
+>       assert "the base evidence is for" in cp.stdout + cp.stderr
+E       assert 'the base evidence is for' in ("=== gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===\n--- base 1b0adffc36b5  candidate 44d0441a4e9c  hos...epo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory\n" + 'gatekeeper-land-differential: every path this branch touches is already byte-identical to 1b0adffc36b566e8bc5111dda40bf68d3c9417d2 — there is nothing to land, and ancestry cannot see it\n')
+E        +  where "=== gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===\n--- base 1b0adffc36b5  candidate 44d0441a4e9c  hos...epo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory\n" = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to 1b0adffc36b566e8bc5111dda40bf68d3c9417d2 — there is nothing to land, and ancestry cannot see it\n').stdout
+E        +  and   'gatekeeper-land-differential: every path this branch touches is already byte-identical to 1b0adffc36b566e8bc5111dda40bf68d3c9417d2 — there is nothing to land, and ancestry cannot see it\n' = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to 1b0adffc36b566e8bc5111dda40bf68d3c9417d2 — there is nothing to land, and ancestry cannot see it\n').stderr
+
+tools/test_gatekeeper_land_differential.py:569: AssertionError
+______________ test_a_cross_host_base_bundle_is_never_subtracted _______________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+tmp_path = PosixPath('/tmp/pytest-of-reyerchu/pytest-8763/popen-gw7/test_a_cross_host_base_bundle_0')
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.np6ljrvf/repo'), '1b0adffc36b566e8bc5111dda40bf68d3c9417d2')
+
+    def test_a_cross_host_base_bundle_is_never_subtracted(tmp_path, synthetic):
+        """A RED BASELINE IS NOT PORTABLE — measured, not assumed.
+    
+        Same base commit, same 90-file selection, same driver, 2026-08-18:
+        8HD-8 reported 2176 test ids and 6 red; 8HD-4 reported 2118 and 9. Three of
+        the extra reds are an environment-dependent family and 58 ids did not exist
+        on the second host at all. Subtracting that baseline from a candidate
+        measured here would excuse three failures this host calls NEW — the
+        laundering direction. So a foreign bundle degrades the run to DEMAND GREEN
+        and the hygiene tier to ABSOLUTE, and excuses nothing.
+        """
+        root, base = synthetic
+        out = tmp_path / "evidence"
+        # A bundle whose base arm was red in BOTH tiers. On this host that would
+        # excuse the same reds on the candidate; from another host it must not.
+        _run(root, base, base_test="failed", a2_gate_line="FAIL  repo hygiene gates",
+             extra=("--base-arm-only", str(out)))
+>       (out / "host").write_text("some-other-host\n")
+
+tools/test_gatekeeper_land_differential.py:589: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.10/pathlib.py:1154: in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-reyerchu/pytest-8763/popen-gw7/test_a_cross_host_base_bundle_0/evidence/host')
+mode = 'w', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return self._accessor.open(self, mode, buffering, encoding, errors,
+                                   newline)
+E       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-reyerchu/pytest-8763/popen-gw7/test_a_cross_host_base_bundle_0/evidence/host'
+
+/usr/lib/python3.10/pathlib.py:1119: FileNotFoundError
+____________________ test_a_same_host_bundle_is_subtracted _____________________
+[gw7] linux -- Python 3.10.12 /usr/bin/python3
+
+tmp_path = PosixPath('/tmp/pytest-of-reyerchu/pytest-8763/popen-gw7/test_a_same_host_bundle_is_sub0')
+synthetic = (PosixPath('/tmp/gk_synthetic_repo.ludcb0sw/repo'), '1b0adffc36b566e8bc5111dda40bf68d3c9417d2')
+
+    def test_a_same_host_bundle_is_subtracted(tmp_path, synthetic):
+        """The paired control. Without it the test above would pass on a driver
+        that simply ignored `--base-evidence` entirely."""
+        root, base = synthetic
+        out = tmp_path / "evidence"
+        _run(root, base, base_test="failed", extra=("--base-arm-only", str(out)))
+        cp, _ = _run(root, base, cand_test="failed",
+                     extra=("--base-evidence", str(out)))
+>       assert cp.returncode == 0, cp.stdout
+E       AssertionError: === gatekeeper landing gate — DIFFERENTIAL (direct-push path) ===
+E         --- base 1b0adffc36b5  candidate 44d0441a4e9c  host 8HD-6
+E         --- run dir /tmp/gk_land_diff.4MSyZ3
+E                   python3: can't open file '/tmp/gk_synthetic_repo.ludcb0sw/repo/vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py': [Errno 2] No such file or directory
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/home/reyerchu/wt/b68-fixtures/tools/gatekeeper-land-differential.sh', '--repo', '/tmp...y byte-identical to 1b0adffc36b566e8bc5111dda40bf68d3c9417d2 — there is nothing to land, and ancestry cannot see it\n').returncode
+
+tools/test_gatekeeper_land_differential.py:613: AssertionError
+________________ test_nothing_the_flow_declares_is_left_unswept ________________
+[gw2] linux -- Python 3.10.12 /usr/bin/python3
+
+tmp_path = PosixPath('/tmp/pytest-of-reyerchu/pytest-8763/popen-gw2/test_nothing_the_flow_declares0')
+
+    def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
+        pop = lc.population_report(lc.FLOW_YAML)
+        assert pop["unswept"] == [], pop["unswept"]
+        # 168 -> 169 -> 170 as the flow gained a clause. The PIN is
+        # `swept == declared`; the literal is only there so a flow that silently
+        # SHRINKS is caught too, and it is meant to move whenever the flow does.
+        #
+        # 169 -> 170 at 74b6abbe35 ("feat(lvs): read magic's extraction feedback
+        # channel and gate it at zero, before netgen"), which added exactly ONE
+        # clause -- `program_exit_zero: magic_illegal_overlap_check`. MEASURED over
+        # the flow YAML at each commit: 772c31dcb4 (the commit that last moved this
+        # literal) 169, 74b6abbe35^ 169, 74b6abbe35 170, HEAD 170, with the added
+        # clause set exactly {('program_exit_zero', 'magic_illegal_overlap_check')}
+        # and nothing removed. The literal did not move with it, so the calibration
+        # instrument's own control has been red on main ever since.
+        # 170 -> 175 at int/tonight. MEASURED with `liar_census.population_report`
+        # over BOTH trees rather than inferred: origin/main declared=170 swept=170
+        # (so the literal was CURRENT on main, not stale as the paragraph above
+        # records for an earlier round), int/tonight declared=175 swept=175. The
+        # five added clauses are the gates of the five half-steps the chip/IP split
+        # introduced -- 0.5ic submission_template_check, 15.5ic pad_ring_check,
+        # 26.5ic die_finishing_check, 37.5ip digital_hardmacro_check, 37.5ic
+        # tapeout_readiness_check -- one `program_exit_zero` each, and nothing was
+        # removed. The PIN `swept == declared` never broke; only the shrink-detector
+        # literal needed to follow the flow, which is what it is for.
+        # 175 -> 178. MEASURED the same way, over the flow YAML blob at each commit
+        # with `liar_census.population_report`, and the CLAUSE SET diffed rather than
+        # the count compared: 03f7b945d7 (the commit that last moved this literal)
+        # declared=175 swept=175, 46db018669 (origin/main) declared=178 swept=178.
+        # The three added clauses, attributed to the commits that added them, are
+        #   69ce9260d  program_exit_zero: tapeout_docs_gen --project . --out-dir
+        #                                 reports/phase3/docs
+        #   00d9dc261  program_exit_zero: general_precheck . --json
+        #                                 reports/phase3/general_precheck.json
+        #   00d9dc261  program_exit_zero: tapeout_declaration_check . --json
+        #                                 reports/phase1/tapeout_declaration.json
+        # and the REMOVED set is empty, so this is a grow and not a churn. `by_kind`
+        # moves 110 -> 113 `program_exit_zero` with `advisory` 37 and `optional` 28
+        # unchanged, and `unswept`/`unrecognised` stay empty on both trees.
+        #
+        # THIRD TIME THIS LITERAL HAS LAGGED THE FLOW (169->170, 170->175, 175->178).
+        # A hand-maintained number that must be remembered by an author who is
+        # editing a different file is prose wearing an assertion, and this file
+        # cannot fix that alone: making the detector derive its floor from the
+        # PREVIOUS flow blob would catch every shrink with nothing to remember, but
+        # it would also leave a DELIBERATE shrink no way to be authorised. That is a
+        # call for the flow's owner, so it is written down here rather than taken.
+        # 178 -> 180 -> 179, and the middle step is not mine. RE-DERIVED the way
+        # the block above derives its own: `discover_clauses` over the flow yaml at
+        # `03f7b945d` (the commit that last moved this literal), at `053eecd27`
+        # (main) and on this branch, CLAUSE SETS diffed rather than counts compared.
+        #
+        #   pin @03f7b945d  175      main @053eecd27  180      branch  179
+        #
+        # FIVE clauses arrived since the literal was last moved and NONE of them
+        # moved it, which is the FOURTH time this file records that happening:
+        #   + 0.5ic    program_exit_zero           tapeout_declaration_check
+        #   + 37.5ic   program_exit_zero           tapeout_docs_gen
+        #   + 37.5self program_exit_zero           general_precheck    (retired below)
+        #   + 9        program_exit_zero           area_total_vs_budget_check   (ppa-loop)
+        #   + 36       optional_program_exit_zero  ppa_head_to_head_check       (ppa-h2h)
+        # and the REMOVED set against the pin is empty. The last two landed after
+        # this literal was last touched and are the reason main itself measures 180
+        # against a literal of 178 — main is RED here right now, and that is not
+        # this change's doing.
+        #
+        # THIS CHANGE retires step `37.5self` and folds the general precheck into
+        # `37.5ic` as a second ARM, so 37.5ic's gate names ONE program that runs
+        # both ladders:
+        #   + 37.5ic   program_exit_zero  tapeout_precheck
+        #   - 37.5ic   program_exit_zero  tapeout_readiness_check
+        #   - 37.5self program_exit_zero  general_precheck
+        # 180 + 1 - 2 = 179. `by_kind` moves 114 -> 113 `program_exit_zero` with
+        # `advisory` 37 and `optional` 29 unchanged; `unswept`/`unrecognised` stay
+        # empty on both trees.
+        #
+        # A SHRINK IS EXACTLY WHAT THIS LITERAL EXISTS FOR, and the block above
+        # states the open question as "a DELIBERATE shrink has no way to be
+        # authorised". This is one, and the authorisation is written here:
+        # TWO GATES STOPPED BEING FLOW CLAUSES WITHOUT STOPPING BEING RUN. Both are
+        # now ARMS that `tapeout_precheck` dispatches, and the venue that proves
+        # they are still reached is `flow_gate_enforcement_audit`'s FOURTH venue —
+        # a transitive dispatch closure seeded only by the flow definition, added
+        # in this same change. Before it, that audit reported both of them
+        # `ORPHANED`, i.e. "reachable from nothing at all", which was false.
+        #
+        # 179 -> 181, AND THE 179 NEVER MATCHED A TREE. RE-DERIVED with
+        # `population_delta` -- added in this change, and added BECAUSE of what the
+        # re-derivation found -- over the flow blob at each commit, CLAUSE SETS
+        # diffed rather than counts compared:
+        #
+        #   053eecd27 (the base the block above measured)   180
+        #   7fcbc7397 ppa(phase4): step 13 ... second relation
+        #   867de4289^ (the parent 867de4289 LANDED ON)     181
+        #   867de4289 (the commit that last moved this literal, set it to 179)  180
+        #   790224904 flow(chip path): a pad ring and a seal ring too
+        #   HEAD                                            181
+        #
+        # THE BLOCK ABOVE IS ARITHMETICALLY RIGHT AND WAS MEASURED AGAINST A BASE
+        # THAT MOVED. `180 + 1 - 2 = 179` is exact against `053eecd27`, which is
+        # where that branch started. `7fcbc7397` landed one clause while the branch
+        # was open, so the parent it actually merged onto measured 181, and the
+        # landed tree was `181 + 1 - 2 = 180` against a literal of 179. IT WAS RED
+        # ON ARRIVAL -- not lagging, wrong on the day -- and `790224904` then added
+        #   + 15.5ic  program_exit_zero  pad_assignment_gen . --json
+        #                                reports/phase3/pad_assignment.json
+        # which is the whole of the delta from `867de4289` to HEAD. The REMOVED set
+        # against that commit is EMPTY, so this is a GROW and no shrink is being
+        # authorised here. `by_kind` moves 114 -> 115 `program_exit_zero` with
+        # `advisory` 37 and `optional` 29 unchanged; `unswept` and `unrecognised`
+        # are empty on both trees, so the SWEEP was never what was broken -- the
+        # census reads every clause the flow declares and this literal is the only
+        # thing in this test that was ever wrong.
+        #
+        # FIFTH ROUND, AND THE FIRST ONE THE PROSE ITSELF LOST. Four rounds above
+        # record the literal LAGGING; this one records the derivation being CORRECT
+        # AGAINST THE WRONG TREE, which no amount of care in a comment block can
+        # prevent, because the fact it depends on -- what the parent measures at the
+        # moment of landing -- is not knowable when the comment is written. So the
+        # protocol every one of those rounds describes in prose ("MEASURED ... the
+        # CLAUSE SET diffed rather than the count compared") is now a function,
+        # `liar_census.population_delta`, with its own controls below. It reports
+        # `added` and `removed` SEPARATELY, so a GROW, a SHRINK and a CHURN are
+        # three different answers rather than one number that cannot tell them
+        # apart. It still decides nothing: the open question the block above states
+        # -- how a DELIBERATE shrink is authorised -- is still the flow owner's to
+        # answer, and is deliberately NOT answered here. What is fixed is that the
+        # next author can MEASURE the delta against the tree they are landing on
+        # instead of reconstructing it by hand from a base that may have moved.
+>       assert pop["swept"] == pop["declared"] == 181, pop
+E       AssertionError: {'swept': 182, 'declared': 182, 'by_kind': {'program_exit_zero': 116, 'advisory_program_exit_zero': 37, 'optional_program_exit_zero': 29}, 'unswept': [], ...}
+E       assert 182 == 181
+
+tools/test_liar_census.py:2179: AssertionError
+=============================== warnings summary ===============================
+tools/test_d9_corpus_baseline.py::TestWiringIsStructuralNotTextual::test_held_checker_documented_in_a_comment_stays_in_the_population
+tools/test_d9_corpus_baseline.py::TestWiringIsStructuralNotTextual::test_genuinely_wired_neighbours_stay_wired[l6_fsm_scaffold_actionable_check]
+tools/test_d9_corpus_baseline.py::TestWiringIsStructuralNotTextual::test_genuinely_wired_neighbours_stay_wired[l9_submodule_conformance_check]
+  <unknown>:166: DeprecationWarning: invalid escape sequence '\s'
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tools/ci/test_gate_mutation_fixture_check.py::test_the_real_repo_is_clean_under_this_gate
+FAILED tools/ci/test_gate_fixtures_discriminate.py::test_fixture_pair_discriminates[ppa_head_to_head_records]
+FAILED tools/ci/test_phase_b_activated_parity.py::test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture
+FAILED tools/ci/test_phase_b_activated_parity.py::test_the_move_is_exactly_the_paths_the_two_states_disagree_on
+FAILED tools/test_gatekeeper_land_differential.py::test_a_host_that_rewrites_checked_out_bytes_cannot_unmeasure_the_tuple[global-config-file]
+FAILED tools/test_gatekeeper_land_differential.py::test_a_host_that_rewrites_checked_out_bytes_cannot_unmeasure_the_tuple[env-injected-config]
+FAILED tools/test_gatekeeper_land_differential.py::test_a_receipt_that_cannot_be_built_is_named_and_not_merely_absent
+FAILED tools/test_gatekeeper_land_differential.py::test_a_failure_the_base_also_has_lands_and_is_named_as_inherited
+FAILED tools/test_gatekeeper_land_differential.py::test_a_gate_red_on_the_base_is_named_as_inherited_too
+FAILED tools/test_gatekeeper_land_differential.py::test_a_failure_the_base_does_not_have_is_still_refused
+FAILED tools/test_gatekeeper_land_differential.py::test_silencing_an_inherited_failure_is_still_refused
+FAILED tools/test_gatekeeper_land_differential.py::test_a_refusal_removes_the_stamp_and_a_pass_writes_it
+FAILED tools/test_gatekeeper_land_differential.py::test_no_stamp_is_written_with_no_stamp
+FAILED tools/test_gatekeeper_land_differential.py::test_a_range_scoped_gate_that_fails_on_the_empty_base_range_refuses
+FAILED tools/test_gatekeeper_land_differential.py::test_the_same_gate_passing_on_the_empty_base_range_does_not_refuse
+FAILED tools/test_gatekeeper_land_differential.py::test_the_four_arms_overlap_in_time
+FAILED tools/test_gatekeeper_land_differential.py::test_base_arm_only_publishes_a_bundle_and_skips_the_candidate_arms
+FAILED tools/test_gatekeeper_land_differential.py::test_base_evidence_for_another_base_is_refused
+FAILED tools/test_gatekeeper_land_differential.py::test_a_cross_host_base_bundle_is_never_subtracted
+FAILED tools/test_gatekeeper_land_differential.py::test_a_same_host_bundle_is_subtracted
+FAILED tools/test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept
+21 failed, 865 passed, 6 skipped, 3 warnings in 27.11s

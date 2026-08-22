@@ -1,0 +1,14 @@
+MUTATION CHECK — a fixture that passes is not evidence until something makes it fail.
+
+table / mutant: delimiter row left in place (no mutation)
+    ok=False  CAN-FAIL fixture was ACCEPTED (rc 0). The mutation this fixture applies does not move the gate's verdict, so the gate's PASS over 
+table / mutant: expected fragment the gate never prints
+    ok=False  CAN-FAIL fixture was rejected (rc 1) but NOT for the declared reason: the refusal never says 'no such phrase in any refusal'. A ga
+emitter / mutant: counter stays at 3 sites (no mutation)
+    ok=False  CAN-FAIL fixture was ACCEPTED (rc 0). The mutation this fixture applies does not move the gate's verdict, so the gate's PASS over 
+emitter / mutant: refuse by REMOVING the subject (the vacuous route)
+    ok=False  CAN-FAIL fixture was rejected (rc 2) but NOT for the declared reason: the refusal never says 'disagrees with itself'. A gate that 
+
+RESTORED — both fixtures exactly as committed:
+    table_rows_belong_to_tables:  can_pass ok=True   can_fail ok=True
+    a_printed_population_agrees_with_its_pin:  can_pass ok=True   can_fail ok=True
