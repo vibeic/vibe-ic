@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 39 markdown files and 98 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 39 markdown files and 99 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -157,15 +157,15 @@ to find the places the method failed without going looking for them.
 
     bash tools/harvest/bin_jharv2/check_all.sh
 
-Twelve gates. Seven need nothing but the checkout; `live_ref_citation_check.py` needs the network,
+Thirteen gates. Eight need nothing but the checkout; `live_ref_citation_check.py` needs the network,
 because a survivability citation can only be verified against `git ls-remote` — the authority — and
 offline it REFUSES rather than passing. On 2026-08-22 every `harvest/rescue-*` ref had been deleted
-from origin while this clone's `refs/remotes` still listed 529 of them; see `RESCUE_REANCHOR.md`. One of them, `branch_preserves_rescued_check.py`, asserts that the 2950 commits in
+from origin while this clone's `refs/remotes` still listed 529 of them; see `RESCUE_REANCHOR.md`. One of them, `branch_preserves_rescued_check.py`, asserts that the 3039 commits in
 `rescued_commits.txt` AND the three whole trees in `preserved_tips.tsv` — 4929 files of
 pruned-checkout and stash content that is on no commit anywhere else — are reachable from this
 branch. They are reachable because the branch carries
 the rescue anchors as extra parents: a rebase, squash or amend that dropped them would un-preserve
-all 2950 while every file in the tree stayed byte-identical, so no diff would show it.
+all 3039 while every file in the tree stayed byte-identical, so no diff would show it.
 
 Each declares the exit code it
 is **expected** to produce — `extras_coverage.py` is expected to FAIL, because those 1083 rows really
@@ -178,17 +178,21 @@ Counts in this file are checked by `bin_jharv2/readme_numbers_check.py`, which i
 ### If a ref is lost: recovering, and the one way to get it wrong
 
 Three refs carry this — the branch, `harvest/worktree-triage-jharvest-mirror`, and the tag
-`harvest-jharv2-final`. **Drilled, not assumed:**
+`harvest-jharv2-final`. That they agree is checked, not assumed; so is the recovery itself, by
+`bin_jharv2/recovery_drill_check.sh`, which performs one every run.
 
-    git clone --branch harvest/worktree-triage-jharvest-mirror <url>     # 12/12 gates, 3039/3039 commits
+    git clone --branch harvest/worktree-triage-jharvest-mirror <url>     # 13/13 gates, 3039/3039 commits
 
-**Recover with a FULL clone or fetch. Never `--depth 1`.** A shallow fetch of the tag produces a
-directory that looks entirely correct — README, all verdict files, 131 rows in
-`verdicts_shard_b.tsv` — and carries **0 of the 3039 preserved commits**. The files are the index;
-the commits are the content, and shallow keeps the first and drops the second.
+**Recover with a FULL clone or fetch. Never `--depth 1`.** A shallow recovery produces a directory
+that looks entirely correct — README, every verdict file, 131 rows in `verdicts_shard_b.tsv`, and
+`rescued_commits.txt` complete with all 3039 lines — while carrying **0 of the 3039 preserved
+commits**. It recovers the full index of the content it does not have.
 
-    shallow: 1 commit reachable,      rescued 0/3039     -> `branch preserves the rescued set` FAILS
-    full:    14365 commits reachable, rescued 3039/3039  -> 12/12 green
+    shallow (depth 1): every deliverable byte-identical, rescued   0/3039  -> preservation gate FAILS
+    full:              every deliverable byte-identical, rescued 3039/3039 -> preservation gate passes
 
-That gate is what distinguishes the two. Someone recovering in a hurry reaches for `--depth 1`
-precisely because it is faster, and every file they look at afterwards would tell them it worked.
+The two arms are taken from the same sha and differ in depth and nothing else, so that is the
+depth's doing. It is also the negative control for `branch preserves the rescued set`: a gate that
+has never been shown failing is not yet evidence, and this hands it a tree that looks right and
+requires it to say no. Someone recovering in a hurry reaches for `--depth 1` precisely because it is
+faster, and every file they open afterwards would tell them it worked.

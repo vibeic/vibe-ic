@@ -54,29 +54,76 @@ def main():
                    if len(r) >= 5 and 'all 0 file(s)' in r[3] and r[2] in ('LANDED', 'ABANDON', 'DROP'))
     WORDS = {'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,'nine':9,'ten':10,
              'eleven':11,'twelve':12,'thirteen':13,'fourteen':14,'fifteen':15}
-    def gates_declared():
+    def _add_lines():
         with open(os.path.join(base, 'bin_jharv2', 'check_all.sh')) as f:
-            return sum(1 for l in f if l.startswith('add "'))
+            return [l for l in f if l.startswith('add "')]
+    def gates_declared():
+        return len(_add_lines())
+    def offline_gates():
+        """Gates needing nothing but the checkout.
+
+        Derived by classifying check_all.sh, not counted by hand -- the hand-written number was
+        seven when the answer was eight, and it drifts every time a gate is added. Fails closed:
+        a gate whose script cannot be located raises rather than being assumed offline, because
+        the assumption that makes the count pass is the one that makes it wrong."""
+        # Assembled from fragments on purpose. Written as one literal, this file matches its OWN
+        # pattern, classifies itself as a network gate, and returns 7 -- which is exactly the stale
+        # number the check exists to catch. A checker that reads itself must not recognise itself.
+        NET = re.compile('|'.join(['ls-' + 'remote', 'ssh' + ' ', 'git ' + 'fetch', 'git ' + 'clone']))
+        n = 0
+        for line in _add_lines():
+            scripts = re.findall(r'\$B/([A-Za-z0-9_.-]+\.(?:sh|py))', line)
+            if not scripts:
+                raise RuntimeError(f'cannot locate the script for gate: {line.strip()[:60]}')
+            net = False
+            for sc in scripts:
+                fp = os.path.join(base, 'bin_jharv2', sc)
+                if not os.path.exists(fp):
+                    raise RuntimeError(f'gate script named but absent: {sc}')
+                if NET.search(open(fp, encoding='utf-8', errors='replace').read()):
+                    net = True
+            if not net: n += 1
+        return n
+    def manifest_commits():
+        with open(os.path.join(base, 'rescued_commits.txt')) as f:
+            return sum(1 for l in f if l.strip())
     CLAIMS = [
         (r'(\d+) markdown files',                 lambda: count_ext('.md')),
         (r'and (\d+) scripts',                    lambda: count_ext('.sh') + count_ext('.py')),
         (r'\*\*authorise deletion\*\* — (\d+) rows do', deletion_bound),
         (r'deletion-bound — (\d+) of \d+',        vacuous_in_joined),
+        # The manifest count appeared twice in prose as 2950 while the file held 3039. Nothing
+        # regenerated either sentence, and the table gate above cannot see a number in a paragraph.
+        (r'the ([\d,]+) commits in\s+`?rescued_commits', manifest_commits),
+        (r'all ([\d,]+) while every file',        manifest_commits),
     ]
-    # The gate COUNT is itself a prose claim, and it was not checked. It is written as a word
-    # ("Twelve gates"), which is why the digit-matching claims above never covered it -- a gate that
-    # only sees digits cannot see a number spelled out.
-    wm = re.search(r'\b(' + '|'.join(WORDS) + r') gates\b', txt, re.I)
-    if wm:
-        claimed_g = WORDS[wm.group(1).lower()]
-        actual_g = gates_declared()
-        ok = claimed_g == actual_g
-        print(f"  {'ok  ' if ok else 'WRONG'} /<word> gates/  README={claimed_g}  actual={actual_g}")
-        if not ok: bad += 1
-        checked_prose_extra = 1
-    else:
-        print("  MISSING  no '<word> gates' claim in the README"); bad += 1
-        checked_prose_extra = 0
+    # Spelled-out counts, matched as word OR digit. Kept separate from CLAIMS because every
+    # occurrence must agree, not just the first one found.
+    WORDCLAIMS = [
+        (r'\b(%s|\d+) gates\b' % '|'.join(WORDS), gates_declared),
+        (r'\b(%s|\d+) need nothing but the checkout' % '|'.join(WORDS), offline_gates),
+    ]
+    # The gate COUNT is itself a prose claim, written as a word ("Twelve gates"), which is why the
+    # digit-matching claims never covered it -- a check that only sees digits cannot see a number
+    # spelled out. And re.search stops at the FIRST match: a second, contradicting occurrence three
+    # paragraphs down passed silently. Every occurrence is checked.
+    checked_prose_extra = 0
+    for rx, fn in WORDCLAIMS:
+        ms = list(re.finditer(rx, txt, re.I))
+        if not ms:
+            print(f"  MISSING  no claim matching /{rx[:34]}../ in the README"); bad += 1; continue
+        try:
+            actual_g = fn()
+        except RuntimeError as e:
+            print(f"  *** cannot derive actual for /{rx[:34]}../: {e} ***"); bad += 1; continue
+        for m in ms:
+            tok = m.group(1).lower()
+            claimed_g = WORDS[tok] if tok in WORDS else int(tok)
+            ok = claimed_g == actual_g
+            print(f"  {'ok  ' if ok else 'WRONG'} /{rx[:30]}../ occurrence at {m.start():5}  "
+                  f"README={claimed_g}  actual={actual_g}")
+            if not ok: bad += 1
+            checked_prose_extra += 1
     print("  -- prose claims --")
     checked_prose = 0
     for rx, fn in CLAIMS:

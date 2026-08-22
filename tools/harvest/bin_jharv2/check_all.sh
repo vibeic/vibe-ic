@@ -24,6 +24,7 @@ add "verdicts_all is reproducible"     0 "d=\$(mktemp -d); cp $H/verdicts_joined
 add "branch preserves the rescued set" 0 "python3 $B/branch_preserves_rescued_check.py $H . HEAD"
 add "redundancy: >=2 refs carry it"   0 "python3 $B/redundancy_check.py $H"
 add "survivability citations are live"  0 "python3 $B/live_ref_citation_check.py $H"
+add "recovery drill: shallow vs full"  0 "bash $B/recovery_drill_check.sh $H ."
 add "extras coverage (EXPECTED RED)"   1 "python3 $B/extras_coverage.py"
 ran=0; bad=0
 for i in "${!NAME[@]}"; do
