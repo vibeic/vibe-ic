@@ -77,3 +77,30 @@ gates it could not execute. Fetched over ssh and pushed from a clone whose hook 
 route used for hook-blocked pushes throughout, never `--no-verify`.
 
 **Total preserved by this sweep: 13 commits that exist nowhere else on origin.**
+
+
+## All seven hosts, scoped correctly
+
+| host | vibe-ic object stores | stores with an orphan | orphan commits |
+|---|---|---|---|
+| .105 | 38 | 0 (already anchored — the sweep is idempotent) | — |
+| .102 | 75 | 1 | 1 |
+| .108 | 4 | 1 | 6 |
+| .112 | 17 | 3 | 8 |
+| .114 | 20 | 4 | 12 |
+| .120 | 19 | 3 | 17 |
+| .121 | 28 | 4 | 6 |
+
+Four stores' pushes were refused by their own repo's pre-push hook or lacked a git identity;
+each was anchored in place with the identity supplied via **environment** rather than written into a
+config I only came to read, then pushed from its own host.
+
+**Push targets were grouped by origin URL.** Two of those stores are `benchmark-data` clones, and
+their commits went to `vibeic/benchmark-data` — pushing them to vibe-ic would have repeated the
+scope error this document exists to record.
+
+## And benchmark-data is now clean
+
+It had accumulated 9 `harvest/*` refs from the buggy run. Five were parentless. The other four held
+commits that were **all already reachable from benchmark-data's own branches** — so every one was
+redundant. All nine removed; that repository carries **0** harvest refs.
