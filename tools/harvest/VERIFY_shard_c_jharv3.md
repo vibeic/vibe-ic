@@ -240,3 +240,57 @@ artefact is wrong, and it is the *only* correct move when the checker is wrong.
 Those two are indistinguishable from the red alone. What separates them is
 measuring the artefact independently first — and a checker that has cried wolf
 four times has earned scrutiny, not deference, on its fifth.
+
+## The shard-A correction is now a gate, not a paragraph
+
+`verdicts_joined.tsv` is what a downstream executor actually reads, and it is
+**derived** from the three per-shard files. It already carries my shard-C flip
+(drv3 reads RECOVER there). It still carries the four shard-A rows as LANDED,
+and it will keep carrying them, because every regeneration re-propagates the
+per-shard file and no regeneration reads prose.
+
+I am not going to edit `verdicts_shard_a.tsv`. Not only because it is another
+agent's deliverable, but because editing it would not hold: if its owner is alive
+and regenerates from its own state, my edit vanishes and the rows revert with
+nothing to say they ever moved.
+
+So `bin_jharv3/rescue_contradiction.py` makes it a gate instead. The rule:
+
+> If `origin` holds a rescue ref saying a path's working tree was **not** landed,
+> then no shard file may call that path LANDED or ABANDON.
+
+The refs are the authority, not the script's opinion — each names its worktree in
+its own commit message, and only exists because the content was measured and
+pushed. Refs come from `ls-remote`, never `refs/remotes`, which outlives branches
+origin has deleted and would let this gate pass on a ref that is gone.
+
+Current state, which is the point:
+
+```
+rescue refs on origin naming a worktree: 4
+CONTRADICTION verdicts_shard_a.tsv: /home/reyerchu/_agentjob_i1015/wt says LANDED …
+CONTRADICTION verdicts_shard_a.tsv: /home/reyerchu/_agent_scratch_whatif/wt_C says LANDED …
+CONTRADICTION verdicts_shard_a.tsv: /home/reyerchu/_wt_1236 says LANDED …
+CONTRADICTION verdicts_shard_a.tsv: /home/reyerchu/_wt_1486 says LANDED …
+  shard a: 4   shard b: 0   shard c: 0
+FAIL: 4 rows call a path deletion-safe that a rescue ref contradicts.
+```
+
+It goes green the moment those four verdicts are fixed, and it stays red through
+every regeneration until they are. That is the delivery mechanism prose could not
+provide to an owner nobody can reach.
+
+### The fifth checker defect, and this one was a false GREEN
+
+The first version of this gate printed **`OK: no shard file contradicts a rescue
+ref`**. It was wrong. `uncommitted work in (\S+)` captured
+`/home/reyerchu/_wt_1486` **with the trailing comma** from its own commit
+sentence, so every lookup missed and four real contradictions reported as zero.
+
+Four times tonight a checker cried wolf and the artefact was fine. This time the
+checker said nothing was wrong and four things were. **A false green is the worse
+failure**: a red gets investigated, a green gets believed and closes the row.
+
+Which is why a gate has to be watched failing before it is trusted passing. This
+one was: it is red now, on exactly the four rows measured on .120, and green on
+the two shards that were verified clean.
