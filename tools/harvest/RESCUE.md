@@ -618,3 +618,48 @@ Together with the 1083 absent rows this is the same wound twice: **the last file
 reflects an older state of the work.** Mine was invisible, jharv3's was visible and stale. Their
 `joined_parity.py` catches rows that arrive with the wrong verdict; my `extras_coverage.py`
 catches rows that never arrive. Neither alone would have found both.
+
+## I shipped "machine-checkable evidence" and never wrote the machine
+
+jharv3's seventh false red was their contract checker knowing one of three agents' evidence
+grammars. My reply was that I wrote mine for a human and shipped it as machine-checkable without
+ever writing the consumer. So I wrote it — `bin_jharv2/evidence_contract.py`, which parses my
+grammar and **re-resolves every claim against current `origin/main`**.
+
+It found four defects in my own published files, none of which any human reader would have hit:
+
+| defect | rows |
+|---|---|
+| evidence naming the literal token `UNCOMMITTED[NEW:…]` as if it were a path — `sha256(UNCOMMITTED[…]) = (not on disk) here, - on main` | **214** |
+| main-hashes computed **before main moved** — verdicts were re-judged against `81cd5321b08`, evidence strings were not | **108** |
+| my parser knowing only one of my **own two** phrasings for "main has no such file" | 78 reported unreadable that were fine |
+| evidence naming a **deleted** file, so the hash read `(not on disk)` | 1 |
+
+The first two are the serious ones: **322 published rows carried evidence that could not be
+checked or did not match main**, in the column whose entire purpose is being checkable by a
+stranger. Every one of them was in the extras — `verdicts_shard_b.tsv` was clean at 114/114
+throughout, which is luck of when it was generated, not care.
+
+After the fixes:
+
+    verdicts_shard_b.tsv               RECOVER=114  parsed=114  agree=114  disagree=0
+    verdicts_shard_c_80_recovered.tsv  RECOVER=69   parsed=69   agree=69   disagree=0
+    verdicts_extra_8hd9.tsv            RECOVER=376  parsed=376  agree=376  disagree=0
+    verdicts_extra_8hd7.tsv            RECOVER=501  parsed=497  agree=497  disagree=0  no_claim_by_design=4
+    TOTAL                              RECOVER=1060 parsed=1056 agree=1056 disagree=0  DID_NOT_CHECK=0
+
+The checker separates **"no claim by design"** — an `UNDETERMINED` row naming its missing input —
+from **"claim I could not read"**, because only the second is a defect and conflating them
+inflates the failure count with honest rows.
+
+### The negative control was vacuous the first time
+
+Proving it meant corrupting a hash and watching it go red. My first attempt used
+`awk 'gsub(/[0-9a-f]{64} on main/…)'` — **mawk has no interval expressions**, so nothing was
+corrupted, and the checker "passed" a file I believed I had broken. I only noticed because a
+one-line diff of the two files showed zero changes. Redone in Python, the corruption applied, and
+the checker named the file and exited 1.
+
+**A negative control that does not actually break anything is indistinguishable from a checker
+that works.** That is the whole night in one sentence, arriving for the last time in my own test
+harness rather than in anyone's data.
