@@ -330,3 +330,52 @@ the population really is 0, and NOT CHECKED + BLOCKING are both correct there.
 The brief's *"your change must leave that row saying exactly what it says today"*
 is satisfied by measurement, not by assertion.
 
+### 2. Every test file that reads the changed machinery
+
+The population is a query, not a judgement call — every `test_*.py` under
+`vibe-ic-marketplace/plugins/vibe-ic/programs/tests` and under `tools/ci`
+matching
+
+    gate_dispatch_over | _gate_dispatch\.sh | GATE_CORPUS_STATE |
+    routed_def_corpus | repo_hygiene_gates\.sh | hygiene_finding_delta |
+    repo_hygiene_parallel
+
+which is **84 files** on this tree. Run on a clean worktree of this branch with
+`PYTHONDONTWRITEBYTECODE=1`, and every red re-run on a clean worktree of
+pristine `origin/main` at `a4caccefe`:
+
+| batch | files | this branch | pristine `origin/main` |
+|---|---|---|---|
+| `programs/tests` (less the one below) | 80 | 1613 passed, 18 skipped, **2 failed** (18m50s) | the same 2 IDs red |
+| `tools/ci` | 3 | 37 passed, **4 failed** | **identical**: 37 passed, the same 4 IDs |
+| `test_landing_merge_verdict.py` | 1 | 125 passed, **9 failed** (7m12s) | **identical**: 125 passed, the same 9 IDs, `diff` empty |
+
+**1775 passed, 18 skipped, 15 red — and every red is red on `origin/main` too,
+ID for ID. This branch introduces none.** That is the brief's *"whatever you
+change must run clean on the current repo"*, measured over the mechanically
+derived population rather than a chosen one.
+
+The 15 are pre-existing debt in three unrelated families, named so that a later
+reader can tell them from anything this change could have caused:
+
+* **2 in `programs/tests`** — `test_gate_red_since_rows.py::test_the_bound_is_
+  what_refuses_and_not_some_other_clause` and `test_v1_9_63_issue693_repo_
+  process_family_wiring.py::test_the_checker_population_covers_checker_shaped_
+  names` (two generator scripts not in the checker population). Neither reads a
+  corpus.
+* **4 in `tools/ci`** — one fixture-discrimination pair, one mutation-fixture
+  gate, and the two `test_phase_b_activated_parity.py` rows, which are the
+  protected-tuple defect recorded in
+  `2026-08-22-protected-tuple-on-main-matches-neither-state.md`.
+* **9 in `test_landing_merge_verdict.py`** — the end-to-end
+  `gatekeeper-verify-merge` arms. Both trees produced the same nine IDs and
+  `diff` between the two lists is empty.
+
+An earlier revision of this record reported 8 reds in the `programs/tests` batch
+over a 75-file population. Six of those have been fixed on `main` since; the
+population grew to 80 files in the same interval. The comparison that matters is
+branch against `main` **at the same commit**, which is what the table above is.
+
+No test was relaxed, no assertion widened, no baseline written. The only source
+changes on this branch are comment blocks in `repo_hygiene_parallel.py` and
+`tests/test_routed_def_corpus_dispatch.py`; no executable line moved.
