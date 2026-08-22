@@ -4532,6 +4532,65 @@ I happen to be here is not the same kind of act as finishing something nobody
 decided.
 
 
+## M85 — I went and got it. The template is acquired, `0.5ic` has run, and three designs do not fit
+
+M52 called this *"the highest-value single action named anywhere in this
+document"* and *"an acquisition, not an engineering task — data we never went and
+got."* **The blocker was that nobody had fetched it. So I fetched it.**
+
+**It was never a network problem.** GitHub answers HTTP 200 from this host and git
+reaches it (a real `Repository not found`, not a connection failure). The doc's
+`<PDK>` placeholder was the whole gap; the org publishes `gf180mcu-project-template`
+and `gf180mcu-precheck` — **an OPEN PDK, so nothing here is under the naming rule.**
+
+    cloned  wafer-space/gf180mcu-project-template
+    pinned  0de7e394337a1f7f5303ac7a3681bf2481b58176   (exact match, verified)
+    licence Apache-2.0
+    NOT vendored into this repo — scratch only
+
+**STEP `0.5ic` HAS NOW RUN, against a real operator template:**
+
+    submission_template_ingest: status=INGESTED slots_shipped=4
+                                declared_slot=slot_1x1 fixtures=10
+
+**And the checker that "reports to nobody" has now reported.** Run across all
+**18** tracked `chip_top` sources against the ingested slot data:
+
+| verdict | n | designs (declared signal bits) |
+|---|--:|---|
+| FITS | 2 | espi 42, subservient 46 |
+| FITS_AFTER_FOLD | 3 | mdio 53, sgmii 63, sha256 75 |
+| **DOES_NOT_FIT** | **3** | **usb_pd 109, ibex 262, opentitan_aes 515** |
+| UNDECIDED | 10 | 6 parameterised widths, 4 no `chip_top` in that file |
+
+**`slot_1x1` is the LARGEST slot the operator ships** — 74 pad entries, against
+72 / 72 / 56 for the others. **So `DOES_NOT_FIT` here is not "pick a bigger slot".
+Those three cannot be bonded into ANY slot this operator offers**, and
+`opentitan_aes` misses by a factor of seven.
+
+**The 10 UNDECIDED are the gate behaving correctly, and worth saying so.** With no
+RTL at all it answered `UNDECIDED: top module 'chip_top' not found (no --rtl
+given)` rather than reporting zero pads and a confident DOES_NOT_FIT. Its own
+docstring records that it once did exactly that — *"an unmeasured thing had become
+a measured zero and the answer looked authoritative"* — and the guard added after
+that is what I watched work. **Rule 9, implemented and observed.**
+
+**What this does and does not settle.** It settles the ACQUISITION: the artefact
+exists, is pinned, is open-licensed, and the pipeline runs end to end on it. It
+does NOT settle where the checker should be wired, or whether these three designs
+are supposed to fit — a design that overflows a shuttle slot may be perfectly
+correct and simply not a candidate for this shuttle. **Three real DOES_NOT_FIT
+verdicts is the first evidence that gate has ever produced about published
+designs, and the decision it feeds is still the owner's.**
+
+**Correcting my own framing, which was wrong in an instructive way.** I wrote that
+this needed "an external artefact", filed it under things I could not do, and
+listed it as blocked five separate times. **It needed a `git clone`.** The item
+was not blocked on access, permission, or capability — it was blocked on someone
+deciding it was their job, and I had written the word "external" in a way that
+kept deciding it was not.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4619,7 +4678,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Re-founding B and D** (2 + 2 reds) | **B: BUILT, RUN, REVERTED — M83.** The sentinel hang WORKS (33s -> 111s, reaches `hermetic Git subject PASS`), but the arm's container cannot be identified: label value is receipt-only, `refs/gk-verify` exists **only on the `--pr` path** and these tests use `--ref`, and every mount lives under an unannounced `mktemp -d`. **One line in `gatekeeper-verify-merge.sh` (PROTECTED) would fix it** — write `RUN_ID` into the probe dir it already writes cleanup markers to. Reverted rather than ship a vacuous pass. **D: blocker retired (M79)** — a real published cell IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, with `routed.def`), and the sandbox fixture already publishes one. **A and C are DONE.** | **one line, in a protected file** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
-| **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — and M66 measured it as CHEAP:** a public Apache-2.0 repo at a pinned commit, clone command already written in `docs/research/template_ingest_run.md`, simply absent from this host. | **external artefact** |
+| **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | **ACQUIRED — M85. The artefact is no longer absent.** Cloned `gf180mcu-project-template` at the pinned `0de7e394337a1f` (Apache-2.0, open PDK, scratch only, NOT vendored). **`0.5ic` has RUN**: `INGESTED, slots_shipped=4, fixtures=10`. **The checker has REPORTED**, across 18 tracked `chip_top` sources: 2 FITS, 3 FITS_AFTER_FOLD, **3 DOES_NOT_FIT** (usb_pd 109, ibex 262, opentitan_aes 515 bits), 10 UNDECIDED. `slot_1x1` is the LARGEST slot (74 pads vs 72/72/56), so those three fit NO slot this operator ships. It was never a network or permission blocker — it was a `git clone` nobody had run. | **acquired; wiring + fit are owner calls** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
