@@ -413,3 +413,29 @@ Two things are worth carrying forward:
   permission to delete is the same error this whole file is about: acting on a
   label instead of on the thing it labels.
 
+### RE-MEASURED against main at v1.11.69 — the earlier numbers had a shelf life
+
+Everything above about composition was measured against `origin/main` @
+`81cd5321b`, the base this branch was cut from. **Main has since moved 214
+commits to `a4caccefe` (v1.11.69)** — a different batch landed, the PPA gate
+audit; none of this branch's work is on it. Re-measured against the new base:
+
+| | vs old main `81cd5321b` | vs new main `a4caccefe` |
+|---|---|---|
+| conflicts | 4, all generated counters | **4, same four files** |
+| the three-step regeneration recipe | verified | **still applies unchanged** |
+| this lane's twelve gates | 10 rc=0, 1 rc=1, 1 rc=2 | **identical** |
+| `only_the_declaring_step` finding set | 6 paths, sha `200f1f446857` | **6 paths, sha `200f1f446857`** |
+
+So main's 214 new commits trip none of these gates, and the LEDGER ROW STILL
+NAMES THE RIGHT PATHS — byte-identical finding set across a 214-commit move of
+the base. The red is a property of those six declared outputs, not of a
+particular main.
+
+The composed COUNTS do move, and they are the one thing above that should not be
+quoted from the older table: against v1.11.69 the composed inventory is
+1252 / 1177 / 2760, not the 1266 / 1192 / 2756 measured against the census lane
+on the old base. That is exactly why the recipe REGENERATES rather than picking a
+side — the right number is whatever the generators say at assembly time, and any
+number written down here is only true of the base it was measured against.
+
