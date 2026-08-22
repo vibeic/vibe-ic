@@ -1572,9 +1572,24 @@ find six paragraphs. The owner is asleep and will read this cold.
 
    AND IT NOW HAS ITS MEASURED BLAST RADIUS, which is what a ruling needed:
    :7220, the site #492 FIXED, covers 10 P0 gates. :3134, the site it did not,
-   covers 182 GATE CLAUSES INVOKING 140 DISTINCT PROGRAMS -- eighteen times as
-   many. #492's own finding is that conflating the two meanings let 39 gates go
-   permanently silent; the mechanism it fixed for 10 is untouched for 140.
+   covers 182 GATE CLAUSES INVOKING 140 DISTINCT PROGRAMS. #492's own finding
+   is that conflating the two meanings let 39 gates go permanently silent, and
+   the mechanism it fixed for 10 was untouched here.
+
+   AND THE EXPOSURE IS SHARPER THAN 140, measured after I found a THIRD piece
+   of prior art I had missed. `_vacuous_exit.py` (#515) routes a gate's exit
+   code from the gate's OWN structured conclusion and 61 programs tree-wide use
+   it; its header records the same discovery, five gates announcing a skip and
+   exiting 0 while four others already exited 2, "both conventions live at
+   once". Of the 140 clause-path programs:
+
+       17  route through `_vacuous_exit`
+       93  EMIT rc=2 BY HAND, each deciding for itself what "2" means
+       30  cannot return 2 at all, so are unaffected
+
+   So it is 93 hand-rolled sites, all credited identically by :3134 -- a
+   smaller and far more actionable number than the 140 I first published, and
+   one that names its own remedy shape: the router 17 of them already use.
    Written up with both sides and options in
    `evidence/rc2_clause_path_decision.md`. The recommendation is a CENSUS first,
    not the mapping change, because the load-bearing unknown is how many of the
