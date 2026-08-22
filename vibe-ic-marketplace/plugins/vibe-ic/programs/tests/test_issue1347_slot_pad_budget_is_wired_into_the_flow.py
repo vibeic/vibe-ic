@@ -82,6 +82,14 @@ def _drive(rtl, with_slots: bool):
     return passed, snippet.startswith(F._VACUOUS_HINT_PREFIX), rep
 
 
+# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
+# whole PROCESS down rather than failing one test, so a subprocess bound must
+# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
+# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
+# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
+# number that can never be reached.
+_CHILD_TIMEOUT_S = 60
+
 # --------------------------------------------------------------------------- #
 # the wiring exists, and it is in a slot that can fail
 # --------------------------------------------------------------------------- #
@@ -253,7 +261,7 @@ def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
     subprocess.run([sys.executable,
                     str(PROG / "flow_gate_enforcement_audit.py"),
                     "--json", str(out)],
-                   capture_output=True, text=True, timeout=600)
+                   capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
     doc = json.loads(out.read_text())
     mine = [g for g in doc["gates"] if g.get("gate") == "slot_pad_budget_check"]
     assert mine, "the audit does not see the gate at all"
@@ -335,7 +343,7 @@ def _wiring_audit_report() -> dict:
     subprocess.run([sys.executable,
                     str(PROG / "checker_execution_wiring_audit.py"),
                     "--json", str(out)],
-                   capture_output=True, text=True, timeout=600)
+                   capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
     return json.loads(out.read_text())
 
 
@@ -522,7 +530,7 @@ def test_the_usage_tier_is_distinct_from_the_vacuous_one():
 
     def rc(*args):
         return subprocess.run([sys.executable, prog, *args],
-                              capture_output=True, text=True, timeout=120).returncode
+                              capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S).returncode
 
     assert rc("--not-a-flag") == 3          # rejected command line
     assert rc() == 3                        # missing positional
@@ -534,7 +542,7 @@ def test_the_usage_tier_is_distinct_from_the_vacuous_one():
 def test_help_still_exits_zero_so_wrappers_do_not_read_it_as_failure():
     import subprocess
     r = subprocess.run([sys.executable, str(PROG / "slot_pad_budget_check.py"),
-                        "--help"], capture_output=True, text=True, timeout=120)
+                        "--help"], capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
     assert r.returncode == 0 and "usage" in r.stdout.lower()
 
 

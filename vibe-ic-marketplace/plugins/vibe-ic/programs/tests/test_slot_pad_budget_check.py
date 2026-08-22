@@ -27,6 +27,14 @@ sys.path.insert(0, str(PROG))
 import slot_pad_budget_check as S  # noqa: E402
 
 
+# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
+# whole PROCESS down rather than failing one test, so a subprocess bound must
+# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
+# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
+# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
+# number that can never be reached.
+_CHILD_TIMEOUT_S = 60
+
 # --------------------------------------------------------------------------- #
 # fixtures — a slot in BOTH shapes, built from the same pad list
 # --------------------------------------------------------------------------- #
@@ -923,7 +931,7 @@ def test_every_exit_code_the_program_returns_is_documented():
     def rc(*argv):
         return subprocess.run([sys.executable, prog, *argv],
                               capture_output=True, text=True,
-                              timeout=120).returncode
+                              timeout=_CHILD_TIMEOUT_S).returncode
 
     observed = {
         rc(str(proj)),                                  # a real verdict
@@ -955,7 +963,7 @@ def test_help_is_a_success_not_a_failure():
     that checks the code."""
     import subprocess
     r = subprocess.run([sys.executable, str(Path(S.__file__)), "--help"],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
     assert r.returncode == 0 and "usage" in r.stdout.lower()
 
 
@@ -981,7 +989,7 @@ def test_the_undecided_line_carries_the_disclosed_skip_marker():
 
     def first_line(*argv):
         r = subprocess.run([sys.executable, prog, *argv],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
         return r.returncode, (r.stdout.strip().splitlines() or [""])[0]
 
     rc, line = first_line(str(Path(tempfile.mkdtemp(prefix="nomark_"))))

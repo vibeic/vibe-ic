@@ -65,6 +65,14 @@ def _answers(d: Path, doc: dict) -> None:
     (d / G._PPA_ANSWERS_REL).write_text(json.dumps(doc))
 
 
+# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
+# whole PROCESS down rather than failing one test, so a subprocess bound must
+# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
+# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
+# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
+# number that can never be reached.
+_CHILD_TIMEOUT_S = 60
+
 # --------------------------------------------------------------------------- #
 # the verdict is actually consulted
 # --------------------------------------------------------------------------- #
@@ -256,7 +264,7 @@ def _wiring_audit_report() -> dict:
     subprocess.run([sys.executable,
                     str(PROG / "checker_execution_wiring_audit.py"),
                     "--json", str(out)],
-                   capture_output=True, text=True, timeout=600)
+                   capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
     return json.loads(out.read_text())
 
 
@@ -301,7 +309,7 @@ def test_the_checker_really_exits_3_on_a_bad_invocation():
     apart."""
     import subprocess as _s
     r = _s.run([sys.executable, str(PROG / "ppa_pr_scope_check.py"),
-                "--not-a-real-flag"], capture_output=True, text=True, timeout=120)
+                "--not-a-real-flag"], capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
     assert r.returncode == 3, (
         f"expected rc 3 (bad invocation), got {r.returncode}")
 
