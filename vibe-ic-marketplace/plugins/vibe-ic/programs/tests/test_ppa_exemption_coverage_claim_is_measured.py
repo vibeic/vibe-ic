@@ -105,7 +105,7 @@ def _rows():
                 argv.append(str(REPO / t.replace("$ROOT/", ""))); want_corpus = False
         if len(argv) >= 3:
             out.append((label.group(1) if label else "?",
-                        claim[0], claim[1], argv))
+                        claim[0], claim[1], argv, lines[j]))
     return out
 
 
@@ -165,7 +165,7 @@ def test_every_stated_coverage_number_is_the_one_the_gate_reports():
     is red, which is exactly the defect this file was written for.
     """
     wrong, noted = [], []
-    for label, claimed, unit, argv in _rows():
+    for label, claimed, unit, argv, _ex in _rows():
         proc = subprocess.run([sys.executable] + argv, capture_output=True,
                               text=True, timeout=600)
         # The roll-up line names the corpus it walked; per-record chatter does
@@ -216,7 +216,7 @@ def test_the_guard_covers_every_exemption_that_states_a_number():
     population is the exact shape every gate in this family exists to refuse.
     """
     declared = set(_numbered_exemptions())
-    covered = {label for label, _, _, _ in _rows()}
+    covered = {label for label, _, _, _, _ in _rows()}
     missed = sorted(declared - covered)
     assert not missed, (
         "an exemption states a coverage number this guard does not verify:\n  "
@@ -224,3 +224,39 @@ def test_the_guard_covers_every_exemption_that_states_a_number():
         + "\n(either make the claim parseable, or make the row runnable here — "
           "silently skipping it is what this file exists to prevent)")
     assert declared, "no numbered exemption found at all; the parser has gone dark"
+
+
+def test_a_declaration_that_says_it_passes_is_on_a_gate_that_passes():
+    """The other claim these declarations make, and it is not a number.
+
+    Four of the five say "PASSES today". That is a statement about the gate's
+    CURRENT verdict, sitting in the line a reader meets beside the row, and it
+    drifts exactly the way the figures did — a gate that starts failing does not
+    rewrite the sentence that says it passes.
+
+    MEASURED when this was written: all four "PASSES today" rows exit 0, and the
+    three rows that do not pass (two head-to-head at rc 1, feasibility at rc 2)
+    make no such claim. So this guard protects a property that currently holds
+    rather than reporting a defect — which is why it is written now, while the
+    agreement is cheap to pin, instead of after it breaks.
+
+    ONE DIRECTION ONLY, deliberately. A declaration describing rc 2 whose gate
+    has started PASSING is PROGRESS, not a defect, and failing on it would
+    punish a gate for improving. That case is disclosed as a NOTE so the stale
+    sentence is still visible to a reader.
+    """
+    wrong, noted = [], []
+    for label, _claimed, _unit, argv, exemption in _rows():
+        rc = subprocess.run([sys.executable] + argv, capture_output=True,
+                            text=True, timeout=600).returncode
+        says_pass = "PASSES today" in exemption
+        if says_pass and rc != 0:
+            wrong.append(f"{label}: declaration says 'PASSES today', gate exits {rc}")
+        elif not says_pass and rc == 0:
+            noted.append(f"{label}: gate now exits 0 and the declaration does not "
+                         f"say so — progress, but the sentence is stale")
+    for n in noted:
+        print("[NOTE] " + n)
+    assert wrong == [], (
+        "a declaration claims a verdict its gate does not reach:\n  "
+        + "\n  ".join(wrong))
