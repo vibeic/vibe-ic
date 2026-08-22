@@ -5267,6 +5267,49 @@ document is a version of that question not being asked; this is the last one, an
 it was in my own conclusion.
 
 
+## M98 — the corpus pointer NEVER closes anything. It is a measurement enabler, and D3 was the outlier
+
+M97 left one question open: is D3's `61 skipped` a property of that dimension or
+of the whole matrix? **Ran all nine other dimension files both ways.**
+
+    9 dimension files, NO pointer     3 failed, 956 passed, 3 skipped, 8 xfailed  (460s)
+    9 dimension files, WITH pointer   5 failed, 956 passed, 0 skipped, 9 xfailed  (780s)
+
+    CLOSED:    0
+    REVEALED:  2
+
+**D3 IS THE OUTLIER, decisively: 61 skips against 3 across nine other files.** The
+matrix is not broadly under-measured; one dimension was, and it happened to be the
+one carrying the reds I had been quoting.
+
+**AND THE MATRIX REDS LIVE IN EXACTLY TWO OF TEN FILES:**
+
+    test_matrix_d3_outputs_produced.py       6 -> 11  with the pointer
+    test_matrix_63x8_coverage.py             3 ->  5  with the pointer
+    d1, d2, d4, d5, d6, d7, d8, d9          ALL GREEN, both arms
+
+**THE RULE THIS ESTABLISHES, and it is the useful part:** across four A/B pairs
+now — D3, the nine dimensions, the closing regression, and the `0.5ic` replay —
+**setting `VIBE_IC_BENCHMARK_DATA` has closed ZERO tests and revealed SEVEN.** It
+is not a fix and it must never be quoted as one. **It converts NOT-MEASURED into
+measured**, and what it measures was already red; the pointer just stopped the
+suite from being quiet about it.
+
+**That cuts both ways and the second way is the one to keep.** A reader could take
+"the pointer reveals 7 more reds" as a reason not to set it. The opposite is true:
+**64 cells were reporting nothing, and every red count taken without the pointer —
+including all of mine — was taken over a denominator that excluded them.** A gate
+that skips is not a gate that passes, and this document has said so about other
+people's code eleven times.
+
+**Newly named by this measurement**, in `test_matrix_63x8_coverage.py`:
+`test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved` and
+`test_the_enforcement_census_is_reported_for_humans`, both failing with *"the
+nested outcome run produced red test report(s) outside the matrix cell"* — which
+is a third cause, distinct from the `home`-root group and from the allowlist
+group, and **not previously recorded anywhere in this document.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
