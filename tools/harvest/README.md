@@ -97,6 +97,12 @@ that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
 - `bin_jharv2/extras_coverage.py` stays RED against `verdicts_joined.tsv`, correctly: those 1083
   rows are genuinely not in it. Pointing that gate at `verdicts_all.tsv` would be circular, since
   the same generator writes both.
+- **A branch was force-pushed today and orphaned 11 commits.** `fix/jwire2-hygiene-wiring` moved
+  from `88b9399076a` to `4b1285a1865` — rewritten, not advanced — leaving the old head on no origin
+  ref and no local ref, alive only in `.121`'s object store. My own survivability row still said
+  *ON_REMOTE via origin/fix/jwire2-hygiene-wiring*, which was true when written. Rescued to
+  `harvest/rescue-121-jwire2-forcepush-orphan` and folded in. **The record that vouches for a commit
+  outlives the ref it names**, so `bin_jharv2/live_ref_citation_check.py` is what keeps that honest.
 - Everything above was measured against `origin/main` **a4caccefeab**. Main fast-forwards, so staleness
   can turn RECOVER into LANDED but never the reverse; a force-push would invalidate that and the
   rows would need re-judging, not re-labelling.
