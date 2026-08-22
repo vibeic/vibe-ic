@@ -1,0 +1,15 @@
+[FAIL] gate_mutation_fixture_check: 12 finding(s)
+  - NEW-OR-UNEXCUSED: 'PPA arms solved one problem (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA arms solved one problem (end-to-end campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA frontier recomputes' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA head-to-head records (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA head-to-head records (end-to-end campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA measurement contract' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA measurement contract (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA measurement contract (end-to-end campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA measurement coverage' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'PPA promotion feasibility (cross-layer campaign)' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'closed-loop edges resolve' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+  - NEW-OR-UNEXCUSED: 'closed-loop executable census' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+gate_mutation_fixture_check: 96 gate(s) declared in repo_hygiene_gates.sh; 12 carry a CAN-FAIL fixture; 12 carry BOTH.
+  baseline (gate_fixture_debt.json) still excuses 72 gate(s); it may only shrink.

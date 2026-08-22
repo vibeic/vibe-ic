@@ -146,8 +146,14 @@ def _write_stub_tree(root: Path) -> None:
         "print(out)\n"
         "raise SystemExit(1 if out.strip() else 0)\n")
 
+    # `SMOKE_BASENAMES` is read as a MODULE ATTRIBUTE by the differential's
+    # floor derivation, which imports this file; the selection is printed only
+    # when the file is RUN. Printing at import time would put the selection into
+    # the floor derivation's own stdout, and the floor would not parse.
     (prog / "ci_targeted_test_select.py").write_text(
-        f"print({SELECTED!r})\n")
+        f"SMOKE_BASENAMES = ({Path(SELECTED).name!r},)\n"
+        f"if __name__ == '__main__':\n"
+        f"    print({SELECTED!r})\n")
 
     # The test arm. It records WHEN it ran, so concurrency is MEASURED rather
     # than assumed, and writes the junit the real driver would write.
@@ -215,11 +221,85 @@ def _write_stub_tree(root: Path) -> None:
     # `gate_process_attestation` is what the record helper below builds its
     # process attestations with — the same module the real dispatcher uses, so
     # the stub cannot attest in a dialect the validator would never see.
+    # The three gates wired into the differential by d5646372f each decide
+    # whether the arms launch AT ALL, and every case below asserts what the arms
+    # then did — so the REAL verdict is what has to run here, not a stub of it.
+    # `_gate_usage_exit` and `_vacuous_exit` are imported by all three from
+    # beside themselves.
     for mod in ("hygiene_finding_delta.py", "_atomic_artefact.py",
-                "gate_process_attestation.py"):
+                "gate_process_attestation.py",
+                "landing_noop_verdict_check.py",
+                "attestation_preflight_check.py",
+                "generated_test_list_min_guard.py",
+                "_gate_usage_exit.py", "_vacuous_exit.py"):
         shutil.copy(REPO / PLUGIN_REL / "programs" / mod, prog / mod)
 
     (root / "tools" / "stub_hygiene_record.py").write_text(_HYGIENE_RECORD)
+
+
+def _programs_invoked_by_the_differential() -> set:
+    """Every `programs/<name>.py` the differential names.
+
+    THE PREDICATE, stated rather than left implicit: a program counts as INVOKED
+    when the script names it as `programs/<name>.py` on a line that is not a
+    comment. That covers both spellings the script uses — the absolute
+    `"$REPO/$PLUGIN_REL/programs/x.py"` form and the `cd`-relative
+    `programs/x.py` form — and it counts the paths handed to the verdict's
+    `--gate-edited` seam, which must exist in the tree for the same reason.
+    """
+    invoked = set()
+    for line in DIFFERENTIAL.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        invoked.update(re.findall(r"programs/([A-Za-z0-9_]+\.py)", line))
+    return invoked
+
+
+def test_every_program_the_differential_invokes_is_provided_by_the_fixture():
+    """The binding that was missing, and whose absence cost 16 tests.
+
+    `d5646372f` wired three new gates into the differential and added none of
+    them to the stub tree above. This suite went 28 green -> 16 red and reported
+    it as `python3: can't open file ...` from inside a temp directory, naming
+    only the FIRST of the three — the other two latent behind it, so the repair
+    would have looked like it half-worked twice.
+
+    The stub tree was CORRECT before that commit: every invoked program present,
+    zero missing. That is the problem this test exists for. A list that must be
+    extended by hand, in lockstep with every new invocation in the script, with
+    nothing that fails when it is not, stays correct right up to the moment it
+    silently is not. This is the thing that fails.
+    """
+    holder = Path(tempfile.mkdtemp(prefix="gk_fixture_census."))
+    try:
+        root = holder / "repo"
+        root.mkdir()
+        _write_stub_tree(root)
+        provided = {q.name for q in (root / PLUGIN_REL / "programs").glob("*.py")}
+    finally:
+        shutil.rmtree(holder, ignore_errors=True)
+
+    invoked = _programs_invoked_by_the_differential()
+    # BOTH PREDICATES ARE PRINTED, not merely applied. Two honest censuses of
+    # this same fixture disagreed 6 vs 3 on 2026-08-22 and the disagreement was
+    # never in the data — it was that one counted only `shutil.copy` and the
+    # fixture also provides by `write_text`. A count whose predicate is printed
+    # can be reconciled against someone else's; one whose predicate is implicit
+    # gets reconciled by argument instead.
+    print("invoked  (:= named as programs/<x>.py on a non-comment line of "
+          f"{DIFFERENTIAL.name}): {len(invoked)}")
+    print("provided (:= any .py under the stub tree's programs/ after "
+          f"_write_stub_tree, copied or written): {len(provided)}")
+
+    missing = sorted(invoked - provided)
+    assert not missing, (
+        "gatekeeper-land-differential.sh invokes programs the synthetic fixture "
+        "does not provide, so every behavioural case in this file dies on "
+        "`can't open file` before it tests anything:\n  "
+        + "\n  ".join(missing)
+        + "\nProvide each in _write_stub_tree: copy it when a case needs its "
+          "real verdict, stub it when it does not."
+    )
 
 
 @pytest.fixture()
