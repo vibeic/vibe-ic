@@ -1,5 +1,27 @@
 DEFAULT_ROTATION_RERUN: PASS pads=77 die=2.262 mm rc=0
 
+IF YOU READ ONE THING, READ ONE OF THESE. They are five questions a reader
+actually has, each answered in ONE place. All five sit in the middle of this
+file, behind 500 lines of section 4 -- grep the heading, not a line number.
+
+    what would it take to finish this?
+        WHAT STANDS BETWEEN THIS DESIGN AND A FINISHED PAD RING
+    who picks up what is left?
+        WHAT REMAINS, AND WHO OWNS EACH PIECE
+    where was this report wrong?
+        WHERE THIS REPORT WAS WRONG, INDEXED
+    how do I check it without trusting it?
+        HOW TO CHECK THIS REPORT WITHOUT TRUSTING IT
+    what does the branch actually change?
+        WHAT THIS BRANCH CHANGES, BY IDENTIFIER
+    and what the PASS at the top does not certify
+        SCOPE OF THE DEFAULT_ROTATION_RERUN PASS
+
+Each of those existed only as fragments until 2026-08-22 -- every fact was in
+the report and none of the five questions had an answer a reader could find.
+That is the defect this file kept producing, and it is worth knowing before
+reading the rest of it.
+
 THREE ORIENTATION DEFECTS FOUND 2026-08-22, AFTER THE FIX HAD LANDED, BY
 RE-RUNNING MY OWN PROBE. They are on main now. All three are one mistake:
 I COMPUTED ORIENTATIONS THAT THE TOOL PRODUCES.
@@ -97,9 +119,57 @@ faster than the caveats:
 It is a real measurement of the geometry and not a verdict on this design's pad
 ring. Sections 4 and CORRECTION carry all of it with the evidence.
 
+WHAT LANDED IN v1.11.70, AND WHY THE ORIENTATION FIXES DID NOT
+===============================================================
+main advanced 673 commits to `ae78abb28` (v1.11.70) on 2026-08-22. Of the six
+commits on this branch beyond the old merge-base, TWO are ancestors of the new
+main and FOUR are not:
+
+    b95dd8a9f  07:55  ANCESTOR   the LEF-wins precedence test
+    41e6562d2  10:08  ANCESTOR   the header count (11 + 8 = 19 -> 12 of 20)
+    c56b8e1b1  15:13  not        PAD_ROTATION_VERTICAL is not inert
+    6c3ebe447  15:23  not        NORTH mirrored, not rotated
+    7ab8f80f0  15:24  not        the north control that observes a value
+    725f9352f  15:30  not        two of four corners mirrored
+
+THE BATCH SNAPSHOTTED THIS BRANCH AT 10:08. Everything authored after that --
+all four orientation commits, spanning 15:13 to 15:30 -- was never in it. The
+merge-base of this branch and main is exactly 41e6562d2.
+
+THAT IS NOT WHAT THE FREEZE APPEARED TO PROMISE, and it is worth writing down
+plainly rather than leaving it to be inferred. The freeze instruction said the
+branch was "frozen at whatever it holds right now, and that is what ships". At
+freeze time it held 725f9352f. What shipped is what it held at 10:08. No
+complaint attaches to that -- an assembly has to snapshot somewhere and mine
+moved after it did -- but a reader comparing the branch to main needs to know
+the snapshot point, not the freeze point.
+
+NO OTHER LANE HAS TOUCHED THESE FILES, which is what makes the pending work
+safe to land whenever somebody wants it. Across all 673 commits main gained,
+the ONLY changes to the four files this branch edits are my own two that landed:
+
+    _pad_ring.py            1 commit   41e6562d2 (mine)
+    pad_ring_gen.py         0 commits
+    pad_ring_check.py       0 commits
+    tests/test_pad_ring.py  2 commits  41e6562d2, b95dd8a9f (both mine)
+
+A clean merge alone would not have shown that -- two lanes can edit related
+things without a textual conflict and still disagree. Here there is no second
+lane to disagree with.
+
+CONSEQUENCE, MEASURED ON `ae78abb28`: `^SIDE_ORIENT` 0, `^CORNER_ORIENT` 0,
+`^VERTICAL_SIDE_ORIENT` 1, the disclosure key still `rotation_vertical_inert`,
+and line 301 still `PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_CORNER"], i)`.
+All three orientation defects are live on main. Pending onto the new main:
++211/-65 across 3 files, 0 conflicts, 106 passed merged.
+
 LANDING STATE CHANGED WHILE THIS REPORT WAS BEING WRITTEN, AND THE CHANGE IS
 LARGE ENOUGH TO BELONG AT THE TOP. MEASURED 2026-08-22, main at `a4caccefe`
-(v1.11.69, 214 commits after the 81cd5321b this report was verified against):
+(v1.11.69, 214 commits after the 81cd5321b this report was verified against).
+SUPERSEDED: main has since moved AGAIN, to `ae78abb28` (v1.11.70). This section
+is kept as the record of the SECOND move; the section above it covers the third
+and is the current one. Three landing states in one day is why nothing here
+pins a head without saying which moment it belongs to:
 
   * THE FIX IS ON MAIN, and all FOUR files there are BYTE-IDENTICAL to this
     branch at b95dd8a9f (sha256 per file). PR #1765 is still OPEN and was not
@@ -118,7 +188,10 @@ LARGE ENOUGH TO BELONG AT THE TOP. MEASURED 2026-08-22, main at `a4caccefe`
         ancestor, and why "is it an ancestor" and "is the content there" gave
         different answers. Both were true; they are different questions.
   * ONE COMMIT DID NOT LAND: `41e6562d2`, the header-count fix and its two
-    tests. Merging this branch into a4caccefe today adds 2 files, +68/-10 --
+    tests. Merging this branch into a4caccefe added 2 files, +68/-10 (TRUE OF
+    THAT MOMENT ONLY -- main has since moved to ae78abb28 / v1.11.70 and the
+    pending figure is +211/-65 across 3 files; see the block at the top of this
+    file, which is the one that is current) --
     MEASURED BY MERGING, and a three-dot diff disagrees: `git diff
     origin/main...41e6562d2` gives +106/-10, overstating by the 38 lines of
     b95dd8a9f's test, which main holds BY CONTENT while the commit is not an
@@ -174,8 +247,8 @@ number must not be quoted without it.)
 
 STATUS OF THE PAIRING: sha256 x gf180mcuD IS A RECORDED NON-CELL.
 AND `sha256 x sky130A` IS A CELL — row 6 of the same document's CELLS table,
-`L19 pdk_target: sky130; L1 "SKY130 主目標"`. That completes a picture the
-report had only half of: the pairing this brief measured is a recorded
+`L19 pdk_target: sky130; L1 "SKY130 主目標"` (= "SKY130 primary target").
+That completes a picture the report had only half of: the pairing this brief measured is a recorded
 non-cell, and the pairing that IS a cell is the very tree whose pre-check and
 pad ring were finally run on 2026-08-22 (`_bm_sha256_sky130A_121`: 15 DEFs,
 zero GDS, NOT_DETERMINED, pad ring SKIP, site fix resolving
@@ -752,6 +825,7 @@ on this host, in the same run directory I took the port count from:
 
     input/docs/L3_external_interface.md  "Physical Pad Placement"
     input/docs/L9_constraints_floorplan.md  9.2.1 "Pad 配置(對齊 L3)"
+                                            (= "Pad placement (aligned to L3)")
 
         North  address[7:0] + write_data[31:0]   40
         South  read_data[31:0] + error           33
@@ -759,7 +833,9 @@ on this host, in the same run directory I took the port count from:
         West   cs, we                             2   = 77
 
 Only ORDERING WITHIN A SIDE is left to the tool ("Pad ordering 同一邊內由 Plugin
-自選;只要符合邏輯區隔即可"). The GROUPING is declared, twice.
+自選;只要符合邏輯區隔即可" = "pad ordering within one side is the
+Plugin's own choice, so long as it respects the logical grouping"). The
+GROUPING is declared, twice.
 
 I read `phase2/stage2/synth/netlist.v` for the 77 and never opened `input/docs/`
 two directories over. The port COUNT was measured; the SIDE SPLIT was asserted
@@ -891,7 +967,8 @@ verified on four PDK trees.
 
 **AND THE DESIGN DOES NOT TARGET gf180mcuD AT ALL.** Raised by the publishing
 agent, verified here: gf180 appears ZERO times across ALL 28 L-DOCUMENT FILES, spanning L1-L27 (L8 appears twice, as _RTL_CONSTANTS and _TIMING_WAVEFORM) -- counted 2026-08-22 on the real tree, file by file. An earlier draft said "the nine L-documents", a denominator I never measured; the zero was right and understated, since 0 of 28 is stronger evidence than 0 of 9. L1
-declares "目標 PDK | SKY130 主目標" and `sky130_fd_sc_hd`; L9 sets the clock
+declares "目標 PDK | SKY130 主目標" (= "Target PDK | SKY130 primary target")
+and `sky130_fd_sc_hd`; L9 sets the clock
 period against that library. Every per-side figure in this report is therefore a
 statement about a PDK this design never names.
 
@@ -1988,6 +2065,115 @@ assumed:
 
 If opening it was wrong, closing it costs one command and nothing is lost.
 
+## The brief's two artefact constraints, graded on what I actually pushed
+
+Both were stated in the brief and neither had been measured on the artefact that
+carries them, as against on the plugin source. The bundle branch is the exposed
+one: it is not checked out anywhere, so no CI gate and no pre-commit hook has
+ever read it.
+
+**No commercial foundry name, process node, SKU or chip codename.** PASS,
+measured by running the repo's OWN scanner over the pushed bundle rather than
+over the working tree. `source_chip_agnostic_check._scan_nda` — 8 tokens, 15
+file extensions — returned `[]` across all 77 eligible files of the 82 on
+`jpadsite/capture-bundle`. The working-tree run that reported "4667 file(s)
+tree-wide" did NOT cover them: `git ls-files docs/capture` is 0 on the working
+branch and 82 on the bundle branch, so the two runs read disjoint sets and only
+the second one is evidence about what shipped. `sky130`, `gf180mcuD` and
+`ihp-sg13g2` are OPEN PDKs, named by the brief as permitted.
+
+The first attempt at that run passed the wrong plugin root and the gate answered
+`NOTHING_SCANNED: ... A clean result over an empty scan is not a clean result`.
+That is `gate_zero_denominator_refuses_check` (#564) firing on me, and it is the
+reason the number above is worth anything.
+
+**English only in repo artefacts.** This one has a real tension with quotation
+integrity, and the resolution is visible rather than silent. Six lines of this
+report quote the design's own L-documents, which are not in English. Translating
+inside the quotation marks would satisfy the constraint by falsifying evidence —
+the whole point of those six quotes is what the source literally says, and two of
+them are load-bearing (they are how this report establishes that the pad GROUPING
+was declared by the design and only the ORDERING WITHIN A SIDE was left to the
+tool). So the quotation stays byte-exact and an English rendering sits beside it.
+A reader who reads no CJK can now read every claim; a reader who does can still
+check the quote against the source.
+
+Verified additions-only: 12 CJK runs before the edit, the same 12 in the same
+sequence after, +253 bytes. `evidence/english_only_check.py` grades it — rc 0
+with every run quoted and rendered, rc 1 with a rendering removed (fires on
+exactly the stripped site), rc 2 for unreadable, empty, and — deliberately — for
+a file with NO CJK at all, since an empty scan is NOT OBSERVED rather than PASS.
+
+I am NOT claiming the constraint is met in its strictest reading. Strictly, an
+English-only artefact contains no CJK, and this one contains twelve runs of it.
+I decided that falsifying six quotations to reach that reading is the worse
+trade, and I am recording the decision here rather than reporting a clean PASS
+the wording would not support. If the flow owner reads the constraint strictly,
+the fix is to drop the six quotations and cite the L-document line numbers alone
+— which costs the reader the ability to check the claim without the source tree.
+
+An edit of my own broke something one line away, in the way an edit to a long
+document reliably does: the rendering on
+line 250 consumed the closing backtick of the inline-code span it followed. Found
+by reading the output rather than by any instrument, then generalised — a
+whole-document backtick-balance pass reports 16 odd-count lines in 8 runs, all 8
+pairing across a line break, 0 real breaks.
+
+### A manifest that could never verify on the branch that carries it
+
+Shipping `verify_manifest.py` immediately found something the manifest's four
+previous regenerations could not: **on the published branch it was unsatisfiable
+by construction.** Ten evidence files are `.log`/`.def`, the repo's `.gitignore`
+drops them at `git add`, and the manifest listed all of them — so a reader who
+checked out the bundle and verified it would get ten absences and no way to know
+they were expected. That flaw was present in the 60-entry version too. Nothing
+saw it because nothing verified it; the manifest had a NOTE telling readers to
+regenerate it and no way for a reader to check that anyone had.
+
+It also found a generator shipped without its output: `gen_omitted.py` was in the
+bundle, `OMITTED_BY_GITIGNORE.md` was not, so the omission was undeclared as well
+as unverifiable. Regenerated from `git ls-files` — the generator's own docstring
+records why it asks git rather than diffing directories, since an earlier version
+compared trees and reported "0 files absent" while ten were missing.
+
+The manifest now verifies in both places and names the difference. A declared
+absence prints `ABSENT-BY-DESIGN <path> (gitignore; declared)` and passes; an
+UNDECLARED absence fails; and an absence with no declaration present at all is
+rc 2, not a pass. All three graded:
+
+    private tree, all present        63 verified,  0 absent   rc 0
+    simulated checkout, 10 dropped   53 verified, 10 declared rc 0
+    plus one undeclared absence      BAD, named              rc 1
+    declaration itself missing       UNDETERMINED, named     rc 2
+
+### A refusal that hid its own precondition, and a command I invented
+
+Making the manifest honest exposed the same flaw one layer down. On a checkout
+`arithmetic_selfcheck.py` reports `NOT VERIFIED: 1 check(s) could not see their
+subject` — correct, and rc 2 rather than a false pass — but the subject is one of
+the ten gitignore-dropped `.def` files, so the published bundle's own self-check
+**can never reach rc 0**, and the message said nothing about that being by design.
+A reader would reasonably read it as a broken bundle.
+
+It now distinguishes the two: a DECLARED absence says so and names what to run; an
+UNDECLARED one says "this bundle is incomplete, not merely trimmed".
+
+The first version of that fix published a command I had not run —
+`python3 build_sha256_padring.py`, presented as writing both DEFs. It is wrong
+three ways. The script takes a mandatory project directory as `sys.argv[1]` and
+raises `IndexError` without it; it reads the netlist from the container path
+`/design/netlist.v`; and it writes the pad-ring INPUT
+(`floorplan.def` + `pad_assignment.json`), not the padring DEF, which comes from
+`pad_ring_gen` afterwards. I caught it by applying my own rule — a published
+command must run verbatim — to a command I had written thirty seconds earlier,
+and by reading the script instead of remembering it.
+
+The corrected text gives both steps and states the precondition the bundle cannot
+satisfy: **this part of the report is not reproducible from the bundle alone**,
+because the design's synthesised netlist is not in it. That is a real gap in the
+evidence set and it is now printed by the artefact itself rather than left for a
+reader to discover.
+
 ## Evidence index — everything in `evidence/`, and what each file settles
 
 Audited 2026-08-22: every file below exists, and every claim in this report
@@ -2350,6 +2536,13 @@ once — an old head and an old main — for the same reason every other stale
 figure here did: it described a moving thing and named no moment.)
 
 ---
+
+
+`english_only_check.py` — grades the brief's "English only in repo
+artefacts" rule on `RESULT.md`. Asserts every CJK run is a verbatim
+quotation carrying an English rendering within 3 lines. rc 0 / 1 / 2 all
+exercised, including rc 2 for a file with no CJK (an empty scan is NOT
+OBSERVED, not PASS). Run: `python3 evidence/english_only_check.py`
 
 ## For whoever handles the other six UNDETERMINED rows
 

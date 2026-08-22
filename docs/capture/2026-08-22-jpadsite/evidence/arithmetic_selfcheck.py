@@ -306,7 +306,33 @@ print("\nPART 3 OF THE RULING, READ OUT OF THE DEF THE TOOL WROTE")
 _pre_def  = _ev / "sha256_gf180_padring.def"
 _post_def = _ev / "sha256_gf180_padring_DEFAULT_R0.def"
 if not (_pre_def.exists() and _post_def.exists()):
-    print("  [NOT VERIFIED] a padring DEF is missing -- cannot judge")
+    # Distinguish "this bundle is broken" from "this input is DECLARED absent".
+    # Both DEFs are .def, which the repo's .gitignore drops at `git add`, so on
+    # a checkout of the published branch this refusal is EXPECTED -- and a
+    # refusal a reader cannot act on is only half a disclosure, so name the
+    # generator that is shipped beside it.
+    _omit = _ev / "OMITTED_BY_GITIGNORE.md"
+    _declared = (_omit.is_file()
+                 and all(d.name in _omit.read_text(encoding="utf-8")
+                         for d in (_pre_def, _post_def)))
+    if _declared:
+        print("  [NOT VERIFIED] both padring DEFs are DECLARED OMITTED "
+              "(.gitignore drops *.def; see OMITTED_BY_GITIGNORE.md). This is "
+              "expected on a checkout, not a broken bundle.")
+        print("  Regenerating them is a TWO-step run inside the vibeic-eda "
+              "image, and it needs an input this bundle does NOT carry -- the "
+              "design's synthesised netlist at /design/netlist.v:")
+        print("      python3 build_sha256_padring.py <proj-dir>")
+        print("      pad_ring_gen <proj-dir> --pdk-root /foss/pdks "
+              "--pdk gf180mcuD")
+        print("  The builder writes <proj-dir>/phase3/stage3/pnr/ and the "
+              "second command writes padring.def there.")
+        print("  WITHOUT that netlist this part of the report is NOT "
+              "reproducible from the bundle alone. Stated because a refusal "
+              "that hides its own precondition is worse than the gap.")
+    else:
+        print("  [NOT VERIFIED] a padring DEF is missing and is NOT declared "
+              "omitted -- this bundle is incomplete, not merely trimmed")
     UNVERIFIED += 1
 else:
     def orients(path):
