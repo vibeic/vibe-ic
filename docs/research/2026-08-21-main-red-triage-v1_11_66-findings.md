@@ -53,9 +53,32 @@ host 8hd-3 · started 2026-08-21 · **read this header before M0**
 
 **SCOPE HAS GROWN PAST THE TITLE IT STARTED WITH.** This began as RUN 8 —
 "v1.11.62 and the ownership question" — and M0 below still states that premise,
-correctly, as the premise OF RUN 8. The document now runs to M36 and the branch
-is cut from `6d06ba664` ("final disposition at v1.11.66"). **M0 is history, not
-the current base.**
+correctly, as the premise OF RUN 8. The branch is cut from `6d06ba664` ("final
+disposition at v1.11.66"). **M0 is history, not the current base.**
+
+> **THIS PARAGRAPH USED TO SAY "the document now runs to M36."** It ran to M92
+> when I noticed. **The header that warns "a summary's accuracy is inversely
+> proportional to how much work happens after it is written" was carrying a
+> count 56 sections stale**, in the same block that publishes a command to
+> re-derive it. Kept as a worked example rather than quietly deleted: the rule
+> was already written, already correct, and I broke it anyway by appending.
+
+**TWO HEADLINE RESULTS POSTDATE MOST OF THIS DOCUMENT. Read them before you
+trust an earlier framing:**
+
+* **M90 — the two lanes AGREE, and I retract "the repair is invisible to CI".**
+  With four invocation flags (docker CLI + socket + `--group-add` + **`-v
+  /tmp:/tmp`**) the image lane goes **22 failed → 6 failed, 128 passed**, and the
+  failing set is **byte-identical to the host's**. My re-founded design A and C
+  tests PASS there. **The repair was never invisible; the lane was
+  misconfigured, and I described the misconfiguration as a property of my own
+  work.** Every earlier "22 failed, 112 passed" in this document describes the
+  UNCONFIGURED lane and should be read that way.
+* **M91/M92 — the six survivors are ONE defect.** Every one is a test control
+  that used to cross as an environment variable and cannot, because the arm's
+  environment is a closed seven-name allowlist. **Committed tree data crosses**
+  — built and executed, not argued (M92). All six are then blocked behind
+  PROTECTED files, which M91 got wrong for four of them and M92 corrects.
 
 **If you read only one thing, read `REQUESTS TO THE LANDER` at the end.** It is
 the only section maintained as a current summary; everything between M0 and it is
