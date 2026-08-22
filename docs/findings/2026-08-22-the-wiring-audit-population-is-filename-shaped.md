@@ -112,3 +112,29 @@ and **35** that also refuse. That 35 sits inside the
 23-to-46 range this document predicted, and is above the literal-only 23 for
 exactly the stated reason: the census counts `rc = 1; return rc`, which a
 literal match never sees. The range was honest; the census narrows it.
+
+## The wiring decision is COUPLED to the protected-tuple repair
+
+_Measured 2026-08-22 against `origin/main` at `ae78abb28`._
+
+Wiring a gate here means adding a `python3 "$PG/<name>.py"` line to
+`tools/ci/repo_hygiene_gates.sh` — the invocations are a hand-maintained
+enumeration, 1834 lines of them. That file is:
+
+    a PINNED authority path in protected_landing_transition.json   yes
+    its live state on main                                         NEITHER
+    declared to move by the open transition                        no
+
+So it is one of the eight paths in group B of the drift finding: already
+mismatched, and moved by something the transition never authorised.
+
+**Editing it to wire anything adds a further unauthorised change to a protected
+path that is already in a refusing state.** That is not a reason never to wire;
+it is a reason the two decisions cannot be taken separately. Whoever wires these
+either repairs the tuple first, or knowingly adds a ninth unauthorised move to
+group B while the receipt machinery is already unable to answer.
+
+This is why no wiring change is prepared on this branch. It would look helpful,
+it would be one line per gate, and it would quietly make the harder problem
+worse. The measurement that wiring the 17 green instruments costs main nothing
+still stands — it is the ONLY part of that decision that is free.
