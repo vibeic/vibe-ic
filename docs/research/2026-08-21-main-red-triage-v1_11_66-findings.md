@@ -4960,6 +4960,68 @@ no such second blocker** — their remedy is entirely in the subject tree, which
 not protected.
 
 
+## M92 — I built M91's remedy. The channel WORKS; the layer under it is protected too
+
+M91 said the four corpus/bootstrap reds *"have no second blocker — their remedy
+is entirely in the subject tree, which is not protected."* **Saying that and not
+building it is the exact mistake M78 caught, so I built it.**
+
+**What I changed** (all in the unprotected test file):
+
+    stub guard   [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ]
+              -> [ -f "$ROOT/.gk-stub-routed-transition" ]
+    stub guard   [ "${GATEKEEPER_STUB_BASE_EXPANDED:-0}" != "1" ]
+              -> [ ! -f "$ROOT/.gk-stub-base-expanded" ]
+    tests        take a PRIVATE clone and commit the sentinel(s) on its BASE,
+                 so both arms inherit them; the arm asymmetry still comes from
+                 `GATEKEEPER_VERIFY_ARM`, which IS on the allowlist
+
+**THE CHANNEL WORKS — this is the load-bearing result.** Before, the guard was
+false in every arm and the run reported `KeyError: 'corpus_transitions'`, the
+producer having never executed. After:
+
+    --- arm A2/B2: base rc=1 candidate rc=1 (hermetic gates)
+
+**Both arms took the routed-transition path for the first time since the
+migration.** M91's thesis is confirmed by execution, not by argument: **committed
+tree data crosses where an environment variable cannot.**
+
+**And then the next layer, which has never run either:**
+
+    [NORECORD] benchmark-data landing checkout: origin must be exactly
+               '.../benchmark-data.git'; observed ['<missing or unreadable>']
+    gatekeeper-verify-merge: benchmark-data B2 changed during trusted parent
+               evidence execution
+
+**Every file in that layer is PROTECTED:**
+
+    benchmark_data_landing_checkout.py   PROTECTED   (emits the NORECORD)
+    routed_def_corpus.py                 PROTECTED
+    _gate_dispatch.sh                    PROTECTED
+    gatekeeper-verify-merge.sh:807       PROTECTED   (the die)
+
+**Reverted, byte-identical to HEAD.** Not because the change was wrong — the stub
+guard it replaced is provably dead code, and the new failure is strictly more
+informative than the old one. **Because I cannot tell whether that failure is a
+real integrity check correctly firing on a fixture I got wrong, or a defect in a
+path nothing has exercised since the migration** — and the checks that would
+answer that are the protected files themselves. **Shipping a test that is red for
+a reason I cannot triage is not better than one that is red for a reason I can.**
+
+**M91 was wrong on its last line, and the correction matters.** I wrote that the
+corpus and bootstrap four *"have no such second blocker"*. They do. **It is not
+the same second blocker as the interrupt pair's** — that one is container
+identification, this one is trusted-parent-evidence integrity — but it lands in
+the same place: a protected authority file. **All six surviving reds are blocked
+behind protected code, not four of them.**
+
+**What is genuinely established, and is worth more than the reverted diff:** the
+migration remedy is proven to work at the point everyone assumed it would fail.
+Whoever holds the protected files can now start from "the control crosses; the
+integrity check downstream needs its fixture taught" rather than from "can this be
+done at all".
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
