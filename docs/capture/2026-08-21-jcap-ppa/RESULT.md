@@ -2430,6 +2430,34 @@ re-derived across the thirty: doing so honestly means sweeping each rule, which
 is the work the table below tracks and the handoff assigns. The count of rules
 whose sweep has actually been done is stated there, not estimated here.*
 
+### Figures that name no population cannot be told apart
+
+Three classes of prose figure have now gone stale the same way — correct when
+written, falsified by the batch growing underneath them. The obvious response is
+a check: scan for any figure whose denominator is a superseded value of a live
+count. It was built and run:
+
+    prose figures citing a superseded denominator            5
+    of those, genuinely stale                                2
+    of those, a figure about a DIFFERENT population           3
+
+The two real ones are fixed above — a sweep row still reading `6 of 29` after its
+own record had been re-measured to `10 of 33`, and a claim about "these 15
+records" written when the batch was fifteen.
+
+**The check is deliberately not wired**, and the reason is the other three. Every
+false positive was a figure using the word *records* about a different set: three
+records emitted by one producer, twenty-nine in-tree backlog files, a numerator
+in `9 of the 33`. A gate that is wrong three times in five is a gate that gets
+switched off, and this one needs the judgement *which population is this?* that a
+regex cannot make.
+
+What generalises instead is a drafting rule, and it is the same family as the
+records about docstrings and quoted counts: **a figure must name its population.**
+`29 records` cannot be distinguished from a stale batch count; `29 in-tree
+backlogs` can, and the staleness becomes self-evident to a reader without any
+tooling. The sweep row above now reads that way.
+
 ### Which rules have actually been swept, and what happened to them
 
 A record's measurement is of the DEFECT. A sweep measures the RULE — its false
@@ -2469,7 +2497,7 @@ four, and not one survived unchanged.**
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
-| A-9 | 29 records | 6 offenders | swept during construction; 6 of 29 IS its sweep |
+| A-9 | 29 → **33** in-tree backlogs | 6 → **10** offenders | swept during construction, then RE-MEASURED after the merge; the 4 new offenders are the sibling capture lanes |
 | A-13 | 47 pairs | 6 | swept during construction; unusable until the generic token was excluded |
 
 In every case the discriminator was invisible from the defect that motivated the
@@ -2549,7 +2577,7 @@ satisfying the letter of it by creating a local file nothing reads.
 ### The 4th distill target was considered and is empty
 
 `agents/ic_expert_db/ic_expert_db.json` holds generalizable design-CLASS CRAFT
-keyed by IC class. **None of these 15 records routes there, and the reason is
+keyed by IC class. **None of these 33 records routes there** — re-derived, not carried: the 33 route to 18 distinct programs and not one is the expert DB. **The reason is
 structural rather than an oversight:** every one is about the FLOW — a gate's
 vocabulary, a producer/consumer seam, an exit code, a population guard — and none
 is knowledge about what makes a class of circuit correct. Recording the empty
