@@ -1440,11 +1440,13 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **eight** steps. Without them **9 of the
-33 records** here emit UNROUTED — the ones routed at those eight — and the
+`benchmark/CAPTURE_ROUTING.json` gains **nine** steps. Without them **10 of the
+34 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
-main already carries, because half of the sixteen steps this lane wrote landed
-with the earlier snapshot.
+main already carries, because half of the steps this lane wrote landed with the
+earlier snapshot. *These two figures have now moved twice, each time because a
+record was added at a step main does not carry; they are derived from the two
+routing files rather than maintained by hand, and the derivation is one command.*
 
 *This read "every record here" until the universal claims in this report were
 audited against their denominators. It was true when written — all sixteen steps
