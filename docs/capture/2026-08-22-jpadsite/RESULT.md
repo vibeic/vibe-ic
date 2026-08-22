@@ -2146,6 +2146,34 @@ rc 2, not a pass. All three graded:
     plus one undeclared absence      BAD, named              rc 1
     declaration itself missing       UNDETERMINED, named     rc 2
 
+### A refusal that hid its own precondition, and a command I invented
+
+Making the manifest honest exposed the same flaw one layer down. On a checkout
+`arithmetic_selfcheck.py` reports `NOT VERIFIED: 1 check(s) could not see their
+subject` — correct, and rc 2 rather than a false pass — but the subject is one of
+the ten gitignore-dropped `.def` files, so the published bundle's own self-check
+**can never reach rc 0**, and the message said nothing about that being by design.
+A reader would reasonably read it as a broken bundle.
+
+It now distinguishes the two: a DECLARED absence says so and names what to run; an
+UNDECLARED one says "this bundle is incomplete, not merely trimmed".
+
+The first version of that fix published a command I had not run —
+`python3 build_sha256_padring.py`, presented as writing both DEFs. It is wrong
+three ways. The script takes a mandatory project directory as `sys.argv[1]` and
+raises `IndexError` without it; it reads the netlist from the container path
+`/design/netlist.v`; and it writes the pad-ring INPUT
+(`floorplan.def` + `pad_assignment.json`), not the padring DEF, which comes from
+`pad_ring_gen` afterwards. I caught it by applying my own rule — a published
+command must run verbatim — to a command I had written thirty seconds earlier,
+and by reading the script instead of remembering it.
+
+The corrected text gives both steps and states the precondition the bundle cannot
+satisfy: **this part of the report is not reproducible from the bundle alone**,
+because the design's synthesised netlist is not in it. That is a real gap in the
+evidence set and it is now printed by the artefact itself rather than left for a
+reader to discover.
+
 ## Evidence index — everything in `evidence/`, and what each file settles
 
 Audited 2026-08-22: every file below exists, and every claim in this report
