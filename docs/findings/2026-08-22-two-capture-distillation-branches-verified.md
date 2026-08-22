@@ -77,6 +77,13 @@ nothing else, and neither `main` nor either verified branch was touched.
          satisfy it. I implemented the two-part remedy and measured it: gate
          rc 1 -> 0, 0 unprovable axes, consumer still excluded, both real
          producers admitted, 3 of 8 tests red. Repair is cheap and named below.
+    F1+  Its remedy, by contrast, is SAFE and I can say so with a control
+         rather than an assertion. Re-built at c0e19ace9: 10 lines + 1 test-
+         helper line, advisory rc 0 with all six findings still printed,
+         `--strict` rc 1, 61 tests passing. Then I broke the property it is
+         sold on — kept the advisory rc and SUPPRESSED the findings — and the
+         branch's own tests caught it, 2 of 61 red. That is the difference from
+         F14, whose remedy can be applied wrongly and pass 233 tests.
 
   jdistchip:
     F16  three gates never return 1 on ANY revision of main I tested, including
@@ -2054,9 +2061,40 @@ F1  BLOCKING (chip) — `only_the_declaring_step_writes_its_output` EXITS 1 ON T
               because crash->rc2, bad-invocation->rc3 and empty->no-finding all
               still hold.
 
-          So option (c) is genuinely mechanical and bounded — 8 lines and 1 —
+          So option (c) is genuinely mechanical and bounded — 10 lines and 1 —
           and it PRESERVES the finding rather than hiding it: the six are still
           printed on every run.
+
+          RE-BUILT AND POSITIVE-CONTROLLED AT TODAY'S CHIP TIP
+          (c0e19ace9), 2026-08-22. Everything above reproduces: 10
+          lines in the program, default rc 0 printing ADVISORY with
+          all six findings listed, `--strict` rc 1 with the same
+          six. Six tests then fail, all of them the ones asserting
+          the refusal, and one line in the test helper (adding
+          `--strict` to its argv) fixes every one — 61 passed across
+          this file and the whole `test_chip_path_rules_rc_contract`
+          family. The count is 61 rather than the 57 I first
+          recorded because the branch has added tests since
+          f3f0beeb6, not because anything moved.
+
+          AND THE PRESERVATION CLAIM IS PINNED BY SOMETHING OTHER
+          THAN ME. F17 taught me that "the suite is green" can be
+          worth nothing, so I broke the exact property option (c) is
+          sold on: kept the advisory rc and SUPPRESSED the six
+          findings from the output. The suite catches it —
+          test_two_writers_of_one_declared_output_go_red and
+          test_a_shell_second_writer_goes_red both fail, 2 of 61.
+
+          THAT IS THE DIFFERENCE BETWEEN THIS REMEDY AND F14's, and
+          it is why I can recommend this one without a caveat. F14's
+          conversion can be applied wrongly and pass 233 tests. This
+          one cannot be applied in the way that would matter —
+          silently dropping the findings — without the branch's own
+          tests going red. Worth knowing the shape of the cover:
+          only 2 of the 6 red-control tests assert on the finding
+          TEXT and the other 4 assert rc alone, so the guard holds
+          against removing the message and is thinner against
+          weakening it.
 
     Plus the missing sweep test in every case.
 
