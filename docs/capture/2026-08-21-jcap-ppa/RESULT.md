@@ -3558,8 +3558,8 @@ number and not the question.
     records                                            47
       fix text quotes a figure                         35
         names a literal command                         6
-        describes HOW the count was taken              26
-        neither — a bare number                         9
+        describes HOW the count was taken              27
+        neither — a bare number                         8
 
 The brief is explicit about this: *the command, the number, the before and
 after.* On the strict reading, 29 figure-bearing records fall short.
@@ -3600,6 +3600,7 @@ was wrong":
 | gates the wiring enumeration counts | 619 | **624** | the tree grew by five |
 | commands the layer presents | 19 | **20** | the tree grew by one |
 | emitter sites writing a basis stamp | 16 | **15** | **does not fully reproduce — see below** |
+| evidence artefacts carrying a digest | 525 of 525 | **525 of 525** | **reproduces exactly** |
 
 **Six re-derivations. Five are small growths and none is a screen mismatch.** The numbers
 were sound; what was missing was the question that produced them. That is a
@@ -3637,7 +3638,16 @@ end. **That asymmetry is the whole argument for the rule:** a screen written
 beside its number costs nothing, and the same screen recovered afterwards costs
 a search that may not converge, as the basis-stamp figure above shows.
 
-Nine records remain, and that is the first thing I would do next. A figure
+**One figure reproduced exactly, and it explains which numbers need re-checking
+at all.** 21 trial contracts, 525 evidence artefacts, 525 carrying a digest —
+identical to the record, where every other re-derivation had drifted by one to
+five. The difference is the kind of population. The drifting figures count files
+in a source tree that grows; this one counts entries in **committed evidence**,
+which cannot move without a commit that changes it. So a figure over published
+artefacts is worth quoting without a date and a figure over a working tree is
+not — which is a cheaper rule than re-checking everything.
+
+Eight records remain, and that is the first thing I would do next. A figure
 without its question is a memory, which is the brief's own word for what this
 loop exists to stop producing.
 
