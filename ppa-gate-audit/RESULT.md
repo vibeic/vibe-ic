@@ -2435,3 +2435,121 @@ NEGATIVE CONTROL, the reason reverted to the denial:
 The three that stay green under the revert are the correct ones to stay green:
 they pin the non-inference and the true-sentence-preserved side, which reverting
 the reason does not touch.
+
+
+# Part 23 — the brief's actual question for the two NOT CHECKED rows: WHICH bug
+
+The brief set a dichotomy for a gate that returns rc 2 over a non-empty
+population. Either it is **missing an artefact it has not named**, or **the
+artefact is there and the gate does not read it** — "declared but inert". It
+said these are different bugs and demanded that each row be classified. Parts
+1-22 established that both rows *name* something. Naming is not the same as
+being right about what is named, and after Part 22 found a producer message
+that was false, the gates' own account of themselves is not evidence.
+
+Both rows were therefore re-derived from the RUN TREE, not from the gate text.
+
+## Row 1 — head-to-head, end-to-end campaign, 2 records
+
+Classification: **missing artefact content, correctly named. Not inert.**
+
+Both records take `timing_wns_ns` from `phase3/stage3/sta/sta_spef_based.rpt`.
+That report is dialect C — no banner at all — so there is genuinely nothing for
+the parser to read an RC condition from, and the gate's rc 2 is earned.
+
+The root cause is one layer further back, and it is the same shape as Part 22.
+The deck that WROTE the report knew:
+
+    sta_spef_based.tcl:6    read_spef .../phase3/stage3/extracted/spm.spef
+    sta_spef_based.tcl:17   puts $_bf "STA_BASIS: POST_ROUTE_SPEF"
+    sta_spef_based.tcl:18   puts $_bf "STA_SIGNOFF_CORNER: SS"
+    sta_spef_based.tcl:19   puts $_bf "STA_BASIS_LIBERTY: ..__ss_100C_1v60.lib"
+    sta_spef_based.tcl:20   puts $_bf "STA_SIGNOFF_CORNER_COUNT: 1"
+
+Five stamps, and **not the SPEF it had just read on line 6**. The two
+multi-corner emitters were taught to stamp their per-stanza basis at v1.11.33;
+this single-corner one still discloses everything about its corner except which
+parasitics produced it. NOT repaired here: it is a change to the deck emitter in
+`phase3_one_shot_runner.py`, a single-writer surface, and it would fix future
+runs only — every published record is static JSON. Named so it is not lost.
+
+## Row 2 — promotion feasibility, cross-layer, 21 adjudicated sets
+
+Classification: **the gate named the WRONG artefact — the one it read rather
+than the one it awaits.** A real defect, repaired here.
+
+Measured in the campaign's own run tree:
+
+    reports/phase3/em.json          EXISTS. `"verdict": "MEASURED"`,
+                                    2431 segments analysed, max segment current
+                                    stated. A healthy artefact.
+    reports/phase3/em_signoff.json  EXISTS, in all 21 trials. Carries a report
+                                    AUTHENTICITY audit (`passed: true`,
+                                    tool_authentic, has_density) and NO
+                                    current-density screen: no violation count,
+                                    no Jmax, no `summary.worst_utilization`.
+
+The `MISSING` line ended `cited artefact: reports/phase3/em.json` — the file
+that is fine. Each record names the artefact it actually wants, itself, in its
+own provenance: `screen_artefact: reports/phase3/em_signoff.json`, **42
+occurrences across the corpus**, and the gate held it and did not print it.
+Sending a reader to a healthy file as the citation for an absent measurement is
+worse than citing nothing: nothing is a gap, this is a misdirection.
+
+The line now reads:
+
+    em: MISSING `reliability.em.violations` at view {"stage":"post_route"}
+    [NOT_MEASURED] -- the current-density screen states verdict 'nothing',
+    which is neither PASS, FAIL nor SKIPPED. read: reports/phase3/em.json
+    -- AWAITED, per the record's own provenance, and NOT the artefact read
+    above: reports/phase3/em_signoff.json
+
+**The verdict is unchanged at rc 2 over 21 sets, 0 infeasible.** The substantive
+gap is real: nothing anywhere in the campaign screens J against a Jmax, so no
+violation count and no utilisation ratio exist to be read. The equivalence axis
+is likewise honestly undetermined — `reports/lec.json` is present, IS read, and
+proves RTL against `post_dft_netlist.v (synth)`, which is not the routed
+netlist. Both remain undecidable. What changed is that the gate now points at
+the thing it needs.
+
+## Two things this repair deliberately does NOT do
+
+**It does not claim the awaited file is absent.** This gate reads a published
+record and never the run tree, so it cannot know — and measured, the file DOES
+exist. What is absent is the verdict, not necessarily the file. An earlier draft
+of this line said "not present" and was corrected before it shipped; a gate
+asserting the state of a filesystem it never opened is the same unearned claim
+in the opposite direction.
+
+**It does not key off the word `screen_artefact`.** The rule is on the SHAPE of
+the provenance value — no whitespace, and a known artefact suffix — because a
+rule fitted to today's key name would miss the next producer's word for the same
+thing. Measured against the corpus, the shape rule selects exactly the 42
+`screen_artefact` values and no prose: `stage_basis` holds the sentence "…the
+worst J/Jmax ratio…", and a looser rule keyed on a slash renders that paragraph
+as a missing file. `tests/…_awaits_not_the_one_it_read.py` pins that case.
+
+## The guard
+
+`tests/test_rc2_names_the_artefact_it_awaits_not_the_one_it_read.py`, 7
+assertions: the population really is non-empty and really is rc 2 (a guard about
+rc 2 that never reaches rc 2 proves nothing); the awaited artefact is named; the
+read artefact is STILL named; the two are ordered and marked so they cannot be
+run together into one undifferentiated list; no presence claim is made; prose is
+never rendered as an artefact; and a record whose provenance names only what was
+already read gains NO `AWAITED` clause — no invented waiting.
+
+NEGATIVE CONTROL, the awaited-artefact naming removed:
+
+    FAILED ::test_the_awaited_artefact_is_named
+    FAILED ::test_the_two_are_distinguishable_and_not_run_together
+    FAILED ::test_the_gate_does_not_claim_the_awaited_file_is_absent
+    3 failed, 4 passed
+
+    E  AssertionError: the gate did not name the artefact the record's own
+       provenance says it is waiting for. An rc 2 that names no missing input
+       is the failure mode this layer exists to end
+
+All three fail on a stated assertion, not on an IndexError — the first draft of
+the third test crashed instead of asserting when nothing was named, which would
+have made its red unreadable, and it was hardened to say so out loud.

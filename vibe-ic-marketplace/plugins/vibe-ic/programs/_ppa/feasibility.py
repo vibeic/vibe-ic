@@ -88,6 +88,7 @@ import ast
 import dataclasses
 import inspect
 import pathlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -849,6 +850,50 @@ def _record_defect(rec: Any) -> Optional[str]:
     return None
 
 
+#: Artefact-shaped provenance values. A record that could not support a metric
+#: often names, in its own `provenance`, the artefact whose ABSENCE is the
+#: reason -- and that is a DIFFERENT file from the one the parser read. The
+#: `sources` list carries what was READ; without this, a `MISSING` line cites a
+#: file that exists and is healthy, and the reader learns nothing about what to
+#: produce. MEASURED on this repository's own corpus: 42 NOT_MEASURED metrics
+#: name `reports/phase3/em_signoff.json` in provenance while citing
+#: `reports/phase3/em.json` as the source, and em.json is present and states
+#: `verdict: MEASURED`. Naming a healthy file as the citation for a missing
+#: measurement is a misdirection, not a naming.
+#:
+#: The test is on the SHAPE of the value, not on the key's name: a rule keyed to
+#: `screen_artefact` would fit today's corpus and miss the next producer's word
+#: for the same thing. Whitespace disqualifies -- provenance also carries prose
+#: (`stage_basis` reads "... the worst J/Jmax ratio ..."), and a sentence that
+#: happens to contain a slash is not a path.
+_ARTEFACT_SUFFIXES = (".json", ".rpt", ".log", ".csv", ".def", ".spef",
+                      ".v", ".lib", ".sdc", ".gds")
+
+
+def _looks_like_artefact(value: Any) -> bool:
+    """Is this provenance value a file this run could have produced?"""
+    return (isinstance(value, str) and bool(value)
+            and not re.search(r"\s", value)
+            and value.lower().endswith(_ARTEFACT_SUFFIXES))
+
+
+def _awaited_artefacts(records: Sequence[Any], read: Sequence[str]) -> List[str]:
+    """Artefacts named in provenance that are NOT the ones already read.
+
+    Only the difference is returned. An artefact that was read and found
+    wanting is reported by `sources` and its own reason; repeating it here
+    would say "waiting for" about a file that is present.
+    """
+    already = {str(x) for x in read if x}
+    out = set()
+    for rec in records:
+        if not isinstance(rec, Mapping):
+            continue
+        for value in (rec.get("provenance") or {}).values():
+            if _looks_like_artefact(value) and str(value) not in already:
+                out.add(str(value))
+    return sorted(out)
+
 def _covers(scope: Mapping[str, Any], view: Mapping[str, Any]) -> bool:
     """True when `scope` satisfies every key/value the required `view` names.
 
@@ -1033,6 +1078,13 @@ def _evaluate_proof(records: Sequence[Any], proof: Proof,
                     "sources": sorted({str((r.get("source") or {}).get("path")
                                            or "") for r, _ in near if
                                        isinstance(r.get("source"), Mapping)}),
+                    # WHAT IS AWAITED, which is not what was READ. See
+                    # `_awaited_artefacts`.
+                    "awaiting": _awaited_artefacts(
+                        [r for r, _ in near],
+                        [str((r.get("source") or {}).get("path") or "")
+                         for r, _ in near
+                         if isinstance(r.get("source"), Mapping)]),
                 })
             else:
                 coverage.append({
