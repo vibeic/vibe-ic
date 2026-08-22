@@ -79,11 +79,23 @@ def _tree(tmp_path, *, l20_asserts_dft, stuck_pct):
         fields = {"dft_present": True,
                   "scan_chains": [{"name": "sc0", "length": 40, "scan_in": "si",
                                    "scan_out": "so", "clock": "clk"}]}
+        applic = "APPLICABLE"
     else:
         fields = {"dft_present": False, "scan_chains": [], "jtag_tap": None,
                   "test_compression": None, "bist_mbist": []}
+        # DECLARES no DFT, and now says so the only way a layer can: an
+        # explicit NOT_APPLICABLE. This fixture used to express "declares no
+        # DFT" as APPLICABLE + NOT_YET_EXTRACTED + all-default fields — i.e.
+        # the emitter's untouched SKELETON, which declares nothing at all. The
+        # gate used to read that skeleton as a declaration, and that conflation
+        # is the defect fixed in `l20_dft_applicability` (see
+        # test_dft_floor_unextracted_l20_is_unknown.py). Switching the fixture
+        # to a real declaration keeps EVERY invariant this file exists to pin —
+        # the two gates still see one INFORMATIONAL tree and must still agree —
+        # while making the docstring's "declares no DFT" literally true.
+        applic = "NOT_APPLICABLE"
     (gd / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps({
-        "doc_id": "L20", "applicability": "APPLICABLE", "fields": fields,
+        "doc_id": "L20", "applicability": applic, "fields": fields,
         "extraction_status": "NOT_YET_EXTRACTED", "extraction_evidence": {},
     }))
     return tmp_path
@@ -197,4 +209,12 @@ def test_signoff_record_discloses_l20_basis_loudly(tmp_path):
     assert sa["status"] == "INFORMATIONAL"
     assert sa["floor_enforced"] is False
     assert sa["l20_applicability"]["asserts_dft"] is False
-    assert any("L20 declares NO DFT" in r for r in sa["reasons"])
+    # The record must NAME the L20 basis it accepted on. The literal wording
+    # follows the declaration channel — this tree now declares via
+    # `applicability: NOT_APPLICABLE` (see `_tree`) — so assert the substance:
+    # the reasons say L20, say the floor was reported not enforced, and carry
+    # the measured number that was let through.
+    joined = " ".join(sa["reasons"])
+    assert "L20" in joined, joined
+    assert "not gated" in joined or "INFORMATIONAL" in joined, joined
+    assert "42.7" in joined, joined

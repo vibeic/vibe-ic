@@ -196,9 +196,24 @@ def test_the_published_corpus_resolves_and_diverges_as_measured():
         pdk, _n, m = G._resolve_pdk_and_node(c, None, None)
         if m:
             diverged[c.name] = (pdk, m)
-    # The two cells #376 named, by name and by both PDK statements.
+    # One of the two cells #376 named still diverges the same way.
     assert diverged.get("v1.5.58_ihp-sg13g2") == ("ihp-sg13g2", "sky130")
-    assert diverged.get("v1.5.66_gf180mcuD") == ("gf180mcuD", "sky130")
+    # gf180mcuD does NOT (re-measured 2026-08-07 against v1.9.96_gf180mcuD,
+    # which replaces the retired v1.5.66_gf180mcuD) — not because the PDK
+    # disagreement itself went away, but because the SAME v1.9.96 ciel-hash
+    # fix (commit 3d7c5a095) that converged this cell also made
+    # `_SIGNOFF_PDK_RE` see TWO candidate names in the tracked flow text
+    # instead of one: the real gf180mcuD liberty paths
+    # (`/foss/pdks/gf180mcuD/...`) plus the ciel content-addressed staging
+    # path (`/foss/pdks/ciel/gf180mcu/versions/<hash>/...`, whose first path
+    # segment the regex reads as the PDK name literal `ciel`). Two names ->
+    # `_pdk_from_signoff_flow` correctly refuses to guess and returns None
+    # (the same "ambiguous" rule `u_hawaii_adc` already exercises), so this
+    # cell now falls into the "no PDK path at all"-shaped bucket rather than
+    # the "resolves and disagrees" one. Verified directly, not assumed:
+    # `_signoff_flow_texts` over this cell yields {'gf180mcuD', 'ciel'}.
+    assert diverged.get("v1.9.96_gf180mcuD") is None
+    assert G._pdk_from_signoff_flow(_CORPUS / "spm" / "v1.9.96_gf180mcuD") is None
     # And the noise stays out: sky130A-vs-sky130 cells are not reported.
     assert "subservient" not in diverged, diverged
     assert "v1.5.65_sky130A" not in diverged, diverged

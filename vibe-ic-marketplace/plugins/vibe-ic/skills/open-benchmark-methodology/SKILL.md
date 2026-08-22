@@ -99,7 +99,7 @@ and lets an agent author RTL directly tests only "the LLM under our roof", not "
 > **Enforced by `programs/benchmark_shape_classify.py`** — derives the shape (A/B/C/D/E) for a
 > NEW benchmark from its on-disk layout (module count, PDK/constraints target, prompt line-count,
 > dataset cardinality, cocotb harness, oracle-gated flag). For a benchmark already in
-> `benchmark-harness/BENCHMARK_REGISTRY.json`, `programs/benchmark_dispatch.py` reads the recorded
+> `benchmark/BENCHMARK_REGISTRY.json`, `programs/benchmark_dispatch.py` reads the recorded
 > shape directly. The prose tree below is the human-readable spec the program implements — do not
 > hand-pick a shape by feel; run the classifier.
 
@@ -217,7 +217,7 @@ and is exempt):
    both prove free-text ALWAYS regresses. For a NEWLY-onboarded benchmark
    flow: if no existing gate program consumes that benchmark's IO format
    (e.g. CVDP's id/completion JSONL), **build the bridge first（gate
-   program / format adapter — see `benchmark-harness/cvdp_gate.py`）, then
+   program / format adapter — see `benchmark/cvdp_gate.py`）, then
    dispatch** — "no ready gate" is a harness backlog item, never a reason
    to go agent-first. Before dispatch the orchestrator must self-check:
    is this prompt's emit action program-enforced? If not, the run's number
@@ -598,7 +598,7 @@ This rule overrides any "skip, it's a known FLOOR" or "just re-run the fails" in
 
 ## § 5 — Per-benchmark cheat sheet (current as of v0.1.26)
 
-> **Enforced by `benchmark-harness/BENCHMARK_REGISTRY.json`**, loaded by
+> **Enforced by `benchmark/BENCHMARK_REGISTRY.json`**, loaded by
 > `programs/benchmark_dispatch.py` (`--list` / `--show <bench>`). The table below is a
 > human-readable snapshot — the registry JSON is the source of truth that drives dispatch; if the
 > two ever disagree, the registry wins. Do not hand-edit run plans from this table; consult the

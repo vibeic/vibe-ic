@@ -473,6 +473,47 @@ def _rank_signoff_first(paths: List[Path], project_dir: Path, ranker) -> List[Pa
                                         p.is_symlink(), str(p)))
 
 
+#: How much of a report's head decides which deck produced it. The markers
+#: below are header lines; nothing past this bound has ever been consulted.
+_DRC_RANK_HEAD_CHARS = 2000
+
+
+def _drc_rank(p: Path) -> int:
+    """Sign-off-first rank for a DRC report: 0 named sign-off, 1 KLayout
+    sign-off database, 2 router projection / unknown, 3 unreadable.
+
+    READS AT MOST ``_DRC_RANK_HEAD_CHARS`` (#797). This was
+    ``p.read_text(errors="replace")[:2000]`` — decode the WHOLE file, then
+    discard all but the first 2000 characters — and it is the `key=` of a
+    `sorted()` over every `*drc*.rpt|log` an rglob of the project finds. A
+    router report is the largest artefact a run produces: measured 2026-08-04
+    at 2.48 GB / 94.9M lines on one cell, against 11.7 MB for the largest
+    report tracked in this repo. So the cost was unbounded in the one input
+    that is unbounded, to inspect a header.
+
+    The failure mode is the reason this is a correctness bug and not a
+    performance note: a checker that cannot finish is killed, and downstream a
+    killed checker is indistinguishable from a checker that ran and found
+    nothing. The step's timeout arrives as the step's verdict.
+    """
+    n = p.name.lower()
+    if "signoff" in n:
+        return 0
+    try:
+        # `open(...).read(N)` and not `read_text()[:N]`: the bound has to be
+        # applied by the READ, not after it. Same decoding and same
+        # `errors="replace"`, so the head compared is byte-identical.
+        with p.open("r", errors="replace") as fh:
+            head = fh.read(_DRC_RANK_HEAD_CHARS)
+    except OSError:
+        return 3
+    if "<report-database>" in head:   # KLayout signoff database
+        return 1
+    if "detailed_route" in head or "openroad" in head.lower():
+        return 2                       # router projection — last
+    return 2
+
+
 def _has_dir(project_dir: Path, name: str) -> bool:
     """Check if a stage directory exists (case-insensitive search). Looks
     at the top level and inside the canonical phase2/<stage>/ and
@@ -591,6 +632,18 @@ _TAPEOUT_STEP_ID = 36
 # carrying `si_vacuity_accepted`::
 #
 #     {"growth_rationale": "<why this release carries one more waiver>",
+#      "growth_rationale_covers": <the root-waiver population that rationale was
+#                                  written against; vibe-ic#922 — a rationale
+#                                  with no recorded population authorises
+#                                  unlimited growth forever, so
+#                                  `waiver_growth_check` requires either the
+#                                  COUNT (an integer equal to the current root
+#                                  count) or the POPULATION (a list naming each
+#                                  root waiver by a value it publishes under
+#                                  ticket/id/step). The list is the stronger
+#                                  spelling: a count says how many the reason
+#                                  was written about, never which, so a count
+#                                  survives a swap that the reason does not>,
 #      "waived_steps": [
 #       {"id": 36,
 #        "reason": "<>=20 chars saying why this vacuity is acceptable>",
@@ -1379,19 +1432,6 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
                                           "*DRC*.rpt", "*DRC*.log"])
     # signoff-first ordering: a report whose NAME or CONTENT marks it as
     # the signoff deck outranks router/projection reports.
-    def _drc_rank(p: Path) -> int:
-        n = p.name.lower()
-        if "signoff" in n:
-            return 0
-        try:
-            head = p.read_text(errors="replace")[:2000]
-        except OSError:
-            return 3
-        if "<report-database>" in head:   # KLayout signoff database
-            return 1
-        if "detailed_route" in head or "openroad" in head.lower():
-            return 2                       # router projection — last
-        return 2
     drc_files = sorted(drc_files, key=_drc_rank)
 
     def _drc_violation_count(p: Path):

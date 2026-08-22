@@ -2,6 +2,7 @@
 import importlib
 import json
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("caravel_integration_runner")
 
 
@@ -230,7 +231,8 @@ class TestPlanIntegration:
         pm = tmp_path / "pm.json"
         _make_pinmap(pm)
         rep = mod.plan_integration(tmp_path, "x", gds, lef, v, pm)
-        assert "v0.1.51" in rep.as_dict()["emitted_by"]
+        assert rep.as_dict()["emitted_by"] == \
+            f"caravel_integration_runner v{shipped_plugin_version()}"
 
     def test_known_floor_constant(self):
         # The 2/7 hard-macro floor must be Consistency + XOR (spm pilot empirical)

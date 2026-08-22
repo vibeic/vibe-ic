@@ -86,13 +86,37 @@ WAIVER_MIN_LEN = 40
 #
 #   {"pass_patterns": ["MD-?905 .* 0xF2", "byte\\[6\\]=0xF2"]}
 #
+# `PASS` used as an ASSERTION that something passed.
+#
+# The flow's own verdict vocabulary contains compounds that carry the token
+# while asserting the OPPOSITE of a pass:
+#
+#   VACUOUS-PASS   the gate ran and found nothing applicable.
+#                  flow_compliance_check excludes it from the executed-PASS
+#                  count in the very line it prints it on.
+#   PASS-VOIDED    a pass withdrawn because a dependency failed
+#                  (_flow_verdict_tiers).
+#
+# Both appear in the tally line a RESULT.md is expected to quote VERBATIM as
+# its evidence, so matching the bare token inside them reads an honest FAIL
+# report as a claim of success — and then demands burn provenance for a burn
+# the same document says never happened. Measured on a report whose text was
+# `absent FPGA hardware; 1 VACUOUS-PASS (FS1 FMEDA)`: `hardware` and `PASS`
+# fell within the 40-character window, from two unrelated clauses.
+#
+# Scope: this excludes the DISQUALIFYING COMPOUNDS only. The `[^\n]{0,40}`
+# adjacency windows below are still adjacency tests, not claim parsers — a
+# bare `PASS` from an unrelated clause inside the window still matches, and
+# closing that would require reading the sentence rather than the span.
+_PASS_CLAIM = r"(?<!VACUOUS-)(?<!NON-)(?<!NOT-)\bPASS\b(?!-VOID)"
+
 _CLAIMS_PASS_PATTERNS = (
-    r"\bPHASE\s*2\s*\+\s*3\b[^\n]{0,40}\bPASS\b",
+    r"\bPHASE\s*2\s*\+\s*3\b[^\n]{0,40}" + _PASS_CLAIM,
     r"\bsof[^\n]{0,40}\bsuccess\b",
     r"\bburn[^\n]{0,40}\b(?:success|completed|verified)\b",
     r"\bSOF[^\n]{0,40}\bprogrammed\b",
-    r"\bhardware[^\n]{0,40}\bPASS\b",
-    r"\boverall\s*verdict\s*[:=]\s*PASS\b",
+    r"\bhardware[^\n]{0,40}" + _PASS_CLAIM,
+    r"\boverall\s*verdict\s*[:=]\s*" + _PASS_CLAIM,
     r"\baudit[_\s]*verdict\s*[:=]\s*['\"]?PASS",
 )
 
@@ -132,6 +156,75 @@ def _build_claims_re(project: Path) -> "re.Pattern[str]":
 _CLAIMS_PASS_RE = re.compile(
     "|".join(_CLAIMS_PASS_PATTERNS), re.IGNORECASE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Self-reference guard — this program's OWN output is not a claim BY the report
+# ---------------------------------------------------------------------------
+# The diagnostics below quote the very tokens they detect. The SKIP line reads
+# "RESULT.md does not claim <phase-2+3 success token> or a successful burn",
+# and the first failure line reads "RESULT.md claims a successful burn /
+# <same token> but does not cite ...".
+#
+# The anti-fabrication doctrine tells an agent to quote a tool's own output
+# verbatim as evidence. Doing exactly that flips this gate on a report whose
+# verdict line is FAIL: pasting the SKIP sentence into the report and re-running
+# the gate over the SAME project turns `SKIP` / exit 0 into
+# `FAIL — 3 provenance gap(s)` / exit 1, with nothing else changed.
+#
+# That is the failure mode this program exists to prevent, pointed at itself:
+# the cheapest way to clear the new FAIL is to paste a burn SHA-256 and an
+# `audit_verdict: PASS` into a report about a burn that never happened. A rule
+# meant to make reports verifiable rewards making them falsely verifiable.
+#
+# SCOPE, deliberately narrow: exact-sentence removal of text THIS PROGRAM
+# emits, and nothing else. Every pass claim outside these sentences still
+# matches, so the guard cannot be used to hide one — quoting our SKIP line buys
+# a fabricator nothing, because their own claim text is untouched. Matching is
+# whitespace-flexible so a hard-wrapped quotation is still recognised.
+_SELF_EMITTED_SENTENCES = (
+    # Current wording (post-fix).
+    "does not claim a successful Phase 2+3 outcome or a successful burn",
+    "claims a successful burn / a successful Phase 2+3 outcome but does not "
+    "cite the SHA-256",
+    # Pre-fix wording, retained so a RESULT.md already written against an
+    # older plugin is still read correctly rather than newly reddened.
+    "does not claim Phase 2+3 PASS or a successful burn",
+    "claims a successful burn / Phase 2+3 PASS but does not cite the SHA-256",
+)
+
+_SELF_EMITTED_RES = tuple(
+    re.compile(r"\s+".join(re.escape(w) for w in s.split()), re.IGNORECASE)
+    for s in _SELF_EMITTED_SENTENCES
+)
+
+
+#: The compliance tally a RESULT.md is asked to quote VERBATIM. Quoting it is
+#: CITING the gate's output, not asserting a pass — the same reason this file
+#: already blanks its own diagnostic sentences before the claim scan.
+#:
+#: MEASURED (#832): a report quoting `PASS=148 FAIL=3 MISSING=0` was read as
+#: claiming a pass and returned rc=1, while three neighbouring shapes had
+#: already been closed. The tally cannot be a pass claim by construction here —
+#: it carries `FAIL=3` in the same breath — so reading it as one contradicts
+#: the doctrine that asked for the quote.
+_QUOTED_TALLY_RE = re.compile(
+    r"PASS\s*=\s*\d+\s+FAIL\s*=\s*\d+\s+MISSING\s*=\s*\d+[^\n]*", re.I)
+
+
+def _strip_self_emitted(text: str) -> str:
+    """Blank out sentences THIS program emits, before scanning for a claim.
+
+    Returns text of the same shape with only our own diagnostic sentences
+    replaced by a space. Any other content — including a real pass claim
+    sitting next to a quoted diagnostic — is left untouched.
+    """
+    for rx in _SELF_EMITTED_RES:
+        text = rx.sub(" ", text)
+    # A quoted tally is evidence the report cites, never a claim it makes.
+    text = _QUOTED_TALLY_RE.sub(" ", text)
+    return text
+
 
 # Citation patterns.
 _AUDIT_SHA_RE = re.compile(
@@ -601,16 +694,21 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
     # Wave 36 — combine chip-agnostic defaults with per-project
     # signature regexes (if any).
     claims_re = _build_claims_re(project)
-    claims_pass = bool(claims_re.search(text))
+    # Scan with this program's own diagnostic sentences blanked out: a report
+    # QUOTING our verdict is citing evidence, not making the claim the quoted
+    # sentence describes. See _strip_self_emitted.
+    claims_pass = bool(claims_re.search(_strip_self_emitted(text)))
     summary["claims_pass"] = claims_pass
 
     if not claims_pass:
         # RESULT.md exists but does not claim a PASS — agent is being
         # honest about a FAIL outcome. SKIP.
+        # Wording note: this sentence must NOT contain the token pair its own
+        # pattern detects, or quoting it re-triggers the gate.
         summary["skip_reason"] = (
-            "RESULT.md does not claim Phase 2+3 PASS or a successful "
-            "burn — provenance citation is not required for a FAIL "
-            "report"
+            "RESULT.md does not claim a successful Phase 2+3 outcome or a "
+            "successful burn — provenance citation is not required for a "
+            "FAIL report"
         )
         return failures, warnings, summary
 
@@ -647,8 +745,11 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
 
     if not audit_sha:
         failures.append(
+            # Wording note: as with the SKIP line above, this sentence must
+            # NOT contain the token pair its own pattern detects.
             "RESULT_MD_MISSING_AUDIT_SHA — RESULT.md claims a "
-            "successful burn / Phase 2+3 PASS but does not cite the "
+            "successful burn / a successful Phase 2+3 outcome but does "
+            "not cite the "
             "SHA-256 of `phase23_completion_audit.json`. Add a line "
             "like `audit_sha256: sha256:<64-hex>` (or the full "
             "`reports/burn_provenance.json` block emitted by "
@@ -745,10 +846,15 @@ def main(argv: List[str]) -> int:
     print()
     print("Why this matters:")
     print(
+        # Wording note: this explanatory block is printed on every FAIL and
+        # is routinely pasted into a report as evidence, so — like the SKIP
+        # and failure lines — it must not contain the token pair the gate's
+        # own pass-claim pattern detects.
         "  The Wave 33 burn guard (mcp-eda v0.99.9) refuses to burn\n"
         "  when phase23_completion_audit.json reports verdict=FAIL.\n"
-        "  Therefore a RESULT.md claiming a successful burn / Phase\n"
-        "  2+3 PASS implies (a) an audit JSON with verdict=PASS, (b)\n"
+        "  Therefore a RESULT.md claiming a successful burn or a\n"
+        "  successful Phase 2+3 outcome implies (a) an audit JSON\n"
+        "  with verdict=PASS, (b)\n"
         "  a guarded program-tool response with success=true, and (c)\n"
         "  a SHA-256 the agent computed against the audit JSON they\n"
         "  cite. Missing any of the three indicates either an\n"

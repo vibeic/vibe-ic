@@ -28,6 +28,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 try:
     import l_doc_taxonomy as _tx
@@ -713,9 +714,8 @@ def fill_skeletons(project_dir: Path, source_text: str) -> Dict[str, str]:
         existing["fields"] = extracted["fields"]
         existing["evidence"] = extracted["evidence"]
         existing["extraction_status"] = extracted["extraction_status"]
-        existing["extracted_by"] = (
-            f"phase1_protocol_spec_extract.extract_{code.lower()}_* v0.1.51"
-        )
+        existing["extracted_by"] = _pmd.emitted_by(
+            f"phase1_protocol_spec_extract.extract_{code.lower()}_*")
         _stamp.dump(path, existing)
         status[code] = extracted["extraction_status"]
     return status
@@ -738,7 +738,7 @@ def _cli() -> int:
         "project_dir": str(args.project_dir),
         "source": str(args.source),
         "status_per_l_doc": status,
-        "emitted_by": "phase1_protocol_spec_extract v0.1.51",
+        "emitted_by": _pmd.emitted_by("phase1_protocol_spec_extract"),
     }
     if args.out_json:
         args.out_json.write_text(json.dumps(payload, indent=2),
@@ -802,7 +802,7 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
             "DATA_WIDTH": {"legal_values": [8, 16, ...], "evidence": [...]},
             ...
         },
-        "extracted_by": "extract_l8_protocol_widths v0.1.65",
+        "extracted_by": "extract_l8_protocol_widths v<plugin version>",
       }
     """
     lines = _lines_of(text)
@@ -932,7 +932,7 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
 
     return {
         "width_parameters": width_params,
-        "extracted_by": "extract_l8_protocol_widths v0.1.65",
+        "extracted_by": _pmd.emitted_by("extract_l8_protocol_widths"),
     }
 
 
@@ -1040,7 +1040,7 @@ def extract_l1_protocol_metadata(text: str, l8_widths: Optional[Dict] = None,
     those extractors instead of re-deriving.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l1_protocol_metadata v0.1.68",
+        "extracted_by": _pmd.emitted_by("extract_l1_protocol_metadata"),
     }
 
     # document_id
@@ -1330,7 +1330,7 @@ def extract_l9_integration_spec(text: str) -> Dict[str, Any]:
     Pure regex / no LLM. General catalog — no brand keywords.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l9_integration_spec v0.1.72",
+        "extracted_by": _pmd.emitted_by("extract_l9_integration_spec"),
     }
     for key, anchor_re, mode in _L9_CONCEPT_CATALOG:
         if mode == "bullets":
@@ -1382,7 +1382,7 @@ def extract_l6_control_logic(text: str,
     General — no brand strings.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l6_control_logic v0.1.72",
+        "extracted_by": _pmd.emitted_by("extract_l6_control_logic"),
     }
 
     # Paragraph extracts
@@ -1487,7 +1487,7 @@ def extract_l12_behavioral_sequences(text: str,
     Paragraph-extracted: narrow_transfer_sequence, byte_invariance_sequence.
     """
     out: Dict[str, Any] = {
-        "extracted_by": "extract_l12_behavioral_sequences v0.1.73",
+        "extracted_by": _pmd.emitted_by("extract_l12_behavioral_sequences"),
     }
 
     # Paragraph extracts
