@@ -913,3 +913,27 @@ is not a fix for a state that has since gone away.
 A branch that ends by saying "a verification is only as current as its last
 re-poll" and leaves its own figures pinned to a dead base would be doing the
 thing it just named.
+
+
+## A second branch, so the lander does not rediscover the trap
+
+Merging this branch onto the live main hits two conflicts, and the obvious
+resolution of one is semantically broken in a way the merge cannot show — I hit
+it myself. Leaving that for someone else is leaving a trap, so
+(`evidence/A_LANDABLE_BRANCH_ON_THE_LIVE_MAIN.md`):
+
+| branch | base | what it is |
+|---|---|---|
+| `jcapsha/converge-capture-distill` | `a4caccefe` | the work and its full record — every measurement, retraction and self-correction |
+| `jcapsha/land-on-current-main` | `ae78abb28` | the same delta as ONE commit on the live main, verified green, directly landable |
+
+The second is built the way the collateral-revert gate itself prescribes —
+`git diff <merge-base>..<branch>` applied to current main, not a merge-forward
+that republishes main's history on the ref. **It pushed clean, which is the
+confirmation that the remedy the gate names actually works.**
+
+    upstream_contract_parity_check   PASS, 3 entries, rc 0
+    pytest                           208 passed, 16 skipped, rc 0
+    plugin_full_audit                D1 PASS, D2 PASS (1273 programs)
+
+Read the first. Merge the second.
