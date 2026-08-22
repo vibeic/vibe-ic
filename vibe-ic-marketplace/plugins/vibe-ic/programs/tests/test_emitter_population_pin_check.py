@@ -228,7 +228,8 @@ def test_no_counter_with_a_threshold_is_silently_missed():
     missed, considered = [], []
     for prog in sorted(PROGRAMS_DIR.glob("*.py")):
         try:
-            tree = _ast.parse(prog.read_text(errors="replace"))
+            tree = _ast.parse(prog.read_text(encoding="utf-8",
+                                             errors="replace"))
         except SyntaxError:
             continue
         script = E.emitted_script_of(tree)
@@ -2553,7 +2554,8 @@ def test_a_legitimate_replacement_character_is_not_a_substitution(tmp_path):
                '            + "  if {[catch {b}]} { incr _m }\\n"\n'
                '            + "  if {$_m >= 2} { puts M }\\n")\n')
     progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
-    assert "�" in (progs / "thing_emit.py").read_text(), "fixture is wrong"
+    assert "�" in (progs / "thing_emit.py").read_text(
+        encoding="utf-8"), "fixture is wrong"
     (progs / "thing_emit.py").read_bytes().decode("utf-8")   # decodes strictly
     r = _run(progs, tests)
     assert "[SUBSTITUTED]" not in r.stdout, (
@@ -2947,7 +2949,8 @@ def test_ci_wires_this_gate_so_that_a_vacuous_run_fails():
     if wiring is None:
         pytest.skip("tools/ci/repo_hygiene_gates.sh is not in this checkout, so "
                     "the wiring claim cannot be checked from here")
-    lines = [ln.strip() for ln in wiring.read_text(errors="replace").splitlines()
+    lines = [ln.strip() for ln in wiring.read_text(
+            encoding="utf-8", errors="replace").splitlines()
              if "emitter_population_pin_check" in ln
              and not ln.lstrip().startswith("#")]
     assert lines, (
