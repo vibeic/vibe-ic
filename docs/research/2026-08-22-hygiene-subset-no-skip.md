@@ -1,5 +1,35 @@
 # The lander kept the review and gave away the no-skip guarantee
 
+> ## READ THIS FIRST — the document is 38 sections and LATER SECTIONS SUPERSEDE EARLIER ONES
+>
+> Fifteen claims in here were corrected by measurement after they were written,
+> and the corrections are APPENDED rather than edited in (deleting what a later
+> section retracts is what makes `landing_collateral_revert_check` fire — this
+> branch already carries one such finding). So an early section can be read and
+> acted on after it has been superseded. **That has already happened once**, to
+> §23's trade. The current position:
+>
+> | question | answer | where |
+> | --- | --- | --- |
+> | What broke? | `4232a7301` put a hygiene-record handover on `argv` and collapsed the verbatim `--summary-json` line | §1–2 |
+> | Is it fixed? | Yes. Seam kept as a FUNCTION keyword, verbatim path restored, budget 240 s → 1800 s | §3 |
+> | Does the wiring fire? | Proved both ways — killed at 5 s → rc 2 blocking; allowed → 89/89 gates in 193 s, rc 1 | §5–6 |
+> | Does the guard stop a RENAME? | Yes — constructed the rename; old test green over it, guard 3 nodes red | §38 |
+> | Does it break anything? | No. Denominator computed four ways; 21 files run for the first time | §33–35 |
+> | Are the other reds new? | No. 17 reds examined, every one not fixed here is red on CLEAN MAIN | §36–37 |
+> | Is it landed? | Yes — batch `2d98cacd4b`, lander hash and pin verified together, 148 passed | §29 |
+> | Should the batch be re-assembled for my finding? | **NO.** The base already fails that gate on `jrows`'s finding; mine is additive | §30 |
+> | What is still open? | `jrows`'s revert; two flow-level defects (§18, §28); the end-to-end run, blocked by `argparse` 1.4.0 in the user site (§31) | — |
+>
+> **Superseded, do not act on:** §23's trade (both bullets — see §30) · §26's
+> "version is the blocker" (§30) · §27's "a quiet host closes it" (§31) · §31's
+> first "shadows stdlib" wording (§31's own correction) · §3's "~550 s" (§3's
+> correction) · §13's "clears 6" (§22 — it is seven).
+>
+> §32 is the register of all 15 corrected claims and all 12 instruments that
+> answered the wrong question. If you are auditing this work, start there.
+
+
 **Subject.** `origin/land/batch67-assembled` at `546487a8a` (v1.11.67), two
 confirmed new reds against `origin/main`:
 
