@@ -21,6 +21,22 @@ goes stale the moment one is added, which is the same fault this file records
 against the program's own docstring. Re-derive it, never re-read it: swap
 3c3c51aee's program in and run this file.)
 
+WHAT THE #712 GREEN ACTUALLY MEANS
+=================================
+`polarity-blind 213 (baseline 213)` could be a count that happens to match --
+one extractor leaving the blind set as another joins it reads exactly the same.
+It is not. The gate compares NAME SETS:
+
+    new  = set(now) - set(base)      # any of these blocks
+    gone = set(base) - set(now)      # the register MAY ONLY SHRINK
+
+Re-derived here rather than taken from the summary line: 224 blind extractors
+including the exemption register, 11 exempted, 213 after exemptions against a
+baseline of 213, with `new` EMPTY and `gone` EMPTY -- and
+`emitter_population_pin_check` in neither set. So the green says this branch
+removed its extractor from the blind set and moved nothing else, which is the
+claim, and not merely that two totals agree.
+
 IF THIS AREA GOES RED FOR A REVIEWER OR A RE-MEASURE, READ THIS FIRST
 ====================================================================
 `test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
