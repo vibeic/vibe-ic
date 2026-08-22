@@ -1,5 +1,0 @@
-{
-  "ic_name": "HDLC / SDLC (ISO/IEC 13239)",
-  "otp_present": false,
-  "notes": "HDLC / SDLC is a wire-level data link protocol spec; no OTP / fuse / configuration ROM at the protocol layer. Concrete HDLC controllers (Zilog SCC, Motorola QUICC, Infineon, Xilinx LogiCORE HDLC) may use OTP to lock the station address, FCS-polynomial selection, or default mode parameters, but this is a per-device feature, not protocol-defined."
-}
