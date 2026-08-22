@@ -58,3 +58,22 @@ Every one of the three was a **count or a set that answered a narrower question 
 — every `.git` for every vibe-ic checkout, local refs for all refs, an empty line for a result. The
 same shape as `refs/remotes` for `ls-remote`, existence for containment, a sample for the whole, and
 a depth limit for the filesystem. It is the most reliable way I have found to be confidently wrong.
+
+
+## Redone correctly, scoped to vibe-ic
+
+| host | vibe-ic object stores | with an orphaned reflog commit |
+|---|---|---|
+| .105 | 38 | 0 |
+| .102 | 75 | 1 |
+
+`.105` reports zero because the 11 real orphans it held are already anchored on origin — the sweep
+is idempotent, and a second run finding nothing is the correct answer, not a broken one.
+
+`.102`'s single orphan, `56b89246120 fix(rtl-gen): OTP_MEM sent ASIC synthesis down the Quartus
+path`, could not push from its own repo: the **pre-push hook aborted** because it could not run
+`git rev-parse --show-toplevel` from a bare `.git` path, and it refused rather than skipping the
+gates it could not execute. Fetched over ssh and pushed from a clone whose hook can run — the same
+route used for hook-blocked pushes throughout, never `--no-verify`.
+
+**Total preserved by this sweep: 13 commits that exist nowhere else on origin.**
