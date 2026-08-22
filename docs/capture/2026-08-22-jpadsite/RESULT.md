@@ -88,8 +88,12 @@ faster than the caveats:
     is the minimum die FOR that split, so die and split are one assumption;
   * NO RUN EVER PRODUCED 2.262 mm. Five sha256 dies exist across two hosts
     (493/493/542/617/873 um), all core-only, zero padring artefacts;
-  * the design targets sky130, not gf180mcuD, and the pairing is a RECORDED
-    NON-CELL. The row's own verdict is NOT_DETERMINED, not this PASS.
+  * the design targets sky130, not gf180mcuD, and THIS pairing is a RECORDED
+    NON-CELL -- while `sha256 x sky130A` IS a cell (CELL_MATRIX row 6), has a
+    REAL RUN under it, and that run is UNFINISHED rather than absent: 15 DEFs
+    through routed and post_hold, zero GDS. So the design is not short of a
+    valid pairing; this brief measured the other one. The row's own verdict is
+    NOT_DETERMINED, not this PASS.
 It is a real measurement of the geometry and not a verdict on this design's pad
 ring. Sections 4 and CORRECTION carry all of it with the evidence.
 
