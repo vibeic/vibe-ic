@@ -334,3 +334,32 @@ three and two printed nothing. That was the WRONG FLAG, not agreement — they t
 a positional root and `--subdir`. A non-result from a wrong invocation is not
 evidence, which is the same trap as the rest of this file.
 
+### The live FAIL is deterministic — the ledger row has a stable subject
+
+Ruling F13 keeps `reports/spare_cell_coverage.json` red and opens a ledger row
+rather than a waiver, so the gate stays red until the ownership question is
+decided in the open. A ledger row is only worth anything if the thing it names
+does not move, and this repository has form here: a nested-outcome bound test in
+another lane passes below load ~10 and fails above it, so "it was red" can be a
+statement about the machine.
+
+Six consecutive runs of `only_the_declaring_step_writes_its_output` over this
+tree, at load 6.05 / 8.88 / 7.86:
+
+    rc=1 every run, 6 findings every run, finding set sha identical (200f1f446857)
+
+The set, which is what the ledger row is about:
+
+    phase1/generated_docs/L21_POWER_INTENT.json
+    phase3/stage3/eco/eco_log.json
+    phase3/stage3/eco/no_eco_needed.flag
+    reports/phase1/extraction_coverage_report.json
+    reports/phase1/extraction_coverage_report.md
+    reports/spare_cell_coverage.json
+
+So the red is a property of the tree, not of the host or the run. Of these six,
+one — `reports/spare_cell_coverage.json` — already has its owner named by the
+flow (step 18, `programs: [spare_cell_coverage_check]`), and the other five are
+declared by steps whose producer is a SKILL, so the decision there is which of
+two Python modules writes an output a skill declares.
+
