@@ -15,14 +15,14 @@ publish honest numbers. You produce two kinds of measurement:
   through `/vibe-ic-all <ic-dir>` → `vibe_ic_one_shot_runner.py`, then the
   mandatory six-pillar `/benchmark-verify <ic-dir>`.
 
-## The 6 canonical Benchmark ICs (`benchmark-data/ic/`)
+## The 6 canonical Benchmark ICs (`<benchmark-data clone>/ic/`)
 
-The "Benchmark IC" targets live under **`benchmark-data/ic/<ic>/`** — top-level
+The "Benchmark IC" targets live under **`$VIBE_IC_BENCHMARK_DATA/ic/<ic>/`** — top-level
 repo data, NOT inside the plugin. Always confirm the live list with
-`ls benchmark-data/ic/`; the protocol + per-IC status detail is in
-`benchmark-data/ic/METHODOLOGY.md`. Current roster:
+`ls "$VIBE_IC_BENCHMARK_DATA/ic/"`; the protocol + per-IC status detail is in
+`$VIBE_IC_BENCHMARK_DATA/ic/METHODOLOGY.md`. Current roster:
 
-| IC (`benchmark-data/ic/<ic>/`) | class | status |
+| IC (`<clone>/ic/<ic>/`) | class | status |
 |---|---|---|
 | `spm` | digital control block (Caravel) | ✅ verified — reference L1–L9 template |
 | `sha256` | crypto hash (secworks) | ✅ verified |
@@ -31,28 +31,54 @@ repo data, NOT inside the plugin. Always confirm the live list with
 | `opentitan_aes` | crypto (lowRISC OpenTitan AES) | ⬜ not yet verified |
 | `ibex` | RISC-V CPU (lowRISC) | ⬜ not yet verified |
 
-Run one: `/vibe-ic-all benchmark-data/ic/<ic>` then `/benchmark-verify benchmark-data/ic/<ic>`.
+Run one: `/vibe-ic-all "$VIBE_IC_BENCHMARK_DATA/ic/<ic>"` then
+`/benchmark-verify "$VIBE_IC_BENCHMARK_DATA/ic/<ic>"`.
+Both take a path, so they work against the clone with no change to the commands
+themselves — what changed is that the path is no longer inside this repository.
 
-### Where each IC's result goes — you COMMIT **and PUSH** it (`benchmark-data/` only)
+### Where each IC's result goes — a DIFFERENT REPOSITORY (changed 2026-08-17)
 
-You push code to the benchmark's subfolder carrying **the COMPLETE output of every
-vibe-ic step**, not just the summary reports. The benchmark subfolder
-**`benchmark-data/ic/<ic>/`** must contain a fully reproducible record of the run
-— another engineer (or a fresh field-agent audit) clones it and sees exactly what
-the plugin produced at every phase. The deliverable is the pushed tree, so after a
-run you `git add benchmark-data/ic/<ic>/…` (explicit paths, never `-A`),
-`git commit`, and **`git push origin main`** (the check-in boundary below still
-binds: only paths under `benchmark-data/` may be staged).
+**Results no longer live in this repository.** They are
+[vibeic/benchmark-data](https://github.com/vibeic/benchmark-data), and so are the
+design inputs that produced them. `vibe-ic` holds the plugin; nothing under
+`benchmark-data/` exists here any more.
 
-Per IC, committed AND pushed into **`benchmark-data/ic/<ic>/`** — the full
-step output:
+Clone it beside your checkout and point the runner at it:
+
+```bash
+git clone https://github.com/vibeic/benchmark-data.git
+export VIBE_IC_BENCHMARK_DATA=$PWD/benchmark-data      # inputs AND results
+```
+
+The cells are `<clone>/ic/<ic>/`, the inputs `<clone>/ic/<ic>/input/`.
+
+#### The push goes to that repository, NOT to vibe-ic
+
+This is the line to get right, because the old instruction — `git add
+benchmark-data/…` then `git push origin main` — now stages nothing here and, if
+forced, would push results into the plugin repo the split exists to keep clean.
+
+```bash
+cd "$VIBE_IC_BENCHMARK_DATA"
+git add ic/<ic>/…          # explicit paths, never -A
+git commit
+git push origin main
+```
+
+The check-in boundary still binds and is now enforced by which repository you are
+standing in: **a benchmark run never commits to `vibeic/vibe-ic` at all.** If a run
+also produced a chip-AGNOSTIC plugin fix, that is a separate, version-less PR
+against `vibe-ic` — the NO-MIX rule, and the two repositories now make mixing
+physically harder rather than merely forbidden.
+
+Per IC, committed AND pushed into **`<clone>/ic/<ic>/`** — the full step output:
 - `RESULT.md` — headline result summary
 - `BENCHMARK_VERIFICATION_REPORT.md` — six-pillar gate (from `/benchmark-verify`)
 - `SOURCE_MANIFEST.md` — GENERATED vs REUSED-IP attribution (mandatory)
 - `CROSS_CHECK_MATRIX.md` + `cross_check/` — Pillar-2 cross-check vs the open-source reference
 - `reports/` — ALL JSON/MD metrics (`orchestrator/vibe_ic_one_shot.json`, coverage, phase1/2/3 gates, audit)
 - **Phase-1 output** — `phase1/generated_docs/L1…L23*.json` (the full L-doc set) + `phase1/` logs
-- **Phase-2 output** — `phase2/stage1/rtl/*.{v,sv}` (RTL, chip_top wrapper), `stage2/synth/` (netlist, yosys.log), lint, `sim/` + `sim_full_stack/` (results.xml / pass.flag / results.json)
+- **Phase-2 output** — `phase2/stage1/rtl/*.{v,sv}` (RTL, chip_top wrapper), `stage2/synth/` (netlist, yosys logs)
 - **Phase-3 output** — `phase3/` PnR (DEF/`*.def`), DRC/LVS/STA reports, `*.gds` streamout, antenna/IR-drop
 - run provenance — `sim/ verify/ provenance.jsonl waivers.json` + every step transcript/log the run emitted
 
@@ -60,8 +86,23 @@ step output:
 > re-running clean-room and diffing against this pushed step output. A run whose
 > outputs are not pushed has not been benchmarked.
 
-A cross-6 roll-up scoreboard, if produced, goes at `benchmark-data/ic/RESULT.md`
-(not present yet). NEVER write — or push — results outside `benchmark-data/`.
+#### Only PASSING, conforming cells are published there
+
+The published tree carries a cell only when three conditions hold, each measured:
+its directory is named `v<version>_<PDK>`, its own `RESULT.md` says PASS, and
+`benchmark_evidence_structure_check.py` exits 0. A run that did not pass is not
+evidence of anything except that a run happened, and shipping it beside the
+passing ones makes those harder to trust. Publish the failure as an issue instead.
+
+#### The two sibling repositories
+
+| repository | what it is |
+|---|---|
+| [vibeic/benchmark-external](https://github.com/vibeic/benchmark-external) | external benchmark material |
+| [vibeic/IP](https://github.com/vibeic/IP) | the four IP submodule pointers, and the commit each benchmark number was produced against |
+
+`vibeic/IP` holds no source. It holds **which commit** — the repositories are
+public and survive on their own, but the pinning does not survive anywhere else.
 
 ## Core Principle
 
@@ -145,11 +186,74 @@ Before any run, follow **`vibe-ic:open-benchmark-methodology`**:
    never fabricate a number or call something "floor" without the evidence.
 5. Every RESULT.md carries the seven mandatory sections (§ 6 of the skill).
 
+## ★ PUBLISHING A CONVERGED CELL — the layout is a CONTRACT, not a preference
+
+**You do not hand-assemble an evidence folder and you do not invent a folder name.**
+Two programs own this; run them, do not reimplement them:
+
+| program | role |
+|---|---|
+| `programs/benchmark_evidence_publish.py` | STAGES a completed run into the canonical layout. **Refuses a non-converged run.** Excludes oversize files, generates `GDS_MANIFEST.txt`. Stages only — never commits. |
+| `programs/benchmark_evidence_structure_check.py` | VALIDATES any published folder. Run it before you commit; CI runs it with `--changed-since`. |
+| `programs/benchmark_evidence_index.py --write` | REGENERATES `<clone>/ic/INDEX.md`. Run it after any publish or delete. Point `VIBE_IC_BENCHMARK_DATA` at the clone — the corpus is not in this repo, and the program says which tree it walked. Without a corpus it writes NOTHING and reports `NO_CORPUS`; it never emits an index of empty sections that would read as "the corpus published nothing". |
+
+### The naming rule — VERSION FIRST, THEN PDK
+
+```
+<clone>/ic/<IC>/
+    input/                       # shared design input, staged ONCE per IC
+    v<major>.<minor>.<patch>_<PDK>/   # ONE folder per converged (version x PDK)
+```
+
+`v1.5.66_gf180mcuD`, `v1.9.86_sky130A`. **Nothing else belongs at the `<IC>/`
+level.** `<clone>/ic/spm/` is the reference: `input/` plus exactly three
+`v*_<PDK>/` folders and not one other entry. Look at it before you publish.
+
+Names that are rejected by name, each because it caused a real loss:
+  * `clean_run_*` — a gitignored prefix, so the committed phase folders are
+    STRIPPED and the evidence silently never lands
+  * `pass_*` / `fail_*` / `PASS_*` — a verdict in the folder name. The verdict
+    belongs in `RESULT.md`, where it can be audited, not in a path.
+
+### Publishing a new result MEANS retiring the old one
+
+When a cell re-converges on a newer plugin, the older `v*_<PDK>` folder for the
+SAME (IC x PDK) is superseded and comes out. Before deleting anything, check what
+depends on it — the repo has three separate mechanisms that cite published paths
+and each of them FAILS LOUDLY when a citation goes stale:
+
+  * `<clone>/ic/retention.json` — the index gate fails when a retention
+    key names no published cell
+  * `programs/tests/fixtures/matrix_d3_output_manifest.json` — records run roots
+    and the artefacts under them
+  * `programs/tests/**` — several read published cells directly
+
+If something genuinely depends on a folder you are retiring, MIGRATE THE
+DEPENDENT and then delete. Keeping a non-conforming folder "because a test reads
+it" is how an IC directory drifts back into the shape this contract exists to
+end.
+
+### The sequence, in order
+
+```
+1  gate the run        flow_compliance_check.py <run> --strict     # exit 0 or stop
+2  stage               benchmark_evidence_publish.py --run-dir <run> --ic <IC> \
+                          --pdk <PDK> --plugin-version <X.Y.Z>
+3  retire the old      git rm -r <clone>/ic/<IC>/v<older>_<PDK>
+4  fix the citations   retention.json / matrix_d3 manifest / any test that read it
+5  regenerate          VIBE_IC_BENCHMARK_DATA=<clone> benchmark_evidence_index.py --write
+6  validate            VIBE_IC_BENCHMARK_DATA=<clone> \
+                          benchmark_evidence_structure_check.py --tree benchmark-data
+7  commit + push
+```
+
+Skipping step 1 is fabrication. Skipping step 4 breaks CI for whoever pushes next.
+
 ## Check-in boundary (HARD — enforced by a program, not by trust)
 
 Two SEPARATE commit channels, NEVER mixed:
 
-1. **Benchmark RESULTS** → **`benchmark-data/` only** (run results, generated
+1. **Benchmark RESULTS** → **the `vibeic/benchmark-data` repository only** (run results, generated
    samples, reports, RESULT.md, SOURCE_MANIFEST.md, cross-check, transcripts).
    You COMMIT **and PUSH** these — a run whose outputs are not pushed has not been
    benchmarked.
@@ -185,7 +289,9 @@ never against your un-landed local patch.
 > the report-only half). You are NOT the maintainer, so you never direct-push to
 > `main`: the **repo-gatekeeper** (whose OWN in-house fixes do land by Layer-2
 > direct push) reviews and lands your PR into the next version. Keep results
-> (`benchmark-data/`) and the plugin/MCP fix in SEPARATE commits (NO-MIX).
+> (the `benchmark-data` repo) and the plugin/MCP fix in SEPARATE commits — and now
+> in separate REPOSITORIES, so NO-MIX is enforced by where you are standing rather
+> than by remembering.
 
 When a run surfaces a real, **VERIFIED** plugin / MCP gap (a runner waiver that
 should be a deterministic program, an ingester miss, a missing gate, an MCP tool
@@ -346,7 +452,9 @@ score each with the command above, aggregate per-problem pass/fail across the 5.
 - ❌ Opening a PR for an UNVERIFIED gap — run the scorer / golden-self-test first;
   a non-bug must never become a PR.
 - ❌ Filing a backlog / ORGANIC item — author a version-less PR instead.
-- ❌ Committing run output anywhere outside `benchmark-data/`.
+- ❌ Committing run output anywhere outside the `benchmark-data` repository — and
+     in particular ❌ committing ANY run output to `vibeic/vibe-ic`, which no longer
+     has a `benchmark-data/` directory to receive it.
 - ❌ Inheriting a prior run's passing samples (contaminates the headline).
 - ❌ Reporting a number without the seven RESULT.md sections + A–H residual triage.
 - ❌ **Shelving a SOLVABLE-but-flaky fail as "pass@1 variance / noise" instead of capturing the

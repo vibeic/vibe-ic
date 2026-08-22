@@ -35,6 +35,8 @@ not by skill (see docs/architecture/RFC_v2.0_PHASE_REDESIGN.md):
   │   │   ├── formal/
   │   │   ├── tb/
   │   │   └── fpga/           Step 6 early prototype
+  │   │       ├── output_files/   Step 6 prototype .sof + .map.rpt
+  │   │       └── final/          Step 39 final sign-off bitstream
   │   ├── stage2/             Steps 7-13: synth + DFT + LEC
   │   │   ├── constraints/
   │   │   ├── synth/
@@ -52,8 +54,7 @@ not by skill (see docs/architecture/RFC_v2.0_PHASE_REDESIGN.md):
       │   └── sim_postlayout/
       ├── stage4/             Steps 31-36: tapeout
       │   ├── gds/            final GDS
-      │   ├── foundry_handoff/
-      │   └── fpga/           Step 36 final on-board re-test
+      │   └── foundry_handoff/
       ├── stage5_manufacturing/  Steps 37-40: fab / sort / packaging / final test
       ├── analog/             A5-A9 (layout / PV / resim / hardmacro / cosim)
       │   ├── <block>/        layout.mag / drc_clean.flag / lvs_match.flag / pre_vs_post.json
@@ -136,6 +137,63 @@ def tb_dir(project: Path) -> Path:
     return project / "phase2/stage1/tb"
 
 
+#: Where a testbench is actually written, in the order to look. The flow itself
+#: writes `sim_full_stack/`, and MEASURED across the tracked corpus that is where
+#: the majority of them are:
+#:
+#:     sim_full_stack/ holds a testbench   29 project(s)
+#:     sim/            holds a testbench   11
+#:
+#: vibe-ic#599: `l10_tb_conformance_check` carried its own candidate list without
+#: `sim_full_stack` and `l12_tb_coverage_check` carried none at all, so step 4 —
+#: the simulation step — was credited with no TB conformance or coverage
+#: measurement on designs that had four L10 test cases and a real testbench on
+#: disk. Two gates answering one question from two independently incomplete
+#: views; the answer lives here now so there is one.
+_TB_DIR_CANDIDATES = (
+    "phase2/stage1/sim/tb",
+    "phase2/stage1/sim_full_stack",
+    "phase2/stage1/sim",
+    "phase2/stage1/tb",
+    "sim/tb",
+    "sim_full_stack",
+    "sim",
+)
+
+
+def _holds_testbench(d: Path) -> bool:
+    if not d.is_dir():
+        return False
+    return any(d.glob("*.v")) or any(d.glob("*.sv")) or \
+        any(d.glob("tb_*.v")) or any(d.glob("tb_*.sv"))
+
+
+def resolve_tb_dir(project: Path, given: "str | Path | None" = None):
+    """The first location under `project` that actually HOLDS a testbench.
+
+    `None` when none of them do — which is a different answer from "the default
+    path does not exist", and the caller must not report the second when the
+    first is true.
+    """
+    cands = []
+    if given is not None:
+        g = Path(given)
+        cands.append(g if g.is_absolute() else project / g)
+        if g.name == "tb":
+            parent = g.parent
+            cands.append(parent if parent.is_absolute() else project / parent)
+    cands += [project / c for c in _TB_DIR_CANDIDATES]
+    seen = set()
+    for c in cands:
+        k = str(c)
+        if k in seen:
+            continue
+        seen.add(k)
+        if _holds_testbench(c):
+            return c
+    return None
+
+
 def fpga_early_dir(project: Path) -> Path:
     """Step 6: early FPGA prototype + on-board <half-duplex-tester> test (Phase 2)."""
     return project / "phase2/stage1/fpga"
@@ -184,6 +242,80 @@ def cts_dir(project: Path) -> Path:
     return project / "phase3/stage3/cts"
 
 
+# ─── clock-plan provenance: ONE definition of "what the plan is derived from"
+#
+# The Step-16 clock plan (`cts_dir()/clock_plan.json`) is built by
+# `phase3_one_shot_runner.step_canonicalize_artefacts` and audited by
+# `clock_plan_check`. They used to answer "which files is this plan derived
+# from?" DIFFERENTLY — the producer swept `project.rglob("*.sdc")`, the checker
+# swept a fixed directory list — so the checker could call stale a plan the
+# producer had just written from a file the checker never looked at. The two
+# helpers below are that one definition, and both sides call them.
+#
+# The SET is deliberately identical to the producer's historical `rglob` sweep
+# (every `*.sdc` under the project); only the ORDER is canonicalised, so
+# adopting it moves no clock into or out of any plan. `clock_plan_check`'s
+# SEPARATE dropped-clock view (`_find_sdc_files`, a curated directory list) is
+# a different question — "which constraints must the plan account for" — and is
+# deliberately left alone: over the tracked corpus the two views disagree on
+# the file set for 9 of the 26 SDC-bearing roots and on the harvested
+# create_clock names for 4, and the extra files the wide sweep reaches are
+# backup/held trees (`phase2/.phase2_held/...`) and un-expanded Tcl (a
+# `-name $clk_name`), which must not become rc-bearing.
+
+SDC_PRIORITY_DIRS = (
+    "phase3/stage3/constraints",
+    "phase3/stage3/cts/constraints",
+    "phase3/stage3/pnr",
+    "phase2/stage2/constraints",
+    "phase2/stage1/fpga",
+    "constraints",
+)
+
+
+def clock_plan_input_sdcs(project: Path):
+    """Every `*.sdc` under `project`, canonical-constraint directories first.
+
+    Stable, deterministic order; no file is excluded, so this is exactly the
+    set the clock-plan producer has always harvested.
+    """
+    seen = []
+    for rel in SDC_PRIORITY_DIRS:
+        d = project / rel
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.sdc")):
+            if f not in seen:
+                seen.append(f)
+    for f in sorted(project.rglob("*.sdc")):
+        if f not in seen:
+            seen.append(f)
+    return seen
+
+
+def clock_plan_sdc_digests(project: Path, sdc_files=None) -> dict:
+    """`{project-relative path: sha256-of-bytes}` for the plan's input SDCs.
+
+    CONTENT, never mtime. The corpus this plugin ships — and every user project
+    — is distributed by `git clone`, copy, rsync or archive extraction, none of
+    which preserve mtimes, so an mtime-keyed provenance finding is noise on any
+    tree that was not the one that produced the artefact. A digest survives all
+    of them and is the only thing that actually answers "was this plan derived
+    from the constraints that are here now?".
+    """
+    import hashlib  # local: only the clock-plan provenance path needs it
+    if sdc_files is None:
+        sdc_files = clock_plan_input_sdcs(project)
+    out = {}
+    for f in sdc_files:
+        try:
+            out[str(f.relative_to(project))] = hashlib.sha256(
+                f.read_bytes()).hexdigest()
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 def extracted_dir(project: Path) -> Path:
     """Parasitic extraction (SPEF)."""
     return project / "phase3/stage3/extracted"
@@ -223,19 +355,48 @@ def foundry_handoff_dir(project: Path) -> Path:
 
 
 def fpga_final_dir(project: Path) -> Path:
-    """Step 36: final FPGA recompile + on-board re-test (Phase 3 sign-off)."""
-    return project / "phase3/stage4/fpga"
+    """Step 39: final FPGA sign-off bitstream (recompile + on-board re-test).
+
+    THREE paths used to compete for this one concept and none of them agreed:
+
+      * flow/phase1_phase2_phase3.yaml:1839 declares step 39's required output
+        as ``phase2/stage1/fpga/final/*.sof``;
+      * ``fpga_on_board_attestation_check`` documents ``bitstream_path:
+        "phase2/stage1/fpga/final/<name>.sof"`` in its own docstring;
+      * this accessor pointed at ``phase3/stage4/fpga``, whose ONLY consumer
+        was a bare ``mkdir`` in phase3_one_shot_runner — nothing ever wrote a
+        file into it, on any run.
+
+    So the declared artefact was UNPRODUCIBLE: post-#455 (required_outputs is
+    ALL-of-N) a genuinely-successful on-board sign-off is reported MISSING.
+    Unified onto the path the flow and the attestation checker already name;
+    `design_one_shot_runner.step_emit_phase2_manifests` now stages the burned
+    bitstream here when — and only when — `fpga_burn` really PASSed.
+    """
+    return project / "phase2/stage1/fpga/final"
 
 
 # ─── analog (distributed across phase1/2/3 per Layout P) ────────────────
 
 def phase1_analog_block_dir(project: Path, block: str) -> Path:
-    """A1 analog spec extraction outputs."""
+    """LEGACY phase-distributed location for A1 spec extraction.
+
+    NOT where A1 writes. `analog_one_shot_runner` and
+    `phase1_doc_one_shot_runner` both emit through `analog_dir()` below
+    (phase3/analog/), and `analog_a1_spec_extract_check` reads there. This
+    helper has ZERO callers in the tree — it is retained only because
+    `migrate_to_layout_p` can leave a legacy project-root `analog/` tree at
+    this path, which the A-gates accept as a SECOND candidate
+    (`_analog_a_check_common.block_artefact_candidates`). Do not route new
+    producers here."""
     return project / "phase1/analog" / block
 
 
 def phase2_analog_block_dir(project: Path, block: str) -> Path:
-    """A2-A4 analog frontend (topology / netlist / corner sweep)."""
+    """LEGACY phase-distributed location for the A2-A4 analog frontend
+    (topology / netlist / corner sweep). NOT where A2-A4 write — see
+    `phase1_analog_block_dir` above; same zero-caller status and same
+    legacy-tolerance rationale."""
     return project / "phase2/analog" / block
 
 
@@ -253,18 +414,21 @@ def phase3_hardmacro_block_dir(project: Path, block: str) -> Path:
     return project / "phase3/analog/hardmacro" / block
 
 
-# Convenience aliases — most analog gates operate on backend artefacts
-# (layout / DRC / LVS / hardmacro) which live under phase3/analog/.
-# Callers that need A1 spec (phase1/analog/) or A2-A4 frontend
-# (phase2/analog/) must use the phase-specific helpers above.
+# CANONICAL analog root. Every analog producer in the tree writes here and
+# every A-gate reads here — A1..A9 alike, not just the A5-A9 backend. The
+# phase-distributed helpers above are legacy read-side tolerances with no
+# callers; the comment that used to sit here told callers to use them for
+# A1 / A2-A4, which no producer has ever done.
 def analog_dir(project: Path) -> Path:
-    """Default analog root — phase3 (where layout / PV / hardmacro live)."""
+    """Canonical analog root — phase3/analog (spec, topology, netlist, corner
+    sweep, layout, PV, resim, hardmacro, and the block list itself)."""
     return project / "phase3/analog"
 
 
 def analog_block_dir(project: Path, block: str) -> Path:
-    """Default per-block analog dir — phase3 (A5-A9 outputs).
-    For A1 spec use phase1_analog_block_dir; for A2-A4 use phase2_analog_block_dir."""
+    """Canonical per-block analog dir — phase3/analog/<block>, for A1..A9
+    outputs. `phase{1,2}_analog_block_dir` are legacy read-side locations
+    only; do not send new producers there."""
     return project / "phase3/analog" / block
 
 
@@ -481,8 +645,26 @@ REPORTS_VALID_ROOT_FILES: tuple = (
 
 
 # Top-level whitelist (for the canonical-top-level enforcement gate).
+#
+# `steps/` is the owner's per-STEP publication view
+# (`steps/<phase>/<stage>/<id>_<slug>/`, symlinks only — see
+# `step_output_collector.py` and `emit_steps_view` below). It is a CANONICAL
+# home, not a stray: `flow_compliance_check._glob_first` documents it as "the
+# owner's step-folder design", `rtl_scan_scope` excludes it by name as "the
+# flow's own PUBLICATION VIEW", and `flow_dashboard_web` serves per-step "open"
+# links out of it. It was missing from this tuple only because exactly one
+# runner built it, so nobody had measured the collision. MEASURED on
+# `campaign_v1578/ibex/converge_1.5.78_sky130A_armA_stock` (a real top-runner
+# run that HAS steps/): `top_level_outputs_in_canonical_check` reported
+# `[FAIL] ... stray dir(s): sim, steps`. Now that EVERY orchestrator publishes
+# the view, leaving it off would turn a hygiene gate red on every run — which
+# teaches readers to ignore it. Recording the directory the flow legitimately
+# owns is not widening the gate: `sim/`, `run_logs/`, `rtl/`, `synth/`,
+# `pnr/`, top-level `*.log` and every other stray are still rejected exactly
+# as before (covered by the reverse-case control in
+# tests/test_steps_view_every_orchestrator.py).
 TOP_LEVEL_VALID_DIRS: tuple = (
-    "input", "phase1", "phase2", "phase3", "reports",
+    "input", "phase1", "phase2", "phase3", "reports", "steps",
 )
 TOP_LEVEL_VALID_FILES: tuple = (
     "provenance.jsonl", "rig_topology.json", "waivers.json",
@@ -621,3 +803,154 @@ def emit_final_summary(project, programs_dir=None, timeout=None) -> bool:
         return r.returncode == 0
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# The per-STEP output view: `<project>/steps/<phase>/<stage>/<id>_<slug>/`.
+#
+# WHY THIS HELPER EXISTS. `step_output_collector.materialize` was called from
+# exactly ONE place — `vibe_ic_one_shot_runner`'s finalize — so a run driven
+# straight at phase2 / phase3 / analog (how most cells are actually driven)
+# ended with NO steps tree at all, and its absence was indistinguishable from
+# a run that had nothing to show. MEASURED: a top-runner ibex backend run has
+# `steps/` with 63 step folders; `AI_IC_design/4th_benchmark/sha256_rerun_e2e`,
+# a phase-driven run with a full phase1/phase2/phase3 tree, has none.
+#
+# BEST-EFFORT, IN BOTH DIRECTIONS. Building the VIEW must never fail a run and
+# must never HANG one — hence the subprocess + timeout, the same idiom
+# `emit_final_summary` uses, and a blanket except around the whole body. But
+# the failure must not be SILENT either: a run that produced artefacts and no
+# steps tree used to look exactly like a run whose orchestrator never had the
+# feature. So EVERY call writes `reports/audit/steps_view.json` recording what
+# happened and why. That is the surfacing decision, and the reasoning is:
+#   * raising  — kills a run over bookkeeping. Forbidden.
+#   * a gate   — the view is derived, not evidence; failing a run because a
+#                convenience view could not be built is the same crime.
+#   * a WARN   — scrolls past, survives in no artefact, cannot be queried.
+#   * a RECORD — durable, attributable, costs one small file, and INVERTS the
+#                default: "no steps tree" is now a written statement with a
+#                reason and a runner name instead of an unexplained absence.
+# The stderr WARN is kept as well, for the human watching the run.
+#
+# The record is VERIFIED, NOT REPORTED. After the collector exits 0 this helper
+# stats `steps/index.json` itself and counts the folders; a collector that
+# claims success and leaves no tree is recorded as a failure. `nested_folders`
+# counts entries whose `folder` has the owner-specified two separators
+# (phase/stage/step), so a regression back to a flat `steps/<id>_<slug>/` is
+# visible in the record rather than having to be re-derived from the tree.
+# ---------------------------------------------------------------------------
+STEPS_VIEW_REPORT_NAME = "steps_view.json"
+# The collector is a pure filesystem walk over the run dir; MEASURED at 0.22 s
+# wall (including interpreter start) on an 89 MB / 63-step ibex backend run.
+# The cap exists only so a pathological tree cannot wedge a finalize.
+STEPS_VIEW_TIMEOUT_S = 300
+
+
+def steps_view_report_path(project) -> Path:
+    """Canonical location of the steps-view status record."""
+    return report_path(Path(project), STEPS_VIEW_REPORT_NAME)
+
+
+def emit_steps_view(project, programs_dir=None, runner=None,
+                    timeout=None) -> dict:
+    """Build `<project>/steps/` and record the outcome. NEVER raises.
+
+    Returns the status record (also written to
+    `reports/audit/steps_view.json`). `status` is one of:
+      OK                — tree present, index.json readable, >=1 step folder
+      BUILD_FAILED      — collector errored, or exited 0 with no usable tree
+      TIMEOUT           — collector exceeded `timeout`
+      COLLECTOR_MISSING — step_output_collector.py not next to this module
+    Callers log the record; they must NOT gate on it."""
+    import json
+    import subprocess          # local imports: helper runs once per run
+    import sys
+    import time
+    from pathlib import Path
+
+    project = Path(project)
+    rec: dict = {
+        "program": "steps_view",
+        "runner": runner or "unknown",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "steps_root": str(project / "steps"),
+        "status": "BUILD_FAILED",
+        "tree_present": False,
+        "n_steps": 0,
+        "n_with_outputs": 0,
+        "nested_folders": 0,
+        "error": None,
+    }
+    try:
+        if programs_dir is None:
+            programs_dir = Path(__file__).resolve().parent
+        collector = Path(programs_dir) / "step_output_collector.py"
+        if not collector.is_file():
+            rec["status"] = "COLLECTOR_MISSING"
+            rec["error"] = f"not found: {collector}"
+        else:
+            if timeout is None:
+                timeout = STEPS_VIEW_TIMEOUT_S
+            proc = None
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(collector), str(project)],
+                    timeout=timeout, check=False,
+                    capture_output=True, text=True,
+                )
+            except subprocess.TimeoutExpired:
+                rec["status"] = "TIMEOUT"
+                rec["error"] = (f"step_output_collector exceeded {timeout}s "
+                                f"on {project}")
+            except Exception as exc:
+                rec["error"] = f"{type(exc).__name__}: {exc}"
+            if proc is not None:
+                if proc.returncode != 0:
+                    rec["error"] = (
+                        f"step_output_collector rc={proc.returncode}: "
+                        + (proc.stderr or "").strip()[-600:])
+                else:
+                    # Do not take the child's word for it — read the tree.
+                    idx = project / "steps" / "index.json"
+                    try:
+                        steps = json.loads(idx.read_text()).get("steps") or []
+                    except Exception as exc:
+                        rec["error"] = (
+                            "collector exited 0 but steps/index.json is "
+                            f"unreadable: {type(exc).__name__}: {exc}")
+                    else:
+                        rec["n_steps"] = len(steps)
+                        rec["n_with_outputs"] = sum(
+                            1 for s in steps if (s.get("n_outputs") or 0) > 0)
+                        rec["nested_folders"] = sum(
+                            1 for s in steps
+                            if str(s.get("folder") or "").count("/") == 2)
+                        rec["tree_present"] = (project / "steps").is_dir()
+                        if rec["tree_present"] and rec["n_steps"] > 0:
+                            rec["status"] = "OK"
+                        else:
+                            rec["error"] = ("collector exited 0 but left no "
+                                            "step folders")
+    except Exception as exc:      # the helper itself must never raise
+        rec["error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        out = steps_view_report_path(project)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
+        rec["record_path"] = str(out)
+    except Exception as exc:
+        rec["record_error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        if rec["status"] == "OK":
+            print(f"steps view: steps/ — {rec['n_steps']} steps, "
+                  f"{rec['n_with_outputs']} with outputs "
+                  f"({rec['nested_folders']} nested phase/stage/step)")
+        else:
+            print(f"  [WARN] steps view NOT built ({rec['status']}): "
+                  f"{rec.get('error')} — recorded in "
+                  f"reports/audit/{STEPS_VIEW_REPORT_NAME}", file=sys.stderr)
+    except Exception:
+        pass
+    return rec
