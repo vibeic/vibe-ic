@@ -12,7 +12,7 @@ host 8hd-3 · started 2026-08-21 · **69 sections (M0–M74); read this header b
 > P=docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md
 > grep -cE '^## M[0-9]+' $P                                   # sections
 > grep -oE '^## M[0-9]+' $P | grep -oE '[0-9]+' | sort -n | tail -1   # highest M
-> sed -n "/instrument defects, consolidated/,/common shape/p" $P | grep -cE '^\| [0-9]+ \|'
+> sed -n '/^### .*instrument defects, consolidated/,/^\*\*The common shape/p' $P | grep -cE '^\| [0-9]+ \|'
 > sed -n "/^## D\. Corrections/,\$p" $P | grep -cE '^[0-9]+\. \*\*'   # corrections
 > ```
 >
@@ -3992,6 +3992,50 @@ establishing what those are worth.
 Seven blockers were false, one badly stated, one wrong about the work, one
 correct, one a stated diminishing-return boundary, and this one — the only claim
 about myself — **true in conclusion and wrong in its reasoning until now.**
+
+
+## M75 — the published check broke ITSELF by being published
+
+The status check ran the four re-derivation commands the header now publishes.
+Three agreed. **The fourth returned 24 where the instrument table has 10.**
+
+**Cause: publishing the command created a second copy of its own anchor.** The
+command was
+
+```sh
+sed -n "/instrument defects, consolidated/,/common shape/p" …
+```
+
+and after I wrote it into the header, **both anchors appear twice** — once in the
+real section, once inside the documented command. `sed` takes the FIRST match, so
+the range began inside my own documentation and ran 1380 lines, sweeping up
+unrelated tables.
+
+**A check that was correct when written and wrong the moment it was published.**
+Not stale — *self-invalidating*. I have spent this document on numbers that decayed
+because work happened after them; this one decayed because it described itself.
+
+**Fixed** by anchoring on the heading form the quoted copy cannot match:
+
+```sh
+sed -n '/^### .*instrument defects, consolidated/,/^\*\*The common shape/p' …
+```
+
+which returns **10**. The other three were checked for the same trap and are
+safe — their anchors are `^## M` and `^## D.`, and the quoted block is indented
+with `>`, so the copies cannot match at line start. **I checked all four rather
+than the one that failed**, because a defect that arrived by publication would
+arrive the same way for each.
+
+**The lesson generalises past markdown.** Any check whose selector can match its
+own documentation is a check that stops working when documented. Anchor on
+something only the real target has — a leading `###`, a line start, a digest —
+never on a phrase you are also going to quote.
+
+**And the process worked.** The header instructs a reader to re-derive before
+quoting; I did exactly that in a routine status check, one commit after writing
+it, and the instruction caught its own defect. **That is the first thing tonight
+that failed loudly rather than plausibly.**
 
 
 # ===== REQUESTS TO THE LANDER =====
