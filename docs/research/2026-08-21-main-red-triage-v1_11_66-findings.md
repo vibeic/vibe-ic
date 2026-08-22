@@ -4222,6 +4222,74 @@ empty" do not share a verdict. That is a green worth recording, since I have
 spent this branch finding places where they DO share one.
 
 
+## M80 — this blocker is REAL, and my one-line description of it was wrong in the way that matters
+
+Two blockers tested and disproven (M78, M79), so I tested the third the same way.
+**It survives — but not in the shape section C gave it.** That row said: *"one
+line each, `advisory` truthful."* One answer, for two gates. **They are not the
+same kind of thing, and one of them would be damaged by that line.**
+
+**MEASURED first** (`flow_gate_enforcement_audit.py`, real exit **1**):
+
+    gates in flow definition : 172
+      ENFORCED (can block)   : 19
+      AUDIT_ONLY (describes) : 153  (88%)
+    declared intent          : 41  (131 UNDECLARED)
+    [FAIL] undeclared::area_total_vs_budget_check
+           undeclared::tapeout_docs_gen
+
+Both sit in the flow's `program_exit_zero` slot — the BLOCKING slot, not
+`advisory_program_exit_zero` — **and the audit still classifies them AUDIT_ONLY,
+because no runner invokes them inline.** That is the flow-yaml-cannot-block shape
+again: the clause describes an intent the runner never executes. So `advisory` is
+truthful *as a description of the current wiring*. That is the whole of what my
+note checked, and it is the wrong question.
+
+**Writing `ENFORCEMENT: advisory` does not describe. It DECIDES.** The audit's own
+words: gates *"ended up de-facto advisory without anyone deciding that"*, and the
+FAIL is *"nothing in the gate says that was the decision."* The declaration's
+entire purpose is to record a decision — so writing one converts an accident into
+a ratified position, and that is not a documentation edit.
+
+**And for one of the two it would ratify the exact defect the program exists to
+remove.** `area_total_vs_budget_check`'s own docstring:
+
+> the synthesised area figure must reach a COMPARISON, or the step must REFUSE
+> [...] A figure produced and never compared is the same defect the power gate
+> was written to remove
+
+**A gate written because nothing read the area number, declared `advisory`, is a
+gate saying the area number still need not be read.** Its sibling
+`power_total_vs_budget_check` got a real comparison and a real flow edge in #1026.
+The honest options for this one are **wire it** (the product decision, with blast
+radius, explicitly not mine) or **declare `blocking` and let it fail until it is
+wired** — the audit's one true failing shape. `advisory` is the option that looks
+like progress and removes the reason the program was written.
+
+**The other is not a check at all.** `tapeout_docs_gen` *"emit[s] the release
+documents for a tape-out candidate"* — a GENERATOR, with no verdict of its own.
+Asking whether it enforces is a category error, and the answer is not a value of
+`ENFORCEMENT:` but whether a generator belongs in a gate census. **That is the
+same classification question as clause (b)**, arriving from the opposite
+direction: (b) asks whether a HYGIENE gate should carry `ENFORCEMENT:`, this asks
+whether a GENERATOR should.
+
+**So the row is now three questions, not one line each:**
+
+| gate | the real question | who |
+|---|---|---|
+| `area_total_vs_budget_check` | wire it, or declare `blocking` and stay red until wired? **Not `advisory`.** | product |
+| `tapeout_docs_gen` | is a generator a gate? | classification |
+| `orphan::silent_decline_audit` (M70) | should a hygiene gate carry `ENFORCEMENT:`? | classification |
+
+**Three for three, the useful part is not the verdict.** Two blockers were false
+and one is real — but the real one was described wrongly, and its wrong
+description named the cheapest action ("one line each") as the answer. **A
+blocker that is real can still be wrong about what it blocks**, and that is
+harder to catch than a blocker that is simply false, because checking it feels
+like confirming it.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4305,7 +4373,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 
 | item | what is missing | kind |
 |---|---|---|
-| **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **TWO clauses, see M48 — declaring `advisory` does NOT close it.** (a) `area_total_vs_budget_check` + `tapeout_docs_gen` declare no `ENFORCEMENT`: one line each, `advisory` truthful (M29). (b) ~~`orphan::silent_decline_audit` needs WIRING~~ — **M70: it IS wired** (`repo_hygiene_gates.sh:1213`) and DOES declare `ENFORCEMENT: advisory`. The flow audit scans only FLOW `program_exit_zero` clauses, and this is a HYGIENE gate, so it reads as an orphan. **A classification question** — should a hygiene gate carry `ENFORCEMENT:` at all, or should ORPHAN recognise hygiene wiring? — not a wiring job. Protected file, `roles=['authority']`. | **policy + a scope rule** |
+| **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **REAL blocker, but REDESCRIBED — M80.** Audit exit 1: 172 gates, 19 can block, 153 AUDIT_ONLY (88%), 131 undeclared. Both named gates sit in the BLOCKING `program_exit_zero` slot and are still AUDIT_ONLY (no runner invokes them inline). **My note said `advisory` truthful for both; that is true of the WIRING and wrong as an action** — writing the line DECIDES rather than describes. For `area_total_vs_budget_check` `advisory` would ratify the exact defect it was written to remove (*'a figure produced and never compared'*): wire it, or declare `blocking` and stay red. `tapeout_docs_gen` is a GENERATOR, not a check — a classification question, same shape as (b) and as M70's hygiene gate. | **3 questions: 1 product, 2 classification** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described. **M68: the "needs a cell authored" premise is FALSE** — a real published cell with a routed DEF is TRACKED in git's index on this host (`ic/spm/v1.5.58_ihp-sg13g2`, 17210 tracked benchmark-data paths); stage it and point `VIBE_IC_BENCHMARK_DATA` at it. Authoring remains forbidden and unnecessary. **A and C are DONE** (4 reds closed). | **decision + evidence** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
