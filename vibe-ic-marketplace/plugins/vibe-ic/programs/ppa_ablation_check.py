@@ -93,6 +93,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _ppa_corpus as corpus_seam  # noqa: E402  one seam for all corpora
+from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 from _ppa import cli_exit  # noqa: E402  §1: argparse exits 2; bad invocation is 3
 from _ppa import schema_validation as SV  # noqa: E402
 
@@ -238,14 +239,18 @@ def check_corpus(named: Path, schema_dir: Path, may_be_absent: bool = False,
           f"refused, {undet} undetermined, {len(rcs) - refused - undet} "
           f"accepted -> rc={worst}")
     if json_out:
-        Path(json_out).write_text(json.dumps({
+        # ATOMIC, never `Path(...).write_text`: this is a DECLARED report
+        # destination, and a truncated one is read downstream as this gate's
+        # own evidence. `_atomic_artefact_residual.json` is a ratchet that may
+        # only ever shrink; a new program does not get to grow it.
+        atomic_write_text(Path(json_out), json.dumps({
             "program": _GATE, "mode": "corpus", "corpus": str(corpus),
             "files_opened": scan.files,
             "records": [str(p) for p, _ in scan.records],
             "unreadable": [{"path": str(p), "why": w}
                            for p, w in scan.unreadable],
             "per_record": reports, "rc": worst,
-        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        }, indent=2, sort_keys=True) + "\n")
     return worst
 
 
@@ -300,10 +305,10 @@ def main(argv=None) -> int:
     for line in lines:
         print(line, file=stream)
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps({
+        atomic_write_text(Path(args.json_out), json.dumps({
             "program": _GATE, "mode": "record", "record": str(path),
             "rc": rc, "lines": lines,
-        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        }, indent=2, sort_keys=True) + "\n")
     return rc
 
 
