@@ -316,12 +316,31 @@ def test_a_broken_or_non_git_pointer_is_undetermined_not_empty(
         assert "not a git checkout" in proc.stderr
 
 
-def test_an_unconfigured_moved_corpus_is_explicit_no_corpus():
+def test_an_unconfigured_moved_corpus_is_an_unknown_denominator():
+    """Nothing anywhere is a could-not-look, not a population of zero.
+
+    This asserted rc 0 / NO_CORPUS until 2026-08-22.  That row reaches
+    `gate_dispatch_over` as rc 0 with nothing on stdout -- a population of ZERO,
+    byte-indistinguishable from a corpus that was READ and holds none.  This
+    module's docstring promises the opposite ("a broken pointer, a loose
+    directory, or a failed git query is UNDETERMINED (rc 2), never an empty
+    population"); an ABSENT corpus was the one could-not-look left out of it.
+
+    STRICTER, NOT LOOSER, and the outcome does not move: rc 2 dispatches
+    "producer FAILED -- denominator unknown" and rc 0 / 0 items dispatches
+    "corpus is EMPTY"; both are unexempted NOT_CHECKED and both block.
+    """
     proc = _helper(None)
 
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert proc.stdout == ""
-    assert "NO_CORPUS" in proc.stderr and "NOTHING WAS SCANNED" in proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout == "", "prose on stdout would become a corpus item"
+    assert "UNDETERMINED" in proc.stderr
+    assert "denominator is UNKNOWN" in proc.stderr
+    assert "not a population of zero" in proc.stderr
+    # It must not claim a scan it did not do, and must not offer a flag this
+    # producer does not have.
+    assert "NO_CORPUS" not in proc.stderr
+    assert "--corpus-may-be-absent" not in proc.stderr
 
 
 def test_two_versions_of_one_design_refuse_before_duplicate_gate_owners(

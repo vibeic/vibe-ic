@@ -318,13 +318,36 @@ a maintainer's machine. There the sentence is not true. That is a real but **sec
 about a producer contract (`routed_def_corpus.py`'s docstring already promises
 *"A broken pointer, a loose directory, or a failed git query is UNDETERMINED
 (rc 2), never an empty population"*; an ABSENT corpus is the one row left out of
-it). It is recorded here and deliberately **not** changed tonight: reversing
-`may_be_absent=True`, which `_corpus_location` documents as a considered
-call-site opt-in and which `test_an_unconfigured_moved_corpus_is_explicit_no_corpus`
-pins, is a decision to propose, not to land unilaterally on a secondary finding.
-It also has **zero** effect on the outcome: both states already block (measured —
+it). **It is fixed here, after the reason for deferring it turned out to be false.**
+
+An earlier draft deferred it, calling `may_be_absent=True` a considered call-site
+opt-in that should be proposed rather than landed. Checked: it was never argued
+for at this call site. It arrived inside `v1.10.69` (`7c376e348`), a **78-file,
+21,872-insertion** feature commit whose message does not contain the words
+`may_be_absent`, `NO_CORPUS`, `absent`, `empty population` or `rc 0` — and the
+test that pinned it was written in that same commit, so it pinned what arrived,
+not what was decided.
+
+The flag is CORRECT where it was designed to be used: a **gate** whose rc 0 is a
+green row, which without it refuses every landing — `gatekeeper-land.sh` argues
+exactly that, at length, for the gates it passes `--corpus-may-be-absent` to.
+Here rc 0 is not a green row. The dispatcher turns an empty population into a
+blocking `NOT_CHECKED` either way, so the flag bought nothing at this call site
+and cost the distinction. And the module's own docstring already promised the
+opposite: *"A broken pointer, a loose directory, or a failed git query is
+UNDETERMINED (rc 2), never an empty population."* An absent corpus is a
+could-not-look like the rest; it was the one row left out of that promise.
+
+So state A is now rc 2 — *"corpus producer FAILED — denominator unknown"* — and
+state B stays rc 0 with 0 items — *"corpus is EMPTY"*. **The outcome does not
+move**: both are unexempted `NOT_CHECKED`, both block (pinned by
 `test_empty_population_has_one_shard_owner_attestation_and_progress` and
-`test_failed_producer_is_a_distinct_blocking_attested_result` both pin rc 2).
+`test_failed_producer_is_a_distinct_blocking_attested_result`). Only the true
+sentence differs, and only the true one is printed.
+
+`test_an_unconfigured_moved_corpus_is_explicit_no_corpus` becomes
+`…_is_an_unknown_denominator`. That is a **tightening** — rc 0 to rc 2 — not a
+relaxed assertion, and it is RED without the change.
 
 ---
 

@@ -360,9 +360,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     corpus, origin = location.resolve(
         named, subdir="ic", gate="routed-def corpus", announce=True)
     if not corpus.is_dir():
-        return location.refuse(
-            "routed-def corpus", named, corpus, origin,
-            may_be_absent=True, scanned="routed DEF(s)")
+        if origin != location.NAMED:
+            # A pointer that is SET and wrong, or a bound SHA with no pointer.
+            # `refuse` already says each of those precisely; do not re-word it.
+            return location.refuse(
+                "routed-def corpus", named, corpus, origin,
+                may_be_absent=False, scanned="routed DEF(s)")
+        # NOTHING ANYWHERE IS AN UNKNOWN DENOMINATOR, NOT AN EMPTY ONE.
+        #
+        # This used to be `refuse(..., may_be_absent=True)`, whose NO_CORPUS row
+        # is rc 0 -- and rc 0 with nothing on stdout reaches `gate_dispatch_over`
+        # as a population of ZERO, indistinguishable from a corpus that was READ
+        # and holds none.  This module's own docstring promises the opposite:
+        # "A broken pointer, a loose directory, or a failed git query is
+        # UNDETERMINED (rc 2), never an empty population."  An ABSENT corpus is
+        # a could-not-look like the rest of them, and it was the one row left
+        # out of that promise.
+        #
+        # `may_be_absent` is CORRECT where it was designed to be used -- a GATE
+        # whose rc 0 is a green row, which without it refuses every landing
+        # (`gatekeeper-land.sh` argues exactly that, at length, for the gates it
+        # passes the flag to).  Here rc 0 is not a green row: the dispatcher
+        # turns an empty population into a blocking NOT_CHECKED either way.  So
+        # the flag bought nothing at this call site and cost the distinction.
+        # It was never argued for here; it arrived inside a 78-file feature
+        # commit (v1.10.69) whose message never mentions it.
+        #
+        # THE OUTCOME IS UNCHANGED AND STILL BLOCKS: rc 2 from a producer is
+        # "corpus producer FAILED -- denominator unknown", rc 0 with 0 items is
+        # "corpus is EMPTY".  Both are NOT_CHECKED, both are unexempted, both
+        # refuse the run.  Only the sentence differs, and now only the true one
+        # is printed.
+        #
+        # Deliberately NOT `refuse`'s wording for this row: it ends by offering
+        # `--corpus-may-be-absent`, a flag this producer does not have.
+        print(
+            f"[routed-def corpus] UNDETERMINED: no corpus at {named} and "
+            f"{location.CORPUS_ENV} is unset, so nothing was opened and the "
+            f"denominator is UNKNOWN -- this is not a population of zero. The "
+            f"published corpus moved to its own repository in v1.10.56; point "
+            f"{location.CORPUS_ENV} at a clone of it to give this gate "
+            f"something to enumerate.",
+            file=sys.stderr,
+        )
+        return 2
 
     rc, paths = _index_paths(corpus)
     if rc != 0:
