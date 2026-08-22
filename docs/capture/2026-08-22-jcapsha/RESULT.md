@@ -1,5 +1,8 @@
 # Three findings, one missing mechanism — and the third one was not what it said it was
 
+*(Four by the end. The fourth was measured on this lane's own working tree, by
+being on the receiving end of it, and is at the bottom.)*
+
 Lane `jcapsha`, 2026-08-22. Branch **`jcapsha/sha256-capture`**, cut from
 `origin/main` @ `81cd5321b` (plugin **v1.11.68**). Version-less; nothing pushed
 to `main`.
@@ -286,6 +289,52 @@ verdict. It FAILS on this branch — and it fails identically on pristine
 both sides. Mine adds a gate (624 → 625) and adds no unwired one, because it is
 routed. **The baseline was not written**, on this or any gate, including where
 the tool suggested it.
+
+## A fourth finding, not in the brief, measured on this lane's own tree
+
+The host-independence gate was run because a new gate belongs under it. It
+destroyed this lane's work twice before it was identified — two edits to
+tracked evidence files reverted between one command and the next, with nothing
+said.
+
+`gate_host_independence_check._repair_checkout` restores any tracked file that
+was clean before a drive and dirty after, and its docstring states the
+attribution as a proof:
+
+    the difference was made by the child this loop just ran, so
+    `git checkout -- <path>` undoes that and provably nothing else
+
+Clean-before and dirty-after identifies a TIME WINDOW, not a writer, and
+`git checkout --` is not an undo of one write — it makes the file equal the
+committed state, taking every uncommitted change with it.
+
+**The live positive control, while the gate was still running:**
+
+    10:00:31  one line appended to a tracked file
+    10:00:57  gone — reverted, silently, unrecoverably
+
+Twenty-six seconds. Nothing on the editing side: no message, no prompt, no
+record. It was not recoverable, because being uncommitted is precisely the
+condition the rule selects for.
+
+**It is the same shape as F1**, which is why it belongs in this bundle rather
+than in a note. A sentence somebody wrote down stood in for a measurement; it
+was careful, well-reasoned prose, and the care is what kept it unexamined. F1's
+root cause was a module header asserting what an upstream tool would do, and
+the assertion kept a refusal firing for the life of the step. The word doing
+the damage here is *provably*.
+
+The gate's boundary is drawn deliberately — its own docstring says an
+over-eager repair "would destroy a maintainer's work in order to tidy up after
+a gate", which is exactly the right concern. The rule simply does not deliver
+it. Note also that this does NOT reproduce on a quiet tree: it needs a second
+writer, which is the normal condition on a fleet where several agents share one
+repository and each is told to work in a worktree of it.
+
+Captured as Bucket A with three deterministic fixes named, and NOT patched
+here: the gate is shared, an instance was executing, and a change to a restore
+path needs its own acceptance run rather than a same-night edit inside a brief
+about something else. `evidence/concurrent_repair/`.
 
 ## What was NOT done, and why
 
