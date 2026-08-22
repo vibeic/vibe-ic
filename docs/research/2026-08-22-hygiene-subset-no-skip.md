@@ -2192,3 +2192,48 @@ sensitivity §13 measured; the other four are not, and are unexplained here. I a
 not fixing them — they are outside this brief and each would need its own
 attribution — but they are named, located, and dated so that finding them again
 costs a grep instead of a night.
+
+## 37. And the original ten, against CURRENT main — none introduced either
+
+§36 asked the base-vs-main question of the seven reds the widened denominator
+found. The same question was still unasked of the ORIGINAL ten — the set carried
+on both arms of every differential since §13, attributed in §7 against
+`a00f53f20`, which v1.11.68 has since superseded. An attribution against a
+superseded main is not an attribution against main.
+
+Clean `origin/main` `81cd5321b0`, the two files that hold all ten:
+
+```
+10 failed, 132 passed  (425s)
+
+red on BOTH main and the batch            10
+red on the batch and GREEN on main         0
+```
+
+**None of the ten was introduced by batch 67 either.** Nine are in
+`test_landing_merge_verdict.py` and one is
+`test_three_orphan_checkers_have_a_machine_runner::test_the_audit_returns_a
+_clean_verdict` — the `checker_execution_wiring_audit` node that also appears
+among the nine hygiene gates the bound review reports.
+
+**So the complete attribution, for every red this work has touched:**
+
+| set | where found | red on current main |
+| --- | --- | --- |
+| 2 target reds | the brief | no — fixed by this branch |
+| 10 carried | every differential since §13 | **10 of 10** |
+| 7 widened-denominator | §33–§35 | **7 of 7** |
+| 6 ceiling-check nodes + the 7th | §22 | no — cleared by this branch |
+
+Seventeen reds examined across four files' worth of denominator, and **every one
+that is not fixed by this branch is red on `main` today**. Batch 67 introduces
+none of them. That is now a measurement rather than the inference §7 made from a
+superseded base.
+
+**The habit this leaves.** Three times tonight a check answered "not mine" and
+the more useful question was one step further out — *not mine* → *not the
+batch's* → *not new at all*. Each step needed a different reference tree, and
+each was cheap once asked. The reason it kept being missed is that "pre-existing"
+FEELS terminal: it closes the question of blame, which is the question an author
+naturally asks, and leaves open the question of inventory, which is the one the
+person holding the landing actually needs.
