@@ -224,6 +224,40 @@ Raw: `raw_landed_by_history_s5_jharv3.tsv` (per row: tracked files, paths differ
 paths main has held, ignored entries and classes), `raw_landing_proofs_s5_jharv3.tsv` (the named
 file, its blob, and the main commit holding it), `raw_ignored_entries_landedflip_s5_jharv3.tsv`.
 
+## 9. The 16 flips made 16 new deletion-bound rows, so the existing gate suite had to accept them
+
+A verdict that authorises deletion has to carry more than a content proof, and shard C already
+has gates that say what more. Re-run against the changed file:
+
+| gate | result |
+|---|---|
+| `bin_jharv3/contract_check.py` | **OK** — 110 rows, 74/34/2, RECOVER coverage 49 differ / 23 absent from main / 2 uncommitted, **0 landed-since-judging, 0 unparseable** |
+| `bin_jharv3/ignored_accounted.py` | **OK** — 492 ignored entries examined, 492 accounted, **36 deletion-bound rows, 36 measured** |
+| `bin_jharv3/absent_from_main_accounted.py` | **OK** — 205782 paths these rows hold that main's tip lacks; 205781 identical to the same path at the merge-base, 1 covered by a live ref containing the whole commit |
+| `bin_jharv3/vacuous_universal.py` (shard C) | **OK** — 0 vacuous universals, 0 stale main cites, 0 unaccounted untracked |
+| `bin_jharv3_s5/recovery_resolves.py` | **OK** — 110 rows, 463 citations, 0 without an instruction that resolves |
+| `bin_jharv3_s5/landed_by_history.py --self-test` | **PASSED** — 5 guarantees, 2 of them traps this session hit |
+| `bin_jharv3/reverify_shard_c.py` | **246 findings — identical on the pre-session file.** I introduced none |
+
+`ignored_accounted.py` went RED first, and correctly: the 16 new deletion-bound rows had no
+untracked/ignored measurement, which is exactly the unexamined input it exists to catch. The
+answer was to go and measure them — 371 further ignored entries, plus clone-wide stash counts
+(`.112/vibe-ic` 1, `.121/vibe-ic` 3, the others 0) — not to adjust the gate.
+
+`absent_from_main_accounted.py` reported one row unaccounted: `wt-j63x8c`, holding a `RESULT.md`
+main's tip lacks, with "no live origin ref this row names contains 3ab7fc723e4". Measured before
+believing it: that head **is** reachable from `origin/harvest/worktree-triage-jharvest`, and the
+file was read back through the branch — blob `3606f2fc93a`, 40882 bytes. The gate reads
+`reachable from X` and `Preserved as X`; the row said "contained by origin/…". A parse gap, not
+an exposure. The row now states the verified fact in the form the checker reads, and the gate is
+green — the fact was checked first and the sentence written second, not the other way round.
+
+The 246 `reverify_shard_c.py` findings are all one class: rows whose *historical* text names a
+`harvest/rescue-*` ref origin has deleted. Those claims are superseded in place by §7's
+corrections, and every one of those rows now also carries a path that resolves — which is what
+`recovery_resolves.py` checks and passes. The evidence is append-only, so the dead names stay
+visible as the audit trail of the repair rather than being edited out of the record.
+
 ## What was not done
 
 Nothing was deleted, on any host. No working tree, index or HEAD was modified anywhere — the
