@@ -1037,8 +1037,18 @@ def test_knob_the_space_guard_is_what_makes_that_cost_zero(tmp_path):
                            capture_output=True, text=True, cwd=str(tmp_path))
 
     assert without.returncode == 0, without.stderr      # the control
+    # THE RC IS THE GATE. The message is corroboration on wording this file does
+    # not own, kept because the landed `test_M_ECO_7` asserts the same phrase --
+    # diverging would leave two tests disagreeing about what the refusal looks
+    # like. Split out with its own message so a REWORD reads as a reword and
+    # not as the guard having stopped refusing. (Audited after a sibling row was
+    # found parsing an output shape that had already moved: this program is not
+    # touched by current main, so the phrase has not drifted yet.)
     assert withd.returncode == 1, withd.stdout + withd.stderr
-    assert "metal-only ECO" in withd.stderr
+    assert "metal-only ECO" in withd.stderr, (
+        "the space guard still refuses (rc=1) but no longer explains itself in "
+        "these words; if the wording moved, update this row and the landed "
+        f"test_M_ECO_7 together:\n{withd.stderr}")
 
 
 # ---------------------------------------------------------------------------
