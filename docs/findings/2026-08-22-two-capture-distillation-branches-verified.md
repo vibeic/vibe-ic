@@ -67,6 +67,14 @@ nothing else, and neither `main` nor either verified branch was touched.
          person applying it runs the twenty with `--json` themselves. jdistchip
          has no such gap: none of its twelve writes an artefact, which is also
          why F14 does not touch it.
+    F15+ Its blocking finding is worse than recorded: THREE of the gate's eight
+         tests encode the false verdict, and one of them
+         (`test_the_consumer_is_excluded_and_that_is_what_makes_it_discriminate`)
+         asserts the unprovable-axis list is non-empty — which is the exact
+         condition for the gate to exit 1. No tree on which the gate passes can
+         satisfy it. I implemented the two-part remedy and measured it: gate
+         rc 1 -> 0, 0 unprovable axes, consumer still excluded, both real
+         producers admitted, 3 of 8 tests red. Repair is cheap and named below.
 
   jdistchip:
     F16  three gates never return 1 on ANY revision of main I tested, including
@@ -1585,6 +1593,62 @@ F15 BLOCKING (matrix) — A NEW GATE SHIPS RED ON A FINDING THAT IS FALSE, AND A
     is that the CONSUMER mentions the schema too — `_ppa/feasibility.py` carries
     the string twice — so a substring test re-admits the very module the gate
     excludes on purpose, and the discrimination those tests pin is lost.
+
+    IMPLEMENTED AND MEASURED, 2026-08-22 — AND IT FOUND SOMETHING WORSE THAN A
+    PINNED RED. I had left this as a recommendation. This session's lesson is that
+    an untested recommendation of mine is where I go wrong, so I built it.
+
+    The predicate: a module is a producer when it CONSTRUCTS metric records and
+    WRITES them — three conjuncts, a `"metric"` key or an `emit(...)` call, a
+    MEASURED / NOT_MEASURED status constant, and a write call. Each conjunct earns
+    its place; the consumer satisfies the first two.
+
+        gate                       rc 1  ->  rc 0
+        emitting modules             38  ->  50
+        names they declare          143  ->  191
+        axes with no produced name    1  ->  0
+
+        discrimination preserved, checked directly:
+            consumer `_ppa/feasibility.py`   _writes_metric_records() = False
+            ppa-crosslayer/tools/drv_records.py                       = True
+            ppa-e2e/tools/signoff_records.py                          = True
+
+    THREE OF THE GATE'S EIGHT TESTS THEN FAIL, and all three encode the false
+    verdict. I expected one:
+
+      1 `test_the_shipped_tree_is_RED_on_drv` — asserts rc 1. Pins the red itself;
+        failing is the point.
+      2 `test_a_proof_name_only_the_consumer_declares_is_not_produced` — asserts
+        the four `timing.drv.*` are NOT produced, on a docstring premise ("occurs
+        in the consumer and in tests, nowhere else") that is untrue of the
+        repository. Fails with "timing.drv.violations is now produced — re-derive
+        the finding", which is exactly right.
+      3 `test_the_consumer_is_excluded_and_that_is_what_makes_it_discriminate` —
+        and this one is the finding. It asserts `unprovable_correct` is NON-EMPTY.
+        The gate exits 1 if and only if some axis is unprovable. SO THIS TEST
+        REQUIRES THE GATE TO BE RED. No tree on which the gate passes can satisfy
+        it; it failed with a bare `assert []`.
+
+    SO THE GATE CANNOT GO GREEN WHILE ITS OWN SUITE IS GREEN. That is stronger
+    than "a test pins the false red", which is what I had written, and it is the
+    reason to fix this before landing rather than after: the red is not one
+    assertion to update but a premise built into three, one of which forbids the
+    passing state outright.
+
+    THE THIRD TEST'S INTENT IS SOUND AND ITS PROXY IS NOT, which makes it cheap to
+    repair. It wants "the exclusion must change the answer, or the exclusion is
+    doing nothing" — a good thing to pin. Measured after the remedy:
+
+        produced WITH the consumer excluded    191 names
+        produced WITHOUT the exclusion         195 names
+        contributed by the consumer alone        4 — area.total_um2,
+            physical.lvs.violations, timing.hold.violations, timing.setup.violations
+        unprovable axes, either way             [] and []
+
+    The exclusion still changes the answer; it no longer changes which AXES are
+    unprovable. So assert the property directly — that excluding the consumer
+    REMOVES NAMES — instead of through an axis count that only holds while the gate
+    is broken. One line, and the test then pins what it says it pins.
 
     THE CORRECT PREDICATE IS "WRITES METRIC RECORDS", NOT "MENTIONS THE SCHEMA":
     a module that CONSTRUCTS a record with a `"metric":` key and a MEASURED /
