@@ -321,7 +321,7 @@ existed — and two rules were added after the count was written.
 
 ## What was NOT done, and why
 
-* **No new guard was landed, and the six Bucket-A rules are red for three
+* **No new guard was landed, and the six Bucket-A rules are red for four
   different reasons.** Stated one by one rather than as a group, because they
   do not share a fix order. (This read "four" while two more records — F3c and
   F3d — were added below it. A count in a summary describing a list that is
@@ -339,6 +339,29 @@ existed — and two rules were added after the count was written.
     was made without measuring and it is wrong — see the correction below.
   * **F4** is red on `main` and stays red: nothing on any branch fixes it, and
     I declined to fix it tonight for the reason given in its own section.
+  * **F3c and F3d** are red on `main` **and red on the fix branch too**, which
+    is a different status from F1/F2 and changes the landing order for them:
+    landing `jpadsite/pad-site` does NOT turn these green, because that branch
+    does not repair what they guard. MEASURED by running each predicate against
+    `git show <ref>:<file>` on both refs — no checkout, no tree touched:
+
+    ```
+    F3d  origin/main               N = rotate_cw       E = rotate_cw
+         origin/jpadsite/pad-site  N = rotate_cw       E = (NO CALL AT ALL)
+    F3c  origin/main               HORIZONTAL -> [N,S]  VERTICAL -> [E,W]
+         origin/jpadsite/pad-site  HORIZONTAL -> [N,S]  VERTICAL -> (nothing)
+         the tool's contract       HORIZONTAL -> [E,W]  VERTICAL -> [N,S]
+    ```
+
+    The `(no call at all)` is the finding rather than a detail of it: the fix
+    branch was built on the conclusion that the variable is inert, so it
+    REMOVED that variable's effect instead of routing it to the sides the tool
+    documents it for — making genuinely inert a variable that was merely
+    misrouted, which is the one outcome that makes the original diagnosis true
+    after the fact. This is NOT a reason to hold that branch: its site fix is
+    real, verified on four PDK trees, and independent of all of this. These two
+    are the argument for a FOLLOW-UP.
+    `evidence/f3cd_red_on_both_trees_MEASURED.txt`.
 * **F3b's guard has a population of 4, and that is the argument for it.**
   Corrected below; the earlier text here claimed the opposite without measuring.
 * **No `--write-baseline`, on any gate.** No assertion relaxed, no regex
