@@ -341,7 +341,11 @@ it, on a clean worktree of `fix/j1764-absent-is-not-empty` at `9b355d2ba`,
   env_var_can_do`). **This record does not claim the change fixes them, and that
   is now measured rather than hedged:** re-run those four IDs alone on the
   pristine `origin/main` worktree and **all four PASS** (`4 passed, 130
-  deselected in 237s`). They are not red on `main` at all -- they are
+  deselected in 237s`) -- and the same four alone on this branch pass too, in
+  the same time (`4 passed, 130 deselected in 241s`). The two trees are
+  symmetric on exactly the IDs the full runs disagreed about, which is what
+  scheduling noise looks like and is not what a behaviour difference looks
+  like. They are not red on `main` at all -- they are
   load-sensitive inside the full-file run, in the same family as the
   `test_gate_process_attestation` intermittent above. That file's end-to-end
   tests build worktrees and kill process groups on timeouts, both full runs were
