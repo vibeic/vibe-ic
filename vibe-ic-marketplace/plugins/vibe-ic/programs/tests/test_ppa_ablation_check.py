@@ -276,6 +276,44 @@ def test_a_corpus_of_other_kinds_only_is_vacuous_not_a_pass(tmp_path):
     assert "2 JSON file(s) opened" in r.stdout
 
 
+def test_selection_is_by_the_DECLARED_schema_and_not_by_a_hint(tmp_path):
+    """A document that LOOKS like an ablation and does not DECLARE the kind is
+    not one, and this is the property `is_ablation` exists to hold.
+
+    MEASURED, AND IT IS WHY THIS TEST EXISTS: a mutation replacing the declared
+    -schema test with a substring test over the document's first bytes passed
+    the whole of the rest of this file. Every fixture here happens to put
+    `"schema": "vibeic.ppa.ablation.v1"` first, so a selector reading the WORD
+    and a selector reading the DECLARATION agree on all of them — a checker
+    validating the thing NEXT TO its claim. This corpus separates them: the
+    file is NAMED for the kind and name-drops it in its first key, and declares
+    a different one. It must NOT be selected, and the verdict must therefore be
+    VACUOUS rather than a per-record CANNOT CHECK.
+    """
+    put(tmp_path / "ablation_looking_but_not.json",
+        {"ablation": "this document is about an ablation",
+         "schema": "vibeic.ppa.comparison.v2",
+         "claim_scope": "within_project",
+         "arms": [arm("a"), arm("b")]})
+    r = run("--corpus", str(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS" in r.stderr, (
+        "a document that only name-drops the kind was SELECTED as one")
+    assert "1 JSON file(s) opened" in r.stdout
+    assert "0 ablation record(s) selected" in r.stdout
+
+
+def test_the_declared_kind_is_selected_even_when_nothing_else_hints_at_it(tmp_path):
+    """The other half of the same rule: no hint in the path, no hint in any
+    key but the declaration itself, and it is still judged."""
+    doc = ablation()
+    doc.pop("isolates")                       # remove the one prose field
+    put(tmp_path / "q" / "zz.json", doc)
+    r = run("--corpus", str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "1 ablation record(s) selected" in r.stdout
+
+
 # ---------------------------------------------------------------------------
 # THE WIRING — a program nothing invokes does not run
 # ---------------------------------------------------------------------------
