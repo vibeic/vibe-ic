@@ -235,6 +235,32 @@ def _describe_ref(repo: Path, ref: str) -> str:
     return proc.stdout.strip() or "UNRESOLVABLE: empty"
 
 
+class LedgerUnreadable(Exception):
+    """The ledger could not be READ. Never a finding about the tree.
+
+    SEPARATED FROM `ValueError`, WHICH THIS MODULE ALSO RAISES, BECAUSE THE TWO
+    ARE GRADED DIFFERENTLY AND WERE NOT. `ValueError` here means the bytes were
+    read and say something wrong -- `acknowledged` is not a list -- which is a
+    defect of the tree at that ref and blocks. This means the bytes could not be
+    obtained at all: no git, no repository, a ref that does not resolve. A gate
+    that could not look has not found anything, and grading it BLOCKING is the
+    "I could not check" -> "you fail" shape this repository has removed
+    repeatedly.
+
+    MEASURED (2026-08-22, this batch): `--ledger-ref` reads through `git show`,
+    so in a fixture tree that is not a git repository the read fails and the
+    whole merge gate returned REQUEST_CHANGES over a CLEAN tree --
+
+        gate_red_since: [FAIL] unreadable ledger: cannot read
+        tools/ci/gate_red_since.json at HEAD: fatal: not a git repository
+
+    -- which is a refusal about the ENVIRONMENT wearing the words of a finding
+    about the CANDIDATE. rc 2 UNDETERMINED, naming the path and the ref and
+    git's own reason, is what that is. `gatekeeper_review.gate_red_since_gate`
+    already routes rc 2 to `skipped`, so no caller had to change.
+    """
+
+
 def load_ledger_from_ref(repo: Path, ref: str) -> List[Dict[str, Any]]:
     """The ledger as it exists at `ref`, read with `git show`.
 
@@ -249,19 +275,24 @@ def load_ledger_from_ref(repo: Path, ref: str) -> List[Dict[str, Any]]:
     A ref is used rather than a second worktree because the caller has a base
     REF and need not have a base checkout.
 
-    A ledger that cannot be read AT THE REF IS AN ERROR, unlike an absent
-    ledger at a path: the caller named a ref and was wrong about it, which is
-    the `$VIBE_IC_BENCHMARK_DATA set + unreadable` shape — never excused.
+    A ledger that cannot be read AT THE REF IS NOT AN EMPTY ONE, unlike an
+    absent ledger at a path: it is `LedgerUnreadable`, and the caller grades it
+    rc 2 UNDETERMINED naming the path, the ref and git's own reason. It is NOT
+    a finding — see that class for the measurement that changed this sentence.
     An empty `acknowledged` at a valid ref is still the normal starting state.
     """
-    proc = subprocess.run(
-        ["git", "-C", str(repo), "show", f"{ref}:{LEDGER_REL}"],
-        capture_output=True, text=True, timeout=60)
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{ref}:{LEDGER_REL}"],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LedgerUnreadable(f"cannot read {LEDGER_REL} at {ref} in {repo}: "
+                               f"{exc}") from exc
     if proc.returncode != 0:
         if "does not exist" in proc.stderr or "exists on disk" in proc.stderr:
             return []          # the ref predates the ledger: no acknowledgements
-        raise ValueError(f"cannot read {LEDGER_REL} at {ref}: "
-                         f"{proc.stderr.strip()[:200]}")
+        raise LedgerUnreadable(f"cannot read {LEDGER_REL} at {ref} in {repo}: "
+                               f"{proc.stderr.strip()[:200]}")
     doc = json.loads(proc.stdout)
     rows = doc.get("acknowledged")
     if rows is None:
@@ -553,7 +584,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             ledger = load_ledger_from_ref(args.repo, args.ledger_ref)
         else:
             ledger = load_ledger(args.ledger or (args.repo / LEDGER_REL))
+    except LedgerUnreadable as exc:
+        # A GATE THAT COULD NOT LOOK IS NOT A GATE THAT FOUND SOMETHING.
+        # Same three channels the vacuous branch below uses, from the same
+        # reason token, so the printed word and the exit code cannot disagree:
+        # the rc-independent stderr sentinel, the `[VACUOUS]` verdict line that
+        # cannot read as a bare PASS, and a last line that NAMES what could not
+        # be read -- which is the line `gate_red_since_gate` quotes.
+        why = str(exc)
+        _vx.announce_vacuous("gate_red_since", why)
+        print(_vx.verdict_line("gate_red_since", passed=True, skipped=True,
+                               reason=why))
+        print(f"gate_red_since: NOT CHECKED — {why}")
+        return _vx.exit_code(passed=True, skipped=True)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        # READ AND WRONG, which is a different sentence: the bytes exist and
+        # say something this program cannot act on. That is a defect of the
+        # tree holding them and it blocks.
         print(f"[FAIL] gate_red_since: unreadable ledger: {exc}")
         return _vx.RC_FAIL
 

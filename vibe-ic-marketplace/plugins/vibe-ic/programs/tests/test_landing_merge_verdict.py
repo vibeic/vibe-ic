@@ -2171,7 +2171,40 @@ def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
 
 def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
         sandbox, tmp_path):
-    """After activation, evidence must not demand another one-use transition."""
+    """After activation, evidence must not demand another one-use transition.
+
+    WHAT THIS ARM MEASURES, AND WHAT IT PROVABLY CANNOT — because the previous
+    version of this test claimed the second as well.
+
+    `.get("corpus_transitions", [])` made "the producer never ran" and "the
+    producer ran and found nothing" the same verdict, and the first was what
+    was happening: the key was ABSENT from the delta. `hygiene_finding_delta`
+    now STATES the population on every record, empty when empty, so the key is
+    present here and the two are distinguishable — that half is repaired at the
+    producer, where it belongs.
+
+    The other half cannot be repaired here. `GATEKEEPER_STUB_ROUTED_TRANSITION`
+    and `GATEKEEPER_STUB_BASE_EXPANDED` are passed to the VERIFIER, and the
+    land arms it launches are hermetic: `gatekeeper-verify-merge.sh`
+    `launch_hermetic_land_arm` hands the runner an exact `--env` list and
+    `hermetic_candidate_runner.py` execs it under `env -i`, so no ambient
+    variable crosses that boundary — by design, and the receipt attests the
+    exact environment. MEASURED on this tree: both arms therefore run the
+    ordinary one-gate dispatch, base and candidate publish a BYTE-IDENTICAL
+    `hygiene.json`, and the delta reports `declared: 1` with no routed-DEF
+    loop on either side. The corpora here are equal because NEITHER expanded,
+    which is the empty<->empty path and not the one this test is named for.
+    The sibling above, which needs the transition to actually happen, is red on
+    pristine origin/main a4caccefe for exactly this reason (KeyError there,
+    `0 == 1` here) and is not this batch's.
+
+    So this arm asserts what it genuinely establishes end to end — the wiring
+    reaches a CLEAN ordinary delta, the population is STATED, and no second
+    one-use transition is demanded — and the expanded<->expanded equality it
+    cannot construct is pinned in
+    `test_hygiene_finding_delta.test_a_delta_with_no_transition_still_states_
+    the_population_as_empty`, which hands `delta` the expanded records directly.
+    """
     r, doc = _verify(
         sandbox, "routed_transition", tmp_path,
         env_extra={
@@ -2183,17 +2216,10 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
     assert doc["verdict"] == "LAND_OK"
     delta = doc["hygiene_finding_delta"]
     assert delta["status"] == "CLEAN", delta
-    # `.get(..., [])` here made "the producer never ran" and "the producer ran
-    # and found nothing" produce the SAME verdict, and the first is what is
-    # actually happening: measured, the key is ABSENT from the delta. The test
-    # then passed through the empty<->empty path instead of the
-    # expanded<->expanded path its own docstring names. Its sibling above reads
-    # the same key with a bare subscript and fails loudly with KeyError on the
-    # same condition. Demand the key, so absence is red rather than silent.
     assert "corpus_transitions" in delta, (
-        "the corpus-transition producer never ran, so an equal-corpus "
-        "assertion here cannot fail and is not measuring the post-bootstrap "
-        "path: " + repr(sorted(delta)))
+        "the delta does not STATE its corpus-transition population, so "
+        "'none' and 'nobody looked' are the same bytes again: "
+        + repr(sorted(delta)))
     assert delta["corpus_transitions"] == []
     assert "trusted EMPTY→expanded evidence supplied" not in r.stdout
 

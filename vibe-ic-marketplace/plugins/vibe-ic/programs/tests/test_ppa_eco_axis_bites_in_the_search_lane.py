@@ -254,10 +254,19 @@ def test_all_three_ppa_clis_can_resolve_the_route(tmp_path):
     """
     progs = ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
              "ppa_search_run.py")
-    # The denominator, stated. This loop is over a literal so it cannot be
-    # empty, but a literal edited down to two entries would still pass while
-    # checking less -- and "all three CLIs" is the claim in the name.
-    assert len(progs) == 3, progs
+    # THE DENOMINATOR, AGAINST THE POPULATION AND NOT AGAINST ITSELF.
+    # This row used to read `len(progs) == 3`, which compares a literal to its
+    # own size: it passes for free, on every tree, forever, and "all three
+    # CLIs" was never checked against how many there are. The population is
+    # DISCOVERED instead -- every `ppa_*` CLI whose source reaches the flow's
+    # own delivery-path router, which is what "can resolve the route" means --
+    # and the comparison is set equality in both directions, so a fourth CLI
+    # joining the lane and a name dropped from this row are each red.
+    routed = {q.name for q in _PROGRAMS.glob("ppa_*.py")
+              if "delivery_path" in q.read_text(encoding="utf-8")}
+    assert routed == set(progs), (
+        f"on the route and not named here: {sorted(routed - set(progs))}; "
+        f"named here and no longer on the route: {sorted(set(progs) - routed)}")
     for prog in progs:
         out = subprocess.run([sys.executable, str(_PROGRAMS / prog), "--help"],
                              capture_output=True, text=True,
@@ -1293,14 +1302,29 @@ def test_publication_a_declared_stance_audits_clean(tmp_path):
     otherwise it is not "eligibility may not rest on silence", it is "no design
     may ever be eligible"."""
     proofs = ({"required": False}, dict(DECL))
-    assert len(proofs) == 2, proofs      # both licensing shapes, stated
+    # THE POPULATION, NOT THE LITERAL'S OWN SIZE. This row used to read
+    # `len(proofs) == 2`, which can never fail -- and two copies of the SAME
+    # declaration would have satisfied it while proving half as much. What
+    # "both licensing shapes" names is the pair of states a PRESENT
+    # `eco_readiness` block resolves to that PROVE something, as against the
+    # silence (NOT_DECLARED) and the refusal (UNREADABLE) that do not. The
+    # states are collected from the runs and compared as a set in both
+    # directions, so a shape that stops licensing, and two shapes that
+    # collapse onto one state, are each red.
+    licensing = {F.ECO_NOT_REQUIRED, F.ECO_REQUIRED}
+    seen = {}
     for i, eco in enumerate(proofs):
         sub = tmp_path / f"case{i}"
         sub.mkdir()
         d = _campaign(sub, eco=eco)
         _rc, man = _run_campaign(d)
+        seen[man["toolchain"]["feasibility_eco_state"]] = eco
         codes = [f["code"] for f in S.audit_manifest(man)]
         assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" not in codes, (eco, codes)
+    assert set(seen) == licensing, (
+        f"a licensing state no shape here reaches: "
+        f"{sorted(licensing - set(seen))}; a state reached that does not "
+        f"license: {sorted(set(seen) - licensing)}")
 
 
 def test_publication_a_resolved_route_also_licenses_the_audit(tmp_path):

@@ -201,18 +201,36 @@ def test_an_artefact_outside_published_scope_is_recorded_not_erased(tmp_path):
     """`phase3/stage3` is not published — an evidence-policy call, not a size
     one. Saying so is what lets a reader tell it apart from "never existed",
     and the sha256 is what makes recovering it from a source host checkable.
+
+    THE EXAMPLE MOVED, THE PROPERTY DID NOT. This test used to make its point
+    with `routed.def`, which is now the ONE artefact staged out of that subtree
+    (`benchmark_evidence_publish._ROUTED_DEF_RELPATH`): a BLOCKING hygiene loop
+    selects its whole population on that path, and no cell the publisher
+    produced could ever have been a member. `placed.def` is its sibling in the
+    same directory, published by nothing, and carries the property unchanged.
+
+    Asserting BOTH sides is deliberate and is strictly more than this test used
+    to say: the boundary is now pinned from each direction, so the exception
+    cannot silently grow into the subtree it was carved out of.
     """
     run = _make_run(tmp_path, gds_bytes=4096)
-    scratch = run / "phase3" / "stage3" / "pnr" / "routed.def"
-    scratch.parent.mkdir(parents=True, exist_ok=True)
-    scratch.write_text("DESIGN top ;\n")
+    pnr = run / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True, exist_ok=True)
+    (pnr / "placed.def").write_text("DESIGN top ;\n")
+    (pnr / "routed.def").write_text("DESIGN top ;\n")
     dest_root = tmp_path / "benchmark-data"
     assert _publish(run, dest_root).returncode == 0
     cell = _cell(dest_root)
-    assert not (cell / "phase3" / "stage3" / "pnr" / "routed.def").exists()
-    line = [ln for ln in (cell / "LAYOUT_ROUTING.txt").read_text().splitlines()
-            if ln.startswith("phase3/stage3/pnr/routed.def ")]
+    body = (cell / "LAYOUT_ROUTING.txt").read_text().splitlines()
+
+    assert not (cell / "phase3" / "stage3" / "pnr" / "placed.def").exists()
+    line = [ln for ln in body if ln.startswith("phase3/stage3/pnr/placed.def ")]
     assert len(line) == 1 and "NOT_PUBLISHED" in line[0], line
+
+    # The carve-out, pinned from the other side.
+    assert (cell / "phase3" / "stage3" / "pnr" / "routed.def").is_file()
+    line = [ln for ln in body if ln.startswith("phase3/stage3/pnr/routed.def ")]
+    assert len(line) == 1 and "STAGED" in line[0], line
 
 
 def test_a_staged_input_artefact_is_not_mislabelled_not_published(tmp_path):
