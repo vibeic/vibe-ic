@@ -187,6 +187,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -246,6 +247,12 @@ _MANIFEST_LINE_RE = re.compile(r"^\S+ \d+B sha256:[0-9a-fA-F]{64}$")
 # Converged verdict tokens (order matters: match the most specific first).
 _VERDICT_TOKENS = ("PASS_WITH_WAIVERS", "PASS", "FAIL")
 _CONVERGED = ("PASS", "PASS_WITH_WAIVERS")
+
+
+#: How each `FolderResult.kind` reads in the roll-up. A kind with no entry here
+#: still prints, under its own name — the line must never lose a population just
+#: because nobody added a label for it.
+_KIND_LABEL = {"cell": "published cell", "ic-root": "IC-level root"}
 
 
 @dataclass
@@ -1129,8 +1136,33 @@ def main(argv: Optional[List[str]] = None) -> int:
                 + "; ".join(f"{r.ic or Path(r.path).name}={_n_entries(r.examined or 0)}"
                             for r in skipped)
                 + ") — counted as neither conformant nor nonconformant")
+    # THE FRACTION DOES NOT SAY WHAT IT COUNTED, and over this corpus the two
+    # possible answers differ by every published cell in the repository.
+    # MEASURED on `vibeic/benchmark-data`, `--tree` at two commits:
+    #
+    #     146d665 (pre-withdrawal)  kinds {ic-root: 9, cell: 4}  "13/13 conformant"
+    #     3b58ccd42 (today)         kinds {ic-root: 9, cell: 0}   "9/9 conformant"
+    #
+    # Both lines are TRUE and neither states the cell count, so a reader of the
+    # CI log gets the same sentence shape from a corpus with four published
+    # cells and from a corpus with none. The per-unit rows and `--json` already
+    # separate them (`kind`); the ROLL-UP did not, and the roll-up is what a
+    # reader takes the impression from.
+    #
+    # THE CELL COUNT IS PRINTED EVEN WHEN IT IS ZERO, and especially then: a
+    # clause that appears only when there are cells would leave the empty corpus
+    # with exactly the silence this discloses. Every other kind is derived from
+    # the results rather than named here, so a kind added later cannot fall out
+    # of the line without anyone noticing.
+    by_kind = Counter(r.kind for r in examined)
+    cells = by_kind.pop("cell", 0)
+    others = ", ".join(f"{n} {_KIND_LABEL.get(k, k)}(s)"
+                       for k, n in sorted(by_kind.items()))
+    population = (f" — over {cells} published cell(s)"
+                  + (f" and {others}" if others else ""))
     print(f"\nbenchmark_evidence_structure_check: "
-          f"{passed}/{len(examined)} conformant, {failed} nonconformant{tail}")
+          f"{passed}/{len(examined)} conformant, {failed} nonconformant"
+          f"{tail}{population}")
 
     if args.json:
         Path(args.json).write_text(
