@@ -239,3 +239,167 @@ def test_the_documented_schema_string_is_the_one_the_checker_accepts():
     assert "vibeic.ppa.pr_answers.v1" in body
     checker = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
     assert "vibeic.ppa.pr_answers.v1" in checker
+
+
+# --------------------------------------------------------------------------- #
+# the gate this branch exists to close, asked locally
+# --------------------------------------------------------------------------- #
+# Same reasoning as the flow half: `machine_runners`, not absence from
+# `test_only`, because a SKILL mention would empty the latter and satisfy
+# nothing. This program's venue is PROG — `gatekeeper_review` spawns it — and
+# NOT the flow, because a change-set is not a design.
+
+def _wiring_audit_report() -> dict:
+    import subprocess
+    import tempfile as _tf
+    out = Path(_tf.mkdtemp(prefix="cewppa_")) / "cew.json"
+    subprocess.run([sys.executable,
+                    str(PROG / "checker_execution_wiring_audit.py"),
+                    "--json", str(out)],
+                   capture_output=True, text=True, timeout=600)
+    return json.loads(out.read_text())
+
+
+def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
+    rep = _wiring_audit_report()
+    runners = rep["machine_runners"].get("ppa_pr_scope_check.py")
+    assert runners, (
+        "checker_execution_wiring_audit credits NO machine runner for "
+        "ppa_pr_scope_check — a skill mention does not count")
+    assert "PROG" in runners, f"gatekeeper_review is not credited: {runners}"
+
+
+def test_the_pr_scope_check_is_not_wired_into_the_design_flow():
+    """It answers a question about a CHANGE-SET. The flow reviews a DESIGN and
+    has no notion of one, so crediting FLOW here would mean it had been wired
+    somewhere it cannot be evaluated."""
+    rep = _wiring_audit_report()
+    runners = rep["machine_runners"].get("ppa_pr_scope_check.py") or []
+    assert "FLOW" not in runners, (
+        f"the PR-scope check is wired into the design flow: {runners}")
+    assert "ppa_pr_scope_check.py" not in (rep.get("test_only") or [])
+
+
+# --------------------------------------------------------------------------- #
+# rc 3 — a bad invocation is THIS WIRING's bug, and it must not read as clean
+# --------------------------------------------------------------------------- #
+# Found by mutation: flipping the rc-3 arm from blocking to green left every
+# test in this module passing. The claim "rc 3 blocks" was in the commit
+# message and in the gate, and nothing measured it.
+#
+# It matters because rc 3 is the ONE exit code that indicts the wiring rather
+# than the PR. If a future edit passes a flag the checker does not accept, the
+# gate would report green forever and the merge condition would never be
+# evaluated again — a gate that cannot fail, arrived at by accident instead of
+# by design. The two halves are pinned separately so neither can drift: the
+# program's contract, and this gate's reading of it.
+
+def test_the_checker_really_exits_3_on_a_bad_invocation():
+    """Half one: the contract this gate depends on. argparse would exit 2,
+    which in this program means UNDETERMINED — the checker overrides that
+    precisely so "you typed it wrong" and "the evidence was not there" stay
+    apart."""
+    import subprocess as _s
+    r = _s.run([sys.executable, str(PROG / "ppa_pr_scope_check.py"),
+                "--not-a-real-flag"], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 3, (
+        f"expected rc 3 (bad invocation), got {r.returncode}")
+
+
+def test_a_bad_invocation_BLOCKS_and_is_never_reported_as_clean(monkeypatch):
+    """Half two: this gate's classification. rc 3 is not the PR's fault and it
+    is not a skip — it is this wiring being broken, which must be loud."""
+    def _rc3(prog, args, **kw):
+        return 3, "", "bad invocation: unrecognized arguments"
+    monkeypatch.setattr(G, "_run_program", _rc3)
+    g = G.ppa_pr_scope_gate(Path("."), "BASE", "HEAD")
+    assert g.rc == 1 and g.green is False, (
+        f"a bad invocation reported {g.rc}/{g.green} — a wiring that cannot "
+        f"run must never read as a wiring that passed: {g.summary}")
+    assert "bad invocation" in g.summary
+
+
+def test_the_four_exit_codes_map_to_four_distinct_gate_readings(monkeypatch):
+    """0 PASS / 1 VIOLATED / 2 NOT CHECKED / 3 BAD INVOCATION. Collapsing any
+    two of them loses a distinction the checker went to trouble to make."""
+    seen = {}
+    for rc in (0, 1, 2, 3):
+        monkeypatch.setattr(G, "_run_program",
+                            lambda p, a, _rc=rc, **kw: (_rc, "", ""))
+        g = G.ppa_pr_scope_gate(Path("."), "BASE", "HEAD")
+        seen[rc] = (g.rc, g.green)
+    assert seen[2] == (-1, True), f"rc 2 must be NOT CHECKED: {seen[2]}"
+    assert seen[3] == (1, False), f"rc 3 must block: {seen[3]}"
+    assert seen[0][1] is True and seen[3][1] is False
+    # a skip and a broken wiring are not the same fact
+    assert seen[2] != seen[3]
+
+
+# --------------------------------------------------------------------------- #
+# this gate declares its own intent, and no program can check that for it
+# --------------------------------------------------------------------------- #
+# `flow_gate_enforcement_audit` reads `ENFORCEMENT:` declarations out of the
+# FLOW definition. This checker is not a flow gate — it judges a change-set,
+# not a design — so that audit never sees it, and the doctrine's own promotion
+# list still has "every gate declares BLOCKING vs ADVISORY" as a program that
+# does not exist yet. Found by mutation: deleting the declaration left all 16
+# tests green.
+#
+# Anchored at line start, which is the #886 rule: a declaration must OPEN its
+# line. Several gates MENTION the word in prose while declaring nothing, and an
+# unanchored pattern read each of those as a declaration.
+
+def test_the_checker_declares_its_enforcement_intent_on_its_own_line():
+    import re
+    doc = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
+    m = re.search(r"^ENFORCEMENT:\s*(blocking|advisory)\s*$", doc, re.M)
+    assert m, ("ppa_pr_scope_check declares no ENFORCEMENT intent. Silence is "
+               "not neutral: an unstated default of advisory is how 62 of 72 "
+               "gates ended up unable to stop anything.")
+    assert m.group(1) == "blocking"
+
+
+def test_the_declaration_matches_what_the_gate_actually_does(monkeypatch):
+    """A declaration nothing cross-checks is the unenforced-declaration shape
+    the doctrine tells you to refuse. Bind it to observed behaviour: it says
+    blocking, so a finding must actually block."""
+    import re
+    doc = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
+    declared = re.search(r"^ENFORCEMENT:\s*(\w+)\s*$", doc, re.M).group(1)
+    monkeypatch.setattr(G, "_run_program", lambda p, a, **kw: (3, "", "bad"))
+    blocks = G.ppa_pr_scope_gate(Path("."), "BASE", "HEAD").green is False
+    assert (declared == "blocking") == blocks, (
+        f"declares {declared!r} but blocking={blocks}")
+
+
+# --------------------------------------------------------------------------- #
+# a review artefact must not be mistakable for a step artefact
+# --------------------------------------------------------------------------- #
+# The gate writes its report to a TemporaryDirectory, and the reason is in the
+# code: the report declares `verdict: FAIL`, and a `reports/**/*.json` carrying
+# that is exactly what `step_internal_fail_bubble_up_check` refuses. Round-4
+# mutation redirected the write into the repo and all 18 tests passed — the
+# justification was written down and never measured.
+
+def test_the_gate_leaves_no_artefact_in_the_repository():
+    repo, base = _repo_with_a_surface()
+    _answers(repo, _ANSWERS_THAT_LIE)
+    before = {p.relative_to(repo) for p in repo.rglob("*") if ".git" not in p.parts}
+    g = G.ppa_pr_scope_gate(repo, base, "HEAD")
+    after = {p.relative_to(repo) for p in repo.rglob("*") if ".git" not in p.parts}
+    assert g.rc == 1                      # it really ran and really found something
+    assert after == before, f"the review wrote into the repo: {sorted(after - before)}"
+
+
+def test_it_writes_no_verdict_FAIL_json_anywhere_under_reports():
+    """The specific cascade: `step_internal_fail_bubble_up_check` reads any
+    `reports/**/*.json` whose verdict is FAIL or MISSING as an unacknowledged
+    step-internal failure."""
+    import json as _j
+    repo, base = _repo_with_a_surface()
+    _answers(repo, _ANSWERS_THAT_LIE)
+    G.ppa_pr_scope_gate(repo, base, "HEAD")
+    for p in repo.rglob("reports/**/*.json"):
+        v = _j.loads(p.read_text()).get("verdict")
+        assert v not in ("FAIL", "MISSING"), f"{p} declares verdict={v}"
+    assert not list(repo.glob("ppa_pr_scope.json"))

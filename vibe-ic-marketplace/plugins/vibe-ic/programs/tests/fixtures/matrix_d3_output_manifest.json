@@ -1100,6 +1100,14 @@
           "alternative": "reports/phase3/lvs_verdict.json",
           "path": "reports/phase3/lvs_verdict.json",
           "size_bytes": 1131
+        },
+        "reports/phase3/drc_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "the recorded copy is `eda_report_audit:drc` output (step 31's own gate clause `drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json`) — same class as lvs.json and erc_density.json above. DECLARED by d976999c4 [v1.11.45], which added the path to step 31's required_outputs and did not measure it into this manifest; the parity gate has read 164 declared paths against 163 entries ever since. RE-DERIVED on the current tree rather than by widening that assertion: the artefact resolves non-empty at the run root five of its own siblings already cite, and the entry is decided LIVE by the same PRODUCED_BY_RUN branch as the other 121, so it reddens the day the root stops carrying it.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/drc_signoff.json",
+          "path": "reports/phase3/drc_signoff.json",
+          "size_bytes": 1919
         }
       }
     },

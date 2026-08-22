@@ -188,12 +188,34 @@ def test_the_runner_passes_its_own_top_name_not_the_programs_default():
     assert R.step_slot_pad_budget(p, "my_soc_top").status == "FAIL"
 
 
-def test_the_step_is_in_the_runners_plan():
+def test_the_step_is_APPENDED_TO_THE_PLAN_not_merely_defined():
+    """A defined-but-uncalled step is the #884 shape exactly: it looks wired to
+    a reader and to the wiring audit (the module still NAMES the program, so
+    PROG is still credited), and it runs never.
+
+    Found by mutation: deleting the `plan.append(...)` line left every test in
+    this module green, because the previous assertion was the substring
+    `step_slot_pad_budget(project` — which the DEFINITION
+    `def step_slot_pad_budget(project: Path, ...)` satisfies all by itself. So
+    the call is resolved structurally, from the plan-building appends."""
     import ast
     src = (PROG / "design_one_shot_runner.py").read_text(encoding="utf-8")
-    assert "step_slot_pad_budget(project" in src, \
-        "the runner defines the step but never puts it in the plan"
-    ast.parse(src)
+    tree = ast.parse(src)
+    appended = set()
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "append"
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "plan"):
+            for a in n.args:
+                if isinstance(a, ast.Call):
+                    try:
+                        appended.add(ast.unparse(a.func))
+                    except Exception:
+                        pass
+    assert "step_slot_pad_budget" in appended, (
+        "design_one_shot_runner defines the step but never appends it to the "
+        f"plan, so it never runs. plan.append targets: {sorted(appended)[:8]}...")
 
 
 def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
@@ -265,3 +287,168 @@ def test_the_three_step_verdicts_are_three_distinct_values():
             _step_status(T._RTL_FITS, True),
             _step_status(T._RTL_FITS, False)}
     assert len(seen) == 3, seen
+
+
+# --------------------------------------------------------------------------- #
+# the gate this branch exists to close, asked locally
+# --------------------------------------------------------------------------- #
+# `checker_execution_wiring_audit` is the gate that named this program as one
+# nothing but its own test ran. The tests above pin the flow clause and the
+# runner spawn INDIVIDUALLY; this pins the audit's own verdict about the
+# program, which is the thing that was actually red.
+#
+# `machine_runners`, NOT absence from `test_only`, and the distinction is the
+# whole point: the audit counts a SKILL document as a runner and says in its
+# own docstring that this is the weakest form there is. Adding one line to a
+# skill would empty `test_only` and satisfy nothing — a skill runs only if an
+# agent remembers to. FLOW / PROG / CI / TOOLS fire without anyone choosing.
+
+def _wiring_audit_report() -> dict:
+    import subprocess
+    import tempfile as _tf
+    out = Path(_tf.mkdtemp(prefix="cew1347_")) / "cew.json"
+    subprocess.run([sys.executable,
+                    str(PROG / "checker_execution_wiring_audit.py"),
+                    "--json", str(out)],
+                   capture_output=True, text=True, timeout=600)
+    return json.loads(out.read_text())
+
+
+def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
+    rep = _wiring_audit_report()
+    runners = rep["machine_runners"].get("slot_pad_budget_check.py")
+    assert runners, (
+        "checker_execution_wiring_audit credits NO machine runner for "
+        "slot_pad_budget_check — a skill mention does not count, because it "
+        "runs only if an agent remembers to")
+    # Both of this branch's wirings, and they are different venues on purpose.
+    assert "FLOW" in runners, f"the flow clause is not credited: {runners}"
+    assert "PROG" in runners, f"the runner spawn is not credited: {runners}"
+
+
+def test_it_is_no_longer_in_the_audits_test_only_population():
+    rep = _wiring_audit_report()
+    assert "slot_pad_budget_check.py" not in (rep.get("test_only") or [])
+
+
+# --------------------------------------------------------------------------- #
+# the runner step's failure path, and where it writes
+# --------------------------------------------------------------------------- #
+# Round-4 mutation found three of these unguarded. Two are about a report
+# landing where its reader looks; the first is the doctrine one.
+
+def test_a_gate_that_COULD_NOT_RUN_is_FAIL_never_PASS(monkeypatch):
+    """"I could not look" and "I looked and it was fine" must never produce
+    the same verdict. Mutating this arm to PASS left every test green, which
+    means the runner could have lost the ability to run this gate at all and
+    reported a clean step forever."""
+    R = _runner()
+
+    def _boom(*a, **kw):
+        raise OSError("no such executable")
+
+    monkeypatch.setattr(R.subprocess, "run", _boom)
+    sr = R.step_slot_pad_budget(_project(_HOPELESS, with_slots=True), "chip_top")
+    assert sr.status == "FAIL", (
+        f"a gate that could not run reported {sr.status!r} — a check that "
+        f"could not look is not a clean check")
+    assert "could not run" in sr.detail
+
+
+def test_the_runner_writes_its_report_INSIDE_THE_PROJECT():
+    """Without `cwd=project` the relative `--json` path resolves against the
+    caller's working directory, so the record lands outside the project and
+    the reader finds nothing. Measured during the mutation run: it wrote into
+    the repository root, where only this repo's own suite_write_guard noticed."""
+    R = _runner()
+    p = _project(_HOPELESS, with_slots=True)
+    before = {q for q in Path.cwd().glob("reports")}
+    sr = R.step_slot_pad_budget(p, "chip_top")
+    assert (p / "reports" / "phase2" / "gates" / "slot_pad_budget.json").is_file(), \
+        "the step's record is not inside the project it judged"
+    assert {q for q in Path.cwd().glob("reports")} == before, \
+        "the step wrote a report outside the project"
+    assert sr.output_files and sr.output_files[0].startswith("reports/")
+
+
+def test_the_runner_and_the_flow_clause_declare_THE_SAME_report_path():
+    """Two producers, one path. If they drift, the flow's re-check writes
+    somewhere the runner's reader never looks, and both look fine alone."""
+    src = (PROG / "design_one_shot_runner.py").read_text(encoding="utf-8")
+    import re
+    m = re.search(r'out_rel = "([^"]+slot_pad_budget[^"]*)"', src)
+    assert m, "the runner declares no report path for this step"
+    assert m.group(1) in _clause(), (
+        f"runner writes {m.group(1)!r}, flow clause says {_clause()!r}")
+
+
+# --------------------------------------------------------------------------- #
+# the fourth verdict: a PASS that is CONDITIONAL on a human decision
+# --------------------------------------------------------------------------- #
+# The program has four verdicts and everything above exercises three. The one
+# left out is the subtle one, and it is the only PASS that does not mean what a
+# PASS normally means.
+#
+# FITS_AFTER_FOLD is rc 0, so the step is green — correctly: refusing it would
+# block a design a competent bond-out fits. But it means "fits ONLY IF a named
+# fold is taken", and the program says in the same breath that whether that
+# fold is safe is a PROTOCOL fact it will not decide. So the green must carry
+# the condition with it. A bare PASS here would read as "this bonds out" when
+# what was measured is "this bonds out if somebody folds two buses and nobody
+# has checked that they are never live together".
+
+def _foldable_project() -> Path:
+    return _project(T._RTL_FOLDABLE, with_slots=True)
+
+
+def test_a_design_that_fits_only_after_folding_is_not_BLOCKED():
+    """The direction that matters first: a legitimate design must not be
+    refused by arithmetic that a real pin-out would have solved."""
+    R = _runner()
+    assert R.step_slot_pad_budget(_foldable_project(), "chip_top").status == "PASS"
+    passed, vacuous, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
+    assert (passed, vacuous) == (True, False)
+    assert rep["verdict"] == "FITS_AFTER_FOLD"
+
+
+def test_the_conditional_pass_is_DISCLOSED_and_not_a_bare_green():
+    """The operator-visible line must name the verdict, not just the status —
+    otherwise the condition is lost at exactly the moment somebody reads
+    'PASS' and stops looking."""
+    R = _runner()
+    sr = R.step_slot_pad_budget(_foldable_project(), "chip_top")
+    assert "FITS_AFTER_FOLD" in sr.detail, (
+        f"the step passed without naming the condition: {sr.detail!r}")
+
+
+def test_the_record_names_the_fold_and_refuses_to_call_it_safe():
+    """The fold is an INVITATION to a human decision, recorded with the
+    signals that could drive it. If the gate ever claimed the fold was safe it
+    would be inventing a pin-out."""
+    _, _, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
+    cands = rep["fold_candidates"]
+    assert cands, "a FITS_AFTER_FOLD verdict that names no fold is unactionable"
+    assert cands[0]["input_bus"] and cands[0]["output_bus"] and cands[0]["width"]
+    assert "NOT DECIDED HERE" in cands[0]["safety"]
+    assert any("protocol-safe" in s for s in rep["does_not_decide"])
+
+
+def test_the_fold_does_not_rewrite_the_declared_number():
+    """The DECLARED count is what the design actually asks for; the folded one
+    is a hypothetical. Reporting only the second would launder a decision
+    nobody took into a measurement."""
+    _, _, rep = _drive(T._RTL_FOLDABLE, with_slots=True)
+    assert rep["declared_signal_bits"] == 75
+    assert rep["signal_bits_after_folding_every_candidate"] == 43
+    assert rep["declared_signal_bits"] != rep["signal_bits_after_folding_every_candidate"]
+
+
+def test_all_four_verdicts_are_reachable_through_the_wiring():
+    """Coverage stated as an assertion rather than assumed from the tests that
+    happen to exist: every verdict the program can return must have been driven
+    through the clause at least once."""
+    seen = set()
+    for rtl, slots in ((_HOPELESS, True), (T._RTL_FITS, True),
+                       (T._RTL_FOLDABLE, True), (T._RTL_FITS, False)):
+        seen.add(_drive(rtl, slots)[2]["verdict"])
+    assert seen == {"DOES_NOT_FIT", "FITS", "FITS_AFTER_FOLD", "UNDECIDED"}, seen

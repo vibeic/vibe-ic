@@ -1,0 +1,20 @@
+{
+ "declared_schema": "vibeic.ppa.comparison.v2",
+ "ok": false,
+ "problem": {
+  "clock_target_ns": 10.0,
+  "corners": [
+   "ss",
+   "tt",
+   "ff"
+  ],
+  "pdk": "sky130A",
+  "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
+ },
+ "record": "/home/reyerchu/_jxlayer/records/h2h_F.json",
+ "refusal": {
+  "code": "BASELINE_TUNED_BY_US",
+  "message": "baseline 'vibe-ic-pnr-only-searched' does not declare `tuned_by_this_project: false`. A baseline we tune is an oracle we wrote, and a favourable number measured against it says nothing about silicon."
+ },
+ "_refiled_note": "This is ppa_head_to_head_check's refusal of the document now filed at ppa-crosslayer/records/ablations/ablation_pnr_only_vs_crosslayer.json as vibeic.ppa.ablation.v1. It is KEPT because it is the evidence that the re-filing is a correction and not a convenience: the gate refused the document, the refusal was right, and the numbers did not change. A re-filing whose causing refusal has been deleted is indistinguishable from a record that was always this kind."
+}

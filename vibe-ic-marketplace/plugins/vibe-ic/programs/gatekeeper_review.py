@@ -1132,6 +1132,11 @@ _HYGIENE_STALL_GRACE_S = 1800
 # MEASURED (2026-08-20, clean origin/main 3199e9b3, this host):
 #     pointer UNSET -> 75 of 80 decided, 71 passed, 4 failed, 5 NOT CHECKED,
 #                      the routed-DEF corpus EMPTY and BLOCKING, 239s wasted.
+#     — and "EMPTY" is how that row READ at the time, not what happened
+#       (vibe-ic#1764). With the pointer unset nothing was OPENED; the corpus
+#       was NOT FOUND. Both are blocking NOT CHECKED and the measurement above
+#       stands, but the two now get different rows, and the pointer-unset run
+#       is the NOT FOUND one.
 #     pointer SET   -> 77 of 83 decided, 73 passed, 4 failed, 6 NOT CHECKED, 241s,
 #                      and `published-evidence index honest` FAILS — a real,
 #                      committed-INDEX-is-stale defect the empty corpus hid
@@ -1464,6 +1469,110 @@ def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
     return GateResult(name, rc, line or (err.strip()[:200] or "no output"))
 
 
+def _declared_labels(repo: Path, script: Optional[Path] = None) -> Optional[list]:
+    """The labels THIS tree declares, from a `--list` run. 0.12 s, measured."""
+    path = Path(script) if script is not None else (repo / _HYGIENE_SCRIPT_REL)
+    if not path.is_file():
+        return None
+    with tempfile.TemporaryDirectory(prefix="hygiene_list_") as td:
+        out = Path(td) / "list.json"
+        try:
+            # watchdog-exempt: `--list` DECLARES the gate set and executes no
+            # gate — `gate_dispatch_init` parses it, every gate is recorded
+            # LISTED, and `gate_dispatch_finish` writes the record and exits.
+            # No tool subprocess is launched, so there is nothing here that can
+            # escape supervision. MEASURED at 0.12 s over 85 gates, and bounded
+            # anyway by the `timeout=` below rather than by that measurement.
+            subprocess.run(["bash", str(path), "--list",
+                            "--summary-json", str(out)],
+                           cwd=str(repo), capture_output=True, timeout=120)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return [str(g.get("label")) for g in (doc.get("gates") or [])]
+
+
+def hygiene_gate_from_record(repo: Path, record: Path,
+                             record_rc: Optional[int],
+                             script: Optional[Path] = None) -> GateResult:
+    """Adjudicate a hygiene record the CALLER already produced.
+
+    IN-PROCESS CALLERS ONLY. THERE IS NO CLI FLAG AND THERE MUST NOT BE.
+    `review()` reaches this through `hygiene_record_in=`, a FUNCTION KEYWORD in
+    the same spirit as `repo_hygiene_gate`'s `script=` seam and under the same
+    rule that function's docstring states.
+
+    v1.11.67 put it on the command line as `--hygiene-record-in`, argued as a
+    change of RUNNER rather than of SUBJECT: the set still runs in full, in the
+    lander's own hygiene lane, and this reads that run's record instead of
+    paying for a second one. The distinction is real and it is why this
+    function exists. It is not a reason to expose it to `argv`, and the two
+    gates that said so were right.
+
+    THE RECORD IS CHECKED, NOT TRUSTED — AND A SHAPE IS NOT A PROVENANCE.
+    The record must exist and parse; it must carry the exit status of the run
+    that produced it, supplied separately by the caller that watched it; and
+    the gates it names must be exactly the set this tree declares, obtained
+    from a `--list` run costing well under a second. Those four are everything
+    this function knows, and all four are properties of the FILE. MEASURED on
+    this repo: `--list` reports 86 declared labels in 0.62 s, and a 6 KB record
+    marking every one of them PASS makes this function return rc 0 green,
+    summarised as `86/86 gate(s) ran`, over a set that never ran. The forgery
+    is not hard and does not need to be; it needs a caller who can name a path.
+
+    So the checks defend an in-process caller that has already run the set from
+    a corrupted or truncated record. They do not, and cannot, defend against
+    the caller itself, which is exactly what a command line is. See
+    `tests/test_hygiene_handover_is_in_process_only.py`, which binds that rule
+    to the KEYWORD rather than to any spelling of a flag.
+
+    Every failure to establish the four is rc 2 UNDETERMINED and BLOCKING.
+    Never rc 0: "I could not check the record" must not reach a verdict as "the
+    record was clean", which is this repo's `_vacuous_exit` convention applied
+    to the handover itself.
+    """
+    name = "repo_hygiene_gates"
+    record = Path(record)
+    if not record.is_file():
+        return GateResult(name, 2,
+                          f"UNDETERMINED — no hygiene record at {record}: the "
+                          f"caller named a record it did not produce, so 0 "
+                          f"gate state(s) could be adjudicated")
+    try:
+        doc = json.loads(record.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return GateResult(name, 2,
+                          f"UNDETERMINED — the hygiene record at {record} does "
+                          f"not parse: {exc}")
+    if record_rc is None:
+        return GateResult(name, 2,
+                          "UNDETERMINED — a hygiene record was supplied with no "
+                          "exit status. The record says WHICH gates were red; "
+                          "only the run's rc says whether the set completed, "
+                          "and a killed run leaves a record that looks finished")
+    declared = _declared_labels(repo, script)
+    if declared is None:
+        return GateResult(name, 2,
+                          "UNDETERMINED — could not ask this tree which gates it "
+                          "declares, so a supplied record cannot be checked "
+                          "against it")
+    named = sorted(str(g.get("label")) for g in (doc.get("gates") or []))
+    if named != sorted(declared):
+        missing = sorted(set(declared) - set(named))
+        extra = sorted(set(named) - set(declared))
+        return GateResult(name, 2,
+                          f"UNDETERMINED — the supplied record names "
+                          f"{len(named)} gate(s) and this tree declares "
+                          f"{len(declared)}: {len(missing)} not in the record "
+                          f"({', '.join(missing[:4])}), {len(extra)} not "
+                          f"declared ({', '.join(extra[:4])})")
+    result = _hygiene_verdict(doc, int(record_rc))
+    return GateResult(result.name, result.rc,
+                      f"{result.summary} [adjudicated from the caller's record "
+                      f"of a run that exited {int(record_rc)}, "
+                      f"{len(declared)} declared gate(s) matched]")
+
+
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     """Turn the script's own coverage record into a gate result.
 
@@ -1700,7 +1809,9 @@ def review(base: str, head: str, *,
            batch: bool = False,
            hygiene_script: Optional[Path] = None,
            hygiene_report: Optional[Path] = None,
-           hygiene_progress: Optional[Path] = None) -> Verdict:
+           hygiene_progress: Optional[Path] = None,
+           hygiene_record_in: Optional[Path] = None,
+           hygiene_record_rc: Optional[int] = None) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
 
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
@@ -1791,9 +1902,14 @@ def review(base: str, head: str, *,
         _record = (Path(hygiene_report).resolve() if hygiene_report is not None
                    else Path(_td) / "hygiene.json")
         _record.parent.mkdir(parents=True, exist_ok=True)
-        gates.append(repo_hygiene_gate(repo, script=hygiene_script,
-                                       summary_out=_record,
-                                       progress_out=hygiene_progress))
+        if hygiene_record_in is not None:
+            _record = Path(hygiene_record_in).resolve()
+            gates.append(hygiene_gate_from_record(
+                repo, _record, hygiene_record_rc, script=hygiene_script))
+        else:
+            gates.append(repo_hygiene_gate(repo, script=hygiene_script,
+                                           summary_out=_record,
+                                           progress_out=hygiene_progress))
         gates.append(gate_red_since_gate(repo, _record))
 
     # 5. verdict.
@@ -1887,6 +2003,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=("persist the complete repo-hygiene summary/attestation JSON at "
               "this path instead of keeping it only for the in-process "
               "gate-red-since adjudication"))
+    # THERE IS NO `--hygiene-record-in`, AND THERE MUST NOT BE. `review()`
+    # takes `hygiene_record_in=` as a FUNCTION KEYWORD, in the same spirit as
+    # `repo_hygiene_gate`'s `script=` seam and under the same rule that
+    # function's docstring states: no CLI flag, because a command-line way to
+    # hand this gate a substitute for running it is a skip button on the one
+    # gate whose entire purpose is that it cannot be forgotten.
+    #
+    # v1.11.67 grew one, argued as a change of RUNNER rather than of SUBJECT.
+    # The argument does not survive contact with the command line: every check
+    # `hygiene_gate_from_record` makes is a check of the record's SHAPE — it
+    # exists, it parses, an rc came with it, and it names exactly the labels a
+    # 0.12 s `--list` run reports — and a shape is not a provenance. Measured
+    # here: with `--list` naming this tree's declared labels, a record marking
+    # every one of them PASS is a few lines of JSON, and the gate returns rc 0
+    # green over a set that never ran. A caller who can pass a path can pass
+    # that path.
+    #
+    # So the handover keeps its ten tests and its callers inside this process,
+    # and `argv` cannot reach it.
     ap.add_argument(
         "--gate-progress", dest="hygiene_progress", default=None,
         help=("append one owner-only JSONL process attestation after each "
