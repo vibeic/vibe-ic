@@ -54,6 +54,8 @@ reset polarity are PARSED from the prose) and host-verified against the dataset 
 from __future__ import annotations
 import re
 
+from _prose_polarity import LINE_END_BREAKS, is_denied, sentence_scope
+
 
 # --------------------------------------------------------------------------- #
 # Ports (shared reader — bullet form OR Verilog module header).
@@ -67,9 +69,26 @@ def _parse_ports(prompt):
 
 
 def _is_moore(prompt: str) -> bool:
-    """A prompt that NAMES itself Moore is not ours — the Moore solver owns it."""
-    return bool(re.search(r"\bMoore[-\s]?type\b|\bMoore\b\s+(?:finite|state|machine|FSM)",
-                          prompt, re.I))
+    """A prompt that NAMES itself Moore is not ours — the Moore solver owns it.
+
+    POLARITY (vibe-ic#712), and here the reader is a PREDICATE rather than a
+    value extractor -- no widening of a write-shape census would ever reach it,
+    and the harm is the same. Measured:
+
+        "The detector is not a Moore machine; it is Mealy."  -> True
+
+    A prompt that explicitly REFUSES Moore was handed to the Moore solver, so
+    the wrong machine gets synthesised from a document that says so plainly.
+    """
+    for m in re.finditer(
+            r"\bMoore[-\s]?type\b|\bMoore\b\s+(?:finite|state|machine|FSM)",
+            prompt, re.I):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=LINE_END_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
+        return True
+    return False
 
 
 def _says_mealy(prompt: str) -> bool:

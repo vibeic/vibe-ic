@@ -49,6 +49,8 @@ if str(_HERE) not in sys.path:
 
 import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
 
+from _prose_polarity import LINE_END_BREAKS, is_denied, sentence_scope
+
 Port = Tuple[str, int]
 
 
@@ -150,10 +152,27 @@ def _parse_poly(prompt: str) -> Optional[Tuple[int, Optional[int]]]:
     """Return (poly_value, implied_width|None) or None. Tries, in order:
     a stated `POLY[=:] <literal>`, a `polynomial 0x..`, an `x^..+..+1` form."""
     # POLY = 8'b10101010  /  POLY: 0xAA  /  generator polynomial = 16'h1021
-    m = re.search(
-        r"(?i)\b(?:POLY|polynomial|generator\s+poly\w*)\b[^\n]*?"
-        r"((?:\d+)?'[bBhHdHoO][0-9a-fA-F_]+|0x[0-9a-fA-F]+|\bx\s*\^[^\n]*?\b1\b)",
-        prompt)
+    # POLARITY (vibe-ic#712). A prompt is written by a person, and a person
+    # retires a polynomial as readily as they state one:
+    #
+    #     "The polynomial 0x04C11DB7 is no longer used; use 0x1021."
+    #
+    # returned 0x04C11DB7. A CRC built on the retired polynomial computes a
+    # different remainder and will not interoperate with the thing it is for.
+    #
+    # `finditer`, not `search`: a denied statement must not END the search, or a
+    # prompt that retires one polynomial and gives another yields nothing.
+    m = None
+    for cand in re.finditer(
+            r"(?i)\b(?:POLY|polynomial|generator\s+poly\w*)\b[^\n]*?"
+            r"((?:\d+)?'[bBhHdHoO][0-9a-fA-F_]+|0x[0-9a-fA-F]+|\bx\s*\^[^\n]*?\b1\b)",
+            prompt):
+        lo, hi = sentence_scope(prompt, cand.start(), cand.end(),
+                                extra_breaks=LINE_END_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
+        m = cand
+        break
     if not m:
         return None
     tok = m.group(1).strip()
