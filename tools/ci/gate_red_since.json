@@ -96,14 +96,6 @@
       "owner": "repo-gatekeeper",
       "why": "step 31 declares reports/phase3/drc_signoff.json and the d3 evidence manifest has never measured it, so the flow and fixtures/matrix_d3_output_manifest.json are out of step.",
       "bound_because": "MEASURED, not estimated: this gate went red at origin/main~85 and was green again by origin/main~25, so the previous instance of this exact defect was repaired in under 60 commits by the people who repair it. The bound is that observed repair time, which is the only number here that is a measurement of the fix rather than a judgement about it."
-    },
-    {
-      "gate": "liar census controls still fire",
-      "since": "41bfd8a126db6cb0473b8d4bec2296ffa2dfd4a6",
-      "max_commits": 35,
-      "owner": "repo-gatekeeper",
-      "why": "the shrink-detector literal in test_liar_census.py lags the flow's declared clause count again -- the fourth time (169->170, 170->175, 175->178, and now).",
-      "bound_because": "MEASURED from the three previous instances: the literal was repaired in 2 commits between origin/main~249 and ~247, and in under 15 commits between origin/main~85 and ~70. 35 commits is half a day and more than twice the worst observed repair. The bound intentionally does NOT cover the structural fix the test's own docstring asks for -- deriving the floor from the flow -- because what closes this red is the bump, and pricing the bound at the structural fix would be buying four days of silence for a five-minute edit."
     }
   ]
 }
