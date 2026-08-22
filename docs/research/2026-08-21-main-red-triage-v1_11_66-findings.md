@@ -5438,6 +5438,59 @@ which was true of one file, but **34 reds, six causes, three unresolved, and the
 denominators stated.**
 
 
+## M102 — the repository's own gate was RED about the defect I spent the day discovering
+
+M101 left three tests un-root-caused. All three are now settled, and the first one
+is the finding of this whole engagement.
+
+**`test_every_na_cell_asserts_a_live_precondition` — the anti-skip gate:**
+
+    2 NA problem(s):
+      - dimension 3: cell test test_d3_required_outputs_are_produced:
+        pytest.skip() at line 2309. A cell test may not skip: the three states
+        are ENFORCED, WAIVED (strict xfail) and NA (asserted precondition)
+      - dimension 7: cell test test_d7_required_outputs_list_is_complete:
+        pytest.skip() at line 375.  [same rule]
+
+**Both call sites are guarded on `corpus_root() is None`.** D3:2309 is the exact
+skip that hid **61 cells** (M96), and this gate has been red about it the entire
+time.
+
+**The repository already knew.** It has a rule — *a cell test may not skip; the
+three states are ENFORCED, WAIVED, NA* — it has a gate enforcing that rule, and
+the gate was FAILING, in the red list I was triaging. **I rediscovered its content
+by measurement over eight commits (M96 → M101), while the sentence naming it sat
+in a test I had classified and not read.**
+
+And the rule is stricter than what I arrived at, in the way that matters: I
+concluded *"set the pointer so the cells are measured"*. **The gate says a cell
+test may not CONTAIN a skip path at all** — because a skip path means the cell can
+be colourless on some host, and which host it is stops being the point. That is
+the stronger form, and it was written down first.
+
+**The other two, settled:**
+
+* `test_no_cell_is_counted_enforced_while_its_predicate_is_red` and
+  `test_the_enforcement_census_is_reported_for_humans` — **downstream of D3 reds**
+  (M99), confirmed by payload.
+* `test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress` —
+  **3/3 PASS in isolation, FAILS in-file** in two independent runs (the 9-file
+  arm and a dedicated whole-file run: 5 failed, 24 passed, 533 s). **Deterministic
+  in-file interaction, not a flake and not an independent defect.** Recorded as
+  its own category rather than folded into the D3 group it sits beside.
+
+**So the census closes at 34 reds, and `test_matrix_63x8_coverage.py`'s five are:
+1 anti-skip gate (D3/D7 skip paths), 2 downstream of D3, 1 in-file interaction,
+1 shared with the downstream pair.**
+
+**The lesson I would put above all the others in this document.** Every instrument
+defect here — the empty grep, the `61 skipped`, the unread payload — is the same
+error: **treating a thing that reports as a thing that measures.** The gate that
+says so was red, and I triaged it as an item rather than reading it as an
+argument. **A red test is a claim about the code. It is worth reading before it is
+worth counting.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
