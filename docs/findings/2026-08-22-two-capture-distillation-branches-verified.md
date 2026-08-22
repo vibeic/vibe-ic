@@ -2583,6 +2583,56 @@ F8  COSMETIC — test_generated_values...::test_the_landed_helpers_are_still_
     documented method.
 ```
 
+## THE SWEEP-rc COLUMN, RE-MEASURED AFTER THE F12 CORRECTION
+
+```text
+The F12 error was an invocation-form mistake, so the question it raises is
+whether that class of error reached anything else in this report. The largest
+exposed surface is the table's `sweep rc` column — the brief's question 3, "does
+the checker exit 0 on the tree we are shipping", answered 32 times.
+
+I re-ran the whole column on 2026-08-22 at main a4caccefe / jdistmat facc28860 /
+jdistchip c0e19ace9, each gate driven in the form it accepts and NO rc 3 scored
+as a verdict:
+
+    32 of 32 agree with the table.   25 rc 0 · 6 rc 1 · 1 rc 2
+    0 gates were unresolvable (every one parsed under --root or positional)
+    matrix takes `--root`, chip takes a positional root, and each returns rc 3
+        to the other's form — the trap that produced the F12 number
+
+THE SEVEN NON-ZERO, AND WHY EACH IS NOT A QUESTION-3 FAILURE:
+
+    gate_proof_vocabulary_has_a_producer            rc 1  = F15, a FALSE red,
+        and the only one of the seven I hold against its branch
+    only_the_declaring_step_writes_its_output       rc 1  = F1, findings true,
+        no repository-sweep test — the finding is the missing test, not the red
+    layer_membership_is_declared_..._prefix         rc 1  declared + pinned;
+        its six findings verified true by hand
+    metric_constant_across_differing_arms           rc 1  declared + pinned;
+        denominator verified by hand (60 arms, 60 distinct knobs dicts)
+    every_required_metric_key_has_a_producer        rc 1  declared + pinned;
+        verified independently (0 measured against 364, beside a control
+        measured 206 times)
+    signoff_report_states_its_stage                 rc 1  declared + pinned by
+        a rewritten member-set test; went rc 0 -> 1 at 4445f34a2 when the author
+        repaired their own always-green gate
+    pytest_aggregate_carries_its_runtime_identity   rc 2  deliberate: "This tree
+        is a repository, not a run tree", asserted by its own test
+
+ONE COUNT MOVED. An earlier passage in this report records "chip-composed 12
+programs, TWO red". At today's tip it is three, the third being
+`signoff_report_states_its_stage`, whose rc 0 -> 1 transition this report
+already documents separately. The passage was correct when written; the branch
+moved under it. Stated here rather than silently edited, because a count that
+changes for a recorded reason is evidence and a count that changes silently is
+not.
+
+SO THE F12 DEFECT WAS LOCAL TO F12'S HARNESS, not general to this report. The
+sweep column was measured per gate, each in its own form, and it holds. That is
+a finding about my own instrument, and it is the reason this section exists: a
+correction is worth more when it comes with the bound on what else it touches.
+```
+
 ## VERDICTS
 
 ```text
