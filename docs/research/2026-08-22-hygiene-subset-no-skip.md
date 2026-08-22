@@ -4192,7 +4192,7 @@ already-mixed tuple. Recorded, not done.
 ## 61. A pinned number that is NOT a bound — the liar-census shrink literal
 
 Branch: `next/liar-census-shrink-pin-follows-the-flow`, off `main` `a4caccefea`,
-one file, +31/−1.
+TWO files — and the second one is the part I nearly shipped without.
 
 `test_nothing_the_flow_declares_is_left_unswept` is red on clean main with
 `assert 182 == 181` while the sweep itself is HEALTHY: `declared=182`,
@@ -4366,3 +4366,45 @@ a spent transition blocks every landing including the one that would repair it"*
 now violated by accumulated drift, so the same blockage returns in a third form:
 main cannot pass its own repo-tools lane, while landings have continued. Whatever
 path those landings took did not run this corpus.
+
+
+### §61 addendum — the fix was incomplete until the ledger row went with it
+
+`tools/ci/gate_red_since.json` acknowledges this exact red, and I found it only
+because I went looking for whether the lane's remaining failures were formally
+accounted for:
+
+    gate:  liar census controls still fire
+    since: 41bfd8a126…   max_commits: 35   owner: repo-gatekeeper
+    why:   the shrink-detector literal in test_liar_census.py lags the flow's
+           declared clause count again -- the fourth time
+
+Two things follow, and the second is the one that matters.
+
+**It independently confirms the call.** The row's `bound_because` says *"what
+closes this red is the bump"*, and that the bound *"intentionally does NOT cover
+the structural fix the test's own docstring asks for … because pricing the bound
+at the structural fix would be buying four days of silence for a five-minute
+edit."* So bumping the literal is the sanctioned repair, stated by a second
+document written by someone else — not merely my reading of the test's comment.
+
+**And the fix was incomplete without retiring it.** The ledger's own rule:
+*"Delete the row in the SAME commit that fixes the gate. A row that outlives its
+truth is failed as `stale`, because a stale acknowledgement is indistinguishable
+to the next reader from a live one, and it is the row that gets believed."* The
+gate it names runs exactly `pytest tools/test_liar_census.py`, which is 114
+passed on this branch. Had I shipped the literal alone I would have closed one
+red and opened another — a green gate with a live acknowledgement saying it is
+red. Acknowledged rows 8 → 7, amended into the same commit.
+
+Checked the other six rows against everything else on these branches: none
+covers `gate_fixtures_discriminate`, `gate_mutation_fixture_check`,
+`hermetic_candidate_runner`, the phase-B parity pair or the differential
+fixture, so no other retirement is owed.
+
+**One instrument note.** The amended push was REFUSED —
+`--force-with-lease` has no recorded lease for a `HEAD:branch` push and declines
+rather than guessing. I caught it only because I compare `git ls-remote` to the
+local sha instead of reading the push's own output, which is the habit
+[[keep-or-drop-is-not-safe-to-delete]] exists for. The working form names the
+expected sha: `--force-with-lease=<ref>:<sha>`.
