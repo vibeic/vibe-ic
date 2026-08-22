@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vibeic.dev/schemas/ppa/feasibility.v1.schema.json",
+  "title": "vibeic.ppa.feasibility.v1",
+  "description": "The adjudication of a candidate set against the hard promotion gate. A verdict here is an eligibility decision about silicon, so the document carries no score, no margin and no weight: there is no quantity a reader could make large enough to turn a violation into a promotion. Every axis states its status, the codes that produced it, and the metric records the status was read from, so the verdict is recomputable from the same evidence by someone who does not trust the producer.",
+  "type": "object",
+  "required": ["schema", "verdict", "exit_code", "candidates"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.feasibility.v1"},
+    "verdict": {
+      "description": "The set-level answer. UNDETERMINED outranks INFEASIBLE: rc=1 asserts a complete finding about the design and a run that could not see all of its evidence has no standing to make one.",
+      "enum": ["FEASIBLE", "INFEASIBLE", "UNDETERMINED"]
+    },
+    "exit_code": {
+      "description": "0 FEASIBLE / 1 INFEASIBLE (a finding about the design) / 2 UNDETERMINED or evidence missing. 2 must never be mapped to PASS by a flow gate.",
+      "type": "integer",
+      "enum": [0, 1, 2]
+    },
+    "codes": {"type": "array", "items": {"type": "string"}},
+    "detail": {"type": "string"},
+    "policy_digest": {
+      "description": "sha256 of the canonical form of `policy`, via _ppa/canonical_json.py. Two verdicts are comparable only if this matches.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "sources": {"type": "object"},
+    "policy": {
+      "type": "object",
+      "required": ["axes", "required_views", "allow_waivers"],
+      "properties": {
+        "axes": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "required_views": {
+          "description": "The scope subsets feasibility had to be established across. An EMPTY list is not `any view`; with nothing declared no checker can tell a one-corner run from full coverage, and every axis is UNDETERMINED.",
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "limits": {
+          "description": "Contract-declared maxima for the limit-bearing axes. There is no built-in default: a limit invented by the checker would be a design-specific constant living in chip-agnostic source.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["max"],
+            "properties": {
+              "max": {"type": "number"},
+              "unit": {"type": "string"}
+            }
+          }
+        },
+        "allow_waivers": {"type": "boolean"}
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["candidate_id", "verdict", "codes", "axes"],
+        "properties": {
+          "candidate_id": {"type": "string"},
+          "verdict": {"enum": ["FEASIBLE", "INFEASIBLE", "UNDETERMINED"]},
+          "codes": {"type": "array", "items": {"type": "string"}},
+          "axes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["axis", "status", "codes"],
+              "properties": {
+                "axis": {"type": "string"},
+                "status": {
+                  "description": "WAIVED is reachable only from VIOLATED. An axis that was never measured can never be waived: a waiver is a named owner accepting a KNOWN risk, and applying one to an unknown converts `nobody looked` into `it passed`.",
+                  "enum": ["SATISFIED", "VIOLATED", "WAIVED", "UNDETERMINED"]
+                },
+                "codes": {"type": "array", "items": {"type": "string"}},
+                "waiver_ids": {"type": "array", "items": {"type": "string"}},
+                "evidence": {
+                  "description": "The metric records this status was read from, each with its scope and its source artefact hash, plus every record that was rejected and why.",
+                  "type": "array",
+                  "items": {"type": "object"}
+                }
+              }
+            }
+          },
+          "waivers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["waiver_id", "applied"],
+              "properties": {
+                "waiver_id": {"type": "string"},
+                "applied": {"type": "boolean"},
+                "axis": {"type": ["string", "null"]},
+                "owner": {"type": "string"},
+                "code": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$comment": "A single weighted score is forbidden in this document and in every public PPA report. Area, power and timing trade against each other, so one number is a proxy for the property and not the property -- and it is the number that gets quoted."
+}

@@ -98,17 +98,29 @@ def test_build_pin_placement_tcl_emits_constraints_per_edge():
     secs = R._v1_0_38_parse_pin_order_cfg(_SAMPLE_CFG)
     tcl = R._v1_0_38_build_pin_placement_tcl(secs, _bare())
     assert "set_io_pin_constraint" in tcl
-    # Each pin pinned to its compass region (N=top, E=right, S=bottom, W=left)
-    assert "-pin_names {clk} -region top:*" in tcl
-    assert "-pin_names {resetn} -region top:*" in tcl
-    assert "-pin_names {gpio_out\\[.*\\]} -region right:*" in tcl
-    assert "-pin_names {data_in} -region bottom:*" in tcl
-    assert "-pin_names {spi_csb} -region left:*" in tcl
-    assert "-pin_names {spi_sck} -region left:*" in tcl
+    # Each cfg entry pinned to its compass region (N=top, E=right, S=bottom,
+    # W=left). The cfg entry is a REGEX, so it is resolved against the
+    # design's own BTerm names first and the matched LITERAL names are what
+    # reaches `-pin_names`; the entry->region binding is asserted on the
+    # emitted resolve + report pair rather than on a raw `-pin_names {<pat>}`
+    # string, which is the form that made OpenROAD answer PPL-0061.
+    for pat, region in [("clk", "top"), ("resetn", "top"),
+                        ("gpio_out\\[.*\\]", "right"),
+                        ("data_in", "bottom"),
+                        ("spi_csb", "left"), ("spi_sck", "left")]:
+        assert ("set _poc_pins [vibeic_pin_names_matching {%s}]" % pat) in tcl
+        assert ("PIN_ORDER_CONSTRAINT_APPLIED: %s -> %s:" % (pat, region)) in tcl
+    # Every constraint goes through the resolver — no cfg entry is handed to
+    # `-pin_names` as a raw pattern.
+    assert "-pin_names $_poc_pins -region" in tcl
+    assert "-pin_names {gpio_out\\[.*\\]}" not in tcl
     # Bare auto-assign still present (placing pins NOT named in the cfg).
     assert _bare() in tcl
     # NONFATAL-guarded so a build lacking the command falls through.
     assert "PIN_ORDER_CONSTRAINT_NONFATAL" in tcl
+    # An entry matching no pin in the design stays LOUD rather than reading
+    # as applied.
+    assert "PIN_ORDER_CONSTRAINT_UNMATCHED" in tcl
 
 
 # ── ingestion entry point ────────────────────────────────────────────────────

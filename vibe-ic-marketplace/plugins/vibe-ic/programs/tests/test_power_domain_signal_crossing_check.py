@@ -221,3 +221,65 @@ def test_l21_fallback_when_no_upf(tmp_path):
     assert rc == 1
     assert rep["power_intent_source"].endswith("L21_POWER_INTENT.json")
     assert rep["inter_domain_crossings"] == 1
+
+
+# ── #312-family: an absent statement is not a statement of absence ──────────
+# `isolation_cells` / `level_shifters` are read on the L21 fallback path and
+# populated by NO producer (311 real L-docs: key present in 27, valued in 0).
+# Both sets are therefore always empty there, and `crossing_missing` reads an
+# empty set as "no strategy scopes this domain" -> every protected crossing
+# reported UNPROTECTED. A false FAIL, firing only on the designs that reach
+# this path.
+
+import power_domain_signal_crossing_check as _PD  # noqa: E402
+
+
+def _l21(power_domains, **extra):
+    f = {"power_domains": power_domains}
+    f.update(extra)
+    return f
+
+
+_TWO_DOMAINS = [{"name": "PD_CORE", "voltage": 0.9, "off_capable": False},
+                {"name": "PD_AON", "voltage": 1.8, "off_capable": True}]
+# NOTE: `_norm` STRIPS a leading `PD_`, so a crossing's domain tokens are the
+# stripped, lowercased form. A fixture using "pd_core" looks up nothing and
+# silently produces no findings — that was a fixture bug here, not a code bug.
+_CROSSING = {"net": "n1", "driver_domain": "core",
+             "receiver_domain": "aon"}
+
+
+def test_312_silent_layer_is_not_reported_as_unprotected():
+    """The layer says NOTHING about protection. Reporting UNPROTECTED states
+    a fact the input never provided."""
+    dom, iso, ls = _PD.parse_l21(_l21(_TWO_DOMAINS))
+    assert not _PD.l21_states_protection()
+    findings, _, _ = _PD.audit(dom, iso, ls, [_CROSSING])
+    assert findings, "the crossing must still be surfaced, not dropped"
+    assert all(f["rule"] == "PROTECTION_UNSTATED" for f in findings), findings
+    assert all(f["severity"] == "WARNING" for f in findings)
+
+
+def test_312_a_stated_strategy_that_misses_the_crossing_still_FAILs():
+    """NO-LEAK: once the layer DOES state a strategy, a crossing it fails to
+    cover is a real unprotected crossing and must still be an ERROR."""
+    dom, iso, ls = _PD.parse_l21(
+        _l21(_TWO_DOMAINS, isolation_cells=[{"domain": "PD_OTHER"}]))
+    assert _PD.l21_states_protection()
+    findings, _, _ = _PD.audit(dom, iso, ls, [_CROSSING])
+    assert findings
+    assert any(f["rule"] == "UNPROTECTED_SIGNAL_CROSSING"
+               and f["severity"] == "ERROR" for f in findings), findings
+
+
+def test_312_a_stated_strategy_that_covers_the_crossing_passes():
+    """Both protections must be stated: these domains differ in voltage AND
+    one is power-down capable, so isolation alone leaves the level-shifter
+    requirement uncovered — an earlier version of this test expected a pass
+    from isolation only and was simply wrong about the requirement."""
+    dom, iso, ls = _PD.parse_l21(
+        _l21(_TWO_DOMAINS, isolation_cells=[{"domain": "PD_AON"}],
+             level_shifters=[{"from": "PD_CORE", "to": "PD_AON"}]))
+    findings, _, _ = _PD.audit(dom, iso, ls, [_CROSSING])
+    assert not [f for f in findings
+                if f["rule"] == "UNPROTECTED_SIGNAL_CROSSING"], findings
