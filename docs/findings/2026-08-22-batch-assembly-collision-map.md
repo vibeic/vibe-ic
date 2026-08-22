@@ -9,8 +9,9 @@ it is a map for whoever assembles them.
 Read this first. The sections below are the working, in the order it happened, and
 several were superseded by later measurement.
 
-**Also worth confirming:** three `land/*` refs exist and two look live; only
-`land/one-assembled` carries the frozen batch (last section).
+**Two live assemblies, and only one carries this batch:** `land/one-assembled` has
+it; `land/batchbig-assembled` is genuinely divergent (measured, last section) and
+carries none of the sixteen frozen branches.
 
 **The one thing still open:** `fix/jppafind-inert-ppa-gates` is ON THE FREEZE LIST
 but is NOT in `land/one-assembled` (`e11626e28`). Verified two ways -- 5 of 5
@@ -456,11 +457,18 @@ are present in `one-assembled`. `batchbig-assembled` does NOT look superseded --
 only one of six -- so on this sample it holds content `one-assembled` lacks, and it
 lacks everything `one-assembled` gained in the last four hours, this batch included.
 
-HEDGE, because the detector matters here: this is a six-line sample, and the same
-class of test called `agent/jrows-on-batchbig` absent when it was present. Treat it
-as "worth confirming before either is landed", not as a finding. The cheap
-confirmation is the one that failed for jppafind: take files each ref changes and
-compare them by sha256 against the other and against main.
+CONFIRMED by the test this paragraph originally deferred -- sha256 every file
+`batchbig-assembled` changes, against `one-assembled` and against main:
 
-The consequence if it is real is one-directional and expensive: landing
+    of the 25 files batchbig-assembled changes, in one-assembled:
+       4  identical to batchbig        its change IS there
+      12  identical to MAIN            its change is NOT there
+       5  differs from both            merged with someone else's
+       4  path absent entirely         one-assembled does not have the file
+
+Sixteen of twenty-five say batchbig's work is not in `one-assembled`, four of them
+files that do not exist there at all. The two refs are genuinely divergent; this is
+not the sampling artefact the six-line version might have been.
+
+The consequence is one-directional and expensive: landing
 `batchbig-assembled` ships none of the sixteen frozen branches.
