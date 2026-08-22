@@ -2,6 +2,54 @@
 
 Measured 2026-08-22 at `origin/main` 81cd5321b.
 
+> ## UPDATE — THE PREDICTION CAME TRUE, SAME DAY
+>
+> This document was written while main was drifted on **two** paths and argued
+> that nothing on the landing path would stop a third. Hours later
+> `land/batchbig-assembled` landed as `a4caccefe` (v1.11.69). It moved
+> **eleven** protected paths and carried **no transition**, exactly as the
+> section "IT IS NOT RARE" said it would.
+>
+> Re-measured at `a4caccefe` with the shipped code — `_observe_files` over the
+> manifest's own 47 rows, then `_match_state`:
+>
+>     manifest current = eda-image-decouple-v1-next
+>     manifest next    = activated-at-lane-parallel-window
+>     vs current : 11 drifted
+>     vs next    : 11 drifted
+>     _match_state -> REFUSED: protected tuple matches neither authorised
+>                              atomic state
+>
+>     tools/ci/_gate_dispatch.sh
+>     tools/ci/landing_completion_record.py
+>     tools/ci/repo_hygiene_gates.sh
+>     tools/ci/routed_def_corpus.py
+>     tools/gatekeeper-land.sh
+>     .../programs/_corpus_location.py
+>     .../programs/ci_harness_timeout_ceiling_check.py
+>     .../programs/hygiene_finding_delta.py
+>     .../programs/landing_merge_verdict.py
+>     .../programs/repo_hygiene_parallel.py
+>     .../programs/tests/test_matrix_63x8_coverage.py
+>
+> A PREPARE for this exact batch existed and was pushed before the landing
+> (`agent/jrows-prepare-for-batchbig`). It was not used. That is the finding:
+> the transition was **available** and the landing path had no reason to ask
+> for it, so it did not.
+>
+> ### AND THE DRIFT CANNOT BE UNDONE BY A MANIFEST-ONLY COMMIT
+>
+> The obvious repair — re-photograph main and call it the new `current` — is
+> refused by the shipped parser:
+>
+>     parse_manifest :327   refuses current.id == next.id
+>     parse_manifest :333   refuses a next tuple identical to current
+>
+> A transition must declare a REAL move. So the repair has to be **bundled with
+> the next change that genuinely moves a protected path**; it cannot be done as
+> a standalone housekeeping commit. Every protected-path landing is blocked
+> until someone does that, and the block is invisible until it is hit.
+
 ## THE STATE
 
 `origin/main` right now matches **neither** authorised atomic state of its own
