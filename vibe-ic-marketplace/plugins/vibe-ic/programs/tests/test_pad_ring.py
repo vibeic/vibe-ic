@@ -1529,3 +1529,28 @@ def test_north_pads_are_mirrored_not_rotated(tmp_path):
     text = _ring_def(root).read_text()
     for pad in (p for p in rep["pads"] if p["side"] == "N"):
         assert f"( {pad['x']} {pad['y']} ) FS ;" in text
+
+
+def test_corners_alternate_rotation_and_mirror(tmp_path):
+    """TWO OF FOUR CORNERS WERE WRONG IN EVERY RING THIS STEP EVER WROTE.
+
+    Uses no constant this change introduces, so the pre-fix tree runs it and
+    answers wrongly rather than raising AttributeError.
+
+    MEASURED, OpenROAD 26Q3-1581, `place_corners` after `make_io_sites
+    -rotation_corner R0`: SW=R0, SE=MY, NE=R180, NW=MX -> N, FN, S, FS. THE
+    PLACER ALTERNATES ROTATION AND MIRROR. The pre-fix step walked
+    rotate_cw(PAD_ROTATION_CORNER, i) -- N, E, S, W -- a pure rotation, so SE
+    and NW came out E and W. A square corner cell has the same bounding box
+    either way, which is why no fit check could ever have caught it."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    got = {c["position"]: c["orient"] for c in rep["corners"]}
+    assert got == {"SW": "N", "SE": "FN", "NE": "S", "NW": "FS"}, (
+        f"corners are {got}; the placer produces "
+        f"{{'SW': 'N', 'SE': 'FN', 'NE': 'S', 'NW': 'FS'}} -- a pure rotation "
+        f"gives E and W where the tool mirrors")
+    text = _ring_def(root).read_text()
+    for c in rep["corners"]:
+        assert f"( {c['x']} {c['y']} ) {c['orient']} ;" in text
