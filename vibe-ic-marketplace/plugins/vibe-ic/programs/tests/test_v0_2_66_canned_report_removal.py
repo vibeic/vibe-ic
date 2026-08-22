@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import design_complexity_estimator as DCE  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
-_RUNNER_SRC = (PLUGIN / "programs" / "phase2_one_shot_runner.py").read_text()
+_RUNNER_SRC = (PLUGIN / "programs" / "design_one_shot_runner.py").read_text()
 
 
 # ── source pins: the canned constants are GONE ─────────────────────────────

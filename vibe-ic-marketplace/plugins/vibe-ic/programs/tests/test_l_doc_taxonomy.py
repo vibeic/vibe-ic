@@ -17,9 +17,13 @@ class TestTaxonomyShape:
     def test_v2_flow_ext_is_5(self):
         assert len(mod.L_DOCS_V2_FLOW_EXT) == 5
 
-    def test_v2_total_is_24(self):
-        # v1 (14) + protocol ext (5) + flow ext (5) = 24
-        assert len(mod.L_DOCS_V2) == 14 + 5 + 5
+    def test_v2_completeness_ext_is_4(self):
+        # #157 — L24-L27 completeness extensions
+        assert len(mod.L_DOCS_V2_COMPLETENESS_EXT) == 4
+
+    def test_v2_total_is_28(self):
+        # v1 (14) + protocol ext (5) + flow ext (5) + completeness ext (4) = 28
+        assert len(mod.L_DOCS_V2) == 14 + 5 + 5 + 4
 
     def test_codes_unique(self):
         codes = [s.code for s in mod.L_DOCS_V2]
@@ -95,9 +99,14 @@ class TestApplicability:
         for c in ("L19", "L20", "L21", "L22"):
             assert c in a
 
-    def test_unknown_ic_class_returns_all(self):
+    def test_unknown_ic_class_returns_all_except_opt_in(self):
+        # #157 — the unknown/fallback applicable set is every code EXCEPT the
+        # opt-in-only completeness codes (L26/L27), so a generic chip never
+        # emits an empty MEMS / memory-module skeleton.
         applicable = mod.applicable_l_docs("unknown")
-        assert applicable == set(mod.all_l_doc_codes())
+        assert applicable == set(mod.all_l_doc_codes()) - {"L26", "L27"}
+        assert "L24" in applicable and "L25" in applicable
+        assert "L26" not in applicable and "L27" not in applicable
 
     def test_cpu_includes_l15(self):
         # ISA opcodes go in L15
@@ -138,9 +147,14 @@ class TestIsApplicable:
         with pytest.raises(KeyError):
             mod.is_applicable("bus_interconnect_protocol", "L99")
 
-    def test_unknown_ic_class_is_applicable_all(self):
+    def test_unknown_ic_class_is_applicable_all_except_opt_in(self):
+        # #157 — unknown is applicable for every code EXCEPT the opt-in-only
+        # codes L26/L27.
         for code in mod.all_l_doc_codes():
-            assert mod.is_applicable("unknown", code)
+            if code in ("L26", "L27"):
+                assert not mod.is_applicable("unknown", code)
+            else:
+                assert mod.is_applicable("unknown", code)
 
 
 class TestNaStub:
@@ -190,9 +204,9 @@ class TestNaStub:
 class TestApiSurface:
     def test_all_l_doc_codes_ordered(self):
         codes = mod.all_l_doc_codes()
-        # L1 must come first, L23 last
+        # L1 must come first, L27 last (#157 folded L24-L27 at the end)
         assert codes[0] == "L1"
-        assert codes[-1] == "L23"
+        assert codes[-1] == "L27"
 
     def test_all_l_doc_full_names_match_codes(self):
         codes = mod.all_l_doc_codes()

@@ -1,8 +1,8 @@
 ---
 name: phase2-rtl-verify
-description: After phase2_one_shot_runner emits RTL + SOF + reference TB PASS, AI spot-checks RTL quality and L9-contract conformance. Triggers when /vibe-ic-phase2 / /vibe-ic-phase2 returns PASS, or on phrases like "review the RTL", "check RTL quality", "verify phase 2 output".
+description: After design_one_shot_runner emits RTL + SOF + reference TB PASS, AI spot-checks RTL quality and L9-contract conformance. Triggers when /vibe-ic-phase2 / /vibe-ic-phase2 returns PASS, or on phrases like "review the RTL", "check RTL quality", "verify phase 2 output".
 tier: verification
-paired_program: phase2_one_shot_runner.py
+paired_program: design_one_shot_runner.py
 ---
 
 # Phase 2 RTL Verification

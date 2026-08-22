@@ -31,6 +31,8 @@ import sys
 from itertools import combinations
 from pathlib import Path
 import _path_layout as _pl
+# Imported, never re-typed — see _doc_tokens.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY
 
 
 JACCARD_FAIL_THRESHOLD = 0.70
@@ -38,8 +40,17 @@ TOKEN_RX = re.compile(r"[A-Za-z0-9_]{3,}")
 
 
 def _doc_tokens(path: Path) -> set[str]:
-    """Tokenise the JSON content (string-serialised) and return the
-    set of tokens of length ≥ 3."""
+    """Tokenise the JSON CONTENT (string-serialised) and return the
+    set of tokens of length ≥ 3.
+
+    The emitter's `_generator` stamp is dropped first. It is identical by
+    construction in every document of a run — that is the whole point of it
+    — so counting it would add the same tokens to both sides of every pair
+    and push the Jaccard score up uniformly. This gate exists to catch a
+    shared CONTENT blob; a shared version record is not content, and
+    letting it raise every pair's similarity would move a thin pair of N/A
+    stubs across the 0.70 threshold for a reason that has nothing to do
+    with what the documents say."""
     try:
         data = json.loads(path.read_text())
     except Exception:
@@ -48,6 +59,8 @@ def _doc_tokens(path: Path) -> set[str]:
         except Exception:
             return set()
         return set(TOKEN_RX.findall(txt))
+    if isinstance(data, dict):
+        data = {k: v for k, v in data.items() if k != _GENERATOR_STAMP_KEY}
     txt = json.dumps(data, ensure_ascii=False)
     return set(TOKEN_RX.findall(txt))
 

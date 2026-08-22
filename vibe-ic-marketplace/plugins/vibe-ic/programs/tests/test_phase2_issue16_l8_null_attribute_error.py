@@ -152,7 +152,7 @@ def test_audit_sweep_no_dict_get_with_dict_default_in_3_programs():
     targets = (
         "aid_class_rtl_gen.py",
         "phase1_doc_one_shot_runner.py",
-        "phase2_one_shot_runner.py",
+        "design_one_shot_runner.py",
     )
     violations: list[tuple[str, int, str]] = []
     for fname in targets:
@@ -208,9 +208,9 @@ def test_rtl_dir_not_wiped_on_crash(tmp_path: Path):
     # Import the runner. Use a class string the registry has no
     # entry for → step_rtl_gen returns WAIVED early, never touching
     # rtl/. Sentinel must survive.
-    if "phase2_one_shot_runner" in sys.modules:
-        importlib.reload(sys.modules["phase2_one_shot_runner"])
-    p2b = importlib.import_module("phase2_one_shot_runner")
+    if "design_one_shot_runner" in sys.modules:
+        importlib.reload(sys.modules["design_one_shot_runner"])
+    p2b = importlib.import_module("design_one_shot_runner")
     result = p2b.step_rtl_gen(project, "totally_unregistered_class_xyz")
     assert result.status == "WAIVED"
     assert sentinel.is_file(), (

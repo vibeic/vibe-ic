@@ -33,7 +33,7 @@ confirm the fixture FAILS on current code.
 Usage:
   python3 regression_issue_intake_check.py \\
       --issue-number 5 \\
-      [--repo reyerchu/AI_IC_design] \\
+      [--repo vibeic/vibe-ic] \\
       [--token-file ~/.config/github/token] \\
       [--repo-root <path>] \\
       [--no-emit-fixture]   # validate only, don't write files
@@ -220,7 +220,7 @@ def _emit_fixture(repo_root: Path, parsed: Dict[str, str],
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--issue-number", type=int, required=True)
-    ap.add_argument("--repo", default="reyerchu/AI_IC_design")
+    ap.add_argument("--repo", default="vibeic/vibe-ic")
     ap.add_argument("--token-file", default=None)
     ap.add_argument("--repo-root", default=None)
     ap.add_argument("--no-emit-fixture", action="store_true")

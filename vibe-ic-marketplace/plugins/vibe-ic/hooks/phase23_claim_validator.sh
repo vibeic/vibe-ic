@@ -131,11 +131,16 @@ EOF
 fi
 
 # Locate the audit gate.
+# PORTABILITY: every candidate is derived from THIS script's own location (or an
+# explicit env override). Absolute paths under a personal home directory used to
+# be listed here; they resolved on one machine only and were dead weight
+# everywhere else.
 GATE=""
+_HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 for candidate in \
-  "$(dirname "$0")/../programs/phase23_completion_self_audit_check.py" \
-  "/home/user/AI_IC_design/opensource_repo/vibe-ic-marketplace/plugins/vibe-ic-d/programs/phase23_completion_self_audit_check.py" \
-  "/home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d/programs/phase23_completion_self_audit_check.py"
+  ${VIBE_IC_PROGRAMS_DIR:+"$VIBE_IC_PROGRAMS_DIR/phase23_completion_self_audit_check.py"} \
+  "$_HOOK_DIR/../programs/phase23_completion_self_audit_check.py" \
+  "$_HOOK_DIR/../../vibe-ic/programs/phase23_completion_self_audit_check.py"
 do
   if [[ -f "$candidate" ]]; then
     GATE="$candidate"
