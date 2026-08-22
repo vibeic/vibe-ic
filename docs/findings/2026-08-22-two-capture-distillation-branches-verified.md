@@ -2933,6 +2933,65 @@ repository already knows and which I had written down. Knowing a rule and
 holding it while impatient are different skills.
 ```
 
+## THE CAPTURE RECORDS AGAINST THE TREE, BOTH DIRECTIONS — nothing found
+
+```text
+Re-checking the brief's CLAIM 1 at today's tips, and then pushing past it into
+the bookkeeping behind it. This section reports a clean result; the brief asked
+for those to be said plainly rather than dressed up.
+
+CLAIM 1 STILL HOLDS at jdistmat facc28860. In `2026-08-21-jcap-matrix`:
+11 records, 10 carrying `rule_name`, every one of the 10 a slug that IS the stem
+of a program on the branch, every one carrying its sentence in `title`. Record
+11 has no `rule_name` and never did. Unchanged from the rename commit, and the
+branch has added ten more programs since without breaking the convention.
+
+FORWARD: every rule_name resolves to a program.
+REVERSE: every program the records claim shipped exists.
+    ppa DISTIL.md     6 named  ->  6 exist
+    matrix DISTIL.md  10 named -> 10 exist
+    chip DISTILLATION.md 10 named -> 8 on this branch, and the other 2 are
+                      explicit cross-references to the sibling lane's programs,
+                      which exist there. 10 of 10 resolve; 8 of 10 resolve
+                      WITHOUT leaving the branch, and stating it the second way
+                      is the honest one.
+
+THE SIX ppa RULES THAT NAME NO PROGRAM ARE NOT A GAP. I derived that set
+independently — rule_names in recoveries.json with no matching program — before
+reading their disposition, and it matched their own declared "Not shipped (6)"
+exactly. Each carries a measured reason, not an excuse: one is ALREADY
+IMPLEMENTED elsewhere (`_ppa/benchmark.py`'s REQUIRED_SCOPE table, with the
+null-placeholder case refused as SCOPE_SENTINEL); two have no static signature
+that discriminates (a scan would flag 37 of 37, or 100 of 131); two need a
+declaration the tree does not carry; one is half-clean and says which half. The
+file states the rule itself — "a record here that names no program is NOT an
+oversight" — and the tree agrees with it.
+
+TWO THINGS I FLAGGED THAT WERE MY OWN MISREADS, recorded because both are the
+same error and someone re-running this will hit them:
+
+  * chip's 13 records "have no `title`". They have a DIFFERENT SCHEMA — no
+    `title`, but `fires_on_original`, `fires_on_a_different_instance`,
+    `measured_before`, `measured_after`, `notes`. Nothing was lost because
+    there was never a sentence-form `rule_name` there to move. I applied
+    jdistmat's schema to jdistchip's file and read the difference as damage.
+  * two programs chip's DISTILLATION.md cites "do not exist". They exist on the
+    SIBLING branch, and the citing paragraph says so in terms — it is chip
+    naming the census lane's offenders and adding "None is from this lane".
+
+  Both are the failure this report keeps finding in itself: an instrument
+  answering correctly about the wrong subject. Neither is a finding against
+  either branch.
+
+AND A CORROBORATION OF F14 FROM THE OTHER LANE. chip's DISTILLATION.md records
+the same defect independently — "529 write their declared report destination
+NON-atomically, residual baseline 515 ... the SAME 16 unregistered offenders,
+none is from this lane". They measured 16; I measure 20 today, the branch having
+added four programs since. Two lanes reaching the same finding by different
+routes is worth more than either alone, and it is the strongest single argument
+that F14 is real rather than an artefact of how I drove the gate.
+```
+
 ## VERDICTS
 
 ```text
