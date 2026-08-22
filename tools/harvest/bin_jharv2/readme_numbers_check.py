@@ -29,7 +29,53 @@ def main():
         ok = actual == claimed
         print(f"  {'ok  ' if ok else 'WRONG'} {fname:36} README={claimed:5}  actual={actual:5}")
         if not ok: bad += 1
-    print(f"  checked {len(hits)} counts, {bad} wrong")
+    # PROSE claims. The table gate above caught none of these: within hours of writing this index
+    # four prose numbers were stale -- two because I added files to the directory it describes, two
+    # because the files it counts changed underneath. A number in prose is exactly as load-bearing
+    # as one in a table and rots faster, because nothing regenerates it.
+    import subprocess, collections
+    def rows(fn, delim='\t'):
+        with open(os.path.join(base, fn)) as f:
+            return list(csv.reader(f, delimiter=delim))[1:]
+    def count_ext(ext):
+        # os.walk, NOT a hardcoded subdirectory list. The first version listed
+        # bin/bin_jharv2/bin_jharv3/shard_c and reported 64 scripts where the directory holds 70 --
+        # a checker whose own enumeration is incomplete produces a confident wrong "actual" and
+        # blames the document. Enumerate the tree; do not name its parts.
+        n = 0
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d != '.git']
+            n += sum(1 for f in files if f.endswith(ext))
+        return n
+    def deletion_bound():
+        return sum(1 for r in rows('verdicts_all.tsv') if len(r) > 2 and r[2] in ('LANDED', 'ABANDON'))
+    def vacuous_in_joined():
+        return sum(1 for r in rows('verdicts_joined.tsv')
+                   if len(r) >= 5 and 'all 0 file(s)' in r[3] and r[2] in ('LANDED', 'ABANDON', 'DROP'))
+    def gates_declared():
+        with open(os.path.join(base, 'bin_jharv2', 'check_all.sh')) as f:
+            return sum(1 for l in f if l.startswith('add "'))
+    CLAIMS = [
+        (r'(\d+) markdown files',                 lambda: count_ext('.md')),
+        (r'and (\d+) scripts',                    lambda: count_ext('.sh') + count_ext('.py')),
+        (r'\*\*authorise deletion\*\* — (\d+) rows do', deletion_bound),
+        (r'deletion-bound — (\d+) of \d+',        vacuous_in_joined),
+    ]
+    print("  -- prose claims --")
+    checked_prose = 0
+    for rx, fn in CLAIMS:
+        m = re.search(rx, txt)
+        if not m:
+            print(f"  MISSING  no prose match for /{rx}/ -- the claim moved or was reworded"); bad += 1; continue
+        checked_prose += 1
+        claimed, actual = int(m.group(1)), fn()
+        ok = claimed == actual
+        print(f"  {'ok  ' if ok else 'WRONG'} /{rx}/  README={claimed}  actual={actual}")
+        if not ok: bad += 1
+    if checked_prose == 0:
+        print("  *** no prose claims matched -- that half of the check is vacuous ***")
+        return 2
+    print(f"  checked {len(hits)} table counts + {checked_prose} prose claims, {bad} wrong")
     return 1 if bad else 0
 
 if __name__ == '__main__':

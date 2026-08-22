@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 21 markdown files and 68 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 22 markdown files and 70 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -38,9 +38,11 @@ every one wrongly.
 | `corrections_withdrawn.tsv` | 4 | corrections that no longer hold — their content landed as main advanced. Withdrawn, not deleted. |
 | `RECOVER_DRIFT.tsv` | 2 | RECOVER rows whose content has since landed. Over-conservative, not dangerous. |
 
-Nine of the twelve carried evidence of the form *"all **0** file(s) matched main"* — a universal over
-an empty set. **All 20 such rows in `verdicts_joined.tsv` are deletion-bound**, which is causal
-rather than coincidental: "every file matched" is exactly what produces LANDED.
+All twelve carry evidence of the form *"all **0** file(s) matched main"* — a universal over
+an empty set. **Every such row still in `verdicts_joined.tsv` is deletion-bound — 9 of 9**, and it was 20 of 20
+when first audited, before jharv3 corrected eleven of them. That is causal rather than coincidental:
+"every file matched" is exactly what produces LANDED, so a row whose file enumeration returned
+nothing lands in the delete bucket by construction.
 
 ## 4. Per-shard sources
 
