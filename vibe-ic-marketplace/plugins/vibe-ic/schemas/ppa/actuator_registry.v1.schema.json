@@ -1,0 +1,221 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "vibeic.ppa.actuator_registry.v1",
+  "title": "PPA actuator registry v1",
+  "description": "The set of actions a closure controller is AUTHORISED to take, and the measurements that judge them. An entry is an authorisation, not a tool name: 'OpenROAD is allowed' authorises nothing, `timing.hold.emit_repair_block` with margin_ps in [0,500] and max_buffer_percent in (0,5] authorises one bounded action. Frozen as v1: a change that would invalidate a hash taken against this file is v2, per docs/PPA_INTERFACES.md section 5.",
+  "type": "object",
+  "required": ["schema", "actuators", "domains", "controllers", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.actuator_registry.v1"},
+    "description": {"type": "string"},
+    "actuators": {
+      "type": "object",
+      "description": "action_id -> authorisation. The key is the action id.",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"},
+      "additionalProperties": {"$ref": "#/definitions/actuator"}
+    },
+    "domains": {
+      "type": "object",
+      "description": "domain name -> the measurement that answers it and the target it is judged against.",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"},
+      "additionalProperties": {"$ref": "#/definitions/domain"}
+    },
+    "controllers": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/definitions/controller"}
+    },
+    "edges": {
+      "type": "object",
+      "description": "Flow step id, RAW as flow/phase1_phase2_phase3.yaml declares it (ids are not all integers: 1.6x, A7, A9 are strings), -> the controller bound to that step's closed_loop edge, or null. null means DECLARED_ONLY and it may never be displayed as a closed-loop success.",
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "null"},
+          {
+            "type": "object",
+            "required": ["controller"],
+            "additionalProperties": false,
+            "properties": {
+              "controller": {"type": ["string", "null"]},
+              "fallback_to": {"type": ["string", "integer", "null"]},
+              "note": {"type": "string"}
+            }
+          }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "binding": {
+      "enum": ["EXECUTABLE", "DECLARED_ONLY"],
+      "description": "EXECUTABLE claims the named program is in the tree and the claim IS CHECKED (Registry.verify_bindings). DECLARED_ONLY names no program at all, so the label and the tree cannot disagree."
+    },
+    "actuator": {
+      "type": "object",
+      "required": ["summary", "binding", "wrapper", "blast_radius", "resource_ceilings", "rollback", "remeasure_domains"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "binding": {"$ref": "#/definitions/binding"},
+        "wrapper": {
+          "type": "object",
+          "description": "A FIXED argv. There is no shell key and no shell in the executor; `shell`, `shell_command` and `command_line` are refused at load.",
+          "additionalProperties": false,
+          "properties": {
+            "program": {
+              "type": ["string", "null"],
+              "pattern": "^[A-Za-z0-9_]+$",
+              "description": "A bare program name resolved as programs/<name>.py. No separator, no dot segment, no absolute path -- refused BEFORE resolution, because resolving first is how a `..` gets to be a real path for one instant."
+            },
+            "argv_template": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "argv items appended after the interpreter and the program. Every {placeholder} must be a declared parameter."
+            }
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Typed parameters. A parameter named argv/args/cmd/command/script/shell/exec/eval/tcl/python/code/expr/extra_args/raw is refused: a typed field may not carry a script, a command or an argv fragment.",
+          "additionalProperties": {"$ref": "#/definitions/parameter"}
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "path"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {"enum": ["file_exists", "file_absent", "file_nonempty"]},
+              "path": {"type": "string", "description": "Relative to the implementation root; may interpolate declared parameters. An absolute path or one that escapes the root is refused."}
+            }
+          },
+          "description": "Evaluable conditions only. A prose precondition is not a precondition."
+        },
+        "blast_radius": {
+          "enum": ["NET", "INSTANCE", "DECK", "BLOCK", "FULL_IMPLEMENTATION"],
+          "description": "Ordered smallest to largest. rollback NONE is admissible only at NET."
+        },
+        "resource_ceilings": {
+          "type": "object",
+          "required": ["wall_seconds", "max_invocations_per_run"],
+          "additionalProperties": false,
+          "properties": {
+            "wall_seconds": {"type": "number", "exclusiveMinimum": 0},
+            "max_invocations_per_run": {"type": "integer", "minimum": 1}
+          },
+          "description": "Required. An unbounded actuator is not authorised, it is merely unmeasured."
+        },
+        "rollback": {"enum": ["SNAPSHOT_RESTORE", "INVERSE_ACTION", "NONE"]},
+        "remeasure_domains": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"},
+          "description": "Every domain this action can disturb. A regression in ANY of them rolls the iteration back even when the objective improved -- that is what this field is FOR. An empty list is refused: an action whose effect nobody re-measures is an action with no evidence."
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["number", "integer", "string", "boolean", "path"]},
+        "unit": {"type": "string", "description": "Required for number and integer: a bound without a unit is a bound on nothing."},
+        "minimum": {"type": "number"},
+        "maximum": {"type": "number", "description": "The ceiling IS the authorisation. A request beyond it is refused, never clamped."},
+        "exclusiveMinimum": {"type": "number"},
+        "enum": {"type": "array"},
+        "required": {"type": "boolean", "default": true},
+        "default": {},
+        "description": {"type": "string"}
+      }
+    },
+    "domain": {
+      "type": "object",
+      "required": ["metric", "unit", "direction", "binding", "satisfied_when"],
+      "additionalProperties": false,
+      "properties": {
+        "metric": {"type": "string", "minLength": 1, "description": "The canonical metric name that goes into a vibeic.ppa.metric.v1 record."},
+        "unit": {"type": "string", "minLength": 1},
+        "direction": {"enum": ["maximize", "minimize"]},
+        "binding": {"$ref": "#/definitions/binding"},
+        "summary": {"type": "string"},
+        "flow_steps": {
+          "type": "array",
+          "items": {"type": ["string", "integer"]},
+          "description": "The flow steps a full re-run would have to re-execute for this domain. Recorded so a run record can state what was NOT re-run in-process. Naming them is the difference between a limitation and a lie."
+        },
+        "measure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "program": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9_]+$"},
+            "argv_template": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Supports {impl_root}, {json_out}, and {glob:<pattern>} which expands to every matching file under the implementation root, sorted, as separate argv items."
+            },
+            "extract": {"$ref": "#/definitions/extract"},
+            "undetermined_rcs": {
+              "type": "array",
+              "items": {"type": "integer"},
+              "default": [2, 3],
+              "description": "Exit codes from the measurement program that mean 'I could not look'. They become NOT_MEASURED with a reason, never a number. Repeating a refusal honestly is the point; turning it into a value would launder it into a fact."
+            }
+          }
+        },
+        "satisfied_when": {
+          "type": "object",
+          "required": ["op", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "op": {"enum": [">=", "<=", ">", "<", "=="]},
+            "value": {"type": "number"}
+          }
+        }
+      }
+    },
+    "extract": {
+      "type": "object",
+      "required": ["kind", "pointer"],
+      "additionalProperties": false,
+      "description": "How a number is lifted out of a measurement's --json. Declarative on purpose: an extractor that could run code would put a second, unreviewed program inside a config file.",
+      "properties": {
+        "kind": {
+          "enum": ["json_pointer", "bool_fraction", "list_length"],
+          "description": "json_pointer reads a number directly (status MEASURED). bool_fraction and list_length COMPUTE one, so the record is DERIVED and carries its formula. bool_fraction over an empty or absent list is NOT_MEASURED, never 1.0 -- a fraction over a zero denominator is undefined."
+        },
+        "pointer": {"type": "string", "description": "RFC-6901 subset."},
+        "flag": {"type": "string", "description": "bool_fraction only: the boolean key on each element."}
+      }
+    },
+    "controller": {
+      "type": "object",
+      "required": ["summary", "objective_domain", "actuator", "plan", "stop"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "objective_domain": {"type": "string", "description": "Must appear in the actuator's remeasure_domains: the thing being optimised must be the thing being re-measured."},
+        "actuator": {"type": "string"},
+        "plan": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "object"},
+          "description": "An ORDERED ladder of parameter proposals. Deterministic on purpose: re-running takes the same actions in the same order. Candidate generation, budget allocation and multi-fidelity belong to _ppa/search.py; a controller that invented its own search would make the two disagree about what a run cost."
+        },
+        "stop": {
+          "type": "object",
+          "required": ["max_iterations", "plateau_patience", "wall_seconds"],
+          "additionalProperties": false,
+          "properties": {
+            "max_iterations": {"type": "integer", "minimum": 1},
+            "plateau_patience": {"type": "integer", "minimum": 1},
+            "wall_seconds": {"type": "number", "exclusiveMinimum": 0}
+          },
+          "description": "Required. A loop with no declared stop condition is a loop."
+        }
+      }
+    }
+  }
+}
