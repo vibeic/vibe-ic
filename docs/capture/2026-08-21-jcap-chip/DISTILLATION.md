@@ -52,6 +52,15 @@ number*.
 Sections are referenced by TITLE, not line number, because line-anchored
 citations rot the moment anything is inserted above them.
 
+**Everything in this lead was re-verified against `origin/main` `a4caccefe`
+(v1.11.69) and `jdistmat/matrix-distil` `3df090f9f`** — the census lane's tip has
+moved twice during this lane's life and main once, so the tips are named rather
+than implied. Re-verified figures: 4 conflicts (the same four generated counter
+files), 5 gates at rc=1, 0 of them wired, and all four disputed filenames still
+carrying this lane's gates by blob hash. If either tip has moved when you read
+this, re-run those four checks before trusting the numbers — the method is in
+*Composing with the census lane* and takes about a minute.
+
 ---
 
 ## Outcome
