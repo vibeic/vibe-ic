@@ -3179,3 +3179,23 @@ have to be gotten past deliberately.
 the branch's own delta against its merge-base, not the branch as a whole. That
 distinction is the entire content of the gate's error message, and it is the
 difference between adding 39 commits and removing 8,068 lines.
+
+### The §47 correction was delivered after all
+
+§47 recorded that the retraction could not reach the peer who received the wrong
+claim: `jmeas3` had ended. It has since returned as a new session, and the
+correction has now been sent — the causal half withdrawn, the surviving half
+(`test_issue538` is unreachable by the default mode, and better evidenced than
+when I first sent it) restated, with an explicit ask to weaken any report that
+carried the stronger version.
+
+Recorded because §47's own framing was "a wrong claim I handed to someone else
+has outlived my ability to correct it", and that turned out to be false — not
+because I did anything, but because the peer came back. **The lesson survives
+the reprieve and is worth keeping in the stronger form: I could not know that
+when I sent it.** A claim dispatched to another agent is out of your hands the
+moment it lands, and whether a retraction ever catches up is luck rather than
+diligence. The discipline is to test before sending, which is exactly what I did
+not do.
+
+§48's live risk was sent in the same message, as the operational half.
