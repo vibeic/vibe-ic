@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 29 markdown files and 77 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 30 markdown files and 80 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -69,6 +69,25 @@ file does not draw, and guessing would put a verdict in another agent's mouth in
 that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
 
 **30 of them authorise deletion; all 30 have now been through `predelete_guard.sh` and measured SAFE** — see `shard_c/108_DROP_guard_results.tsv`.
+
+## 4c. Every deletion-bound row now has a recorded guard result
+
+**213 of 213.** An executor selecting `LANDED`/`ABANDON` from `verdicts_all.tsv` can look up each one:
+
+| file | rows | covers |
+|---|---|---|
+| `JOINED_DELETION_GUARD_RESULTS.tsv` | 49 | the roster's deletion-bound rows |
+| `EXTRAS_DELETION_GUARD_RESULTS.tsv` | 161 | the extras' — all SAFE |
+| `shard_c/108_DROP_guard_results.tsv` | 30 | host 108's DROP rows |
+
+The extras needed three methods. 37 answered directly; 81 first refused as *stale clone* and were
+fetched **forward** before they could be judged at all; and 43 are pruned checkouts with no git dir,
+compared file-by-file to the main commit their manifest identifies, then **every differing file
+checked against main's history** — 39 files differed, all 39 found on main.
+
+That last step is why they read SAFE rather than alarming. Compared to *current* main a pruned
+checkout looks catastrophic: ~446 files differ because main moved, and ~17,192 read absent because
+`benchmark-data/` was split out of this repo entirely. Neither is unlanded work.
 
 ## 5. Still open, and not mine to close
 
