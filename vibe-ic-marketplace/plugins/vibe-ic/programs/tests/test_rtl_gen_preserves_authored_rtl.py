@@ -53,6 +53,14 @@ STUB_SRC = (
     "(p / 'gen_top.v').write_text('module gen_top(); endmodule\\n')\n"
 )
 STUB_FAIL_SRC = "import sys\nsys.exit(3)\n"
+STUB_PARTIAL_FAIL_SRC = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "p = Path(sys.argv[1]) / 'phase2/stage1/rtl'\n"
+    "p.mkdir(parents=True, exist_ok=True)\n"
+    "(p / 'partial.v').write_text('module partial; endmodule\\n')\n"
+    "sys.exit(3)\n"
+)
 
 CLASS_NAME = "example_guard_class"
 
@@ -332,6 +340,49 @@ def test_fallback_reachable_when_generator_fails(tmp_path, monkeypatch):
     assert res.status == "FAIL"
     assert res.extras.get("fallback_skill") == "spec-to-rtl"
     assert "spec-to-rtl" in res.detail
+
+
+def test_failed_generator_partial_output_is_discarded_transactionally(
+        tmp_path, monkeypatch):
+    _install_class(monkeypatch, gen_src=STUB_PARTIAL_FAIL_SRC)
+    project = _new_project(tmp_path)
+
+    res = R.step_rtl_gen(project, CLASS_NAME)
+
+    assert res.status == "FAIL"
+    assert not (_rtl(project) / "partial.v").exists()
+    assert _names(_rtl(project)) == []
+    assert not (project / "phase2" / "stage1" /
+                "rtl.pre_gen_backup").exists()
+
+
+def test_registered_generator_is_staged_and_never_adopts_replaced_root(
+        tmp_path, monkeypatch):
+    _install_class(monkeypatch)
+    project = _new_project(tmp_path)
+    displaced = tmp_path / "proj.displaced"
+    generator_roots = []
+    real_run = R._run
+
+    def _run_after_live_root_replacement(cmd, *args, **kwargs):
+        if len(cmd) >= 3 and Path(cmd[1]).name == STUB_NAME:
+            candidate = Path(cmd[2])
+            generator_roots.append(candidate)
+            assert candidate != project
+            project.rename(displaced)
+            project.mkdir()
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(R, "_run", _run_after_live_root_replacement)
+
+    res = R.step_rtl_gen(project, CLASS_NAME)
+
+    assert res.status == "BLOCKED"
+    assert res.extras["output_refusal"]["reason"] == (
+        "PROJECT_BOUNDARY_REPLACED_DURING_PUBLICATION")
+    assert generator_roots and len(generator_roots) == 1
+    assert not list(project.rglob("*"))
+    assert not (_rtl(displaced) / "gen_top.v").exists()
 
 
 def test_eco_inert_note_absent_when_class_declares_no_fallback(monkeypatch):

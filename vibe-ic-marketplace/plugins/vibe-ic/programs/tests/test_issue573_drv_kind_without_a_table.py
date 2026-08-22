@@ -46,6 +46,8 @@ import sys
 
 import pytest
 
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "sta_corner_record_completeness_check.py"
 
@@ -156,20 +158,27 @@ def test_the_finding_precedes_the_violation_branch():
 
 
 # ── the corpus number, so a regression in the parser is visible ──────────────
+@needs_corpus
 def test_the_shape_exists_in_the_corpus():
     """Guards against a parser change that makes `kinds_without_table` always
     empty — which would satisfy every test above except this one.
 
-    Skipped when benchmark-data is not present (a plugin-only checkout).
+    Skipped when the PUBLISHED corpus is not readable here.
+
+    The old guard was `(<repo>/benchmark-data).is_dir()`, and that stopped being
+    the right question when the results moved to `vibeic/benchmark-data`: the
+    directory of that name is still here — it carries the design INPUTS — so the
+    guard was satisfied while there was not one STA report to read, and the
+    sweep below then reported `0 > 0`, i.e. a regression in the parser. There is
+    no regression; there is nothing to parse. `@needs_corpus` asks whether a
+    published CELL is readable, which is what this test needs, and renders a "no"
+    as a skip naming the corpus instead of as a finding about `extract_drv`.
     """
-    # Derived from THIS file's location, never from a home directory: the
-    # shipped-path portability gate rejects an absolute `/home/<user>/…` in
-    # shipped source, and it is right to — a hard-coded home makes the test
-    # silently skip for every other checkout, which is the same
-    # absence-reads-as-a-pass shape this file is about.
-    root = _PROGRAMS.parents[3] / "benchmark-data"
-    if not root.is_dir():
-        pytest.skip("benchmark-data not present in this checkout")
+    # Still never a home directory: `corpus_root()` reads its location from THIS
+    # file plus `VIBE_IC_BENCHMARK_DATA`, so the shipped-path portability gate
+    # keeps holding and no checkout is hard-coded into the source.
+    root = corpus_root()
+    assert root is not None, "@needs_corpus should have skipped before this point"
     seen = 0
     for p in root.rglob("sta*.rpt"):
         try:

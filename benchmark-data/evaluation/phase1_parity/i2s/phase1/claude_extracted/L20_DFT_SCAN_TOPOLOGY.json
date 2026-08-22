@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "I2S 2022 spec does not specify DFT / scan / BIST. Concrete I2S controller / codec IP from modern vendors adds standard scan + JTAG at the integrator level."
-  }
-}
