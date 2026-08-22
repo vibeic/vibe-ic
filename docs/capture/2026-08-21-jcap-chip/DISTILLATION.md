@@ -579,3 +579,29 @@ axis can never be measured, and 63 published records measure it. This is not a
 composition conflict and not a merge problem — it is a factual disagreement about
 the tree, decidable by counting, and the count is above. Not repaired here: it is
 another lane's program and this lane has no standing to edit it.
+
+**The gate was then run properly, because I had only inferred that it blocks.**
+An earlier attempt passed it a positional path and got rc=3 — a BAD INVOCATION,
+not a verdict, and this file has already recorded twice that a non-result from a
+wrong flag proves nothing. It takes `--root`. Correctly invoked:
+
+    feasibility axes: 9   emitting modules: 18   names they declare: 110
+    [FAIL] 1 axis/axes prove from names nobody produces:
+       drv:  timing.drv.violations
+             timing.drv.max_tran_violations
+             timing.drv.max_cap_violations
+             timing.drv.max_fanout_violations
+    rc=1
+
+rc=1 **on their branch alone and in the composed tree**, so it will block the
+batch, and it flags all four names exactly as its docstring says. The count above
+stands unamended: three of those four are carried MEASURED by 63 canonical
+records across 21 trials with OpenSTA provenance.
+
+One near-miss worth recording, since it would have put a false correction in
+front of the assembler: reading that output with `head -8` showed only
+`timing.drv.violations`, and I began writing a note saying their gate's real
+finding was narrower than its docstring. It was not — the list was simply cut off.
+Truncation is not absence, which is the same mistake as every other one in this
+file, and the second time in two turns that a display artefact nearly reversed a
+correct conclusion.
