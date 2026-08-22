@@ -1874,8 +1874,32 @@ and names no gate.
 
 ### A-47 · a document and the record set it describes are checked together at landing · `repo.lane_artefact_namespace`
 
-**This one is about what happened to this bundle.** It landed, and what landed
-is not what was verified:
+**This one is about what happened to this bundle — and the first three things I
+said about it were wrong.** The defect is real and much smaller than I reported.
+Matching the two record sets on their **pattern text**, which no rename touches:
+
+    records this lane froze                     44
+      absent from the landed set                 0
+    records in the landed set that are new       1   contributed by a collaborating lane
+    entries RESHAPED by that lane's pass        12   slug rule-name + an added title
+
+**Nothing was lost, nothing duplicated, no other bundle's records mixed in.** The
+landed set is this lane's 44 plus one addition, beside a report never updated
+for the plus one.
+
+I got there after three confident readings that were each wrong: that another
+bundle's records had been merged in (refuted — none of them appear in either
+sibling bundle); that the set held duplicates (refuted — a normalised key count
+of zero); that four records had been lost (refuted — the four were renames whose
+words changed, so the normaliser could not see them). **Every one of those was a
+name-based comparison, and every one failed the same way.**
+
+That is the rule's own lesson turned on the person writing it: **reconcile two
+versions of a record set on a field the editing pass does not touch.** A name is
+the field most likely to be edited, so it is the worst possible key — and it is
+the one every obvious comparison reaches for first.
+
+What did land, and what the report still says:
 
     landed record document                45 records
     landed report — title, sections, status block   44
