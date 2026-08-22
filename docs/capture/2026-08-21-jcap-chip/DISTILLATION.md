@@ -242,10 +242,33 @@ offenders in both — four `*_census.py` and twelve other programs of that lane
 `invocation_proved_by_parse_not_by_text.py`, and ten more). **None is from this
 lane**, and this lane's twelve gates are not among them.
 
-The fix is not a baseline edit. `_atomic_artefact_residual.json` is a RATCHET —
-`test_the_shipped_residual_only_ever_shrinks` fails if the count grows — so
-registering the sixteen would be refused by the ratchet's own test. They have to
-write atomically.
+**CORRECTION — I asserted a remedy from a test's NAME and it was wrong.** I
+first wrote that registering the sixteen "would be refused by the ratchet's own
+test". Tested by actually doing it: adding all sixteen to
+`_atomic_artefact_residual.json` makes BOTH the plain gate and `--strict` return
+0. Registering is permitted by the instrument.
+
+What the instrument enforces, at `atomic_artifact_write_check.py:274`, is
+
+    if args.strict and len(current) > len(baseline):
+
+— the current offender count against the count IN THE COMMITTED BASELINE. Edit
+the baseline in the same change and both numbers move together, so the guard
+cannot see it. Its own docstring says the residual "may only ever shrink" and the
+baseline file says "this list may only get shorter", and neither is what the code
+checks.
+
+So the accurate statement is: **the instrument permits what its own contract
+forbids.** By policy the sixteen should be converted to
+`_atomic_artefact.write_text/write_json` — which is what the baseline's
+`how_to_shrink` field says — and registering them is available but is debt
+written down, not a fix. Which of the two the census lane takes is theirs to
+decide; what this note must not do is tell them the instrument forbids something
+it allows.
+
+That gap is worth its own attention, and it is the same shape as everything else
+in this file: a guard whose check and whose claim are not the same thing. It is
+not repaired here — `atomic_artifact_write_check.py` belongs to neither lane.
 
 Recorded here, not repaired here: they are another lane's programs, and ruling
 F13 gave this lane one item. Stated so the batch assembler meets it as a known,
