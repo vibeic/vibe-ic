@@ -733,6 +733,37 @@ control("record-figure", not re.search(r"\d", "a sentence with no figure in it")
 check("every record's fix text carries a figure", not _nofig,
       f"{len(RECS)} records" + (f"; without: {_nofig}" if _nofig else ""))
 
+# 47. THE BRIEF'S FOUR CONSTRAINTS. The report asserts them in one line -- "No
+# gate is implemented. No version bumped. No baseline written. Nothing pushed to
+# main." -- and nothing measured any of them. They are the claims a landing
+# reviewer most needs to trust, and they were the reviewer taking my word for it.
+import subprocess as _sp2
+def _git(*a):
+    return _sp2.run(["git", *a], capture_output=True, text=True, cwd=str(ROOT)).stdout
+_base = "origin/main"
+_plugdiff = [f for f in _git("diff", "--name-only", _base, "HEAD",
+                             "--", "vibe-ic-marketplace/").split() if f]
+_vers = [l for l in _git("diff", _base, "HEAD", "--",
+                         "*plugin.json", "*marketplace.json").splitlines()
+         if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))
+         and "version" in l]
+_basel = [f for f in _plugdiff if "baseline" in pathlib.Path(f).name]
+_added = [f for f in _git("diff", "--name-only", "--diff-filter=A", _base, "HEAD",
+                          "--", "vibe-ic-marketplace/").split() if f.endswith(".py")]
+_on_main = _sp2.run(["git", "merge-base", "--is-ancestor", "HEAD", _base],
+                    cwd=str(ROOT), capture_output=True).returncode == 0
+control("constraints", bool(_git("rev-parse", _base).strip()))   # the base must resolve,
+# or every diff below is empty and all four constraints "pass" against nothing.
+_viol = []
+if _vers:   _viol.append(f"version line(s) changed: {len(_vers)}")
+if _basel:  _viol.append(f"baseline file(s) changed: {_basel}")
+if _added:  _viol.append(f"program file(s) added: {_added}")
+if _on_main: _viol.append("HEAD is an ancestor of main")
+check("the brief's four constraints hold, measured against the base",
+      not _viol,
+      f"plugin files touched: {len(_plugdiff)}" + ("; " + "; ".join(_viol) if _viol else
+      "; no version bump, no baseline, no program added, HEAD not on main"))
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

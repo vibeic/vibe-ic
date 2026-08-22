@@ -1450,7 +1450,14 @@ single red from a ninety-second repository-wide gate is not evidence; treating i
 as evidence manufactures a confident false verdict.*
 
 No gate is implemented. No version bumped. No baseline written. Nothing pushed
-to main.
+to main. **Measured, not asserted** — that sentence stated four things and
+nothing checked any of them, which made the four claims a landing reviewer most
+needs to trust the four he had only my word for. Check 47 now derives all four
+from the base: no changed version line in either manifest, no baseline file in
+the diff, no `.py` added anywhere under the plugin tree, and `HEAD` not an
+ancestor of `main`. It is shown able to fail — run against a base across which
+main itself added programs, the same predicate reports 12 added files and 6
+changed version lines.
 
 ## Where each record came from
 
@@ -2337,7 +2344,7 @@ rather than in a command line that would fail for whoever tried it.
 zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (47 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (48 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -2517,7 +2524,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            47 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            48 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -2537,7 +2544,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     47 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     48 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other
