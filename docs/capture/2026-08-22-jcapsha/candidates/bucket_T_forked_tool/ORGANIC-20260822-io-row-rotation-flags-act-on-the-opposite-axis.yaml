@@ -23,6 +23,6 @@ suggested_fix: |
   Exchange the per-axis rotation and site arguments at the io-row construction call so each flag drives the axis it names, or document the opposite convention in the command help; the fix must cover both flag pairs together.
 
 id: "ORGANIC-20260822-io-row-rotation-flags-act-on-the-opposite-axis"
-submitted_at: "2026-08-22T09:40:56+08:00"
+submitted_at: "2026-08-22T10:02:09+08:00"
 session_context: >-
   Found while converging a capture over another lane's pad-ring recovery. That lane swept four values of one rotation flag with the other held at the identity, concluded the variable was inert, and recorded a second observation -- that a pad on a horizontal side tracked the vertical flag -- as an oddity it did not chase. Those are one fact. A two-by-two varying both flags, one process per cell, resolves it, and a positive control at the site-selection flag pair of the same command reproduces the same crossing with no orientation reasoning involved.
