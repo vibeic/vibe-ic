@@ -6,6 +6,7 @@ asserted rc 0 here would be asserting the defect away.
 """
 from __future__ import annotations
 
+import shutil
 import re
 import subprocess
 import sys

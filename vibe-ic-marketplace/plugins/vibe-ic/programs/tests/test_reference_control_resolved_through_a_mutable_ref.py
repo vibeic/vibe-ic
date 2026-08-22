@@ -1,6 +1,7 @@
 """The moving-reference rule, driven in both directions."""
 from __future__ import annotations
 
+import shutil
 import json
 import subprocess
 import sys
@@ -165,3 +166,30 @@ def test_the_shipped_tree_passes_its_own_rule():
     r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
                        capture_output=True, text=True, timeout=900)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
+
+
+def test_an_empty_population_is_undetermined_not_a_pass():
+    """A GREEN FROM AN EMPTY DENOMINATOR IS NOT A PASS.
+
+    Measured before the guard existed: on a well-formed but EMPTY tree this
+    program printed its populations as 0 and then a `[PASS]` sentence that is a
+    universal claim over the empty set -- vacuously true, and indistinguishable
+    to a caller from the same sentence over the real repository.
+
+    `gate_zero_denominator_refuses_check` refuses this shape, and CANNOT SEE
+    THIS FILE: its population is `*_check.py`. So the refusal is asserted here.
+    """
+    root = Path(tempfile.mkdtemp(prefix="zeropop_"))
+    try:
+        (root / ".git").mkdir()
+        (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+         / "tests").mkdir(parents=True)
+        r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
+                           capture_output=True, text=True, timeout=900)
+        assert r.returncode == 2, (
+            f"an empty population returned rc={r.returncode}; it must be "
+            f"UNDETERMINED, not a pass\n{r.stdout}")
+        assert "NOT a pass" in r.stdout, r.stdout
+        assert "[PASS]" not in r.stdout, r.stdout
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
