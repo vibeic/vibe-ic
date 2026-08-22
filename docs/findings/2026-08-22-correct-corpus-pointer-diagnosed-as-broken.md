@@ -480,3 +480,56 @@ match exactly, four and four.
 checkout where only three were wired; a fourth landed since. Re-read at main
 before it reached a record — the same "which tree did this number come from"
 error the rest of this document is about.*
+
+## The brief's own premise, re-measured — and a stale figure in an unlanded record
+
+The brief opens with *"of the ten gates that report NOT CHECKED on `origin/main`,
+nine carry a dated exemption. One does not."* I had been carrying the exemption
+arithmetic from an earlier record rather than taking it myself. Taken, at
+`a4caccefe`, on 2026-08-22:
+
+| | at `a4caccefe` (today's main) | at `81cd5321b` |
+|---|---|---|
+| `uncheckable_until` lines | **25** | 20 |
+| dated `2026-11-30` | **3** | 9 |
+| dated `2027-02-28` | **22** | 11 |
+| expired (date ≤ today) | **0** | 0 |
+
+**The conclusion is unchanged and stronger for having been re-taken.** All 25
+attach to `run_tolerating_uncheckable` — 24 directly once intervening comment
+lines are skipped, and one separated from its wrapper by a `gate_serial`
+directive. **None** attaches to a plain blocking `run`, none to
+`gate_dispatch_over`, and none has expired. Since `gate_dispatch_finish` fails
+the run on an expired exemption, and since the dispatcher refuses an exemption on
+a population refusal at all, the routed-DEF EMPTY row remains **the only
+unexempted blocking refusal in the file**.
+
+### The figure is stale in a record that has not landed
+
+`origin/fix/jdefcorpus-routed-def-restoration-condition-v2` states *"all **20**
+of them"*, quotes `grep -c '^[[:space:]]*uncheckable_until '` returning `20`, and
+splits them *"**9** dated 2026-11-30, **11** dated 2027-02-28"*. Those are
+exactly the values at `81cd5321b` — its first draft's base — and that record
+carries the header *"RE-MEASURED end to end … on a clean worktree of
+`origin/main` @ `a4caccefe` … every load-bearing claim below was taken again
+rather than carried forward."*
+
+This claim was not taken again. It is `81cd5321b`'s number presented as
+`a4caccefe`'s, in a document whose own thesis is that evidence attaches to a sha
+and not to a branch name. It is load-bearing there: the table is what argues the
+routed-DEF row *"really is the only unexempted blocking refusal in the file
+today, rather than one red among several of its class"* — a conclusion that
+survives, on the numbers above, but not on the numbers it prints. Its adjacent
+remark that the 9-vs-9 match is *"a coincidence, not an identity"* is moot: the
+count is 3.
+
+**For whoever lands that branch:** the verdict stands, the arithmetic beside it
+does not. Correct 20 → 25, 9 → 3, 11 → 22, or drop the table for the property it
+was there to establish, which is re-measured above and holds.
+
+*Two refinements were needed before my own number was right, so it is worth
+saying how. Pairing each exemption with the line immediately after it gave
+"20 `run_tolerating_uncheckable`, 5 `#`" — the wrapper is not always adjacent.
+Skipping comments gave "24 + 1 `gate_serial`". Only the third pass was the
+answer. A one-pass `grep` beside a structured file is how the stale figure got
+there in the first place.*
