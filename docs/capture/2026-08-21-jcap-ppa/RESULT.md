@@ -1872,7 +1872,7 @@ learned to check before quoting a number.
 **(d)** yes — it keys on an emitted verdict with no recorded subject identity,
 and names no gate.
 
-### A-47 · a per-lane document is landed by replacement and cannot share a path · `repo.lane_artefact_namespace`
+### A-47 · a document and the record set it describes are checked together at landing · `repo.lane_artefact_namespace`
 
 **This one is about what happened to this bundle.** It landed, and what landed
 is not what was verified:
@@ -1899,6 +1899,32 @@ records against 47 sections** — the same defect, one lane further on.
 > A clean merge is not evidence of a correct merge. For a document whose counts,
 > cross-references and prose are one object, a clean merge is the warning sign:
 > a conflict would have stopped the landing and asked a human.
+
+**I tested the remedy instead of asserting it, and the test disproved my own
+prescription.** Replacing the landed bundle wholesale from this lane takes the
+failing checks from 16 to 1 — and the working-tree status showed it **deleting a
+file this lane never wrote**. That file is another lane's DISTILL output, and
+the history says why:
+
+    commits touching this bundle directory, this lane        97
+    commits touching it from ANOTHER lane                     3
+
+That lane ran the distil step against these records, wrote its own document
+beside them, and contributed the 12 records in the other shape. **So this is not
+two strangers' files colliding — it is two lanes collaborating in one directory
+with nothing checking the result as a whole**, and a wholesale replacement would
+have destroyed a peer's work while turning the checks green.
+
+**So the prescription is not replacement.** The sharpest form of this finding is
+that *the consistency check already exists and ships in the same directory*: the
+bundle carries a verifier binding record count, section count, status block and
+every cross-reference to one another, it catches all twelve real failures in
+about a second, and **nothing ran it at landing.**
+
+One further thing the test found: the emitted artefacts carry the plugin version
+they were emitted against, so carrying them across a version bump makes them
+refuse — correctly. Re-emitting at the landing base clears it. That is a step a
+lander must take, not a defect in either lane.
 
 **(o)** yes — the landed state is the original, and the check that catches it is
 a comparison the bundle already knows how to make.
@@ -4016,7 +4042,7 @@ gap was non-empty every single time it was measured.
 | A-44 | 14 reduce-to-one sites | **4 unsorted** | the same glob is sorted in one program and unsorted in another; a repaired instance let a nested snapshot certify the outer project |
 | A-45 | 6 multi-group axes | **5 mix kinds** | 1 equivalence argument exists and it covers the one pair that does not mix; a SATISFIED group beats an UNDETERMINED one |
 | A-46 | 650 verdict emitters | **≤36 stamp a tree** | a brief that was right about an unfetchable tree cost a full remote-ref sweep and a scratch reconstruction to adjudicate |
-| A-47 | the landed bundle | **45 records vs 44 sections** | two lanes' documents text-merged at one path with zero conflicts; reproduced on demand at 48 vs 47 |
+| A-47 | the landed bundle | **45 records vs 44 sections** | 97 commits this lane, 3 another; the bundle's own verifier catches all 12 real failures in a second and nothing ran it at landing |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |
