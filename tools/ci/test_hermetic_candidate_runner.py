@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,8 @@ SPEC.loader.exec_module(runner)
 
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
+import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -57,21 +60,47 @@ def load_container(name):
         fail("Error: No such container: " + name)
     return json.loads(path.read_text(encoding="utf-8"))
 
+@contextlib.contextmanager
+def state_lock():
+    """Serialise the state mutations real Docker serialises in its daemon.
+
+    The runner drives `container kill` and `container rm --force` CONCURRENTLY
+    during teardown, which is fine against a real daemon and was not fine here:
+    `kill` does load -> mutate -> save with nothing holding the two ends
+    together, so `rm` could unlink between them and `save` would then RESURRECT
+    the file. Measured 2026-08-22 -- a zero-byte `container.json` left behind,
+    because the stub was torn down between creating the name and writing to it.
+
+    The lock is NOT taken around a whole command. `container start --attach`
+    blocks until the container exits and is itself what `kill` ends, so holding
+    a lock across it would deadlock the pair it is meant to protect.
+    """
+    fd = os.open(str(root / ".state.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
 def save_container(doc, create=False):
     path = container_path(doc["Name"].lstrip("/"))
-    # Two harness races, both of which made a CORRECT runner look like it had
-    # leaked a container it force-removed and verified absent.
-    #   1. `container rm` can land while an attached child is still finishing.
-    #      A removed container must STAY removed; re-creating the record here
-    #      resurrected it after the runner had already checked.
-    #   2. write_text truncates before writing, so a kill in between left a
-    #      0-byte record -- which still `exists()`, and so still read as
-    #      "the container is present".
-    if not create and not path.exists():
-        return
-    tmp = path.parent / (path.name + ".%d.tmp" % os.getpid())
-    tmp.write_text(json.dumps(doc), encoding="utf-8")
-    os.replace(tmp, path)
+    with state_lock():
+        if not create and not path.exists():
+            # REMOVED WHILE THIS COMMAND WAS MID-FLIGHT. Writing now would
+            # resurrect a container the runner has already torn down, and the
+            # test that checks cleanup is owned would see leftover state that
+            # the runner did not leave. Real Docker errors here; this returns
+            # quietly on purpose, because a non-zero exit from a late `kill`
+            # would change the runner's control flow rather than just its
+            # bookkeeping, and the fake exists to be deterministic about the
+            # latter.
+            return
+        # ATOMIC, so a stub killed mid-write can never leave a zero-byte file
+        # where a valid document or no document are the only two honest states.
+        tmp = path.parent / (path.name + "." + str(os.getpid()) + ".tmp")
+        tmp.write_text(json.dumps(doc), encoding="utf-8")
+        os.replace(str(tmp), str(path))
 
 if args[:2] == ["image", "inspect"]:
     print(json.dumps([{"Architecture": "amd64", "Id": IMAGE_ID,
@@ -307,12 +336,13 @@ elif args[:2] == ["container", "kill"]:
 elif args[:2] == ["container", "rm"]:
     name = args[-1]
     path = container_path(name)
-    if not path.exists():
-        fail("Error: No such container: candidate")
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if doc["State"]["Running"] and "--force" not in args:
-        fail("container is running")
-    path.unlink()
+    with state_lock():
+        if not path.exists():
+            fail("Error: No such container: candidate")
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if doc["State"]["Running"] and "--force" not in args:
+            fail("container is running")
+        path.unlink()
     print(doc["Name"].lstrip("/"))
 else:
     fail("unsupported fake Docker command: " + repr(args))
@@ -809,3 +839,63 @@ printf 'VIBEIC_PROGRESS {"completed":1,"nonce":"%s","schema":1,"scope":"live","s
         "provisioner_absent": True,
         "volume_absent": True,
     }
+
+
+#: Enough concurrent pairs that the race cannot hide. The unfixed stub leaked on
+#: 41 of 200 trials (~20%), so P(a broken stub shows zero leaks here) is about
+#: 0.8**60 -- roughly one in seven hundred thousand. Fewer trials would make
+#: this guard itself flaky, which is the failure it exists to remove.
+_RACE_TRIALS = 60
+
+
+def test_the_fake_docker_serialises_kill_against_rm(case):
+    """A container the runner REMOVED must not come back.
+
+    `test_malformed_progress_is_norecord_and_cleanup_is_owned` was
+    intermittently red -- green three times in a row one hour and red in every
+    interleaved round the next -- and the only failing assertion was that
+    `container.json` is gone. The leftover file was ZERO BYTES, which named it:
+    the runner drives `kill` and `rm --force` concurrently during teardown, and
+    the stub did load -> mutate -> save with nothing holding the ends together,
+    so `rm` could unlink between them and `save` resurrected the file.
+
+    This drives that pair directly instead of waiting for host load to expose
+    it. Measured over the stub at each commit: 41 leaks in 200 trials before the
+    fix, 0 after.
+    """
+    state = case["state"]
+    state.mkdir(parents=True, exist_ok=True)
+    name = "vibeic-candidate-race-probe"
+    doc = {
+        "Name": "/" + name, "Id": "2" * 64,
+        "State": {"Running": True, "Status": "running", "ExitCode": 0,
+                  "Pid": 1234, "Restarting": False},
+        "Mounts": [], "Config": {}, "HostConfig": {},
+    }
+    env = dict(os.environ)
+    env["FAKE_DOCKER_STATE"] = str(state)
+
+    def drive(argv):
+        subprocess.run([sys.executable, str(case["docker"])] + argv,
+                       env=env, capture_output=True, text=True)
+
+    survivors = []
+    for _ in range(_RACE_TRIALS):
+        (state / "container.json").write_text(json.dumps(doc), encoding="utf-8")
+        killer = threading.Thread(target=drive,
+                                  args=(["container", "kill", name],))
+        remover = threading.Thread(target=drive,
+                                   args=(["container", "rm", "--force", name],))
+        killer.start(); remover.start()
+        killer.join(); remover.join()
+        leftover = state / "container.json"
+        if leftover.exists():
+            survivors.append(leftover.stat().st_size)
+            leftover.unlink()
+
+    assert not survivors, (
+        f"{len(survivors)} of {_RACE_TRIALS} kill/rm races left a container "
+        f"the runner had removed, sizes {sorted(set(survivors))}. A `save` that "
+        "lands after an `unlink` resurrects torn-down state, and a stub killed "
+        "mid-write leaves a zero-byte document where a valid one or none are "
+        "the only honest states.")
