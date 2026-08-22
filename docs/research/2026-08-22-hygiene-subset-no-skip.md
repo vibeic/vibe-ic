@@ -2616,3 +2616,32 @@ and this branch's guarantee no longer depends on it being fixed.
 
 That is the strongest thing this work does. The fix restored a property; the
 guard made the property survivable by the gate that is supposed to enforce it.
+
+### Closing the one hole in §40: a CLI flag cannot be added from anywhere else
+
+§40 claims a re-regression would be caught because the guard is SELECTED for a
+diff touching `gatekeeper_review.py`. That leaves an obvious evasion: add the
+flag from some other file, so the diff never touches the module and the guard is
+never selected. Checked with the parser rather than a grep, because a first
+grep over-matched — it listed five files containing both `add_argument` and
+`gatekeeper_review`, all of which merely have their OWN parsers and mention the
+module in passing.
+
+```
+ArgumentParser constructions in gatekeeper_review.py : 1
+  constructed inside function                        : main()   (line 1840)
+module-level parser names exposed                    : none
+```
+
+The parser is a LOCAL of `main()`. Nothing imports it, nothing can reach it, and
+there is no module-level `ap` for another file to mutate. All 17 `add_argument`
+calls are in that file. **To add a command-line option to `gatekeeper_review`
+you must edit `gatekeeper_review.py`**, and any diff that does so selects the
+guard.
+
+So the evasion does not exist, and §40's claim holds without that caveat. Worth
+the two commands: an unclosed hole in the one positive conclusion of this
+document would have been the most expensive place to leave one, and the shape of
+the check matters as much as the answer — the AST answered a question the grep
+had already answered wrongly, which is the fourth time tonight that swap was
+what produced the truth.
