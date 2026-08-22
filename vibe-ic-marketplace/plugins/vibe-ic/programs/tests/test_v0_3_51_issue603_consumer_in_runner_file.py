@@ -169,3 +169,42 @@ def test_real_issue600_still_producer():
     if not diff:
         pytest.skip("#600 not in this checkout")
     assert F.classify_diff(diff)["verdict"] == "PRODUCER"
+
+
+# --- the verdict-token TIE-BREAK (v1.9.63) ---------------------------------
+# `phase1_expert_parse_track.py::main` changed a printed `VACUOUS_PASS:` to
+# `INCOMPLETE:` and nothing else — the most on-the-nose consumer change in
+# #599 — and no pattern recognised it: the file is not `*_check.py` and the
+# lines carry no `verdict` / `classif` / `_emit` identifier. It read `unknown`
+# -> ambiguous -> MIXED, which is a 40-minute re-run for a changed word.
+
+def test_a_verdict_token_alone_makes_an_otherwise_unknown_hunk_consumer():
+    r = F.classify_hunk("programs/phase1_expert_parse_track.py", "main",
+                        '- print(f"VACUOUS_PASS: {PROGRAM} — no expert ...")\n'
+                        '+ print(f"INCOMPLETE: {PROGRAM} — the AI sub-track ...")')
+    assert r["class"] == "consumer", r
+
+
+def test_the_tie_break_NEVER_overrules_producer_evidence():
+    """The reason it is a tie-break and not a pattern. As a plain consumer
+    pattern it also matched hunks that DO carry producer evidence — a producer
+    that happens to print `FAIL:` — and turned them consumer, which is the
+    unsafe direction. MEASURED: as a pattern it moved #600 off PRODUCER."""
+    r = F.classify_hunk("programs/phase3_one_shot_runner.py", "step_pnr",
+                        '+ print("FAIL: routing incomplete")\n'
+                        '+ write_def("/out/routed.def")')
+    assert r["class"] == "producer", r
+
+
+def test_lowercase_prose_is_not_a_verdict_token():
+    """`pass` and `incomplete` are ordinary English. Only the UPPERCASE code
+    form counts — the same rule this file already applies to note/finding."""
+    r = F.classify_hunk("programs/some_helper.py", "helper",
+                        "+ # this pass is incomplete and may fail\n")
+    assert r["class"] == "unknown", r
+
+
+def test_a_verdict_token_inside_a_longer_identifier_does_not_match():
+    r = F.classify_hunk("programs/some_helper.py", "helper",
+                        "+ PASSED_COUNT = 3\n+ self.FAILURES = []\n")
+    assert r["class"] == "unknown", r

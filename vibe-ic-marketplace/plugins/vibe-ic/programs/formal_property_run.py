@@ -42,14 +42,18 @@ import argparse
 import json
 import re
 import shutil
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import _container_exec as _CE  # vibe-ic#628 — bound the solver, not the client
+
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
+import _rtl_include_hub as _hub  # noqa: E402  (include-hub aggregator predicate)
 
 # ── SBY transcript signatures (tool-output shapes, not chip literals) ──────
 # A multi-task run tags every line with `[<sby>_<task>]`; a single-task run
@@ -677,6 +681,47 @@ def detect_engines(container: Optional[str]) -> Dict[str, bool]:
     return avail
 
 
+#: vibe-ic#628 — the share of host memory ONE solver process tree may address.
+#: A bound on how much of the machine a disposable process may take, NOT a model
+#: of what a proof needs: a formal property that fails to converge is the
+#: EXPECTED behaviour of a solver on a hard instance, and the suite treated it as
+#: if it were bounded. The runaway measured on a 125.7 GB host reached 109 GB;
+#: at this share it would have been stopped near 31 GB with ~95 GB still free.
+FORMAL_MEM_SHARE = 0.25
+#: Never bound below this — a share of a small CI box must not make every proof
+#: fail for want of memory, which is the same outage from the other end.
+FORMAL_MEM_FLOOR_KB = 4 * 1024 * 1024
+
+
+def memory_limit_kb(meminfo: Optional[str] = None,
+                    env: Optional[Dict[str, str]] = None) -> Optional[int]:
+    """Address-space bound (KiB) for the solver, or None when it cannot be
+    derived — in which case NO limit is emitted and the transcript says so,
+    rather than a guessed number being imposed.
+
+    `VIBEIC_FORMAL_MEM_LIMIT_KB` overrides; `0` disables the bound explicitly,
+    which is different from being unable to derive one and must stay sayable.
+    """
+    env = os.environ if env is None else env
+    raw = str(env.get("VIBEIC_FORMAL_MEM_LIMIT_KB", "")).strip()
+    if raw:
+        try:
+            v = int(raw)
+        except ValueError:
+            return None
+        return None if v <= 0 else v
+    text = meminfo
+    if text is None:
+        try:
+            text = Path("/proc/meminfo").read_text(errors="replace")
+        except OSError:
+            return None
+    m = re.search(r"^MemTotal:\s+(\d+)\s*kB", text or "", re.MULTILINE)
+    if not m:
+        return None
+    return max(FORMAL_MEM_FLOOR_KB, int(int(m.group(1)) * FORMAL_MEM_SHARE))
+
+
 # ── impure runner ──────────────────────────────────────────────────────────
 def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
              timeout: int) -> str:
@@ -687,15 +732,46 @@ def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
     if container:
         path_export = ("export PATH=/foss/tools/bin:/foss/tools/yosys/bin:"
                        "$PATH")
-        inner = (f"{path_export}; cd {formal_dir} && rm -rf {sby_path.stem} "
+        # vibe-ic#628 — BOUND THE SOLVER, NOT THE CLIENT. This was
+        # `docker exec` under a client-side `subprocess.run(timeout=)`, which
+        # is the #623 defect in a second place: the deadline killed the local
+        # client while sby's yosys carried on inside the container, unsignalled
+        # and unwatched. MEASURED on a 125.7 GB host: one such yosys reached
+        # 109 GB RSS, still climbing at ~1 GB per 20 s, with MemAvailable at
+        # 3.2 GB and swap exhausted — about a minute from the OOM killer, on a
+        # machine also running four production services. Killing that one
+        # process returned MemAvailable 3.2 GB -> 113.0 GB.
+        #
+        # Two bounds, because they stop different things:
+        #   * the deadline moves INSIDE the container (coreutils `timeout`, the
+        #     `_container_exec` primitive) so an expiry actually reaches the
+        #     solver;
+        #   * `ulimit -v` bounds ADDRESS SPACE for sby and every child it
+        #     spawns — a process may lower its own rlimit but never raise it,
+        #     so yosys cannot escape it. A deadline alone does not help a
+        #     solver that eats the host in less time than its budget.
+        _lim = memory_limit_kb()
+        _ul = f"ulimit -v {_lim}; " if _lim else ""
+        inner = (f"{_ul}{path_export}; cd {formal_dir} && rm -rf {sby_path.stem} "
                  f"&& sby -f {name}")
-        cmd = ["docker", "exec", container, "bash", "-lc", inner]
+        cmd = ["docker", "exec", container,
+               "timeout", "-k", str(_CE.DEFAULT_KILL_GRACE_S), str(int(timeout)),
+               "bash", "-lc", inner]
+        timeout = int(timeout) + _CE.CLIENT_GRACE_S
     else:
         cmd = ["sby", "-f", name]
     try:
         p = subprocess.run(cmd, cwd=str(formal_dir), capture_output=True,
                            text=True, timeout=timeout)
-        return (p.stdout or "") + (p.stderr or "")
+        out = (p.stdout or "") + (p.stderr or "")
+        if container and p.returncode == 124:
+            # The CONTAINER-side deadline fired, so the solver was signalled
+            # where it lives. Named, because an anonymous death reads as a
+            # tool crash and sends the reader to the wrong place.
+            out += (f"\n[formal_property_run] SOLVER DEADLINE: the "
+                    f"container-side `timeout` stopped sby after {timeout - _CE.CLIENT_GRACE_S}s. "
+                    f"The proof is INCONCLUSIVE — not disproved.\n")
+        return out
     except subprocess.TimeoutExpired as e:
         out = e.stdout or ""
         err = e.stderr or ""
@@ -813,6 +889,26 @@ def run(project: Path, harness: Optional[Path] = None,
             if r.resolve() != dst.resolve():
                 shutil.copy2(r, dst)
             staged_rtl.append(r.name)
+        # An INCLUDE-HUB AGGREGATOR (a source whose body `include`s SIBLING
+        # sources that are ALSO staged standalone) must not be handed to
+        # `read_verilog` next to the files it includes: every included module
+        # is then elaborated twice and yosys ABORTS with
+        #     ERROR: Re-definition of module `\<name>'
+        # before any engine starts. sby reports rc=16 / "did not return a
+        # status" for every task, the step finds no clean proof and
+        # self-reports a FORMAL capability gap it does not actually have.
+        # Measured on caravel_user_project: `uprj_netlists.v` includes
+        # `user_project_wrapper.v` and `user_proj_example.v`, which the file
+        # list also carries standalone.
+        # Same predicate `_rtl_include_hub` that phase-2 synth, the LEC gold
+        # read and phase-3 synth already apply, so the selectors cannot drift.
+        # FAIL-OPEN in both directions: an unreadable file is not a hub, and
+        # if the filter would empty the list the unfiltered list is kept.
+        _sibs = {r.name for r in rtl}
+        _hubs = {r.name for r in rtl if _hub.is_include_hub(r, _sibs)}
+        _kept = [n for n in staged_rtl if n not in _hubs]
+        if _kept:
+            staged_rtl = _kept
         hdst = formal_dir / harness.name
         if harness.resolve() != hdst.resolve():
             shutil.copy2(harness, hdst)
@@ -990,6 +1086,66 @@ def _write_report(formal_dir: Path, results: dict) -> None:
               if results.get("mode") == "invariant-strengthened"
               else "_report.md")
     (formal_dir / f"{results['top']}{suffix}").write_text("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
+#
+# A published record can describe a state that no longer exists. For a formal
+# run the dangerous drift is the PROOF STRENGTH: `unbounded_proved` means "holds
+# for all reachable states", while a bounded BMC result only means "no
+# counterexample within the bound". A record carrying PASS on the strength of a
+# bounded proof is a record whose verdict a reader will over-trust, and the
+# distinction is exactly what `assert_bound_honesty` guards at run time.
+#
+# `_STRENGTH_HONESTY` re-derives that one question from what the record itself
+# publishes, so an old record is judged by today's rule rather than by the words
+# it was written with.
+import _record_adjudication as _ra  # noqa: E402
+
+
+def _strength_honesty(record: dict):
+    """Would this gate still call this a PASS on the strength it recorded?"""
+    verdict = record.get("verdict")
+    if verdict != "PASS":
+        return None                      # only a PASS can over-claim
+    unbounded = bool(record.get("unbounded_proved"))
+    if unbounded:
+        return None                      # a real unbounded proof still stands
+    return _ra.Supersession(
+        would_issue="PARTIAL",
+        because=("the record carries verdict PASS with unbounded_proved false, "
+                 "so every property it proved was proved BOUNDED — no "
+                 "counterexample within a bound, which is not a proof for all "
+                 "reachable states. Today's rule reserves PASS for a run whose "
+                 "properties all PASSED and discloses a bounded-only result as "
+                 "PARTIAL; a reader taking this PASS as a full proof would be "
+                 "over-trusting it"),
+    )
+
+
+RECORD_ADJUDICATION = _ra.declare(
+    __file__,
+    gate="formal_property_run",
+    # The entry point of the verdict decision; the fingerprint follows the
+    # module-local call closure from here, so `proof_strength` and
+    # `assert_bound_honesty` are covered without being listed.
+    decision_roots=("build_results",),
+    # Regenerate with:
+    #   python3 published_record_staleness_check.py \
+    #       --print-decision-digest formal_property_run
+    decision_digest="bfe3ec44467f0d8bebdabc306902e4a68bfc69592a3ca81b5ec34d355c7575ff",
+    rules=(
+        _ra.Rule(
+            rule_id="formal_property_run.bounded-is-not-a-proof",
+            landed_in="#562",
+            requires=("verdict", "unbounded_proved"),
+            decide=_strength_honesty,
+            what=("a PASS whose properties were all proved BOUNDED claims more "
+                  "than a bounded result supports; PARTIAL is the honest verdict"),
+        ),
+    ),
+)
 
 
 def main(argv=None) -> int:

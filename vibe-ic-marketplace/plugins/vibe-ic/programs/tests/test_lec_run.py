@@ -174,6 +174,90 @@ def test_parse_unproven_with_timeout_is_still_fail():
 
 
 # ---------------------------------------------------------------------------
+# CONTAINER-side budget kill (run_yosys_equiv): the `timeout` that _docker wraps
+# every call in fires BEFORE the host subprocess.run deadline, so a genuine
+# wall-budget kill returns NORMALLY with GNU-`timeout`'s exit code (124 / 137)
+# and NEVER raises subprocess.TimeoutExpired. run_yosys_equiv must re-attach the
+# budget marker so the parser classifies it as a disclosed budget gap, not a
+# hard FAIL. Regression from opentitan_aes × sky130A (27904 $equiv cells killed
+# at 7200s, misbooked verdict=FAIL "may genuinely differ").
+# ---------------------------------------------------------------------------
+class _FakeProc:
+    def __init__(self, returncode, stdout):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+# The exact shape the opentitan_aes run produced: only the INITIAL $equiv total
+# banner leaked (equiv_simple was still churning when SIGKILL landed) — no
+# `N proven / M unproven` completion line, no counterexample.
+_KILLED_MID_PROOF = (
+    "Yosys 0.67+\n"
+    "Found 27904 unproven $equiv cells (27904 groups) in equiv:\n"
+    "  Trying to prove $equiv for \\u_aes.ctr_i[82]: ezsat\nezsat\n failed.\n"
+    "  Trying "
+)
+
+
+@pytest.mark.parametrize("rc", [137, 124])
+def test_container_timeout_rc_reattaches_budget_marker(monkeypatch, rc):
+    # yosys killed by the container-side `timeout` (137=SIGKILL after
+    # --kill-after, 124=SIGTERM expiry) arrives via the NORMAL return path.
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(rc, _KILLED_MID_PROOF))
+    # 60 and not the 7200 s production LEC budget: `lec_run._docker` is
+    # monkeypatched above, so this call launches nothing and the number never
+    # bounds anything — it was on `ci_harness_timeout_ceiling_check`'s advisory
+    # list as the largest unresolvable "bound" in the tree. What the test is
+    # about is the marker re-attachment on rc 137/124, which the value below
+    # does not enter.
+    launched, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=60)
+    assert launched is True
+    assert lec_run._TIMEOUT_MARKER in out          # marker re-attached
+    # …and the parser now correctly classifies it, NOT a false FAIL:
+    p = lec_run.parse_equiv_output(out)
+    assert p["verdict"] == "INCONCLUSIVE"
+    assert p["equivalent"] is False                # never a fake pass
+
+
+def test_container_clean_rc_does_not_fabricate_marker(monkeypatch):
+    # NEGATIVE CONTROL: a normal completed run (rc=0) with a REAL mismatch must
+    # NOT get a budget marker — the genuine FAIL has to survive.
+    done_fail = ("Yosys 0.67+\n"
+                 "Found 8 $equiv cells in equiv:\n"
+                 "  Of those cells 0 are proven and 8 are unproven.\n")
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(0, done_fail))
+    _, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=10)
+    assert lec_run._TIMEOUT_MARKER not in out
+    assert lec_run.parse_equiv_output(out)["verdict"] == "FAIL"
+
+
+def test_container_tool_error_rc1_does_not_fabricate_marker(monkeypatch):
+    # NEGATIVE CONTROL: an ordinary yosys error exit (rc=1) is not a budget
+    # kill — no marker, so a genuine no-verdict crash stays a FAIL.
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(1, "Yosys 0.67+\nERROR: boom\n"))
+    _, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=10)
+    assert lec_run._TIMEOUT_MARKER not in out
+
+
+def test_container_timeout_rc_with_recorded_mismatch_still_fails(monkeypatch):
+    # A timeout that ALSO recorded a completed mismatch (proven+unproven parsed)
+    # keeps its real FAIL even though rc=137 re-attaches the marker — the marker
+    # only redirects a NO-VERDICT run, it can never hide a proven difference.
+    done_then_killed = ("Yosys 0.67+\n"
+                        "Found 8 $equiv cells in equiv:\n"
+                        "  Of those cells 0 are proven and 8 are unproven.\n")
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(137, done_then_killed))
+    _, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=10)
+    assert lec_run._TIMEOUT_MARKER in out          # marker re-attached…
+    assert lec_run.parse_equiv_output(out)["verdict"] == "FAIL"  # …but FAIL stands
+
+
+# ---------------------------------------------------------------------------
 # build_report — JSON schema keys the downstream gate reads
 # ---------------------------------------------------------------------------
 def test_build_report_schema_keys():
@@ -218,18 +302,28 @@ def test_pass_report_is_accepted_by_the_real_gate(tmp_path):
     assert res.passed is True, [f.rule for f in res.findings]
 
 
-def test_skip_report_is_honest_gate_fail_not_vacuous_pass(tmp_path):
+def test_skip_report_is_honest_waived_deferred_not_vacuous_pass(tmp_path):
     p = lec_run.parse_equiv_output(SAT_LIMITED_OUTPUT)
     r = lec_run.build_report(p, "chip_top", "chip_top_synth.v", None)
     (tmp_path / "reports").mkdir()
     (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
     (tmp_path / "reports" / "lec.rpt").write_text(SAT_LIMITED_OUTPUT)
     res = gate.audit(tmp_path)
-    # SKIPPED-CONDITION is equivalent:false -> the gate must NOT pass it, and
-    # must not pass it vacuously either.
+    # A SAT-model-unsupported SKIPPED-CONDITION is a DISCLOSED capability gap:
+    # lec_run built no deciding miter and recorded NO counterexample
+    # (non_equivalent_points == 0). The gate must NOT pass it, and must NOT pass
+    # it vacuously either — `passed` stays False. But it is NOT a hard
+    # LEC_NOT_EQUIVALENT that cascade-marks every downstream physical step MISSING
+    # off a netlist nothing proved non-equivalent; it is the non-blocking
+    # WAIVED-DEFERRED tier (inconclusive=True, its own honest LEC_SKIPPED_CONDITION
+    # finding), the SAME evidence class the #208 INCONCLUSIVE sibling is booked as.
+    # NO-LEAK: a genuine mismatch lands non_equivalent_points>0 (or verdict FAIL)
+    # and still hard-FAILs at the substance verdict — covered by
+    # test_skipped_condition_with_counterexample_still_hard_fails.
     assert res.passed is False
+    assert res.inconclusive is True
     rules = {f.rule for f in res.findings}
-    assert "LEC_NOT_EQUIVALENT" in rules
+    assert rules == {"LEC_SKIPPED_CONDITION"}, rules
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +362,53 @@ def test_build_equiv_script_omits_liberty_when_none():
     assert "read_verilog -sv /p/rtl/a.v" in s
     assert "-icells" not in s
     assert "equiv_make gold gate equiv" in s
+
+
+# ---------------------------------------------------------------------------
+# equiv_struct SAT-free pre-reduction — the deck must run structural hashing
+# BEFORE spending any SAT, so equiv_simple decides only the cones that are
+# genuinely restructured, not every trivially-identical key-point.
+#
+# MEASURED motivation (a large AES miter, container yosys 0.67+): after
+# equiv_make the miter had 31 850 unproven $equiv cells; a single equiv_struct
+# pass collapsed 28 517 of them structurally (28 403 merges), leaving 3 333 for
+# SAT — a 10x cut. Without equiv_struct the deck SAT-hammered all 31 850,
+# exhausted the wall clock mid-equiv_simple, and reported a FALSE INCONCLUSIVE.
+# ---------------------------------------------------------------------------
+def test_build_equiv_script_runs_equiv_struct_before_sat():
+    # FORWARD negative control: FAILS against the byte-identical pre-fix deck
+    # (which had no equiv_struct), PASSES after the pre-reduction is inserted.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None)
+    assert "equiv_struct" in s, "SAT-free structural pre-reduction is missing"
+    # It must sit AFTER key-point mapping and BEFORE the first SAT proof, so the
+    # SAT stages see the reduced set — not before equiv_make (nothing to merge),
+    # not after equiv_simple (the saving is already spent).
+    assert (s.index("equiv_make gold gate equiv")
+            < s.index("equiv_struct")
+            < s.index("equiv_simple")), "equiv_struct out of order"
+
+
+def test_build_equiv_script_keeps_full_sat_ladder():
+    # REVERSE control — a STABLE INVARIANT that MUST PASS both before AND after
+    # the equiv_struct fix. equiv_struct is SOUND but only proves STRUCTURAL
+    # identity; it can never witness functional equivalence of a restructured
+    # cone. So the fix must AUGMENT, never REPLACE, the SAT proof ladder. This
+    # pins the exact cheat the prompt warns of: "greening" convergence by
+    # DELETING equiv_simple/equiv_induct (trivially fast AND blind). It makes NO
+    # reference to equiv_struct, so it holds on the pre-fix deck too — its only
+    # job is to fail the moment any SAT stage disappears or the ladder reorders.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None)
+    for stage in ("equiv_simple", "equiv_induct -seq 4",
+                  "equiv_induct -seq 16", "equiv_induct -seq 64",
+                  "equiv_status"):
+        assert stage in s, f"SAT verification stage {stage!r} was removed"
+    assert (s.index("equiv_simple")
+            < s.index("equiv_induct -seq 4")
+            < s.index("equiv_induct -seq 16")
+            < s.index("equiv_induct -seq 64")
+            < s.index("equiv_status")), "SAT ladder order broken"
 
 
 # ---------------------------------------------------------------------------
@@ -692,7 +833,7 @@ def _yosys(script_path):
     cmd = (f"export PATH=/foss/tools/yosys/bin:$PATH && "
            f"yosys -s {script_path} 2>&1")
     return subprocess.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-                          capture_output=True, text=True, timeout=300).stdout or ""
+                          capture_output=True, text=True, timeout=60).stdout or ""
 
 
 # ---------------------------------------------------------------------------
@@ -1110,3 +1251,75 @@ def test_runner_outer_timeout_exceeds_the_producer_worst_case():
         "Step 13 — LEC (RTL ≡ handoff netlist)", 1)[1]
     assert "3 * lec_producer_yosys_timeout_s()" in src
     assert "timeout=1200" not in src
+
+
+# ---------------------------------------------------------------------------
+# NO-COMPLETED-COMPARISON KILL (measured: opentitan_aes × sky130A, this run).
+#
+# A miter WAS built (`Found N unproven $equiv cells (N groups) in equiv:` →
+# total known → not parse_error) but the proof was CUT OFF mid-equiv_simple:
+# NO `N proven / M unproven` completion line, NO `Proved N` line, NO
+# counterexample — and NO wall-budget marker (the kill did NOT route through
+# run_yosys_equiv's rc 124/137 / TimeoutExpired paths; e.g. an external SIGKILL
+# that left a stale artifact, a docker-daemon restart, an OOM with a different
+# rc). Before this fix the parser fell through to the final `else` and booked
+# it FAIL "may genuinely differ" — a fabricated non-equivalence from a run that
+# decided ZERO points. The real opentitan_aes Step-13 lec.json was exactly this
+# (only ~1720/31850 cells attempted, no equiv_status), and that false FAIL
+# blocked 24 downstream steps. This is the OBSERVABLE-keyed safety net behind
+# the marker path: no decided points + no counterexample = no evidence in
+# EITHER direction → INCONCLUSIVE, never FAIL, never PASS.
+# ---------------------------------------------------------------------------
+def test_killed_mid_proof_no_marker_is_inconclusive_not_fail():
+    # POSITIVE control (FAILS against the byte-identical pre-fix file, PASSES
+    # after): the killed-mid-equiv_simple shape with NO marker is INCONCLUSIVE.
+    p = lec_run.parse_equiv_output(_KILLED_MID_PROOF)
+    assert p["parse_error"] is False            # a miter WAS built (total known)
+    assert p["total"] == 27904
+    assert p["proven"] is None and p["unproven"] is None   # nothing decided
+    assert p["verdict"] == "INCONCLUSIVE"       # NOT the fabricated FAIL
+    assert p["equivalent"] is False             # never a fake pass
+    expl = p["verdict_explanation"].lower()
+    assert "no decided points" in expl or "cut off" in expl
+
+
+def test_killed_mid_proof_no_marker_gate_is_non_blocking(tmp_path):
+    # END-TO-END: the downstream gate resolves the INCONCLUSIVE report to a
+    # non-blocking WAIVED-DEFERRED (rc 3), NOT the LEC_NOT_EQUIVALENT hard FAIL
+    # that cascade-marked 24 downstream steps MISSING.
+    p = lec_run.parse_equiv_output(_KILLED_MID_PROOF)
+    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
+    (tmp_path / "reports" / "lec.rpt").write_text(_KILLED_MID_PROOF)
+    res = gate.audit(tmp_path)
+    assert res.inconclusive is True
+    assert res.passed is False                  # never a vacuous PASS
+    assert "LEC_NOT_EQUIVALENT" not in {f.rule for f in res.findings}
+    assert gate.main([str(tmp_path)]) == 3      # non-blocking, not a PASS
+
+
+def test_completed_unproven_no_marker_no_ctrex_still_fails():
+    # REVERSE control (must STILL pass — this is what catches a fix that
+    # "tightened the filter until the count hit zero"): a COMPLETED miter that
+    # left points unproven is a genuine non-equivalence and must STAY FAIL even
+    # with NO marker and NO explicit counterexample phrase. The discriminator
+    # is a decided per-point verdict (proven parsed), which _no_completed_
+    # comparison is False for — so the softening can NEVER reach a real mismatch.
+    done_fail = ("Yosys 0.67+\n"
+                 "Found 8 $equiv cells (8 groups) in equiv:\n"
+                 "  Of those cells 0 are proven and 8 are unproven.\n")
+    p = lec_run.parse_equiv_output(done_fail)
+    assert p["parse_error"] is False
+    assert p["proven"] == 0 and p["unproven"] == 8   # a DECIDED verdict exists
+    assert p["verdict"] == "FAIL"                     # NOT laundered to INCONCLUSIVE
+
+
+def test_killed_mid_proof_with_counterexample_still_fails():
+    # NO-LEAK: if a killed-mid-proof log ALSO recorded a counterexample, the
+    # proven difference stands regardless of the missing completion line.
+    txt = (_KILLED_MID_PROOF
+           + "\nequiv_induct: proved the designs are non-equivalent\n")
+    p = lec_run.parse_equiv_output(txt)
+    assert p["proven"] is None and p["unproven"] is None
+    assert p["verdict"] == "FAIL"               # counterexample overrides

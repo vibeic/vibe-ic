@@ -468,6 +468,59 @@ def _lightweight_status(
     return "pending", ""
 
 
+# Statuses a given mode's classifier CANNOT emit, so their count is structurally
+# 0 and must never be rendered as if it were a measurement. `_lightweight_status`
+# decides purely on output-file presence and has no branch returning "fail" or
+# "missing"; printing "fail 0" from it states a verdict the mode never computed.
+_UNEXPRESSIBLE = {
+    "lightweight": frozenset({"fail", "missing"}),
+    "full": frozenset(),
+}
+
+
+def _orchestrator_failures(project: Path) -> List[dict]:
+    """Failing step records quoted VERBATIM from reports/orchestrator/*.json.
+
+    These are the runner's OWN authoritative per-step verdicts. They are
+    reported as a flat list and are deliberately NOT joined onto dashboard step
+    rows: the orchestrator keys steps by runner-internal name ("pnr",
+    "yosys_synth") while the flow keys them by id ("21", "9"), and no mapping
+    between those vocabularies exists in this repo. Inventing one would let a
+    FAIL be painted onto the wrong row, which is worse than leaving it
+    unattributed -- it sends the reader somewhere specific and wrong.
+
+    `status` is preserved exactly as written (FAIL, FAIL_ECO_INERT, ...); it is
+    matched case-insensitively but never normalised, because the distinct tiers
+    carry distinct remediation.
+    """
+    out: List[dict] = []
+    odir = project / "reports" / "orchestrator"
+    try:
+        files = sorted(p for p in odir.glob("*.json") if p.is_file())
+    except OSError:
+        return out
+    for jf in files:
+        try:
+            doc = json.loads(jf.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for st in doc.get("steps") or []:
+            if not isinstance(st, dict):
+                continue
+            raw = str(st.get("status") or "")
+            if "FAIL" not in raw.upper():
+                continue
+            out.append({
+                "source": jf.name,
+                "name": str(st.get("name") or ""),
+                "status": raw,
+                "detail": str(st.get("detail") or ""),
+            })
+    return out
+
+
 def _map_compliance_status(raw_status: str) -> str:
     """Map a flow_compliance_check verdict to a dashboard status."""
     raw = str(raw_status or "").upper().replace("_", "-")
@@ -549,12 +602,52 @@ def _compliance_detail(comp_step: dict) -> str:
 def _lane_applicability(project: Path) -> Tuple[bool, bool]:
     """(analog_applicable, silicon_received) — cheap project-level signals that
     MIRROR the flow's own step conditions, so lightweight agrees with --full.
-    Analog A1-A9 + mixed M1-M4 apply only when the design declared analog blocks
-    (`phase1/analog/analog_block_list.json` — the exact file the --full gate
-    conditions on); manufacturing 40-44 only once silicon is physically back
+    Analog A1-A9 + mixed M1-M4 apply when the design declared analog blocks;
+    manufacturing 40-44 only once silicon is physically back
     (`phase3/stage5_manufacturing/silicon_received.json`). When neither holds
-    those lanes are honestly `na` / `external`, not a misleading `pending`."""
-    analog = (project / "phase1" / "analog" / "analog_block_list.json").exists()
+    those lanes are honestly `na` / `external`, not a misleading `pending`.
+
+    The analog block list is probed at BOTH canonical locations. The flow yaml
+    conditions on `phase1/analog/analog_block_list.json`, but the only two
+    producers — `phase1_doc_one_shot_runner` (L5_ADI_SPEC emit) and
+    `analog_one_shot_runner` — write it through `_path_layout.analog_dir()`,
+    i.e. `phase3/analog/analog_block_list.json`; the phase1 spelling is
+    reachable only via `migrate_to_layout_p` on a legacy project-root tree.
+    `flow_compliance_check._glob_first` hides this with a phase{1,2,3}/analog →
+    canonical remap, but this module does raw `Path.exists()`, so on a REAL
+    analog run it read `False` and marked the whole Analog + Mixed-Signal
+    lanes "na — design declares no analog blocks". That is a false
+    not-applicable on the load-bearing lane, and it made lightweight DISAGREE
+    with --full, which is exactly what this helper exists to prevent.
+
+    PRESENCE OF THE FILE IS NOT DECLARATION OF ANALOG WORK. Widening the probe
+    on `Path.exists()` alone would install the MIRROR IMAGE of the defect it
+    fixes: measured over the 17 tracked projects in this repo that carry an
+    `analog_block_list.json`, all 17 move `False -> True`, and 8 of them
+    (`ethernet`, `i2c`, `jesd204`, `lin`, `spdif`, `usb`, `ic/sha256`,
+    `ic/subservient`) satisfy `_analog_a_check_common.analog_class_is_na` —
+    their only "analog block" is a `low_confidence: true` keyword phantom
+    (i2c's `dac` / `oscillator` come from a PDF abbreviation table's
+    "Analog-to-Digital"). A pure-digital design's dashboard would flip the
+    whole Analog A1-A9 + Mixed-Signal M1-M4 lane from `na` to applicable — a
+    FALSE applicable, exactly symmetric to the false not-applicable above.
+
+    So the ORGANIC #676 predicate that already governs the analog P0 gates is
+    consulted here too, and this module is made to agree with them rather than
+    invent a second answer. It can only ever move `True -> False`: an import or
+    read failure degrades to the plain `.exists()` behaviour above, never to a
+    fail-open `True`."""
+    analog = (
+        (project / "phase3" / "analog" / "analog_block_list.json").exists()
+        or (project / "phase1" / "analog" / "analog_block_list.json").exists()
+    )
+    if analog:
+        try:
+            import _analog_a_check_common as _aac
+            if _aac.analog_class_is_na(project):
+                analog = False
+        except Exception:
+            pass          # degrade to the presence-only answer; never fail open
     silicon = (project / "phase3" / "stage5_manufacturing"
                / "silicon_received.json").exists()
     return analog, silicon
@@ -721,6 +814,8 @@ def collect(project, full: bool = False) -> dict:
         "plugin_version": _plugin_version(),
         "note": note,
         "summary": summary,
+        "summary_unavailable": sorted(_UNEXPRESSIBLE.get(mode, frozenset())),
+        "orchestrator_failures": _orchestrator_failures(project_path),
         "phases": phases_out,
     }
 

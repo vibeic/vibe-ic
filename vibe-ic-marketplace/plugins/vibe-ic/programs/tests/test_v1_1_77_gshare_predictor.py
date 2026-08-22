@@ -71,7 +71,7 @@ def _host_score(dut_sv: str):
         c = subprocess.run(["iverilog", "-g2012", "-o", vvp, dut, _REF, _TB],
                            capture_output=True, text=True)
         assert c.returncode == 0, f"iverilog failed: {c.stderr}\n{dut_sv}"
-        r = subprocess.run(["vvp", vvp], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(["vvp", vvp], capture_output=True, text=True, timeout=60)
         out = r.stdout
         import re
         m = re.search(r"Total mismatched samples is (\d+)", out)

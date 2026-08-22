@@ -38,8 +38,15 @@ def _analog_block(project: Path, block: str) -> None:
     (project / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
     (project / "reports" / "phase3" / "analog_one_shot.json").write_text(
         json.dumps({"verdict": "PASS"}))
+    # `_provenance: real_ngspice` is true of the SIMULATOR and says nothing
+    # about the SUBJECT; `design_content` is where the sweep republishes what
+    # the netlist it ran on contains. A PRODUCTION-READY analog IC has a loop
+    # that closed on a design-bound netlist, so the fixture says so — without
+    # it, this test would also be asserting that a sweep which will not name
+    # its circuit can carry an IC to PRODUCTION-READY.
     (d / "corner_results.json").write_text(json.dumps({
         "partial_measurement": False, "_provenance": "real_ngspice",
+        "design_content": "structure_and_geometry",
         "corners_executed": 9, "full_pvt_sweep_executed": True}))
 
 
