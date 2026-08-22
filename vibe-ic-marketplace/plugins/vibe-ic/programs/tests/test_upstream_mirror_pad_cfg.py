@@ -22,6 +22,9 @@ from pathlib import Path
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROGRAMS))
+
+from not_verified_tier import skip_not_verified  # noqa: E402
 _spec = importlib.util.spec_from_file_location("_pad_ring_pin",
                                                PROGRAMS / "_pad_ring.py")
 PR = importlib.util.module_from_spec(_spec)
@@ -92,11 +95,12 @@ def test_upstream_side_arithmetic_measures_the_master_width():
     """
     tcl = _upstream_tcl()
     if tcl is None:
-        pytest.skip(
+        skip_not_verified(
             f"upstream {PR.UPSTREAM_MIRROR['upstream']} is not on this host: "
             f"$VIBEIC_LIBRELANE_ROOT is unset or does not carry it and "
             f"`librelane` is not importable. The question could not be put "
-            f"here; it is put in the container image that ships the flow.")
+            f"here; it is put in the container image that ships the flow.",
+            "set $VIBEIC_LIBRELANE_ROOT to a LibreLane checkout that carries it, or run in the container image that ships the flow")
     text = tcl.read_text(errors="replace")
 
     # The side loop is where the per-side arithmetic lives. Bound the search to

@@ -38,6 +38,9 @@ import sys
 import pytest
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_PROGRAMS))
+
+from not_verified_tier import skip_not_verified  # noqa: E402
 _ROOT_WITNESS = "vibe-ic-marketplace"
 
 
@@ -88,13 +91,15 @@ def _require_git(root):
     """
     probe = _git(root, "rev-parse", "--git-dir")
     if probe.returncode != 0:
-        pytest.skip(
-            f"NOT OBSERVED: {root} is not a git repository (git rev-parse "
+        skip_not_verified(
+            f"{root} is not a git repository (git rev-parse "
             f"--git-dir exited {probe.returncode}: "
             f"{probe.stderr.strip().splitlines()[:1]}), so no sha, path or "
             f"branch cited by the report could be RESOLVED here. This is a "
             f"fact about the checkout -- a staged copy with no .git, as the "
-            f"container lane uses -- and not about the document.")
+            f"container lane uses -- and not about the document.",
+            "run against a full checkout rather than a staged copy with no "
+            ".git, so the citations can be resolved")
 
 
 def test_every_sha_the_report_cites_resolves_to_a_commit():

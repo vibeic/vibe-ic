@@ -47,9 +47,12 @@ from pathlib import Path
 
 import pytest
 
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
+
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
+from not_verified_tier import not_verified_reason  # noqa: E402
 import _pad_ring as PR            # noqa: E402
 import pad_ring_check as CHK      # noqa: E402
 import pad_ring_gen as GEN        # noqa: E402
@@ -2135,13 +2138,17 @@ def _measure_placer_orientations(lib, work: Path, rot: str):
 
 
 @pytest.mark.skipif(not _HAVE_OPENROAD,
-                    reason="openroad not on PATH (container-only tool)")
+                    reason=not_verified_reason(
+                        "openroad is not on PATH (container-only tool), so the placer was never run and these orientations were NOT observed",
+                        PULL_REMEDY))
 @pytest.mark.skipif(not (_PDK_ROOT and Path(_PDK_ROOT).is_dir()),
                     reason="no PDK_ROOT on this host")
 
 
 @pytest.mark.skipif(not _HAVE_OPENROAD,
-                    reason="openroad not on PATH (container-only tool)")
+                    reason=not_verified_reason(
+                        "openroad is not on PATH (container-only tool), so the placer was never run and these orientations were NOT observed",
+                        PULL_REMEDY))
 @pytest.mark.skipif(not (_PDK_ROOT and Path(_PDK_ROOT).is_dir()),
                     reason="no PDK_ROOT on this host")
 def test_the_shipped_orientations_are_what_the_placer_produces(tmp_path):
