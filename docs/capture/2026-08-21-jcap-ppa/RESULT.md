@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 33 records, and the sixteen already-program claims of which fifteen hold
+# The PPA cluster, DISTILLED — 33 records, and the seventeen already-program claims of which sixteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -7,12 +7,12 @@ eighteen end-to-end findings are already enforced by a shipped program or a
 general census test, and were fixed between the run that found them and this
 tree.** Add the smaller `jsonschema` item, which is not one of the eighteen, and
 four more classes drawn from the six lane records, and the count is
-**11 + 1 + 4 = 16** claims examined — of which **fifteen hold and one, F-2, is
+**11 + 1 + 5 = 17** claims examined — of which **sixteen hold and one, F-2, is
 disproven by execution**: its guard's predicate is satisfied by a production
 fallback and cannot fail. Those sixteen produced no record; duplicating them would be
 worse than skipping them.
 
-Two of the sixteen were marked *conditional* rather than clean, and one of those
+Two of the seventeen were marked *conditional* rather than clean, and one of those
 two, F-2, was later disproven outright. The brief's test
 for a landed fix — can the class recur in a module nobody has touched? — is
 really a question about whether the guard's population is DISCOVERED or
@@ -165,6 +165,7 @@ also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 | a gate that read NOTHING must not exit 0 | `programs/gate_zero_denominator_refuses_check.py` — and its header states exactly why the first gate does not imply it, which is the distinction I would otherwise have re-derived |
 | a bad invocation is 3, and asking for `--help` is not a bad invocation | `programs/_ppa/cli_exit.py` reads the exit code rather than catching the type; `test_ppa_layer_exit_contract.py` carries BOTH arms — the two are one defect from opposite sides, so a suite testing one manufactures the other. **The repo-wide form of this landed while this branch was open** and is worth the lander's attention: `programs/_gate_usage_exit.py` gives new gates an rc 3 because rc 2 already means VACUOUS, and `programs/_gate_invocation.py` recovers the distinction for the 1232 programs that predate it by reading the callee's error protocol out of its stderr. Their own measurement is the population: of 241 registered structural gates, **39 never got past argument parsing and every one was recorded as a benign input-missing skip**. I hit this live in this lane — the backlog sanitiser answered rc 2 to a missing `--file` and I read it as a content verdict before checking. `classify_not_invocable` was run on that exact invocation and named it, with a genuine content FAIL and a clean PASS as controls returning None |
 | a present-but-empty population is never a pass | `tests/test_ppa_layer_vacuous_population.py` — the right question, on 8 of 19 programs; the coverage gap is recorded under **A-3**, not as a class of its own |
+| a published run's inputs are declared by DIGEST, so identity survives the path | the trial contracts' `evidence_manifest` — **525 of 525** artefacts carry a content digest beside path, role and byte count. Demonstrated working: the published baseline was recovered by hash after its source project ceased to exist on this host. Found late, in the one source section this lane had not read |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
 CLASS is what this lane recorded instead:
@@ -1579,7 +1580,7 @@ coverage of the input.** So the last passes audited the input instead:
 | `ppa-e2e/FINDINGS.md` | read in full — all 18 |
 | `ppa-e2e/RESULT.md` | read in full, including §1–7 |
 | `ppa-e2e/METHOD.md` | read in full |
-| `ppa-crosslayer/RESULT.md` | read: §5–§10 and the requests |
+| `ppa-crosslayer/RESULT.md` | read: §5–§10 and the requests — **and §2 late, which is the control the brief named.** It yielded the seventeenth ALREADY-PROGRAM and the correction to `A-15`'s remedy. The coverage note above was accurate about what had been read and silent about the brief having asked for more |
 | six lane records | read: findings, *what I could not settle*, and every REQUESTS/HANDOFF section |
 
 The last section produced **no new record, and that is the correct outcome.** It
@@ -2520,7 +2521,7 @@ rather than in a command line that would fail for whoever tried it.
 ## Summary
 
 **STATUS**: 33 records emitted and validated — 30 Bucket A, 2 C, 1 T, zero B,
-zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
+zero D. 17 ALREADY-PROGRAM claims examined, 16 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
 re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (48 fast + 4 authoritative). No gate
@@ -2545,7 +2546,7 @@ bucket. My 27 resolve as:
 
 | resolution | n | records |
 |---|---:|---|
-| ALREADY-PROGRAM | 16 claims, **15 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
+| ALREADY-PROGRAM | 17 claims, **16 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
 | **EXTRACT-NEW** | 7 | A-3, A-4, A-13, A-22, A-25, A-30, A-31 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
