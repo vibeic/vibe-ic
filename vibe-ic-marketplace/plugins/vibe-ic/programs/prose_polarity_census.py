@@ -68,6 +68,24 @@ Note the first is a PREDICATE, not a keyed write, so no widening of this
 census's predicate would ever reach it. The harm is the same: a denied statement
 read as an assertion.
 
+AND 262 IS NOT 262 DEFECTS. Sampled by hand at this tip, several of these
+DECLINE rather than lie, because a denial usually creates the contradiction
+their own ambiguity guard already refuses:
+
+    behavioral_fsm_synth::_parse_reset_level
+        needs asynchronous XOR synchronous. A sentence retiring the async reset
+        names both, so it returns None -- no value, rather than the wrong one.
+    cellular_automaton_synth::_extract_rule
+        "Rule 110 is no longer used. Implement rule 30." -> None, two rules
+        seen and neither trusted.
+
+That is not a fix -- a correct value is still lost, and an honest None is not a
+repair -- but it is not the harm either, and counting it as one would inflate
+the number the same way the HDL caveat inflates the census. Each entry needs
+reading, and generic fixtures do not reach most of them: these functions have
+specific phrasing contracts, and a probe that misses the pattern reports a
+silence it caused itself.
+
 THIS IS NOT A LIST TO ACT ON, and that is the point of keeping it out of the
 count. 231 is unreadable, and a census nobody reads records nothing -- the
 narrower predicate here is what made seven defects findable by reading 46. The
