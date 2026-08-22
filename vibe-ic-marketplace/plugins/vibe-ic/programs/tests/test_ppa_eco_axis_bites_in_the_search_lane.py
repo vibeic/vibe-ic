@@ -854,6 +854,22 @@ def _eco_only_policy():
         pol, axes=tuple(a for a in pol.axes if a.name == F.ECO_AXIS))
 
 
+def test_the_prose_ten_is_the_declaration_and_the_kind_mix_sums_to_it():
+    """The other number this file's prose leans on.
+
+    Five comments say "all ten spare cells". That ten is not a literal anybody
+    typed twice -- it is `DECL["min_spare_cells"]`, and the per-kind floors sum
+    to it. Asserted because the sibling row exists for a docstring number that
+    was wrong and nothing checked; the difference here is that the prose traces
+    to one fixture, and this makes that traceability a test rather than a habit.
+    """
+    assert DECL["min_spare_cells"] == 10, DECL
+    assert sum(DECL["min_spare_cells_by_kind"].values()) == 10, DECL
+    # and the fixture the prose describes really does start from that number
+    kept = [m for m in kept_spares() if m["metric"] == F.ECO_M_COUNT]
+    assert kept and kept[0]["value"] == DECL["min_spare_cells"], kept
+
+
 def test_eco_only_policy_leaves_exactly_nine_axes_unevidenced():
     """Pins the number the sibling docstring states.
 
