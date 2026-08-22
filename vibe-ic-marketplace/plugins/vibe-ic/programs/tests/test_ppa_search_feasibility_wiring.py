@@ -106,8 +106,17 @@ def run_dir(tmp_path):
         _trial("binary", _nine_clean(1000.0)),
         _trial("gray", _one_axis_dirty(900.0)),
     ]))
+    # The policy DECLARES that this design needs no spare population, rather
+    # than being silent about it. The neighbouring test below already describes
+    # it that way -- "the one term this fixture's policy declares no requirement
+    # for" -- and until now that sentence was aspirational: the document said
+    # nothing at all, which is a different fact and one `audit_manifest` now
+    # separates (ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE). `required: false` is a
+    # decision, so the term still reads NOT_APPLICABLE and every verdict in this
+    # file is unchanged; what changes is that the fixture now means what it says.
     (tmp_path / "policy.json").write_text(
-        json.dumps({"required_views": [VIEW]}))
+        json.dumps({"required_views": [VIEW],
+                    "eco_readiness": {"required": False}}))
     return tmp_path
 
 

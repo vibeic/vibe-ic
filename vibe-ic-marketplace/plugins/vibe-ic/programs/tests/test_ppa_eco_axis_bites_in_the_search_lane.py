@@ -1163,3 +1163,110 @@ def test_router_on_real_trees_reports_undetermined_not_a_verdict():
     assert axis_of(r).applicability["state"] == F.ECO_PATH_UNDETERMINED
     assert r.verdict == F.UNDETERMINED
     assert F.set_exit_code([r]) == F.RC_UNDETERMINED
+
+
+# ---------------------------------------------------------------------------
+# ELIGIBILITY MAY NOT REST ON ECO SILENCE (the publication boundary)
+# ---------------------------------------------------------------------------
+# The finding above is that a silent contract publishes the spare-deleting
+# candidate as ELIGIBLE. Two ways of stopping that were built and measured and
+# BOTH are wrong:
+#
+#   an UNDETERMINED verdict on an undeclared population -- 18 failures, incl.
+#       the feasibility module's core positive fixture. No candidate on any
+#       ECO-silent contract could ever be FEASIBLE, so "both arms feasible"
+#       could never hold and no head-to-head could be defended.
+#   a refusal at policy load -- invents a category the module does not have.
+#       `test_a_policy_declaring_no_view_adjudicates_nothing_and_says_so` pins
+#       that an UNDER-DECLARED policy RUNS and returns UNDETERMINED; it is
+#       never refused at load.
+#
+# The third place is the one where eligibility stops being an adjudication and
+# becomes a PUBLISHED CLAIM. `audit_manifest` already refuses
+# ELIGIBLE_ON_A_PARTIAL_VECTOR, under a rule its own test states as "a term the
+# contract PROVES does not apply is not a missing check". PROVES is the word
+# that decides this: NOT_REQUIRED and the IP path are proofs, NOT_DECLARED is
+# an absence wearing a proof's label. The audit could not tell them apart until
+# the toolchain block carried the stance; it can now, from the document alone.
+#
+# The candidate verdict is UNTOUCHED. What is refused is the claim.
+def test_publication_a_silent_run_may_not_publish_eligible_candidates(tmp_path):
+    """The run still completes and still adjudicates; its manifest does not
+    audit clean, because it is claiming eligibility on an axis nobody was
+    asked about."""
+    d = _campaign(tmp_path)
+    _rc, man = _run_campaign(d)
+    assert man["toolchain"]["feasibility_eco_state"] == F.ECO_NOT_DECLARED
+    assert _ran(man)["feasibility"]["verdict"] == S.FEAS_ELIGIBLE  # unchanged
+    codes = [f["code"] for f in S.audit_manifest(man)]
+    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" in codes, codes
+
+
+def test_publication_the_run_that_prints_the_caveat_now_fails_its_own_audit():
+    """`ppa_search_run` already PRINTED "[CANNOT CHECK] ... published ELIGIBLE
+    by it" on this shape and then audited clean. A report may not publish a
+    sentence its own audit refuses; this is the two agreeing."""
+    import subprocess as _sp
+    src = (_PROGRAMS / "ppa_search_run.py").read_text(encoding="utf-8")
+    assert "published ELIGIBLE by it" in src or "is published ELIGIBLE" in src
+    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" in \
+        (_PROGRAMS / "_ppa" / "search.py").read_text(encoding="utf-8")
+
+
+def test_publication_a_declared_stance_audits_clean(tmp_path):
+    """Both proofs license eligibility, and the clause must not refuse them --
+    otherwise it is not "eligibility may not rest on silence", it is "no design
+    may ever be eligible"."""
+    for i, eco in enumerate(({"required": False}, dict(DECL))):
+        sub = tmp_path / f"case{i}"
+        sub.mkdir()
+        d = _campaign(sub, eco=eco)
+        _rc, man = _run_campaign(d)
+        codes = [f["code"] for f in S.audit_manifest(man)]
+        assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" not in codes, (eco, codes)
+
+
+def test_publication_a_resolved_route_also_licenses_the_audit(tmp_path):
+    """The other half: no declaration at all, but --project resolves the route.
+    The stance is then NOT_DECLARED_ON_CHIP_PATH, candidates are UNDETERMINED
+    rather than ELIGIBLE, and the clause has nothing to refuse."""
+    d = _campaign(tmp_path)
+    _rc, man = _run_campaign(d, "--project", str(chip_tree(tmp_path / "chip")))
+    assert man["toolchain"]["feasibility_eco_state"] != F.ECO_NOT_DECLARED
+    codes = [f["code"] for f in S.audit_manifest(man)]
+    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" not in codes, codes
+
+
+def test_publication_negative_control_the_clause_is_what_refuses(tmp_path):
+    """Remove the clause from the SOURCE; the same manifest audits clean.
+
+    Without this the assertions above could be passing because of
+    ELIGIBLE_ON_A_PARTIAL_VECTOR or any other clause.
+    """
+    d = _campaign(tmp_path)
+    _rc, man = _run_campaign(d)
+    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" in \
+        [f["code"] for f in S.audit_manifest(man)]
+
+    path = pathlib.Path(S.__file__)
+    src = path.read_text(encoding="utf-8")
+    arm = '    if tc.get("feasibility_eco_state") == "NOT_DECLARED":'
+    assert src.count(arm) == 1, "the control is pinned to this arm's exact text"
+    # `_ppa/search.py` uses relative imports, so it cannot be exec'd as a
+    # standalone module: it is loaded INSIDE the `_ppa` package, under a
+    # distinct name, so `from . import ...` resolves the way it does normally.
+    name = "_ppa._search_without_the_eco_stance_clause"
+    mod = types.ModuleType(name)
+    mod.__file__ = str(path)
+    mod.__package__ = "_ppa"
+    sys.modules[name] = mod
+    try:
+        exec(compile(src.replace(arm, '    if False:'), str(path), "exec"),
+             mod.__dict__)
+    finally:
+        sys.modules.pop(name, None)
+    codes = [f["code"] for f in mod.audit_manifest(man)]
+    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" not in codes
+    assert codes == [], (
+        "with the clause removed the manifest STILL does not audit clean, so "
+        f"the refusal measured above is not coming from it: {codes}")
