@@ -1896,6 +1896,24 @@ not:
   layer presents 19 commands, that exactly 2 were driven to a real verdict, and
   that the other 17 are not measured and not claimed.
 
+**The brief's FIRST requirement, tested rather than assumed.** *"START WITH THE
+18. For each, write the rule that would have caught it."* The verifier confirms
+the table has eighteen rows; it never confirmed a row states a RULE rather than a
+status. Screened for obligation — 18 rows, **0 stating anything less** — with two
+negative controls proving a bare status does not match.
+
+The screen took three attempts, and the misses are worth naming because anyone
+rebuilding it will repeat them: a verb list of *must / may not / never* misses
+the imperative mood (*"De-duplicate by CONTENT, not by path"*), misses *"Nothing
+that enters a hash identity may carry…"*, and misses *"may claim only"* if the
+alternative requires those two words to be adjacent — they are three words apart.
+Each miss reported a real rule as a defect. **This is deliberately not made a
+permanent check**: the regex needed three passes to stop producing false
+positives on hand-written English, and a fragile screen wired into a gate fails
+later for reasons that have nothing to do with the document. The measurement is
+recorded; the table is eighteen stable hand-written rows and does not need a
+parser standing over it.
+
 A third flag was my screen's fault, not the records': the Bucket-T record looked
 figure-free because I searched the field the Bucket-A records use, and the ladder
 puts a T record's measurement in `problem` and `bad_sample`, where it is dense
