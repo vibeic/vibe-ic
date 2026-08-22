@@ -15,6 +15,12 @@
 # refused all 29 of my ABANDON rows; reverse-apply showed all 29 CONTAINED_IN_MAIN and the two real
 # losses still NOT_CONTAINED. A guard that refuses everything protects nothing.
 #
+# LIMITATION, measured 2026-08-22: reverse-apply against the CURRENT main reports not_contained for
+# a change that DID land and whose files main modified afterwards -- the hunk no longer applies even
+# though nothing is missing. Three rows read "not contained" against live main and CONTAINED against
+# the main they were judged at, one of them with 678 files. When a row cites a judged main, test
+# BOTH before believing a refusal. A refusal is still the safe direction; it is not proof of loss.
+#
 # Pass the expected origin/main as $1. The guard refuses if the clone disagrees, because a stale or
 # divergent origin/main manufactures a false LANDED: content that matches an OLD main and differs
 # from the current one reads as "already landed" and is deleted. Measured on .112, whose clone held
