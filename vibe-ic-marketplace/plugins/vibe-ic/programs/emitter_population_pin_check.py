@@ -849,8 +849,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "pinned": value, "emitted": sorted(emitted),
                     })
 
+    # COMPARED, not "examined". Both counts moved to mean what was actually
+    # compared when a declined comparison stopped being counted as one made;
+    # leaving the older word would have the head describe a different quantity
+    # from the one it prints.
     head = (f"{counters_examined} emitted counter denominator(s) and "
-            f"{pins_examined} test pin(s) examined; {len(denied)} match(es) "
+            f"{pins_examined} test pin(s) COMPARED; {len(denied)} match(es) "
             f"not counted because the statement DENIES them; {len(unparsed)} "
             f"source(s) NOT examined because they would not parse; "
             f"{len(undecidable)} population(s) NOT DECIDABLE")
@@ -877,15 +881,25 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"counted")
 
     if counters_examined == 0 and pins_examined == 0:
-        _vac.announce_vacuous(TOOL, "no-population-stated-twice")
+        # WHY IT IS EMPTY, because the two reasons are not the same fact. "No
+        # population is stated twice here" is FALSE when one was stated twice
+        # and this guard declined to decide it -- and that sentence is the only
+        # thing a reader gets on a path where nothing else was printed.
+        withheld = len(undecidable) + len(denied) + len(unparsed)
+        reason = ("declined-every-comparison" if withheld
+                  else "no-population-stated-twice")
+        _vac.announce_vacuous(TOOL, reason)
         # THE REACH IS PRINTED ON THIS PATH TOO. A verdict of "nothing was
         # compared" is exactly the one a reader needs the reach for: it is the
         # difference between a tree that states no population twice and a tree
         # this guard could not read. Without it, a run whose reach was emptied
         # by unparseable sources -- or by polarity -- announced the empty result
         # and not the cause.
-        print(f"[VACUOUS] {TOOL}: no emitted population is stated twice here, "
-              f"so nothing was compared; this is NOT a pass [{head}]")
+        said = ("every population this tree states twice was WITHHELD from "
+                "comparison above" if withheld
+                else "no emitted population is stated twice here")
+        print(f"[VACUOUS] {TOOL}: {said}, so nothing was compared; this is NOT "
+              f"a pass [{head}]")
         return _vac.RC_VACUOUS
 
     if findings:

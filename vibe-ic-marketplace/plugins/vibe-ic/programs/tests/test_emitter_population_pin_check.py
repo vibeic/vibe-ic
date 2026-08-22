@@ -1464,7 +1464,7 @@ def test_the_reach_survives_a_REFUSAL(tmp_path):
     # EVERY field the head carries, derived from the head itself rather than
     # listed by hand -- a reach field added later must not be able to slip in
     # unchecked, which is exactly what happened to `NOT DECIDABLE`.
-    for fragment in ("emitted counter denominator(s)", "test pin(s) examined",
+    for fragment in ("emitted counter denominator(s)", "test pin(s) COMPARED",
                      "not counted because the statement DENIES them",
                      "NOT examined because they would not parse",
                      "population(s) NOT DECIDABLE"):
@@ -1630,6 +1630,48 @@ def test_a_DENIED_incr_cannot_excuse_a_real_disagreement(tmp_path):
     assert len(doc["findings"]) == 1, doc
     # and the denial is still reported by the reader that DOES honour it
     assert any(d["what"] == "increment" for d in doc["denied_by_polarity"]), doc
+
+
+def test_the_vacuous_tier_says_WHY_it_is_empty(tmp_path):
+    """Two different facts had one sentence. "No emitted population is stated
+    twice here" is FALSE when one WAS stated twice and this guard declined to
+    decide it -- and on the vacuous path that sentence is nearly all a reader
+    gets, because no finding was printed.
+
+    The distinction is not cosmetic. "Nothing to compare" means the tree is
+    silent on the question; "everything was withheld" means the tree spoke and
+    the guard would not judge. The first is a fact about the design, the second
+    a fact about this program's reach -- and only the second is a reason to come
+    back and look.
+
+    The machine-readable token that `_vacuous_exit` announces is distinguished
+    too, so a harness can tell them apart without parsing English."""
+    declined = ('def _repair(name):\n'
+                '    return "  if {[catch {%s}]} { incr _n }\\n" % name\n\n\n'
+                'def script():\n    return ("  set _n 0\\n" + _repair("a")\n'
+                '            + _repair("b") + _repair("c")\n'
+                '            + "  if {$_n >= 3} { puts ALL }\\n")\n')
+    nothing = 'def script():\n    return "  puts hello\\n"\n'
+    pin = "def test_x():\n    assert True\n"
+
+    progs, tests = _tree(tmp_path / "declined", declined, pin)
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_VACUOUS, out
+    assert "WITHHELD from comparison" in r.stdout, (
+        "a tree that DID state a population twice was reported as silent on "
+        "it:\n" + r.stdout)
+    assert "declined-every-comparison" in out, out
+
+    progs, tests = _tree(tmp_path / "nothing", nothing, pin)
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_VACUOUS, out
+    assert "no emitted population is stated twice here" in r.stdout, r.stdout
+    assert "no-population-stated-twice" in out, out
+    assert "WITHHELD" not in r.stdout, (
+        "a silent tree was reported as having had something withheld:\n"
+        + r.stdout)
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────
