@@ -6217,6 +6217,37 @@ decaying number, and never ran it after the document grew.** The header says
 section count from memory for a hundred sections.
 
 
+## M119 — the other three published commands audited. Three sound, one was broken, and that ratio is the point
+
+M118 found the section-count command undercounting. **A command that runs is not
+a command that is right** — the identical lesson as a test that passes — so the
+other three got the same treatment rather than a glance at their output.
+
+**`instrument defects` — SOUND.** The `sed` range yields 12 pipe-rows: 10 numbered
+plus header and separator. Numbers run **1–10 with no gaps**, and the terminator
+`^\*\*The common shape` is present, so the range closes where the table does
+rather than running to end-of-file.
+
+**`corrections` — SOUND.** 45 entries, range **1–45, no missing numbers, no
+duplicates**, `len == max`. Checked with a parser rather than a count, because a
+count cannot tell 45 sequential entries from 45 entries numbered 1..47 with two
+repeats — which is exactly the failure the section-count command had.
+
+**`highest M` — SOUND**, and now agrees with the corrected section count instead
+of contradicting it.
+
+**One of four was wrong, and it was the one whose answer I quoted most.** The
+three that survived are the ones I never leaned on; the broken one produced the
+figure in the title, in summaries, and in the header block that exists to stop
+figures decaying.
+
+**That is not a coincidence and it is worth naming.** A command whose output you
+publish repeatedly is the one whose brokenness costs most and the one you are
+least likely to re-run, precisely because you already "know" the answer. **The
+check that matters least is the one you run; the check that matters most is the
+one you remember the result of.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
