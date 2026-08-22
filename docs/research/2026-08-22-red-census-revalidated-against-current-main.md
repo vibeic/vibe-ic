@@ -3,6 +3,24 @@
 host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 `origin/main` at **a4caccefe**
 
+## RECONCILIATION — which rows of the FROZEN branch this supersedes
+
+`ptmo/main-red-triage-v11166` is frozen at `88cf416b6` and **cannot be updated**.
+Its section C is correct as of `a00f53f20`. **Read this table alongside it**; where
+they disagree, this document is later and says why.
+
+| frozen section C row | status on `a4caccefe` |
+|---|---|
+| **3** — `flow_gate_enforcement_audit` exits 1 on two undeclared gates | **CLOSED.** The audit exits 0, both gates declare `ENFORCEMENT`, declared intent 41 → 44. **The decision it asked for was made** (Part 2) |
+| **3** — 63x8 remainder (1 anti-skip, 1 in-file interaction, 1 shared) | **now 2.** The in-file-interaction test is GREEN upstream, its cause independently confirmed (Part 1) |
+| **5** — the vacuity conditional | **unchanged, but the DECISION has moved** — see Part 3: the question is now about a gate program's disclosure channel, not the flow's tiering logic |
+| **16** — the corpus/record situation | **unchanged.** 11 D3 + 3 ledger untouched by 244 commits |
+| **6** — landing-verdict | **unchanged**, and the arithmetic re-confirms the frozen branch's own count exactly |
+| **1** — `magic` | **unchanged** (environment) |
+
+**Net: 34 → 30 open.** Nothing in the frozen branch became WRONG; four items became
+DONE, three of them by a decision it requested.
+
 ## Why this exists
 
 The census in `ptmo/main-red-triage-v11166` (frozen at `88cf416b6`) was measured
