@@ -419,3 +419,64 @@ stops being false.
 That is carried on its own branch, `next/citation-routing-named-corpus-is-not-wrong`,
 because it edits a program this branch does not otherwise touch and it needs its
 own red.
+
+## The EMPTY row is load-bearing machinery, not an unattended red
+
+Found while establishing whether the citation-routing rc 2 blocks a landing. It
+answers a question the brief asks — *what would have to exist for this gate to
+check anything* — on a side the landed adjudication does not cover, and it is a
+mechanical reason BLOCKING must stay.
+
+`hygiene_finding_delta.py` names the brief's row as a constant:
+
+```python
+ROUTED_DEF_CORPUS = "published cells carrying a routed DEF"
+ROUTED_DEF_EMPTY_LABEL = (
+    f'corpus "{ROUTED_DEF_CORPUS}" is EMPTY — nothing was checked over it')
+```
+
+— verbatim the sentence the brief quotes. `_corpus_transition` is documented as
+*"the sole permitted EMPTY-to-expanded declaration addition"*, and to sanction a
+corpus going from 0 items to N it REQUIRES, among other things:
+
+- the base corpus be the exact structural EMPTY shape — `items=0`, `gates=1`,
+  `expansion=EXPANDED`; anything else is refused;
+- the base record register **exactly one** `ROUTED_DEF_EMPTY_LABEL` row as
+  **unexempted NOT_CHECKED**;
+- the base-only declarations be exactly that row — *"unrelated removals never
+  transition"*;
+- both arms and a parent-owned canonical manifest bind the same immutable
+  benchmark commit;
+- independent parent-owned execution receipts exist per gate label.
+
+And the bootstrap is *"deliberately named rather than inferred from arbitrary
+`items: 0 -> N` metadata"*, because inference *"would turn every newly declared
+loop into a way around the exact declared-set comparison"*.
+
+**So the row is a precondition of its own repair.** The brief asks whether the
+declaration should change from BLOCKING to something honest. Beyond the
+dispatcher forbidding an exemption on a population refusal, this is a second,
+independent reason it must not: the sanctioned restoration path *reads* the
+unexempted EMPTY row and refuses to proceed without exactly one of it. Exempting
+or downgrading the row would not merely soften a red — it would break the only
+machinery that can ever retire it.
+
+It also extends the brief's restoration answer. The landed adjudication states
+the PUBLISHING condition (one cell under
+`ic/<ic>/v<ver>_<pdk>/phase3/stage3/pnr/routed.def` meeting `INDEX.md`'s bar).
+This is the LANDING condition, and it is stricter than "publish a cell": the
+transition is attested, not merely observed.
+
+**READ, NOT EXERCISED.** Every statement here is from the source of
+`hygiene_finding_delta.py` at `a4caccefe`. No transition was performed and none
+could be — it requires a published cell, which is the thing that does not exist.
+The four per-cell gate labels it expects
+(`macro OBS not crossed`, `DRC PASS is not vacuous`,
+`inner FAILs reach the verdict`, `new tool diagnostic id`) were cross-checked
+against what `repo_hygiene_gates.sh` actually wires on `a4caccefe`, and they
+match exactly, four and four.
+
+*An earlier note of mine said three. That count came from a 906-commit-old
+checkout where only three were wired; a fourth landed since. Re-read at main
+before it reached a record — the same "which tree did this number come from"
+error the rest of this document is about.*
