@@ -2743,9 +2743,13 @@ Work through it in sequence. Step 1 gates the rest.
    ten committed bad samples do not contain the crash: three JSON files each, no
    log, no error file, and a runner exit of 1 that the golden arm also records,
    so nothing in the tree distinguishes them from a passing run. A maintainer
-   receiving them can reproduce nothing. Attach the tool's own exit status and
-   stderr tail for at least one arm, and the post-route netlist for that arm,
-   then file. This is `A-15` as a precondition rather than a lesson.
+   receiving them can reproduce nothing. **The evidence cannot be found, only
+   remade**: the two run trees the records' provenance paths point at are both
+   gone from this host, checked. So attaching the tool's exit status, its stderr
+   tail and the post-route netlist means **re-running one crashing arm** — budget
+   that, rather than going searching. This is `A-15` as a precondition rather
+   than a lesson, and as the clearest statement of its cost: the rule reads like
+   tidiness right up until the window closes.
 6. Then **proceed to** the **Bucket-C provenance plumbing**, which is the precondition for the
    header rule and the reason that record is C rather than A.
 
