@@ -3,6 +3,32 @@
 l9_submodule_conformance_check.py — cross-check the SUBMODULE half of the
 L9 Integration Spec against the actual RTL emitted under <project>/rtl/.
 
+ENFORCEMENT: advisory — and unlike this repo's other `advisory` declarations
+this one is advisory on BOTH axes, which is why it needs no caveat. No runner
+spawns the gate inline, so it cannot stop step 2 as step 2 runs; and step 2
+wires it in `advisory_program_exit_zero`, the flow's non-blocking slot, so
+`flow_compliance_check` records an rc 1 as a finding and passes the step.
+
+THE REASON IS A MEASUREMENT, AND IT ALREADY EXISTED — in the flow definition,
+where #1006 wrote it, and nowhere this audit could read it. Re-measured on
+2ec8fc2f with `tools/d9_corpus_baseline.py --only l9_submodule_conformance_
+check`: 8 of 107 published roots red, 3 CLEAN, 96 NO-INPUT. All 8 reds were
+opened by hand. Six are the L9 EXTRACTOR turning a prose token into a declared
+submodule (`signed` — a Verilog reserved keyword; `Checks`; `min_distance`;
+two 8b/10b comma characters), so the finding is true and its label points at
+the RTL for a defect in the producer. One (usb_pd) is a real design-side gap.
+One (edge_llm_matmul_accel) is a WRONG RULER: the RTL implements the same
+function under a different, valid decomposition against an L9 whose submodules
+carry no evidence and no confidence. One demonstrable wrong ruler in 8 is on
+its own enough to keep this out of the blocking slot.
+
+PROMOTION CONDITION, so this is a re-measurement and not a standing opinion:
+repair the L9 submodule extractor so a prose token cannot become a declared
+submodule, decide whether the decomposition is a CONTRACT or a SUGGESTION (see
+the `layer-contract-doctrine` skill), then re-run the command above. When the
+red count is driven by designs rather than by the extractor, this declaration
+becomes `blocking` and the flow row becomes `program_exit_zero`.
+
 Catches the failure modes of CLAUDE.md rule #1 ("Single-agent RTL generation
 — multi-agent fails on port naming") and rule #3 ("No stub modules — DTOP
 must instantiate everything") at the artefact level. The rule itself is

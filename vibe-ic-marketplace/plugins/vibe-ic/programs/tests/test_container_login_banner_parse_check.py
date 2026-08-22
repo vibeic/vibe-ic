@@ -24,6 +24,20 @@ sys.path.insert(0, str(PROG.parent))
 import container_login_banner_parse_check as mod  # noqa: E402
 
 
+#: Bound for both launches in this file. NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed.
+#: The landed values were 300 (the corpus sweep) and 180 (the empty-population
+#: probe). MEASURED here: the sweep parses every program in this tree and is
+#: the slower of the two at 2.27 s; the probe is a single `python -c` at
+#: 0.03 s. 60 s is ~26x the sweep, which is the one that grows with the tree.
+_CLI_TIMEOUT_S = 60
+
 LOGIN_CALL = (
     "import subprocess\n"
     "cp = subprocess.run(['docker','exec','c','bash','-lc','tool'],\n"
@@ -39,7 +53,7 @@ def _write(tmp_path: Path, name: str, body: str) -> Path:
 def test_the_repo_itself_is_clean(tmp_path):
     """Corpus sweep. A gate that fires on the state it ships with is a bug."""
     r = subprocess.run([sys.executable, str(PROG)], capture_output=True,
-                       text=True, timeout=300)
+                       text=True, timeout=_CLI_TIMEOUT_S)
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -100,7 +114,7 @@ def test_an_empty_population_is_not_reported_as_clean(tmp_path):
                         "import container_login_banner_parse_check as m;\n"
                         "m._programs = lambda: [];\n"
                         "sys.exit(m.main())"],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=_CLI_TIMEOUT_S)
     assert r.returncode == 2, r.stdout + r.stderr
     assert "neither is a PASS" in r.stdout
 
