@@ -769,3 +769,242 @@ def test_measured_shape_with_max_slew_violations_fails(tmp_path):
     assert "R3_SIGNOFF_CORNER_VIOLATION" not in res["rules_violated"]
     rc_ax = next(a for a in res["axis_evidence"] if a["axis"] == "rc")
     assert rc_ax["drv"]["violations"] == {"max_slew": 139}
+
+
+# ── #447 convention applied here: state the denominator ────────────────────
+#
+# THESE THREE WERE MEASURED ON PUBLISHED CELLS, AND THAT WAS NEVER THE SUBJECT.
+# `subservient` (zero sign-off corner rows) and `spm` (4-6 rows, 2-4 sign-off)
+# were the convenient real examples of two SHAPES; what is being pinned is what
+# the PROGRAM says about each shape. Reading them from the published tree bought
+# nothing and cost a great deal: the cells moved to vibeic/benchmark-data, so the
+# pair on `subservient` failed on an empty result — a report of a defect where
+# the only fact was that the data had moved — while the `spm` half had been
+# silently dormant even longer, pinned to `v1.5.65_sky130A`, a version directory
+# the published tree no longer carries, so its `if not cell.is_dir(): skip` fired
+# on EVERY host including one holding the whole corpus.
+#
+# Rebuilt on the fixture builders this file already owns, so both shapes are
+# measured in every checkout, and a regression in the vacuous-sentence guard
+# fails here instead of waiting for a corpus. Verified against the published
+# cells before the rewrite: the primary-only fixture reproduces `subservient`'s
+# reading exactly (signoff_corner_rows 0, "NO SIGN-OFF CORNER WAS REPORTED",
+# no "every sign-off corner MET"), and the multi-corner fixture reproduces
+# `spm`'s (corner_rows > 1 with sign-off rows > 0).
+def _primary_only(tmp_path: Path, name: str = "primary_only") -> Path:
+    """A run whose ONLY corner row is `primary` — the `subservient` shape.
+
+    No sign-off stance declaration of either axis, so nothing gives a corner the
+    `signoff` role and R3 has nothing to examine.
+    """
+    run = _run(tmp_path, name)
+    _write(run / "phase2/stage2/constraints/pvt_matrix.json", json.dumps({
+        "version": "1.0", "primary_corner": "TT", "corner_count": 1,
+        "multi_corner": False,
+        "corners": [{"name": "lib__tt_025C_1v80", "label": "TT"}],
+    }))
+    _write(run / "phase3/stage3/sta/sta_spef_based.rpt", _nominal(0.05))
+    return run
+
+
+def test_a_run_with_no_signoff_corner_says_so_instead_of_claiming_MET(tmp_path):
+    """R3 — the sign-off MET rule — only examines rows whose `role_class` is
+    "signoff" and SKIPS every other role. On a run whose only corners are
+    `primary`, R3 examined ZERO rows and the verdict line still read "every
+    sign-off corner MET".
+
+    The claim is not false — vacuously every one of zero corners is met — but
+    it printed identically to a real multi-corner closure, which is the defect
+    this repo has now removed from five separate programs (#447).
+    """
+    d = G.evaluate(_primary_only(tmp_path))
+    assert d.get("signoff_corner_rows") == 0, d.get("signoff_corner_rows")
+    assert d.get("corner_rows", 0) > 0, (
+        "the fixture reported no corner row at all — this test would then be "
+        "pinning the vacuous sentence on an empty read, not on the zero-"
+        "sign-off shape")
+    joined = " ".join(d.get("reasons") or [])
+    assert "NO SIGN-OFF CORNER WAS REPORTED" in joined, joined
+    assert "every sign-off corner MET" not in joined, joined
+
+
+def test_a_real_multi_corner_run_still_reports_its_counts(tmp_path):
+    """The paired half: a run WITH sign-off corners must still get the normal
+    sentence, now carrying both denominators."""
+    run = _run(tmp_path, "multi_corner_counts")
+    _declare(run)
+    _write(run / "phase3/stage3/sta/sta_spef_multicorner.rpt",
+           _multicorner(6.18, 0.54))
+    _write(run / "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+           _mcorner_ocv(2.68, 0.33))
+    _write(run / "phase3/stage3/sta/sta_spef_based.rpt", _nominal(0.00))
+
+    d = G.evaluate(run)
+    assert d.get("corner_rows", 0) > 1, d.get("corner_rows")
+    assert d.get("signoff_corner_rows", 0) > 0, d.get("signoff_corner_rows")
+    joined = " ".join(d.get("reasons") or [])
+    assert "NO SIGN-OFF CORNER WAS REPORTED" not in joined, joined
+
+
+def test_the_counts_are_exported_in_the_result(tmp_path):
+    """A denominator nobody can read is not a denominator — it has to be in
+    the machine-readable result, not only in the prose."""
+    d = G.evaluate(_primary_only(tmp_path, "exported_counts"))
+    assert "corner_rows" in d and "signoff_corner_rows" in d, sorted(d)
+
+
+# ── the NO-PATHS-ANALYSED sentinel (#198) ──────────────────────────────────
+# Measured on the published corpus: three reports whose entire body is
+#     No paths found. / tns max 0.00 / wns max 0.00 / worst slack max INF
+# were read as a MET setup slack of +0.000 ns. OpenSTA's `worst_slack` starts
+# at infinity and takes the min over the analysed paths, so it is still INF
+# exactly when NOTHING was analysed; the companion `wns 0.00` is the arithmetic
+# echo of that empty set (`wns = min(0, worst_slack)`), not a timing result.
+# Reading it as met is this gate's own founding defect — "an unreported corner
+# is indistinguishable from a met one" — occurring inside its own reader.
+_NO_PATHS = ("No paths found.\n"
+             "tns max 0.00\n"
+             "wns max 0.00\n"
+             "worst slack max INF\n")
+
+
+def _multicorner_no_paths_on_setup(hold_slack: float,
+                                   liberty: str = _LIB_TT) -> str:
+    """A multi-corner report whose declared SETUP sign-off corner analysed no
+    paths at all, while the HOLD corner is a genuine measurement."""
+    return (
+        "# Multi-corner SPEF STA (TAPEOUT-SIGNOFF P1)\n"
+        "# SETUP corner: max-RC   HOLD corner: min-RC\n"
+        "# corners_available: max,min,nom\n"
+        f"# corner_liberty: max={liberty}\n"
+        f"# corner_liberty: min={liberty}\n"
+        f"=== SETUP (max-RC corner, SPEF=max, liberty={liberty}) ===\n"
+        + _NO_PATHS + _DRV_OK +
+        f"=== HOLD (min-RC corner, SPEF=min, liberty={liberty}) ===\n"
+        f"worst slack min {hold_slack}\n"
+        "tns max 0.00\n"
+        + _DRV_OK
+    )
+
+
+def test_signoff_corner_that_analysed_no_paths_is_unreported_not_met(tmp_path):
+    """THE defect. A DECLARED sign-off corner whose report analysed zero paths
+    carries no timing evidence, so R2 must call it unreported. Before the fix
+    its vacuous `wns max 0.00` was read as a met +0.000 ns and the run passed
+    — an empty analysis and a closed one were indistinguishable, which is the
+    exact shape this gate exists to stop."""
+    run = _run(tmp_path, "signoff_no_paths")
+    _declare(run)
+    _write(run / "phase3/stage3/sta/sta_spef_multicorner.rpt",
+           _multicorner_no_paths_on_setup(0.36))
+    _write(run / "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+           _mcorner_ocv(1.20, 0.21))
+    _write(run / "phase3/stage3/sta/sta_spef_based.rpt", _nominal(0.05))
+
+    rc, res = _judge(run, tmp_path)
+
+    assert rc == 1
+    assert res["verdict"] == "FAIL"
+    assert "R2_DECLARED_BUT_UNREPORTED" in res["rules_violated"]
+    row = [r for r in res["corners"]
+           if r["axis"] == "rc" and r["corner"] == "max"][0]
+    assert row["setup_wns_ns"] is None, row
+
+
+def test_no_path_report_does_not_put_a_met_number_in_the_evidence_table(
+        tmp_path):
+    """The published `subservient` shape: the only timing artifact is a nominal
+    report that analysed nothing. The run-level verdict is already honest
+    ('no sign-off corner was reported'), but the evidence table used to print a
+    concrete `+0.000` for that corner — a number a reader can quote as 'not
+    negative'. A corner that measured nothing must show nothing."""
+    run = _run(tmp_path, "nominal_no_paths")
+    _write(run / "phase2/stage2/constraints/pvt_matrix.json", json.dumps({
+        "primary_corner": "TT",
+        "corners": [{"name": "lib__tt_025C_1v80", "label": "TT"}],
+    }))
+    _write(run / "phase3/stage3/sta/sta_spef_based.rpt", _NO_PATHS)
+
+    _rc, res = _judge(run, tmp_path)
+
+    rows = [r for r in res["corners"] if r.get("reported")]
+    assert rows, res["corners"]
+    for row in rows:
+        assert row["setup_wns_ns"] is None, row
+        assert row["tns_ns"] is None, row
+
+
+def test_a_genuinely_measured_zero_slack_is_still_met(tmp_path):
+    """The regression control that stops the fix from over-reaching: a real
+    zero from an analysis that DID run is exactly-met timing and must keep its
+    datapoint. Only the INF sentinel makes a zero vacuous."""
+    run = _run(tmp_path, "true_zero")
+    _declare(run)
+    _write(run / "phase3/stage3/sta/sta_spef_multicorner.rpt",
+           _multicorner(0.00, 0.00))
+    _write(run / "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+           _mcorner_ocv(0.00, 0.00))
+    _write(run / "phase3/stage3/sta/sta_spef_based.rpt", _nominal(0.00))
+
+    rc, res = _judge(run, tmp_path)
+
+    assert rc == 0, res
+    assert "R2_DECLARED_BUT_UNREPORTED" not in res["rules_violated"]
+    row = [r for r in res["corners"]
+           if r["axis"] == "rc" and r["corner"] == "max"][0]
+    assert row["setup_wns_ns"] == 0.00, row
+
+
+def test_a_measured_zero_in_the_summary_dialect_is_still_met():
+    """The control that actually bites. The fixture above reports its zero as
+    `worst slack max 0.00`, which the suppression never touches — so it cannot
+    detect an over-reaching fix. The `wns`/`tns` summary dialect is where the
+    suppression operates, and there a zero with NO sentinel above it is a
+    genuine exactly-met measurement that must survive intact."""
+    got = G.extract_slacks("wns max 0.00\ntns max 0.00\n")
+
+    assert got["setup_wns_ns"] == 0.00, got
+    assert got["tns_ns"] == 0.00, got
+
+
+def test_exponent_form_of_the_sentinel_is_not_scraped_as_a_slack():
+    """`worst slack max 1e+30` is the same no-paths sentinel in exponent form.
+    The numeric worst-slack pattern would otherwise scrape the leading `1` out
+    of the exponent and report a FABRICATED +1 ns of slack — worse than the
+    0.00 case, because it invents headroom that was never measured."""
+    got = G.extract_slacks("worst slack max 1e+30\n")
+
+    assert got["setup_wns_ns"] is None, got
+
+
+def test_a_negative_summary_survives_the_sentinel():
+    """A completeness gate must never suppress evidence of a violation. If a
+    body carries the no-paths sentinel AND a negative `wns`, the two disagree —
+    and the honest resolution is to keep the negative number, because it cannot
+    be an arithmetic echo of infinity."""
+    got = G.extract_slacks("wns max -2.03\nworst slack max INF\n")
+
+    assert got["setup_wns_ns"] == -2.03, got
+
+
+def test_a_real_section_survives_an_empty_one_on_the_same_axis():
+    """One empty section must not blank an axis that was genuinely measured
+    elsewhere in the same body: a finite `worst slack` proves paths WERE
+    analysed, so the summary lines stand."""
+    got = G.extract_slacks(
+        "=== SETUP (max-RC corner, SPEF=max) ===\n"
+        + _NO_PATHS +
+        "=== SETUP (nom-RC corner, SPEF=nom) ===\n"
+        "worst slack max 7.61\n")
+
+    assert got["setup_wns_ns"] == 7.61, got
+
+
+def test_the_sentinel_on_setup_does_not_blank_a_measured_hold():
+    """The suppression is per axis. A setup analysis that found no paths says
+    nothing about the hold analysis that did."""
+    got = G.extract_slacks(
+        "worst slack max INF\nwns max 0.00\nworst slack min 0.54\n")
+
+    assert got["setup_wns_ns"] is None, got
+    assert got["hold_wns_ns"] == 0.54, got

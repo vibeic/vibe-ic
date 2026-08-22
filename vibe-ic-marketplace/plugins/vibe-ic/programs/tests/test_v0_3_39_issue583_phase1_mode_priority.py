@@ -130,7 +130,7 @@ def test_run_all_honors_ic_name_end_state(tmp_path):
         [sys.executable, "-m", "phase1_engine.cli", "run-all",
          str(docs), str(out), "--ic-name", "crypto_periph",
          "--allow-underspec"],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=60,
         cwd=str(ENGINE_PARENT.parent.parent.parent.parent),
         env={**__import__("os").environ,
              "PYTHONPATH": str(ENGINE_PARENT)},

@@ -1,5 +1,0 @@
-{
-  "ic_name": "I2S Bus (Inter-IC Sound, UM11732)",
-  "register_map_present": false,
-  "notes": "I2S is a wire-level audio streaming protocol; no register map at the protocol layer. Concrete I2S controller / target IP blocks define their own register file (typically: TX/RX FIFO control, sample rate / bit clock divisor, word length, channel-format select, mute, interrupt enable) at the SoC integration level — covered by individual block guides, not by UM11732."
-}

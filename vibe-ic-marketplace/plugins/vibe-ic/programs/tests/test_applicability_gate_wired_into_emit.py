@@ -72,12 +72,25 @@ def test_write_l_doc_imports_applicability_gate():
 
 
 def test_gate_fires_BEFORE_disk_write():
-    """The gate must replace `content` BEFORE out.write_text(...) so the
-    on-disk JSON reflects the na_stub, not the over-filled template."""
+    """The gate must replace `content` BEFORE the document is serialised,
+    so the on-disk JSON reflects the na_stub, not the over-filled template.
+
+    The write is `_stamp.dump(out, content)` since vibe-ic#522 routed every
+    L-document write through the shared chokepoint that records the
+    producing release; before that it was an inline
+    `out.write_text(json.dumps(content …))`. Both spellings are accepted so
+    this ordering assertion survives the next time the write is factored,
+    which is the whole reason it broke: it named an implementation detail
+    rather than the event it cares about."""
     src = RUNNER.read_text()
     gate_pos = src.find("ic_class_applicability_gate_v0_1_62")
-    write_pos = src.find("out.write_text(json.dumps(content")
-    assert gate_pos > 0 and write_pos > 0
+    write_pos = max(src.find("_stamp.dump(out, content)"),
+                    src.find("out.write_text(json.dumps(content"))
+    assert gate_pos > 0, "the applicability gate is no longer in _write_l_doc"
+    assert write_pos > 0, (
+        "no recognised serialisation of `content` found in _write_l_doc — "
+        "if the write was renamed again, teach this test the new spelling "
+        "rather than deleting the ordering assertion")
     assert gate_pos < write_pos
 
 
