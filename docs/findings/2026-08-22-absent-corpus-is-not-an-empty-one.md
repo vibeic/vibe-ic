@@ -1,11 +1,22 @@
-# An ABSENT corpus is not an EMPTY one — and calling it one closed the gate GREEN
+# An ABSENT corpus is not an EMPTY one — the ruling, the measurement, and its bound
 
-_Measured 2026-08-22 on host `8HD-6`, against `origin/main` at `81cd5321b` and
-against `fix/j1764-absent-is-not-empty`, with the SHIPPED
-`tools/ci/repo_hygiene_gates.sh` rather than with a fixture. Pure repository
-gate machinery: no design, PDK, vendor or part identifier appears._
+_Measured 2026-08-22 on host `8HD-6` with the SHIPPED
+`tools/ci/repo_hygiene_gates.sh` rather than with a fixture, and RE-measured the
+same day against the two commits by name: `81cd5321b`, the last commit before
+the fix, and `a4caccefe`, `main` carrying it. Pure repository gate machinery: no
+design, PDK, vendor or part identifier appears._
 
 Closes the defect filed as vibe-ic#1764.
+
+**This revision corrects an overstatement in the first one.** The first
+revision, written by the run that made the change, said the fix stopped `main`
+closing the hygiene DAG green and that `lane_hygiene` would begin returning 2
+where it returned 0. Re-measured against both commits, neither is true as
+stated: the closing rc of the shipped hygiene script is 2 in **both** states on
+**both** commits, and the waiver the fix closes was not reachable in state A on
+the production path. The defect and the fix stand; the claim about their reach
+did not, and a record that overstates its own cost is the same class of error as
+a row that overstates its own coverage. What is true, measured, is below.
 
 ## The two states, and why one name for both is a false claim
 
@@ -23,12 +34,12 @@ nobody took, which is the same class of defect as calling rc 2 a pass.
 `bash tools/ci/repo_hygiene_gates.sh --list --summary-json …`, over the corpus
 `published cells carrying a routed DEF`:
 
-| tree | pointer | `corpora[].expansion` | recorded label |
+| commit | pointer | `corpora[].expansion` | recorded label |
 |---|---|---|---|
-| `origin/main` | UNSET (state A) | `EXPANDED` | `corpus "…" is EMPTY — nothing was checked over it` |
-| `origin/main` | SET (state B) | `EXPANDED` | `corpus "…" is EMPTY — nothing was checked over it` |
-| this branch | UNSET (state A) | **`NO_CORPUS`** | **`corpus "…" was NOT FOUND — nothing was opened to check`** |
-| this branch | SET (state B) | `EXPANDED` | `corpus "…" is EMPTY — nothing was checked over it` |
+| `81cd5321b` (before) | UNSET (state A) | `EXPANDED` | `corpus "…" is EMPTY — nothing was checked over it` |
+| `81cd5321b` (before) | SET (state B) | `EXPANDED` | `corpus "…" is EMPTY — nothing was checked over it` |
+| `a4caccefe` (after) | UNSET (state A) | **`NO_CORPUS`** | **`corpus "…" was NOT FOUND — nothing was opened to check`** |
+| `a4caccefe` (after) | SET (state B) | `EXPANDED` | `corpus "…" is EMPTY — nothing was checked over it` |
 
 The pointer used for the SET arm is a real clone of the published tree whose
 `ic/` subtree carries **0** files matching `*/*/phase3/stage3/pnr/routed.def` —
@@ -46,54 +57,93 @@ that state:
                    and it publishes no */*/phase3/stage3/pnr/routed.def. This IS
                    a measurement …
 
-## The part that was not cosmetic: `main` closed GREEN over state A
+## The second collapse, in the waiver — and an honest bound on it
 
-#1764 reads as a wording defect because both states already refuse at
+vibe-ic#1764 reads as a wording defect because both states already refuse at
 `gate_dispatch_finish` (rc 2), and they do. But `gate_dispatch_finish` is not
-the closing verdict of the hygiene tier. `repo_hygiene_parallel._summary_rc` is,
-and it **waives exactly one unexempted NOT_CHECKED**: the phase-1 bootstrap row
-for a corpus that was READ and publishes nothing.
+the only closing verdict in the tier. `repo_hygiene_parallel._summary_rc` is the
+closing rc of the parallel hygiene DAG, and it **waives exactly one unexempted
+NOT_CHECKED**: the phase-1 bootstrap row for a corpus that was READ and
+publishes nothing. An absent corpus reached that waiver wearing the same label
+and the same `expansion`, so the waiver answered for it too.
 
-An absent corpus reached that waiver wearing the same label and the same
-`expansion`, so it was waived too. Measured on real wiring — the real producer
-through the real `_gate_dispatch.sh`, then the real `_summary_rc`:
+Re-measured on both commits — the real producer through the real
+`_gate_dispatch.sh`, then that same commit's own `_summary_rc` over the record
+it produced:
 
-| tree | state | `expansion` | `gate_dispatch_finish` | **`_summary_rc`** |
+| commit | state | `expansion` | `gate_dispatch_finish` | `_summary_rc` |
 |---|---|---|---|---|
-| `origin/main` | A absent | `EXPANDED` | 2 | **0 — a PASS** |
-| `origin/main` | B read-empty | `EXPANDED` | 2 | 0 — intended bootstrap |
-| this branch | A absent | `NO_CORPUS` | 2 | **2 — refused** |
-| this branch | B read-empty | `EXPANDED` | 2 | 0 — **unchanged** |
+| `81cd5321b` (before) | A absent | `EXPANDED` | 2 | **0** |
+| `81cd5321b` (before) | B read-empty | `EXPANDED` | 2 | 0 — intended bootstrap |
+| `a4caccefe` (after) | A absent | **`NO_CORPUS`** | 2 | **2 — refused** |
+| `a4caccefe` (after) | B read-empty | `EXPANDED` | 2 | 0 — **unchanged** |
 
-So a bare checkout with no pointer ran the hygiene tier, reported enforcement,
-and closed green over a corpus nothing had opened. **The row wording was the
-symptom; this was the cost.** It is also exactly what the brief forbids: *do not
-make either state a pass.*
+Before the fix the two states were byte-indistinguishable in every column. After
+it they differ in exactly two, and row B is untouched.
 
-Both the label and `expansion == "EXPANDED"` are now load-bearing in
-`_legacy_empty_without_process`, and the source says so, so an absent corpus
-fails the shape check even if some future caller hands it the EMPTY label.
+### How far that reaches, stated against my own first finding
 
-## What this changes operationally, stated plainly
+The first revision of this file called this *"`main` closes the hygiene DAG
+green over a corpus nothing opened"*. That is stronger than what is true, and
+the bound belongs in the record next to the finding.
 
-This is a behaviour change, not only a wording change, so here is who feels it.
+`repo_hygiene_parallel` has exactly one production caller,
+`gatekeeper_review.repo_hygiene_gate`, and it binds the corpus **before** the
+set and returns rc 2 with a named remedy if it cannot:
 
-* **The review / landing path: nothing changes.**
-  `gatekeeper_review._published_corpus_binding()` resolves
-  `VIBE_IC_BENCHMARK_DATA`, then `VIBEIC_BENCHMARK_DATA_CHECKOUT`, then falls
-  back to `$HOME/_matrix_benchmark_data`, and **refuses with a named remedy if
-  it cannot** — it never returns rc 0 unbound. That path is therefore always in
-  state B, and state B is byte-identical before and after. #1763 is untouched.
-* **A hand-run `tools/ci/repo_hygiene_gates.sh`, or `gatekeeper-land.sh`'s
-  `lane_hygiene`, on a machine with no pointer exported: `full:repo-hygiene`
-  now returns rc 2 where it used to return 0.** `lane_hygiene` (line 1347)
-  passes only `VIBEIC_SUBJECT_ROOT` and `GATEKEEPER_HYGIENE_JOBS` and inherits
-  whatever the operator happens to have exported, so it can be in state A.
+    if script is None:
+        corpus_env_or_none, corpus_refusal = _published_corpus_binding()
+        if corpus_refusal is not None:
+            return GateResult(name, 2, corpus_refusal)
 
-The second bullet is the point, not a regression: that rc 0 was a pass over a
-corpus nothing opened. The remedy is one line and the producer's own message
-already prints it — point `VIBE_IC_BENCHMARK_DATA` at a clone. An honest
-refusal naming a missing input beats a green run that measured nothing.
+`_published_corpus_binding` tries `VIBE_IC_BENCHMARK_DATA`, then
+`VIBEIC_BENCHMARK_DATA_CHECKOUT`, then `$HOME/_matrix_benchmark_data`, and
+refuses unless the result is the ROOT of a git checkout carrying `ic/` with a
+readable HEAD — it never returns rc 0 unbound. And a pointer that is **set and
+wrong** makes the producer rc 2 UNDETERMINED, not absent. So the only way into
+`_summary_rc` on that path is with a corpus that resolved: **state A could not
+reach the waiver on the production path.** `script is not None` is a unit-test
+seam with deliberately no CLI flag, so it is not a second way in.
+
+So the waiver collapse was **latent, not live** — reachable by invoking
+`repo_hygiene_parallel.py` directly on a machine with no pointer, not by a
+review or a landing. It was still worth closing: that binding was the single
+guard standing between an unmeasured corpus and a waived refusal, and "one guard
+is enough" is not how the rest of this repository is built. What the fix buys is
+that the waiver no longer *depends* on that binding being correct.
+`test_every_unresolvable_corpus_is_an_ERROR_and_the_set_never_runs` pins the
+binding; `test_an_absent_corpus_does_not_close_the_hygiene_dag_green` pins the
+waiver. Neither now carries the other.
+
+## What this changes operationally: no exit code moves, measured
+
+The first revision claimed:
+
+> A hand-run `tools/ci/repo_hygiene_gates.sh`, or `gatekeeper-land.sh`'s
+> `lane_hygiene`, on a machine with no pointer exported: `full:repo-hygiene`
+> now returns rc 2 where it used to return 0.
+
+**That is false, and the measurement above is what refutes it.** `lane_hygiene`
+(`tools/gatekeeper-land.sh:1373`) runs `bash tools/ci/repo_hygiene_gates.sh`,
+whose closing rc is `gate_dispatch_finish` — not `_summary_rc`; the shell script
+never calls the parallel runner. `gate_dispatch_finish` measured **2 in state A
+on `81cd5321b` as well as on `a4caccefe`**. The row was blocking before and is
+blocking now, at the same severity, in the same run, with the same closing rc.
+
+* **The review / landing path: nothing changes.** It is always in state B, and
+  state B is byte-identical before and after. #1763 is untouched.
+* **A hand-run `repo_hygiene_gates.sh` with no pointer: nothing changes.**
+  Still rc 2, still one blocking NOT CHECKED row. Only its *sentence* changed,
+  from "is EMPTY — nothing was checked over it" to "was NOT FOUND — nothing was
+  opened to check".
+* **A direct `python3 repo_hygiene_parallel.py` with no pointer: this is the
+  one behaviour change.** The absent-corpus row is no longer waived, so that
+  invocation stops treating an unopened corpus as the bootstrap row.
+
+This is the answer to the brief's *"whatever you change must run clean on the
+current repo; a guard that fires on the state we just shipped is not a guard"*:
+**nothing new fires.** What changed is that the row now tells the truth about
+which state it is in.
 
 Worth noting that `gatekeeper_review.py` already states this exact rule one
 layer up, at the binding it performs:
@@ -102,7 +152,7 @@ layer up, at the binding it performs:
 > ANYWHERE is not a pass either. The two are different states with different
 > remedies, so they get different sentences; neither is rc 0.
 
-#1764 is that same rule missing one layer down.
+vibe-ic#1764 is that same rule missing one layer down.
 
 ## The ruling: which is blocking
 
@@ -163,15 +213,16 @@ Both states, as a pair, because the collapse was a statement about a pair:
   downstream delta may not re-collapse what the dispatcher split.
 * `test_an_absent_corpus_does_not_close_the_hygiene_dag_green` — **the one that
   matters**: both states end to end through the real wiring, asserting the
-  closing rc of the DAG. A hand-built record could not show this, because on
-  `main` the defect *is* that the absent state is handed the empty row's label;
-  a fixture that types the right label in has already fixed the bug it tests.
+  closing rc of the DAG. A hand-built record could not show this, because at
+  `81cd5321b` the defect *is* that the absent state is handed the empty row's
+  label; a fixture that types the right label in has already fixed the bug it
+  tests.
 * `test_the_phase1_waiver_covers_the_measured_empty_row_and_not_the_absent_one`
   and `test_the_waiver_checks_the_shape_and_not_only_the_label` — these two pass
   on `main` as well. They are guards for the future, not the red, and this
   record does not claim otherwise.
 
-**Red without the fix**, production code reverted to `origin/main` and the tests
+**Red without the fix**, production code reverted to `81cd5321b` and the tests
 kept: `5 failed, 13 passed` on the row-identity set, plus the closing-rc test.
 The sharpest is the last one, because the log it captures contains the entire
 defect in one place — the producer says it scanned nothing, and one line later

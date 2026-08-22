@@ -872,14 +872,22 @@ def test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND(tmp_path)
 # DAG — waives exactly one unexempted NOT_CHECKED: the phase-1 bootstrap row for
 # a corpus that was READ and publishes nothing. Because an absent corpus arrived
 # wearing that row's label and that row's `expansion`, the waiver covered it too,
-# and the DAG closed GREEN over a corpus nothing opened.
+# and `_summary_rc` returned 0 over a corpus nothing opened.
 #
-# MEASURED 2026-08-22, this host, real producer through real `_gate_dispatch.sh`:
+# RE-MEASURED 2026-08-22, this host, real producer through real
+# `_gate_dispatch.sh`, on the commit before the fix and on the tree that carries
+# it:
 #
-#     origin/main   corpus ABSENT      -> _summary_rc 0    <- a PASS
-#     origin/main   corpus read-empty  -> _summary_rc 0    <- intended bootstrap
-#     this branch   corpus ABSENT      -> _summary_rc 2    <- refused
-#     this branch   corpus read-empty  -> _summary_rc 0    <- unchanged
+#     81cd5321b (before)  ABSENT -> _summary_rc 0    read-empty -> 0
+#     a4caccefe (after)   ABSENT -> _summary_rc 2    read-empty -> 0
+#
+# LATENT, NOT LIVE, and this comment does not pretend otherwise: the only
+# production caller of `repo_hygiene_parallel` binds the corpus before the set
+# and refuses rc 2 if it cannot, so state A never reached the waiver in a real
+# review or landing. `gate_dispatch_finish` -- the closing rc of the shipped
+# `repo_hygiene_gates.sh` that `lane_hygiene` runs -- measured 2 in BOTH states
+# on BOTH commits, so no lane's exit code moved. What is pinned here is that the
+# waiver no longer DEPENDS on that one binding being right.
 #
 # This is the assertion that makes "do not make either state a pass" true, so it
 # is driven end to end. A hand-built record cannot show it: on `origin/main` the
