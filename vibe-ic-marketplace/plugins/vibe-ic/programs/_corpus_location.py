@@ -112,6 +112,79 @@ class CorpusIndexIndeterminate(RuntimeError):
     """The index probe itself failed; callers must not infer a population."""
 
 
+#: The structural marker that says "this directory is the repository root".
+#: `.git` is deliberately NOT the marker: a tarball export, a `git worktree`
+#: without its gitdir, and a vendored copy all lack it while still being the
+#: tree the gate is about. `vibe-ic-marketplace/` is tracked content, so it is
+#: present in every shape of the checkout.
+_REPO_MARKER = "vibe-ic-marketplace"
+
+
+def repo_root(start: Path) -> Optional[Path]:
+    """The repository root at or above `start`, or None.
+
+    The same walk `checker_execution_wiring_audit` already does; hoisted here
+    so the corpus seam and the root seam cannot disagree about where the
+    repository ends.
+    """
+    start = Path(start).resolve()
+    for anc in (start, *start.parents):
+        if (anc / _REPO_MARKER).is_dir():
+            return anc
+    return None
+
+
+def default_named(start: Path, rel: str) -> Path:
+    """The in-repo path `rel`, or the LITERAL `rel` when the repo has no such tree.
+
+    WHY THIS EXISTS, AND WHY IT IS BOUNDED (vibe-ic#1710)
+    =====================================================
+    Three gates spelled this as an UNBOUNDED ancestor walk::
+
+        named = next((b / _DEFAULT_CORPUS_REL for b in here.parents
+                      if (b / _DEFAULT_CORPUS_REL).is_dir()),
+                     Path(_DEFAULT_CORPUS_REL))
+
+    `Path.parents` does not stop at the repository. It continues into the
+    checkout's parent directory, into $HOME, and up to `/`. So the corpus a
+    repository gate scanned was decided by whatever happened to sit ABOVE the
+    checkout on that machine.
+
+    MEASURED on main a4caccefe, the SAME commit, the SAME host, two clones:
+
+        clone at $HOME/<work>/vibe-ic   (an ancestor, $HOME, carries a
+                                         benchmark-data/ checkout)
+            test_issue1710_...py -> 15 failed, 27 passed
+            and the gate announced: "scanning the corpus at the named root
+            ($HOME/benchmark-data/ic); VIBE_IC_BENCHMARK_DATA=<the corpus the
+            TEST built> is set and NOT followed"
+        clone at /var/tmp/j1710/vibe-ic         (no such ancestor)
+            same file -> 42 passed
+
+    Nothing about the repository differed. That is the whole of the reported
+    host discrepancy: a gate's verdict moved with the operator's home directory,
+    and `resolve()`'s named-root precedence then DECLINED the pointer in favour
+    of a tree nobody named.
+
+    The repair is not to give the pointer precedence — that asymmetry is
+    deliberate and measured (see the module docstring; letting the pointer win
+    outright turned 15 of 21 tests red for every developer who had it set). The
+    repair is that the NAMED root must be a fact about the REPOSITORY. Bounded
+    here at the repository root, so:
+
+      * a repo that carries `rel` resolves to its own copy, on every host;
+      * a repo that does not returns the LITERAL relative `rel`, which is not a
+        directory, so `resolve()` follows the pointer and `refuse()` names the
+        path that was looked for. Nothing silently becomes a pass.
+    """
+    root = repo_root(start)
+    if root is not None:
+        candidate = root / rel
+        if candidate.is_dir():
+            return candidate
+    return Path(rel)
+
+
 def env_pointer() -> Optional[str]:
     """The raw pointer, or None. Read in one place so a test that clears it
     clears it for everybody."""

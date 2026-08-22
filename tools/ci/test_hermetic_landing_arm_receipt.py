@@ -318,6 +318,43 @@ def test_mutated_input_is_refused(tmp_path, target):
         V.validate(**_validate_kwargs(case))
 
 
+@pytest.mark.parametrize("target", ["selection", "plan", "receipt"])
+def test_a_relinked_parent_owned_input_is_refused_with_identical_bytes(
+        tmp_path, target):
+    """A parent-owned input that was RELINKED, byte for byte, is still refused.
+
+    The sibling above moves the BYTES, which every content digest in the chain
+    sees. This moves only the inode and the file TYPE, and almost nothing sees
+    that: `hermetic_candidate_runner._resolve_mount` calls
+    `path.resolve(strict=True)` BEFORE it checks `S_ISREG`, so a symlinked
+    input arrives as its resolved regular target and every later
+    `_read_regular` is satisfied; the merge verifier's own `cmp` of the
+    selection against the selection it regenerates compares content, which is
+    identical by construction. `_resolved_file` is the one clause in the
+    repository that lstats the SUPPLIED path, and until this test nothing
+    drove it with a relinked arm input — the artifact and validation-record
+    symlink guards below cover different paths and match on "single-link".
+
+    MEASURED 2026-08-22 end to end, relinking the parent-owned selection while
+    the candidate wave was in flight: with this clause disabled the run LANDS
+    OK, and with it the run is rc 2 with no verdict document at all.
+    """
+    case = _pytest_case(tmp_path)
+    # THE PAIRED CONTROL FIRST: this exact case validates before the relink, so
+    # the refusal below is about the relink and not about the fixture.
+    V.validate(**_validate_kwargs(case))
+
+    path = case[target]
+    copy = path.parent / f"{path.name}.identical-copy"
+    copy.write_bytes(path.read_bytes())
+    path.unlink()
+    path.symlink_to(copy)
+    assert path.read_bytes() == copy.read_bytes(), "the bytes must be identical"
+
+    with pytest.raises(V.Refusal, match="direct regular file"):
+        V.validate(**_validate_kwargs(case))
+
+
 def test_mutated_artifact_is_refused_during_validation(tmp_path):
     case = _pytest_case(tmp_path)
     (case["output"] / "result.txt").write_text(

@@ -222,15 +222,47 @@ dispatcher refuses one:
 turns the whole sweep rc 2 regardless.
 
 That the other NOT CHECKED rows are a different KIND of thing is measured, not
-assumed. Every `uncheckable_until` in `repo_hygiene_gates.sh` — all **20** of
+assumed. Every `uncheckable_until` in `repo_hygiene_gates.sh` — all **25** of
 them, dated `2026-11-30` or `2027-02-28` — attaches to a
 `run_tolerating_uncheckable`. Not one attaches to a plain `run`, and not one
 attaches to the population refusal:
 
     $ grep -c '^[[:space:]]*uncheckable_until ' tools/ci/repo_hygiene_gates.sh
-    20
-    # …and the wrapper on the gate line each one precedes:
-    #   run_tolerating_uncheckable  x20      run  x0      gate_dispatch_over  x0
+    25
+    # …and the wrapper each one precedes, following the declaration past any
+    # comment lines (24 are adjacent; one is separated by a `gate_serial`):
+    #   run_tolerating_uncheckable  x25      run  x0      gate_dispatch_over  x0
+
+And none of the 25 has expired. Measured 2026-08-22, ISO-8601 so a string
+compare is a date compare: **3** dated `2026-11-30`, **22** dated `2027-02-28`,
+**0** past their review date. That matters because `gate_dispatch_finish` fails
+the run on an expired exemption too — so the routed-DEF population refusal really
+is the only unexempted blocking refusal in the file today, rather than one red
+among several of its class.
+
+> **CORRECTED 2026-08-22.** This passage previously read **20** / **9** / **11**
+> with `run_tolerating_uncheckable x20`. Those are the values at `81cd5321b`,
+> this record's first-draft base and 214 commits earlier. They were **already
+> wrong at `fed57f213`, the commit this file landed in** — measured there and at
+> `a4caccefe` nineteen commits later, both **25 / 3 / 22**, so the figure never
+> described the tree it shipped in and had not merely aged. The paragraph's
+> CONCLUSION is unchanged and was re-derived independently before this edit; only
+> the arithmetic beside it moved. Recorded in place rather than silently
+> rewritten, because a corrected number with no history is the next reader's
+> unverifiable claim. Counting method, since a one-pass `grep` is how the wrong
+> figure arose: the wrapper is not always the line after the declaration —
+> pairing on adjacency alone yields a spurious 20.
+
+*A count that matches is not an identity.* The brief observed nine exempted NOT
+CHECKED rows; **three** exemptions carry the earlier date, so the numeric
+coincidence that made the earlier version of this paragraph worth writing does
+not exist — and the caution it argued for stands on its own without it. Four of
+the 25 sit inside `_per_published_cell_gates` and cannot fire at all while the
+population is 0, leaving at most 21 that could produce a row, and which of those
+actually returned rc 2 in a given run is a fact about that run. Without its
+record the nine cannot be mapped one to one, and asserting it because the numbers
+agree would be the "the count was true and the impression was false" error this
+file keeps repairing.
 
 And none of the 20 has expired. Measured 2026-08-22, ISO-8601 so a string
 compare is a date compare: **9** dated `2026-11-30`, **11** dated `2027-02-28`,
@@ -318,13 +350,36 @@ a maintainer's machine. There the sentence is not true. That is a real but **sec
 about a producer contract (`routed_def_corpus.py`'s docstring already promises
 *"A broken pointer, a loose directory, or a failed git query is UNDETERMINED
 (rc 2), never an empty population"*; an ABSENT corpus is the one row left out of
-it). It is recorded here and deliberately **not** changed tonight: reversing
-`may_be_absent=True`, which `_corpus_location` documents as a considered
-call-site opt-in and which `test_an_unconfigured_moved_corpus_is_explicit_no_corpus`
-pins, is a decision to propose, not to land unilaterally on a secondary finding.
-It also has **zero** effect on the outcome: both states already block (measured —
+it). **It is fixed here, after the reason for deferring it turned out to be false.**
+
+An earlier draft deferred it, calling `may_be_absent=True` a considered call-site
+opt-in that should be proposed rather than landed. Checked: it was never argued
+for at this call site. It arrived inside `v1.10.69` (`7c376e348`), a **78-file,
+21,872-insertion** feature commit whose message does not contain the words
+`may_be_absent`, `NO_CORPUS`, `absent`, `empty population` or `rc 0` — and the
+test that pinned it was written in that same commit, so it pinned what arrived,
+not what was decided.
+
+The flag is CORRECT where it was designed to be used: a **gate** whose rc 0 is a
+green row, which without it refuses every landing — `gatekeeper-land.sh` argues
+exactly that, at length, for the gates it passes `--corpus-may-be-absent` to.
+Here rc 0 is not a green row. The dispatcher turns an empty population into a
+blocking `NOT_CHECKED` either way, so the flag bought nothing at this call site
+and cost the distinction. And the module's own docstring already promised the
+opposite: *"A broken pointer, a loose directory, or a failed git query is
+UNDETERMINED (rc 2), never an empty population."* An absent corpus is a
+could-not-look like the rest; it was the one row left out of that promise.
+
+So state A is now rc 2 — *"corpus producer FAILED — denominator unknown"* — and
+state B stays rc 0 with 0 items — *"corpus is EMPTY"*. **The outcome does not
+move**: both are unexempted `NOT_CHECKED`, both block (pinned by
 `test_empty_population_has_one_shard_owner_attestation_and_progress` and
-`test_failed_producer_is_a_distinct_blocking_attested_result` both pin rc 2).
+`test_failed_producer_is_a_distinct_blocking_attested_result`). Only the true
+sentence differs, and only the true one is printed.
+
+`test_an_unconfigured_moved_corpus_is_explicit_no_corpus` becomes
+`…_is_an_unknown_denominator`. That is a **tightening** — rc 0 to rc 2 — not a
+relaxed assertion, and it is RED without the change.
 
 ---
 

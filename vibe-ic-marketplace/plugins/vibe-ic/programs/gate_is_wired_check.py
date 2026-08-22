@@ -107,11 +107,39 @@ un-landable and it would be turned off, which is how a gate ends up reporting
 FAIL while blocking nothing. The known set is a baseline that may only shrink;
 anything NEW fails from the first run.
 
+A SHRINK IS A PASS, AND THE GATE SAYS SO WITHOUT NAMING A LAUNDERING FLAG
+-------------------------------------------------------------------------
+Wiring a recorded gate makes the baseline TOO BIG, which is the tightening
+direction, and this gate used to answer it with
+
+    [NOTE] baseline shrank — now wired: <name>. Re-run with --write-baseline.
+
+That sentence is the defect. `--write-baseline` records whatever THIS run
+measured — the departures and the arrivals together — so on a day when a gate
+is wired and another is added unwired, the flag the operator was just told to
+run removes the paid debt and records the new offender as accepted debt. And
+the guard that was supposed to stop that was
+
+    if prev and len(now) > len(prev): refuse
+
+a COUNT, not a membership test, so a one-out-one-in swap wrote cleanly at
+constant size. `flow_gate_enforcement_audit` removed this exact hole from
+itself under vibe-ic#900 ("RATCHET ON MEMBERSHIP, NOT ON COUNT"); this gate
+still carried it. It is a membership test now, and a shrink is recorded by
+`--record-shrink`, which writes `previous & current` and CANNOT add — see
+`_ratchet_baseline`.
+
+The verdict path never writes: `tools/ci/repo_hygiene_gates.sh` runs inside the
+whole-repo `suite_write_guard` bracket at `tools/gatekeeper-land.sh:690`, which
+blocks on any tracked write, so a gate that rewrote its own register while
+producing a verdict would refuse the landing that carried the fix.
+
 chip-AGNOSTIC: pure filesystem and reference structure.
 
 USAGE
 -----
-    gate_is_wired_check.py [--root .] [--json OUT] [--write-baseline]
+    gate_is_wired_check.py [--root .] [--json OUT]
+                           [--record-shrink | --write-baseline]
 
     exit 0 = no NEW unwired gate, and the baseline has not grown
     exit 1 = a new one, or the baseline grew / went stale (BLOCKING)
@@ -133,6 +161,9 @@ import sys
 import tokenize
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _ratchet_baseline as _ratchet  # noqa: E402
 
 #: vibe-ic#1130 — `_gate` IS in this set, and its absence was the second
 #: route to "a checker nothing runs". `checker_execution_wiring_audit`
@@ -375,8 +406,13 @@ def main(argv=None) -> int:
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true",
-                    help="record the CURRENT set; it may only shrink, and the "
-                         "next run re-checks that")
+                    help="record the CURRENT set. Refused if that would ADD "
+                         "any entry — a debt register is not a waiver list")
+    ap.add_argument(_ratchet.RECORD_FLAG, dest="record_shrink",
+                    action="store_true",
+                    help="record a measured TIGHTENING: write `previous & "
+                         "current`, which can only remove entries. This is "
+                         "the path the gate names when it reports a shrink")
     a = ap.parse_args(argv)
 
     plugin = Path(a.root).resolve() if a.root else Path(__file__).resolve().parents[1]
@@ -419,25 +455,46 @@ def main(argv=None) -> int:
         return 2
 
     bpath = Path(a.baseline) if a.baseline else plugin / "programs" / _BASELINE_NAME
-    if a.write_baseline:
+    if a.write_baseline or a.record_shrink:
         prev = _load_baseline(bpath) or []
-        if prev and len(now) > len(prev):
-            print(f"[FAIL] refusing to write a baseline that GREW "
-                  f"({len(prev)} -> {len(now)}). It is a debt register, not a "
-                  f"waiver list.", file=sys.stderr)
+        # THE RECORDED SET, BY THE TWO PATHS THAT MAY PRODUCE IT.
+        #
+        # `--record-shrink` writes `previous & current`, which is a subset of
+        # `previous` whatever this run measured, so a gate that became unwired
+        # today cannot enter the register through it. `--write-baseline` writes
+        # what this run measured and is refused below if that ADDS anything —
+        # a membership test, not the count test this gate used to carry, which
+        # a one-out-one-in swap passed at constant size.
+        record = _ratchet.shrunk(prev, now) if a.record_shrink else now
+        left = _ratchet.departed(prev, record)
+        if prev and a.record_shrink and not left:
+            print(f"nothing to record: {bpath} already holds the tightened set "
+                  f"({len(prev)} unwired)")
+            return 0
+        doc = {
+            "_comment": "Gates no automatic verdict consults (vibe-ic#693). "
+                        "MAY ONLY SHRINK. A gate here produces no verdict, and "
+                        "the tree looks the same either way. `skill_only` is "
+                        "recorded because a skill mention runs the gate only "
+                        "if an agent remembers to — which for a gate that "
+                        "catches a vacuous pass is the same as absent at the "
+                        "moment it matters.",
+            "unwired": record,
+            "skill_only": sorted(n for n in record if w.get(n, {}).get("skill")),
+        }
+        try:
+            # The subset property is re-established on the DOCUMENT, so a
+            # future edit that builds `unwired` from something other than the
+            # two expressions above is refused here rather than trusted.
+            _ratchet.write_shrunk(bpath, doc,
+                                  previous_by_register={"unwired": prev}
+                                  if prev else {})
+        except _ratchet.ShrinkRefused as exc:
+            print(f"[FAIL] gate_is_wired baseline: {exc}", file=sys.stderr)
             return 1
-        bpath.write_text(json.dumps(
-            {"_comment": "Gates no automatic verdict consults (vibe-ic#693). "
-                         "MAY ONLY SHRINK. A gate here produces no verdict, and "
-                         "the tree looks the same either way. `skill_only` is "
-                         "recorded because a skill mention runs the gate only "
-                         "if an agent remembers to — which for a gate that "
-                         "catches a vacuous pass is the same as absent at the "
-                         "moment it matters.",
-             "unwired": now,
-             "skill_only": sorted(n for n in now if w[n]["skill"])},
-            indent=2) + "\n")
-        print(f"wrote {bpath} ({len(now)} unwired)")
+        if left:
+            print(_ratchet.report_line("unwired", left, len(prev), len(record)))
+        print(f"wrote {bpath} ({len(record)} unwired)")
         return 0
 
     base = _load_baseline(bpath)
@@ -459,8 +516,20 @@ def main(argv=None) -> int:
     print(f"  gates: {len(gates(plugin))}   unwired: {len(now)} "
           f"(baseline {len(base)})   of those named in a skill: {len(skill_only)}")
     if gone:
-        print(f"  [NOTE] baseline shrank — now wired: {', '.join(gone)}. "
-              f"Re-run with --write-baseline.")
+        # A TIGHTENING IS NEVER A FAILURE AND NEVER AN ERRAND. It is reported
+        # in full — which gates left, and by how much — and the register is
+        # brought into line by `--record-shrink`, which can only remove. The
+        # sentence that used to stand here named `--write-baseline`, whose
+        # other effect on the same run is to record every NEW offender as
+        # accepted debt.
+        # The sizes are the REGISTER's, before and after this tightening —
+        # `len(now)` would fold in any NEW offender and report a shrink of the
+        # wrong size on exactly the run where the two land together.
+        print(_ratchet.report_line("unwired", gone,
+                                   len(base), len(base) - len(gone)))
+        print(f"           now wired, so they no longer belong in the register."
+              f" Record it with:  gate_is_wired_check.py "
+              f"{_ratchet.RECORD_FLAG}")
     if new:
         print(f"\n[FAIL] {len(new)} gate(s) newly consulted by no automatic "
               f"verdict:")

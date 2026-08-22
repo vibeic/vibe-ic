@@ -344,6 +344,12 @@ WHICH_GATES = (
     ("test_mbist_wrapper_gen", "_HAS_IVERILOG"),
     ("test_mux_compare_synth", "_HAS_IVERILOG"),
     ("test_organic_20260722_chip_top_power_pin_connect_guard", "_HAS_IVERILOG"),
+    # The one gate the population scan found DEFINED and this register did not
+    # name. It was missing on 38bef66e9a and on b1b654943e alike, so it is not
+    # fallout from the de-duplication that removed the file's SECOND copy of
+    # this definition — the row was never written. `shutil.which("openroad")`
+    # is the whole discriminator, so it belongs here and not in a carve-out.
+    ("test_pad_ring", "_HAVE_OPENROAD"),
     ("test_prompt_example_selftest", "_HAVE_IVERILOG"),
     ("test_ramp_waveform_oracle_check", "_HAS_IVERILOG"),
     ("test_round15_rs232_clear_control", "_HAVE_IVERILOG"),

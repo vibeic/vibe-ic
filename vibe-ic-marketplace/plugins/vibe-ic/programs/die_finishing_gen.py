@@ -174,6 +174,25 @@ _GDS_GLOBS = (
 )
 #: LibreLane's own PDK variable, so an environment already configured for the
 #: canonical open-source flow needs no second declaration here.
+#: WHAT THIS MODULE MIRRORS FROM UPSTREAM, AND WHAT PINS IT THERE
+#:
+#: The header above says the seal-ring INTERFACE is taken from upstream
+#: unchanged — four flags, and a named skip on the same unset variable. That is
+#: a contract with a tool this module does not own, and a contract stated only
+#: in prose is one nothing re-reads.
+UPSTREAM_MIRROR: Dict[str, str] = {
+    "upstream": "librelane/steps/klayout.py",
+    "mirrors": (
+        "the seal-ring generator contract: the four-flag command line, the "
+        "PDK-scoped script variable whose absence is a named skip, and the "
+        "second code path that additionally exports the tool search path so "
+        "the technology definition loads."),
+    "pinned_by": (
+        "tests/test_upstream_mirror_klayout_sealring.py"
+        "::test_upstream_sealring_contract_is_the_one_this_module_drives"),
+}
+
+
 _ENV_SCRIPT = "KLAYOUT_SEALRING_SCRIPT"
 #: The path every PDK config.tcl that declares the variable actually builds:
 #: `$PDK_ROOT/$PDK/libs.tech/klayout/tech/scripts/sealring.py`. This is PDK
@@ -333,7 +352,11 @@ def resolve_script(project: Path, explicit: Optional[str],
     STATEMENT about specific locations rather than a shrug:
       1. `--script`
       2. the project's PDK-bridge declaration (`sealring.script`)
-      3. the design's own tape-out declaration (`seal_ring_script`)
+      3. the design's own tape-out declaration (`seal_ring_script`) — taken as
+         given when absolute, and otherwise ALSO tried joined to
+         `$PDK_ROOT/$PDK`, because a declared script path is normally relative
+         to the PDK root (that is how it appears in the PDK tree). `source`
+         records which of the two forms hit.
       4. `$KLAYOUT_SEALRING_SCRIPT` — LibreLane's own PDK variable
       5. `$PDK_ROOT/$PDK/` + the conventional script path
 
@@ -359,7 +382,35 @@ def resolve_script(project: Path, explicit: Optional[str],
     tried.append(f"{_DECL_SOURCE}.{_DECL_SCRIPT}")
     decl_script = _declared(declared or {}, _DECL_SCRIPT)
     if isinstance(decl_script, str) and decl_script.strip():
-        return decl_script.strip(), f"{_DECL_SOURCE}.{_DECL_SCRIPT}", tried
+        decl_script = decl_script.strip()
+        # A DECLARED SCRIPT PATH IS USUALLY RELATIVE TO THE PDK ROOT, because
+        # that is how it appears in the PDK tree and it is the only form that is
+        # a fact about the DIE rather than about one machine's filesystem:
+        #     seal_ring_script: libs.tech/klayout/tech/scripts/sealring.py
+        # Returning it verbatim made exactly that form unresolvable, and because
+        # this step OUTRANKS the $PDK_ROOT/$PDK probe below, answering the field
+        # correctly was worse than leaving it blank. MEASURED, same project,
+        # same declaration, same layout, only the program version differing:
+        #     4-step resolver (no declaration step)  -> rc 0, seal PASS
+        #     5-step resolver, field answered        -> rc 2, DISCLOSED_SKIP
+        #     5-step resolver, field UNANSWERED      -> rc 0, seal PASS
+        # So try the declared value AS GIVEN first — an operator who wrote an
+        # absolute path meant it — and only then joined to the PDK root, saying
+        # in `source` which form actually hit. Existence is still decided by the
+        # runner, not here, so a declared script that resolves in NEITHER form
+        # still reaches the same DISCLOSED_SKIP it does today: this widens which
+        # spellings can be FOUND, never what counts as found.
+        _decl_src = f"{_DECL_SOURCE}.{_DECL_SCRIPT}"
+        if os.path.isabs(decl_script):
+            return decl_script, _decl_src, tried
+        _root = pdk_root or os.environ.get("PDK_ROOT")
+        _name = pdk or os.environ.get("PDK")
+        if _root and _name:
+            joined = f"{_root.rstrip('/')}/{_name}/{decl_script.lstrip('/')}"
+            if os.path.exists(joined):
+                tried.append(joined)
+                return joined, f"{_decl_src} (joined to $PDK_ROOT/$PDK)", tried
+        return decl_script, _decl_src, tried
     tried.append(f"${_ENV_SCRIPT}")
     env_script = os.environ.get(_ENV_SCRIPT)
     if env_script:

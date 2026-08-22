@@ -49,21 +49,69 @@ this one has no such power, so raising the ledger can never buy a green.
 
 WHAT FAILS
 ==========
-  L1 incomplete   a row without `gate` / `since` / `max_commits`. An
-                  acknowledgement with no bound is the thing being removed, so
-                  it cannot be written.
+  L1 incomplete   a row without `gate` / `since` / `since_date` / `max_days`.
+                  An acknowledgement with no bound is the thing being removed,
+                  so it cannot be written.
   L2 stale        a row naming a gate that is now PASS (or absent from the
                   record). The fix landed and the row outlived its truth — a
                   stale acknowledgement is indistinguishable, to the next
                   reader, from a live one, and it is the row that will be
                   believed. Delete it in the commit that fixes the gate.
-  L3 expired      `since` is more than `max_commits` commits behind HEAD. This
-                  is the deadline actually biting, and it is the only reason
-                  this program exists rather than a report.
-  L4 unresolvable a row citing a commit this repository does not contain. The
-                  age cannot be computed, so the bound cannot be enforced, and
-                  "I could not check the deadline" must not read as "the
-                  deadline is fine".
+  L3 expired      `since` is more than `max_days` days behind the endpoint.
+                  This is the deadline actually biting, and it is the only
+                  reason this program exists rather than a report.
+  L4 misdated     `since_date` is not the date of the commit `since` names.
+                  The row states one thing about itself and its own anchor
+                  states another, and a reader has no way to tell which half is
+                  the typo.
+
+AND ONE THAT IS NOT A FINDING ABOUT THE TREE — rc 2, NOT CHECKED:
+
+  U1 unresolvable a row citing a commit this repository does not contain, or
+                  one whose date cannot be read. The age cannot be computed, so
+                  the bound cannot be enforced, and "I could not check the
+                  deadline" must not read as "the deadline is fine" — nor as
+                  "the deadline has passed". It is not graded in either
+                  direction, and the row is NAMED.
+  U2 superseded   a row still carrying `max_commits` and no `max_days`, written
+                  under the clock this program replaced. Refusing it as
+                  `incomplete` would blame a row that was correct when written.
+
+THE CLOCK IS A DATE, AND IT USED TO BE A COMMIT COUNT (measured 2026-08-22)
+==========================================================================
+The age was `git rev-list --count <since>..<head>`, which is a property of the
+MERGE TOPOLOGY and not of the promise. MEASURED on a 97-branch assembly: every
+merged branch's commits fall inside that range, so the five shipped rows read
+1590-2109 commits against bounds of 140-210 and all five would have been called
+EXPIRED — by an assembly none of their authors had anything to do with. An
+acknowledgement that was fine yesterday must not expire because someone else
+merged 97 branches today.
+
+`--first-parent` is not the repair: three of the five `since` shas are not on
+the head's first-parent chain, so it would silently mis-age exactly those three
+while looking like it had fixed the problem.
+
+How stale a promise is, is a property of WHEN IT WAS MADE. So the row records
+`since_date`, the bound is a duration in days, and the age is the elapsed time
+between that date and the endpoint's own commit date. A merge moves neither.
+
+WHY THE ENDPOINT IS STILL A REF AND NOT THE WALL CLOCK. `--head-ref` exists so
+a landing counts to its BASE (see `git_age_days`), and the same tree read twice
+must give the same verdict. Reading `datetime.now()` would make the answer
+depend on when it was asked, which is the property this file's `_doc` block was
+protecting when it chose commits in the first place. Dates keep it: two readers
+of the same (tree, endpoint) pair still compute the same age.
+
+MIGRATING THE FIVE SHIPPED ROWS CHANGED WHAT NONE OF THEM PROMISES. Each row
+had already stated its bound in days in its own `bound_because` — "210 commits
+is three days at the measured rate", "140 commits is two days", "200 commits is
+~2.6 days" — so the duration is the row's own number, carried over unrounded.
+Cross-checked against the authors' intent from the other side: the ~78
+commits/day they measured is this history's FIRST-PARENT cadence, and under it
+the two rows that expire by date (6.1 days old, bounds of 3 and 2) also expire
+by first-parent count (432 commits, bounds of 210 and 140), while the three that
+survive by date survive by first-parent count too (163, bound 200). The two
+clocks agree on all five; only the 97-branch full count disagreed with both.
 
 WHAT IS REPORTED BUT DOES NOT FAIL
 ==================================
@@ -90,6 +138,7 @@ import argparse
 import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
                     Tuple)
@@ -139,17 +188,84 @@ def _did_not_run(state: Optional[str]) -> bool:
 #: Ledger location, relative to the repository root.
 LEDGER_REL = "tools/ci/gate_red_since.json"
 
-_REQUIRED_KEYS = ("gate", "since", "max_commits")
+_REQUIRED_KEYS = ("gate", "since", "since_date", "max_days")
+
+#: The field the duration clock REPLACED, kept only so a row written under the
+#: previous contract is recognised as such and refused as UNDETERMINED rather
+#: than silently read as unbounded. See `_SUPERSEDED`.
+_SUPERSEDED_BOUND_KEY = "max_commits"
 
 #: The largest bound that is still a bound. MEASURED while probing this
-#: program against itself: a row with `max_commits: 9999999` satisfies every
+#: program against itself: a row with an unreachable bound satisfies every
 #: other rule here and never expires, so the mechanism can be switched off by
 #: editing the file it adjudicates — the same "wired where it can never
 #: block" shape it exists to catch. The ceiling does not forbid a long
 #: remediation; it forbids an unattended one. A red that genuinely needs
 #: longer is renewed by moving `since` forward, which is a visible act that
 #: shows up in review, rather than a number nobody reads again.
-MAX_BOUND_COMMITS = 500
+#:
+#: DERIVED FROM THE CEILING IT REPLACED, ROUNDED DOWN. The previous ceiling was
+#: 500 commits, and the ledger's own rows measured this repository's cadence at
+#: ~78 commits/day, so 500 commits is 6.41 days. It is floored to 6 rather than
+#: rounded to the nearest whole day: rounding a CEILING up is a loosening, and
+#: this migration is not allowed to loosen anything. Every shipped row's bound
+#: is 3 days or less, so the floor binds none of them.
+MAX_BOUND_DAYS = 6.0
+
+
+#: Finding kinds that are NOT a judgement about the tree. A row this program
+#: could not age has told it nothing, and grading it in EITHER direction is the
+#: defect: "expired" invents a verdict from a failed read, "fine" hides one.
+#: The CLI routes a run whose ONLY findings are these to rc 2 NOT CHECKED, and
+#: names the rows. A real finding beside them still exits 1 — rc 2 is "I
+#: reached no verdict", which stops being true the moment another row failed.
+UNDETERMINED_KINDS = ("unresolvable", "superseded")
+
+#: Seconds in a day. Named because the alternative is `86400` appearing in the
+#: middle of an arithmetic expression that decides whether a deadline passed.
+_SECONDS_PER_DAY = 86400.0
+
+
+def _parse_iso(text: Optional[str]) -> Optional[datetime]:
+    """An ISO-8601 timestamp WITH an offset, or None.
+
+    A naive timestamp is refused rather than assumed to be UTC or local: this
+    value is one end of a subtraction whose answer expires an acknowledgement,
+    and guessing the zone would move that answer by up to a day in whichever
+    direction the host happens to sit. `git` emits `%cI`, which always carries
+    the offset, so the refusal costs a correctly-written row nothing.
+    """
+    if not text:
+        return None
+    raw = str(text).strip()
+    if raw.endswith(("Z", "z")):            # `fromisoformat` rejects the
+        raw = raw[:-1] + "+00:00"           # military form before 3.11
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _same_instant(a: Optional[str], b: Optional[str]) -> bool:
+    """True when two ISO timestamps name the same moment.
+
+    Compared as INSTANTS, not as strings: `2026-08-16T19:07:48+08:00` and
+    `2026-08-16T11:07:48+00:00` are the same commit date written by two hosts
+    in two zones, and failing a row over that would be a finding about
+    `TZ` rather than about the acknowledgement. Unparseable on either side is
+    False — a date this program cannot read is not a date it can confirm.
+    """
+    pa, pb = _parse_iso(a), _parse_iso(b)
+    if pa is None or pb is None:
+        return False
+    return pa == pb
+
+
+def _days(value: float) -> str:
+    """A duration for humans: `3` rather than `3.0`, `2.6` rather than `2.6000000001`."""
+    rounded = round(float(value), 1)
+    return str(int(rounded)) if rounded == int(rounded) else str(rounded)
 
 
 class Finding:
@@ -329,14 +445,22 @@ def record_is_vacuous(record: Dict[str, Any]) -> Optional[str]:
 
 def adjudicate(record: Dict[str, Any],
                ledger: List[Dict[str, Any]],
-               age: Callable[[str], Optional[int]],
+               age: Callable[[str], Optional[float]],
+               dated: Optional[Callable[[str], Optional[str]]] = None,
                ) -> Tuple[List[Finding], List[str], List[str]]:
     """The whole decision, as a pure function. Returns (findings, known, new).
 
-    `age(sha) -> commits behind HEAD, or None if this repo does not contain it`
-    is injected so every branch below is reachable from a test without building
-    a git history per case — including L4, which by definition cannot be staged
-    with a real commit.
+    `age(sha) -> DAYS between that commit and the endpoint, or None if this
+    repo does not contain it (or cannot date it)` is injected so every branch
+    below is reachable from a test without building a git history per case —
+    including U1, which by definition cannot be staged with a real commit.
+
+    `dated(sha) -> that commit's own ISO date, or None` is optional and is used
+    ONLY to cross-check the row's recorded `since_date` against its anchor. It
+    cannot move the clock: the age comes from the repository either way, so a
+    re-dated row buys nothing, and this check exists so a row cannot MISLEAD a
+    human reader about how old it is. Absent, the cross-check is skipped and
+    said to be skipped rather than reported as passed.
     """
     states = _states(record)
     findings: List[Finding] = []
@@ -344,6 +468,26 @@ def adjudicate(record: Dict[str, Any],
 
     for row in ledger:
         label = str(row.get("gate") or "")
+        if (row.get("max_days") in (None, "")
+                and row.get(_SUPERSEDED_BOUND_KEY) not in (None, "")):
+            # WRITTEN UNDER THE CLOCK THIS PROGRAM REPLACED, and correct when
+            # it was written. Calling it `incomplete` would blame the row for a
+            # migration it could not have anticipated, and converting its
+            # commit bound to days here would be this program inventing a
+            # deadline nobody agreed to. It is acknowledged — so its gate does
+            # not read as a NEW red owned by nobody — and NOT adjudicated.
+            acknowledged_gates.add(label)
+            findings.append(Finding(
+                "superseded", label or "(unnamed row)",
+                f"the row bounds itself with `{_SUPERSEDED_BOUND_KEY}: "
+                f"{row.get(_SUPERSEDED_BOUND_KEY)!r}` and carries no "
+                f"`max_days`. The clock is a duration now, because a commit "
+                f"count is a property of the merge topology and expired all "
+                f"five shipped rows on a 97-branch assembly. Migrate the row: "
+                f"`since_date` = the date of commit {str(row.get('since'))[:12]}, "
+                f"`max_days` = the duration this row's own `bound_because` "
+                f"already states"))
+            continue
         missing = [k for k in _REQUIRED_KEYS if row.get(k) in (None, "")]
         if missing:
             findings.append(Finding(
@@ -382,28 +526,43 @@ def adjudicate(record: Dict[str, Any],
             findings.append(Finding(
                 "unresolvable", label,
                 f"the row cites commit {since[:12]}, which this repository "
-                f"does not contain, so its deadline cannot be evaluated"))
+                f"does not contain or cannot date, so its deadline cannot be "
+                f"evaluated. NOT graded in either direction"))
             continue
         try:
-            bound = int(row["max_commits"])
+            bound = float(row["max_days"])
         except (TypeError, ValueError):
             findings.append(Finding(
                 "incomplete", label,
-                f"max_commits is not an integer: {row['max_commits']!r}"))
+                f"max_days is not a number: {row['max_days']!r}"))
             continue
-        if bound > MAX_BOUND_COMMITS:
+        if bound > MAX_BOUND_DAYS:
             findings.append(Finding(
                 "unbounded", label,
-                f"max_commits is {bound}, beyond the {MAX_BOUND_COMMITS}-commit "
-                f"ceiling. A deadline that cannot arrive is not a deadline; "
-                f"renew the row by moving `since` forward instead"))
+                f"max_days is {_days(bound)}, beyond the "
+                f"{_days(MAX_BOUND_DAYS)}-day ceiling. A deadline that cannot "
+                f"arrive is not a deadline; renew the row by moving `since` "
+                f"forward instead"))
+            continue
+        # THE CROSS-CHECK RUNS BEFORE THE DEADLINE, NOT INSTEAD OF IT. A row
+        # whose stated date contradicts its own anchor is misreporting its age
+        # to every human who reads it, and that is worth saying even on a row
+        # that is comfortably inside its bound.
+        stated = str(row["since_date"])
+        actual = dated(since) if dated is not None else None
+        if actual is not None and not _same_instant(stated, actual):
+            findings.append(Finding(
+                "misdated", label,
+                f"the row records since_date {stated!r}, but commit "
+                f"{since[:12]} is dated {actual!r}. The row and its own anchor "
+                f"disagree about how old this acknowledgement is"))
             continue
         if behind > bound:
             findings.append(Finding(
                 "expired", label,
-                f"red since {since[:12]} — {behind} commit(s) ago, and the "
-                f"bound this row set for itself was {bound}. "
-                f"{row.get('owner') or 'nobody'} owns it"))
+                f"red since {since[:12]} ({stated}) — {_days(behind)} day(s) "
+                f"ago, and the bound this row set for itself was "
+                f"{_days(bound)}. {row.get('owner') or 'nobody'} owns it"))
 
     red = sorted(l for l, s in states.items()
                  if s != _PASS and not _did_not_run(s))
@@ -445,12 +604,13 @@ def inherited_red_reasons(
     number computed from a history that does not exist. Infinity is the state
     being removed. Hence 0.
 
-    The DECLARED N is `max_commits`, per gate, in the row you must then write —
-    required by `_REQUIRED_KEYS`, bounded by `MAX_BOUND_COMMITS`, and read at
-    the `bound` line below exactly as `adjudicate` reads it. Writing the row is
-    the amnesty: a reason, an owner, and an expiry, all visible in a tracked
-    file. Renewal is moving `since` forward, which is a visible act; raising
-    `max_commits` past the ceiling is refused, so immortality cannot be bought.
+    The DECLARED N is `max_days`, per gate, in the row you must then write —
+    required by `_REQUIRED_KEYS`, bounded by `MAX_BOUND_DAYS`, and read at the
+    `bound` line below exactly as `adjudicate` reads it. Writing the row is the
+    amnesty: a reason, an owner, and an expiry, all visible in a tracked file.
+    Renewal is moving `since` (and `since_date` with it) forward, which is a
+    visible act; raising `max_days` past the ceiling is refused, so immortality
+    cannot be bought.
 
     Returns one string per offending gate, sorted, deduplicated by label. An
     empty list means every inherited blocking red is owned by a live, unexpired
@@ -468,8 +628,24 @@ def inherited_red_reasons(
                 f"AN INHERITED RED WITH NO OWNER — {label} failed on the base "
                 f"too, so it is not this branch's, and no row in "
                 f"{LEDGER_REL} names it. Add one with an owner and a "
-                f"max_commits bound, or fix the gate. A red that belongs to "
+                f"max_days bound, or fix the gate. A red that belongs to "
                 f"nobody is the one that survives everything.")
+            continue
+        if (row.get("max_days") in (None, "")
+                and row.get(_SUPERSEDED_BOUND_KEY) not in (None, "")):
+            # The row is a real acknowledgement written under the commit clock
+            # this program replaced. Its bound cannot be evaluated as a
+            # duration, and converting it here would be this program inventing
+            # a deadline nobody agreed to — so it refuses, and NAMES the
+            # migration rather than leaving a reader to guess.
+            out[label] = (
+                f"AN INHERITED RED'S BOUND PREDATES THE DURATION CLOCK — "
+                f"{label} still bounds itself with `{_SUPERSEDED_BOUND_KEY}` "
+                f"and carries no `max_days`. A commit count is a property of "
+                f"the merge topology, which is why it was replaced; migrate "
+                f"the row in {LEDGER_REL} to `since_date` + `max_days`. Until "
+                f"then its deadline cannot be evaluated, and that must not "
+                f"read as 'the deadline is fine'.")
             continue
         missing = [k for k in _REQUIRED_KEYS if row.get(k) in (None, "")]
         if missing:
@@ -484,65 +660,96 @@ def inherited_red_reasons(
             out[label] = (
                 f"AN INHERITED RED'S DEADLINE CANNOT BE EVALUATED — {label} "
                 f"cites commit {str(row['since'])[:12]}, which this repository "
-                f"does not contain. 'I could not check the deadline' must not "
-                f"read as 'the deadline is fine'.")
+                f"does not contain or cannot date. 'I could not check the "
+                f"deadline' must not read as 'the deadline is fine'.")
             continue
         try:
-            bound = int(row["max_commits"])
+            bound = float(row["max_days"])
         except (TypeError, ValueError):
             out[label] = (
                 f"AN INHERITED RED'S BOUND IS NOT A NUMBER — {label} declares "
-                f"max_commits={row['max_commits']!r}.")
+                f"max_days={row['max_days']!r}.")
             continue
-        if bound > MAX_BOUND_COMMITS:
+        if bound > MAX_BOUND_DAYS:
             out[label] = (
                 f"AN INHERITED RED IS ACKNOWLEDGED WITHOUT A REACHABLE "
-                f"DEADLINE — {label} declares max_commits={bound}, beyond the "
-                f"{MAX_BOUND_COMMITS}-commit ceiling. A deadline that cannot "
-                f"arrive is not a deadline; renew by moving `since` forward.")
+                f"DEADLINE — {label} declares max_days={_days(bound)}, beyond "
+                f"the {_days(MAX_BOUND_DAYS)}-day ceiling. A deadline that "
+                f"cannot arrive is not a deadline; renew by moving `since` "
+                f"forward.")
             continue
         if behind > bound:
             out[label] = (
                 f"THE DEADLINE ON AN INHERITED RED HAS PASSED — {label} has "
-                f"been red since {str(row['since'])[:12]}, {behind} commit(s) "
-                f"ago, and the bound this row set for itself was {bound}. "
-                f"{row.get('owner') or 'nobody'} owns it.")
+                f"been red since {str(row['since'])[:12]}, {_days(behind)} "
+                f"day(s) ago, and the bound this row set for itself was "
+                f"{_days(bound)}. {row.get('owner') or 'nobody'} owns it.")
     return [out[k] for k in sorted(out)]
 
 
-def git_age(repo: Path, head: str = "HEAD") -> Callable[[str], Optional[int]]:
-    """Commits between a sha and `head`, or None when the sha is unknown here.
+def git_commit_date(repo: Path) -> Callable[[str], Optional[str]]:
+    """`rev` -> that commit's own ISO-8601 committer date, or None.
 
-    The clock is COMMITS and not wall time on purpose: it is derivable from the
-    repository alone, identical for every reader of the same tree, and needs no
-    persisted run history — which is precisely what this repo does not keep.
-
-    `head` EXISTS BECAUSE THE CANDIDATE MUST NOT MOVE THE CLOCK (2026-08-22).
-    Counting to a candidate branch's own HEAD adds that branch's commits to
-    EVERY row's age, so a large branch expires rows it has nothing to do with —
-    and a small one shelters them. MEASURED on a 15-commit branch: 7 rows read
-    as expired against its HEAD and 5 against `origin/main`, the tree that
-    actually lands. Two of the difference were rows the branch never touched.
-
-    The deadline is a property of the base, so a landing counts to the base.
-    This is the same rule as the one that requires the LEDGER to be the base's:
-    a branch must not be able to change what counts as overdue, in either
-    direction.
+    None means one indivisible thing to every caller: this repository could not
+    tell me when that commit was made — it does not contain it, `git` failed,
+    or the ref names something that is not a commit. Callers grade that as
+    UNDETERMINED, never as an age.
     """
 
-    def age(sha: str) -> Optional[int]:
+    def dated(rev: str) -> Optional[str]:
         try:
             proc = subprocess.run(
-                ["git", "-C", str(repo), "rev-list", "--count", f"{sha}..{head}"],
+                ["git", "-C", str(repo), "show", "-s", "--format=%cI", rev],
                 capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.SubprocessError):
             return None
         if proc.returncode != 0:
             return None
-        try:
-            return int(proc.stdout.strip())
-        except ValueError:
+        return proc.stdout.strip() or None
+
+    return dated
+
+
+def git_age_days(repo: Path,
+                 head: str = "HEAD") -> Callable[[str], Optional[float]]:
+    """Days between a commit's date and `head`'s date, or None if unreadable.
+
+    THE CLOCK USED TO BE `rev-list --count <since>..<head>` (measured
+    2026-08-22). A commit count is a property of the MERGE TOPOLOGY, and a merge
+    is something the acknowledgement's author does not control: on a 97-branch
+    assembly every merged branch's commits land inside that range, so all five
+    shipped rows read 1590-2109 against bounds of 140-210 and every one would
+    have been called EXPIRED by an assembly none of them had anything to do
+    with. `--first-parent` is not the repair either — three of the five `since`
+    shas are not on the head's first-parent chain, so it would have silently
+    mis-aged exactly those three while appearing to fix the problem.
+
+    How stale a promise is, is a property of when it was made. Dates keep the
+    two properties the commit clock was chosen for: derivable from the
+    repository alone, and identical for every reader of the same (tree,
+    endpoint) pair. The wall clock would keep neither, which is why the
+    endpoint is still a ref.
+
+    `head` EXISTS BECAUSE THE CANDIDATE MUST NOT MOVE THE CLOCK (2026-08-22).
+    Dating every row against a candidate branch's own HEAD lets that branch
+    shelter or expire rows it has nothing to do with. The deadline is a
+    property of the base, so a landing counts to the base — the same rule as
+    the one that requires the LEDGER to be the base's.
+
+    A NEGATIVE AGE IS RETURNED AS IT IS, not clamped. It means the endpoint
+    predates the acknowledgement — an old checkout, or a rewritten history —
+    and it can never exceed a positive bound, so it cannot expire a row. The
+    endpoint and its date are printed on every run, which is where a reader
+    sees that the answer was measured against a tree older than the promise.
+    """
+    dated = git_commit_date(repo)
+
+    def age(sha: str) -> Optional[float]:
+        start = _parse_iso(dated(sha))
+        end = _parse_iso(dated(head))
+        if start is None or end is None:
             return None
+        return (end - start).total_seconds() / _SECONDS_PER_DAY
 
     return age
 
@@ -615,7 +822,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"gate_red_since: 0 gate state(s) examined — {why}")
         return _vx.exit_code(passed=True, skipped=True)
 
-    findings, known, new = adjudicate(record, ledger, git_age(args.repo, args.head_ref))
+    findings, known, new = adjudicate(
+        record, ledger,
+        git_age_days(args.repo, args.head_ref),
+        git_commit_date(args.repo))
 
     # SHALLOWNESS IS ONLY AN ANSWER WHEN A ROW ACTUALLY FAILED TO RESOLVE.
     #
@@ -659,7 +869,10 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"declared, {len(known) + len(new)} red "
           f"({len(known)} acknowledged, {len(new)} NEW), "
           f"{len(ledger)} ledger row(s)")
-    print(f"  clock: ages counted to {args.head_ref} ({_describe_ref(args.repo, args.head_ref)}); "
+    _end_date = git_commit_date(args.repo)(args.head_ref)
+    print(f"  clock: ages are DAYS, counted to {args.head_ref} "
+          f"({_describe_ref(args.repo, args.head_ref)} dated "
+          f"{_end_date or 'UNREADABLE'}); "
           f"rows read from "
           + (f"{args.ledger_ref} ({_describe_ref(args.repo, args.ledger_ref)})"
              if args.ledger_ref
@@ -690,11 +903,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     tail = (f"{len(new)} NEW red, {len(known)} acknowledged"
             + (f" (NEW: {', '.join(new[:4])}"
                + (" …" if len(new) > 4 else "") + ")" if new else ""))
-    if findings:
-        kinds = ", ".join(sorted({f.kind for f in findings}))
-        print(f"[FAIL] gate_red_since: {len(findings)} acknowledgement(s) "
-              f"{kinds} — {tail}")
+    graded = [f for f in findings if f.kind not in UNDETERMINED_KINDS]
+    ungraded = [f for f in findings if f.kind in UNDETERMINED_KINDS]
+    if graded:
+        # A REAL FINDING OUTRANKS "I COULD NOT LOOK". rc 2 asserts that this run
+        # reached no verdict, and the moment one row genuinely failed that
+        # sentence is false. The ungraded rows are still NAMED above and their
+        # count is carried here, so folding them in cannot make them invisible.
+        kinds = ", ".join(sorted({f.kind for f in graded}))
+        print(f"[FAIL] gate_red_since: {len(graded)} acknowledgement(s) "
+              f"{kinds} — {tail}"
+              + (f"; {len(ungraded)} row(s) NOT adjudicable" if ungraded
+                 else ""))
         return _vx.RC_FAIL
+    if ungraded:
+        # NEITHER PASS NOR EXPIRED. The row cites a commit this repository
+        # cannot date, so the only honest answer is that the deadline was not
+        # evaluated — and it is delivered through the same three channels the
+        # vacuous branch uses, from one reason token, so the printed word and
+        # the exit code cannot disagree.
+        why = (f"{len(ungraded)} acknowledgement(s) could not be aged: "
+               + "; ".join(f"{f.gate} ({f.kind})" for f in ungraded))
+        _vx.announce_vacuous("gate_red_since", why)
+        print(_vx.verdict_line("gate_red_since", passed=True, skipped=True,
+                               reason=why))
+        print(f"gate_red_since: NOT CHECKED — {why}")
+        return _vx.exit_code(passed=True, skipped=True)
     print(f"[PASS] gate_red_since: every red is NEW or owned by a live, "
           f"unexpired acknowledgement — {tail}")
     return _vx.RC_PASS

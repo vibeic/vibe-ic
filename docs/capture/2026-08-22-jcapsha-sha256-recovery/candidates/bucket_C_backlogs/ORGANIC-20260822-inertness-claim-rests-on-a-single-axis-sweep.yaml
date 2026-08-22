@@ -1,0 +1,18 @@
+type: bug
+severity: P1
+component: program:pad_ring_gen
+plugin_version: "1.11.69"
+
+title: >-
+  A shipped refusal states a reason a later measurement contradicts
+
+pattern: |
+  A step refuses with a stated reason that was measured, published, ruled on, and built into shipped behaviour -- and the measurement behind it covered one axis of a multi-axis family. The refusal may still be the right behaviour, but the reason printed beside it is the part a reader acts on, and it is false. Correcting the reason and keeping the behaviour, or dropping the behaviour, are different decisions with different consequences, and the record cannot be left saying something the tree can be measured to contradict.
+
+suggested_fix: |
+  Re-read the inertness record against the complementary-axis measurement, decide whether the refusal survives on the corrected premise, and restate the reason to match whichever way the decision goes. Then, separately, require that any future inertness claim name a sweep over every sibling of its variable family -- the siblings are derivable from the shared prefix in the module's own declared variable list, so the requirement is checkable.
+
+id: "ORGANIC-20260822-inertness-claim-rests-on-a-single-axis-sweep"
+submitted_at: "2026-08-22T12:42:08+08:00"
+session_context: >-
+  The refusal and its inertness record are landed. The complementary-axis sweep that refutes the stated reason is in ``docs/capture/2026-08-22-jcapsha-sha256-recovery/evidence/`rotation_axis_vocabulary.md`, with the four scripts that reproduce it.

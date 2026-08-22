@@ -16,10 +16,10 @@
     "pdk": "sky130A",
     "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
   },
-  "record": "/home/reyerchu/_jxlayer/records/h2h_B.json",
+  "record": "ppa-crosslayer/records/h2h_B.json",
   "refusal": {
-    "code": "SCOPE_INCOMPLETE",
-    "message": "arm 'vibe-ic-phase3-defaults''s `power_mw` scope does not declare ['mode']. Both arms declaring nothing would otherwise satisfy equality, and two numbers that say nothing about themselves are not thereby comparable."
+    "code": "FEASIBILITY_NOT_CHECKED",
+    "message": "feasibility is not established for ['vibe-ic-crosslayer-searched', 'vibe-ic-phase3-defaults']: vibe-ic-crosslayer-searched: `feasibility.checks.drv.status` (the check declares status NOT_CHECKED); vibe-ic-phase3-defaults: `feasibility.checks.drv.status` (the check declares status NOT_CHECKED). Each is a decided status this record does not carry, and `ppa_feasibility_check` is the program that adjudicates that axis. An unclosed or unverified implementation cannot be the cheaper one, and a comparison that did not look is UNDETERMINED."
   },
   "roles": {
     "baselines": [

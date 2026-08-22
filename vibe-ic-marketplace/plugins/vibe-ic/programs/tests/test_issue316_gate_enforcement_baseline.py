@@ -22,7 +22,8 @@ _PROG = _PROGRAMS / "flow_gate_enforcement_audit.py"
 _BASELINE = _PROGRAMS / "flow_gate_enforcement_baseline.json"
 
 
-def _run(*extra, baseline=None, flow=None, programs=None):
+def _run(*extra, baseline=None, flow=None, programs=None, extra_kw=()):
+    extra = tuple(extra) + tuple(extra_kw)
     cmd = [sys.executable, str(_PROG)]
     if baseline is not None:
         cmd += ["--baseline", str(baseline)]
@@ -98,13 +99,55 @@ def test_316_a_new_contradiction_fails(tmp_path):
 
 def test_316_paid_debt_must_leave_the_register(tmp_path):
     """A register entry that no longer contradicts is stale; left in place it
-    becomes standing permission."""
+    becomes standing permission.
+
+    IT LEAVES BY BEING RECORDED, NOT BY REDDENING THE BOARD. This arm used to
+    assert `rc == 1` on a paid debt, which made "fix nothing" the cheapest way
+    to keep this audit green — and the remedy the audit named, `--write-baseline`,
+    records whatever THAT run measured, so on a day when a debt is paid and a
+    new finding arrives it files the new finding as accepted debt. A ratchet
+    that costs its own operator something in the tightening direction is not a
+    ratchet.
+
+    So what is asserted now is strictly more than before: the paid entry is
+    NAMED, the run does NOT fail over it, the audit does NOT point at the
+    laundering flag, and `--record-shrink` actually removes it — and removes
+    ONLY it. The old form could be satisfied by a program that failed every
+    run; this one cannot.
+
+    BOTH registers are recorded in the fixture, deliberately. With
+    `undeclared_known` absent the run exits 1 for being UNRECORDED, so the old
+    `rc == 1` was true whatever the shrink did — two causes folded into one
+    assertion.
+    """
     bl = tmp_path / "bl.json"
+    rep = tmp_path / "rep.json"
     known = json.loads(_BASELINE.read_text())["known"]
-    bl.write_text(json.dumps({"known": known + ["orphan::a_gate_that_is_gone"]}))
+    seed = {"known": known, "undeclared_known": []}
+    bl.write_text(json.dumps(seed))
+    _run("--json", str(rep), baseline=bl)
+    measured = json.loads(rep.read_text())
+    now_u = sorted(f"undeclared::{u['gate']}"
+                   for u in (measured.get("undeclared_audit_only") or []))
+
+    paid = "orphan::a_gate_that_is_gone"
+    bl.write_text(json.dumps({"known": known + [paid],
+                              "undeclared_known": now_u}))
     r = _run(baseline=bl)
-    assert r.returncode == 1, r.stdout
-    assert "the debt was paid" in r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert paid in r.stdout and "TIGHTENED" in r.stdout, r.stdout
+    assert "--write-baseline" not in r.stdout, (
+        "the audit still points a reader at the flag whose other effect is to "
+        "record this run's NEW findings as accepted debt")
+
+    r2 = _run("--record-shrink", baseline=bl)
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    after = json.loads(bl.read_text())
+    assert paid not in after["known"], "the paid debt did not leave the register"
+    assert set(after["known"]) <= set(known + [paid]), (
+        "the recording ADDED an entry — that is --write-baseline under another "
+        "name")
+    assert set(after["undeclared_known"]) <= set(now_u)
 
 
 def test_316_register_may_not_grow(tmp_path):

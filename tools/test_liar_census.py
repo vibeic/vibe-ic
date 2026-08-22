@@ -2123,6 +2123,34 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # `advisory` 37 and `optional` 29 unchanged; `unswept`/`unrecognised` stay
     # empty on both trees.
     #
+    # 181 -> 182, FOURTH TIME THIS LITERAL HAS LAGGED THE FLOW. RE-DERIVED the
+    # way every block above derives its own: `discover_clauses` over the flow YAML
+    # blob at 100af53b4 (the commit that last moved this literal) and at HEAD, with
+    # the CLAUSE SETS diffed on the identity the census uses -- (step, kind, cmd) --
+    # rather than the counts compared. MEASURED:
+    #
+    #   100af53b4   declared=181 swept=181 unswept=0 unrecognised=0
+    #   HEAD        declared=182 swept=182 unswept=0 unrecognised=0
+    #
+    #   ADDED   1   step 2  program_exit_zero
+    #                       slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json
+    #   REMOVED 0
+    #
+    # So it is a GROW and not a churn, and the PIN `swept == declared` never broke:
+    # 182 == 182 on this tree, `unswept` and `unrecognised` both empty. Only the
+    # shrink-detector literal needed to follow the flow, which is what it is for.
+    #
+    # THE ADDED CLAUSE IS NOT INCIDENTAL. `slot_pad_budget_check` is one of the
+    # three checkers `checker execution wiring` reported as run by nothing but
+    # their own tests. Wiring it into the flow is what turned that gate green --
+    # and it is the same edit that grew this count. One repair, two rows.
+    #
+    # A FIRST DIFF OF MINE SAID "CHURN, DO NOT MOVE IT", AND IT WAS WRONG: the key
+    # fell through to the dataclass repr, which carries fields the census does not
+    # identify a clause by, so 14 unchanged clauses showed as added AND removed.
+    # Recorded because the false verdict was the safe-looking one, and a diff key
+    # that reports churn over identical commands would have blocked a legitimate
+    # follow for as long as anyone believed it.
     # A SHRINK IS EXACTLY WHAT THIS LITERAL EXISTS FOR, and the block above
     # states the open question as "a DELIBERATE shrink has no way to be
     # authorised". This is one, and the authorisation is written here:
@@ -2176,7 +2204,37 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # answer, and is deliberately NOT answered here. What is fixed is that the
     # next author can MEASURE the delta against the tree they are landing on
     # instead of reconstructing it by hand from a base that may have moved.
-    assert pop["swept"] == pop["declared"] == 181, pop
+    # 181 -> 182, AND IT IS THE "BASE THAT MOVED" SHAPE AGAIN -- the exact
+    # failure the commit that last set this literal was named for
+    # (100af53b47, "the shrink pin was measured against a base that moved, not
+    # a sweep that missed"). RE-DERIVED the way every block above derives its
+    # own: `population_report` over the flow YAML BLOB at each commit, CLAUSE
+    # SETS diffed rather than counts compared.
+    #
+    #   pin @100af53b47   declared=181 swept=181
+    #   main @a4caccefea  declared=182 swept=182
+    #   HEAD              declared=182 swept=182
+    #
+    # ONE clause arrived and NOTHING was removed, so this is a grow and not a
+    # churn:
+    #   + step 2   program_exit_zero   slot_pad_budget_check
+    # attributed to 34466e7262 ("flow(#1347): the pad-budget gate answers
+    # before the build, not after it").
+    #
+    # WHY THE LITERAL LAGGED, MEASURED RATHER THAN GUESSED: the pin commit and
+    # the adding commit are on PARALLEL branches -- neither is an ancestor of
+    # the other, both landed on main, both dated 2026-08-21. So the literal was
+    # CURRENT against the tree its author measured and stale against the trunk
+    # the moment the other branch landed. That is the FIFTH time this file
+    # records the literal lagging, and the second time it lagged for this
+    # reason specifically; the open question stated two blocks above -- a
+    # hand-maintained number an author must remember while editing a different
+    # file -- is unchanged and is still the flow owner's call.
+    #
+    # `by_kind` moves 115 -> 116 `program_exit_zero` with `advisory` 37 and
+    # `optional` 29 unchanged; `unswept` and `unrecognised` are empty on all
+    # three trees.
+    assert pop["swept"] == pop["declared"] == 182, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 

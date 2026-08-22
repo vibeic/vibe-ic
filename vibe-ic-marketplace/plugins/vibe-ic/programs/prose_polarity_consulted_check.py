@@ -44,11 +44,35 @@ Extractors that predate the vocabulary are recorded, not failed: failing a
 pre-existing pile on day one is how a gate ends up switched off, and this repo
 has measured that. Anything NEW fails from the first run.
 
+A SHRINK IS A PASS, AND THE COUNT GUARD IT USED TO NAME WAS LAUNDERING
+----------------------------------------------------------------------
+An extractor that learns to consult polarity makes the register TOO BIG, and
+this gate used to answer that with "Re-run with --write-baseline". MEASURED on
+the tree this paragraph was written against, that instruction was live
+laundering: the population read `polarity-blind 213 (baseline 213)` while
+`spec_numeric_pack_extract::_detect_rounding_modes` had LEFT the set and
+`_area_unit::liberty_areas` had JOINED it, and the write path's only guard was
+
+    if prev and len(now) > len(prev): refuse
+
+a COUNT. Running the flag the gate had just recommended exited 0 and recorded
+the brand-new offender as accepted debt at unchanged size 213 — no size moved,
+so nothing looked wrong to a reader either. `flow_gate_enforcement_audit` had
+removed this exact hole from itself under vibe-ic#900 ("RATCHET ON MEMBERSHIP,
+NOT ON COUNT"); this gate still carried it.
+
+It is a membership test now, and a tightening is recorded by `--record-shrink`,
+which writes `previous & current` and cannot add — see `_ratchet_baseline`. The
+verdict path never writes: the hygiene suite runs inside the whole-repo
+`suite_write_guard` bracket at `tools/gatekeeper-land.sh:690`, which blocks on
+any tracked write.
+
 chip-AGNOSTIC: pure AST structure. No chip, PDK, vendor or field literal.
 
 USAGE
 -----
-    prose_polarity_consulted_check.py [--root .] [--json OUT] [--write-baseline]
+    prose_polarity_consulted_check.py [--root .] [--json OUT]
+                                      [--record-shrink | --write-baseline]
 
     exit 0 = no NEW polarity-blind extractor, and the baseline has not grown
     exit 1 = a new one, or the baseline grew (BLOCKING)
@@ -62,6 +86,9 @@ import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _ratchet_baseline as _ratchet  # noqa: E402
 
 _BASELINE_NAME = "prose_polarity_baseline.json"
 _POLARITY_MODULE = "_prose_polarity"
@@ -226,6 +253,35 @@ _NOT_PROSE: Dict[str, str] = {
         "`analog_hardmacro_check` recorded a Liberty containing only `/* the "
         "release was cancelled */` satisfying a bare `\"cell\" in text` test "
         "on the letters inside the word cancelled. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "_area_unit::liberty_areas":
+        "Liberty `cell (<name>) {` group headers and the `area : <float>;` "
+        "attribute inside each group. The matched text is a production of the "
+        "Liberty grammar emitted by the characterisation tool, in which there "
+        "is no form that DENIES a cell's area: Liberty gives no way to write "
+        "'this cell's area is NOT 1.064'. The direct precedent is "
+        "`digital_hardmacro_check::parse_liberty` above -- the SAME file "
+        "format, exempted for the same stated reason. Absence is already how "
+        "this function reports it: a `cell` group carrying no `area` simply "
+        "does not enter the returned map, and each cell's block is bounded by "
+        "the NEXT cell header so no neighbouring group can lend it one. The "
+        "number is not even believed on its own -- `derive` exists precisely "
+        "because a Liberty area carries no declared unit, so every value this "
+        "function returns is cross-checked against the same cell's LEF `SIZE` "
+        "footprint, a disagreeing distribution REFUSES rather than publishes, "
+        "and fewer than MIN_CELLS comparable cells refuses too. Contrast the "
+        "two defects this gate was built from (#706 pdk_target, #711 "
+        "die_area_budget_um): both read English design documents, where denial "
+        "is spellable and was spelled. DISCLOSED, because this entry is where "
+        "it belongs: `lef_footprints_um2` in this same module reads LEF the "
+        "same formal way and is the same class, but the scan does NOT flag it "
+        "-- `_match_derived_names` skips any assignment whose target is not a "
+        "bare Name, so the tuple `w, h = float(s.group(1)), float(s.group(2))` "
+        "breaks the taint and `out[m.group(1)] = w * h` names nothing derived. "
+        "Splitting that one line into two Name assignments makes the scan flag "
+        "it (measured). It cannot be listed here while that holds, because "
+        "`exemption_audit` FAILS on an exempted name the scan does not flag -- "
+        "which is the audit working, not a hole: the set may not be padded "
+        "with names that were never findings.",
     "digital_hardmacro_gen::read_interface":
         "The DEF PINS section. The matched text is the entry form `- <pinName> "
         "+ NET <net> + DIRECTION <dir> + USE <use> ;` -- a production of the "
@@ -466,7 +522,13 @@ def main(argv=None) -> int:
     ap.add_argument("--root", default=None)
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--baseline", default=None)
-    ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--write-baseline", action="store_true",
+                    help="record the CURRENT set. Refused if that would ADD "
+                         "any entry — a debt register is not a waiver list")
+    ap.add_argument(_ratchet.RECORD_FLAG, dest="record_shrink",
+                    action="store_true",
+                    help="record a measured TIGHTENING: write `previous & "
+                         "current`, which can only remove entries")
     a = ap.parse_args(argv)
 
     root = Path(a.root).resolve() if a.root else Path(__file__).resolve().parents[1]
@@ -481,21 +543,36 @@ def main(argv=None) -> int:
     now = [n for n in now_all if n not in set(exempted)]
     bpath = Path(a.baseline) if a.baseline else root / "programs" / _BASELINE_NAME
 
-    if a.write_baseline:
+    if a.write_baseline or a.record_shrink:
         prev = _load(bpath) or []
-        if prev and len(now) > len(prev):
-            print(f"[FAIL] refusing to write a baseline that GREW "
-                  f"({len(prev)} -> {len(now)}). It is a debt register, not a "
-                  f"waiver list.", file=sys.stderr)
+        # `--record-shrink` writes `previous & current`, a subset of `previous`
+        # whatever this run measured. `--write-baseline` writes what this run
+        # measured and is refused below if that ADDS anything — the membership
+        # test the count guard here was not.
+        record = _ratchet.shrunk(prev, now) if a.record_shrink else now
+        left = _ratchet.departed(prev, record)
+        if prev and a.record_shrink and not left:
+            print(f"nothing to record: {bpath} already holds the tightened set "
+                  f"({len(prev)} recorded)")
+            return 0
+        doc = {
+            "_comment": "Prose extractors that never consult the polarity of "
+                        "the sentence they read (vibe-ic#712). MAY ONLY "
+                        "SHRINK. A denied value published as a declaration is "
+                        "how a design gets hard-sized onto another chip's die "
+                        "while citing its own document as the authority.",
+            "known": record,
+        }
+        try:
+            _ratchet.write_shrunk(bpath, doc,
+                                  previous_by_register={"known": prev}
+                                  if prev else {})
+        except _ratchet.ShrinkRefused as exc:
+            print(f"[FAIL] prose_polarity baseline: {exc}", file=sys.stderr)
             return 1
-        bpath.write_text(json.dumps(
-            {"_comment": "Prose extractors that never consult the polarity of "
-                         "the sentence they read (vibe-ic#712). MAY ONLY "
-                         "SHRINK. A denied value published as a declaration is "
-                         "how a design gets hard-sized onto another chip's die "
-                         "while citing its own document as the authority.",
-             "known": now}, indent=2) + "\n")
-        print(f"wrote {bpath} ({len(now)} recorded)")
+        if left:
+            print(_ratchet.report_line("known", left, len(prev), len(record)))
+        print(f"wrote {bpath} ({len(record)} recorded)")
         return 0
 
     base = _load(bpath)
@@ -523,8 +600,16 @@ def main(argv=None) -> int:
             print(f"   {p}")
         return 1
     if gone:
-        print(f"  [NOTE] baseline shrank — now polarity-aware: "
-              f"{', '.join(gone[:6])}. Re-run with --write-baseline.")
+        # Reported, never failed, and never as an errand pointing at the flag
+        # that would ALSO record this run's new offenders as accepted debt.
+        # Sizes are the REGISTER's before and after: `len(now)` folds in any
+        # arrival and would misreport the shrink on the run where both land.
+        print(_ratchet.report_line("known", gone,
+                                   len(base), len(base) - len(gone)))
+        print(f"           now polarity-aware, so they no longer belong in the "
+              f"register. Record it with:\n"
+              f"           prose_polarity_consulted_check.py "
+              f"{_ratchet.RECORD_FLAG}")
     if new:
         print(f"\n[FAIL] {len(new)} prose extractor(s) read a value out of a "
               f"sentence and write it as a declaration without asking whether "

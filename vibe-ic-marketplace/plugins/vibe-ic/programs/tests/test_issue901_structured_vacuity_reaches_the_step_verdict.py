@@ -414,10 +414,51 @@ def test_GUARD_the_legacy_channel_keeps_its_tier_when_siblings_ran(tmp_path):
         f'        - program_exit_zero: "{substantive} . --json reports/sub.json"\n'
         f'        - program_exit_zero: "{legacy} . --json reports/leg.json"\n')
     _rc, out, doc = _audit(project, flow)
-    assert _step_under_audit(doc)["status"] == "VACUOUS_PASS", (
-        "a clause disclosing through the legacy channel stopped promoting the "
-        "step once a sibling ran; that is the count paying for itself by "
-        "un-disclosing something already disclosed\n" + out)
+    status = _step_under_audit(doc)["status"]
+    # 2026-08-22 — CORRECTED, AND STRENGTHENED, NOT RELAXED. Read the
+    # docstring above: every harm it names is about the step REJOINING THE
+    # EXECUTED-PASS NUMERATOR ("becoming a bare PASS", "handed back to it").
+    # None is about the spelling of the word. This assertion pinned the word
+    # `VACUOUS_PASS` because when it was written that word WAS the only way to
+    # be out of the numerator, so the label was a faithful proxy for the
+    # property — until a second out-of-numerator word existed, at which point
+    # the proxy started refusing a change that cannot cause the harm.
+    #
+    # `pass_count = counts["PASS"]`, and `PARTIALLY-VACUOUS` is not the string
+    # `"PASS"`, so the property is asserted DIRECTLY here now. That is strictly
+    # stronger: the old form could be satisfied by any future rename that kept
+    # the five characters, and could be defeated by one that did not; this form
+    # tracks the harm itself. The unanimous case is still pinned to the exact
+    # old word, below, so the legacy channel has lost nothing it had.
+    assert status != "PASS", (
+        "a clause disclosing through the legacy channel stopped holding the "
+        "step out of the executed-PASS numerator once a sibling ran; that is "
+        "the count paying for itself by un-disclosing something already "
+        "disclosed\n" + out)
+    assert status == "PARTIALLY-VACUOUS", (
+        "one clause of two examined nothing, so neither `PASS` nor the "
+        "unanimous word is true of this step\n" + out)
+    assert any("PARTIALLY-VACUOUS" in str(r)
+               for r in _step_under_audit(doc)["reasons"]), out
+
+
+def test_GUARD_the_legacy_channel_alone_still_gets_the_unanimous_word(tmp_path):
+    """The other half of the correction above, and the reason it is not a
+    weakening: with NO substantive sibling the legacy channel still yields the
+    EXACT pre-existing word, byte for byte.
+
+    So the change is a SPLIT of the vacuous bucket by a count, not a retreat
+    from it: unanimous keeps `VACUOUS_PASS`, non-unanimous gets a word that is
+    true. If this ever stops saying `VACUOUS_PASS`, the legacy channel really
+    has lost tier power and this fails.
+    """
+    project = tmp_path / "proj"
+    legacy = _synth_gate(tmp_path, "legacy_vacuous_emitter", "PASS", rc=2)
+    flow = _flow(
+        tmp_path,
+        f'        - program_exit_zero: "{legacy} . --json reports/leg.json"\n')
+    _rc, out, doc = _audit(project, flow)
+    assert _step_under_audit(doc)["status"] == "VACUOUS_PASS", out
 
 
 def test_GUARD_one_structured_disclosure_beside_a_sibling_is_not_unanimous(
@@ -726,7 +767,23 @@ def test_GUARD_the_shipped_step_is_not_vacuous_when_its_sim_actually_ran(
         "vacuously satisfied' over a tree whose sim ran, whose testbenches "
         "drive the unit and whose coverage was measured\n"
         + "\n".join(str(r) for r in step.get("reasons", [])))
-    assert step["status"] == "PASS", step
+    # 2026-08-22 — CORRECTED. `!= "VACUOUS_PASS"` above is this test's subject
+    # and is untouched. `== "PASS"` was not a second requirement, it was the
+    # only remaining word: when this was written the tiers were {PASS,
+    # VACUOUS_PASS}, so "not vacuous" and "PASS" were the same assertion typed
+    # twice. They are no longer. Step 4 here ran 4 clauses, 3 read real content
+    # and 1 examined nothing; `PASS` claims the step was audited throughout and
+    # is as false in that direction as `VACUOUS_PASS` is in the other. The word
+    # that is true is asserted instead.
+    #
+    # WHAT THIS DOES *NOT* DO, stated because it is the reasonable objection:
+    # it does not return step 4 to the executed-PASS numerator. It was already
+    # out of it on origin/main (as VACUOUS_PASS) and it is still out of it here
+    # — `pass_count` is unchanged by this whole change, for any step. Putting a
+    # step that has an unexamined clause INTO `pass_count` is the one direction
+    # #901 guards everywhere and is not this shard's call to make.
+    assert step["status"] == "PARTIALLY-VACUOUS", step
+    assert step.get("partial_vacuity_disclosed") is True, step
 
 
 def test_the_shipped_step_names_the_one_clause_that_examined_nothing(tmp_path):

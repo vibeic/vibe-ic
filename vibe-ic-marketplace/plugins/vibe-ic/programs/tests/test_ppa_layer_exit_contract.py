@@ -174,6 +174,21 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
         "ppa_contract_build.py":       ["--declaration", a, "--root", d,
                                         "--out", str(absent.parent / "o.json")],
         "ppa_contract_check.py":       ["--contract", a],
+        # The ablation kind's gate. MEASURED before it was listed, not listed
+        # and hoped for: `--record <absent>` exits 2 and prints
+        # `[CANNOT CHECK] ... No record was read, so nothing has been
+        # established`, which is the shape `test_vacuous_refusal_is_marked`
+        # asks for below.
+        #
+        # `--record` AND NOT `--corpus <emptydir>`, deliberately. Both are
+        # vacuous and both answer 2, but the corpus arm's line is written by
+        # the shared `_ppa_corpus.vacuous` seam and carries `VACUOUS:` rather
+        # than a §1 marker -- a property of the SEAM, shared with every other
+        # corpus gate here, not of this program. Declaring the corpus arm
+        # would have made this row red for something no edit to this program
+        # can fix, and would have hidden this program's own vacuous answer
+        # behind it.
+        "ppa_ablation_check.py":       ["--record", a],
         # The design-for-ECO producer. Its vacuous input is a spare plan that
         # is not there, and the point of the arm for THIS program is sharper
         # than the general one: a producer that read a missing plan as

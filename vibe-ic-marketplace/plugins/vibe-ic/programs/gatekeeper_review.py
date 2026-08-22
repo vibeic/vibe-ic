@@ -1602,8 +1602,18 @@ def hygiene_gate_from_record(repo: Path, record: Path,
                       f"{len(declared)} declared gate(s) matched]")
 
 
-def _process_states() -> tuple:
-    """The states a gate reaches by running, from their one owner.
+#: Used ONLY when `hygiene_finding_delta` cannot be loaded. It is a COPY of the
+#: set this file exists to avoid re-deriving, so using it silently would be the
+#: very drift the by-path load prevents: if a state were ever REMOVED upstream,
+#: this stale copy would keep counting it and `ran` would over-report gates as
+#: having run. Under-reporting would be conservative; over-reporting is not.
+#: So the fallback is kept — a packaging fault must not brick every landing —
+#: but `_process_states_with_source` makes its use VISIBLE in the verdict.
+_PROCESS_STATES_FALLBACK = ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")
+
+
+def _process_states_with_source() -> tuple:
+    """`(states, source)`. `source` is None when the owner answered.
 
     Loaded by path at the moment it is needed rather than at module scope: this
     file is executed by the isolated trusted entry, and a top-level `sys.path`
@@ -1616,9 +1626,15 @@ def _process_states() -> tuple:
             Path(__file__).resolve().parent / "hygiene_finding_delta.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return tuple(module.PROCESS_STATES)
-    except Exception:                     # pragma: no cover - packaging damage
-        return ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")
+        return tuple(module.PROCESS_STATES), None
+    except Exception as exc:              # pragma: no cover - packaging damage
+        return _PROCESS_STATES_FALLBACK, f"{type(exc).__name__}: {exc}"
+
+
+def _process_states() -> tuple:
+    """The states a gate reaches by running, from their one owner."""
+    states, _ = _process_states_with_source()
+    return states
 
 
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
@@ -1671,9 +1687,16 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     # The set is taken from `hygiene_finding_delta.PROCESS_STATES`, which
     # owns it and already computed `ran` from it correctly; both consumers
     # that re-derived it by hand were wrong in the same direction.
-    ran = len([g for g in gates if g.get("state") in _process_states()])
+    _states, _states_fallback = _process_states_with_source()
+    ran = len([g for g in gates if g.get("state") in _states])
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
+    if _states_fallback is not None:
+        # SAY the denominator came from a stale copy. A number derived from a
+        # set this file could not read is not the same claim as one derived
+        # from its owner, and a reader cannot tell them apart otherwise.
+        where += (" [ran-set from this file's FALLBACK copy, not from "
+                  f"hygiene_finding_delta: {_states_fallback}]")
     if secs is not None:
         where += f" in {secs}s"
     if not_checked:

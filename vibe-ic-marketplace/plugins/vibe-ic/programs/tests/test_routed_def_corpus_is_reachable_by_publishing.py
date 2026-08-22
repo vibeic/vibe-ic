@@ -237,3 +237,39 @@ def test_d_the_corpus_producer_counts_the_published_cell(tmp_path, monkeypatch):
         f"gate loops over. stdout={items!r} stderr={produced.stderr[-2000:]}")
     assert items[0].endswith(
         "/ic/widgetmul/v9.9.9_openpdkx/phase3/stage3/pnr/routed.def")
+
+
+# --------------------------------------------------------------------------
+# ARM E — CONTROL: a cell that carries it is still a LANDABLE cell.
+# --------------------------------------------------------------------------
+
+_STRUCTURE_CHECK = _PROGRAMS / "benchmark_evidence_structure_check.py"
+
+
+def test_e_a_cell_carrying_its_routed_def_still_validates(tmp_path):
+    """Staging an artefact into the cell is worthless if the cell cannot land.
+
+    Green before the repair as well as after — that is what makes it a control
+    rather than evidence. It is here because the failure it rules out is
+    silent: `benchmark_evidence_structure_check` is what CI runs over a
+    published folder, and a repair that made every future cell nonconformant
+    would have traded an unreachable corpus for an unpublishable one, which is
+    strictly worse and would not have shown up in ARMs A-D at all.
+    """
+    run = _make_run(tmp_path)
+    dest_root = tmp_path / "benchmark-data"
+    assert _publish(run, dest_root).returncode == 0
+    assert (_cell(dest_root) / "phase3" / "stage3" / "pnr" / "routed.def").is_file()
+
+    import os
+    env = {k: v for k, v in os.environ.items()}
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)  # validate THIS tree, not a clone
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    checked = subprocess.run(
+        [sys.executable, str(_STRUCTURE_CHECK), "--tree", str(dest_root)],
+        capture_output=True, text=True, env=env)
+    assert checked.returncode == 0, (
+        "a cell carrying its routed DEF must still be conformant, or the "
+        f"repair produces cells that cannot land:\n{checked.stdout[-3000:]}"
+        f"\n{checked.stderr[-2000:]}")
+    assert "0 nonconformant" in checked.stdout

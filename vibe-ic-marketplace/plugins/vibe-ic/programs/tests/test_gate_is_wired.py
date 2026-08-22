@@ -180,7 +180,13 @@ def test_wiring_a_recorded_gate_is_reported_and_still_passes(tmp_path):
     _tree(root, gates=["old_check"], ci_names=["old_check"])
     rc, out = _run(root)
     assert rc == 0, out
-    assert "baseline shrank" in out and "old_check" in out
+    assert "TIGHTENED" in out and "old_check" in out
+    # AND IT DOES NOT SEND THE READER TO THE FLAG THAT ERASES A REGRESSION.
+    # `--write-baseline` records whatever THIS run measured, arrivals included,
+    # so recommending it on every shrink recommends it on the days a shrink and
+    # a new offender land together. Measured on the shipped tree: that flag
+    # exited 0 over a one-out-one-in swap at unchanged size.
+    assert "--write-baseline" not in out, out
 
 
 def test_the_baseline_may_not_GROW(tmp_path):
@@ -189,7 +195,12 @@ def test_the_baseline_may_not_GROW(tmp_path):
     (root / "programs" / "b_check.py").write_text("# added\n")
     rc, out = _run(root, "--write-baseline")
     assert rc == 1, out
-    assert "GREW" in out
+    # THE REFUSAL MUST NAME WHAT IT REFUSED. The previous assertion was the
+    # word "GREW", which a message can carry while saying nothing about which
+    # entry arrived — and the guard behind it was a COUNT, so a one-out-one-in
+    # swap never reached this branch at all. Naming the entry is checkable and
+    # is what a reader needs.
+    assert "b_check" in out, out
     # and the recorded set is untouched by the refusal
     kept = json.loads((root / "programs"
                        / "gate_is_wired_baseline.json").read_text())["unwired"]
@@ -330,7 +341,8 @@ def test_the_shipped_register_still_refuses_to_GROW(tmp_path):
          "--baseline", str(short), "--write-baseline"],
         capture_output=True, text=True, timeout=55)
     assert r2.returncode == 1, r2.stdout + r2.stderr
-    assert "GREW" in r2.stdout + r2.stderr
+    assert sorted(now)[0] in r2.stdout + r2.stderr, (
+        "the write path refused without naming the entry it refused")
     # the refusal left the register it was pointed at untouched
     assert json.loads(short.read_text())["unwired"] == sorted(now)[1:]
 

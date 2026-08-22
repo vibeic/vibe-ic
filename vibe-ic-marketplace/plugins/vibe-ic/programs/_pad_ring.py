@@ -199,6 +199,33 @@ FLOORPLAN_DEF_REL = "phase3/stage3/pnr/floorplan.def"
 PADRING_DEF_REL = "phase3/stage3/pnr/padring.def"
 PADRING_SKIPPED_REL = "phase3/stage3/pnr/padring.SKIPPED.txt"
 REPORT_REL = "reports/phase3/padring.json"
+#: WHAT THIS MODULE MIRRORS FROM UPSTREAM, AND WHAT PINS IT THERE
+#:
+#: The docstring above says this module borrows upstream's shape — its variable
+#: names verbatim, its eight numbered steps in their order. A borrowing stated
+#: only in prose drifts silently: the along-the-row extent was taken from the
+#: ORIENTED footprint here while upstream measures the MASTER, and on a real
+#: ring that was a 4.4x error that surfaced as an unrelated refusal. Our side of
+#: that invariant is pinned (`test_a_vertical_side_sums_the_master_width_not_
+#: its_height`). THEIRS WAS NOT, so an upstream change would land here as a
+#: divergence nothing asks about.
+#:
+#: `pinned_by` names a test that reads the UPSTREAM artefact. It is machine-
+#: readable so `upstream_mirror_is_pinned_check` can require it rather than
+#: trust that somebody wrote one.
+UPSTREAM_MIRROR: Dict[str, str] = {
+    "upstream": "librelane/scripts/openroad/common/pad_cfg.tcl",
+    "mirrors": (
+        "the per-side pad arithmetic: the fit sum and the along-the-row step. "
+        "Upstream measures a cell in exactly two places and BOTH read the "
+        "master's width, on all four sides; there is no getHeight anywhere in "
+        "its side arithmetic."),
+    "pinned_by": (
+        "tests/test_upstream_mirror_pad_cfg.py"
+        "::test_upstream_side_arithmetic_measures_the_master_width"),
+}
+
+
 ASSIGNMENT_REL = "phase3/stage3/pnr/pad_assignment.json"
 
 SCHEMA = "vibe-ic/padring/1"
@@ -211,6 +238,7 @@ MIN_REASON_CHARS = 40
 
 SIDES: Tuple[str, ...] = ("S", "E", "N", "W")           # upstream's order
 CORNER_POSITIONS: Tuple[str, ...] = ("SW", "SE", "NE", "NW")
+
 
 #: Upstream's variable name for each side.
 SIDE_VAR = {"S": "PAD_SOUTH", "E": "PAD_EAST",
@@ -267,24 +295,66 @@ _CW90 = {"N": "E", "E": "S", "S": "W", "W": "N",
 #: Orientations whose footprint is the master's SIZE with the axes swapped.
 _ROTATED = ("E", "W", "FE", "FW")
 
-#: What the placer ACTUALLY orients a vertical-side pad to, in DEF spelling.
+#: What the placer ACTUALLY orients a pad to ON EVERY SIDE, in DEF spelling.
 #:
-#: MEASURED 2026-08-22, four SEPARATE OpenROAD processes (26Q3-1165), one per
-#: `PAD_ROTATION_VERTICAL` value so no row from an earlier pass could be reused
-#: by a later one:
+#: RE-MEASURED 2026-08-22, OpenROAD 26Q3-1581, at librelane's default rotations,
+#: all four sides observed in one process and cross-checked by holding one
+#: rotation parameter and varying the other:
 #:
-#:     ROTV = R0 / R90 / R180 / MX   ->   WEST orient=MXR90, EAST orient=R90
-#:                                        75 um along the row, 350 um into the
-#:                                        die, IDENTICAL in all four
+#:     SOUTH R0    -> N        WEST  MXR90 -> FW
+#:     NORTH MX    -> FS       EAST  R90   -> W
 #:
-#: The vertical-side orientation is a CONSTANT of the placer, not a function of
-#: the declared rotation. Written here in the placer's own spelling
-#: (`MXR90` -> `FW`, `R90` -> `W`) so the DEF this step emits says what the tool
-#: would have said. Emitting the DECLARED orientation instead produced an
-#: artefact that contradicted its own geometry.
-VERTICAL_SIDE_ORIENT: Dict[str, str] = {
+#: THE NORTH ENTRY IS THE CORRECTION. This step used to compute NORTH as
+#: `rotate_cw(PAD_ROTATION_HORIZONTAL, 2)`, which at the default yields S
+#: (R180). The placer produces MX -> FS. Same bounding box, MIRRORED rather
+#: than rotated, so a DEF reader deriving pin positions gets a different cell.
+#: Part 3 of the flow owner's ruling -- "the DEF must not contradict itself,
+#: write the orientation the tool actually produces" -- was applied to the
+#: vertical sides and missed here.
+#:
+#: RE-CONFIRMED on a SECOND build before landing, because a value carried
+#: forward under the word "measured" is what produced the claim this file
+#: exists to correct: identical in OpenROAD 26Q3-1666, and the default row
+#: identical again in 26Q3-1535. Three builds, one answer -- a property of the
+#: placer, not of one release.
+#:
+#: AND IT IS RE-DERIVABLE, WHICH THE ORIGINAL CLAIM WAS NOT. In
+#: `tests/test_pad_ring.py`, the test named
+#:     test_the_shipped_orientations_are_what_the_placer_produces
+#: runs upstream's own call shape against whatever IO library is installed and
+#: compares the tool's answer with this dict. Change a value here without the
+#: placer agreeing and that test says so, in the tool's own words.
+SIDE_ORIENT: Dict[str, str] = {
+    "S": ORIENT_ALIASES["R0"],
+    "N": ORIENT_ALIASES["MX"],
     "W": ORIENT_ALIASES["MXR90"],
     "E": ORIENT_ALIASES["R90"],
+}
+
+#: What the placer ACTUALLY orients each CORNER to, in DEF spelling, at
+#: librelane's default `PAD_ROTATION_CORNER`.
+#:
+#: MEASURED 2026-08-22, OpenROAD 26Q3-1581, `place_corners` after
+#: `make_io_sites -rotation_corner R0`:
+#:
+#:     SW  R0   -> N        NE  R180 -> S
+#:     SE  MY   -> FN       NW  MX   -> FS
+#:
+#: THE PLACER ALTERNATES ROTATION AND MIRROR: R0, MY, R180, MX. This step used
+#: to walk `rotate_cw(PAD_ROTATION_CORNER, i)` -- N, E, S, W -- a PURE
+#: ROTATION, so SE and NW were wrong: E where the tool writes FN, W where it
+#: writes FS. Same bounding box for a square corner cell, mirrored rather than
+#: rotated, so the fit arithmetic cannot see it and a DEF reader can. Two of
+#: four corners, in every ring this step has ever written.
+#:
+#: Re-confirmed on 26Q3-1666 before landing, and re-derived on every run of
+#: the placer test named above -- which fails on THIS dict alone, with the
+#: sides left correct, so the corner half cannot hide behind them.
+CORNER_ORIENT: Dict[str, str] = {
+    "SW": ORIENT_ALIASES["R0"],
+    "SE": ORIENT_ALIASES["MY"],
+    "NE": ORIENT_ALIASES["R180"],
+    "NW": ORIENT_ALIASES["MX"],
 }
 
 #: librelane's declared default for all three pad rotations
@@ -782,8 +852,9 @@ def validate_assignment(obj: object) -> Dict[str, object]:
     if not seen:
         raise AssignmentError(
             "PAD_CONFIG_VARIABLE_ABSENT",
-            "all four side lists are empty — a ring of no pads assigns "
-            "nothing, and an empty set is not a pad ring")
+            f"all four side lists are empty in {ASSIGNMENT_REL} "
+            f"({', '.join(SIDE_VAR[s] for s in SIDES)}) — a ring of no pads "
+            f"assigns nothing, and an empty set is not a pad ring")
 
     rots = {}
     for var in ("PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",

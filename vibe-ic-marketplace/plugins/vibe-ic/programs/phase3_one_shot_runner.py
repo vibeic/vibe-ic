@@ -3350,7 +3350,8 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         f"}}\n")
 
 
-def _build_unplaceable_master_cap_tcl() -> str:
+def _build_unplaceable_master_cap_tcl(
+        cts_masters: Optional[Sequence[str]] = None) -> str:
     """Forbid every master too WIDE to have a legal site on this floorplan.
 
     Measured field failure: a flow shipped a `routed.def` carrying 563 signal
@@ -3569,11 +3570,107 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "      puts \"UNPLACEABLE_INSTANCES_PRESENT: [llength $_wc_pre] "
         "instance(s) already in the netlist exceed the bound -- $_wc_pre\"\n"
         "    }\n"
+        "    # REPORT-ONLY: masters EXACTLY at the bound. The comparison above\n"
+        "    # is deliberately STRICT and must stay so -- on the floorplan that\n"
+        "    # produced it the SURVIVING masters sat exactly here, so `>=` would\n"
+        "    # empty the pool. But `one fits` is not `many fit`: an instance this\n"
+        "    # wide needs the single longest free run on the die, so a step that\n"
+        "    # creates them in QUANTITY cannot be legalized, and nothing said so.\n"
+        "    set _wc_at {}\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_lib [[ord::get_db] getLibs] {\n"
+        "        foreach _wc_m [$_wc_lib getMasters] {\n"
+        "          if {![$_wc_m isCore]} { continue }\n"
+        "          if {[$_wc_m getWidth] == $_wc_run} { lappend _wc_at [$_wc_m getName] }\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "    if {[llength $_wc_at] > 0} {\n"
+        "      puts \"MASTERS_AT_PLACEABILITY_BOUND: [llength $_wc_at] core "
+        "master(s) are EXACTLY the measured free-site run "
+        "([expr {$_wc_run / $_wc_sw}] site(s)); one instance places, many "
+        "cannot -- kept usable by the strict bound above -- $_wc_at\"\n"
+        "    }\n"
         "  }\n"
-        "} _wc_err]} { puts \"UNPLACEABLE_MASTERS_NONFATAL: $_wc_err\" }\n")
+        + _cts_master_bound_check_tcl(cts_masters)
+        + "} _wc_err]} { puts \"UNPLACEABLE_MASTERS_NONFATAL: $_wc_err\" }\n")
 
 
-def _build_tapcell_and_placeability_tcl(pdk: "PdkConfig") -> str:
+def _cts_master_bound_check_tcl(
+        cts_masters: Optional[Sequence[str]] = None) -> str:
+    """REPORT-ONLY: name the CTS masters that sit at or above the bound.
+
+    `PLACEABLE_WIDTH_BOUND` is measured from the live tap grid and then
+    PRINTED AND NEVER CONSULTED -- a `git grep` finds it in this emitter, in
+    its own tests, and nowhere else.  Meanwhile `clk_buf_root` comes from the
+    PDK registry (or, when absent, from "the LAST clkbuf in the Liberty", i.e.
+    the WIDEST one) and is fixed before any floorplan exists.  Nothing joins
+    the two, so the flow can hand `clock_tree_synthesis -root_buf` a master
+    that its own cap has just measured to be exactly at the placeability
+    limit -- and then CTS instantiates it thousands of times.
+
+    Measured, three independent designs on one open PDK, all three printing
+    `PLACEABLE_WIDTH_BOUND: 56000 dbu = 50 site(s)` and all three naming a
+    50-site master as `-root_buf`.  On the small one CTS used it ONCE and the
+    design legalized.  On the large one CTS used it 2 055 times, the post-hold
+    legalizer was left with ~2 344 illegal cells, and the full-die rung had
+    recovered 11 % of them after ten hours of one core.  Downsizing exactly
+    those instances takes the residual to 303 in sixteen minutes.
+
+    This does NOT change the choice and does NOT exclude anything: excluding a
+    master at the bound is explicitly wrong (the strict `>` is pinned by
+    `test_a_master_exactly_at_the_bound_stays_legal`, whose own floorplan had
+    the SURVIVORS sitting exactly there).  It makes the condition SAYABLE at
+    floorplan time instead of discoverable ten hours into a legalizer.
+
+    chip-AGNOSTIC: the master names are the caller's already-resolved
+    values; no design, PDK, cell or dimension literal appears here.  With no
+    names supplied the function is INERT and emits nothing, so a caller that
+    does not know them is unchanged.
+    """
+    names = [n for n in (cts_masters or []) if n]
+    if not names:
+        return ""
+    seen, uniq = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            uniq.append(n)
+    lst = " ".join(uniq)
+    return (
+        "  # REPORT-ONLY: the masters this flow will hand to CTS, against the\n"
+        "  # bound just measured. Printed, never enforced.\n"
+        "  # `_wc_run`/`_wc_sw` are set inside the rows block; a floorplan with no\n"
+        "  # rows never runs it, and an unset read would abort the whole cap into\n"
+        "  # its NONFATAL branch -- a report-only addition must not be able to do\n"
+        "  # that, so it checks before it reads.\n"
+        "  if {[info exists _wc_run] && [info exists _wc_sw] && $_wc_run > 0} {\n"
+        f"    foreach _wc_cm {{{lst}}} {{\n"
+        "      # resolved by walking the libs, the same way the cap above finds\n"
+        "      # its masters -- not `findMaster`, so this block needs nothing the\n"
+        "      # block it is appended to does not already use.\n"
+        "      set _wc_cw -1\n"
+        "      foreach _wc_lb [[ord::get_db] getLibs] {\n"
+        "        foreach _wc_mm [$_wc_lb getMasters] {\n"
+        "          if {[$_wc_mm getName] eq $_wc_cm} { set _wc_cw [$_wc_mm getWidth] }\n"
+        "        }\n"
+        "      }\n"
+        "      if {$_wc_cw < 0} { continue }\n"
+        "      if {$_wc_cw >= $_wc_run} {\n"
+        "        puts \"CTS_MASTER_AT_PLACEABILITY_BOUND: $_wc_cm is "
+        "[expr {$_wc_cw / $_wc_sw}] site(s) against a measured free-site run "
+        "of [expr {$_wc_run / $_wc_sw}] site(s) -- every instance CTS creates "
+        "from it needs the longest free run on the die, so a clock tree that "
+        "uses it in quantity cannot be legalized\"\n"
+        "      }\n"
+        "    }\n"
+        "  }\n")
+
+
+
+def _build_tapcell_and_placeability_tcl(
+        pdk: "PdkConfig",
+        cts_masters: Optional[Sequence[str]] = None) -> str:
     """`tapcell` insertion followed by the unplaceable-master width cap.
 
     ORDER IS THE POINT and is why these two are composed in one place rather
@@ -3588,7 +3685,8 @@ def _build_tapcell_and_placeability_tcl(pdk: "PdkConfig") -> str:
     call site) is deliberate: the ordering contract is then testable by calling
     this function, with no need to inspect the emitter's source.
     """
-    return _build_tapcell_tcl(pdk) + _build_unplaceable_master_cap_tcl()
+    return (_build_tapcell_tcl(pdk)
+            + _build_unplaceable_master_cap_tcl(cts_masters))
 
 
 
@@ -11786,17 +11884,81 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # area figure in a sign-off artefact is worse than no figure.
     _area_stats = None
     try:
-        _area_stats = _sas.emit_for_run(project, log, netlist)
+        # THE LIBRARY THIS SYNTHESIS ACTUALLY LOADED. It is the same one
+        # interpolated into `stat -liberty` above, so the area figure and
+        # the library its unit is derived from cannot disagree. The HOST
+        # path, not the container translation: the emitter runs here.
+        _area_stats = _sas.emit_for_run(project, log, netlist,
+                                        liberty=getattr(pdk, "liberty", None))
     except Exception:
         _area_stats = None
     _synth_evidence = [str(netlist), str(log)]
     if _area_stats is not None:
         _synth_evidence.append(str(_area_stats))
+
+    # ── step 9's area clause, ENFORCED HERE (vibe-ic, 2026-08-22) ────────────
+    #
+    # The flow declares `area_total_vs_budget_check` in step 9's
+    # `program_exit_zero`, and until now NO runner spawned it: it was evaluated
+    # only by `flow_compliance_check` as `final_audit`, after every artefact had
+    # already been written, so it could describe a run but never stop one. That
+    # is vibe-ic#306's whole finding, and this gate's own declaration recorded
+    # it as `ENFORCEMENT: advisory` for exactly that reason.
+    #
+    # THIS is where its verdict belongs. Step 9's declared output is
+    # `phase2/stage2/synth/stats.json`, and the call above is what finally
+    # writes an AREA into it: step 9's other producer maps to generic primitives
+    # (`abc -g cmos2`) and yosys prints no area line at all, so before this
+    # point there is no figure to compare. No flow edit is needed or made — the
+    # clause stays exactly where it is declared.
+    #
+    # ONLY rc 1 STOPS THE STEP, and that is a deliberate bound, not timidity:
+    #   rc 1  the design's own synthesised cell area exceeds the die area IT
+    #         declared. That is a fact about the design, it is knowable here
+    #         rather than at streamout, and it is a FAIL.
+    #   rc 0  compared and it fits.
+    #   rc 2  INCOMPLETE — most often "no ceiling declared". MEASURED, and a
+    #         CORRECTION of the number first written here: `die_area_budget_um`
+    #         is null in 118 of 136 real converge runs across all 5 fleet
+    #         machines (swept independently for
+    #         `l19_pdk_floorplan_contract_check`), not the 176-of-177 an earlier
+    #         comment cited from a withdrawn corpus. Roughly one run in seven
+    #         DOES declare a die. Treating rc 2 as non-green would still turn
+    #         118 of 136 runs non-green over a requirement they never wrote, so
+    #         it is DISCLOSED in this step's detail and does not stop the step.
+    #         Whether the flow should demand a declared die budget is a product
+    #         decision and is deliberately NOT taken here.
+    #   any other outcome (timeout, missing program) is a fault of the check,
+    #         never a verdict about the design, and is disclosed the same way.
+    _area_verdict = ""
+    _area_prog = PROGRAMS_DIR / "area_total_vs_budget_check.py"
+    if _area_stats is not None and _area_prog.is_file():
+        try:
+            _acp = subprocess.run(
+                [sys.executable, str(_area_prog), str(project)],
+                capture_output=True, text=True, timeout=120)
+        except Exception as _exc:                                # noqa: BLE001
+            _area_verdict = f" area_budget=NOT_CHECKED({_exc.__class__.__name__})"
+        else:
+            _atail = ((_acp.stdout or "") + (_acp.stderr or "")).strip()[-600:]
+            if _acp.returncode == 1:
+                return StepResult(
+                    "synth", "FAIL", time.time() - t0,
+                    f"netlist={netlist.name} cells={cell_count} "
+                    f"frontend={synth_frontend}; the synthesised cell area "
+                    f"exceeds the die area this design declares, so it cannot "
+                    f"be placed at any utilisation. {_atail}",
+                    _synth_evidence,
+                    extras={"synth_frontend": synth_frontend,
+                            "area_budget_rc": 1})
+            _area_verdict = (" area_budget=ok" if _acp.returncode == 0
+                             else f" area_budget=INCOMPLETE(rc={_acp.returncode})")
     return StepResult("synth", "PASS", time.time() - t0,
                       f"netlist={netlist.name} cells={cell_count} "
                       f"frontend={synth_frontend}"
                       + (f" area_stats={_area_stats.name}"
-                         if _area_stats is not None else " area_stats=none"),
+                         if _area_stats is not None else " area_stats=none")
+                      + _area_verdict,
                       _synth_evidence,
                       extras={"synth_frontend": synth_frontend,
                               "reference_flow_qor_knobs": _rf_notes,
@@ -15289,6 +15451,87 @@ def _spare_tieoff_measured_from_log(log_path: Path) -> Dict[str, Any]:
     return out
 
 
+# STEP 18 DECLARES TWO OUTPUTS; THIS RUNNER PRODUCES THE SECOND BY INVOKING
+# ITS DECLARING PRODUCER, AND NAMES THAT PATH NOWHERE BELOW.
+#
+# The path is reports/spare_cell_coverage.json. Its one declaring producer is
+# `spare_cell_coverage_check`, and this runner is not it: the runner used to
+# write a rival payload there, graded against the run's own --spare-density
+# instead of the gate's fixed readiness floor, so one path carried two
+# verdicts and whichever writer ran last decided what benchmark_verify_report
+# Pillar 6 read. THE STEP THAT INSERTS THE SPARE CELLS DOES NOT GRADE ITS OWN
+# INSERTION.
+# docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md
+#
+# REMOVING THAT WRITE LEFT THE OTHER HALF OPEN, and that half is what the
+# function below closes. `required_outputs` is graded by PRESENCE. On an
+# orchestrated run step 18's gate clause invokes the checker and the file
+# appears; on a RUNNER-ONLY run - this program called directly, which is the
+# supported single-call entry point - nobody ran it, and
+# `flow_compliance_check --strict` over the runner's own output reported:
+#
+#     with it     PASS-VOIDED  Step 18: Spare-cell + ECO-prep insertion
+#     without it  MISSING      Step 18: Spare-cell + ECO-prep insertion
+#                 required_outputs missing: 1 of 2 satisfied
+#
+# A declared output with exactly one permitted writer that nothing ever runs
+# is single-writered AND ABSENT. Those are two different questions and only
+# the first one had an answer.
+#
+# WHY THE PATH LITERAL IS IN THIS COMMENT AND NOT IN THE CODE.
+# `test_spare_coverage_single_declaring_producer` refuses ANY non-comment line
+# of this file that names that path - not only a write, the NAME - because a
+# bound path is one edit away from a second writer. So the function reads the
+# producer's verdict off its STDOUT, which is where the checker prints the
+# same report it writes. The runner therefore neither writes nor opens that
+# path, and does not know where it is; it knows only what the declaring
+# producer said. That is a stronger statement than the one the removed write
+# could make, not a way around the guard.
+def _emit_spare_cell_coverage(project: Path, spare_json: Path) -> str:
+    """Run step 18's declaring producer and report its verdict on the detail
+    line. See the comment block above for what this closes and what it refuses.
+
+    NO `--target-density` IS PASSED, deliberately. The run's own
+    `--spare-density` is the insertion parameter and the gate's default is the
+    readiness floor; handing the first to the second would restore the
+    self-grade through the argument list instead of through the file, which is
+    the same defect wearing a different hat.
+
+    rc != 0 is NOT an emission failure. The checker exits 1 on a FAIL verdict,
+    and that verdict is in the report the downstream gate reads - so it is
+    NOTED and never swallowed, and it never blocks PnR: a thin ECO budget is a
+    readiness finding, not a routing failure. Returns the note to append to
+    the step detail; never raises.
+    """
+    if not spare_json.is_file():
+        return (" | spare_coverage: NOT RUN - no spare_cells.json to grade, "
+                "so step 18's graded output is legitimately absent")
+    try:
+        r = subprocess.run(
+            [sys.executable,
+             str(PROGRAMS_DIR / "spare_cell_coverage_check.py"),
+             str(project)],
+            capture_output=True, text=True, timeout=120)
+    except Exception as exc:  # nosec - emission is best-effort, never fatal
+        return f" | spare_coverage_emit_failed: {exc}"
+    try:
+        graded = json.loads(r.stdout)
+    except Exception:
+        tail = (r.stderr or r.stdout or "").strip().splitlines()
+        return (f" | spare_coverage: the declaring producer emitted no "
+                f"readable verdict (rc={r.returncode}): "
+                + (tail[-1][:200] if tail else "no output"))
+    verdict = graded.get("verdict") or "UNKNOWN"
+    note = (f" | spare_coverage={verdict} "
+            f"(spare_cell_coverage_check rc={r.returncode}, "
+            f"floor={graded.get('target_density')}, "
+            f"actual={graded.get('actual_density')})")
+    reasons = graded.get("reasons") or []
+    if verdict != "PASS" and reasons:
+        note += " - " + "; ".join(str(x) for x in reasons[:3])
+    return note
+
+
 def _dont_use_family_fallback_tcl() -> str:
     """v1.2.86 — GENERAL, PDK-family fallback that excludes the physically
     unroutable characterization / low-power cell FAMILIES from the resizer/CTS/
@@ -16106,7 +16349,17 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
     if clk_sink_buf:
         _clkswap = (
             f"if {{$_dplok{v} == 0}} {{\n"
-            f"  if {{![catch {{\n"
+            # NOT `![catch ...]` here.  Every other `![catch ...]` in this emitter
+            # guards a body whose SUCCESS is the interesting case ("if it did not
+            # error, proceed").  This one guards a body whose FAILURE is the
+            # interesting case, so the polarity reverses: with the `!` the
+            # `_NONFATAL:` line printed on SUCCESS with an empty message and said
+            # NOTHING when the swap actually threw -- a downsize that silently did
+            # not happen, followed by a `detailed_placement` that behaves as though
+            # it had.  Measured on a real run: the rung is worth an 87 % drop in the
+            # illegal-cell count, so a silent failure there presents as "this design
+            # will not legalize".
+            f"  if {{[catch {{\n"
             f"    set _rblk{v} [ord::get_db_block]\n"
             f"    set _rtgt{v} [[ord::get_db] findMaster {clk_sink_buf}]\n"
             f"    if {{$_rtgt{v} ne \"NULL\" && $_rtgt{v} ne \"\"}} {{\n"
@@ -20576,7 +20829,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # v0.1.46/47/48 — silicon-critical PnR blocks (extracted to pure
     # helpers; see TestSiliconCriticalPnrBlocks in
     # programs/tests/test_phase3_backend_fixes.py).
-    tapcell_block = _build_tapcell_and_placeability_tcl(pdk)
+    tapcell_block = _build_tapcell_and_placeability_tcl(
+        pdk, cts_masters=(clk_buf, clk_buf_root))
     # #684 R6 (post-place) — sparse-die anti-flood tap prune, emitted after
     # placement (real geometry) and BEFORE placed.def (keeps DEF-stage
     # monotonicity). Pre-mark the spare grid positions (inserted after
@@ -21587,10 +21841,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         (rpt_dir / "sta.rpt").write_text(sta_file.read_text())
 
     # === Design-for-ECO Step 18 artefacts ===
-    # Emit phase3/stage3/pnr/spare_cells.json (the inserted spare set,
-    # consumed by spare_cell_preservation_check) and
-    # reports/spare_cell_coverage.json (the readiness verdict, consumed
-    # by spare_cell_coverage_check). Best-effort: a write failure logs
+    # Emit phase3/stage3/pnr/spare_cells.json — the inserted spare set,
+    # consumed by spare_cell_preservation_check AND by
+    # spare_cell_coverage_check, which recomputes the readiness verdict
+    # from it. This step emits the MEASUREMENT; the verdict belongs to
+    # the gate (see the block below). Best-effort: a write failure logs
     # to the step detail but never fails PnR.
     spare_note = ""
     try:
@@ -21619,48 +21874,42 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         }
         _aa.write_text(out_dir / "spare_cells.json",
             json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
-        # Coverage readiness JSON. distribution_ok is derived from the
-        # grid spread (>1 distinct grid cell occupied); tie_off_ok from
-        # the plan's tied_off flag. The dedicated checker recomputes
-        # these from spare_cells.json — this is a convenience summary.
+        # reports/spare_cell_coverage.json is deliberately NOT written
+        # here. Step 18 declares ONE producer for that path —
+        # `spare_cell_coverage_check` — and this block used to write it
+        # too. The two payloads graded the SAME run against DIFFERENT
+        # floors: this one against the run's own `--spare-density`, the
+        # gate's against its fixed readiness minimum. A run invoked with
+        # `--spare-density 0.005` (or 0) therefore published
+        # `status: PASS` from here and `status: FAIL` from the gate, at
+        # one path, and whichever ran last decided what
+        # `benchmark_verify_report` Pillar 6 read. `distribution_ok`
+        # disagreed the same way: this block asked only for >1 distinct
+        # site, the gate for half the spare count.
+        #
+        # Nothing is lost. Every MEASUREMENT this block published —
+        # count, placed_cells_est, target_density, actual_density,
+        # tie_off, tied_off, and the instance coordinates the spread is
+        # derived from — is in the spare_cells.json written above, which
+        # is the gate's input. Only the self-grade is gone, and a
+        # self-grade against a self-chosen floor is precisely what the
+        # gate exists to refuse.
+        #
+        # docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md
         distinct_xy = {(i.get("llx"), i.get("lly"))
                        for i in spare_plan.get("instances", [])}
-        distribution_ok = (spare_plan.get("count", 0) <= 1
-                           or len(distinct_xy) > 1)
-        # Same MEASURED tie-off value the spare_cells.json carries — never the
-        # pre-run claim, so this convenience summary cannot disagree with the
-        # artefact the dedicated checker recomputes from.
-        _cov_tie_ok = bool(spare_payload.get("tied_off"))
-        cov_verdict = ("PASS" if (actual_dens >= spare_dens
-                                  and distribution_ok
-                                  and _cov_tie_ok)
-                       else "FAIL")
-        coverage_payload = {
-            "program": "spare_cell_coverage (runner-emit)",
-            "target_density": round(spare_dens, 6),
-            "actual_density": actual_dens,
-            "count": spare_plan.get("count", 0),
-            "placed_cells_est": placed_cells_est,
-            "distribution_ok": distribution_ok,
-            "tie_off_ok": _cov_tie_ok,
-            # The measurement behind `tie_off_ok`, so a FAIL says which of
-            # "raised", "never ran" or "partial" happened.
-            "tie_off": _tie_measured,
-            "verdict": cov_verdict,
-            # `status` mirrors `verdict` for the documented Pillar-6 schema.
-            "status": cov_verdict,
-        }
-        # Literal flow-declared path (not the report auto-router, which
-        # would file an unknown name under reports/audit/).
-        cov_path = project / "reports" / "spare_cell_coverage.json"
-        cov_path.parent.mkdir(parents=True, exist_ok=True)
-        cov_path.write_text(
-            json.dumps(coverage_payload, indent=2, ensure_ascii=False) + "\n")
+        # The step detail reports the MEASUREMENT (how many distinct
+        # sites the spares occupy), never a verdict on it — grading the
+        # spread is the gate's job and it applies a stricter rule.
         spare_note = (f" | spares={spare_plan.get('count', 0)} "
                       f"(target_d={spare_dens:g} actual_d={actual_dens:g} "
-                      f"dist_ok={distribution_ok})")
+                      f"distinct_sites={len(distinct_xy)})")
     except Exception as _sp_exc:  # nosec — artefact emit is best-effort
         spare_note = f" | spare_emit_failed: {_sp_exc}"
+    # Step 18's SECOND declared output, produced by invoking its declaring
+    # producer — never by writing a second payload at the same path. See
+    # `_emit_spare_cell_coverage` for what this closes and what it refuses.
+    spare_note += _emit_spare_cell_coverage(project, out_dir / "spare_cells.json")
     if spare_warn:
         spare_note += f" | {spare_warn}"
 
@@ -31848,7 +32097,41 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                       time.time() - t0, detail, written)
 
 
-def step_digital_hardmacro_gen(project: Path) -> StepResult:
+def _hardmacro_pdk_dir(pdk: Optional["PdkConfig"]) -> Optional[str]:
+    """The DESIGN'S PDK directory, for `digital_hardmacro_gen --pdk-root`.
+
+    MEASURED DEFECT this exists to close. `digital_hardmacro_gen._magicrc_for`
+    took the alphabetically FIRST `*/libs.tech/magic/*.magicrc` under whatever
+    it was given, and this step gave it nothing -- so the producer fell back to
+    `$PDK_ROOT`, which in the shipped image is the PARENT of every installed
+    PDK:
+
+        PDK_ROOT = /foss/pdks   ->  gf180mcuD's technology, for EVERY design.
+
+    A design on any other PDK was abstracted against a technology that does not
+    define its layers, and magic answers that with `Unknown layer/datatype` and
+    a LEF carrying an outline and NO PINS -- not an error. The producer now
+    REFUSES when it cannot tell which PDK it is on; this supplies the answer so
+    the refusal is not the normal case.
+
+    Derived from the run's OWN `PdkConfig.name` under `$PDK_ROOT`, and returned
+    only when that directory actually holds `libs.tech/magic/`. Nothing is
+    reconstructed and no PDK name is hard-coded: if the layout is not the
+    standard one this returns None, the producer sees the bare `$PDK_ROOT` and
+    refuses with its own stated reason. Degrades to a refusal, never to a guess.
+    """
+    if pdk is None or not getattr(pdk, "name", ""):
+        return None
+    root = os.environ.get("PDK_ROOT", "")
+    if not root:
+        return None
+    cand = Path(root) / pdk.name
+    return str(cand) if (cand / "libs.tech" / "magic").is_dir() else None
+
+
+def step_digital_hardmacro_gen(project: Path,
+                               pdk: Optional["PdkConfig"] = None
+                               ) -> StepResult:
     """Canonical step 37.5ip — the cell/IP path TERMINAL producer.
 
     WIRED HERE AND NOT INTO THE GATE, for the reason step A8 already records in
@@ -31878,6 +32161,12 @@ def step_digital_hardmacro_gen(project: Path) -> StepResult:
     report = project / "reports" / "phase3" / "digital_hardmacro_gen.json"
     report.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(prog), str(project), "--json", str(report)]
+    # THE DESIGN'S PDK, NAMED. Without it the producer sees only `$PDK_ROOT`
+    # and, before it learned to refuse, silently picked whichever technology
+    # sorted first. See `_hardmacro_pdk_dir`.
+    _pdk_dir = _hardmacro_pdk_dir(pdk)
+    if _pdk_dir:
+        cmd += ["--pdk-root", _pdk_dir]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
                             errors="replace", timeout=1800)
@@ -32077,10 +32366,39 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                  str(project), "--json", str(sdc_check_json)],
                 capture_output=True, text=True, timeout=60,
             )
+            # `r` WAS BOUND AND NEVER READ. This step's own docstring promises
+            # "any individual emission failure logs WARN but the step
+            # continues", and this block logged nothing on any outcome: it
+            # tested only whether the file appeared. A step that swallows the
+            # result of a subprocess it ran, while its contract says it warns,
+            # is a disclosure that exists from the emitter's side and not the
+            # reader's.
+            #
+            # THE TWO OUTCOMES ARE NOT THE SAME THING and the note says which:
+            #   report written, rc != 0  -- NOT an emission failure. The
+            #       checker exits `0 if result.passed else 1`, so a non-zero
+            #       code means the SDC has real findings, and they are IN the
+            #       JSON that the downstream gate reads. Noted because the
+            #       runner's own notes are what a human reads first, and
+            #       "I emitted a report saying the SDC did not pass" must not
+            #       be silent.
+            #   report NOT written        -- a genuine emission failure, which
+            #       is what the docstring's WARN was promised for.
             if sdc_check_json.is_file():
                 written.append(str(sdc_check_json))
-        except Exception:
-            pass
+                if r.returncode != 0:
+                    notes.append(
+                        f"sdc_syntax_check reported findings (rc={r.returncode}); "
+                        f"the verdict is in "
+                        f"{sdc_check_json.relative_to(project)} and this step "
+                        "neither blocks on it nor hides it")
+            else:
+                tail = (r.stderr or r.stdout or "").strip().splitlines()
+                notes.append(
+                    f"sdc_syntax_check emitted no report (rc={r.returncode}): "
+                    + (tail[-1][:200] if tail else "no output"))
+        except Exception as exc:  # best-effort, never block the step
+            notes.append(f"sdc_syntax_check emit failed: {exc}")
 
     # --- v1.6.190 / v1.6.191 (#77 P2 / #78 P2): copy chip GDS into
     # foundry_handoff/ ----
@@ -32834,12 +33152,28 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     dfm_json = rpt_phase3 / "dfm_screen.json"
     if primary_def.is_file() and _signoff_regen(dfm_json, primary_def):
         try:
-            subprocess.run(
+            # ADVISORY AT THE CALL SITE, which is the second of the two
+            # remedies `spawned_gate_whose_status_is_discarded` names: "bind
+            # the result and read its status, OR say ADVISORY at the call site
+            # so the decision is on the record rather than inferred from
+            # silence." The status is deliberately NOT a verdict here -- the
+            # comment above says it, and it is true: this is the canonicalize
+            # EMITTER, and the gate re-runs the screen for the verdict. What
+            # was wrong was the silence, not the leniency: an absent report was
+            # indistinguishable from a clean one.
+            _dfm = subprocess.run(
                 [sys.executable, str(PROGRAMS_DIR / "dfm_screen_check.py"),
                  str(project)],
                 timeout=300, check=False, capture_output=True, text=True)
             if dfm_json.is_file():
                 written.append(str(dfm_json))
+            else:
+                _tail = (_dfm.stderr or _dfm.stdout or "").strip().splitlines()
+                notes.append(
+                    f"DFM screen emitted no report (rc={_dfm.returncode}); the "
+                    "gate re-runs the screen for the verdict, so this is "
+                    "ADVISORY here and not a finding: "
+                    + (_tail[-1][:200] if _tail else "no output"))
         except Exception as exc:
             notes.append(f"DFM screen emit failed: {exc}")
 
@@ -34476,6 +34810,12 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"puts $_bf \"STA_BASIS: POST_ROUTE_SPEF\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER: {_signoff_corner}\"\n"
         f"puts $_bf \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+        # …and the RC axis too. Stamping only the PROCESS corner left the one
+        # axis on which this report differs from `sta_mcorner_ocv.rpt` -- which
+        # reads `spef_corners/<top>.max.spef` while this reads the un-cornered
+        # `<top>.spef` -- unstated, so a consumer saw two setup slacks under one
+        # identity and had to call two different measurements a contradiction.
+        f"puts $_bf \"STA_BASIS_SPEF: {spef_path.name}\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_COUNT: 1\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_SEMANTICS this report times ONE process "
         f"corner; it is NOT by itself multi-corner sign-off evidence\"\n"
@@ -39245,8 +39585,13 @@ def _emit_thermal_screen(project: Path, top: str, pdk: PdkConfig,
     not_computed / no die area → the gate writes an honest SKIP (never a
     fabricated density). Returns True when the JSON is produced (any verdict)."""
     out_json.parent.mkdir(parents=True, exist_ok=True)
+    # ADVISORY AT THE CALL SITE. The status is deliberately not a verdict: the
+    # VERDICT is read out of the JSON immediately below, which is where this
+    # screen's answer actually lives. The one silent path was the missing
+    # report -- `return False` with nothing said, so a screen that CRASHED was
+    # indistinguishable to the caller from one that was not applicable.
     try:
-        subprocess.run(
+        _th = subprocess.run(
             [sys.executable, str(PROGRAMS_DIR / "thermal_screen_check.py"),
              str(project), "--json", str(out_json)],
             timeout=300, check=False, capture_output=True, text=True)
@@ -39254,6 +39599,10 @@ def _emit_thermal_screen(project: Path, top: str, pdk: PdkConfig,
         notes.append(f"thermal screen emit failed: {exc}")
         return False
     if not out_json.is_file():
+        _tail = (_th.stderr or _th.stdout or "").strip().splitlines()
+        notes.append(
+            f"thermal screen emitted no report (rc={_th.returncode}): "
+            + (_tail[-1][:200] if _tail else "no output"))
         return False
     try:
         v = json.loads(out_json.read_text(errors="replace")).get("verdict")
@@ -41277,7 +41626,7 @@ def main() -> int:
     # produced digitally could be placed by anybody: a completed sign-off run
     # contained no `.lef` anywhere. Immediately after canonicalisation, which
     # is what puts the sign-off GDS at this producer's declared input path.
-    plan.append(step_digital_hardmacro_gen(project))
+    plan.append(step_digital_hardmacro_gen(project, pdk))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
@@ -41392,18 +41741,42 @@ def main() -> int:
     # post-layout gate-sim's no-SDF retry recompiles the full PDK cell library),
     # leaving _derive to read a stale phase23 that says FAIL while the
     # authoritative re-audit — written moments later — says PASS_WITH_WAIVERS.
-    # This direct, BLOCKING flow_compliance re-run rewrites
+    # This direct, SYNCHRONOUS flow_compliance re-run rewrites
     # phase23_completion_audit.json on the exact state the verdict is about to
     # report, so the orchestrator's headline can never lag its own sign-off.
+    #
+    # THE WORD HERE WAS "BLOCKING" AND THE CODE COULD NOT BLOCK. `check=False`,
+    # the result was unbound, and the handler was `except Exception: pass` --
+    # so prose asserted a property the three lines below cannot have. It is a
+    # REFRESH, and calling it blocking made a reader believe a failed re-run
+    # would stop the verdict when nothing would even mention it.
+    #
+    # AND THE FAILURE MATTERS, which is why the silence was the real defect: if
+    # this refresh does not run, `_derive` reads a STALE
+    # phase23_completion_audit.json -- exactly the lag this call exists to
+    # prevent, and the headline can then disagree with its own sign-off. It
+    # still must not abort finalize (the summary this failure belongs in is
+    # written below it), so the outcome is RECORDED and the step continues.
     try:
         import subprocess as _sp_fc
-        _sp_fc.run(
+        _fc = _sp_fc.run(
             [sys.executable, str(PROGRAMS_DIR / "flow_compliance_check.py"),
              str(project), "--strict"],
             timeout=_pl.audit_timeout_s(project) + 120,
             check=False, capture_output=True, text=True)
-    except Exception:  # nosec — best-effort refresh; _derive still reads the file
-        pass
+        if _fc.returncode != 0:
+            # NOT a finding about the design: flow_compliance exits non-zero
+            # for a non-clean flow, which is the ordinary case this refresh is
+            # run to capture. What is worth saying is that the refresh RAN and
+            # what it returned, so a stale audit can be told from a fresh one.
+            print(f"[INFO] flow_compliance refresh returned rc={_fc.returncode}; "
+                  "phase23_completion_audit.json is fresh and the headline is "
+                  "derived from it", file=sys.stderr)
+    except Exception as _fc_exc:  # nosec — must not abort finalize
+        print("[WARN] flow_compliance refresh did NOT run "
+              f"({_fc_exc}); _derive will read a STALE "
+              "phase23_completion_audit.json and the headline may lag its own "
+              "sign-off", file=sys.stderr)
 
     steps_verdict = _aggregate_verdict(plan)
     verdict, audit_verdict, verdict_note = _derive_headline_verdict(

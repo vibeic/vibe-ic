@@ -296,10 +296,13 @@ def main(argv=None) -> int:
     #
     # The fallback name stays the literal relative path the old message printed,
     # so a reader still learns WHAT was looked for when nothing is found.
+    # vibe-ic#1710 — BOUNDED at the repository root. The unbounded
+    # `here.parents` walk that stood here left the checkout and took the
+    # first `_DEFAULT_CORPUS_REL` it met above it, so the corpus this gate scanned was
+    # decided by the operator's home directory. See
+    # `_corpus_location.default_named` for the two-clone measurement.
     named = (Path(a.corpus) if a.corpus else
-             next((b / _DEFAULT_CORPUS_REL for b in here.parents
-                   if (b / _DEFAULT_CORPUS_REL).is_dir()),
-                  Path(_DEFAULT_CORPUS_REL)))
+             _corpus.default_named(here, _DEFAULT_CORPUS_REL))
     corpus, origin = _corpus.resolve(named, subdir=_CORPUS_SUBDIR,
                                      gate="l_doc_field_producer_check",
                                      announce=True)

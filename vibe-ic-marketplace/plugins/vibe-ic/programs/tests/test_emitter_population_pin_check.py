@@ -21,6 +21,22 @@ goes stale the moment one is added, which is the same fault this file records
 against the program's own docstring. Re-derive it, never re-read it: swap
 3c3c51aee's program in and run this file.)
 
+WHAT THE #712 GREEN ACTUALLY MEANS
+=================================
+`polarity-blind 213 (baseline 213)` could be a count that happens to match --
+one extractor leaving the blind set as another joins it reads exactly the same.
+It is not. The gate compares NAME SETS:
+
+    new  = set(now) - set(base)      # any of these blocks
+    gone = set(base) - set(now)      # the register MAY ONLY SHRINK
+
+Re-derived here rather than taken from the summary line: 224 blind extractors
+including the exemption register, 11 exempted, 213 after exemptions against a
+baseline of 213, with `new` EMPTY and `gone` EMPTY -- and
+`emitter_population_pin_check` in neither set. So the green says this branch
+removed its extractor from the blind set and moved nothing else, which is the
+claim, and not merely that two totals agree.
+
 IF THIS AREA GOES RED FOR A REVIEWER OR A RE-MEASURE, READ THIS FIRST
 ====================================================================
 `test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
@@ -239,7 +255,8 @@ def test_no_counter_with_a_threshold_is_silently_missed():
     missed, considered = [], []
     for prog in sorted(PROGRAMS_DIR.glob("*.py")):
         try:
-            tree = _ast.parse(prog.read_text(errors="replace"))
+            tree = _ast.parse(prog.read_text(encoding="utf-8",
+                                             errors="replace"))
         except SyntaxError:
             continue
         script = E.emitted_script_of(tree)
@@ -1843,7 +1860,9 @@ def test_the_real_tree_has_no_undecidable_population(real_run):
 # PRINTED line instead of a comment line. That difference is the whole point:
 # once a commented `incr` stopped being a site, the comment version was skipped
 # by EITHER rule, so neither was individually necessary -- deleting the polarity
-# consult in `multiplied_counters` outright left all 88 tests green. Measured.
+# consult in `multiplied_counters` outright left the ENTIRE suite green -- 88
+# tests at the time, and the number is not what the sentence rests on: a
+# count of the tests that exist is stale as soon as one is added. Measured.
 EMITTER_DENIED_INCR_PRINTED_IN_A_HELPER = (
     'def _unused(name):\n'
     '    return "  puts \\"the fallback does not incr _n; it re-issues %s\\"\\n" % name\n\n\n'
@@ -2562,7 +2581,8 @@ def test_a_legitimate_replacement_character_is_not_a_substitution(tmp_path):
                '            + "  if {[catch {b}]} { incr _m }\\n"\n'
                '            + "  if {$_m >= 2} { puts M }\\n")\n')
     progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
-    assert "�" in (progs / "thing_emit.py").read_text(), "fixture is wrong"
+    assert "�" in (progs / "thing_emit.py").read_text(
+        encoding="utf-8"), "fixture is wrong"
     (progs / "thing_emit.py").read_bytes().decode("utf-8")   # decodes strictly
     r = _run(progs, tests)
     assert "[SUBSTITUTED]" not in r.stdout, (
@@ -2956,7 +2976,8 @@ def test_ci_wires_this_gate_so_that_a_vacuous_run_fails():
     if wiring is None:
         pytest.skip("tools/ci/repo_hygiene_gates.sh is not in this checkout, so "
                     "the wiring claim cannot be checked from here")
-    lines = [ln.strip() for ln in wiring.read_text(errors="replace").splitlines()
+    lines = [ln.strip() for ln in wiring.read_text(
+            encoding="utf-8", errors="replace").splitlines()
              if "emitter_population_pin_check" in ln
              and not ln.lstrip().startswith("#")]
     assert lines, (
@@ -3285,6 +3306,47 @@ def test_the_statement_stop_rests_on_a_true_premise():
         "this walk now tests for forms that are not expressions, and an "
         "expression is the only thing that cannot sit above the statement "
         f"stop -- so the stop may now be hiding an answer: {not_expressions}")
+
+
+def test_this_program_is_on_none_of_the_THREE_registers():
+    """The brief's one non-negotiable rule, made mechanical.
+
+    #712's green can be obtained honestly -- the extractor consults polarity --
+    or by any of three register edits: adding this program to the baseline of
+    known offenders, adding it to the `_NOT_PROSE` exemption list, or arranging
+    for the gate to stop counting it. The first two are one line each and both
+    read as PASS afterwards.
+
+    So membership is checked in all three, not argued. If a later red here is
+    ever closed by exempting this program instead of fixing it, this fails and
+    names which register it was written into."""
+    import json as _json
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    try:
+        import prose_polarity_consulted_check as gate
+    except ImportError as e:
+        pytest.skip(f"the #712 gate is not importable here ({e})")
+
+    me = PROG.stem
+    exempt = getattr(gate, "_NOT_PROSE", {})
+    exempt_names = list(exempt) if isinstance(exempt, dict) else list(exempt or ())
+    assert exempt_names, "the exemption register is empty -- probe is looking at the wrong name"
+    on_exempt = [n for n in exempt_names if me in n]
+    assert not on_exempt, (
+        f"this program has been written into the `_NOT_PROSE` exemption "
+        f"register: {on_exempt}. That closes the row by declaring the question "
+        f"inapplicable, which is the move the brief forbids")
+
+    baseline = PROGRAMS_DIR / "prose_polarity_baseline.json"
+    if not baseline.is_file():
+        pytest.skip("no polarity baseline in this checkout")
+    known = _json.loads(baseline.read_text(encoding="utf-8"))["known"]
+    assert known, "the baseline is empty -- probe is looking at the wrong key"
+    on_base = [n for n in known if me in n]
+    assert not on_base, (
+        f"this program has been added to the baseline of known polarity-blind "
+        f"extractors: {on_base}. A census that grew because someone told it to "
+        f"expect one more has learned nothing")
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────

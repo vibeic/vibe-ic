@@ -141,8 +141,13 @@ Exit codes:
                                             construction — 113 of 150 gates
                                             were in that state while this audit
                                             printed PASS.
-       — or a recorded entry that no longer holds, which must be paid down out
-       of its register rather than left standing as permission.
+       A recorded entry that NO LONGER HOLDS is not a failure and never was
+       one honestly: it is the debt being PAID, the direction this register
+       exists to encourage. It is reported as a TIGHTENING and recorded by
+       `--record-shrink`, which writes `previous & current` and cannot add.
+       Failing it made the cheapest way to keep this audit green "fix nothing",
+       and the remedy it named — `--write-baseline` — is the one write that
+       would ALSO record every new finding of the same run as accepted debt.
     2  NOT CHECKED: I/O error, the flow definition could not be parsed, or the
        residual baseline states no readable measurement (absent, unreadable,
        truncated). An explicitly empty register is still a measurement and
@@ -157,6 +162,9 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _ratchet_baseline as _ratchet  # noqa: E402
 
 try:
     import yaml
@@ -1763,6 +1771,14 @@ def audit(flow: Path, programs: Path) -> dict:
         {"venue": "dispatched by a gate the flow names (transitive)",
          "present": bool(dispatched), "reached": sorted(dispatched)},
     ]
+    # See the note beside `declared_weaker_than_wired` in the report below.
+    # Computed from the SAME rows the rest of this report is built from, so it
+    # cannot describe a different tree than the one just audited.
+    declared_weaker_than_wired = [
+        {"gate": r["gate"], "declared": r["declared"], "wiring": r["wiring"]}
+        for r in rows
+        if r["declared"] == "advisory" and r["wiring"] == INLINE_BLOCKING]
+
     return {
         "orphan_venues": orphan_venues,
         "total_gates": len(rows),
@@ -1783,6 +1799,24 @@ def audit(flow: Path, programs: Path) -> dict:
         "declared": sum(1 for r in rows if r["declared"]),
         "undeclared": sum(1 for r in rows if not r["declared"]),
         "contradictions": contradictions,
+        # THE OTHER DIRECTION, WHICH `contradictions` CANNOT SEE (2026-08-22).
+        #
+        # `contradictions` is one-directional by construction: it fails a gate
+        # that DECLARES blocking and is wired AUDIT_ONLY. The reverse — wired
+        # INLINE_BLOCKING while its own file says `advisory` — passed this audit
+        # silently, and a reader of that file is told the gate cannot stop the
+        # step when it can.
+        #
+        # MEASURED on origin/main a4caccefe: ONE gate is in that state. It is
+        # reported and NOT failed, deliberately, because its case is a genuine
+        # collision over what the token means rather than a mistake: it writes
+        # `ENFORCEMENT: advisory` and immediately says "(Advisory describes the
+        # FINDINGS. The track's EXECUTION is mandatory.)" — finding SEVERITY,
+        # which is a different axis from the one this audit measures. Failing it
+        # would decide that dispute by reddening a blocking hygiene gate, which
+        # is not this program's call. Disclosing it puts the dispute where a
+        # flow owner can see it, and stops the next one being added silently.
+        "declared_weaker_than_wired": declared_weaker_than_wired,
         "orphaned": orphaned,
         "malformed_clauses": malformed,
         "undeclared_audit_only": undeclared_audit_only,
@@ -1835,6 +1869,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "mention is UNRECORDED, which is not the same as empty")
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the CURRENT set; it may only ever shrink")
+    ap.add_argument(_ratchet.RECORD_FLAG, dest="record_shrink",
+                    action="store_true",
+                    help="record a measured TIGHTENING only: write `previous "
+                         "& current` for BOTH registers, which can remove "
+                         "entries and can never add one. Needs no reason "
+                         "string and accepts none, because there is no "
+                         "growth for a reason to excuse")
     ap.add_argument("--scope-expanded", metavar="REASON",
                     help="permit a GROWING baseline for this write, because "
                          "the audit now LOOKS at more than it did (>=30 chars; "
@@ -1945,6 +1986,69 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     prev = _recorded("known")
     prev_u = _recorded("undeclared_known")
+    if a.record_shrink:
+        # THE TIGHTENING PATH, AND WHY IT IS NOT `--write-baseline` RENAMED.
+        #
+        # It writes `previous & current` for each register, which is a SUBSET
+        # of what that register already held for every possible measurement.
+        # An entry this run found for the first time is absent from `previous`
+        # by definition, so it cannot arrive through here — there is no flag,
+        # threshold or reason string that changes that, and `write_shrunk`
+        # re-checks it on the finished document rather than trusting these two
+        # expressions. `--scope-expanded` is therefore not accepted: it exists
+        # to excuse GROWTH, and this path has none to excuse.
+        #
+        # An UNRECORDED register is left unrecorded. Creating one here would be
+        # writing a measurement, not shrinking one, and the read path below
+        # already says so in its own words.
+        if prev is None and prev_u is None:
+            print(f"NOT CHECKED: neither register is recorded in "
+                  f"{bl_path.name}, so there is no set for a tightening to "
+                  f"shrink. Record a measurement first.", file=sys.stderr)
+            return 2
+        new_known = now if prev is None else _ratchet.shrunk(prev, now)
+        new_undecl = now_u if prev_u is None else _ratchet.shrunk(prev_u, now_u)
+        left = {"known": _ratchet.departed(prev or [], new_known),
+                "undeclared_known": _ratchet.departed(prev_u or [], new_undecl)}
+        if not any(left.values()):
+            print(f"nothing to record: {bl_path.name} already holds the "
+                  f"tightened sets ({len(new_known)} contradiction/orphan, "
+                  f"{len(new_undecl)} undeclared)")
+            return 0
+        doc_out = dict(doc)
+        doc_out.update({
+            "previous_size": None if prev is None else len(prev),
+            "known": new_known,
+            "undeclared_previous_size": None if prev_u is None else len(prev_u),
+            "undeclared_known": new_undecl,
+        })
+        # A tightening never widens scope, so any reason recorded against a
+        # PREVIOUS widening is cleared rather than carried forward — a reason
+        # that outlives the growth it explained reads to the next writer as
+        # standing permission.
+        doc_out["scope_expanded"] = None
+        doc_out["undeclared_scope_expanded"] = None
+        guarded = {}
+        if prev is not None:
+            guarded["known"] = prev
+        if prev_u is not None:
+            guarded["undeclared_known"] = prev_u
+        try:
+            _ratchet.write_shrunk(bl_path, doc_out,
+                                  previous_by_register=guarded,
+                                  ensure_ascii=False)
+        except _ratchet.ShrinkRefused as exc:
+            print(f"\n[FAIL] flow_gate_enforcement baseline: {exc}",
+                  file=sys.stderr)
+            return 1
+        for label, entries in sorted(left.items()):
+            if entries:
+                before = len(prev if label == "known" else prev_u)
+                print(_ratchet.report_line(label, entries, before,
+                                           before - len(entries)))
+        print(f"\nwrote {bl_path} ({len(new_known)} contradiction/orphan, "
+              f"{len(new_undecl)} undeclared)")
+        return 0
     if a.write_baseline:
         # vibe-ic#900 — RATCHET ON MEMBERSHIP, NOT ON COUNT.
         #
@@ -2060,17 +2164,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         new = [k for k in now if k not in set(prev)]
         paid = [k for k in prev if k not in set(now)]
         if paid:
-            print(f"\n[FAIL] {len(paid)} recorded entr(ies) no longer "
-                  f"contradict — the debt was paid; shrink the baseline so it "
-                  f"cannot become standing permission:")
+            # A RATCHET THAT FAILS WHEN IT TIGHTENS IS BROKEN. This branch used
+            # to return 1 and tell the operator to run `--write-baseline`, so
+            # paying a debt cost a red board and the remedy on offer would also
+            # have recorded that run's NEW findings as accepted debt. Reported
+            # and recorded now, never failed.
+            print(_ratchet.report_line("known", paid,
+                                       len(prev), len(prev) - len(paid)))
             for k in paid:
                 print(f"   (resolved) {k}")
+            print(f"   Record it with:  flow_gate_enforcement_audit.py "
+                  f"{_ratchet.RECORD_FLAG}")
         if new:
             print(f"\n[FAIL] {len(new)} NEW gate(s) declare an intent they are "
                   f"not wired for:")
             for k in new:
                 print(f"   {k}")
-        if new or paid:
             rc = 1
     # The #886 register reports in its OWN words. The sentence above is FALSE
     # about this class — an `undeclared::` gate declares nothing, so it cannot
@@ -2089,12 +2198,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         new_u = [k for k in now_u if k not in set(prev_u)]
         paid_u = [k for k in prev_u if k not in set(now_u)]
         if paid_u:
-            print(f"\n[FAIL] {len(paid_u)} recorded undeclared gate(s) now "
-                  f"state an intent or are invoked inline — the debt was paid; "
-                  f"shrink `undeclared_known` so it cannot become standing "
-                  f"permission:")
+            # Same ruling as `known` above, in this register's own words: a
+            # gate that has since stated an intent, or that a runner now
+            # invokes inline, is the debt being paid.
+            print(_ratchet.report_line("undeclared_known", paid_u,
+                                       len(prev_u), len(prev_u) - len(paid_u)))
             for k in paid_u:
                 print(f"   (resolved) {k}")
+            print(f"   Record it with:  flow_gate_enforcement_audit.py "
+                  f"{_ratchet.RECORD_FLAG}")
         if new_u:
             print(f"\n[FAIL] {len(new_u)} NEW gate(s) are AUDIT_ONLY and "
                   f"declare no intent at all — nothing invokes them where they "
@@ -2102,13 +2214,26 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"decision:")
             for k in new_u:
                 print(f"   {k}")
-        if new_u or paid_u:
             rc = 1
     if rc:
         return rc
     print(f"\n[PASS] no NEW enforcement contradiction "
           f"({len(now)} recorded as debt; {len(now_u)} gate(s) recorded as "
           f"UNDECLARED and audit-only)")
+    # DISCLOSED ON THE PASS PATH, because the PASS is what gets read as "every
+    # declaration matches its wiring". It does not: this class is the one the
+    # `contradiction` scan above cannot see, and it does not affect the exit
+    # code — see the note beside `declared_weaker_than_wired` in `audit()`.
+    weaker = rep.get("declared_weaker_than_wired") or []
+    if weaker:
+        print(f"  DISCLOSURE — {len(weaker)} gate(s) are wired so they CAN stop "
+              f"a step while their own file declares `advisory`. Not failed "
+              f"here: `advisory` is used by at least one of them for finding "
+              f"SEVERITY, a different axis from the one this audit measures, "
+              f"and settling that is a flow owner's call:")
+        for w in weaker:
+            print(f"    {w['gate']}  declared={w['declared']} "
+                  f"wiring={w['wiring']}")
     return 0
 
 

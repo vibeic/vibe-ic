@@ -194,7 +194,7 @@ def test_the_run_states_the_clause_reach_not_only_the_findings():
 
 
 def test_the_reach_is_pinned_by_MEMBERS_not_by_a_count():
-    """The reach is 2 of 22 — and this pins WHICH 2.
+    """The reach is 1 of 21 — and this pins WHICH 1.
 
     A bare `== 2` is exactly the defect
     `population_pin_without_its_member_set` refuses: one module leaving the
@@ -235,7 +235,7 @@ def test_the_reach_is_pinned_by_MEMBERS_not_by_a_count():
                    for n in ast.walk(tree)):
             reach.add(f.name)
 
-    expected = {"gate_red_since_check.py", "spare_cell_coverage_check.py"}
+    expected = {"gate_red_since_check.py"}
     assert reach == expected, (
         f"the clause's reach MOVED. entered: {sorted(reach - expected)}; "
         f"left: {sorted(expected - reach)}. Re-derive the COVERAGE section of "

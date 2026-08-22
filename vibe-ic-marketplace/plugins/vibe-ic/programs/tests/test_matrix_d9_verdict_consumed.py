@@ -652,25 +652,30 @@ def test_d9_structural_only_scoping_is_still_the_documented_two_member_set():
 #:   RETURNCODE  the exit code is bound and read. `design_one_shot_runner`
 #:               does `rc, out, err = _run(...)` and maps rc onto a StepResult.
 #:   REPORT      the exit code is DISCARDED and the verdict is taken from the
-#:               json the checker writes. `phase3_one_shot_runner` calls
-#:               `_sp_fc.run(..., check=False)` without binding the result, in a
-#:               `try/except Exception: pass`, and then reads the refreshed
-#:               `phase23_completion_audit.json` in `_derive_headline_verdict`.
+#:               json the checker writes.
 #:
-#: REPORT is a real channel and is not scored as a defect — but it is WEAKER
-#: than RETURNCODE in a way this dimension exists to name, and the weakness is
-#: recorded here rather than in a commit message nobody re-reads. `check=False`
-#: plus a bare `except Exception: pass` means a checker that CRASHES or is KILLED
-#: leaves the previous run's `phase23_completion_audit.json` in place, and
-#: `_derive_headline_verdict` has an absent/unreadable branch but no STALE
-#: branch — so a stale verdict is read as a fresh one. The call site's own
-#: comment claims the refresh is what stops the headline "lagging its own
-#: sign-off"; on the crash path it lags exactly, and silently. Reported, not
-#: fixed here: changing a runner's verdict plumbing is a flow-level change and
-#: belongs in a change that carries its own acceptance evidence.
+#: `phase3_one_shot_runner` WAS REPORT AND IS NOT ANY MORE, re-measured on this
+#: tree. Its call now binds the result (`_fc = _sp_fc.run(...)`) and reads
+#: `_fc.returncode`, and the enclosing handler is no longer a bare
+#: `except Exception: pass` — it names the consequence. `_consumption_channel`
+#: therefore scores it RETURNCODE, so the pin moves REPORT -> RETURNCODE. The
+#: direction matters: this dimension's subject is a runner going the OTHER way,
+#: and the message below still fails on that.
+#:
+#: WHAT RETURNCODE DOES NOT SAY HERE, stated so the pin is not read as more than
+#: it is. The channel classifies whether the exit status is BOUND AND READ, not
+#: whether anything BRANCHES on it in a way that stops the run. At this call
+#: site the non-zero branch prints an `[INFO]` line and the headline verdict is
+#: still derived from the refreshed `phase23_completion_audit.json`. What the
+#: repair removed was the SILENCE — a refresh that never ran, or one that
+#: returned non-zero, used to be indistinguishable from a clean one, and
+#: `_derive_headline_verdict` still has no STALE branch. That remaining hole is
+#: reported, not fixed here: changing a runner's verdict plumbing is a
+#: flow-level change and belongs in a change that carries its own acceptance
+#: evidence.
 RUNNER_CONSUMPTION_AS_MEASURED = {
     "design_one_shot_runner.py": "RETURNCODE",
-    "phase3_one_shot_runner.py": "REPORT",
+    "phase3_one_shot_runner.py": "RETURNCODE",
 }
 
 #: The exact string constant a runner builds the checker's argv from. Matched by
@@ -791,6 +796,59 @@ def test_d9_every_runner_that_invokes_the_checker_consumes_its_verdict():
         f"{ {k: (RUNNER_CONSUMPTION_AS_MEASURED.get(k), v) for k, v in measured.items() if RUNNER_CONSUMPTION_AS_MEASURED.get(k) not in (None, v)} }.\n"
         f"A runner moving RETURNCODE -> REPORT is this dimension's subject at "
         f"the flow's outer edge and must be a decision, not a diff nobody read.")
+
+
+#: Two call sites that differ ONLY in whether the result is kept. Held here as
+#: source text and parsed, so the classifier is asked the question directly.
+_DISCARDING_SITE = '''
+def finalize(project):
+    try:
+        subprocess.run(
+            [sys.executable, str(PROGRAMS_DIR / "flow_compliance_check.py"),
+             str(project), "--strict"],
+            check=False, capture_output=True, text=True)
+    except Exception:
+        pass
+'''
+_BINDING_SITE = '''
+def finalize(project):
+    try:
+        _fc = subprocess.run(
+            [sys.executable, str(PROGRAMS_DIR / "flow_compliance_check.py"),
+             str(project), "--strict"],
+            check=False, capture_output=True, text=True)
+        if _fc.returncode != 0:
+            print("refresh rc=%d" % _fc.returncode)
+    except Exception:
+        pass
+'''
+
+
+def test_d9_the_channel_classifier_can_still_answer_REPORT():
+    """NON-DEGENERACY, and it is load-bearing from the day the last real REPORT
+    left the tree.
+
+    Both entries in `RUNNER_CONSUMPTION_AS_MEASURED` now read RETURNCODE, so
+    every assertion in `test_d9_every_runner_that_invokes_the_checker_consumes_
+    its_verdict` is equally satisfied by a `_consumption_channel` that has lost
+    the ability to say REPORT at all — the pin would go green over a classifier
+    that answers RETURNCODE to everything, which is the shape of a check that
+    cannot fail. This asks the classifier both questions on call sites that
+    differ in exactly one thing: whether the CompletedProcess is bound.
+    """
+    def _fn(src):
+        tree = ast.parse(src)
+        return next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef))
+
+    assert _consumption_channel(_fn(_DISCARDING_SITE)) == "REPORT", (
+        "a bare-expression spawn of the checker no longer reads as REPORT; the "
+        "classifier can only answer RETURNCODE and the pin above proves "
+        "nothing")
+    assert _consumption_channel(_fn(_BINDING_SITE)) == "RETURNCODE", (
+        "binding the result and reading .returncode no longer reads as "
+        "RETURNCODE, so the two answers are not distinguished by the thing "
+        "they are supposed to be distinguished by")
 
 
 def test_d9_the_invocation_scan_ignores_prose(tmp_path):

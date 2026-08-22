@@ -68,6 +68,15 @@ suggested_fix: |
   NOT attempted here: this is another lane's declaration, landed, and picking the
   clause is a judgement about what the gate means, not a typo fix.
 
+related: |
+  ORGANIC-20260822-crosslayer-campaign-published-without-eco-adjudication (P2)
+  is the SAME SILENCE one level down, and is the reason this one has no symptom:
+  the 21 candidate sets this gate examines declare no ECO stance, so the tenth
+  axis is uniformly NOT_APPLICABLE and never appears in a result. Fixing the
+  wording here does not fix that, and fixing that would give this gate a tenth
+  axis with real verdicts in it -- at which point the stale sentence starts
+  actively misdescribing the run. Whoever takes either should read both.
+
 session_context: >-
   Found by jeco2 while auditing whether the design-for-ECO feasibility axis
   actually bites (branch jeco2/eco-axis-bite-audit). The audit's own subject is

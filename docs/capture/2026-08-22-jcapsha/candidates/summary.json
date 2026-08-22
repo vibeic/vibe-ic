@@ -1,0 +1,27 @@
+{
+  "date": "2026-08-22",
+  "totals": {
+    "A": 4,
+    "B": 0,
+    "C": 0,
+    "D": 0,
+    "T": 1
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/upstream_contract_parity_check.py",
+      "programs/gate_host_independence_check.py"
+    ],
+    "bucket_T": [
+      "OpenROAD"
+    ]
+  },
+  "bucket_A_files": [
+    "docs/capture/2026-08-22-jcapsha/candidates/bucket_A_programs_upstream_contract_parity_check_rule_sketches.py",
+    "docs/capture/2026-08-22-jcapsha/candidates/bucket_A_programs_gate_host_independence_check_rule_sketches.py"
+  ],
+  "bucket_T_dir": "docs/capture/2026-08-22-jcapsha/candidates/bucket_T_forked_tool",
+  "bucket_T_files": [
+    "ORGANIC-20260822-io-row-rotation-flags-act-on-the-opposite-axis.yaml"
+  ]
+}

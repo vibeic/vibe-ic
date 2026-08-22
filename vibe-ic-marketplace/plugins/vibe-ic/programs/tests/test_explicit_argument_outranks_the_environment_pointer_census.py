@@ -5,6 +5,7 @@ both shapes four lines apart. Both are fixtures here.
 """
 from __future__ import annotations
 
+import shutil
 import json
 import subprocess
 import sys
@@ -169,3 +170,22 @@ def test_the_census_never_blocks_by_default():
     assert "[CENSUS]" in r.stdout
     assert "the gate is programs/%s.py" % _RULE in r.stdout, (
         "the census must name the gate that does the refusing")
+
+
+def test_a_count_over_an_empty_population_is_undetermined():
+    """As above -- with an EMPTY inventory, so the stale-row branch (which is a
+    real report and correctly returns 0) does not mask the vacuous one."""
+    root = Path(tempfile.mkdtemp(prefix="csz_"))
+    try:
+        (root / ".git").mkdir()
+        (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+         / "tests").mkdir(parents=True)
+        inv = root / "empty_inv.json"
+        inv.write_text('{"known": []}\n', encoding="utf-8")
+        r = subprocess.run([sys.executable, str(PROG), "--root", str(root),
+                            "--inventory", str(inv)],
+                           capture_output=True, text=True, timeout=900)
+        assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}"
+        assert "0 modules were parsed" in r.stdout, r.stdout
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

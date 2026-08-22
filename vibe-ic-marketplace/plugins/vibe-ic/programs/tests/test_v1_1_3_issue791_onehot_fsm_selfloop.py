@@ -244,15 +244,14 @@ def test_spec_conformance_clean_for_correct_onehot(tmp_path):
 
 # ---- gates_atomic allow-lists the rule as emit-blocking ---------------------
 def test_gates_atomic_blocks_on_rule():
-    import ast
-    ga = (PROGRAMS.parent / "benchmark" / "gates_atomic.py").read_text()
-    # The rule must be a member of the emit-blocking conformance set.
-    assert '"fsm-onehot-missing-transition"' in ga
-    # and it must appear inside the _BLOCKING_CONFORMANCE_RULES literal.
-    i = ga.index("_BLOCKING_CONFORMANCE_RULES")
-    j = ga.index("}", i)
-    assert "fsm-onehot-missing-transition" in ga[i:j]
-    assert ast is not None
+    # The rule must be a member of the emit-blocking conformance set that
+    # gates_atomic actually consults. This used to slice the set out of
+    # gates_atomic's source between "_BLOCKING_CONFORMANCE_RULES" and the next
+    # "}"; that literal was a hand-kept duplicate and was deleted in v1.11.70
+    # when it drifted from the canonical set. Read the set instead of the file.
+    import spec_conformance_check as _scc
+    assert "fsm-onehot-missing-transition" in _scc.EMIT_BLOCKING_CONFORMANCE_RULES, \
+        sorted(_scc.EMIT_BLOCKING_CONFORMANCE_RULES)
 
 
 # ---- DEFECT ARTIFACT: the real on-disk sample, content-gated (Step-2.7 r2) --

@@ -299,6 +299,21 @@ def test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical(tmp_path):
     import _crash_safe_scratch as _scratch_root
     tmp_root = _scratch_root._tmp_root()
     prior = set(tmp_root.glob("gate_cli_probe_*"))
+
+    def _owned_by(d, pid):
+        """Does THIS directory belong to the child this test started?
+
+        "A `gate_cli_probe_*` directory that was not there before" is not an
+        identity, it is a guess, and it is wrong the moment anything else on
+        the host runs this probe. `_crash_safe_scratch.reserve` writes the
+        owning pid into `.owner.lock` (`os.write(fd, b"%d\n" % os.getpid())`),
+        so the identity is available and this reads it.
+        """
+        lock = d / _scratch_root.LOCK_NAME
+        try:
+            return int(lock.read_text(encoding="utf-8").split()[0]) == pid
+        except (OSError, ValueError, IndexError):
+            return False
     child = sp.Popen(
         [sys.executable, "-c",
          "import sys;sys.path.insert(0, %r)\n"
@@ -312,6 +327,11 @@ def test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical(tmp_path):
         deadline = time.time() + _PROBE_TIMEOUT_S
         while time.time() < deadline and child.poll() is None:
             for d in set(tmp_root.glob("gate_cli_probe_*")) - prior:
+                # BOTH conditions, and the pid one is the load-bearing half:
+                # the set difference only says "new to this test", which a
+                # CONCURRENT peer's scratch also satisfies.
+                if not _owned_by(d, child.pid):
+                    continue
                 if (d / "programs" / ("hold_area_budget_check.py"
                                       + PROBE._BACKUP_SUFFIX)).exists():
                     scratch = d
@@ -320,10 +340,10 @@ def test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical(tmp_path):
                 break
             time.sleep(0.02)
         assert scratch is not None, (
-            "the probe never entered its mutation window in a NEW scratch "
-            "directory, so the kill below would prove nothing — which is what "
-            "happens when the mutation is being applied to the repository "
-            "instead")
+            "the probe never entered its mutation window in a scratch "
+            "directory THIS test's child owns (pid %d), so the kill below "
+            "would prove nothing — which is what happens when the mutation is "
+            "being applied to the repository instead" % child.pid)
         os.killpg(os.getpgid(child.pid), signal.SIGKILL)
     finally:
         # KILL FIRST, then wait. A bare `wait` here leaves the child running
@@ -348,6 +368,13 @@ def test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical(tmp_path):
     _S.reap(PROBE._SCRATCH_PREFIX)
     assert not scratch.exists(), (
         "the killed run's scratch survived the reaper: %s" % scratch)
+    # NOTE ON WHY THE ASSERTION ABOVE IS SAFE UNDER CONCURRENCY, since it is
+    # the one that used to flake: `reap` keeps any scratch whose `.owner.lock`
+    # is still HELD, which is correct and is what protects a peer's live run.
+    # It only ever failed here because `scratch` could be a peer's directory —
+    # selected by "new to this test" rather than by ownership. With the pid
+    # check above, `scratch` is this child's, its lock was released by the
+    # kernel when the SIGKILL landed, and the reaper takes it.
 
 
 def test_there_is_no_flag_that_mutates_the_shipped_tree():

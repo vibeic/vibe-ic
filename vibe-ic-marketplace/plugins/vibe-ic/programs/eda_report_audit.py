@@ -542,6 +542,10 @@ TOOL_SIGNATURES = {
         "net violations",      # "Found N net violations"
         "pin violations",
         "gate-oxide",
+        # KLayout's own antenna output, in the exact forms it writes:
+        # the RDB description line, and the rule descriptions' "gate oxide"
+        # (a SPACE — the hyphenated form above never matches it).
+        "report for antenna", "gate oxide area",
     ],
 }
 
@@ -1241,10 +1245,20 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     # where each sits in the file. The text greps run on the ORIGINAL text, so
     # the 22 corpus reports that carry a `#` preamble AND a text body are
     # byte-for-byte unaffected (measured: 22/22 identical).
+    # `^[INFO] COUNT: N` is MAGIC's own count as the LibreLane `Magic.DRC` step
+    # writes it, and MEASURED on a real run it is the only verdict marker that
+    # appears at all — `DRC errors found: N` is never emitted by that flow, so
+    # a clean Magic DRC returned None here and the file was reported UNREADABLE
+    # while the shuttle operator's arm passed the same layout. ANCHORED to line
+    # start (and to the optional [INFO] tag) so it cannot pick up an incidental
+    # "count: N" from prose elsewhere in an 11 MB transcript; it sits with the
+    # other ANCHORED patterns, above the loose fallback, for the same reason
+    # they do.
     for _rx in (r"violation\s+count\s+summary\s*:\s*(\d+)",
                 r"violation\s+report\s*:\s*(\d+)",
                 r"total\s+violations?\s*[:=]?\s*(\d+)",
-                r"DRC errors? found:\s*(\d+)"):
+                r"DRC errors? found:\s*(\d+)",
+                r"(?m)^\s*(?:\[INFO\]\s*)?COUNT\s*:\s*(\d+)\s*$"):
         m = re.search(_rx, text, re.I)
         if m:
             return (int(m.group(1)), 0)
@@ -2616,6 +2630,77 @@ def _check_sta(project_dir: Path) -> AuditResult:
     return result
 
 
+#: A KLayout antenna rule name, in the namespace the open PDKs use (`ANT.1`,
+#: `ANT.16_i_ANT.2`). Anchored, so it cannot match "important" or a stray word.
+_KLAYOUT_ANT_RULE_RE = re.compile(r"(?m)^\s*[\"<]?\s*(ANT[._-]\w+)", re.I)
+
+
+def _antenna_klayout_count(text: str) -> Optional[int]:
+    """Antenna violations from KLAYOUT's own two output shapes, or None.
+
+    MEASURED, gf180mcuD chip path 2026-08-22. `_check_antenna` knew exactly one
+    idiom -- OpenROAD's `check_antennas` ("Found N net violations") -- and
+    KLayout's antenna check, which IS the antenna sign-off on gf180mcuD, emits
+    neither that nor anything like it. On a chip the shuttle operator's own
+    container passed 16/16 with `25 rules, 0 non-zero`, our own arm reported
+
+        {"files_found": 2, "violations": null, "clean": null, "tool_authentic": false}
+
+    i.e. it could not reach a verdict at all on this PDK. The two shapes:
+
+      REPORT DATABASE (`antenna.klayout.lyrdb`) -- the same `<report-database>`
+        container the DRC deck writes, with `<description>Report for antenna_*`
+        and `ANT.*` category names. Violations are `<item>` elements.
+      PER-RULE TALLY (`antenna.klayout.json`) -- `{"ANT.1": 0, "ANT.8": 0, ...}`,
+        one entry per rule. Violations are the sum.
+
+    RETURNS None, NOT 0, whenever it cannot conclude -- an empty tally, a tally
+    whose keys are not antenna rules, a non-numeric value, an RDB with no
+    `<items>`. UNMEASURED IS NOT ZERO: a `{}` that became "clean" would credit
+    a run that measured nothing as a passing antenna sign-off, which is the
+    exact direction this audit exists to refuse.
+    """
+    head = text[:4096]
+    # --- the per-rule JSON tally ---
+    s = text.lstrip()
+    if s.startswith("{"):
+        try:
+            obj = json.loads(text)
+        except (ValueError, TypeError):
+            obj = None
+        if isinstance(obj, dict) and obj:
+            keys = list(obj.keys())
+            if not any(_KLAYOUT_ANT_RULE_RE.match(f'"{k}"') for k in keys):
+                return None          # a JSON that is not an antenna tally
+            total = 0
+            for v in obj.values():
+                if isinstance(v, bool) or not isinstance(v, int):
+                    return None      # a value we cannot add is not a zero
+                total += v
+            return total
+        return None                  # `{}` is a run that measured nothing
+    # --- the KLayout report database ---
+    if "<report-database" in head:
+        # THE WHOLE TEXT, not the first 64 KiB. A rule name past that bound is
+        # still a rule name, and reading its absence FROM THE WINDOW as absence
+        # FROM THE FILE is the substitution
+        # `declaration_searched_only_inside_a_truncated_window` refuses: a
+        # long report database whose first antenna rule sits late was
+        # classified `not an antenna report` and returned None, which this
+        # audit reads as "no count" and not as "zero violations". The scan is
+        # linear and only ever widens the classification, so the bound bought
+        # nothing it was worth losing that for.
+        looks_antenna = ("report for antenna" in head.lower()
+                         or bool(_KLAYOUT_ANT_RULE_RE.search(text)))
+        if not looks_antenna:
+            return None
+        counted = _count_rdb_items_streaming(text)
+        if counted is None:
+            return None
+        return counted[0] + counted[1]
+    return None
+
+
 def _check_antenna(project_dir: Path) -> AuditResult:
     """Antenna (gate-oxide) substance check — the missing sibling of em/ir_drop.
     Step 26 historically gated only on antenna.rpt PRESENCE; this parses the
@@ -2677,6 +2762,14 @@ def _check_antenna(project_dir: Path) -> AuditResult:
         else:
             for mm in pair_re.finditer(text):
                 cnt += int(mm.group(1)) + int(mm.group(2)); seen = True
+        if not seen:
+            # KLayout's own two shapes — the antenna sign-off on any PDK whose
+            # deck is KLayout-based. Only consulted when the OpenROAD idiom
+            # found nothing, so the two can never double-count.
+            kl = _antenna_klayout_count(text)
+            if kl is not None:
+                cnt = kl
+                seen = True
         if seen:
             total_viol = (total_viol or 0) + cnt
 

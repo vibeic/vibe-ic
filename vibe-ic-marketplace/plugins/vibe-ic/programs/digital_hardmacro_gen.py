@@ -343,6 +343,27 @@ def emit_liberty(design: str, pins: List[Pin]) -> str:
 
 # ── the LEF: Magic, through the PDK's own magicrc ─────────────────────────
 
+#: WHAT THIS MODULE MIRRORS FROM UPSTREAM, AND WHAT PINS IT THERE
+#:
+#: `build_lef_tcl` below follows upstream's LEF-writing script, and three of
+#: its decisions are DEFAULTS READ OFF UPSTREAM rather than choices made here:
+#: the abstract (`-hide`) form, the absence of `-pinonly`, and the read-views
+#: route rather than the GDS-only one. A default that upstream changes and we
+#: do not is a silent divergence in a signed-off artefact — the GDS-only route
+#: was measured to produce a LEF with ZERO PINS on a real run.
+UPSTREAM_MIRROR: Dict[str, str] = {
+    "upstream": "librelane/scripts/magic/lef.tcl",
+    "mirrors": (
+        "the LEF write sequence and its three PDK-scoped knobs, whose upstream "
+        "defaults this module bakes in: the abstract form unless the full-LEF "
+        "flag is set, no pin-only unless its flag is set, and the read-views "
+        "route rather than the GDS-only one."),
+    "pinned_by": (
+        "tests/test_upstream_mirror_magic_lef.py"
+        "::test_upstream_lef_write_defaults_are_the_ones_this_module_bakes_in"),
+}
+
+
 def build_lef_tcl(top: str, gds: str, def_file: str, out_lef: str,
                   full_lef: bool, pinonly: bool) -> str:
     """The Magic TCL, following `librelane/scripts/magic/lef.tcl`.
@@ -397,12 +418,72 @@ def _magicrc_for(pdk_root: str) -> Optional[str]:
     The tool never re-derives PDK rules — upstream's rule 4. When no magicrc
     is found the capability is ABSENT and this program skips with that stated
     reason; it does not fall back to a default technology.
+
+        IT USED TO PICK THE ALPHABETICALLY FIRST PDK AND CALL THAT THE DESIGN'S.
+    The body was `sorted(root.glob("*/libs.tech/magic/*.magicrc"))[0]`, and
+    MEASURED in the shipped image, where PDK_ROOT is the PARENT of every
+    installed PDK -- which is what this program's own `--pdk-root` default
+    reads:
+
+        PDK_ROOT                             = /foss/pdks
+        _magicrc_for("/foss/pdks")           -> gf180mcuD/.../gf180mcuD.magicrc
+        _magicrc_for("/foss/pdks/sky130A")   -> None
+        _magicrc_for("/foss/pdks/gf180mcuD") -> None
+
+    Two defects in three lines, and they compound into a third:
+
+    1. WITH THE CONVENTIONAL `PDK_ROOT`, EVERY DESIGN GOT ONE TECHNOLOGY --
+       whichever sorts first. A design on any other PDK is abstracted against a
+       technology that does not define its layers.
+    2. PASSING THE CORRECT, SPECIFIC PDK DIRECTORY RETURNED None. The glob
+       requires a `*/` level, so `<root>/<pdk>` -- the obviously right thing for
+       a caller to pass -- found nothing and the capability read as ABSENT. The
+       one call that could have been right was the one that failed.
+    3. SO THE FAILURE IS SILENT. Magic does not refuse an unknown layer; it
+       reports `Unknown layer/datatype` and writes a LEF with an OUTLINE AND NO
+       PINS. That is the artefact `_LEF_HAS_PIN_RE` below already refuses to
+       stage -- the pin-less abstract is the SYMPTOM and this was a cause.
+
+    THE RULE NOW, and it refuses rather than guesses. `run()` receives
+    `pdk_root` and reads the design name off the DEF; it has NO input naming the
+    design's PDK, so it cannot choose correctly even in principle:
+
+      * `<pdk_root>/libs.tech/magic/*.magicrc` -- pdk_root IS the PDK. Use it.
+      * exactly ONE `*/libs.tech/magic/*.magicrc` -- only one technology is
+        installed, so there is no choice to get wrong. Use it.
+      * MORE THAN ONE -- REFUSE. Nothing here says which the design is on.
+
+    Returning None is not a regression: it is the ABSENT capability this
+    module already promises to skip on with a stated reason, instead of a wrong
+    abstract that looks delivered.
+
+    chip/PDK-AGNOSTIC: no PDK name appears here; the rule is about HOW MANY
+    technologies are in scope, never which.
     """
     root = Path(pdk_root) if pdk_root else None
     if not root or not root.is_dir():
         return None
+    own = sorted(root.glob("libs.tech/magic/*.magicrc"))
+    if own:
+        return str(own[0])
     hits = sorted(root.glob("*/libs.tech/magic/*.magicrc"))
-    return str(hits[0]) if hits else None
+    if len(hits) == 1:
+        return str(hits[0])
+    return None
+
+
+def magicrc_candidates(pdk_root: str) -> List[str]:
+    """Every magicrc `_magicrc_for` can see under `pdk_root`, for the message.
+
+    A refusal that does not say WHAT it was choosing between is a refusal
+    nobody can act on.
+    """
+    root = Path(pdk_root) if pdk_root else None
+    if not root or not root.is_dir():
+        return []
+    own = sorted(root.glob("libs.tech/magic/*.magicrc"))
+    return [str(x) for x in (own or sorted(
+        root.glob("*/libs.tech/magic/*.magicrc")))]
 
 
 _LEF_HAS_PIN_RE = re.compile(r"(?m)^\s*PIN\s+\S+")
@@ -416,7 +497,17 @@ def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
         return False, "magic is not on PATH in this environment"
     magicrc = _magicrc_for(pdk_root)
     if magicrc is None:
-        return False, (f"no `*/libs.tech/magic/*.magicrc` under PDK_ROOT "
+        cands = magicrc_candidates(pdk_root)
+        if len(cands) > 1:
+            return False, (
+                f"PDK_ROOT {pdk_root!r} holds {len(cands)} PDK technologies "
+                f"and nothing here says which one this design is on, so no "
+                f"magicrc was chosen: {', '.join(cands)}. Pass the PDK "
+                f"DIRECTORY itself (the one holding `libs.tech/magic/`). "
+                f"Choosing between them would abstract the design against a "
+                f"technology that may not define its layers, which yields a "
+                f"LEF with an outline and no pins rather than an error.")
+        return False, (f"no `libs.tech/magic/*.magicrc` under PDK_ROOT "
                        f"{pdk_root!r}; the PDK's own technology file is the "
                        f"only one this program will use")
     with tempfile.TemporaryDirectory() as td:

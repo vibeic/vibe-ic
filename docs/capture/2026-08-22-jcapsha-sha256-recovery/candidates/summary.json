@@ -1,0 +1,33 @@
+{
+  "date": "2026-08-22",
+  "totals": {
+    "A": 2,
+    "B": 0,
+    "C": 1,
+    "D": 0,
+    "T": 2
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/absence_verdict_names_its_search_space_check.py",
+      "programs/upstream_mirror_is_pinned_check.py"
+    ],
+    "bucket_T": [
+      "KLayout",
+      "OpenROAD"
+    ]
+  },
+  "bucket_A_files": [
+    "docs/capture/2026-08-22-jcapsha-sha256-recovery/candidates/bucket_A_programs_absence_verdict_names_its_search_space_check_rule_sketches.py",
+    "docs/capture/2026-08-22-jcapsha-sha256-recovery/candidates/bucket_A_programs_upstream_mirror_is_pinned_check_rule_sketches.py"
+  ],
+  "bucket_C_dir": "docs/capture/2026-08-22-jcapsha-sha256-recovery/candidates/bucket_C_backlogs",
+  "bucket_C_files": [
+    "ORGANIC-20260822-inertness-claim-rests-on-a-single-axis-sweep.yaml"
+  ],
+  "bucket_T_dir": "docs/capture/2026-08-22-jcapsha-sha256-recovery/candidates/bucket_T_forked_tool",
+  "bucket_T_files": [
+    "ORGANIC-20260822-io-row-option-families-use-opposite-axis-vocabularies.yaml",
+    "ORGANIC-20260822-sealring-branches-transpose-the-die-rectangle-indices.yaml"
+  ]
+}

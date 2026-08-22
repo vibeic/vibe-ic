@@ -3237,6 +3237,14 @@ steps:
     programs:
       - spare_cell_coverage_check
     required_outputs:
+      # `spare_cells.json` is the eda_pnr step's MEASUREMENT of the spare
+      # pool it inserted. `spare_cell_coverage.json` is the GRADE of that
+      # measurement, and `spare_cell_coverage_check` is its sole declaring
+      # producer — the runner used to write it too, against the run's own
+      # `--spare-density` instead of the gate's readiness floor, so one
+      # path carried two verdicts and the last writer won. The insertion
+      # step does not grade its own insertion.
+      # docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md
       - "phase3/stage3/pnr/spare_cells.json"
       - "reports/spare_cell_coverage.json"
     gate:

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Arms, fairness conditions, and the independent scorer for a PPA head-to-head.
 
+CHIP_AGNOSTIC: strict-logic — no process, vendor or PDK name in the LOGIC of this
+file. `test_ppa_benchmark_fairness::test_the_library_is_chip_and_pdk_and_vendor_agnostic` strips the module docstring before it looks, so the docstring MAY name
+one; the code below may not. This is STRICTER than the repo-wide
+`source_chip_agnostic_check`, whose PASS is not this file's verdict.
+
 WHAT THIS MODULE IS FOR, IN ONE SENTENCE
 ========================================
 
@@ -499,6 +504,21 @@ def check_stage_basis_agreement(arms: Sequence[Mapping[str, Any]]) -> None:
             if sc is None:
                 continue      # SCOPE_UNDECLARED in check_scope_parity owns it
             stage = sc.get("stage")
+            # A STAGE THAT WAS NEVER STATED CANNOT CONTRADICT ANYTHING.
+            # `check_scope_parity` owns completeness and says so precisely
+            # ("scope does not declare ['stage', ...]", SCOPE_INCOMPLETE, rc 2);
+            # this check owns the case where a stage IS stated and is wrong for
+            # the declared basis. The distinction became load-bearing when this
+            # check moved AHEAD of parity in `ppa_head_to_head_check.evaluate`:
+            # without it, an arm whose `area_um2` scope is `{}` was reported as
+            # "taken at stage=None -- a stage this basis does not cover", which
+            # names a contradiction that does not exist and buries the real
+            # defect, which is that the scope is empty. MEASURED by
+            # tests/test_ppa_benchmark_fairness.py::test_VACUOUS_both_arms_
+            # declaring_an_EMPTY_scope_does_not_buy_equality, which went red on
+            # exactly that substitution.
+            if stage is None:
+                continue      # SCOPE_INCOMPLETE in check_scope_parity owns it
             if stage in allowed:
                 continue
             kind = ("a PROXY stage" if stage in PROXY_STAGES
@@ -658,6 +678,45 @@ def derive_feasibility(arm: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
     return "FEASIBLE", {"checked": sorted(checks), **detail}
 
 
+def _missing_feasibility_fields(detail: Mapping[str, Any]) -> str:
+    """WHICH FIELD is absent, named as a field, for each undecided axis.
+
+    This used to print `['drv']` -- the axis LIST and nothing else. That is a
+    verdict about the record, not a thing a reader can go and get, and the
+    difference is enforced: `test_rc2_over_a_nonempty_population_names_the_
+    artefact` requires a gate exiting 2 over a NON-EMPTY population to name a
+    REFERENT for what is absent -- a field, an artefact or a flag -- because
+    "rc 2 with no named missing input" is a row nobody can act on and a row
+    nobody can act on is a green one at the next reading.
+
+    IT BECAME REACHABLE, rather than being newly wrong. While the two campaign
+    corpora refused at rc 1 for a basis contradiction, this message was never
+    the last word a reader got; re-filing those records from the post-route
+    number their campaign had already measured moved both corpora to rc 2, and
+    this sentence became the whole of what the reader is told. The defect was
+    always here -- the repair upstream of it is what made it visible.
+
+    The axis name alone is also genuinely less than what is known: the record
+    has a KEY where the decided status belongs, `derive_feasibility` already
+    holds the reason that key is undecided, and both are printed here.
+    """
+    axes = detail.get("not_checked")
+    if not axes:
+        # No per-axis list: the arm carries no `feasibility.checks` at all, and
+        # `derive_feasibility` says so in `reason`. Name the block itself --
+        # the missing input is the whole object, not one axis of it.
+        reason = detail.get("reason")
+        return (f"`feasibility.checks` is absent ({reason})" if reason
+                else "`feasibility.checks` is absent")
+    reasons = detail.get("reasons") or {}
+    out = []
+    for axis in axes:
+        why = reasons.get(axis)
+        field = f"`feasibility.checks.{axis}.status`"
+        out.append(f"{field} ({why})" if why else field)
+    return ", ".join(out)
+
+
 def check_feasibility(arms: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     """Both arms were asked the same feasibility question, and both passed it.
 
@@ -695,9 +754,11 @@ def check_feasibility(arms: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         raise Refusal(
             "FEASIBILITY_NOT_CHECKED",
             f"feasibility is not established for {sorted(not_checked)}: "
-            + "; ".join(f"{f}: {per_arm[f].get('not_checked') or per_arm[f]}"
+            + "; ".join(f"{f}: {_missing_feasibility_fields(per_arm[f])}"
                         for f in sorted(not_checked))
-            + ". An unclosed or unverified implementation cannot be the "
+            + ". Each is a decided status this record does not carry, and "
+              "`ppa_feasibility_check` is the program that adjudicates that "
+              "axis. An unclosed or unverified implementation cannot be the "
               "cheaper one, and a comparison that did not look is "
               "UNDETERMINED.",
             RC_UNDETERMINED)

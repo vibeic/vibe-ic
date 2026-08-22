@@ -220,19 +220,52 @@ def test_lef_tcl_exposes_upstreams_two_other_knobs():
 def test_a_pinless_abstract_is_never_staged(tmp_path, monkeypatch):
     """MEASURED: the GDS-only route produced an outline plus obstructions and
     zero PINs. That looks like a delivered view and is not one, so it is not
-    left on disk."""
+    left on disk.
+
+    THE FAKE PATCHES THE SEAM THE CODE ACTUALLY LAUNCHES THROUGH, and it did
+    not always. `write_lef_with_magic` used to launch magic with
+    `subprocess.run`, which is what this test faked. It now goes through
+    `_watchdog.run_supervised(..., popen_factory=...)` under the plugin-wide
+    BLOCKING PROCESS POLICY, so `mod.subprocess.run` was never called and the
+    fake intercepted nothing. The test then launched the REAL `magic`:
+
+        host without magic : "magic did not complete: watchdog reported
+                              launch_error after 0s"   -- red, every run
+        host/image with it : magic actually runs on the fixture GDS
+
+    Neither is this test's subject. It asserts what
+    `write_lef_with_magic` does with a pin-less LEF, which is a decision made
+    AFTER the tool returns; a unit test of that decision must not depend on
+    whether an EDA binary is installed, and this one silently did. That is why
+    the arm is faked at `run_supervised` and not at `subprocess.Popen`: the
+    seam is the supervised call, and faking below it would leave the same
+    dependency one layer down.
+    """
     out = tmp_path / "macro_a.lef"
 
-    def fake_run(cmd, **kw):
-        work = Path(kw["cwd"])
+    def fake_supervised(cmd, **kw):
+        # The recipe hands magic the tcl script inside its own work dir, so
+        # the work dir is derivable from the command -- the fake does not need
+        # the closure the real `popen_factory` carries.
+        work = Path(cmd[-1]).parent
         (work / "macro_a.lef").write_text(
             "MACRO macro_a\n  SIZE 100 BY 50 ;\n  OBS\n    LAYER m1 ;\n"
             "      RECT 0 0 100 50 ;\n  END\nEND macro_a\n")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+        return mod._watchdog.SupervisedResult(
+            rc=0, out="", err="", outcome="natural", elapsed_s=0.0)
 
     monkeypatch.setattr(mod.shutil, "which", lambda _n: "/usr/bin/magic")
     monkeypatch.setattr(mod, "_magicrc_for", lambda _r: "/x/y.magicrc")
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod._watchdog, "run_supervised", fake_supervised)
+    # The old seam, pinned shut. If the launch ever moves BACK to
+    # `subprocess.run` this fails loudly instead of quietly running real magic
+    # again -- the failure mode this arm just spent a red on.
+    def _no_bare_run(*_a, **_k):                       # pragma: no cover
+        raise AssertionError(
+            "write_lef_with_magic launched through subprocess.run; the "
+            "BLOCKING PROCESS POLICY seam is _watchdog.run_supervised and "
+            "this test fakes that one")
+    monkeypatch.setattr(mod.subprocess, "run", _no_bare_run)
     gds = tmp_path / "in.gds"
     gds.write_bytes(build_gds("macro_a"))
     dfp = tmp_path / "in.def"
@@ -298,7 +331,12 @@ def test_the_runner_invokes_this_producer(tmp_path):
     src = _runner_src()
     assert "def step_digital_hardmacro_gen(" in src
     assert 'PROGRAMS_DIR / "digital_hardmacro_gen.py"' in src
-    assert "plan.append(step_digital_hardmacro_gen(project))" in src
+    # THE CALL NOW CARRIES THE DESIGN'S PDK, and that is load-bearing rather
+    # than cosmetic: without it the producer saw only `$PDK_ROOT` -- the PARENT
+    # of every installed PDK in the shipped image -- and abstracted every design
+    # against whichever technology sorted first. The `pdk` argument is what
+    # makes the producer's refusal the exception instead of the rule.
+    assert "plan.append(step_digital_hardmacro_gen(project, pdk))" in src
 
 
 def test_the_gate_never_invokes_this_producer():

@@ -1,7 +1,7 @@
 {
   "date": "2026-08-22",
   "totals": {
-    "A": 41,
+    "A": 45,
     "B": 0,
     "C": 2,
     "D": 0,
@@ -30,7 +30,10 @@
       "programs/_ppa/timing.py",
       "programs/benchmark_run_manifest.py",
       "programs/gen_program_inventory.py",
-      "programs/landing_merge_verdict.py"
+      "programs/landing_merge_verdict.py",
+      "programs/_ppa_corpus.py",
+      "programs/_ppa/feasibility.py",
+      "programs/benchmark_evidence_structure_check.py"
     ],
     "bucket_T": [
       "OpenROAD"
@@ -58,7 +61,10 @@
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_timing_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_benchmark_run_manifest_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_gen_program_inventory_rule_sketches.py",
-    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_landing_merge_verdict_rule_sketches.py"
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_landing_merge_verdict_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_corpus_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_feasibility_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_benchmark_evidence_structure_check_rule_sketches.py"
   ],
   "bucket_C_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs",
   "bucket_C_files": [

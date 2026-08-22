@@ -37,9 +37,20 @@ WHAT THIS MODULE REFUSES TO DO
   row; it does not omit it").
 * **Read the no-paths sentinel as met timing.** See `_withhold_reason`.
 * **Guess a scope field.** An unknown stage, mode, voltage or temperature is
-  `null` with the reason recorded in `scope_gaps`. A fabricated scope is worse
-  than an absent one: it makes two incomparable numbers look comparable, which
-  is the exact failure `scope` was introduced to stop.
+  OMITTED from `scope` with the reason recorded in `scope_gaps`. A fabricated
+  scope is worse than an absent one: it makes two incomparable numbers look
+  comparable, which is the exact failure `scope` was introduced to stop.
+* **Write a scope key as `null`.** Until v1.11.69 this module emitted all eight
+  keys always, `null` for the ones it could not establish, on the stated ground
+  that "an omitted key and a null key are different claims to a reader". They
+  are -- and only one of them is SAFE, because `null == null`: two records that
+  could not read their corner compared as the SAME corner. `PPA_INTERFACES` §2
+  has said so in writing since v1.11.53 ("A `scope` key that is present and
+  null is worse than one that is absent... is OMITTED and the reason is
+  recorded outside `scope`"), and `_ppa/metrics.validate` enforces it as
+  `SCOPE_SENTINEL`. Two lanes held opposite rules; the one that can REFUSE is
+  the rule. MEASURED before the change, over 12 real run trees on this host:
+  152 rows refused `SCOPE_SENTINEL`, all of them from this module.
 * **Derive a number and call it measured.** OpenSTA's `wns` is
   `min(0, worst_slack)`. If the report printed no `wns` line, the wns row is
   NOT_MEASURED — it is not computed from the worst slack. §3: hash the value
@@ -220,19 +231,25 @@ def discover_reports(project: Path,
     Sorted because row order feeds document identity: an unsorted glob makes the
     same tree hash two ways on two filesystems.
 
-    DE-DUPLICATED BY CONTENT, NOT BY PATH. `_STA_DIRS` names three directories
-    and this flow's runner publishes each report into TWO of them, as separate
-    files with identical bytes -- measured on a real run, all three sign-off
-    reports satisfy
-    `sha256(phase3/stage3/sta/X.rpt) == sha256(reports/phase3/X.rpt)`.
-    De-duplicating on the resolved path (which is what this did until v1.11.33)
-    sees two files and reads both, so EVERY row was emitted twice and all 20
-    (metric, scope) groups in the document collided. They are one artefact and
-    one reading; the second copy is the publisher's, not the tool's.
+    DE-DUPLICATED BY PATH. Byte equality is DETECTED here and decided
+    elsewhere -- see the comment below, and `collapse_declared_mirrors`.
 
-    The first path in `_STA_DIRS` order wins, and each collapse is appended to
-    `collapsed` so the caller can say what it dropped instead of dropping it
-    quietly.
+    `_STA_DIRS` names three directories and this flow's runner publishes each
+    report into TWO of them, as separate files with identical bytes -- measured
+    on a real run, all three sign-off reports satisfy
+    `sha256(phase3/stage3/sta/X.rpt) == sha256(reports/phase3/X.rpt)`.
+    De-duplicating on the resolved path alone (which is all this did until
+    v1.11.33) sees two files and reads both, so EVERY row was emitted twice and
+    all 20 (metric, scope) groups in the document collided.
+
+    THIS DOCSTRING SAID "DE-DUPLICATED BY CONTENT" AND THE CODE HAD STOPPED
+    DOING THAT (v1.11.57). A comment that states the opposite of the code is
+    worse than no comment: it is read as the contract. It was, and it cost
+    three red arms in `test_ppa_layer_timing_view_dedup.py`, which were written
+    against this sentence rather than against the function.
+
+    Every byte-identical pair is appended to `collapsed` so the caller can say
+    what it found instead of finding it quietly. NOTHING IS DROPPED HERE.
     """
     candidates: Dict[str, Path] = {}
     for rel in _STA_DIRS:
@@ -421,14 +438,47 @@ def _ident(value: Optional[str]) -> Optional[str]:
     return value.strip().lower() if isinstance(value, str) and value.strip() else None
 
 
+#: Why a scope key is ABSENT, when the caller has no more specific sentence.
+#: Every omission is explained -- an unexplained absent key and a `null` one are
+#: the same silence, and the whole point of omitting is that the reason moves
+#: somewhere a reader can see it (`scope_gaps`) instead of somewhere two records
+#: can silently compare equal (`scope`).
+_SCOPE_OMISSION_REASON = {
+    "stage": "the artefact carries no stamp saying which stage it analysed",
+    "mode": "nothing in this project attributes a timing mode to this artefact",
+    "process": "this section names no process corner",
+    "voltage_v": "no liberty path was available to read a supply voltage from",
+    "temperature_c": "no liberty path was available to read a temperature from",
+    "rc_corner": ("this section names neither an RC corner nor the parasitic "
+                  "file it read"),
+    "clock": ("not_applicable: this row is the DESIGN-WIDE figure and is not "
+              "scoped to one clock; the per-clock evidence is "
+              "`timing.*.worst_path_slack_ns`, which carries the clock it names"),
+    "check": "this section labels neither a setup nor a hold check",
+}
+
+
 def _scope(stage: Optional[str], mode: Optional[str], process: Optional[str],
            voltage_v: Optional[float], temperature_c: Optional[float],
            rc_corner: Optional[str], clock: Optional[str],
            check: Optional[str]) -> Dict[str, Any]:
-    """The eight scope keys, always all eight, in the frozen order.
+    """The scope keys this artefact ESTABLISHED, in the frozen order.
 
-    Always all eight because an omitted key and a null key are different claims
-    to a reader, and only one of them is true.
+    A key the producer could not establish is ABSENT, never `null`. Until
+    v1.11.69 this returned all eight always, and the reasoning written here was
+    that "an omitted key and a null key are different claims to a reader, and
+    only one of them is true". Both halves of that sentence are right and the
+    conclusion drawn from it was wrong: `null == null`, so two records that
+    could not read their RC corner compared as records taken at the SAME RC
+    corner, and a head-to-head could put them side by side. An absent key
+    cannot do that -- `_ppa/metrics.record_key` hashes the scope it is given, so
+    two records missing different keys hash differently and stay incomparable,
+    which is the honest answer.
+
+    The claim the null was carrying is not lost. It moves to `scope_gaps`
+    (`_gaps_for`), which is OUTSIDE scope and therefore cannot make anything
+    compare equal. That is `PPA_INTERFACES` §2, and `_ppa/metrics.validate`
+    refuses the null spelling as `SCOPE_SENTINEL`.
 
     `process` and `rc_corner` are case-normalised. They are IDENTIFIERS, and a
     view the process stance spells `SS` while its liberty stem spells `ss` is
@@ -436,33 +486,83 @@ def _scope(stage: Optional[str], mode: Optional[str], process: Optional[str],
     comparable only if their `scope` matches") report two identical corners as
     incomparable. The verbatim spelling survives in `source.raw`.
     """
-    return {"stage": stage, "mode": mode, "process": _ident(process),
+    full = {"stage": stage, "mode": mode, "process": _ident(process),
             "voltage_v": voltage_v, "temperature_c": temperature_c,
             "rc_corner": _ident(rc_corner), "clock": clock, "check": check}
+    # `""` as well as None: the empty string is §6.1's third sentinel and
+    # `"" == ""` compares equal exactly the way `null == null` does.
+    return {k: v for k, v in full.items() if v is not None and v != ""}
 
 
-def _path_scope(base: Dict[str, Any], obs: Any, ordinal: int) -> Dict[str, Any]:
+def _gaps_for(scope: Dict[str, Any],
+              base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """`base` plus a reason for every scope key `_scope` left out.
+
+    The caller's own sentence always wins: it knows WHY this particular
+    artefact was silent, and `_SCOPE_OMISSION_REASON` is only the fallback for
+    a key nobody explained. What this function guarantees is that no key is
+    absent WITHOUT a reason -- an unexplained hole in a scope is the same
+    invisible claim as a `null`, moved one field over.
+    """
+    out = dict(base or {})
+    for key in _SCOPE_KEYS:
+        if key not in scope and key not in out:
+            out[key] = _SCOPE_OMISSION_REASON[key]
+    return out
+
+
+def _path_names(obs: Any) -> Tuple[Optional[str], Optional[str]]:
+    """The (startpoint, endpoint) pair this observation names, or (None, None).
+
+    One reader, so `_path_scope` and the collision pre-scan in
+    `rows_from_report` cannot come to different conclusions about whether a
+    path was named -- which would put a row in the "named" bucket and then
+    scope it by ordinal, or the reverse.
+    """
+    start = getattr(obs, "startpoint", None)
+    end = getattr(obs, "endpoint", None)
+    return (start, end) if (start and end) else (None, None)
+
+
+def _path_scope(base: Dict[str, Any], obs: Any, ordinal: int,
+                names_identify: bool = True) -> Dict[str, Any]:
     """`base` plus the identity of ONE reported path.
 
-    THE ENDPOINTS WHEN THE ARTEFACT NAMES THEM, THE ORDINAL ONLY WHEN IT DOES
-    NOT. A path is identified by where it starts and ends, and those names are
-    the same in two runs of one design -- so two arms' records for one path
-    carry equal scope and remain comparable, which is the whole point of scope.
+    THE ENDPOINTS WHEN THE ARTEFACT NAMES THEM AND THE NAMES TELL THE PATHS
+    APART, THE ORDINAL OTHERWISE. A path is identified by where it starts and
+    ends, and those names are the same in two runs of one design -- so two arms'
+    records for one path carry equal scope and remain comparable, which is the
+    whole point of scope.
 
     An ORDINAL is a position in a printed list. It distinguishes the rows inside
     one document, which is what stops the collision, but it is NOT an identity:
     if a tool prints the same paths in a different order the ordinals move, and
     two arms would be compared across different paths. So it is used only when
-    the artefact gave no names, and then the cross-arm comparison REFUSES on
-    differing scope -- which is the honest answer, because an unnamed path
-    cannot be shown to be the same path.
+    the names cannot do the job, and then the cross-arm comparison REFUSES on
+    differing scope -- which is the honest answer, because a path that cannot be
+    shown to be the same path must not be compared as if it were.
 
-    Both are never emitted together: adding a volatile key next to a stable one
-    would make the stable one useless.
+    `names_identify=False` IS THE CASE THIS FUNCTION MISSED UNTIL v1.11.69.
+    It checked whether the artefact PRINTED two names, never whether the two
+    names it printed were UNIQUE in the view. OpenSTA prints one
+    `Startpoint:`/`Endpoint:` pair per reported path and nothing stops two
+    reported paths of one group from sharing both -- and when they do, the
+    "identity" is shared, the rows collide, and the index refuses the second as
+    SAME_ARTEFACT_TWO_VALUES: one artefact, one scope, two numbers. REPRODUCED
+    on this checkout with a two-path stamped report; MEASURED at 0 occurrences
+    across 2572 path identities in every STA report on this host, so it is a
+    hole in the rule and not a defect anyone has hit yet. The caller decides,
+    because only the caller can see the whole section.
+
+    Both keys are never emitted together: adding a volatile key next to a stable
+    one would make the stable one useless. When the names do not identify, they
+    are DROPPED rather than kept alongside -- a name that two rows share is not
+    a weaker identity, it is a wrong one, and `source.raw` still carries the
+    line the row came from for anyone reading by hand.
     """
     out = dict(base)
-    start, end = getattr(obs, "startpoint", None), getattr(obs, "endpoint", None)
-    if start and end:
+    start, end = _path_names(obs)
+    if start and end and names_identify:
         out["path_startpoint"] = start
         out["path_endpoint"] = end
     else:
@@ -581,13 +681,15 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
     parser_src_sha = report.sha256
 
     if report.empty:
+        _empty_scope = _scope(stage, mode, None, None, None, None, None, None)
         rows.append(_row(
             "timing.report", INVALID,
-            _scope(stage, mode, None, None, None, None, None, None),
+            _empty_scope,
             _source(project, path, parser_src_sha, None, None),
             reason="the STA artefact exists but is empty",
-            scope_gaps={k: v for k, v in
-                        (("stage", stage_gap), ("mode", mode_gap)) if v}))
+            scope_gaps=_gaps_for(_empty_scope, {
+                k: v for k, v in
+                (("stage", stage_gap), ("mode", mode_gap)) if v})))
         return rows
 
     for sec in report.sections:
@@ -595,12 +697,20 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
         liberty = sec.liberty
         rc_corner = sec.rc_corner
         process = sec.process
+        # Which parasitic file this view was timed against. Dialect A/B name it
+        # on the banner; the unbannered dialect can only say so whole-file.
+        spef = sec.spef
         if sec.banner is None:
             # Dialect C: one implicit section, and the whole-file stamps are
             # what describe it. Relating them is meaning, so the BACKEND left
             # it alone and it happens here.
             liberty = liberty or report.basis_liberty
             process = process or report.signoff_corner
+            # Dialect C has no banner, so the whole-file stamp is the ONLY
+            # place its parasitics can be named. Same relation as the two
+            # lines above: the BACKEND parsed the stamp, relating it to this
+            # section is meaning, and meaning happens here.
+            spef = spef or report.basis_spef
         pvt = opensta.parse_liberty_pvt(liberty)
         gaps: Dict[str, str] = {}
         if stage_gap:
@@ -621,10 +731,63 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
             gaps["process"] = (
                 "banner declares process=%s but its liberty stem %s reads %s"
                 % (process, pvt.stem, pvt.process))
+        # THE RC AXIS IS AN AXIS, and it is NOT filled from a file name.
+        # Only dialect A prints a `<x>-RC corner` label; every other dialect
+        # leaves `rc_corner` unestablished, and two views timed against
+        # DIFFERENT parasitic files then carry one identity. That is a real
+        # defect and the repair for it is (a) the corner AS THE TOOL REPORTS
+        # IT, carried through from the producer, or failing that (b) a stated
+        # gap. It is NOT (c) `_rc_corner_from_spef(spef)`, which read `max`
+        # back out of `<top>.max.spef` and briefly stood here.
+        #
+        # WHY (c) IS REFUSED, and it is the module's own rule rather than a
+        # preference: `_stage_for` above declines the identical inference in
+        # the identical shape -- "inferring `post_route_extracted` from the
+        # filename would let a pre-layout estimate be compared against sign-off
+        # evidence the moment somebody adds a pre-layout report to the same
+        # directory". A module that refuses a filename inference for `stage`
+        # and performs one for `rc_corner` contradicts itself, and unlike a
+        # stage the contradiction SHIPS: `rc_corner` is a scope key, two scopes
+        # that compare equal are what licenses a comparison, and the corner
+        # would have been an identity nobody measured. `<top>.max.spef` says
+        # what somebody NAMED the file, never what corner the extraction ran
+        # at.
+        #
+        # (a) IS STILL THE ANSWER WANTED, and it is not available in this
+        # dialect today: the banner states the parasitics as a PATH and no
+        # normalised corner label, so there is no tool-reported corner here to
+        # carry. The gap below says exactly that, and names the artefact, so
+        # the producer that could stamp one is where the next reader starts.
         if rc_corner is None:
-            gaps["rc_corner"] = (
-                "this report names no RC corner for the section; the RC axis "
-                "is reported by the multi-corner SPEF report, not this one")
+            # THE DATUM WAS HERE AND THIS BRANCH USED TO DENY IT. Dialect B's
+            # banner reads `=== SETUP corner: process=SS liberty=..,
+            # SPEF=x.max.spef ===`, and the backend captures that token off the
+            # SAME line it takes `process=` and `liberty=` from
+            # (`_BANNER_SPEF_RE`). This branch answered "this report names no
+            # RC corner" for it regardless -- a producer reporting a field
+            # unreported while holding the identity of it, which is the class
+            # the PPA record gates exist to end. MEASURED on a real run's
+            # `sta_mcorner_ocv.rpt`: rc_corner=None, spef='<top>.max.spef'.
+            #
+            # It stays a GAP, and that is deliberate rather than a half-fix.
+            # The token is a FILE NAME, and reading `max` out of `x.max.spef`
+            # is exactly the filename inference `_stage_for` refuses above --
+            # "inferring `post_route_extracted` from the filename would let a
+            # pre-layout estimate be compared against sign-off evidence". What
+            # the reason owes is the TRUE cause and the identity it is holding,
+            # so the next reader starts at the artefact instead of at a denial.
+            if spef:
+                gaps["rc_corner"] = (
+                    "this section names its parasitics as %r but no normalised "
+                    "RC-corner label, and the file name is NOT read as one: "
+                    "deriving a corner from a stem is the filename inference "
+                    "this module refuses elsewhere. The RC identity IS stated "
+                    "by the report and is not yet carried in scope" % (spef,))
+            else:
+                gaps["rc_corner"] = (
+                    "this report names no RC corner for the section; the RC "
+                    "axis is reported by the multi-corner SPEF report, not "
+                    "this one")
 
         # ── which CHECKS analysed nothing? Keyed per check, never per
         # report: an unbannered report carries BOTH checks in one section, and
@@ -647,6 +810,11 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
         for check in checks:
             scope = _scope(stage, mode, process, pvt.voltage_v,
                            pvt.temperature_c, rc_corner, None, check)
+            # ONE gap map per view, so every row of the view explains the same
+            # absences the same way. `clock` is absent here by DESIGN, not by
+            # failure -- `report_worst_slack` is a design-wide figure -- and
+            # `_SCOPE_OMISSION_REASON["clock"]` says exactly that.
+            view_gaps = _gaps_for(scope, gaps)
             for kind in _VIEW_METRIC_KINDS:
                 metric = "timing.%s.%s_ns" % (check, kind)
                 m = next((x for x in sec.measurements
@@ -659,7 +827,7 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
                         reason=("not_reported: the artefact carries no %s line "
                                 "for this view — the tool was not asked, or the "
                                 "query failed" % kind),
-                        scope_gaps=gaps))
+                        scope_gaps=view_gaps))
                     continue
                 src = _source(project, path, parser_src_sha, m.line, m.raw)
                 if m.no_paths or m.value is None:
@@ -667,16 +835,16 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
                         metric, NOT_MEASURED, scope, src,
                         reason=(_SENTINEL_REASON if m.no_paths
                                 else "the tool printed no usable number"),
-                        scope_gaps=gaps))
+                        scope_gaps=view_gaps))
                     continue
                 why = _withhold_reason(
                     no_paths_by_check.get(check, False), m.kind, m.value)
                 if why:
                     rows.append(_row(metric, NOT_MEASURED, scope, src,
-                                     reason=why, scope_gaps=gaps))
+                                     reason=why, scope_gaps=view_gaps))
                 else:
                     rows.append(_row(metric, MEASURED, scope, src,
-                                     value=m.value, scope_gaps=gaps))
+                                     value=m.value, scope_gaps=view_gaps))
 
         # ── per-CLOCK rows, from the only per-clock evidence there is ──────
         # `report_worst_slack` is design-wide; these path blocks name a path
@@ -684,6 +852,21 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
         # they get their own metric name and can never be mistaken for the
         # design-wide worst.
         ordinals: Dict[Tuple[str, str], int] = {}
+        # WHICH NAMED PAIRS ACTUALLY IDENTIFY A PATH IN THIS SECTION. Counted
+        # BEFORE any row is built, because the answer for the first path
+        # depends on a path that has not been read yet. A pair printed twice
+        # names two different measurements and therefore identifies neither.
+        named_seen: Dict[Tuple[Any, ...], int] = {}
+        for p in sec.paths:
+            if p.slack is None or p.clock is None:
+                continue
+            start, end = _path_names(p)
+            if not (start and end):
+                continue
+            ck = ({"max": "setup", "min": "hold"}.get(p.path_type or "")
+                  or sec.check or "unlabelled")
+            k = (start, end, p.clock, ck)
+            named_seen[k] = named_seen.get(k, 0) + 1
         for p in sec.paths:
             if p.slack is None or p.clock is None:
                 continue
@@ -697,15 +880,26 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
             # every consumer. The reading is not duplicated and the numbers do
             # not disagree: the SCOPE was missing the field that tells the
             # paths apart (PPA_INTERFACES §2.1, last paragraph).
+            #
+            # v1.11.53 added the endpoint names and v1.11.69 added the half
+            # that was missing: names only identify a path if they are UNIQUE
+            # in the view. Two reported paths sharing one (startpoint,
+            # endpoint) pair rebuilt the original defect exactly -- one
+            # artefact, one scope, two numbers -- and `named_seen` above is
+            # what notices.
             key = (p.clock, check)
             ordinals[key] = ordinals.get(key, 0) + 1
             scope = _scope(stage, mode, process, pvt.voltage_v,
                            pvt.temperature_c, rc_corner, p.clock, check)
+            start, end = _path_names(p)
+            identifies = bool(start and end) and named_seen.get(
+                (start, end, p.clock, check), 0) == 1
+            path_scope = _path_scope(scope, p, ordinals[key], identifies)
             rows.append(_row(
                 "timing.%s.worst_path_slack_ns" % check, MEASURED,
-                _path_scope(scope, p, ordinals[key]),
+                path_scope,
                 _source(project, path, parser_src_sha, p.line, p.raw),
-                value=p.slack, scope_gaps=gaps))
+                value=p.slack, scope_gaps=_gaps_for(path_scope, gaps)))
     return rows
 
 
@@ -766,11 +960,15 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
     # TWO LANES FIXED F-10 INDEPENDENTLY AND BOTH ARE KEPT, because they are
     # not the same mechanism and neither subsumes the other:
     #
-    #   discover_reports(..., collapsed)   collapses byte-identical artefacts by
-    #                                      CONTENT DIGEST. It catches duplicates
-    #                                      nobody declared, which is the only
-    #                                      thing that can catch a duplicate the
-    #                                      producer does not know it made.
+    #   discover_reports(..., collapsed)   REPORTS byte-identical artefacts by
+    #                                      CONTENT DIGEST and drops none of
+    #                                      them. It catches duplicates nobody
+    #                                      declared, which is the only thing
+    #                                      that can catch a duplicate the
+    #                                      producer does not know it made --
+    #                                      but a hash cannot tell that copy
+    #                                      from a second reading that agrees,
+    #                                      so it reports and does not decide.
     #   collapse_declared_mirrors(...)     collapses what the RUN ITSELF wrote
     #                                      down as a copy, in
     #                                      reports/phase3/artefact_mirrors.json.
@@ -794,10 +992,15 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
             text = f.read_text(errors="replace")
         except OSError as exc:
             # Unreadable is NOT clean. It gets a row that says so.
+            _unreadable_scope = _scope(None, mode, None, None, None, None,
+                                       None, None)
             rows.append(_row(
                 "timing.report", INVALID,
-                _scope(None, mode, None, None, None, None, None, None),
+                _unreadable_scope,
                 _source(project, f, opensta.file_digest(f), None, None),
+                scope_gaps=_gaps_for(_unreadable_scope, {
+                    "stage": "the artefact could not be read, so nothing in it "
+                             "could stamp a stage"}),
                 reason="the STA artefact could not be read: %s" % exc))
             notes.append("[CANNOT CHECK] unreadable: %s" % _rel(project, f))
             continue
@@ -833,13 +1036,18 @@ def timing_rows(project: Path) -> Tuple[List[Row], List[str]]:
         if any(_covers(r, decl) for r in reported):
             continue
         field = "process" if decl["axis"] == "process" else "rc_corner"
+        decl_scope = _scope(
+            None, mode, decl["corner"] if field == "process" else None,
+            None, None,
+            decl["corner"] if field == "rc_corner" else None,
+            None, decl["check"])
         rows.append(_row(
             "timing.%s.worst_slack_ns" % decl["check"], NOT_MEASURED,
-            _scope(None, mode, decl["corner"] if field == "process" else None,
-                   None, None,
-                   decl["corner"] if field == "rc_corner" else None,
-                   None, decl["check"]),
+            decl_scope,
             _source(project, None, None, None, None),
+            scope_gaps=_gaps_for(decl_scope, {
+                "stage": "no artefact reports this view at all, so nothing "
+                         "stamps a stage for it"}),
             reason=("declared_but_not_reported: the run declared %s corner %r "
                     "for the %s check on the %s axis and no STA artefact "
                     "reports a slack for it"
@@ -906,11 +1114,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         s = r["scope"]
         val = ("%.6g" % r["value"]) if r.get("status") == MEASURED \
             else r.get("status")
+        # `-` for an ABSENT key, and it is not the same as a key holding the
+        # string "-": the row's `scope_gaps` says why each one is absent, and
+        # this line is a summary for a human, not the record.
+        def _f(key):
+            return s[key] if key in s else "-"
         print("%-34s %-8s stage=%s mode=%s process=%s V=%s T=%s rc=%s clock=%s "
               "check=%s  %s" % (
-                  r["metric"], r["status"], s["stage"], s["mode"],
-                  s["process"], s["voltage_v"], s["temperature_c"],
-                  s["rc_corner"], s["clock"], s["check"], val))
+                  r["metric"], r["status"], _f("stage"), _f("mode"),
+                  _f("process"), _f("voltage_v"), _f("temperature_c"),
+                  _f("rc_corner"), _f("clock"), _f("check"), val))
 
     if doc["measured_count"] == 0:
         print("[CANNOT CHECK] _ppa.timing: %d STA artefact(s) opened and NOT "

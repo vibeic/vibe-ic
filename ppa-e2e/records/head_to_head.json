@@ -64,10 +64,10 @@
      "status": "MEASURED",
      "unit": "mW",
      "scope": {
-      "stage": "synth",
-      "scenario": "default",
+      "stage": "post_route_extracted",
+      "scenario": "diagnostic",
       "activity_basis": "VECTORLESS",
-      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty": null,
       "tool": "opensta",
       "process": "tt",
       "voltage_v": 1.8,
@@ -75,10 +75,10 @@
       "mode": "functional",
       "group": "Total"
      },
-     "value": 0.306,
+     "value": 0.5730000000000001,
      "source": {
-      "path": "/home/reyerchu/_jppae2e/run/baseline/reports/phase3/power.rpt",
-      "sha256": "sha256:0b396df0e27ee2d8855799fc8e10f980a1ccc007649d9f48f35d2355417a47ea",
+      "path": "/home/reyerchu/_jppae2e/records/baseline/power_postroute.rpt",
+      "sha256": "sha256:2e5ea25cd125cc337e20092d45bf86e18a3b04700734e044e57fa7af07841050",
       "tool": "opensta",
       "parser": "_ppa/power.py"
      }
@@ -188,10 +188,10 @@
      "status": "MEASURED",
      "unit": "mW",
      "scope": {
-      "stage": "synth",
-      "scenario": "default",
+      "stage": "post_route_extracted",
+      "scenario": "diagnostic",
       "activity_basis": "VECTORLESS",
-      "liberty": "sky130_fd_sc_hd__tt_025C_1v80.lib",
+      "liberty": null,
       "tool": "opensta",
       "process": "tt",
       "voltage_v": 1.8,
@@ -199,10 +199,10 @@
       "mode": "functional",
       "group": "Total"
      },
-     "value": 0.306,
+     "value": 0.559,
      "source": {
-      "path": "/home/reyerchu/_jppae2e/run/trials/t028/reports/phase3/power.rpt",
-      "sha256": "sha256:0b396df0e27ee2d8855799fc8e10f980a1ccc007649d9f48f35d2355417a47ea",
+      "path": "/home/reyerchu/_jppae2e/records/trials/t028/power_postroute.rpt",
+      "sha256": "sha256:551f81f934078aa9ad3781e5f88d9a202e65bcde66bebb9215b4f359a75d2c2c",
       "tool": "opensta",
       "parser": "_ppa/power.py"
      }

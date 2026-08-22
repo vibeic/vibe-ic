@@ -28,9 +28,49 @@ import pathlib
 import subprocess
 import sys
 
-from _published_corpus import cell_dirs, corpus_root, needs_corpus
+import os
+
+import pytest
+
+from _published_corpus import CORPUS_ENV, cell_dirs, corpus_root, needs_corpus
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
+
+#: RESOLVED AT IMPORT, BEFORE THE FIXTURE BELOW CLEARS THE POINTER.
+#: `test_the_corpus_as_committed_passes` names the corpus as its `--root`, so it
+#: needs the resolution that `$VIBE_IC_BENCHMARK_DATA` provides — and it is the
+#: ONE test here that does. Reading it at import keeps the fixture safe for all
+#: 18 without giving that test an exemption it would then have to remember to
+#: keep. `needs_corpus` is evaluated at the same moment and skips the test when
+#: this is None, so the two can never disagree.
+_CORPUS_AT_IMPORT = corpus_root()
+
+
+@pytest.fixture(autouse=True)
+def _the_subject_is_the_root_this_test_names(monkeypatch):
+    """Clear `$VIBE_IC_BENCHMARK_DATA` for every test in this module.
+
+    WHY, MEASURED. `citation_routing_is_true_check` deliberately ADDS the tree
+    named by that variable to its scan — it prints `note: … adds a corpus to
+    scan` — which is correct behaviour for a gate run over the repository. It is
+    NOT what a unit test means when it builds three files in `tmp_path` and asks
+    `main(["--root", that])`. With a pointer set at the published corpus, four
+    cases here failed: `assert C.main(["--root", repo]) == 0` returned 2, over a
+    corpus the test never mentioned and does not control.
+
+    The tests were not wrong about their subject; they simply never said that the
+    ambient environment was not part of it. This says it.
+
+    THIS IS NOT A WAY TO MAKE A RED GO AWAY, and the difference is where the
+    behaviour went. The pointer path is not silenced — it is covered
+    deliberately, and with its own red, in
+    `test_named_empty_corpus_is_not_a_wrong_pointer.py`, which drives the same
+    program in a subprocess WITH the pointer bound and asserts what it says
+    about a corpus that carries none of its subject. Nothing is now untested
+    that was tested before; one module stopped being accidentally exposed to a
+    variable, and another module tests that variable on purpose.
+    """
+    monkeypatch.delenv(CORPUS_ENV, raising=False)
 
 
 def _load(name):
@@ -158,7 +198,10 @@ def test_the_corpus_as_committed_passes():
     clone and this runs exactly as it always did, on the same records, and can
     still fail.
     """
-    assert C.main(["--root", str(corpus_root())]) == 0
+    # `_CORPUS_AT_IMPORT`, not `corpus_root()`: the autouse fixture above has
+    # cleared the pointer by the time this body runs, and re-reading it here
+    # would resolve to None and root the gate at the string "None".
+    assert C.main(["--root", str(_CORPUS_AT_IMPORT)]) == 0
 
 
 # ── the wiring it makes safe ───────────────────────────────────────────────

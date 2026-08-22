@@ -1,0 +1,23 @@
+{
+  "date": "2026-08-22",
+  "totals": {
+    "A": 4,
+    "B": 0,
+    "C": 1,
+    "D": 1,
+    "T": 0
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/pad_ring_check.py"
+    ]
+  },
+  "bucket_A_files": [
+    "docs/capture/2026-08-22-jcapsha-padsite/candidates/bucket_A_programs_pad_ring_check_rule_sketches.py"
+  ],
+  "bucket_C_dir": "docs/capture/2026-08-22-jcapsha-padsite/candidates/bucket_C_backlogs",
+  "bucket_C_files": [
+    "ORGANIC-20260822-inertness-disclosure-states-a-false-reason.yaml"
+  ],
+  "bucket_D_file": "docs/capture/2026-08-22-jcapsha-padsite/candidates/bucket_D_discarded.md"
+}

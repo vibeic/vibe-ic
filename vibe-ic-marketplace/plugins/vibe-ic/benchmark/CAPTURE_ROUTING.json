@@ -109,9 +109,13 @@
       "bucket_B_skill_file": "skills/checkpoint-gate/SKILL.md"
     },
     "phase3.pad_ring": {
-      "description": "Step 15.5ic pad-ring placement: the DECLARED pad ring is placed by upstream's own algorithm, or the config variables it went without are named. Its producer and its gate are pad_ring_gen.py / pad_ring_check.py, which is why this step does NOT route to phase3_one_shot_runner.py like its floorplan neighbour.",
-      "bucket_A_program": "programs/pad_ring_gen.py",
-      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+      "description": "Pad-ring site resolution, per-side fit and abutment for the self-tape-out path (flow step 15.5ic). Routed to the step's GATE: flow/phase1_phase2_phase3.yaml declares 15.5ic's verdict as `program_exit_zero: pad_ring_check`, so a rule recovered here belongs in the checker; the producer and the shared helper are named as related. Added because the step had no routing entry at all, so a capture taken here fell through to default_routing, whose bucket_A_program is null.",
+      "bucket_A_program": "programs/pad_ring_check.py",
+      "bucket_A_related": [
+        "programs/pad_ring_gen.py",
+        "programs/_pad_ring.py"
+      ],
+      "bucket_B_skill_file": "skills/tapeout-checklist/SKILL.md"
     },
     "phase3.floorplan": {
       "description": "Floorplan / die-area / core-utilization / macro placement setup ahead of PnR.",
@@ -186,23 +190,6 @@
       "_note": "Bucket A target TBD — analog sizing loop currently has no single dedicated check program; the closest is the analog-sizing-loop skill itself. File a backlog if a deterministic sizing-loop checker is authored.",
       "bucket_B_skill_file": "skills/analog-sizing-loop/SKILL.md"
     },
-    "mixed_signal.M_top_merge": {
-      "bucket_A_program": "programs/mixed_signal_merge_check.py",
-      "bucket_B_skill_file": "skills/mixed-signal-cosim/SKILL.md"
-    },
-    "mcp_eda.lint": {
-      "bucket_A_program": "mcp-eda/src/tools/lint.js",
-      "bucket_B_skill_file": "agents/ic-expert-agent.md"
-    },
-    "mcp_eda.synth": {
-      "bucket_A_program": "mcp-eda/src/tools/synth.js",
-      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
-    },
-    "mcp_eda.cocotb": {
-      "description": "MCP eda_cocotb — sibling .py staging, PYTHONPATH, etc. (the CVDP harness_library lesson)",
-      "bucket_A_program": "mcp-eda/src/tools/cocotb.js",
-      "bucket_B_skill_file": "agents/ic-expert-agent.md"
-    },
     "benchmark.scoring": {
       "description": "Host scorers (score_iverilog_tb.py / score_cocotb_mcp.py) — cwd=design_dir, substitution disclosures, etc.",
       "bucket_A_program": "benchmark/score_iverilog_tb.py",
@@ -216,6 +203,40 @@
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/benchmark-verify/SKILL.md"
     },
+    "capture.backlog_sanitize": {
+      "bucket_A_program": "programs/backlog_sanitize_check.py",
+      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    },
+    "capture.emit": {
+      "bucket_A_program": "programs/enhancement_emit.py",
+      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    },
+    "mcp_eda.cocotb": {
+      "description": "MCP eda_cocotb — sibling .py staging, PYTHONPATH, etc. (the CVDP harness_library lesson)",
+      "bucket_A_program": "mcp-eda/src/tools/cocotb.js",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+    "mcp_eda.lint": {
+      "bucket_A_program": "mcp-eda/src/tools/lint.js",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+    "mcp_eda.synth": {
+      "bucket_A_program": "mcp-eda/src/tools/synth.js",
+      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
+    },
+    "mixed_signal.M_top_merge": {
+      "bucket_A_program": "programs/mixed_signal_merge_check.py",
+      "bucket_B_skill_file": "skills/mixed-signal-cosim/SKILL.md"
+    },
+    "phase3.die_finishing": {
+      "description": "Die finishing: the seal ring, driven through the PDK's own generator, and the die identification cells.",
+      "bucket_A_program": "programs/die_finishing_check.py",
+      "bucket_B_skill_file": "skills/phase3-backend-verify/SKILL.md"
+    },
+    "ppa.artefact_write": {
+      "bucket_A_program": "programs/_atomic_artefact.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
     "ppa.feasibility": {
       "bucket_A_program": "programs/ppa_feasibility_check.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
@@ -228,21 +249,20 @@
       "bucket_A_program": "programs/ppa_search_run.py",
       "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
     },
-    "ppa.artefact_write": {
-      "bucket_A_program": "programs/_atomic_artefact.py",
-      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
-    },
-    "capture.emit": {
-      "bucket_A_program": "programs/enhancement_emit.py",
-      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
-    },
-    "capture.backlog_sanitize": {
-      "bucket_A_program": "programs/backlog_sanitize_check.py",
-      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    "repo.absence_verdict": {
+      "description": "A refusal that a declared thing is not there. The rule this step carries: an absence verdict must name the search space it exhausted, because 'not found' and 'not looked for' are different verdicts that print the same way.",
+      "bucket_A_program": "programs/absence_verdict_names_its_search_space_check.py",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "repo.host_independence": {
       "bucket_A_program": "programs/gate_host_independence_check.py",
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "repo.upstream_parity": {
+      "description": "Where this plugin RE-IMPLEMENTS an upstream flow's computation or configuration contract",
+      "bucket_A_program": "programs/upstream_contract_parity_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md",
+      "_comment": "Deliberately NOT routed to the step a divergence was first found at: the rule is about re-implementation, not about the subsystem that happened to surface it."
     },
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
@@ -319,6 +339,26 @@
       "description": "Proving that a named client-side enforcement point is installed and current",
       "bucket_A_program": "programs/landing_merge_verdict.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.unique_lookup": {
+      "description": "Resolving an artefact a caller expects to be unique, when the search returns several",
+      "bucket_A_program": "programs/_ppa_corpus.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "ppa.proof_group_equivalence": {
+      "description": "Admitting an alternative way to establish an axis alongside the original",
+      "bucket_A_program": "programs/_ppa/feasibility.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.verdict_provenance": {
+      "description": "Emitting a verdict that will be quoted after the tree it judged has moved",
+      "bucket_A_program": "programs/benchmark_evidence_structure_check.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.lane_artefact_namespace": {
+      "description": "Landing a document one lane owns, when another lane owns a document of the same kind",
+      "bucket_A_program": "programs/enhancement_emit.py",
+      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
     }
   },
   "default_routing": {

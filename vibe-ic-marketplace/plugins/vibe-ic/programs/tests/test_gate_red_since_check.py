@@ -45,16 +45,23 @@ def _record(*gates, declared=None, listed_only=False):
     }
 
 
-def _row(gate="a gate", since=SHA, max_commits=10, **kw):
-    row = {"gate": gate, "since": since, "max_commits": max_commits,
-           "owner": "vibe-ic#1028", "why": "measured"}
+#: A stand-in `since_date`. Every fixture below injects its own age function,
+#: so nothing here reads this value as a clock — it is present because a row
+#: without it is `incomplete`, which is a different finding from the one under
+#: test in each case.
+DATE = "2026-01-01T00:00:00+00:00"
+
+
+def _row(gate="a gate", since=SHA, max_days=3, **kw):
+    row = {"gate": gate, "since": since, "since_date": DATE,
+           "max_days": max_days, "owner": "vibe-ic#1028", "why": "measured"}
     row.update(kw)
     return row
 
 
 def _age(n):
-    """An age function that answers `n` for everything, or None to mean
-    'this repository does not contain that commit'."""
+    """An age in DAYS for everything, or None to mean 'this repository does not
+    contain that commit, or cannot date it'."""
     return lambda sha: n
 
 
@@ -63,19 +70,19 @@ def _age(n):
 # ---------------------------------------------------------------------------
 def test_an_acknowledgement_past_its_bound_is_a_finding():
     findings, _, _ = G.adjudicate(_record(("a gate", "FAIL")),
-                                  [_row(max_commits=10)], _age(11))
+                                  [_row(max_days=3)], _age(4))
     assert [f.kind for f in findings] == ["expired"]
-    assert "11 commit(s) ago" in findings[0].detail
+    assert "4 day(s) ago" in findings[0].detail
     assert "vibe-ic#1028" in findings[0].detail, (
         "an expired row must name its owner — an expiry nobody is addressed to "
         "is the same unowned obligation this program replaces")
 
 
-def test_the_same_acknowledgement_one_commit_inside_its_bound_is_not():
+def test_the_same_acknowledgement_one_day_inside_its_bound_is_not():
     """The control. Without it, `expired` would be satisfied by a program that
     fails every acknowledged gate, which is a ban and not a deadline."""
     findings, known, new = G.adjudicate(_record(("a gate", "FAIL")),
-                                        [_row(max_commits=10)], _age(10))
+                                        [_row(max_days=3)], _age(3))
     assert findings == []
     assert known == ["a gate"] and new == []
 
@@ -114,7 +121,7 @@ def test_the_same_row_with_the_label_it_actually_has_is_accepted():
 # ---------------------------------------------------------------------------
 # L1 — an acknowledgement with no deadline cannot be written
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("missing", ["gate", "since", "max_commits"])
+@pytest.mark.parametrize("missing", list(G._REQUIRED_KEYS))
 def test_a_row_missing_a_required_field_is_incomplete(missing):
     row = _row()
     del row[missing]
@@ -131,7 +138,7 @@ def test_a_complete_row_is_not_incomplete():
 
 def test_a_non_integer_bound_is_incomplete_rather_than_crashing():
     findings, _, _ = G.adjudicate(_record(("a gate", "FAIL")),
-                                  [_row(max_commits="soon")], _age(1))
+                                  [_row(max_days="soon")], _age(1))
     assert [f.kind for f in findings] == ["incomplete"]
 
 
@@ -246,7 +253,7 @@ def test_cli_exits_0_when_every_red_is_new(tmp_path):
 
 def test_cli_exits_1_on_a_stale_row(tmp_path):
     res = _cli(tmp_path, _record(("a gate", "PASS")),
-               [_row(since="HEAD", max_commits=10)])
+               [_row(since="HEAD", max_days=3)])
     assert res.returncode == 1, res.stdout + res.stderr
     assert "[FAIL]" in res.stdout and "stale" in res.stdout
 
@@ -260,26 +267,40 @@ def test_cli_exits_2_and_announces_vacuous_on_an_empty_record(tmp_path):
     assert "[VACUOUS]" in res.stdout
 
 
+def _real(rev="HEAD~5"):
+    """A real commit of this repository AND its real date, or (None, None).
+
+    Both are needed together. A row carrying the stub `DATE` against a real
+    `since` is a `misdated` finding — the row and its own anchor disagreeing —
+    which is the cross-check doing its job and not the clause under test in
+    either arm below.
+    """
+    sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", rev],
+                         capture_output=True, text=True).stdout.strip()
+    if not sha:
+        return None, None
+    return sha, G.git_commit_date(ROOT)(sha)
+
+
 def test_cli_exits_1_on_an_expired_row_against_real_git_history(tmp_path):
     """The one case that uses the REAL clock rather than an injected one, so a
-    broken `git_age` cannot hide behind the pure-function tests above."""
-    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD~5"],
-                          capture_output=True, text=True).stdout.strip()
+    broken `git_age_days` cannot hide behind the pure-function tests above."""
+    head, when = _real()
     if not head:
         pytest.skip("shallow history")
     res = _cli(tmp_path, _record(("a gate", "FAIL")),
-               [_row(since=head, max_commits=0)])
+               [_row(since=head, since_date=when, max_days=0)])
     assert res.returncode == 1, res.stdout + res.stderr
     assert "expired" in res.stdout
 
 
 def test_cli_exits_0_for_the_same_history_inside_the_bound(tmp_path):
-    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD~5"],
-                          capture_output=True, text=True).stdout.strip()
+    head, when = _real()
     if not head:
         pytest.skip("shallow history")
     res = _cli(tmp_path, _record(("a gate", "FAIL")),
-               [_row(since=head, max_commits=G.MAX_BOUND_COMMITS)])
+               [_row(since=head, since_date=when,
+                     max_days=G.MAX_BOUND_DAYS)])
     assert res.returncode == 0, res.stdout + res.stderr
 
 
@@ -289,10 +310,10 @@ def test_cli_exits_0_for_the_same_history_inside_the_bound(tmp_path):
 def test_the_shipped_ledger_parses_and_every_row_is_complete():
     rows = G.load_ledger(LEDGER)
     for row in rows:
-        for key in ("gate", "since", "max_commits"):
+        for key in G._REQUIRED_KEYS:
             assert row.get(key) not in (None, ""), (
                 f"shipped ledger row {row.get('gate')!r} is missing {key}")
-        assert int(row["max_commits"]) > 0
+        assert float(row["max_days"]) > 0
 
 
 def test_an_absent_ledger_reads_as_empty_rather_than_raising(tmp_path):
@@ -304,7 +325,7 @@ def test_the_verdict_line_itself_carries_the_new_count(tmp_path):
     the partition has to survive on that line or it does not reach the landing
     reader at all — which would defeat the program's whole purpose."""
     res = _cli(tmp_path, _record(("today", "FAIL"), ("old", "FAIL")),
-               [_row(gate="old", since="HEAD", max_commits=G.MAX_BOUND_COMMITS)])
+               [_row(gate="old", since="HEAD", max_days=G.MAX_BOUND_DAYS)])
     last = res.stdout.strip().splitlines()[-1]
     assert "1 NEW red" in last and "1 acknowledged" in last, last
     assert "today" in last, last
@@ -313,7 +334,7 @@ def test_the_verdict_line_itself_carries_the_new_count(tmp_path):
 def test_the_verdict_line_says_zero_when_nothing_is_new(tmp_path):
     """The control: the count must track the record, not be decoration."""
     res = _cli(tmp_path, _record(("old", "FAIL")),
-               [_row(gate="old", since="HEAD", max_commits=G.MAX_BOUND_COMMITS)])
+               [_row(gate="old", since="HEAD", max_days=G.MAX_BOUND_DAYS)])
     last = res.stdout.strip().splitlines()[-1]
     assert "0 NEW red" in last and "1 acknowledged" in last, last
 
@@ -326,9 +347,9 @@ def test_a_bound_beyond_the_ceiling_is_a_finding():
     by editing the very file it adjudicates, and every other assertion here
     still passes."""
     findings, _, _ = G.adjudicate(_record(("a gate", "FAIL")),
-                                  [_row(max_commits=9999999)], _age(1))
+                                  [_row(max_days=9999999)], _age(1))
     assert [f.kind for f in findings] == ["unbounded"]
-    assert str(G.MAX_BOUND_COMMITS) in findings[0].detail
+    assert G._days(G.MAX_BOUND_DAYS) in findings[0].detail
 
 
 def test_a_bound_exactly_at_the_ceiling_is_accepted():
@@ -336,13 +357,13 @@ def test_a_bound_exactly_at_the_ceiling_is_accepted():
     be an off-by-one that pushes people to renew a week early forever."""
     findings, known, _ = G.adjudicate(
         _record(("a gate", "FAIL")),
-        [_row(max_commits=G.MAX_BOUND_COMMITS)], _age(1))
+        [_row(max_days=G.MAX_BOUND_DAYS)], _age(1))
     assert findings == [] and known == ["a gate"]
 
 
 def test_the_shipped_ledger_respects_the_ceiling():
     for row in G.load_ledger(LEDGER):
-        assert int(row["max_commits"]) <= G.MAX_BOUND_COMMITS, row
+        assert float(row["max_days"]) <= G.MAX_BOUND_DAYS, row
 
 
 def test_the_guard_is_in_the_smoke_floor_so_a_ledger_diff_reaches_it():

@@ -1,0 +1,9 @@
+##### ROTH=R90 ROTV=MX
+  row=IO_CORNER_NORTH_WEST site=GF_COR_Site orient=MX
+  row=IO_CORNER_NORTH_EAST site=GF_COR_Site orient=R180
+  row=IO_CORNER_SOUTH_EAST site=GF_COR_Site orient=MY
+  row=IO_CORNER_SOUTH_WEST site=GF_COR_Site orient=R0
+  row=IO_NORTH site=V_SITE orient=R0
+  row=IO_EAST site=H_SITE orient=MXR90
+  row=IO_SOUTH site=V_SITE orient=MX
+  row=IO_WEST site=H_SITE orient=R90

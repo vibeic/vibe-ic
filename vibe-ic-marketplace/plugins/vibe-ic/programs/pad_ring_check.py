@@ -258,6 +258,38 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
                 f"{cell.get('master')!r}, {def_rel} instantiates "
                 f"{comp.master!r}"))
 
+        # ── the DEF's orientation IS the report's, exactly ────────────────
+        # NOT re-derived from the footprint. A MIRROR and a ROTATION share a
+        # bounding box -- FS against S on a north pad, FN against E on a
+        # square corner -- so every extent, fit, abutment and spacing check in
+        # this file agrees either way, and a DEF reader deriving pin positions
+        # does not. MEASURED on this gate before the check existed: flipping a
+        # north pad FS -> S and a corner FN -> E in `padring.def` each left it
+        # rc 0 with ZERO findings. That is the whole defect class this step was
+        # corrected for, unguarded in the artefact a downstream tool parses.
+        rep_orient = PR.normalise_orient(cell.get("orient"))
+        def_orient = PR.normalise_orient(comp.orient)
+        if rep_orient is None:
+            out.append(_finding(
+                "PAD_ORIENT_UNDECLARED",
+                f"{inst!r} declares orientation {cell.get('orient')!r}, "
+                f"which is not one of {list(PR.DEF_ORIENTS)} — an orientation "
+                f"that cannot be read cannot be corroborated"))
+        elif def_orient is None:
+            out.append(_finding(
+                "PAD_ORIENT_UNREADABLE_IN_DEF",
+                f"{inst!r} is placed in {def_rel} with orientation "
+                f"{comp.orient!r}, which is not one of "
+                f"{list(PR.DEF_ORIENTS)}"))
+        elif def_orient != rep_orient:
+            out.append(_finding(
+                "PAD_ORIENT_DISAGREES_WITH_DEF",
+                f"{inst!r}: the report declares orientation {rep_orient!r} "
+                f"and {def_rel} places it {def_orient!r}. These may share a "
+                f"bounding box — a mirror is not a rotation — so no extent or "
+                f"spacing check can see the difference, and a reader deriving "
+                f"pin positions from the footprint gets a different cell"))
+
         w, h = cell.get("width_dbu"), cell.get("height_dbu")
         if not isinstance(w, int) or not isinstance(h, int) or w <= 0 or h <= 0:
             out.append(_finding(

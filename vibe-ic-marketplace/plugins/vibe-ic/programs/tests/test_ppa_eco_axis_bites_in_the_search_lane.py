@@ -33,6 +33,23 @@ axis is declared and inert.
 `test_finding_*` pins that behaviour so it cannot change by accident. If the
 route gap is closed, those tests must be updated DELIBERATELY -- which is the
 point of pinning it rather than leaving it as a sentence in a report.
+
+WHICH COMMITS ON THIS BRANCH CHANGE SHIPPED BEHAVIOUR
+=====================================================
+Three, and a reviewer should scrutinise exactly these:
+
+    4ca6b6eaf  ppa_search_run.py gains --project
+    9f693090c  _ppa/search.py: audit_manifest refuses eligibility on an
+               undeclared ECO stance
+    72f1543b4  ppa_search_run.py: the build warning names its consequence
+
+Everything else adds tests or files backlog items.
+
+CORRECTION TO 9f693090c's OWN MESSAGE, which cannot be edited once pushed: it
+says "THIS IS THE ONE COMMIT ON THIS BRANCH THAT CHANGES CALLER-VISIBLE
+BEHAVIOUR" and "it is last". Both were true when written and neither is now --
+4ca6b6eaf preceded it and 72f1543b4 followed it. It IS still self-contained and
+revertable on its own; it is not the only one, and it is not last.
 """
 import json
 import pathlib
@@ -830,13 +847,54 @@ def _campaign_trials():
 
 def _eco_only_policy():
     """The ECO axis alone. The bundles below carry ECO records and nothing
-    else, and a verdict dragged to UNDETERMINED by eight axes nobody supplied
-    evidence for would say nothing about design-for-ECO."""
+    else, so against the full table NINE axes have no evidence at all
+    (setup, hold, drv, drc, lvs, antenna, ir, em, equivalence) and the verdict
+    they drag to UNDETERMINED would say nothing about design-for-ECO.
+
+    NINE, measured -- ten axes in the table, one of them the subject. An earlier
+    revision of this docstring said "eight", which was wrong when written and is
+    the reason `test_eco_only_policy_leaves_exactly_nine_axes_unevidenced`
+    exists: a number in a comment that nothing checks is a number that drifts.
+    """
     pol = F.policy_from_document(
         {"required_views_by_axis": {F.ECO_AXIS: [{"stage": "post_route"}]},
          "eco_readiness": dict(CAMPAIGN_DECL)})
     return dataclasses.replace(
         pol, axes=tuple(a for a in pol.axes if a.name == F.ECO_AXIS))
+
+
+def test_the_prose_ten_is_the_declaration_and_the_kind_mix_sums_to_it():
+    """The other number this file's prose leans on.
+
+    Five comments say "all ten spare cells". That ten is not a literal anybody
+    typed twice -- it is `DECL["min_spare_cells"]`, and the per-kind floors sum
+    to it. Asserted because the sibling row exists for a docstring number that
+    was wrong and nothing checked; the difference here is that the prose traces
+    to one fixture, and this makes that traceability a test rather than a habit.
+    """
+    assert DECL["min_spare_cells"] == 10, DECL
+    assert sum(DECL["min_spare_cells_by_kind"].values()) == 10, DECL
+    # and the fixture the prose describes really does start from that number
+    kept = [m for m in kept_spares() if m["metric"] == F.ECO_M_COUNT]
+    assert kept and kept[0]["value"] == DECL["min_spare_cells"], kept
+
+
+def test_eco_only_policy_leaves_exactly_nine_axes_unevidenced():
+    """Pins the number the sibling docstring states.
+
+    The ECO-only bundles carry one axis's records; the table has ten. If a
+    future axis is added or removed, this reddens and the prose next to it gets
+    re-read -- which is the only way a count in a comment stays true.
+    """
+    recs = clean_nine()[:0] + spares()          # ECO records and nothing else
+    pol = F.policy_from_document(
+        {"required_views_by_axis": {F.ECO_AXIS: [dict(VIEW)]},
+         "eco_readiness": dict(DECL)})
+    r = F.promotion_verdict(cand("eco-only", recs), pol)
+    unevidenced = [a.name for a in r.axes if a.status == F.AXIS_UNDETERMINED]
+    assert len(F.DEFAULT_AXES) == 10, [a.name for a in F.DEFAULT_AXES]
+    assert len(unevidenced) == 9, unevidenced
+    assert F.ECO_AXIS not in unevidenced, unevidenced
 
 
 def test_real_the_axis_admits_the_eco_preserving_arm_and_refuses_the_winners(

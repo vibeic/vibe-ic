@@ -42,63 +42,105 @@ def rows():
 
 @pytest.fixture(scope="module")
 def age():
-    return G.git_age(REPO)
+    return G.git_age_days(REPO)
+
+
+#: A bound BELOW every shipped row's real age, used as the "must expire" arm.
+#: A day is too coarse now that the clock is a duration: the three PPA rows are
+#: hours old, so `max_days=1` would not expire them and the arm would report
+#: the rule broken when it is the stimulus that is wrong.
+_TIGHT_DAYS = 0.001
+
+
+def _ack(repo, gate, since, days, **kw):
+    """A synthetic acknowledgement, DATED FROM THE REPOSITORY like a real one.
+
+    `since_date` is read from the commit rather than typed, for the same reason
+    the shipped rows carry the commit's own date: a row whose stated date and
+    whose anchor disagree is a `misdated` finding, and a fixture that hand-typed
+    one would be testing the typo rather than the rule.
+    """
+    return dict(gate=gate, since=since,
+                since_date=G.git_commit_date(repo)(since),
+                max_days=days, **kw)
 
 
 @pytest.fixture(scope="module")
 def straddling_clock(rows):
-    """`(age, behind)` for the clock read at a tree the row's bound can straddle.
+    """`(age, behind)` for a clock read at a tree the row's bound can straddle.
 
-    WHY THE DIRECTION TESTS BELOW CANNOT READ THE CLOCK AT `HEAD` ANY MORE, AND
-    WHY THE ANSWER IS NOT A BIGGER BOUND.
+    WHY THE DIRECTION TESTS BELOW CANNOT READ THE CLOCK AT `HEAD`, AND WHY THE
+    ANSWER IS NOT A BIGGER BOUND.
 
     Each of them takes a shipped row and SYNTHESISES a bound either side of the
     red's measured age -- `behind - 1` must expire, `behind + 1` must not. That
     construction has a ceiling built into it that nothing declared: a bound is
-    only legal up to `MAX_BOUND_COMMITS`, and once the age read at HEAD passes
-    that ceiling NEITHER side can be built. `behind - 1` is refused as
-    `unbounded` before the expiry clause is ever reached, and `behind + 1`
-    clamps to the ceiling and lands BELOW the age, so it expires too. MEASURED
-    on this tree: `rows[0]` is 941 commits old at HEAD, ceiling 500, and all
-    three tests reported the wrong clause. Nothing about the ROWS changed --
-    every shipped row was already past its bound on the base, and no verdict
-    moves. What went dark is the PROOF.
+    only legal up to `MAX_BOUND_DAYS`, and once the age read at HEAD passes that
+    ceiling NEITHER side can be built. `behind - 1` is refused as `unbounded`
+    before the expiry clause is ever reached, and `behind + 1` lands above the
+    ceiling too. MEASURED on this tree: `rows[0]` is 6.1 days old at HEAD
+    against a 6-day ceiling, so both sides are out of reach at the endpoint the
+    production run uses.
 
-    `MAX_BOUND_COMMITS` is a ceiling on how large a bound may be DECLARED. It
-    is not a deadline, and raising it to fit a test would be raising a limit to
-    make a measurement come out -- so the endpoint moves instead, which costs
-    the tests nothing they were actually asserting. `git_age` already takes the
-    tree the clock counts TO: it is the production `--head-ref`, and a landing
-    passes its BASE for exactly this reason. Here it is handed a tree partway
-    along the row's own real history, so `behind` is a distance a row is
-    ALLOWED to declare a bound for, at any age the row ever reaches. `since` is
-    untouched, the row is the shipped one, and the history is this repository's.
+    `MAX_BOUND_DAYS` is a ceiling on how large a bound may be DECLARED. It is
+    not a deadline, and raising it to fit a test would be raising a limit to
+    make a measurement come out -- so the ENDPOINT moves instead, which costs
+    the tests nothing they were actually asserting. `git_age_days` already takes
+    the tree the clock counts TO: it is the production `--head-ref`, and a
+    landing passes its BASE for exactly this reason. Here it is handed a tree
+    partway along the row's own real history, so `behind` is a distance a row is
+    ALLOWED to declare a bound for. `since` is untouched, the row is the shipped
+    one, and the history is this repository's.
 
-    The endpoint is MEASURED, not assumed: merges make "the Nth commit after
-    `since`" and "N commits ahead of `since`" different numbers, so candidates
-    are probed with the same `age` the adjudicator uses and the first one
-    inside the window is returned.
+    THE ENDPOINT IS MEASURED, NOT ASSUMED. Under the duration clock the useful
+    endpoint is one whose DATE sits a workable number of days after `since`,
+    which is not the same as one a fixed number of commits along: commit dates
+    are not monotonic across merges, and 500 commits of a busy day can span
+    hours. So candidates are probed with the same `age` the adjudicator uses and
+    the first one landing inside the window is returned.
     """
     since = str(rows[0]["since"])
+    # ONE `git log`, NOT ONE PROBE PER COMMIT. There are thousands of commits
+    # between the oldest `since` and HEAD on this history, and calling the age
+    # function for each is two `git` processes apiece — minutes of fixture for
+    # a value that is a subtraction of two dates. The dates are read in one
+    # pass and the arithmetic is done here.
     listing = subprocess.run(
-        ["git", "-C", str(REPO), "rev-list", "--reverse", "--ancestry-path",
-         f"{since}..HEAD"], capture_output=True, text=True).stdout.split()
+        ["git", "-C", str(REPO), "log", "--reverse", "--ancestry-path",
+         "--format=%H %cI", f"{since}..HEAD"],
+        capture_output=True, text=True).stdout.splitlines()
     assert listing, (
         f"no commit of this repository lies between {since[:12]} and HEAD, so "
         f"no endpoint can be chosen and neither direction of the expiry rule "
         f"can be constructed here")
-    hi = G.MAX_BOUND_COMMITS - 1
-    for nth in (hi // 2, hi // 4, hi // 8, 32, 8, 2, 1):
-        if not 0 < nth <= len(listing):
+    start = G._parse_iso(G.git_commit_date(REPO)(since))
+    assert start is not None, f"this repo cannot date {since[:12]}"
+    # Room for `behind + 1` to stay legal, so direction two is constructible.
+    hi = G.MAX_BOUND_DAYS - 1
+    best = None
+    for line in listing:
+        sha, _, iso = line.partition(" ")
+        when = G._parse_iso(iso)
+        if when is None:
             continue
-        at = G.git_age(REPO, listing[nth - 1])
-        behind = at(since)
-        if behind is not None and 1 < behind <= hi:
-            return at, behind
+        behind = (when - start).total_seconds() / G._SECONDS_PER_DAY
+        # The LARGEST such endpoint gives the widest straddle, so a rounding
+        # difference at either side cannot collapse the window.
+        if _TIGHT_DAYS < behind <= hi and (best is None or behind > best[1]):
+            best = (sha, behind)
+    if best is not None:
+        sha, behind = best
+        at = G.git_age_days(REPO, sha)
+        # MEASURED THROUGH THE PRODUCTION FUNCTION, not trusted from the loop:
+        # if `git_age_days` and this arithmetic ever disagree, the direction
+        # tests must fail rather than silently assert against a number the
+        # adjudicator never sees.
+        assert at(since) == pytest.approx(behind), (at(since), behind)
+        return at, behind
     raise AssertionError(
         f"no tree between {since[:12]} and HEAD sits a declarable distance "
-        f"(2..{hi}) from it, so the expiry rule cannot be exercised in either "
-        f"direction on this history")
+        f"({_TIGHT_DAYS}..{hi} days) from it, so the expiry rule cannot be "
+        f"exercised in either direction on this history")
 
 
 def _record(states):
@@ -112,17 +154,25 @@ def _record(states):
 # THE ROWS ARE EVALUABLE. Each of these is a way a row goes quiet on its own.
 # --------------------------------------------------------------------------
 
-def test_every_row_carries_the_three_required_keys_and_the_three_human_ones(rows):
+def test_every_row_carries_the_required_keys_and_the_three_human_ones(rows):
     assert rows, "the ledger is empty -- the clock is stopped again"
+    # COLLECTED. An assert inside the row loop stops at the first offender, so
+    # the failure names one row and the next is reachable only by fixing that
+    # one and re-running. See the note on the bound test below.
+    missing = []
     for row in rows:
         for key in G._REQUIRED_KEYS:
-            assert key in row, f"{row.get('gate')!r} is missing {key!r}"
+            if key not in row:
+                missing.append(f"{row.get('gate')} is missing {key}")
         # Not required by the adjudicator, and required HERE. A bound with no
         # stated reason is indistinguishable at review time from a bound chosen
         # to reach past today, which is the one thing this mechanism cannot
         # detect for itself.
         for key in ("owner", "why", "bound_because"):
-            assert row.get(key), f"{row['gate']!r} has no {key}"
+            if not row.get(key):
+                missing.append(f"{row.get('gate')} has no {key}")
+    assert not missing, (
+        f"{len(missing)} field(s) missing across the ledger: " + "; ".join(missing))
 
 
 def test_every_row_names_a_gate_this_repo_actually_declares(rows):
@@ -131,26 +181,57 @@ def test_every_row_names_a_gate_this_repo_actually_declares(rows):
     the file looking like coverage, so it is checked against the declaring
     script directly."""
     script = HYGIENE.read_text(encoding="utf-8")
-    for row in rows:
-        assert f'"{row["gate"]}"' in script, (
-            f"{row['gate']!r} is named by no `run` line in "
-            f"{HYGIENE.relative_to(REPO)}")
+    undeclared = [row["gate"] for row in rows
+                  if f'"{row["gate"]}"' not in script]
+    assert not undeclared, (
+        f"{len(undeclared)} row(s) named by no `run` line in "
+        f"{HYGIENE.relative_to(REPO)}: " + ", ".join(undeclared))
 
 
 def test_every_since_resolves_to_a_commit_this_repo_contains(rows, age):
-    for row in rows:
-        assert age(row["since"]) is not None, (
-            f"{row['gate']!r} cites {row['since']!r}, which this repo does not "
-            f"have -- an unresolvable `since` is a clock that never advances")
+    unresolvable = [f"{row['gate']} cites {row['since']}" for row in rows
+                    if age(row["since"]) is None]
+    assert not unresolvable, (
+        f"{len(unresolvable)} row(s) cite a commit this repo does not have -- "
+        "an unresolvable `since` is a clock that never advances: "
+        + "; ".join(unresolvable))
 
 
 def test_every_bound_is_a_bound(rows):
+    bad = []
     for row in rows:
-        bound = row["max_commits"]
-        assert isinstance(bound, int) and not isinstance(bound, bool)
-        assert 0 < bound <= G.MAX_BOUND_COMMITS, (
-            f"{row['gate']!r} declares {bound}, outside "
-            f"1..{G.MAX_BOUND_COMMITS}")
+        bound = row["max_days"]
+        if not isinstance(bound, (int, float)) or isinstance(bound, bool):
+            bad.append(f"{row['gate']} declares {bound!r}, not a number")
+        elif not 0 < bound <= G.MAX_BOUND_DAYS:
+            bad.append(f"{row['gate']} declares {bound}, outside "
+                       f"0..{G.MAX_BOUND_DAYS} days")
+    assert not bad, f"{len(bad)} bound(s) are not bounds: " + "; ".join(bad)
+
+
+def test_every_since_date_is_the_date_of_the_commit_it_names(rows):
+    """The row's anchor and the row's stated date must agree.
+
+    A row that says it was acknowledged on one date while the commit it cites
+    is dated another is misreporting its own age to every human who reads it —
+    and re-dating a row to keep it alive is the one act this file forbids
+    outright. It buys nothing in any case (the clock reads the repository, not
+    this field), which is exactly why the disagreement would otherwise go
+    unnoticed until somebody tried to audit a deadline by eye.
+    """
+    dated = G.git_commit_date(REPO)
+    wrong = []
+    for row in rows:
+        actual = dated(str(row["since"]))
+        if actual is None:
+            wrong.append(f"{row['gate']}: this repo cannot date "
+                         f"{str(row['since'])[:12]}")
+        elif not G._same_instant(str(row["since_date"]), actual):
+            wrong.append(f"{row['gate']}: row says {row['since_date']}, "
+                         f"commit {str(row['since'])[:12]} says {actual}")
+    assert not wrong, (
+        f"{len(wrong)} row(s) disagree with their own anchor: "
+        + "; ".join(wrong))
 
 
 # --------------------------------------------------------------------------
@@ -167,13 +248,13 @@ def test_a_row_whose_since_has_fallen_past_its_bound_refuses(
     """
     age, behind = straddling_clock
     row = dict(rows[0])
-    assert 1 < behind <= G.MAX_BOUND_COMMITS, behind
-    row["max_commits"] = behind - 1
+    assert _TIGHT_DAYS < behind <= G.MAX_BOUND_DAYS, behind
+    row["max_days"] = behind - 1
     findings, _, _ = G.adjudicate(
         _record({row["gate"]: "FAIL"}), [row], age)
     kinds = [f.kind for f in findings]
     assert "expired" in kinds, kinds
-    assert str(behind) in " ".join(f.detail for f in findings), (
+    assert G._days(behind) in " ".join(f.detail for f in findings), (
         "the refusal must say how far behind it actually is, not merely that "
         "it is behind")
 
@@ -191,8 +272,8 @@ def test_the_same_row_inside_its_bound_does_not_refuse(
     """
     age, behind = straddling_clock
     row = dict(rows[0])
-    row["max_commits"] = behind + 1
-    assert row["max_commits"] <= G.MAX_BOUND_COMMITS, (
+    row["max_days"] = behind + 1
+    assert row["max_days"] <= G.MAX_BOUND_DAYS, (
         "the endpoint left no room for a bound ABOVE the age; direction two "
         "cannot be constructed and must not be silently weakened to fit")
     findings, known, _ = G.adjudicate(
@@ -213,40 +294,116 @@ def test_a_gate_not_named_by_any_row_does_not_stop_a_landing(rows, age):
                                                          for f in findings]
 
 
+# ---------------------------------------------------------------------------
+# THIS MODULE WAS VALIDATED AS AN INSTRUMENT, 2026-08-22.
+#
+# A suite that passes proves nothing about a mechanism unless it FAILS when the
+# mechanism is broken. Both sites of the deciding clause in
+# `gate_red_since_check` --
+#
+#     if behind > bound:        (x2)   ->   if False:
+#
+# were mutated, and the mutation was confirmed to change observable behaviour
+# BEFORE the suite's verdict was read (a substitution that merely reports
+# "applied" proves only that a string was found):
+#
+#     pristine   a row 999 behind a bound of 1  ->  findings ['expired']
+#     mutant     the same row                   ->  findings []
+#
+# Against that mutant this module goes 1 failed -> 7 failed: SIX guards flip
+# from pass to fail --
+#
+#     test_a_row_whose_since_has_fallen_past_its_bound_refuses
+#     test_the_bound_is_what_refuses_and_not_some_other_clause
+#     test_renewing_by_moving_since_forward_is_what_silences_it
+#     test_no_environment_variable_can_move_the_clock
+#     test_a_candidates_own_commits_do_not_expire_a_row_it_never_touched
+#     test_a_candidate_cannot_renew_its_own_overdue_row
+#     test_the_mechanism_still_expires_a_gate_that_DID_run
+#
+# -- so they sit BEHIND the deadline rather than restating it. The seventh is
+# the ceiling failure this module reports on the shipped rows either way.
+# ---------------------------------------------------------------------------
+
+
 def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
     """The mutation arm on the SHIPPED rows.
 
-    Every row is driven red, then the SAME row is driven red again with its
-    bound raised to the ceiling. If a row refuses in both arms, something other
-    than the deadline is failing it and the row's number is decorative.
+    Every row is driven red at an age one commit PAST the bound it typed for
+    itself, and then again at an age exactly AT it. The first must report
+    `expired` and the second must report nothing at all -- so what decides is
+    the comparison between the red's age and this row's own number, and nothing
+    else about the row.
+
+    WHY THE AGE IS VARIED AND NOT THE BOUND. Until v1.11.70 this held the real
+    age fixed and raised the bound to `MAX_BOUND_COMMITS`, expecting `expired`
+    to stop. That is the same question only while every shipped row is YOUNGER
+    than the ceiling. The ceiling is 500 commits, and MEASURED on 2026-08-22 this
+    repo took 539 commits in the 5.69 days from c5d7f2d00e1d (2026-08-16 19:07)
+    to a4caccefe -- 94.7 a day, which makes that ceiling a 5.3-DAY deadline. So
+    two rows citing c5d7f2d00e1d -- 'L-doc field producer' (bound 210, itself
+    2.2 days) and 'evidence citation resolves' (bound 140, 1.5 days) -- stood
+    539 commits back, 39 PAST the ceiling. For a row in that state no
+    legal bound clears the deadline, so the old loose arm asked `adjudicate`
+    for a verdict it is designed never to give, and then read the refusal as
+    evidence that "something other than the deadline is failing it". That is
+    precisely backwards: it was the deadline, and only the deadline. The bound
+    had not become decorative; it had been overtaken. Varying the AGE asks the
+    intended question at any repo age and never has to name a number past the
+    ceiling, so it cannot expire on its own the way the old form did.
+
+    The at-bound arm asserts NO findings rather than merely no `expired` one.
+    `adjudicate` returns early for `stale`, `unresolvable` and `incomplete`, so
+    a row failing for one of those produces no `expired` finding either and
+    "not any expired" would have passed on it -- green because the row was
+    broken in a different way, which is the one thing this arm must not do.
     """
+    # COLLECTED, then asserted once. `assert` inside this loop stopped at the
+    # first offending row, so the failure could only ever say "a row" and never
+    # "how many". Measured on the shipped tree: it reported ONE decorative bound
+    # while TWO were present, and the second was only reachable by deleting the
+    # first from the file and re-running. A check that under-reports by a factor
+    # of two is the same defect this test exists to catch, in the test itself.
+    never_expires = []
+    decorative = []
+    past_ceiling = []
     for row in rows:
         red = _record({row["gate"]: "FAIL"})
-        tight, _, _ = G.adjudicate(red, [dict(row, max_commits=1)], age)
+        tight, _, _ = G.adjudicate(
+            red, [dict(row, max_days=_TIGHT_DAYS)], age)
         loose, _, _ = G.adjudicate(
-            red, [dict(row, max_commits=G.MAX_BOUND_COMMITS)], age)
-        assert any(f.kind == "expired" for f in tight), (
-            f"{row['gate']!r} does not expire even at a bound of 1")
+            red, [dict(row, max_days=G.MAX_BOUND_DAYS)], age)
+        if not any(f.kind == "expired" for f in tight):
+            never_expires.append(row["gate"])
 
         behind = age(row["since"])
-        if behind is not None and behind > G.MAX_BOUND_COMMITS:
+        if behind is not None and behind > G.MAX_BOUND_DAYS:
             # PAST THE CEILING, WHICH IS A DIFFERENT CLAUSE AND MUST BE SAID SO.
-            # A red older than MAX_BOUND_COMMITS cannot be covered by ANY legal
+            # A red older than MAX_BOUND_DAYS cannot be covered by ANY legal
             # bound, so "it still expires at the ceiling" is true and is not
             # evidence that some unnamed clause is deciding it. Measured
             # 2026-08-22: `L-doc field producer` and `evidence citation
             # resolves` reached 501 against a ceiling of 500. Asserting the
             # generic message there would have reported a defect that is not
-            # one — and saying nothing would have hidden a row that can never
+            # one -- and saying nothing would have hidden a row that can never
             # again be legitimately acknowledged, only renewed or fixed.
-            assert any(f.kind == "expired" for f in loose), (
-                f"{row['gate']!r} is {behind} behind, past the ceiling of "
-                f"{G.MAX_BOUND_COMMITS}, so it must expire even at the ceiling")
+            if not any(f.kind == "expired" for f in loose):
+                past_ceiling.append((row["gate"], behind))
             continue
 
-        assert not any(f.kind == "expired" for f in loose), (
-            f"{row['gate']!r} still expires at the ceiling while only "
-            f"{behind} behind -- its stated bound is not what is deciding this")
+        if any(f.kind == "expired" for f in loose):
+            decorative.append(row["gate"])
+    assert not never_expires, (
+        f"{len(never_expires)} row(s) do not expire even at a bound of "
+        f"{_TIGHT_DAYS} day(s): "
+        f"{never_expires}")
+    assert not past_ceiling, (
+        f"{len(past_ceiling)} row(s) are past the ceiling of "
+        f"{G.MAX_BOUND_DAYS} day(s) and so must expire even at the ceiling: "
+        f"{past_ceiling}")
+    assert not decorative, (
+        f"{len(decorative)} row(s) still expire at the ceiling -- their stated "
+        f"bound is not what is deciding them: {decorative}")
 
 
 def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):
@@ -254,16 +411,28 @@ def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):
     judgement and not a stuck output."""
     head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
+    # Same correction as above, for the same reason: one assert per loop reports
+    # one row and hides the rest.
+    not_expiring = []
+    walled = []
     for row in rows:
         expired, _, _ = G.adjudicate(
-            _record({row["gate"]: "FAIL"}), [dict(row, max_commits=1)], age)
-        assert any(f.kind == "expired" for f in expired)
+            _record({row["gate"]: "FAIL"}),
+            [dict(row, max_days=_TIGHT_DAYS)], age)
+        if not any(f.kind == "expired" for f in expired):
+            not_expiring.append(row["gate"])
         renewed, _, _ = G.adjudicate(
             _record({row["gate"]: "FAIL"}),
-            [dict(row, since=head, max_commits=1)], age)
-        assert not any(f.kind == "expired" for f in renewed), (
-            f"{row['gate']!r} cannot be renewed by moving `since` to HEAD, so "
-            f"the row has no legitimate way out and the mechanism is a wall")
+            [_ack(REPO, row["gate"], head, _TIGHT_DAYS)], age)
+        if any(f.kind == "expired" for f in renewed):
+            walled.append(row["gate"])
+    assert not not_expiring, (
+        f"{len(not_expiring)} row(s) do not expire at a bound of "
+        f"{_TIGHT_DAYS} day(s): "
+        f"{not_expiring}")
+    assert not walled, (
+        f"{len(walled)} row(s) cannot be renewed by moving `since` to HEAD, so "
+        f"they have no legitimate way out and the mechanism is a wall: {walled}")
 
 
 # --------------------------------------------------------------------------
@@ -298,12 +467,12 @@ def test_no_environment_variable_can_move_the_clock(rows, straddling_clock):
     """
     age, behind = straddling_clock
     row = dict(rows[0])
-    row["max_commits"] = behind - 1
+    row["max_days"] = behind - 1
     red = _record({row["gate"]: "FAIL"})
     before = [f.line() for f in G.adjudicate(red, [row], age)[0]]
     assert any("expired" in line for line in before)
-    poison = {"GATE_RED_SINCE_MAX_COMMITS": "99999",
-              "GATE_RED_SINCE_SKIP": "1", "MAX_BOUND_COMMITS": "99999",
+    poison = {"GATE_RED_SINCE_MAX_DAYS": "99999",
+              "GATE_RED_SINCE_SKIP": "1", "MAX_BOUND_DAYS": "99999",
               "GATE_RED_SINCE_AMNESTY": "all", "CI": "true"}
     saved = {k: os.environ.get(k) for k in poison}
     os.environ.update(poison)
@@ -321,7 +490,7 @@ def test_no_environment_variable_can_move_the_clock(rows, straddling_clock):
 def test_the_ceiling_cannot_be_raised_from_the_file_it_adjudicates(rows, age):
     """A row asking for more than the ceiling is refused, so the mechanism
     cannot be switched off by editing the ledger."""
-    row = dict(rows[0], max_commits=G.MAX_BOUND_COMMITS + 1)
+    row = dict(rows[0], max_days=G.MAX_BOUND_DAYS + 1)
     findings, _, _ = G.adjudicate(
         _record({row["gate"]: "FAIL"}), [row], age)
     assert findings, "a bound above the ceiling was accepted"
@@ -331,13 +500,27 @@ def test_the_ceiling_cannot_be_raised_from_the_file_it_adjudicates(rows, age):
 # THE CANDIDATE MUST NOT MOVE THE CLOCK.
 # --------------------------------------------------------------------------
 
+#: Fixture commits are ONE DAY APART, and that is load-bearing now.
+#: The clock is a duration, so five commits written in the same second are five
+#: commits zero days apart: every age would be 0.0, no bound could be straddled,
+#: and each direction test would pass for the wrong reason. Dates are stamped
+#: explicitly rather than left to the wall clock so the fixture means the same
+#: thing on a fast host and a slow one.
+_FIXTURE_DAY = "2026-01-{:02d}T00:00:00+00:00"
+
+
 def _repo(tmp_path):
-    """A history: since -> base -> three candidate commits."""
+    """A history: since -> base -> three candidate commits, one day apart."""
     r = tmp_path / "r"
     r.mkdir()
-    def git(*a):
+    def git(*a, day=None):
+        env = None
+        if day is not None:
+            env = dict(os.environ,
+                       GIT_AUTHOR_DATE=_FIXTURE_DAY.format(day),
+                       GIT_COMMITTER_DATE=_FIXTURE_DAY.format(day))
         return subprocess.run(["git", "-C", str(r), *a], capture_output=True,
-                              text=True, check=False)
+                              text=True, check=False, env=env)
     git("init", "-q")
     git("config", "user.email", "t@example.invalid")
     git("config", "user.name", "t")
@@ -345,7 +528,7 @@ def _repo(tmp_path):
     for i in range(5):
         (r / f"f{i}").write_text(str(i), encoding="utf-8")
         git("add", "-A")
-        git("commit", "-q", "-m", f"c{i}")
+        git("commit", "-q", "-m", f"c{i}", day=i + 1)
         shas.append(git("rev-parse", "HEAD").stdout.strip())
     return r, shas
 
@@ -353,8 +536,8 @@ def _repo(tmp_path):
 def test_the_clock_counts_to_the_ref_it_is_given(tmp_path):
     r, shas = _repo(tmp_path)
     since, base = shas[0], shas[1]
-    assert G.git_age(r, base)(since) == 1
-    assert G.git_age(r, "HEAD")(since) == 4
+    assert G.git_age_days(r, base)(since) == 1.0
+    assert G.git_age_days(r, "HEAD")(since) == 4.0
 
 
 def test_a_candidates_own_commits_do_not_expire_a_row_it_never_touched(tmp_path):
@@ -366,16 +549,16 @@ def test_a_candidates_own_commits_do_not_expire_a_row_it_never_touched(tmp_path)
     either direction."""
     r, shas = _repo(tmp_path)
     since, base = shas[0], shas[1]
-    row = {"gate": "some gate", "since": since, "max_commits": 2}
+    row = _ack(r, "some gate", since, 2)
     red = _record({"some gate": "FAIL"})
 
-    against_base, _, _ = G.adjudicate(red, [row], G.git_age(r, base))
+    against_base, _, _ = G.adjudicate(red, [row], G.git_age_days(r, base))
     assert [f.kind for f in against_base] == [], (
-        "one commit behind a bound of two must not be overdue")
+        "one day behind a bound of two must not be overdue")
 
-    against_head, _, _ = G.adjudicate(red, [row], G.git_age(r, "HEAD"))
+    against_head, _, _ = G.adjudicate(red, [row], G.git_age_days(r, "HEAD"))
     assert any(f.kind == "expired" for f in against_head), (
-        "four commits behind a bound of two must be overdue — otherwise this "
+        "four days behind a bound of two must be overdue — otherwise this "
         "test proves nothing about which ref was used")
 
 
@@ -420,44 +603,53 @@ def _repo_with_ledger(tmp_path, base_rows, head_rows):
     """A history whose ledger differs between the base commit and HEAD."""
     r = tmp_path / "lr"
     (r / "tools" / "ci").mkdir(parents=True)
-    def git(*a):
+    day = [0]
+    def git(*a, dated=False):
+        env = None
+        if dated:
+            day[0] += 1
+            env = dict(os.environ,
+                       GIT_AUTHOR_DATE=_FIXTURE_DAY.format(day[0]),
+                       GIT_COMMITTER_DATE=_FIXTURE_DAY.format(day[0]))
         return subprocess.run(["git", "-C", str(r), *a], capture_output=True,
-                              text=True, check=False)
+                              text=True, check=False, env=env)
     git("init", "-q")
     git("config", "user.email", "t@example.invalid")
     git("config", "user.name", "t")
     (r / "seed").write_text("x", encoding="utf-8")
-    git("add", "-A"); git("commit", "-q", "-m", "seed")
+    git("add", "-A"); git("commit", "-q", "-m", "seed", dated=True)
     since = git("rev-parse", "HEAD").stdout.strip()
 
-    # Commits BETWEEN `since` and the base, so a row bounded at 1 is genuinely
-    # past its bound at the base rather than exactly on it — `adjudicate` fails
-    # on `behind > bound`, and a fixture sitting on the boundary would prove
-    # nothing about which ledger was read.
+    # Commits BETWEEN `since` and the base — a DAY apart now that the clock is
+    # a duration — so a row bounded at 1 day is genuinely past its bound at the
+    # base rather than exactly on it. `adjudicate` fails on `behind > bound`,
+    # and a fixture sitting on the boundary would prove nothing about which
+    # ledger was read. Same commits, dates instead of counts.
     for i in range(3):
         (r / f"b{i}").write_text("x", encoding="utf-8")
-        git("add", "-A"); git("commit", "-q", "-m", f"base{i}")
+        git("add", "-A"); git("commit", "-q", "-m", f"base{i}", dated=True)
 
     led = r / G.LEDGER_REL
     def write(rows):
         led.write_text(json.dumps({"acknowledged": rows}), encoding="utf-8")
-    write([dict(row, since=since) for row in base_rows])
-    git("add", "-A"); git("commit", "-q", "-m", "base ledger")
+    write([_ack(r, row["gate"], since, row["max_days"]) for row in base_rows])
+    git("add", "-A"); git("commit", "-q", "-m", "base ledger", dated=True)
     base = git("rev-parse", "HEAD").stdout.strip()
 
     for i in range(4):                      # the candidate's own commits
         (r / f"c{i}").write_text("x", encoding="utf-8")
-        git("add", "-A"); git("commit", "-q", "-m", f"cand{i}")
-    write([dict(row, since=git("rev-parse", "HEAD").stdout.strip())
-           for row in head_rows])
-    git("add", "-A"); git("commit", "-q", "-m", "candidate renews the row")
+        git("add", "-A"); git("commit", "-q", "-m", f"cand{i}", dated=True)
+    head = git("rev-parse", "HEAD").stdout.strip()
+    write([_ack(r, row["gate"], head, row["max_days"]) for row in head_rows])
+    git("add", "-A"); git("commit", "-q", "-m", "candidate renews the row",
+                          dated=True)
     return r, since, base
 
 
 def test_the_ledger_comes_from_the_ref_not_the_working_tree(tmp_path):
     r, since, base = _repo_with_ledger(
-        tmp_path, [{"gate": "g", "max_commits": 1}],
-        [{"gate": "g", "max_commits": 1}])
+        tmp_path, [{"gate": "g", "max_days": 1}],
+        [{"gate": "g", "max_days": 1}])
     at_base = G.load_ledger_from_ref(r, base)
     assert [row["since"] for row in at_base] == [since], at_base
     on_disk = G.load_ledger(r / G.LEDGER_REL)
@@ -470,25 +662,25 @@ def test_a_candidate_cannot_renew_its_own_overdue_row(tmp_path):
     `since` forward to HEAD in its own tree, which WOULD silence it — and does
     not, because the landing reads the rows at the base."""
     r, since, base = _repo_with_ledger(
-        tmp_path, [{"gate": "g", "max_commits": 1}],
-        [{"gate": "g", "max_commits": 1}])
+        tmp_path, [{"gate": "g", "max_days": 1}],
+        [{"gate": "g", "max_days": 1}])
     red = _record({"g": "FAIL"})
 
     silenced, _, _ = G.adjudicate(
-        red, G.load_ledger(r / G.LEDGER_REL), G.git_age(r, base))
+        red, G.load_ledger(r / G.LEDGER_REL), G.git_age_days(r, base))
     assert not any(f.kind == "expired" for f in silenced), (
         "the candidate's own ledger must be the one that WOULD silence it, or "
         "this test is not exercising the attack")
 
     held, _, _ = G.adjudicate(
-        red, G.load_ledger_from_ref(r, base), G.git_age(r, base))
+        red, G.load_ledger_from_ref(r, base), G.git_age_days(r, base))
     assert any(f.kind == "expired" for f in held), (
         "reading the rows at the base did not keep the row overdue")
 
 
 def test_a_ref_that_predates_the_ledger_is_empty_not_an_error(tmp_path):
     r, since, base = _repo_with_ledger(
-        tmp_path, [{"gate": "g", "max_commits": 1}], [])
+        tmp_path, [{"gate": "g", "max_days": 1}], [])
     assert G.load_ledger_from_ref(r, since) == []
 
 
@@ -506,7 +698,7 @@ def test_a_ref_that_does_not_exist_is_an_error(tmp_path):
     channels. A bare `pytest.raises(ValueError)` accepted either grading.
     """
     r, since, base = _repo_with_ledger(
-        tmp_path, [{"gate": "g", "max_commits": 1}], [])
+        tmp_path, [{"gate": "g", "max_days": 1}], [])
     with pytest.raises(G.LedgerUnreadable) as caught:
         G.load_ledger_from_ref(r, "no-such-ref-9f3a")
     named = str(caught.value)
@@ -563,7 +755,7 @@ def test_the_verdict_says_which_tree_the_ages_were_counted_to(tmp_path):
     line = next((l for l in out.splitlines() if "clock:" in l), "")
     assert line, out
     assert shas[1][:7] in line or shas[1] in line, line
-    assert "ages counted to" in line
+    assert "ages are DAYS, counted to" in line
 
 
 def test_the_verdict_says_where_the_rows_came_from(tmp_path):
@@ -608,9 +800,9 @@ def test_a_gate_that_did_not_run_is_never_reported_expired(tmp_path, state):
     for a gate that was never executed. "I could not look" must not reach a
     verdict as "I looked and it was bad"."""
     r, shas = _repo(tmp_path)
-    row = {"gate": "g", "since": shas[0], "max_commits": 1}
+    row = _ack(r, "g", shas[0], 1)
     findings, known, new = G.adjudicate(
-        _record({"g": state}), [row], G.git_age(r, "HEAD"))
+        _record({"g": state}), [row], G.git_age_days(r, "HEAD"))
     assert [f.kind for f in findings] == [], [f.line() for f in findings]
     assert "g" not in known and "g" not in new
 
@@ -618,7 +810,7 @@ def test_a_gate_that_did_not_run_is_never_reported_expired(tmp_path, state):
 @pytest.mark.parametrize("state", [G._LISTED, G._OTHER_SHARD, "OUT_OF_SCOPE", "QUEUED"])
 def test_a_gate_that_did_not_run_is_not_counted_red(tmp_path, state):
     _, _, new = G.adjudicate(
-        _record({"other": state}), [], G.git_age(tmp_path, "HEAD"))
+        _record({"other": state}), [], G.git_age_days(tmp_path, "HEAD"))
     assert new == [], new
 
 
@@ -626,9 +818,9 @@ def test_the_mechanism_still_expires_a_gate_that_DID_run(tmp_path):
     """The direction that keeps the exemption honest: widening what cannot be
     adjudicated must not turn the deadline into something that never fires."""
     r, shas = _repo(tmp_path)
-    row = {"gate": "g", "since": shas[0], "max_commits": 1}
+    row = _ack(r, "g", shas[0], 1)
     findings, _, _ = G.adjudicate(
-        _record({"g": "FAIL"}), [row], G.git_age(r, "HEAD"))
+        _record({"g": "FAIL"}), [row], G.git_age_days(r, "HEAD"))
     assert any(f.kind == "expired" for f in findings), [f.line() for f in findings]
 
 
@@ -638,7 +830,7 @@ def test_the_cli_names_the_rows_it_could_not_adjudicate(tmp_path):
     r, shas = _repo(tmp_path)
     led = tmp_path / "led.json"
     led.write_text(json.dumps({"acknowledged": [
-        {"gate": "g", "since": shas[0], "max_commits": 1}]}), encoding="utf-8")
+        _ack(r, "g", shas[0], 1)]}), encoding="utf-8")
     rec = tmp_path / "rec.json"
     rec.write_text(json.dumps(_record({"g": G._OTHER_SHARD, "x": "PASS"})),
                    encoding="utf-8")
@@ -699,7 +891,7 @@ def test_a_shallow_repository_that_still_resolves_is_treated_as_normal(tmp_path)
     assert G.repository_is_shallow(REPO) is not None, (
         "this checkout is no longer shallow — the case below is still correct "
         "but this test no longer proves the distinction on it")
-    age = G.git_age(REPO, "HEAD")
+    age = G.git_age_days(REPO, "HEAD")
     rows = G.load_ledger(LEDGER)
     assert rows and all(age(r["since"]) is not None for r in rows), (
         "a shipped row stopped resolving in a shallow-but-complete checkout")
@@ -712,7 +904,7 @@ def test_a_truncated_clone_names_the_truncation_and_a_remedy(tmp_path):
         pytest.skip("git did not produce a shallow clone here")
     led = tmp_path / "led.json"
     led.write_text(json.dumps({"acknowledged": [
-        {"gate": "g", "since": shas[0], "max_commits": 1}]}), encoding="utf-8")
+        _ack(r, "g", shas[0], 1)]}), encoding="utf-8")
     rec = _rec_file(tmp_path, {"g": "FAIL"})
     out = _cli(shallow, rec, "--ledger", str(led)).stdout
     assert "SHALLOW clone" in out, out
@@ -727,7 +919,177 @@ def test_a_full_repository_with_a_bad_sha_does_not_blame_shallowness(tmp_path):
     assert G.repository_is_shallow(r) is None
     led = tmp_path / "led.json"
     led.write_text(json.dumps({"acknowledged": [
-        {"gate": "g", "since": "0" * 40, "max_commits": 1}]}), encoding="utf-8")
+        {"gate": "g", "since": "0" * 40,
+         "since_date": "2026-01-01T00:00:00+00:00",
+         "max_days": 1}]}), encoding="utf-8")
     out = _cli(r, _rec_file(tmp_path, {"g": "FAIL"}), "--ledger", str(led)).stdout
     assert "unresolvable" in out.lower()
     assert "SHALLOW" not in out, out
+
+
+# --------------------------------------------------------------------------
+# A MERGE IS NOT AN AGE. The defect this clock was changed for, staged.
+# --------------------------------------------------------------------------
+
+def _assembly(tmp_path, branches=97):
+    """`since` -> a base -> an assembly of `branches` merged side branches.
+
+    Every commit is dated ONE DAY after `since` — including all 97 merges — so
+    the assembly adds no elapsed time at all and adds a great deal of topology.
+    That separates the two clocks cleanly: the commit count moves by hundreds,
+    the calendar does not move at all, and any verdict that changes between the
+    two trees changed because of the merge and nothing else.
+    """
+    r = tmp_path / "asm"
+    r.mkdir()
+    day1 = _FIXTURE_DAY.format(1)
+    day2 = _FIXTURE_DAY.format(2)
+
+    def git(*a, when=day2):
+        return subprocess.run(
+            ["git", "-C", str(r), *a], capture_output=True, text=True,
+            check=False,
+            env=dict(os.environ, GIT_AUTHOR_DATE=when,
+                     GIT_COMMITTER_DATE=when))
+
+    git("init", "-q", "-b", "trunk")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (r / "seed").write_text("x", encoding="utf-8")
+    git("add", "-A"); git("commit", "-q", "-m", "since", when=day1)
+    since = git("rev-parse", "HEAD").stdout.strip()
+    (r / "base").write_text("x", encoding="utf-8")
+    git("add", "-A"); git("commit", "-q", "-m", "base")
+    before = git("rev-parse", "HEAD").stdout.strip()
+
+    for b in range(branches):
+        git("checkout", "-q", "-b", f"side{b}", since)
+        (r / f"s{b}").write_text("x", encoding="utf-8")
+        git("add", "-A"); git("commit", "-q", "-m", f"side{b}")
+        git("checkout", "-q", "trunk")
+        git("merge", "-q", "--no-ff", "-m", f"merge side{b}", f"side{b}")
+    return r, since, before, git("rev-parse", "HEAD").stdout.strip()
+
+
+def test_a_ninety_seven_branch_merge_does_not_move_either_verdict(tmp_path):
+    """The measurement that changed the clock, reproduced as a fixture.
+
+    MEASURED 2026-08-22 on `land/two-assembled`: the five shipped rows read
+    1590-2109 commits against bounds of 140-210 and ALL FIVE would have been
+    called expired — by an assembly none of their authors had anything to do
+    with. Here the same shape is built deliberately: 97 side branches merged in,
+    every one of them dated the same day as the tree before the assembly.
+
+    Both directions are checked, because a clock that never expires anything
+    would also pass a one-directional version of this test. The live row must
+    stay live and the overdue row must stay overdue.
+    """
+    r, since, before, after = _assembly(tmp_path)
+
+    n_before = int(subprocess.run(
+        ["git", "-C", str(r), "rev-list", "--count", f"{since}..{before}"],
+        capture_output=True, text=True).stdout)
+    n_after = int(subprocess.run(
+        ["git", "-C", str(r), "rev-list", "--count", f"{since}..{after}"],
+        capture_output=True, text=True).stdout)
+    assert n_after > n_before + 100, (
+        f"the fixture did not actually inflate the topology ({n_before} -> "
+        f"{n_after}), so it cannot demonstrate anything about a merge")
+
+    live = _ack(r, "g", since, 3)          # 1 day old, bound 3 days
+    overdue = _ack(r, "g", since, 0.5)     # 1 day old, bound half a day
+    red = _record({"g": "FAIL"})
+
+    for label, row, expect in (("live", live, False), ("overdue", overdue, True)):
+        was = [f.kind for f in G.adjudicate(
+            red, [row], G.git_age_days(r, before))[0]]
+        now = [f.kind for f in G.adjudicate(
+            red, [row], G.git_age_days(r, after))[0]]
+        assert ("expired" in was) is expect, (label, was)
+        assert now == was, (
+            f"the {label} row's verdict moved across a {n_after - n_before}-"
+            f"commit merge that added no elapsed time: {was} -> {now}")
+
+    # AND THE CLOCK THAT WAS REPLACED WOULD HAVE FLIPPED IT. Without this the
+    # test above could pass on a fixture too small to reproduce the defect, and
+    # would then be asserting that nothing happens rather than that this clock
+    # is immune to something that really does happen.
+    assert n_after > 3 >= n_before, (
+        f"a commit-count bound of 3 would not have straddled this assembly "
+        f"({n_before} -> {n_after}), so the old clock's failure is not "
+        f"reproduced and the immunity above is untested")
+
+
+def test_a_row_whose_commit_cannot_be_dated_is_not_checked_rather_than_expired(
+        tmp_path):
+    """rc 2, NOT rc 0 and NOT rc 1.
+
+    "I could not read this row's date" must not reach a reader as "the deadline
+    is fine", and must not reach one as "the deadline has passed" either. The
+    row is NAMED, and the exit code says no verdict was reached.
+    """
+    r, shas = _repo(tmp_path)
+    ledger = tmp_path / "led.json"
+    ledger.write_text(json.dumps({"acknowledged": [
+        {"gate": "g", "since": "0" * 40,
+         "since_date": "2026-01-01T00:00:00+00:00", "max_days": 1}]}),
+        encoding="utf-8")
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps(_record({"g": "FAIL"})), encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, str(PROGRAMS / "gate_red_since_check.py"),
+         "--record", str(rec), "--repo", str(r), "--ledger", str(ledger)],
+        capture_output=True, text=True)
+    assert out.returncode == 2, (out.returncode, out.stdout, out.stderr)
+    assert "NOT CHECKED" in out.stdout, out.stdout
+    assert "g" in out.stdout
+    assert "expired" not in out.stdout.lower(), (
+        "a row that could not be aged was reported as overdue")
+
+
+def test_a_row_still_on_the_commit_bound_is_named_not_silently_unbounded(
+        tmp_path):
+    """The migration state: a row written under the clock this program replaced.
+
+    It is NOT `incomplete` — the row was correct when it was written, and
+    blaming it for a migration it could not have anticipated would send whoever
+    reads the failure looking for a defect in the row. It is NOT adjudicated
+    either: converting its commit bound into days here would be this program
+    inventing a deadline nobody agreed to. rc 2, and the row is named.
+    """
+    r, shas = _repo(tmp_path)
+    ledger = tmp_path / "led.json"
+    ledger.write_text(json.dumps({"acknowledged": [
+        {"gate": "g", "since": shas[0], "max_commits": 210}]}), encoding="utf-8")
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps(_record({"g": "FAIL"})), encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, str(PROGRAMS / "gate_red_since_check.py"),
+         "--record", str(rec), "--repo", str(r), "--ledger", str(ledger)],
+        capture_output=True, text=True)
+    assert out.returncode == 2, (out.returncode, out.stdout, out.stderr)
+    assert "max_days" in out.stdout, out.stdout
+    assert "incomplete" not in out.stdout, (
+        "a row written under the previous clock was blamed as malformed")
+
+
+def test_a_real_finding_beside_an_unreadable_row_still_exits_one(tmp_path):
+    """rc 2 means "I reached no verdict", and that stops being true the moment
+    another row genuinely failed. The unreadable row is still named."""
+    r, shas = _repo(tmp_path)
+    ledger = tmp_path / "led.json"
+    ledger.write_text(json.dumps({"acknowledged": [
+        {"gate": "unreadable", "since": "0" * 40,
+         "since_date": "2026-01-01T00:00:00+00:00", "max_days": 1},
+        _ack(r, "overdue", shas[0], _TIGHT_DAYS)]}), encoding="utf-8")
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps(
+        _record({"unreadable": "FAIL", "overdue": "FAIL"})), encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, str(PROGRAMS / "gate_red_since_check.py"),
+         "--record", str(rec), "--repo", str(r), "--ledger", str(ledger)],
+        capture_output=True, text=True)
+    assert out.returncode == 1, (out.returncode, out.stdout, out.stderr)
+    assert "expired" in out.stdout
+    assert "NOT adjudicable" in out.stdout, (
+        "the row that could not be aged was folded away by the real finding")

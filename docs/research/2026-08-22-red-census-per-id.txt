@@ -1,0 +1,62 @@
+# PER-ID: the reds on origin/main a4caccefe, bucketed BY CAUSE — companion to
+# 2026-08-22-red-census-revalidated-against-current-main.md
+# measured 2026-08-22, host 8hd-3, VIBE_IC_BENCHMARK_DATA SET (without it 61 D3 cells report nothing)
+#
+# PROVENANCE: this list is GENERATED, and was verified BIDIRECTIONALLY against the raw
+# pytest output before shipping -- every id here traces to a run (0 untraceable), and every
+# id the runs produced appears here (0 dropped). A generated list is a claim like any other;
+# checking only one direction would catch invention but not omission.
+#
+# 33 ids on MAIN. The census document's 30 is the FROZEN BRANCH's tree:
+#   main 33 - 4 closed by ptmo/main-red-triage-v11166 + 1 it deliberately reddens = 30
+#
+# CLOSED UPSTREAM since the census, NOT listed below (4):
+#   flow_gate_enforcement_audit trio: organic900_901_ratchet, issue490_drc_report_check_argv,
+#                                     issue306_register_paydown   (audit now exits 0)
+#   test_matrix_63x8_coverage.py::test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress
+
+## CORPUS-RECORD (14)
+   programs/tests/test_matrix_63x8_coverage.py::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved
+   programs/tests/test_matrix_63x8_coverage.py::test_no_cell_is_counted_enforced_while_its_predicate_is_red
+   programs/tests/test_matrix_63x8_coverage.py::test_the_enforcement_census_is_reported_for_humans
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_evidence_is_live_wherever_the_run_root_exists
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step0.5ic]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step1.6x]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step15]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step17]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step19]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step31]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]
+   programs/tests/test_matrix_d3_outputs_produced.py::test_d3_the_compliance_audit_does_not_create_declared_outputs
+
+## LANDING-VERDICT (9)
+   programs/tests/test_landing_merge_verdict.py::test_end_to_end_a_green_test_cannot_move_b1_to_another_commit
+   programs/tests/test_landing_merge_verdict.py::test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord
+   programs/tests/test_landing_merge_verdict.py::test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave
+   programs/tests/test_landing_merge_verdict.py::test_end_to_end_index_flags_cannot_hide_changed_b1_bytes
+   programs/tests/test_landing_merge_verdict.py::test_end_to_end_relinked_parent_selection_is_norecord
+   programs/tests/test_landing_merge_verdict.py::test_end_to_end_replace_refs_cannot_redefine_the_verified_tree
+   programs/tests/test_landing_merge_verdict.py::test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence
+   programs/tests/test_landing_merge_verdict.py::test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees
+   programs/tests/test_landing_merge_verdict.py::test_pid_only_term_kills_a_term_ignoring_b2_and_removes_worktrees
+
+## VACUITY (5)
+   programs/tests/test_issue901_structured_vacuity_reaches_the_step_verdict.py::test_GUARD_the_shipped_step_is_not_vacuous_when_its_sim_actually_ran
+   programs/tests/test_issue901_structured_vacuity_reaches_the_step_verdict.py::test_the_other_self_aware_shipped_gate_also_reaches_the_tier
+   programs/tests/test_issue901_structured_vacuity_reaches_the_step_verdict.py::test_the_shipped_step_names_the_one_clause_that_examined_nothing
+   programs/tests/test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_is_deferred_not_counted_without_coverage
+   programs/tests/test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_lifts_step4_out_of_skipped_condition
+
+## LEDGER-BY-DESIGN (3)
+   programs/tests/test_matrix_mutation_ledger.py::test_every_enforced_cell_carries_a_named_mutation[step0.5ic]
+   programs/tests/test_matrix_mutation_ledger.py::test_every_enforced_cell_carries_a_named_mutation[step1.6x]
+   programs/tests/test_matrix_mutation_ledger.py::test_the_coverage_is_complete_and_the_count_is_stated
+
+## 63X8-ANTISKIP (1)
+   programs/tests/test_matrix_63x8_coverage.py::test_every_na_cell_asserts_a_live_precondition
+
+## MAGIC-ENV (1)
+   programs/tests/test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged
+

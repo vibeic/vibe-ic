@@ -1,0 +1,92 @@
+EVERY COMMAND THIS REPORT PUBLISHES, EXTRACTED AND RUN
+======================================================
+WHY: the report was found to contain a re-run pointer aimed at a place with
+NOTHING IN IT ("the loop is in no_test_was_weakened.py's docstring" -- it is not,
+and that script refuses on a program file). That is worse than a stale figure. A
+wrong number can be re-measured; a dead pointer costs the reader the trip and
+teaches them to distrust the pointers that ARE good, and this report leans on
+them heavily.
+
+So: extract every command from RESULT.md mechanically, and RUN it.
+
+  #   command                                                   result
+  --------------------------------------------------------------------------
+   1  git cat-file -e 41e6562d2^{commit}                        OK
+   3  git diff --numstat a00f53f20..41e6562d2                   OK, 4 files
+   4  git ls-remote origin refs/heads/jpadsite/capture-bundle   OK
+   5  git merge-base --is-ancestor 41e6562d2 origin/main        OK, "not yet"
+   6  git show 41e6562d2:...tests/test_pad_ring.py  > /tmp/t.py OK, 1471 lines
+   7  git show <head>:docs/capture/.../RESULT.md | head -1      OK, the key line
+   8  git show a00f53f20:...pad_ring_gen.py | sed -n '526p'     OK, the dead
+                                                                anchor, alive in
+                                                                history
+   9  git show a00f53f20:...tests/test_pad_ring.py  > /tmp/b.py OK, 928 lines
+  11  ls /foss/pdks/gf180mcuD/.../lef/*.lef | wc -l             OK, 15 (in the
+                                                                pinned image)
+  12  the AST heredoc (mutation denominator)                    OK, True x3 --
+                                                                extracted back
+                                                                OUT of the
+                                                                report and run,
+                                                                not eyeballed
+  13  python3 no_test_was_weakened.py /tmp/b.py /tmp/t.py       OK
+
+THE TWO THAT ARE NOT RUNNABLE, AND WHY THAT IS CORRECT:
+   2  git diff --numstat $(git merge-base HEAD origin/main)..HEAD
+      Labelled `# BREAKS` in the report. It is published AS a counter-example --
+      it returns +106/-10 today and ZERO FILES once this branch lands, because
+      vibe-ic lands by merge and the merge-base becomes the head. Running it is
+      the point; believing it is the error.
+  10  grep -h '^ *SITE' .../lef/*.lef | sort | uniq -c
+      A QUOTED MEASUREMENT with an elided path, not a recipe -- it sits directly
+      under command 11, which carries the full path. Stated here rather than
+      "expanded to make the table read 12/12", because the honest count is
+      ELEVEN RUNNABLE, ALL PASSING, plus one deliberate counter-example and one
+      elision.
+
+RE-RUN THIS AUDIT: extract with the regex over RESULT.md that produced the list
+(`^\s{2,}(\$ )?(git|grep|python3|docker|sha256sum|ls|find|pytest|bash)\b`), then
+run each. The regex is a LOWER BOUND -- an ad-hoc pattern is always narrower than
+its subject -- so a command it misses is not a command that works.
+
+AND EVERY QUOTATION, CHECKED AGAINST ITS SOURCE
+===============================================
+Same reasoning one step over: a quotation a reader cannot find by searching for
+it is not a quotation. Ten quotations, six sources, all verified in the pinned
+image or at main a4caccefe.
+
+  IN THE REPO
+    flow yaml :3045-3048   "composes the config ... derives nothing, and stamps
+                            every variable with which source it came from"   EXACT
+    #492  flow_compliance_check.py   "39 registered gates be permanently
+                            silent"                                          EXACT
+    #1347 slot_pad_budget_check.py   "exit 2 is this flow's VACUOUS_PASS
+                            tier"                                            EXACT
+    slot_pad_budget_check.py "A question that could not be asked has not
+                            passed"                                          EXACT
+    declared_pdk_is_the_pdk_used_check.py  "both halves are always present in
+                            a real run" / "the missing input IS the finding"  EXACT
+    benchmark-data/ic/CELL_MATRIX.md  "declares SKY130 only"                 EXACT
+  UPSTREAM, in ghcr.io/vibeic/vibeic-eda:0.3.16
+    librelane/config/flow.py         the PAD_FAKE_SITES docstring            EXACT
+    scripts/openroad/common/pad_cfg.tcl  "set width [expr [[$inst getMaster]
+                            getWidth] / $units]" and "incr sum_of_cell_widths
+                            $width"                                          EXACT
+    scripts/openroad/common/io.tcl   "if { [info exists ::env(PAD_FAKE_SITES)] }" EXACT
+
+ONE REAL DEFECT, AND IT WAS ABOUT EMPHASIS RATHER THAN WORDS. The flow yaml
+writes `derives nothing` in LOWERCASE. This report rendered it `DERIVES NOTHING`.
+That is worse than it looks: the SAME SENTENCE contains the author's own
+capitalisation, "WHERE THE SLOT SPEAKS", so a reader sees two stressed phrases
+and takes both as the flow owner's. My emphasis was misrepresenting which word
+the flow owner chose to stress, inside the one quotation the report relies on to
+say a precedence question is already settled. Restored; my emphasis moved to my
+own prose.
+
+TWO FALSE ALARMS, BOTH MY INSTRUMENT, BOTH CONFIRMED BEFORE ACTING:
+  * "both halves are always present in a real run" reported MISSING -- it is
+    line-wrapped in the source and `grep -F` cannot span a newline.
+  * the flow yaml quote reported MISSING under whitespace normalisation -- that
+    source is YAML COMMENTS, so every line carries a `#` the normaliser kept.
+Acting on either would have "corrected" a correct quotation into a wrong one.
+The rule that saved both: a MISSING result gets verified by hand before it gets
+acted on. A found result is self-checking; a missing one is not.

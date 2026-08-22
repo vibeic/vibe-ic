@@ -84,9 +84,11 @@ def _legacy_empty_without_process(reference: Dict[str, Any],
     (vibe-ic#1764).  The row it waives says a population was MEASURED and the
     measurement is 0.  Until the dispatcher grew a separate row, a corpus that
     resolved to nothing arrived here wearing this exact label and this exact
-    `expansion`, so the waiver answered for it too and `_summary_rc` closed the
-    hygiene DAG GREEN over a corpus nobody opened -- an enforcement figure
-    covering a measurement nobody took.  BOTH the label and `expansion ==
+    `expansion`, so the waiver answered for it too and `_summary_rc` returned 0
+    over a corpus nobody opened -- an enforcement figure covering a measurement
+    nobody took.  That reach is bounded: this module's only production caller
+    binds the corpus before the set, so the waiver was reachable in that state
+    only by running this module directly.  BOTH the label and `expansion ==
     "EXPANDED"` are load-bearing against that: an absent corpus is recorded
     `NO_CORPUS` and fails the shape check even if some future caller hands it
     this label.  Do not widen either one.
@@ -1012,17 +1014,31 @@ def _summary_rc(doc: Dict[str, Any]) -> int:
         # corpus/gate shape must prove it is the no-process bootstrap row.
         #
         # THIS IS THE ONE PLACE A POPULATION REFUSAL CAN BECOME A PASS, so it
-        # is also the one place vibe-ic#1764 actually cost something. An absent
-        # corpus used to reach it wearing the EMPTY row's label and expansion
-        # and be waived. Measured 2026-08-22 on origin/main, real producer
-        # through the real dispatcher:
+        # is where vibe-ic#1764's collapse was worth closing. An absent corpus
+        # reached this waiver wearing the EMPTY row's label and the EMPTY row's
+        # expansion, so the waiver answered for it too. Re-measured 2026-08-22
+        # on `81cd5321b` (the commit before the fix) and on `a4caccefe` (this
+        # tree), real producer through the real `_gate_dispatch.sh`:
         #
-        #     corpus ABSENT      -> _summary_rc 0   <- a PASS, nothing opened
-        #     corpus read-empty  -> _summary_rc 0   <- the intended bootstrap
+        #     before   ABSENT -> _summary_rc 0   read-empty -> 0   IDENTICAL
+        #     after    ABSENT -> _summary_rc 2   read-empty -> 0
         #
-        # `_legacy_empty_without_process` now refuses the first on `expansion`,
-        # and `test_an_absent_corpus_does_not_close_the_hygiene_dag_green`
-        # drives both states end to end so the pair cannot re-merge.
+        # LATENT, NOT LIVE, and the difference is worth stating rather than
+        # letting the comment imply the stronger thing. This module's only
+        # production caller is `gatekeeper_review.repo_hygiene_gate`, which
+        # binds the corpus BEFORE the set and returns rc 2 with a named remedy
+        # if it cannot (pinned by `test_every_unresolvable_corpus_is_an_ERROR_
+        # and_the_set_never_runs`), so an absent corpus never arrived here on
+        # that path. `gate_dispatch_finish` -- the closing rc of the shipped
+        # `repo_hygiene_gates.sh`, which is what `lane_hygiene` runs -- was
+        # measured at 2 in BOTH states on BOTH commits, so no lane's exit code
+        # moved. What the fix buys is that this waiver no longer DEPENDS on
+        # that one binding being correct, which is the only thing that made it
+        # safe.
+        #
+        # `_legacy_empty_without_process` refuses an absent corpus on
+        # `expansion`, and `test_an_absent_corpus_does_not_close_the_hygiene_
+        # dag_green` drives both states end to end so the pair cannot re-merge.
         if not (unexempted == [_LEGACY_ROUTED_EMPTY_LABEL]
                 and _legacy_empty_without_process(
                     doc, _LEGACY_ROUTED_EMPTY_LABEL)):

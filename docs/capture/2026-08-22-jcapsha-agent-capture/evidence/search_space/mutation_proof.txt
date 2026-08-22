@@ -1,0 +1,25 @@
+### BASELINE (unmutated), the property holds
+[PASS] suite_write_guard: this pytest session wrote nothing `git status --porcelain` would show.
+
+4 passed in 0.94s
+
+### MUTATION 1: the tech view dropped from the refusal record
+    (the PRE-FIX shape: the artefact carries only the view it happened to read)
+=== pad_ring_gen (proj) ===
+  verdict: FAIL
+  PAD_SITE_NOT_FOUND: PAD_SITE_NAME='no_such_site' is declared by neither PDK view this run resolved: 3 LEF SITE record(s) from 1 LEF(s) and 0 tech-view declaration(s) from 0 config file(s). PAD-class sites available: ['io_corner_site', 'io_site']
+=========================== short test summary info ============================
+FAILED test_refusal_names_its_search_space.py::test_the_refusal_enumerates_every_view_it_consulted_as_data
+FAILED test_refusal_names_its_search_space.py::test_each_view_names_the_paths_it_resolved_not_only_a_count
+FAILED test_refusal_names_its_search_space.py::test_a_consulted_but_empty_view_is_distinguishable_from_an_unread_one
+3 failed, 1 passed in 1.19s
+
+### RESTORED (reverse edit; `git diff` on the mutated file is empty)
+[PASS] suite_write_guard: this pytest session wrote nothing `git status --porcelain` would show.
+
+4 passed in 0.77s
+
+NOTE: the fourth test -- the one asserting the human MESSAGE names both
+views -- PASSED under the mutation. The message is composed independently
+of the record, so the two tests catch different losses. Necessary, and
+not sufficient, each on its own.

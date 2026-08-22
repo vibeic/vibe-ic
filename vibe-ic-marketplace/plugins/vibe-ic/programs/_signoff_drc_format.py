@@ -206,9 +206,35 @@ _RDB_DECK_RE = re.compile(r"<generator>\s*drc:\s*script\s*=\s*'([^']*)'", re.I)
 _RDB_TOPCELL_RE = re.compile(r"<top-cell>([^<]*)</top-cell>")
 
 # --- the Magic DRC transcript ----------------------------------------------
-_MAGIC_COUNT_RE = re.compile(r"(?i)\bDRC\s+errors?\s+found\s*:\s*\d+")
+#: Magic's count, in the two dialects it is actually written in. The second is
+#: what the LibreLane `Magic.DRC` step emits, and MEASURED on a real run it is
+#: the ONLY verdict marker present:
+#:
+#:     $ grep -n 'COUNT:\|DRC errors' 67-magic-drc/reports/drc.magic.rpt
+#:     [INFO] COUNT: 0
+#:
+#: `DRC errors found: N` never appears in that flow's output, so a classifier
+#: that knows only the first dialect cannot recognise a Magic report this flow
+#: produced -- see `_MAGIC_TAIL_BYTES` for the other half of the same miss.
+_MAGIC_COUNT_RE = re.compile(
+    r"(?i)(?:\bDRC\s+errors?\s+found\s*:\s*\d+"
+    r"|^\s*(?:\[INFO\]\s*)?COUNT\s*:\s*\d+)", re.M | re.I)
 _MAGIC_CMD_RE = re.compile(r"(?i)\bdrc\s+(?:count|why|check|catchup)\b")
 _MAGIC_BANNER_RE = re.compile(r"(?i)\bmagic\b")
+
+#: A TRANSCRIPT PUTS ITS VERDICT AT THE END. MEASURED on a real 11 471 075-byte
+#: Magic DRC transcript from the gf180mcuD chip path:
+#:
+#:     'Magic 8.3'        first at byte           1     <- inside the 64 kB head
+#:     'No errors found'  first at byte  11 470 745     <- 175x beyond it
+#:     'COUNT:'           first at byte  11 470 769
+#:     'drc count|why|check|catchup'  ABSENT ENTIRELY
+#:
+#: So the banner was visible and the verdict was not, and the file classified as
+#: "no recognised producer signature" -- i.e. a clean Magic DRC read as an
+#: unreadable report. The head window is right for a HEADER; a transcript needs
+#: its tail read too. Bounded, so a huge file is still not held in full twice.
+_MAGIC_TAIL_BYTES = 65536
 
 
 class Producer:
@@ -282,8 +308,10 @@ def classify_text(text: str) -> Producer:
     if looks_svrf(body):
         return Producer(SVRFDRC, None, top,
                         "SVRF-native per-rule tally", header_tool)
-    if _MAGIC_COUNT_RE.search(head) or (
-            _MAGIC_BANNER_RE.search(head) and _MAGIC_CMD_RE.search(head)):
+    _tail = body[-_MAGIC_TAIL_BYTES:] if len(body) > _MAGIC_TAIL_BYTES else ""
+    if (_MAGIC_COUNT_RE.search(head) or _MAGIC_COUNT_RE.search(_tail)
+            or (_MAGIC_BANNER_RE.search(head)
+                and (_MAGIC_CMD_RE.search(head) or _MAGIC_CMD_RE.search(_tail)))):
         return Producer(MAGIC, None, top, "magic DRC transcript", header_tool)
     return Producer(None, None, top, "no recognised producer signature",
                     header_tool)

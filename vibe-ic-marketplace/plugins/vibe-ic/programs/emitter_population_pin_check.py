@@ -906,7 +906,8 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
             # POLARITY FIRST, THEN THE COMMENT RULE -- the order `counters_of`
             # uses, and here it is load-bearing for a second reason. With the
             # comment rule first this consult became DEAD: measured, deleting
-            # it outright left all 88 tests green, and
+            # it outright left the ENTIRE suite green (88 tests then, and
+            # the count is not the point), and
             # `test_a_DENIED_incr_cannot_excuse_a_real_disagreement` went on
             # passing for a reason other than the one it names. Unreachable
             # code that a test appears to cover is worse than no code.
@@ -959,9 +960,19 @@ def named_program(tree: ast.AST, stems: Set[str]) -> Optional[str]:
     shape.
 
     MEASURED, because "most" is what this said until it was checked and "most"
-    means a majority: 3.88s of 9.40s CPU over 3547 calls, so 41% -- the biggest
+    means a majority: 3.59s of 9.31s over 3547 calls, so 39% -- the biggest
     single line item, not more than everything else together. The argument for
-    parsing once is unchanged at 41%; the word was.
+    parsing once is unchanged at 39%; the word was. (Median of three; first
+    recorded as 41% from one run, which is the same magnitude and was not
+    re-derived until it was.)
+
+    MEASURE IT BY TIMING `ast.parse` DIRECTLY, not under cProfile. The profiler
+    instruments Python-level calls and not the C-level parse, so it reports the
+    same work as 15% of a total inflated to ~25s -- a reader who re-checks that
+    way will conclude this paragraph is wrong by a factor of two and it is the
+    instrument. Wrap `ast.parse`, run `main`, compare against wall clock; the
+    call count 3547 is the same either way and is the thing to confirm you are
+    measuring the right target.
     """
     found: Set[str] = set()
     for n in ast.walk(tree):

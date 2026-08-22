@@ -19,7 +19,7 @@ blocking nothing; `ci_targeted_test_select --base 7fcbc7397~1` selecting 325
 tests including 16 `test_matrix_*` whose red was never acted on; and the ninth
 matrix dimension, built around whether a step's verdict is CONSUMED.
 
-The deadline itself was already built — `max_commits` in
+The deadline itself was already built — `max_days` in
 `tools/ci/gate_red_since.json`, read by `gate_red_since_check` — and nothing
 ever opened it, because a row is voluntary and pure cost so no row is ever
 written. These tests pin the forcing function, in BOTH directions, and mutate
@@ -44,11 +44,17 @@ import landing_merge_verdict as V          # noqa: E402
 
 # ----------------------------------------------------------------- the fixture
 
-#: Ages, in commits behind HEAD, for the synthetic `since` shas below. Injected
-#: rather than built from a real history, exactly as `adjudicate` intends: every
-#: branch stays reachable without a git repository per case, INCLUDING the
-#: unresolvable one, which by definition cannot be staged with a real commit.
-_AGE = {"since-recent": 3, "since-old": 240}
+#: Ages, in DAYS behind the endpoint, for the synthetic `since` shas below.
+#: Injected rather than built from a real history, exactly as `adjudicate`
+#: intends: every branch stays reachable without a git repository per case,
+#: INCLUDING the unresolvable one, which by definition cannot be staged with a
+#: real commit.
+_AGE = {"since-recent": 0.5, "since-old": 5.0}
+
+#: A stand-in date. Nothing here reads it as a clock — `_age` is the clock —
+#: but a row without it is `incomplete`, a different finding from the ones
+#: under test.
+DATE = "2026-01-01T00:00:00+00:00"
 
 
 def _age(sha: str):
@@ -56,11 +62,11 @@ def _age(sha: str):
 
 
 def _row(gate="repo hygiene: a blocking gate", since="since-recent",
-         max_commits=50, owner="#1025"):
-    row = {"gate": gate, "since": since, "owner": owner,
+         max_days=3, owner="#1025"):
+    row = {"gate": gate, "since": since, "since_date": DATE, "owner": owner,
            "why": "a synthetic row, for this test only"}
-    if max_commits is not None:
-        row["max_commits"] = max_commits
+    if max_days is not None:
+        row["max_days"] = max_days
     return row
 
 
@@ -85,13 +91,13 @@ def test_an_inherited_blocking_red_with_no_owner_refuses():
 
 
 def test_an_inherited_blocking_red_past_its_deadline_refuses():
-    """THE DEADLINE, BITING. `since-old` is 240 commits back, the bound is 30."""
+    """THE DEADLINE, BITING. `since-old` is 5 days back, the bound is 3."""
     out = _reasons(_carried(("FAIL", "repo hygiene: a blocking gate", "")),
-                   [_row(since="since-old", max_commits=30)])
+                   [_row(since="since-old", max_days=3)])
     assert len(out) == 1, out
     assert "THE DEADLINE ON AN INHERITED RED HAS PASSED" in out[0]
-    assert "240 commit(s) ago" in out[0]
-    assert "was 30" in out[0]
+    assert "5 day(s) ago" in out[0]
+    assert "was 3" in out[0]
     assert "#1025" in out[0], "the refusal must name the owner it has"
 
 
@@ -101,7 +107,7 @@ def test_an_inherited_red_owned_by_a_live_deadline_does_not_refuse():
     """The whole point of the ledger: a row with a live bound buys TIME, and
     that is the only thing it buys — the suite still exits 1 for the gate."""
     assert _reasons(_carried(("FAIL", "repo hygiene: a blocking gate", "")),
-                    [_row(since="since-recent", max_commits=50)]) == []
+                    [_row(since="since-recent", max_days=5)]) == []
 
 
 @pytest.mark.parametrize("kind", ["WROTE_CORPUS", "EXEMPTION_EXPIRED"])
@@ -132,15 +138,15 @@ def test_a_red_that_is_NOT_inherited_is_not_this_rule_s_business():
 
 def test_mutation_raising_the_bound_past_the_ceiling_cannot_buy_immortality():
     out = _reasons(_carried(("FAIL", "repo hygiene: a blocking gate", "")),
-                   [_row(since="since-old", max_commits=G.MAX_BOUND_COMMITS + 1)])
+                   [_row(since="since-old", max_days=G.MAX_BOUND_DAYS + 1)])
     assert len(out) == 1, out
     assert "WITHOUT A REACHABLE DEADLINE" in out[0]
-    assert str(G.MAX_BOUND_COMMITS) in out[0]
+    assert G._days(G.MAX_BOUND_DAYS) in out[0]
 
 
 def test_mutation_dropping_the_bound_is_not_an_acknowledgement():
     out = _reasons(_carried(("FAIL", "repo hygiene: a blocking gate", "")),
-                   [_row(max_commits=None)])
+                   [_row(max_days=None)])
     assert len(out) == 1, out
     assert "WITHOUT A BOUND" in out[0]
 
@@ -166,7 +172,7 @@ def test_mutation_repointing_the_row_at_another_gate_unowns_this_one():
 def test_mutation_renewing_by_moving_since_forward_is_the_legitimate_act():
     """The one mutation that SHOULD silence it, so the arm above is a
     discriminator and not a rule that refuses everything."""
-    expired = _row(since="since-old", max_commits=30)
+    expired = _row(since="since-old", max_days=3)
     assert _reasons(_carried(("FAIL", "repo hygiene: a blocking gate", "")),
                     [expired]) != []
     renewed = dict(expired, since="since-recent")
@@ -195,14 +201,14 @@ def _verdict(*, carried, ledger, age):
 
 def test_the_landing_refuses_an_inherited_red_past_its_deadline():
     v = _verdict(carried=_carried(("FAIL", "repo hygiene: a blocking gate", "")),
-                 ledger=[_row(since="since-old", max_commits=30)], age=_age)
+                 ledger=[_row(since="since-old", max_days=3)], age=_age)
     assert any("THE DEADLINE ON AN INHERITED RED HAS PASSED" in r
                for r in v.reasons), v.reasons
 
 
 def test_the_landing_does_not_refuse_one_inside_its_deadline():
     v = _verdict(carried=_carried(("FAIL", "repo hygiene: a blocking gate", "")),
-                 ledger=[_row(since="since-recent", max_commits=50)], age=_age)
+                 ledger=[_row(since="since-recent", max_days=5)], age=_age)
     assert not any("INHERITED RED" in r for r in v.reasons), v.reasons
 
 
@@ -213,3 +219,23 @@ def test_a_verdict_given_no_ledger_says_so_rather_than_reading_clean():
                  ledger=None, age=None)
     assert "INHERITED_RED_DEADLINE_NOT_EVALUATED" in v.disclosures
     assert not any("INHERITED RED" in r for r in v.reasons), v.reasons
+
+
+def test_a_row_still_bounded_in_commits_refuses_and_names_the_migration():
+    """The migration state, on the LANDING path.
+
+    A row written under the clock this program replaced is a real
+    acknowledgement whose bound cannot be evaluated as a duration. Converting
+    it here would be this program inventing a deadline nobody agreed to, and
+    staying silent would be "I could not check the deadline" reaching a reader
+    as "the deadline is fine" — the rule this whole file exists to hold. So it
+    refuses, and it NAMES what to do rather than leaving a reader to guess.
+    """
+    row = _row(max_days=None)
+    row["max_commits"] = 210
+    out = _reasons(_carried(("FAIL", "repo hygiene: a blocking gate", "")), [row])
+    assert len(out) == 1, out
+    assert "PREDATES THE DURATION CLOCK" in out[0], out[0]
+    assert "max_days" in out[0]
+    assert "WITHOUT A BOUND" not in out[0], (
+        "a row that was correct when written was blamed as malformed")

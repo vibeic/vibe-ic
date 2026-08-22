@@ -1,0 +1,68 @@
+THE PRE-CHECK, RUN ON THE REAL sha256 RUN — not on the project I built
+=======================================================================
+The brief asks: "re-run the pad ring for sha256 and report what the general
+pre-check says." I reported NOT_DETERMINED, layouts_found=0. THAT RUN WAS ON
+`/gp`, A PROJECT I CONSTRUCTED -- the JSON says so in its own `project` field
+and I had not read it. A constructed input substituting for the subject, in the
+one place the brief actually asked about.
+
+RE-RUN 2026-08-22 ON THE REAL TREE, `_bm_sha256_sky130A_121`:
+
+    NOT_DETERMINED: general_precheck (no operator) — layouts_found=0,
+    ladder_steps_required=11, steps_with_evidence=0, failed=0, undetermined=11,
+    declaration_answered=0/18 — no finished layout found under the project
+    (searched 4 layout location(s)); nothing was examined, so nothing was
+    determined
+
+THE VERDICT IS THE SAME AND THE REASON IS NOW UNDERSTOOD, which it was not
+before. The real tree is not empty:
+
+    DEF files            15   floorplan / placed / filled / routed_preantenna /
+                              post_hold ... a real, placed, routed core
+    GDS files             0   <- this is why layouts_found=0
+    padring artefacts     0   <- and why the pad ring was never the blocker here
+
+`general_precheck` looks for a FINISHED layout. A DEF is not one. So the row is
+undetermined because the run stops before stream-out, NOT because the project
+was hollow -- which is what my earlier answer, taken on a constructed project,
+could not distinguish.
+
+WHAT THIS DOES AND DOES NOT CHANGE:
+  * The reported verdict for the brief's item 4 is unchanged: NOT_DETERMINED,
+    layouts_found=0.
+  * The BASIS is now the real subject. The earlier figure was true of a project
+    I had built, and any reader would have taken it as a statement about
+    sha256.
+  * It also confirms, from the design's own tree, that there are no padring
+    artefacts anywhere in it -- the same fact reached earlier from the DEF
+    survey and from `layouts_found=0`, now from a third direction.
+  * The tree is sky130A. That is the PDK the design DECLARES (L19
+    pdk_target = "sky130"), so this is the pre-check speaking about the pairing
+    the design actually names, not the gf180mcuD one this brief measured.
+
+AND THE SAME CHECK RUN OVER EVERY ARTEFACT, since one had been wrong
+====================================================================
+The `/gp` slip was found by reading a field I had never read -- the artefact's
+own declaration of what it was run on. Every evidence JSON was then checked the
+same way:
+
+  gate_ab_PRE_fix_padring.json          /run/ab_pre     constructed, disclosed
+  gate_ab_POST_fix_padring.json         /run/ab_post    constructed, disclosed
+  general_precheck/sha256_..._.json     /gp             constructed -- NOW disclosed
+  sha256_gf180_padring_DEFAULT_R0.json  /w/proj         regenerated 2026-08-22,
+                                                        disclosed
+  sha256_gf180_padring_report.json      /run/proj_R90   pre-ruling, disclosed
+
+ALL FIVE ARE CONSTRUCTED PROJECTS AND ALL FIVE ARE NOW SAID TO BE. One was not
+until today.
+
+A CORROBORATION FELL OUT OF IT: `proj_R90` in the last path independently
+confirms that artefact was built at PAD_ROTATION_VERTICAL=R90 -- which
+normalises to the DEF spelling 'W', the value I had attributed to it from its
+`config.rotation` field alone. Two independent sources for an attribution I had
+made from one.
+
+WHAT NONE OF THIS CHANGES: the constructed projects were the right tool for
+isolating the DEFECT, and the report says so. What they were never a
+substitute for is the SUBJECT, and the pre-check was the one place that
+distinction mattered to the brief's own question.

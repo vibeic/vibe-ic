@@ -518,3 +518,104 @@ def test_an_unlegalizable_placement_still_fails_loudly(tmp_path):
     out = _run_ladder("1", tmp_path)
     assert "T_LEGALIZE_FAILED" in out, out
     assert "T_LEGALIZE_OK" not in out, out
+
+
+# ── the bound was PRINTED AND NEVER CONSULTED ───────────────────────────────
+# `PLACEABLE_WIDTH_BOUND` is measured from the live tap grid, and a `git grep`
+# used to find it in the emitter and in this file and NOWHERE ELSE. Meanwhile
+# `clk_buf_root` comes from the PDK registry (or "the last clkbuf in the
+# Liberty", i.e. the widest) and is fixed before a floorplan exists. Nothing
+# joined the two, so the flow could hand `clock_tree_synthesis -root_buf` a
+# master its own cap had just measured to sit exactly at the placeability
+# limit. Measured on three designs of one open PDK: all three printed
+# `PLACEABLE_WIDTH_BOUND: 56000 dbu = 50 site(s)` and all three named a 50-site
+# master as -root_buf. On the small one CTS used it ONCE and the design
+# legalized; on the large one CTS used it 2 055 times and the post-hold
+# legalizer was left with ~2 344 illegal cells.
+#
+# These are REPORT-ONLY. Nothing new is excluded: the strict `>` above is
+# correct and stays, pinned by test_a_master_exactly_at_the_bound_stays_legal.
+
+def _run_cap_named(setup: str, tmp_path, cts) -> str:
+    f = tmp_path / "cap_named.tcl"
+    f.write_text(_STUB + setup
+                 + p3._build_unplaceable_master_cap_tcl(cts)
+                 + '\nputs "DONTUSE: $::DONTUSE"\n')
+    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr + r.stdout
+    return r.stdout
+
+
+@_needs_tcl
+def test_a_master_exactly_at_the_bound_is_named_even_though_it_stays_legal(
+        tmp_path):
+    """`one fits` is not `many fit`. The master stays usable -- that part is
+    deliberate and unchanged -- but it is now SAID, at floorplan time."""
+    setup = _OBSTRUCTED + "mkmaster cell_at_bound 200\n"
+    out = _run_cap(setup, tmp_path)
+    assert "MASTERS_AT_PLACEABILITY_BOUND:" in out, out
+    assert "cell_at_bound" in out.split("MASTERS_AT_PLACEABILITY_BOUND:")[1]
+    assert "20 site(s)" in out.split("MASTERS_AT_PLACEABILITY_BOUND:")[1]
+    # and it is still NOT excluded -- the strict bound is untouched
+    assert "cell_at_bound" not in _excluded(out), out
+
+
+@_needs_tcl
+def test_nothing_at_the_bound_means_no_such_line(tmp_path):
+    """NEGATIVE CONTROL: a library with no master exactly at the run must not
+    produce the line. Without this, the assertion above passes on a checker
+    that prints unconditionally."""
+    out = _run_cap(_OBSTRUCTED, tmp_path)   # 100 / 300 / 400 against a 200 run
+    assert "MASTERS_AT_PLACEABILITY_BOUND:" not in out, out
+
+
+@_needs_tcl
+def test_a_cts_master_at_the_bound_is_named_by_name(tmp_path):
+    """The load-bearing one: the master the flow will hand to CTS is checked
+    against the bound the flow just measured."""
+    setup = _OBSTRUCTED + "mkmaster clkroot 200\n"
+    out = _run_cap_named(setup, tmp_path, ("drv_narrow", "clkroot"))
+    assert "CTS_MASTER_AT_PLACEABILITY_BOUND: clkroot is 20 site(s)" in out, out
+    assert "free-site run of 20 site(s)" in out, out
+    assert "clkroot" not in _excluded(out), out
+
+
+@_needs_tcl
+def test_a_cts_master_that_fits_is_silent(tmp_path):
+    """NEGATIVE CONTROL for the same check: the narrow buffer must NOT be
+    named, or the line means nothing."""
+    out = _run_cap_named(_OBSTRUCTED, tmp_path, ("drv_narrow",))
+    assert "CTS_MASTER_AT_PLACEABILITY_BOUND" not in out, out
+
+
+@_needs_tcl
+def test_a_cts_master_wider_than_the_bound_is_named_too(tmp_path):
+    """At-or-above, not only at: a master already excluded by the cap is still
+    worth naming, because -root_buf names it explicitly and set_dont_use does
+    not stop an explicit argument."""
+    out = _run_cap_named(_OBSTRUCTED, tmp_path, ("drv_wide",))
+    assert "CTS_MASTER_AT_PLACEABILITY_BOUND: drv_wide is 30 site(s)" in out, out
+
+
+@_needs_tcl
+def test_the_named_check_is_inert_when_the_caller_supplies_nothing(tmp_path):
+    """A caller that does not know its CTS masters is unchanged -- the emitter
+    must add no Tcl at all."""
+    assert p3._cts_master_bound_check_tcl() == ""
+    assert p3._cts_master_bound_check_tcl(()) == ""
+    assert p3._cts_master_bound_check_tcl((None, "")) == ""
+    out = _run_cap(_OBSTRUCTED + "mkmaster clkroot 200\n", tmp_path)
+    assert "CTS_MASTER_AT_PLACEABILITY_BOUND" not in out, out
+
+
+def test_the_call_site_supplies_the_resolved_cts_masters():
+    """The composer must PASS THEM THROUGH -- a check wired to nothing is the
+    defect this file exists to close, one layer up."""
+    import inspect
+    src = inspect.getsource(p3._build_tapcell_and_placeability_tcl)
+    assert "cts_masters" in src, src
+    whole = inspect.getsource(p3)
+    assert "_build_tapcell_and_placeability_tcl(\n        pdk, cts_masters=" in whole \
+        or "cts_masters=(clk_buf, clk_buf_root)" in whole, \
+        "the call site does not supply the resolved masters"

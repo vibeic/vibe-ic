@@ -872,14 +872,22 @@ def test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND(tmp_path)
 # DAG — waives exactly one unexempted NOT_CHECKED: the phase-1 bootstrap row for
 # a corpus that was READ and publishes nothing. Because an absent corpus arrived
 # wearing that row's label and that row's `expansion`, the waiver covered it too,
-# and the DAG closed GREEN over a corpus nothing opened.
+# and `_summary_rc` returned 0 over a corpus nothing opened.
 #
-# MEASURED 2026-08-22, this host, real producer through real `_gate_dispatch.sh`:
+# RE-MEASURED 2026-08-22, this host, real producer through real
+# `_gate_dispatch.sh`, on the commit before the fix and on the tree that carries
+# it:
 #
-#     origin/main   corpus ABSENT      -> _summary_rc 0    <- a PASS
-#     origin/main   corpus read-empty  -> _summary_rc 0    <- intended bootstrap
-#     this branch   corpus ABSENT      -> _summary_rc 2    <- refused
-#     this branch   corpus read-empty  -> _summary_rc 0    <- unchanged
+#     81cd5321b (before)  ABSENT -> _summary_rc 0    read-empty -> 0
+#     a4caccefe (after)   ABSENT -> _summary_rc 2    read-empty -> 0
+#
+# LATENT, NOT LIVE, and this comment does not pretend otherwise: the only
+# production caller of `repo_hygiene_parallel` binds the corpus before the set
+# and refuses rc 2 if it cannot, so state A never reached the waiver in a real
+# review or landing. `gate_dispatch_finish` -- the closing rc of the shipped
+# `repo_hygiene_gates.sh` that `lane_hygiene` runs -- measured 2 in BOTH states
+# on BOTH commits, so no lane's exit code moved. What is pinned here is that the
+# waiver no longer DEPENDS on that one binding being right.
 #
 # This is the assertion that makes "do not make either state a pass" true, so it
 # is driven end to end. A hand-built record cannot show it: on `origin/main` the
@@ -975,3 +983,246 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
             if c["name"] == _REAL_CORPUS][0]["expansion"] == "NO_CORPUS"
     assert [c for c in b_doc["corpora"]
             if c["name"] == _REAL_CORPUS][0]["expansion"] == "EXPANDED"
+
+
+# --- vibe-ic#1764: the RECORD consumer sections 5/5b did not sweep -----------
+#
+# The sweep asking whether the collapse was singular enumerated every program
+# that reaches `_corpus_location.refuse` — the PRODUCER side. There is a second
+# side: programs that read the dispatcher's `corpora` row back. Two were traced
+# (`repo_hygiene_parallel._summary_rc`, `hygiene_finding_delta._validate_record`)
+# and a third was not, because it is neither a producer nor a Python consumer:
+#
+#     tools/gatekeeper-verify-merge.sh:810  base_has_exact_legacy_routed_empty
+#
+# It decides whether the BASE arm is in the one state that authorises
+# `build_trusted_transition_evidence` — the trusted parent enumerating and
+# EXECUTING the routed corpus on the landing path. If an absent corpus could
+# wear the row it accepts, the landing would build trusted transition evidence
+# over a corpus nothing opened, which is this issue's defect at its most
+# expensive point.
+#
+# MEASURED 2026-08-22, this host, real dispatcher, on `81cd5321b` (before the
+# fix) and on this tree, the shipped predicate over records the real dispatcher
+# wrote:
+#
+#     cell                          before                after
+#     stub producer exit 3, SHA     PRODUCER_FAILED  ref  NO_CORPUS   refuses
+#     no pointer, SHA bound         PRODUCER_FAILED  ref  PRODUCER_FAILED  ref
+#     pointer -> read-empty, SHA    EXPANDED    AUTHORISES  EXPANDED  AUTHORISES
+#     no pointer, no SHA            EXPANDED       refuses  NO_CORPUS   refuses
+#     pointer -> read-empty, no SHA EXPANDED       refuses  EXPANDED    refuses
+#
+# THE VERDICT IS IDENTICAL IN EVERY CELL ON BOTH COMMITS. This consumer was
+# never collapsed, and the answer is stated as the sweep found it rather than
+# as a fix: it is held by two INDEPENDENT guards, and the second is the one the
+# rest of this file's ruling supplies.
+#
+#   1. `_corpus_location` already refuses rc 2 UNDETERMINED for a bound SHA with
+#      no checkout, so inside `gatekeeper-verify-merge.sh` — which exports
+#      `GATEKEEPER_BENCHMARK_DATA_SHA` in both arms — state A cannot arise: it
+#      is a broken configuration there, not an absent corpus.
+#   2. Without that SHA the predicate refuses on `benchmark_data_sha` anyway.
+#
+# So this is a REGRESSION PIN, not a fix, and it is not red on `81cd5321b`.
+# Saying otherwise would be the same overstatement this record already corrected
+# once. What it pins is that the predicate keeps refusing an unopened corpus
+# WITHOUT leaning on guard 1 — on the record itself, not on the pointer binding
+# being right.
+#
+# WHICH BYTES DO THAT REFUSING. Re-measured at the branch head, because the
+# first version of this comment named only one of them. There are TWO
+# in-predicate guards -- the gate-label equality and the exact `expansion` dict
+# -- and EACH REFUSES ON ITS OWN. That redundancy is why the end-to-end
+# assertion below cannot police them: relax one and the other still refuses, so
+# the record is still rejected and the assertion is still green. A guard that
+# only bites once BOTH have fallen is half a guard.
+#
+# So `_shipped_authorizer` polices them individually, and the two layers are
+# measured, not assumed. Mutations of the shipped predicate, each driven over
+# the exact record case (2) builds -- `NO_CORPUS`, the NOT FOUND gate label,
+# `benchmark_data_sha` MATCHING, so guard 1 is satisfied and cannot be what
+# refuses:
+#
+#     widen the gate-label filter to accept NOT FOUND too   -> RED  "no longer
+#         selects on g.get("label") == label"
+#     widen `expansion` to accept NO_CORPUS, literal kept   -> RED  "now names
+#         'NO_CORPUS'"   <- the literal survives an `or` branch, so only the
+#         forbidden-spelling check sees this one
+#     widen BOTH, both literals kept                        -> RED  (and the
+#         substantive `assert 0 == 1` behind it)
+#     drop `"expansion"` from the dict comparison           -> RED  "no longer
+#         mentions '"expansion": "EXPANDED"'"
+#     unmutated shipped bytes                               -> PASSES
+#
+# So no single-guard erosion is invisible any more, and the end-to-end
+# assertion stays as the backstop for the case where both fall at once.
+
+VERIFY_MERGE = REPO / "tools" / "gatekeeper-verify-merge.sh"
+_AUTHORIZER = "base_has_exact_legacy_routed_empty"
+#: Stands in for the immutable corpus commit the outer verifier measures once
+#: and exports into BOTH arms.  Its only role here is equality.
+_BOUND_SHA = "0123456789abcdef0123456789abcdef01234567"
+_REAL_EMPTY_LABEL = f'corpus "{_REAL_CORPUS}" is EMPTY — nothing was checked over it'
+_REAL_ABSENT_LABEL = (f'corpus "{_REAL_CORPUS}" was NOT FOUND — nothing was '
+                      f'opened to check')
+
+
+def _transition_base_record(tmp_path: Path, stem: str, producer: str,
+                            pointer: str | None, sha: str | None) -> Path:
+    """A base-arm summary record over the REAL corpus name, written by the
+    real `_gate_dispatch.sh` at the legacy un-attested call site.
+
+    Un-attested on purpose: `base_has_exact_legacy_routed_empty` requires the
+    row to carry NO process attestation, which is the phase-1 bootstrap shape
+    the base arm is in.  Building it any other way would test a record the
+    predicate is not written for.
+    """
+    root = tmp_path / f"tr-{stem}"
+    root.mkdir(parents=True)
+    script = root / "gates.sh"
+    script.write_text(textwrap.dedent(f"""\
+        set -euo pipefail
+        ROOT={str(root)!r}
+        . {str(DISPATCH)!r}
+        gate_dispatch_init "$@"
+        _body() {{ run "per cell ($1)" "$ROOT" true; }}
+        gate_dispatch_over {_REAL_CORPUS!r} _body {producer}
+        gate_dispatch_finish
+        """), encoding="utf-8")
+    summary = root / "summary.json"
+    env = os.environ.copy()
+    env.pop(ENV, None)
+    env.pop("GATEKEEPER_BENCHMARK_DATA_SHA", None)
+    env["GATEKEEPER_HYGIENE_JOBS"] = "1"
+    if pointer is not None:
+        env[ENV] = pointer
+    if sha is not None:
+        env["GATEKEEPER_BENCHMARK_DATA_SHA"] = sha
+    subprocess.run(["bash", str(script), "--summary-json", str(summary)],
+                   env=env, capture_output=True, text=True)
+    return summary
+
+
+def _shipped_authorizer(tmp_path: Path, stem: str, record: Path) -> int:
+    """Run the predicate's SHIPPED bytes, lifted out of the script verbatim.
+
+    Copied rather than stubbed, and the extraction asserts what it took, so a
+    rename or a restructure of the function fails loudly here instead of
+    leaving this test silently measuring nothing.
+    """
+    text = VERIFY_MERGE.read_text(encoding="utf-8")
+    match = re.search(rf"^{_AUTHORIZER}\(\) \{{\n.*?^\}}\n", text,
+                      re.M | re.S)
+    assert match, (
+        f"{_AUTHORIZER} is no longer a top-level function in "
+        f"{VERIFY_MERGE.name}; this test can no longer reach the shipped bytes")
+    body = match.group(0)
+    for required in ('"expansion": "EXPANDED"', "is EMPTY", "benchmark_data_sha"):
+        assert required in body, (
+            f"the landing-transition authorizer no longer mentions {required!r}. "
+            f"It decides whether a base arm authorises trusted transition "
+            f"evidence; keeping a corpus nothing opened out of that decision is "
+            f"what these bytes do (vibe-ic#1764)")
+    # BOTH guards must stay EQUALITIES, and this is asserted separately from the
+    # substantive check below because the substantive check cannot see a single
+    # widening: with two redundant guards, relaxing one leaves the other
+    # refusing and the assertion green (measured -- see the matrix above). A
+    # membership test in place of either `==` is the first half of the only
+    # mutation that gets an unopened corpus through, so it fails HERE, on its
+    # own, before it can be paired with the second half.
+    for guard in ('g.get("label") == label',
+                  '"expansion": "EXPANDED"}'):
+        assert guard in body, (
+            f"the landing-transition authorizer no longer selects on {guard!r}. "
+            f"It is one of TWO independent guards that keep an absent-corpus "
+            f"record out of `build_trusted_transition_evidence`; widening "
+            f"either to a membership or subset test is invisible to the "
+            f"end-to-end assertion below, because the other one still refuses "
+            f"(vibe-ic#1764 §7)")
+    # ...and neither guard may be widened by NAMING the absent-corpus state.
+    # An `== "EXPANDED"` kept intact beside an `or ... == "NO_CORPUS"` still
+    # carries both literals above, so only this catches it. The predicate has
+    # no legitimate reason to mention either spelling: it authorises exactly
+    # one state and that state is the READ-empty one. Bound stated honestly --
+    # this reads the shipped text, so a widening that avoids both spellings
+    # (an indirection through a variable) would pass here and is caught only by
+    # the end-to-end assertion below, and only if BOTH guards fall.
+    for forbidden in ("NO_CORPUS", "NOT FOUND"):
+        assert forbidden not in body, (
+            f"the landing-transition authorizer now names {forbidden!r}. It "
+            f"authorises the trusted parent to enumerate and EXECUTE the routed "
+            f"corpus, and the only state that may do so is a corpus that was "
+            f"READ and publishes nothing. A corpus nothing opened must not be "
+            f"reachable from these bytes at all (vibe-ic#1764)")
+    driver = tmp_path / f"authorizer-{stem}.sh"
+    driver.write_text(
+        f"TRUSTED_REPO={str(REPO)!r}\nBENCHMARK_SHA={_BOUND_SHA!r}\n"
+        + body + f"\n{_AUTHORIZER} {str(record)!r}\n", encoding="utf-8")
+    return subprocess.run(["bash", str(driver)], capture_output=True,
+                          text=True).returncode
+
+
+def _corpus_row(record: Path) -> tuple[dict, list[str]]:
+    doc = json.loads(record.read_text(encoding="utf-8"))
+    rows = [c for c in doc["corpora"] if c["name"] == _REAL_CORPUS]
+    assert len(rows) == 1, rows
+    labels = [g["label"] for g in doc["gates"] if g.get("corpus") == _REAL_CORPUS]
+    return rows[0], labels
+
+
+def test_the_landing_transition_authorizer_never_accepts_an_unopened_corpus(
+        tmp_path):
+    """#1763's row keeps its authority; a corpus nothing opened never gains it."""
+    corpus = _read_but_empty_corpus(tmp_path)
+    subject = _subject_repo(tmp_path)
+    real = f"python3 {str(HELPER)!r} --repo {str(subject)!r}"
+
+    # (1) STATE B, the state the landing arms are actually in. This is #1763's
+    # row and it must still authorise — a change that made the transition
+    # un-buildable would be a regression dressed as caution.
+    b_record = _transition_base_record(
+        tmp_path, "b", real, str(corpus), _BOUND_SHA)
+    b_row, b_labels = _corpus_row(b_record)
+    assert b_row["expansion"] == "EXPANDED"
+    assert b_labels == [_REAL_EMPTY_LABEL], b_labels
+    assert _shipped_authorizer(tmp_path, "b", b_record) == 0, (
+        "the base arm in the state #1763 adjudicated no longer authorises "
+        "trusted transition evidence")
+
+    # (2) A NO_CORPUS ROW CARRYING THE MATCHING BOUND SHA. The producer cannot
+    # reach this state — see (3) — so the population is stubbed while the RECORD
+    # stays the real dispatcher's. That is the whole point: with the SHA guard
+    # satisfied -- asserted below, not assumed -- the refusal can only come
+    # from what vibe-ic#1764 added: the corpus row's `expansion` and the gate
+    # label that travels with it. Either alone refuses; see the matrix above.
+    a_record = _transition_base_record(
+        tmp_path, "a", "bash -c 'exit 3'", None, _BOUND_SHA)
+    a_row, a_labels = _corpus_row(a_record)
+    assert a_row["expansion"] == "NO_CORPUS", a_row
+    assert a_labels == [_REAL_ABSENT_LABEL], a_labels
+    # Guard 1 is SATISFIED here. Without this the refusal below would be
+    # ambiguous -- a `benchmark_data_sha` mismatch refuses every record, and a
+    # pin that cannot tell which guard fired is measuring nothing.
+    assert (json.loads(a_record.read_text(encoding="utf-8"))
+            .get("corpus_inputs", {}).get("benchmark_data_sha")) == _BOUND_SHA
+    assert _shipped_authorizer(tmp_path, "a", a_record) == 1, (
+        "a base arm whose corpus was NEVER OPENED authorised the trusted "
+        "parent to enumerate and execute the routed corpus. The transition "
+        "evidence would then be built over a measurement nobody took "
+        "(vibe-ic#1764)")
+
+    # (3) THE SECOND, INDEPENDENT GUARD, stated by measurement so that neither
+    # is mistaken for the only one. Inside `gatekeeper-verify-merge.sh` the SHA
+    # is exported in both arms, and a bound SHA with no checkout is a BROKEN
+    # POINTER, not an absent corpus: `_corpus_location` refuses it rc 2 before
+    # the question of which row to wear can arise.
+    u_record = _transition_base_record(tmp_path, "u", real, None, _BOUND_SHA)
+    u_row, _ = _corpus_row(u_record)
+    assert u_row["expansion"] == "PRODUCER_FAILED", u_row
+    assert _shipped_authorizer(tmp_path, "u", u_record) == 1
+
+    # The three rows are three different states, which is the property this
+    # whole file exists to keep.
+    assert len({b_row["expansion"], a_row["expansion"],
+                u_row["expansion"]}) == 3

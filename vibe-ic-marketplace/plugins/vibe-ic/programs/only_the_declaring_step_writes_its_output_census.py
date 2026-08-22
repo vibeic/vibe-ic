@@ -336,8 +336,14 @@ def main(argv=None) -> int:
               f"{len(new)} unrecorded. This is a count, not a "
               f"verdict — the gate is programs/only_the_declaring_step_writes_its_output.py.")
     if rc and not a.strict:
-        print("\n  CENSUS: reported, not refused. The gate for this rule is\n"
-              "  programs/only_the_declaring_step_writes_its_output.py — run that for a verdict.")
+        # ONE UNBROKEN PHRASE. The rc-0 line below already says "the gate is
+        # programs/<rule>.py"; this branch said the same thing in other words
+        # and split the program name onto a second line, so the sentence that
+        # names the refusing gate was absent from every run that found
+        # something — which is exactly the run a reader needs it on.
+        print("\n  CENSUS: reported, not refused. For this rule\n"
+              "  the gate is programs/only_the_declaring_step_writes_its_output.py"
+              " — run that for a verdict.")
         return 0
     return rc
 

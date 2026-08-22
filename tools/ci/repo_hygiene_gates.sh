@@ -148,18 +148,85 @@ run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
 # about a published comparison, and it is acknowledged with a deadline in
 # tools/ci/gate_red_since.json rather than wired around. `ppa-gate-audit/RESULT.md`
 # is the whole measurement.
-uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population, not a missing prerequisite: a record whose axis scope is incomplete or carries a null sentinel cannot be decided either way, and two nulls comparing EQUAL would otherwise pass two numbers taken under unrecorded conditions as taken under the same ones. A record that CAN be decided and fails is rc 1. THE DATE ON THIS EXEMPTION IS UNTOUCHED and no leniency changed; only a sentence of FACT did. It used to end 'and this corpus produces one today', naming h2h_F -- which was not a head-to-head at all but a within-project ablation mis-filed under this document kind, and has been re-filed as vibeic.ppa.ablation.v1 with every number byte-identical and the refusal that caused it kept beside it. The corpus is 14 records, 0 refused, and the 2 that remain undecidable are the pre-existing unrecorded-field defect this text already describes"
+uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population, not a missing prerequisite: a record whose axis scope is incomplete or carries a null sentinel cannot be decided either way, and two nulls comparing EQUAL would otherwise pass two numbers taken under unrecorded conditions as taken under the same ones. A record that CAN be decided and fails is rc 1. THE DATE ON THIS EXEMPTION IS UNTOUCHED and no leniency changed; only a sentence of FACT did. It used to end 'and this corpus produces one today', naming h2h_F -- which was not a head-to-head at all but a within-project ablation mis-filed under this document kind, and has been re-filed as vibeic.ppa.ablation.v1 with every number byte-identical and the refusal that caused it kept beside it. The corpus is 14 records, 0 refused, and the 2 that remain undecidable are h2h_A and h2h_B. THEIR REASON IS NOT THE UNRECORDED-FIELD DEFECT THIS TEXT PREDICTED, and the sentence is corrected rather than left: both refuse at FEASIBILITY_NOT_CHECKED, naming 'feasibility.checks.drv.status' on BOTH arms, which check_feasibility reaches BEFORE check_scope_parity -- so the rc_corner sentinel h2h_A also carries is never the verdict. NAMED MISSING INPUT: a decided CLEAN/VIOLATIONS status on the drv axis. PRODUCER: none -- ppa-crosslayer/RESULT.md 8.4 measured that nothing in programs/ produces drv, which is why it was the last axis standing there too. Until this batch these two were rc 1 STAGE_CONTRADICTS_BASIS: each cited a stage='synth' power number under measurement_basis='post_route_sta'. Their power axis has been re-filed from the labelled post-route diagnostic the same trial already measured, so what is left is a stated gap and not a false claim"
 run_tolerating_uncheckable "PPA head-to-head records (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-crosslayer"
-# MEASURED 2026-08-22: 2 record(s), 0 refused, 2 undetermined -> rc=2. Both are
-# `SCOPE_SENTINEL` — `timing_wns_ns` declares an `rc_corner` key with no value,
-# and two nulls compare EQUAL, so two numbers taken under conditions nobody
-# recorded would pass as taken under the same conditions. That is a
+# MEASURED: 2 record(s), 0 refused, 2 undetermined -> rc=2. That is a
 # content-earned NOT_CHECKED over a NAMED population of two, which is a
 # different fact from the zero-second no-op this row used to be.
-uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population of two: both published records declare a timing rc_corner key with no value, so neither comparison can be decided. It is NOT a claim that the corpus is empty — the count is printed on every run — and a record that CAN be decided and fails is rc 1. THE PRODUCER-SIDE CAUSE, MEASURED 2026-08-22 over every scope/source pair in ppa-e2e: the timing axis of both records is taken from sta_spef_based.rpt, and that report names no RC corner anywhere in this corpus — 490 of 490 metric rows sourced from it carry rc_corner null. The only source that DOES name one is sta_spef_multicorner.rpt (549 max / 544 min), which is what the cross-layer records use and why they are decided. Re-filing the axis from it is not a repair anyone can make here: its rows sit at a different process corner than the tt/1.6V/100C these records publish, and its own wns_ns is null. NAMED MISSING INPUT: a setup WNS for these two arms, at the corner they publish, from an STA run that records its RC corner. PRODUCER: the end-to-end campaign runner. Stating the field from anything in the tree today would be composing the condition after the measurement"
+#
+# THE COUNT WAS PREDICTED CORRECTLY AND THE REASON WAS NOT, so the reason is
+# corrected here. This comment said both records were `SCOPE_SENTINEL` on the
+# `rc_corner` key. They are not: both refuse at `FEASIBILITY_NOT_CHECKED`,
+# naming `feasibility.checks.drv.status` -- and `setup` and `hold` besides --
+# because `check_feasibility` runs BEFORE `check_scope_parity`, so the scope
+# sentinel these records also carry is never the verdict a reader is given.
+# The rc_corner gap is real and is still described in the exemption below; it
+# is simply not what stops these two.
+uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population of two. THE VERDICT BOTH RECORDS ACTUALLY RETURN is FEASIBILITY_NOT_CHECKED, naming 'feasibility.checks.drv.status', 'feasibility.checks.setup.status' and 'feasibility.checks.hold.status'; check_feasibility runs before check_scope_parity, so the rc_corner gap described below is real but is not what stops them. Until this batch the first of the two was rc 1 STAGE_CONTRADICTS_BASIS -- a stage='synth' power number cited under measurement_basis='post_route_sta' -- and its power axis has been re-filed from the post-route diagnostic this campaign had already measured and published beside it in head_to_head_diagnostic_power.json. THE SECOND, PRE-EXISTING GAP, still true: both published records declare a timing rc_corner key with no value, so on that axis too neither comparison can be decided. It is NOT a claim that the corpus is empty — the count is printed on every run — and a record that CAN be decided and fails is rc 1. THE PRODUCER-SIDE CAUSE, MEASURED 2026-08-22 over every scope/source pair in ppa-e2e: the timing axis of both records is taken from sta_spef_based.rpt, and that report names no RC corner anywhere in this corpus — 490 of 490 metric rows sourced from it carry rc_corner null. The only source that DOES name one is sta_spef_multicorner.rpt (549 max / 544 min), which is what the cross-layer records use and why they are decided. Re-filing the axis from it is not a repair anyone can make here: its rows sit at a different process corner than the tt/1.6V/100C these records publish, and its own wns_ns is null. NAMED MISSING INPUT: a setup WNS for these two arms, at the corner they publish, from an STA run that records its RC corner. PRODUCER: the end-to-end campaign runner. Stating the field from anything in the tree today would be composing the condition after the measurement"
 run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-e2e"
+
+# THE ABLATION KIND, WHICH UNTIL NOW HAD A SCHEMA AND NO GATE.
+#
+# `schemas/ppa/ablation.v1.schema.json` exists because a WITHIN-PROJECT
+# comparison was filed as `vibeic.ppa.comparison.v2` and `ppa_head_to_head_check`
+# refused it BASELINE_TUNED_BY_US. The record was honest; the document kind was
+# the lie. The new kind was the right repair -- and nothing that RUNS ever read
+# it. Measured on a4caccefe (v1.11.69): one pytest driving one hardcoded path,
+# and in this file the word `ablation` appeared in a comment and nowhere else.
+#
+# WHY THAT IS NOT A COSMETIC GAP. The three rows above refuse a comparison whose
+# baseline this project tuned. This kind is where such a document legitimately
+# goes -- and with no gate behind it, it is also where an ILLEGITIMATE one could
+# go to escape those same conditions. The schema closes that from the other side
+# (`tuned_by_this_project: const true` on EVERY arm, so a real head-to-head
+# cannot satisfy it), but a schema nothing applies refuses nothing.
+#
+# THE WRAPPER, AND IT WAS CHOSEN THE SECOND TIME BY MEASUREMENT RATHER THAN BY
+# TASTE. The gate PASSES today: 633 JSON file(s) opened under ppa-crosslayer,
+# 1 ablation record selected, 0 refused, 0 undetermined, 1 accepted -> rc=0. So
+# plain `run` looked right and was written first. It is WRONG, and here is the
+# measurement that says so:
+#
+#   $ GATEKEEPER_BENCHMARK_DATA_SHA=... VIBE_IC_BENCHMARK_DATA=<clone> \
+#       ppa_ablation_check --corpus <repo>/ppa-crosslayer
+#   note: GATEKEEPER_BENCHMARK_DATA_SHA binds the landing corpus; forcing
+#         VIBE_IC_BENCHMARK_DATA=<clone> and refusing any candidate-local
+#         .../ppa-crosslayer shadow.
+#   VACUOUS: ... 0 ablation record(s) selected ... rc=2
+#
+# A BOUND LANDING REDIRECTS THIS ROW AWAY FROM THE NAMED ROOT. That is
+# `_corpus_location.resolve`'s bound branch working exactly as designed -- one
+# byte-attested external checkout, no candidate-local shadow -- and it means an
+# rc 2 here can be a fact about the LANDING ENVIRONMENT rather than about any
+# record. Failing a landing for that would be a gate answering a question
+# nobody asked, so rc 2 arrives as NOT CHECKED. rc 1 -- a record that WAS read
+# and does not hold -- still fails, which is the half that matters.
+#
+# AND THE EXEMPTION IS DECLARED, because the dispatcher refuses to let it be
+# defaulted into. Written first with no `uncheckable_until` -- on the reasoning
+# that rc 2 is not EXPECTED here and an undeclared row stays louder -- and
+# `_gate_dispatch.sh` rejected the whole run for it:
+#
+#   gate_dispatch: WIRING ERROR -- "PPA ablation records (within-project)" is
+#   wired with run_tolerating_uncheckable, so it can report NOT_CHECKED, but no
+#   `uncheckable_until <YYYY-MM-DD> <why>` line precedes it -- tolerance has to
+#   be bought, not defaulted into
+#   ... the set was not correctly declared, so this run certifies NOTHING
+#
+# That is the correct ruling and it cost nine test reds to learn. The routed-DEF
+# row that reports "BLOCKING; no exemption" is NOT a counter-example: it uses
+# the structural-refusal wrapper, a different mode, whose rc 2 is the only
+# truthful outcome it has.
+#
+# AIMED AT ppa-crosslayer AND NOT AT benchmark-data, deliberately: this is where
+# the kind lives (`records/ablations/`), and it is the directory a SECOND
+# ablation would be filed into tomorrow -- the case that was validated by
+# nothing before this row existed.
+uncheckable_until 2027-02-28 "rc 2 here is NOTHING OPENED or nothing of this kind found -- never a verdict about a record. Over THIS repository the gate DECIDES and PASSES today: 633 JSON file(s) opened under ppa-crosslayer, 1 ablation record selected, 0 refused, 0 undetermined, 1 accepted, rc 0. The reachable rc 2 is environmental and was MEASURED, not guessed: a landing that binds a corpus (GATEKEEPER_BENCHMARK_DATA_SHA) forces VIBE_IC_BENCHMARK_DATA and refuses the candidate-local ppa-crosslayer shadow, so this row then reads a clone that carries no ablation record and answers VACUOUS rc 2. A record that IS read and does not hold is rc 1 and still fails this row. WHAT THE REVIEW DATE IS FOR: if the corpus this repository carries ever stops holding an ablation record, this row goes NOT CHECKED and the exemption above becomes a false sentence -- that is the state to look for, not the date"
+run_tolerating_uncheckable "PPA ablation records (within-project)" "$ROOT" \
+    python3 "$PG/ppa_ablation_check.py" --corpus "$ROOT/ppa-crosslayer"
 
 # THE REST OF THE PPA RECORD FAMILY, wired on the ruling three lines above.
 #
@@ -293,7 +360,7 @@ run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pa
 # MEASURED 2026-08-22:
 #   cross-layer  b000     vs 20 trials  ->  20 comparable, rc 0
 #   end-to-end   baseline vs 60 trials  ->  60 comparable, rc 0
-uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+uncheckable_until 2027-02-28 "PASSES today over 210 pairs — 21 contracts in 1 problem group, every pair inside the group compared. It was 20 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 # `--baseline` IS GONE, and dropping it is what makes this row decide anything.
 # MEASURED on a758f4adc, exactly as the line below was written:
 #
@@ -316,7 +383,7 @@ uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract 
 run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --corpus "$ROOT/ppa-crosslayer"
-uncheckable_until 2027-02-28 "PASSES today over 60 pairs; rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+uncheckable_until 2027-02-28 "PASSES today over 1830 pairs — 61 contracts in 1 problem group, every pair inside the group compared. It was 60 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --corpus "$ROOT/ppa-e2e"
@@ -875,6 +942,46 @@ run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_sc
 # SPDX licence, 11 attribution record(s), rc=0 PASS.
 run "vendored attribution retained"     "$ROOT" python3 "$PG/vendored_attribution_retained_check.py"
 
+# --- the upstream-parity family (vibe-ic#1082 compose step) -----------------
+# Three checkers landed together and NOTHING but their own unit tests ran any
+# of them: `checker_execution_wiring_audit` named all three, and
+# `gate_is_wired_check` named the two below that are gate-shaped. A checker a
+# fixture proves and no tree ever exercises is verified against its author's
+# MODEL of the artefacts, never against the artefacts.
+#
+# They sit together and next to the attribution gate above because they are the
+# same population and the same question: what this repository BORROWED from an
+# upstream flow, and whether the borrowing is still maintained rather than
+# merely once true.
+#
+# THE SUBJECT IS PASSED EXPLICITLY, not defaulted. Each of the three defaults to
+# the directory it is installed in, and a gate that reads its own installation
+# cannot be shown a mutated input — so the declaration names `$PLUGIN`, which
+# is the same tree in production and is what makes the two-fixture pair
+# (tools/ci/gate_fixtures/) able to drive the real declared command.
+
+# The register half: every upstream name inside a registered entry is in exactly
+# one class. rc 2 if the register cannot be read — an empty register passes
+# every property it states, which is the one verdict it must never return.
+run "upstream contract parity"          "$ROOT" python3 "$PG/upstream_contract_parity_check.py" \
+    --register "$PLUGIN/programs/upstream_contract_parity.json"
+
+# The declaration half: a module that says it mirrors upstream must name a test
+# that READS upstream. rc 2 on zero declared mirrors — that is a question with
+# no subject, not a clean answer to it.
+run "declared upstream mirrors are pinned" "$ROOT" python3 "$PG/upstream_mirror_is_pinned_check.py" \
+    --programs-dir "$PLUGIN/programs"
+
+# The anchor half, and the only one of the three whose input is HOST-dependent:
+# it opens the upstream file each pin names and looks for the anchor text in it.
+# `--upstream-root "$ROOT"` says an upstream tree VENDORED INSIDE THE CHECKOUT
+# also counts; nothing vendors one today, so on a bare host every pin resolves
+# to NOT_ON_HOST and the gate refuses rather than reporting agreement it never
+# measured.
+uncheckable_until 2027-02-28 "needs an INSTALLED upstream tool tree on the host for ONE of its two legs. The STRUCTURAL leg needs no tree and runs everywhere: it evaluates each UPSTREAM_PINS declaration and requires every pin to carry both an upstream key and an anchor key. MEASURED on a bare checkout, 5 of 5 declared pin(s) pass it, and it discriminates rather than merely passing -- drop one pin's anchor and the count goes to 4 with rc 1 PIN_INCOMPLETE; make the declaration non-literal and it goes to 0 with rc 1 PIN_UNREADABLE, both on a host with no upstream tree anywhere. The COMPARISON leg is what rc 2 declines: it opens the file each pin names and looks for the anchor text, and on a bare checkout none of the declared upstream files resolves under any probed root. The refusal PRINTS both halves -- how many pins were structurally validated, and every root probed with whether the directory exists and how many declared upstream files were found under it -- so this row can never read as a gate that checked nothing. rc 2 is NOT 'the re-implementations agree' and the gate says so in those words. An anchor ABSENT from a file it DID read is rc 1 and still fails this row"
+run_tolerating_uncheckable "upstream pins still resolve" "$ROOT" python3 "$PG/upstream_reimplementation_pin_check.py" \
+    --programs-dir "$PLUGIN/programs" --upstream-root "$ROOT"
+
 # vibe-ic#408/#389 — a PDK the image ships must be SELECTABLE by the name
 # `--pdk` matches, and every asset the registry DECLARES must resolve. The
 # name half is pure registry data and runs everywhere; the asset half needs
@@ -1073,7 +1180,7 @@ run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_
 # The checker now refuses to call that state a PASS (rc 2 with the count), so
 # this line cannot go green until a contract-carrying report is committed, and
 # it goes green by itself on the first one that is.
-uncheckable_until 2026-11-30 "KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key, so every rule takes the pre-contract early return and rc 2 says so rather than reporting an unexercised guard as clean. Goes green by itself on the first contract-carrying report committed"
+uncheckable_until 2026-11-30 "IT IS A MISSING PREREQUISITE, AND THIS DECLARATION USED TO DENY BEING ONE. Measured 2026-08-22: the gate prints '--dir <ROOT>/benchmark-data is not a directory' — it opens NO report. The previous wording said \"KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key\", which is a claim about the CONTENT of reports nothing read; it was plausibly true before v1.10.56 moved benchmark-data to its own repository, and has been a statement about an absent tree ever since. It also promised to go \"green by itself on the first contract-carrying report committed\" — it cannot, because no report committed HERE is in the directory it opens. MISSING INPUT, NAMED: a readable benchmark-data corpus, i.e. VIBE_IC_BENCHMARK_DATA pointed at a clone of the published-corpus repository. NOT given --corpus-may-be-absent deliberately: that flag returns rc 0 NO_CORPUS, which is a pass printed over a population nobody opened. THE REVIEW DATE IS DELIBERATELY UNCHANGED at 2026-11-30 even though the mechanism it was defending turned out to be false: re-dating an exemption is forbidden outright, and the argument for moving it here — that a date guarding a false reason means something different from one guarding a named absence — is exactly the kind of reasoning an author uses to widen his own deadline. The text is corrected; the clock is not touched"
 run_tolerating_uncheckable "blocker list contract on committed reports" "$ROOT" \
     python3 "$PG/blocker_classification_check.py" --dir "$ROOT/benchmark-data"
 
@@ -1157,7 +1264,7 @@ run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_program
 # therefore "this clone cannot answer", which is the normal state for a
 # developer's `--depth` checkout and must be LOUD and non-fatal; CI checks out
 # complete and genuinely checks. rc 1 (a hand-edited figure) still fails.
-uncheckable_until 2027-02-28 "needs a COMPLETE clone: it REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; CI checks out complete and genuinely checks. A hand-edited figure is still rc 1"
+uncheckable_until 2027-02-28 "needs a COMPLETE clone AND the artefact to have been generated, and only the first half used to be stated. It REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; a hand-edited figure is still rc 1. MEASURED 2026-08-22 on a COMPLETE checkout (git rev-parse --is-shallow-repository = false): rc 2 anyway, and the reason is not depth — 'docs/ENGINEERING_EVIDENCE.md does not exist'. That file is NOT tracked (git ls-files finds none), so on any clean checkout it is absent until the generator this very row invokes has run. Blaming shallowness alone sends a reader to check their clone depth when the answer is that nothing generated the file yet"
 run_tolerating_uncheckable "engineering evidence fresh" \
     "$ROOT" python3 "$ROOT/tools/gen_engineering_evidence.py" --check
 
@@ -1213,6 +1320,17 @@ run "a printed population agrees with its pin" "$PLUGIN" python3 programs/emitte
 # `0` in prose and returns `0` in rc is a silent pass, and the disclosure gate
 # passes it correctly.
 run "a zero denominator refuses" "$ROOT" python3 "$PG/gate_zero_denominator_refuses_check.py"
+
+# THE OTHER HALF OF THE DENOMINATOR QUESTION, and the one the three above cannot
+# reach. They ask what a PASS disclosed about its reach. This asks what a
+# REFUSAL disclosed about its reach: an absence verdict — a `*_NOT_FOUND` /
+# `*_ABSENT` / `*_MISSING` refusal — must name WHERE it looked, or a reader
+# cannot tell "it is in neither of the two places it is declared" from "I opened
+# one of them". Landed with nothing but its own unit test running it.
+# `--programs-dir` names the subject for the same reason the upstream family
+# above does: the default is this gate's own installation.
+run "absence verdicts name where they looked" "$ROOT" python3 "$PG/absence_verdict_names_its_search_space_check.py" \
+    --programs-dir "$PLUGIN/programs"
 
 # vibe-ic#528 — the OTHER half of the disclosure question, and the reason both
 # are wired: the check above asks whether a HUMAN READER can see that a gate

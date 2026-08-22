@@ -58,16 +58,46 @@ _PROGRAMS = _TESTS.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 from _ppa import metrics as M      # noqa: E402
+from _ppa.backends import opensta  # noqa: E402
 from _ppa import timing as T       # noqa: E402
 
 FIX = _TESTS / "fixtures" / "ppa" / "sta" / "known_answer" / "views"
 # F-10 IS FIXED AND THE PIN IS GONE. Until the record lane landed, the three
 # arms below were `xfail(strict=True)` with the note "goes red the moment the
-# fix lands", handed over in RESULT.md per PPA_INTERFACES §6. The fix landed in
-# `_ppa/timing.discover_reports` (de-duplicate by CONTENT, not by resolved
-# path) and all three xpassed, which is this file's own instruction to delete
-# the pin: "a pin that survives its bug is a second bug, and it is the one that
-# hides the first". The arms stay, unpinned, as the guard against a regression.
+# fix lands", handed over in RESULT.md per PPA_INTERFACES §6. The fix landed and
+# all three xpassed, which is this file's own instruction to delete the pin: "a
+# pin that survives its bug is a second bug, and it is the one that hides the
+# first". The arms stay, unpinned, as the guard against a regression.
+#
+# WHICH MECHANISM FIXED IT CHANGED UNDER THIS FILE, AND THIS FILE WAS NOT MOVED
+# WITH IT (v1.11.57, `e4c5840d6f`). These arms were written at v1.11.53 against
+# `discover_reports` de-duplicating by CONTENT DIGEST: byte-identical, therefore
+# one artefact, therefore one kept. A second lane then shipped
+# `test_declared_mirrors_are_not_a_second_measurement.py::
+#  test_two_identical_artefacts_that_are_not_declared_mirrors_both_count`,
+# whose rule a content hash CANNOT satisfy -- two DIFFERENT sign-off reports
+# whose bytes happen to agree are two measurements, and collapsing them by
+# digest deletes evidence. Nothing in the bytes tells the two situations apart.
+#
+# So the contract was inverted where it had to be: byte equality now DETECTS and
+# the PRODUCER'S DECLARATION decides. `discover_reports` keeps both copies and
+# records the pair in `collapsed`; `collapse_declared_mirrors` drops the copy
+# the run itself wrote down as a mirror in `reports/phase3/artefact_mirrors.json`
+# (`phase3_one_shot_runner._publish_artefact_mirror`, three call sites), with a
+# reason attached. An UNDECLARED byte-identical pair is a finding in its own
+# right and BOTH count, because a double count is visible in the document and a
+# deletion is not.
+#
+# v1.11.57's landing gate was skipped by owner directive, so nothing compared
+# test IDs and these three arms landed red on main still asserting the
+# superseded rule. THEY ARE CORRECTED HERE, NOT RELAXED: the property they
+# protect is unchanged -- one measurement must not become two rows under one
+# (metric, scope) -- and it is now asserted over the tree shape the runner
+# actually produces (mirror declared), plus a new arm's worth of assertion that
+# the UNDECLARED shape is loud rather than silent. The live contract is guarded
+# on the other side by `test_ppa_timing.py::
+# test_a_report_published_into_two_directories_is_read_ONCE`; before this
+# correction the two files asserted opposite things about the same call.
 
 
 def _one_report() -> pathlib.Path:
@@ -93,33 +123,65 @@ def _tree_with_the_same_report_in_two_places(tmp_path) -> pathlib.Path:
     return tmp_path
 
 
+def _declare_the_mirror(root: pathlib.Path) -> None:
+    """Write the manifest the RUN ITSELF writes when it publishes a copy.
+
+    `phase3_one_shot_runner._publish_artefact_mirror` emits this for every
+    artefact it mirrors into a second directory, so a real Phase-3 tree carries
+    it. Without it the pair is undeclared, and an undeclared pair is a
+    different situation with a different correct answer -- asserted in
+    `test_an_undeclared_duplicate_is_loud_not_silent` below.
+    """
+    a = root / "phase3" / "stage3" / "sta" / "sta_mcorner_ocv.rpt"
+    b = root / "reports" / "phase3" / "sta" / "sta_mcorner_ocv.rpt"
+    manifest = root / T._MIRROR_MANIFEST
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps(
+        {"schema": "vibeic.artefact_mirrors.v1",
+         "mirrors": [{"mirror": T._rel(root, b),
+                      "of": T._rel(root, a),
+                      "sha256": opensta.file_digest(a),
+                      "reason": "published into a second directory by the runner"}]},
+        indent=2) + "\n", encoding="utf-8")
+
+
 def test_both_copies_are_discovered(tmp_path):
     """The premise of the finding, stated on its own so that a failure below
     cannot be explained away as 'discovery only found one'.
 
-    THE PREMISE IS UNCHANGED; WHERE IT IS OBSERVED MOVED. Discovery still has
-    to REACH both trees — if it only ever saw one, the two arms below would be
-    green over a population of one and would prove nothing. Since the record
-    lane landed F-10 it no longer RETURNS both, because the two files are
-    byte-identical and one measurement recorded twice is not two measurements.
-    So the premise is now read off the pair (kept, collapsed): two candidates
-    were seen, one was kept, and the second was COLLAPSED ONTO THE ONE KEPT
-    rather than never found. `discover_reports` takes the `collapsed` list
-    precisely so this stays observable instead of becoming a silent drop.
+    THE PREMISE IS UNCHANGED; WHAT DISCOVERY DOES WITH IT MOVED. Discovery has
+    to REACH both trees — if it only ever saw one, the arms below would be
+    green over a population of one and would prove nothing. That is asserted
+    directly here, on the paths, rather than inferred from a count.
+
+    WHAT THIS ARM NO LONGER ASSERTS, AND WHY. It used to require `len(found)
+    == 1`: byte-identical, therefore collapsed to one. Since v1.11.57 the bytes
+    DETECT and the producer's declaration DECIDES, so an undeclared pair keeps
+    BOTH and merely REPORTS the pair — see the note at the head of this file.
+    The observable that survives, and the one this arm now pins, is that the
+    duplicate is never silent: the pair is reported, and it names both members,
+    so a reader can tell a duplicate from a dropped file. The "counted once"
+    property moved to the arms below, where the mirror is declared.
     """
     root = _tree_with_the_same_report_in_two_places(tmp_path)
+    a = root / "phase3" / "stage3" / "sta" / "sta_mcorner_ocv.rpt"
+    b = root / "reports" / "phase3" / "sta" / "sta_mcorner_ocv.rpt"
     collapsed = []
     found = T.discover_reports(root, collapsed)
-    assert len(found) + len(collapsed) == 2, (
-        f"discovery reached {len(found) + len(collapsed)} of the two trees; "
-        f"kept={[str(f) for f in found]} collapsed={[str(a) for a, _ in collapsed]}")
-    assert len(found) == 1 and len(collapsed) == 1, (
-        f"the two copies are byte-identical, so exactly one is kept and one "
-        f"collapses; kept={[str(f) for f in found]} "
-        f"collapsed={[(str(a), str(b)) for a, b in collapsed]}")
-    assert collapsed[0][1] == found[0], (
-        "the collapse does not name the report it was collapsed onto, so a "
-        "reader cannot tell a de-duplication from a dropped file")
+    assert {f.resolve() for f in found} == {a.resolve(), b.resolve()}, (
+        f"discovery did not reach both trees; kept={[str(f) for f in found]} "
+        f"collapsed={[str(x) for x, _ in collapsed]}")
+    assert len(collapsed) == 1, (
+        f"the two copies are byte-identical, so exactly one pair is REPORTED "
+        f"as a byte-identical duplicate; "
+        f"collapsed={[(str(x), str(y)) for x, y in collapsed]}")
+    assert collapsed[0][0].resolve() != collapsed[0][1].resolve(), (
+        "the reported pair names one file twice, so it is not a pair")
+    assert {collapsed[0][0].resolve(), collapsed[0][1].resolve()} == \
+        {a.resolve(), b.resolve()}, (
+        "the report does not name the file it duplicates, so a reader cannot "
+        "tell a duplicate from a dropped file: "
+        f"{(str(collapsed[0][0]), str(collapsed[0][1]))}")
 
 
 def test_one_measurement_is_not_counted_twice(tmp_path):
@@ -127,8 +189,18 @@ def test_one_measurement_is_not_counted_twice(tmp_path):
 
     `metrics.record_key` is what `MetricIndex` uses. Two rows sharing a key
     are two copies of one fact.
+
+    OVER THE TREE THE RUNNER ACTUALLY PRODUCES. `_publish_artefact_mirror`
+    writes `reports/phase3/artefact_mirrors.json` for every copy it publishes,
+    so a real Phase-3 tree declares its mirror; `_declare_the_mirror` builds
+    exactly that. The property asserted is the same one F-10 was filed for —
+    one measurement, one row per (metric, scope). What changed is that the
+    collapse is driven by the producer's declaration rather than by a content
+    hash, because a hash cannot tell a copy from a second reading that agrees.
+    The undeclared case is asserted separately, below.
     """
     root = _tree_with_the_same_report_in_two_places(tmp_path)
+    _declare_the_mirror(root)
     rows, notes = T.timing_rows(root)
     assert rows, f"no rows produced; nothing was checked. notes={notes}"
     keys = Counter((r["metric"], json.dumps(r.get("scope"), sort_keys=True))
@@ -145,10 +217,16 @@ def test_the_duplicate_rows_come_from_the_same_bytes(tmp_path):
     """States WHY the duplication is a defect rather than two views.
 
     Both copies carry the same `source.sha256`. Two rows over one artefact
-    hash are not two measurements; they are one measurement, recorded twice.
+    hash are not two measurements; they are one measurement, recorded twice —
+    and the run said so itself, in the mirror manifest `_declare_the_mirror`
+    writes. That declaration is what makes this a defect rather than a
+    coincidence: without it, identical bytes prove nothing (see
+    `test_an_undeclared_duplicate_is_loud_not_silent`).
     """
     root = _tree_with_the_same_report_in_two_places(tmp_path)
+    _declare_the_mirror(root)
     rows, _ = T.timing_rows(root)
+    assert rows, "no rows produced; nothing would be checked"
     by_key = {}
     for r in rows:
         by_key.setdefault(
@@ -160,6 +238,36 @@ def test_the_duplicate_rows_come_from_the_same_bytes(tmp_path):
         f"F-10: {len(same_bytes)} (metric, scope) pair(s) are recorded more "
         f"than once over the SAME artefact sha256, i.e. one measurement "
         f"counted twice: {sorted(m for m, _ in same_bytes)}")
+
+
+def test_an_undeclared_duplicate_is_loud_not_silent(tmp_path):
+    """The other half of the corrected contract, asserted so that "both are
+    kept" can never quietly become "and nobody is told".
+
+    An undeclared byte-identical pair keeps BOTH rows on purpose: deleting a
+    real second measurement is worse than double-counting one, because a double
+    count is visible in the document and a deletion is not. That trade is only
+    defensible while the duplication is REPORTED. If this note ever stops being
+    emitted, the double count becomes silent and F-10 is back in a new place —
+    which is precisely the failure the arms above were written to prevent, so
+    it is pinned here rather than left to the mechanism's good intentions.
+    """
+    root = _tree_with_the_same_report_in_two_places(tmp_path)
+    rows, notes = T.timing_rows(root)
+    assert rows, f"no rows produced; nothing was checked. notes={notes}"
+    keys = Counter((r["metric"], json.dumps(r.get("scope"), sort_keys=True))
+                   for r in rows)
+    assert any(n > 1 for n in keys.values()), (
+        "an UNDECLARED byte-identical pair no longer double-counts. That may "
+        "be an improvement, but it is a contract change: re-read the note at "
+        "the head of this file, move the 'both are kept' rule with it, and "
+        "reconcile `test_ppa_timing.py::"
+        "test_a_report_published_into_two_directories_is_read_ONCE` and "
+        "`test_declared_mirrors_are_not_a_second_measurement.py` in the same "
+        "commit -- do not delete this arm on its own.")
+    assert any("undeclared byte-identical artefacts" in n for n in notes), (
+        "both copies were counted and NOTHING said so. A double count that is "
+        f"not reported is a silent one. notes={notes}")
 
 
 def test_row_digest_alone_cannot_see_this(tmp_path):

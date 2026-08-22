@@ -589,14 +589,47 @@ the cheat this lane exists not to be. It is **REQUEST 2** that
 Each record below differs from the one above it in exactly one respect, and each
 was produced before its successor rather than assembled backwards.
 
-| record | what it declares | verdict | condition that failed |
+| record | as produced, it declared | verdict when produced | condition that failed |
 |---|---|---|---|
 | `h2h_A` | shipped numbers, setup at the governing `ss` corner | rc=2 `SCOPE_SENTINEL` | *same corner* — **producer defect**, §8.2 |
 | `h2h_B` | setup at `tt`, shipped power | rc=2 `SCOPE_INCOMPLETE` | *same activity basis* — **producer defect**, §8.3 |
 | `h2h_C` … `h2h_O` | setup at `tt`, power from the labelled post-route diagnostic | **rc=0 PASS** | none |
 
+**`h2h_A` AND `h2h_B` NO LONGER DECLARE WHAT THAT TABLE SAYS THEY DECLARE, and
+the column headings are past tense for that reason.** Both have been RE-FILED,
+and this section is kept rather than deleted because the progression it records
+is how the four conditions were satisfied and that history is still true.
+
+WHAT WAS WRONG WITH THEM, which is not what §8.2 and §8.3 say. Each carried its
+`power_mw` at `scope.stage = "synth"` while the arm around it declared
+`measurement_basis: "post_route_sta"` — a number that states where it came from
+and states it falsely. `ppa_head_to_head_check` could not say so while
+`check_scope_parity` ran first: an rc 2 was reported and the rc 1 behind it was
+never printed, which is why the verdict column above reads `SCOPE_SENTINEL` and
+`SCOPE_INCOMPLETE` rather than `STAGE_CONTRADICTS_BASIS`. With the checks
+reordered the refusal surfaced, on these two records and on `ppa-e2e`'s
+`head_to_head.json`.
+
+WHAT WAS DONE. The power axis of all three was re-filed from the labelled
+post-route diagnostic — the same one `h2h_C` uses, for the same trial, from the
+artefact whose `sha256` the record already recorded and which is committed in
+this tree (`records/trials/b000/diag/power_postroute.rpt`,
+`records/trials/c02/diag/power_postroute.rpt`). Nothing was relabelled: the
+synth number was not restamped as post-route, it was REPLACED by the post-route
+number that had been measured and not used. The alternative remedy — filing the
+arm `NOT_MEASURED` with the producer's `--power withheld` reason — was not
+needed here, because the measurement exists.
+
+WHERE THAT LEAVES THEM. Both are now **rc=2 `FEASIBILITY_NOT_CHECKED`**, on
+`feasibility.checks.drv.status`: the `drv` axis is undecided on both arms
+because, as §8.4 records, nothing in `programs/` produces it. That is a STATED
+GAP over a named field, not a claim, and it is the same axis that was already
+the last one standing in §8.4. `h2h_C` … `h2h_O` are unchanged and still PASS.
+
 Full machine reports: `records/h2h_*_report.json`; the records themselves are
-`records/h2h_*.json`.
+`records/h2h_*.json`. The reports for the three re-filed records were
+regenerated from the shipped checker over the re-filed record, so a report
+beside a record is that record's verdict and not its predecessor's.
 
 ### 8.2 `SCOPE_SENTINEL` — `_ppa/timing.py` writes `null` into a scope
 

@@ -65,3 +65,48 @@ A record here that names no program is NOT an oversight: it carries a measured
 reason — already implemented elsewhere, half implemented, no static signature,
 or a population too thin to earn a gate. Re-deriving those measurements is the
 work this file exists to save.
+
+## OUT OF SCOPE: the records that are not Bucket A (4 of 17)
+
+The DISTIL brief covered the Bucket-A records only. These were NOT
+examined, and are listed so a reader of a capture with 17 records and 13 dispositions can tell
+*considered and excluded* from *missed*. The reason on each line is the
+record's own `why_not_bucket_a` field, not a judgement added here.
+
+- **[T]** A fatal condition downgraded to a warning leaves no machine-readable statement that the stage did not complete
+  > A plugin-side rule can only enumerate the identifiers the fork has
+  > ALREADY downgraded — which is what it does today, with a list of error
+  > markers plus a separately added scan for the one identifier most
+  > recently downgraded to a warning. That list can never include the next
+  > downgrade, because the downgrade exists precisely to stop the tool from
+  > erroring, so a downstream rule is guaranteed to be one release behind
+  > and to fail in the passing direction. The completion statement has to
+  > come from the tool that knows it did not complete.
+
+- **[C]** An artefact index that matches whole-path literals cannot tell a reader from a writer, nor see a reader that resolves the path at run time
+  > A deterministic rule is the right answer and the input is a program's
+  > source text; what a program cannot decide from a bare basename
+  > occurrence is whether that occurrence is a read, a write, or a name in a
+  > mapping table or a comment. The measured population is eight undeclared
+  > step-designated outputs mentioned by basename elsewhere, and several of
+  > those mentions are not reads — so the widened pattern shipped as-is
+  > produces false findings, which this module's own doctrine treats as a
+  > defect to kill rather than a cost to accept. Deciding it needs source-
+  > level data-flow analysis plus an individual verdict on each of the
+  > eight, which is a new program and a fixture corpus, not a wider regular
+  > expression.
+
+- **[C]** A published run carries the reports it produced but not the inputs those reports name
+  > The check itself IS deterministic and belongs in Bucket A — a published
+  > run either carries the inputs its own reports name or it does not, and
+  > that is a file-existence test over paths the reports themselves state.
+  > What is large is everything the check needs before it can be turned on:
+  > the contract for which inputs a published run must carry has to be
+  > written, every already-published run has to be measured against it, and
+  > runs have to be re-published from a flow carrying the identity stamps,
+  > because switching the check on today fails the entire corpus for a
+  > reason that predates the rule.
+
+- **[D]** ?
+  > (the record states no reason)
+

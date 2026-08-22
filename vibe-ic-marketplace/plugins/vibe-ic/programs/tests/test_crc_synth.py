@@ -305,3 +305,54 @@ def test_non_dict_and_empty():
     assert C.solve(None) is None
     assert C.solve({}) is None
     assert C.solve({"input": {"prompt": ""}}) is None
+
+
+# ── polarity: a prompt retires a polynomial as readily as it states one ─────
+#
+# Found by a census of functions fed a `prompt`. A CRC built on the retired
+# polynomial computes a different remainder and will not interoperate.
+
+def _poly(prompt):
+    import crc_synth as M
+    return M._parse_poly(prompt)
+
+
+def test_a_retired_polynomial_is_not_read_as_stated():
+    assert _poly("The polynomial 0x04C11DB7 is no longer used.") is None
+
+
+def test_the_live_polynomial_beside_a_retired_one_is_taken():
+    """`finditer`, not `search`: a denied statement must not end the search, or
+    a prompt that retires one polynomial and gives another yields nothing."""
+    assert _poly("The polynomial 0x04C11DB7 is no longer used.\n"
+                 "Use polynomial 0x1021.") == (0x1021, 16)
+
+
+def test_a_plainly_stated_polynomial_is_still_read():
+    """The control arm: a fix that read nothing would pass the rest."""
+    assert _poly("The CRC polynomial is 0x04C11DB7.") == (0x04C11DB7, 32)
+
+
+def test_a_retired_init_value_is_not_read_as_stated():
+    """The polynomial was guarded first and its siblings were not -- two readers
+    of one document disagreeing about a denial, in one file."""
+    import crc_synth as M
+    assert M._parse_init("The init value 0xFFFFFFFF is no longer used.\n"
+                         "Use init = 0x0000.") == 0
+
+
+def test_a_retired_reflect_setting_is_not_read_as_stated():
+    import crc_synth as M
+    assert M._parse_reflect_xor(
+        "reflect_in = true is no longer used.\n"
+        "reflect_in = false and reflect_out = false, xor_out = 0."
+    ) == (False, False, 0)
+
+
+def test_the_plainly_stated_convention_is_still_read():
+    """The control arm for both siblings."""
+    import crc_synth as M
+    assert M._parse_init("init = 0xFFFFFFFF") == 0xFFFFFFFF
+    assert M._parse_reflect_xor(
+        "reflect_in = true and reflect_out = true, xor_out = 0xFFFFFFFF."
+    ) == (True, True, 0xFFFFFFFF)

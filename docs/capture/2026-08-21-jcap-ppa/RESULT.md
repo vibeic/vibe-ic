@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 44 records, and the nineteen already-program claims of which eighteen hold
+# The PPA cluster, DISTILLED — 48 records, and the twenty-one already-program claims of which twenty hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -32,7 +32,7 @@ number — which is the failure `A-27` records. The drift is bounded instead: of
 none is in the PPA layer, so no swept population moved by more than six. Main moved 30 commits under this branch while it was open,
 and one of them (`506ff68c1`) landed this bundle's own earlier snapshot at the
 canonical path — so this branch UPDATES that bundle rather than adding a second
-copy, and the fourteen records it carried are a subset of the thirty-one here.
+copy, and the fourteen records it carried are a subset of those here.
 Sources: `ppa-e2e/FINDINGS.md` (F-1..F-18), `ppa-e2e/RESULT.md` (13 requests),
 `ppa-crosslayer/RESULT.md` (10 requests), and six lane records in
 `/tmp/capture_lanes/`.
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 44 records](#the-44-records)
+- [The 48 records](#the-48-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -82,6 +82,9 @@ Accepted with no refusal and no unrouted record.
 - [This bundle moved, and it was the merge that said so](#this-bundle-moved-and-it-was-the-merge-that-said-so)
 - [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
 - [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
+- [Four classes checked this pass and deliberately NOT recorded](#four-classes-checked-this-pass-and-deliberately-not-recorded)
+- [The records quote numbers and mostly do not quote the command](#the-records-quote-numbers-and-mostly-do-not-quote-the-command)
+- [Six refusals, one principle: two absences compare EQUAL](#six-refusals-one-principle-two-absences-compare-equal)
 - [Summary](#summary)
 - [Next](#next)
 
@@ -90,7 +93,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 41 | deterministic rules — the default, and every one names its predicate |
+| **A** | 45 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -163,7 +166,7 @@ it now — checked by reading it, not by trusting the fix note.
 | F-18 a count is demanded where the schema allows a status | `_ppa/benchmark.py` `CHECK_CLEAN` / `VERDICT_CLEAN`; `test_ppa_verdict_and_scope_shapes.py` | every floor check, verdict-valued or count-valued |
 | (smaller) `jsonschema` not a dependency | `_ppa/jsonschema_bundled.py` — bundled, so a stock host is covered | and it names the too-old case the import guard missed |
 
-Seven more classes, drawn from the six lane records rather than from the 18, are
+Nine more classes, drawn from the six lane records rather than from the 18, are
 also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 
 | class | already enforced by |
@@ -175,6 +178,8 @@ also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 | a lever that deletes a design property is priced, and the axis refuses | `programs/ppa_eco_spare_records.py` producing the evidence, `ECO_AXIS = "eco_readiness"` in `_ppa/feasibility.py` refusing on it, and two gates on the flow's own spare-cell artefact. **Landed on main DURING this lane** — see the withdrawn `A-18` |
 | a published run's inputs are declared by DIGEST, so identity survives the path | the trial contracts' `evidence_manifest` — **525 of 525** artefacts carry a content digest beside path, role and byte count. Demonstrated working: the published baseline was recovered by hash after its source project ceased to exist on this host. Found late, in the one source section this lane had not read |
 | a shared ABSENCE is not a shared value, so records with no measured identity are not grouped together | `programs/ppa_contract_check.py` clause `PPA-C-007` — an identity that is NOT_MEASURED is CANNOT CHECK, never a pass, and the corpus mode refuses to key on it rather than comparing two runs on the strength of a shared blank. **Driven, not cited**: a contract declaring one identity as NOT_MEASURED returns four UNDETERMINED `PPA-C-007` rows naming each absent identity. The sibling gate states the matching exclusion out loud — a contract with no identities is dropped from the conflict scan, *because a silent exclusion is a denominator nobody can see* |
+| an EMPTY value is not a value, because two empties compare equal | `programs/_ppa/metrics.py` `validate` — a verdict metric whose value is the empty string is refused `VERDICT_SENTINEL`, *"two of them compare EQUAL, so two circuits nobody compared would read as agreeing"*. **Driven, and two-directional**: the empty string is refused, a NUMBER carrying `unit: verdict` is refused `VERDICT_NOT_A_STRING` (*"a verdict encoded as a number is a number downstream"*), and a real verdict string trips neither. A different enforcement point and a different operation from `PPA-C-007` above — that one refuses GROUPING on an absent identity, this one refuses COMPARING on an absent value |
+| a lever TRIED AND LOST is a measurement; one quietly dropped is not | `programs/_ppa/search.py` `audit_manifest` clause `LEDGER_TRUNCATED` — a manifest whose proposed-trial count exceeds the trials it publishes is refused with *"Publish every trial, not the best one."* **Driven, with the control inside the measurement**: two calls differing ONLY in the proposed count — the honest one does not raise it, the truncated one does. A sibling clause `RAN_COUNT_DISAGREES` covers the same gap from the ran side |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
 CLASS is what this lane recorded instead:
@@ -233,7 +238,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 44 records
+## The 48 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -368,6 +373,26 @@ the floor with declared-versus-discovered equality.
 
 **(o)** yes. **(d)** yes, and in the direction a floor can never see — an entry
 left behind for a member since deleted.
+
+*An in-tree exemplar of the correct form, found while chasing a sibling lane's
+un-actioned baseline note.* A shipped wiring gate ratchets on the **name set**,
+not the count:
+
+    gates: 624   unwired: 58 (baseline 59)   [PASS]
+    [NOTE] baseline shrank — now wired: <one program>. Re-run with --write-baseline.
+
+I read that as a defect first. A ceiling one larger than the measurement looks
+like slack a future regression could hide in — one new unwired program returns
+the count to 59 and nothing goes red. **It is not slack.** The comparison is
+`set(now) - set(base)`, so a newly unwired program is a *name* absent from the
+baseline and fails immediately whatever the count does; a second clause catches
+the count growing with no new name, which is the stale-baseline case the first
+cannot see.
+
+Both directions matter for whoever builds this record. A *count* ratchet really
+would have that hole, so this name-set-plus-count-backstop is the shape to copy
+rather than re-derive. And the un-actioned shrink is tidiness, not an open hole
+— nobody should write the baseline believing they are closing one.
 
 ### A-4 · layer membership is declared not inferred from a filename prefix · `benchmark.verify_claim_done`
 
@@ -1018,8 +1043,8 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            41     (22 when the rule was written)
-    distinct target programs    22
+    Bucket-A records            45     (22 when the rule was written)
+    distinct target programs    25
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
@@ -1067,12 +1092,27 @@ the failure it was written for — a file truncated mid-string passing every
 landing gate. So why did it not fire? Because coverage of a root-scoped gate is
 whatever root it is handed:
 
-    programs walking a repository index                       37
-    programs referencing the split-out tree by name           98
+    programs walking a repository index                       38   (37 when first measured)
+    programs referencing the split-out tree by name           99   (98 when first measured)
     the tree present in this repository                       NO
+    ...but a clone of it IS reachable on this host, tracking  8309 files
     declared as a submodule                                   NO  (module list empty)
     resolved instead by                                       an environment variable
     the hygiene gate is invoked with                          this repository's root only
+
+*Both figures were re-derived after I found I could not reproduce them from the
+record.* Each counts files directly under the program directory, matched on
+source text — one for the version-control index query, one for the corpus
+directory's name. Both moved by exactly **one**: a tree that grew, not a screen
+that disagreed. The tell is that a genuine scope change moves the second by
+**six**, not one — including the package subdirectory gives 105, which is a
+different question and not a better answer.
+
+One trap for the next reader, because it produced a wrong number inside this
+audit: writing the alternation in extended-regex syntax as though it were
+basic-regex matches the literal backslash and returns **zero**, silently. A
+broken screen and a clean tree print the same — this batch's own central class,
+turning up inside the audit of it.
 
 *The screen behind 37 and 98 was not recorded, so these figures cannot be
 re-derived from this report — the third instance of `A-27` inside this document,
@@ -1463,6 +1503,30 @@ and any view vocabulary the flow later gains.
 
 ---
 
+*A cheaper detector, from the lane that made the decision.* Comparing a declared
+view set against what the flow produces needs a second source that can itself go
+stale. Most of these fail a test that needs neither:
+
+| axis group | scope namespace | a global corner list demands… |
+|---|---|---|
+| setup, hold | signs off **across process corners** | corners it has — fine |
+| DRC, LVS, antenna, IR, EM, equivalence | a **single measurement over one database**, no process corner at all | corners that do not exist — **permanently uncovered** |
+
+The requirement is unsatisfiable **as a matter of type, not availability**. And
+the tell is sharp: the only way a producer could satisfy it is to *fabricate*
+the missing scopes. **A requirement whose sole route to satisfaction is
+invention is malformed, not strict.** Check that direction first; fall back to
+the flow comparison only for what survives it.
+
+The shipped remedy is worth copying because it re-opens the question without
+breaking anything: per-axis requirements fall back to the global list for any
+axis they do not name, so a contract written before the field adjudicates
+identically; an axis named with an **empty** list is undetermined rather than
+trivially satisfied, since there is deliberately no spelling for *any view will
+do*; a key naming no known axis is dropped rather than silently honoured; and
+the resolved view set is published on **satisfied** axes too, so questioning a
+requirement does not require first making the axis fail.
+
 ### A-37 · a refusal that names the obstacle also names the remedy · `ppa.cli_contract`
 
 The last unmined item in the brief's sources, and the first clean sweep in this
@@ -1701,6 +1765,218 @@ none.
 **(d)** yes — it compares a resolved hook path against a tracked source and
 names no particular hook.
 
+### A-44 · a search result consumed as if unique must prove it is unique · `repo.unique_lookup`
+
+From the corpus lane's third decision, which names the move in one line: *taking
+the first record is what destroys this. A gate that needs* the *contract and
+finds two has not found the contract — it has found a disagreement.*
+
+    sites reducing a search to one result                14
+      first of an explicitly SORTED glob                  8   deterministic, plausibly deliberate — not claimed
+      first hit of an UNSORTED walk                       4   the filesystem decides the verdict
+      index [0] straight off a glob                       2   one of which is a docstring, see below
+
+**The 4 are oversights, and that is measured rather than assumed.** The *same*
+glob expression over the same plugin directory appears **sorted in one program
+and unsorted in another** — so at least one of the two was not chosen.
+
+One of the remaining two is not code. It is a docstring recording the repair of
+this exact defect, and it states the casualty:
+
+> An earlier revision fell back to `project.glob("**/sim_professional/<name>")`
+> and took `hits[0]`, which let a **NESTED snapshot's bundle certify the OUTER
+> project**.
+
+The remedy also already exists, at corpus scale, and should be copied rather
+than redesigned: a shared helper keys records by identity across five gates,
+refuses two claimants whose content differs by naming **both paths and both
+digests**, and prints byte-identical duplicates as a note instead of dropping
+them — because a population whose size depends on how many times somebody
+copied a file is its own defect.
+
+So the class has a working implementation, a documented casualty, and four live
+sites, and **nothing connects them.**
+
+**(o)** yes — the original reduced a multi-match walk to its first element.
+**(d)** yes — it keys on reducing a search to one result without a count, and
+names no lookup.
+
+### A-45 · an alternative proof admits nothing the proof it stands in for would refuse · `ppa.proof_group_equivalence`
+
+The feasibility lane admitted a second way to prove the timing axes and refused
+to call it a relaxation on trust:
+
+    wns = min(0, worst_slack)   =>   wns >= 0  <=>  worst_slack >= 0
+
+Same predicate, so it admits no candidate the original would refuse — argued in
+a comment that also states what the substitution may **not** do (rescue a view
+nobody analysed) and names the test that sweeps the range *"rather than trusting
+this comment"*. That is the model. It is also, measured across the layer, the
+**only** one:
+
+    axes declared                                        10
+      admitting more than one proof group                 6
+        whose groups MIX predicate kinds                  5
+      equivalence arguments anywhere in the layer         1   ← covers the one pair that does NOT mix
+
+The mixed pairs are a zero-count beside a non-negative-slack (twice), a
+verdict-membership beside a zero-count, and a zero-count beside a
+magnitude-under-limit (twice). A count is zero against a threshold **the tool
+chose**; a magnitude is under a limit **the contract states**. Those agree only
+when the thresholds do, and nobody has said they do.
+
+**The aggregation makes it reachable, and I read it rather than assuming it:**
+
+    VIOLATED in any group   ->  VIOLATED      a violation cannot be outvoted — safe
+    SATISFIED in any group  ->  SATISFIED     beats UNDETERMINED — this is the widening
+
+So the group that happens to carry data on a given run decides the verdict, on
+its own predicate, and the output does not record which group did it. An axis
+proven the strong way and the same axis proven the weak way are indistinguishable
+afterwards.
+
+**(o)** yes — five axes declare mixed-kind groups today with no stated equivalence.
+**(d)** yes — it keys on alternatives under one subject with differing predicates
+and no licence, and names no axis.
+
+### A-46 · a verdict artefact records the tree it was measured on · `repo.verdict_provenance`
+
+A lane was handed a brief saying a named gate would go FAIL → PASS. **It did
+not, on the tree the lane had.** The brief was not wrong:
+
+| gate | the lane's base | the brief's tree |
+|---|---|---|
+| the wiring audit | rc 1, **7** names — the lane's line removes one, leaving 6 | rc 0 — because six wiring lines were already there |
+
+Those six had not landed. Establishing *that* took grepping **every reachable
+remote reference** for them and finding zero hits; testing the claim at all then
+took adding the six in a scratch tree, re-measuring, and reverting. **A stamp on
+the original verdict would have replaced all of it with a comparison of two
+identifiers.**
+
+Without the stamp, two runs disagreeing is indistinguishable from two *trees*
+disagreeing, and the reader who inherits the quote cannot tell a false claim
+from a true claim about a state they do not have.
+
+    programs emitting a JSON artefact                      650
+      referencing a commit identity at all         at most   36
+
+**The screen is loose on purpose, and in the safe direction.** It matches the
+word anywhere in the file, including uses that never reach the artefact — so 36
+is a *ceiling* and the real figure is lower. A rarity claim measured by a screen
+biased toward *finding* the property is safe; the same screen used to argue the
+gap is small would not be. That asymmetry is the one thing this batch has
+learned to check before quoting a number.
+
+**(o)** yes — that artefact named no tree.
+**(d)** yes — it keys on an emitted verdict with no recorded subject identity,
+and names no gate.
+
+### A-47 · a document and the record set it describes are checked together at landing · `repo.lane_artefact_namespace`
+
+**This one is about what happened to this bundle — and the first three things I
+said about it were wrong.** The defect is real and much smaller than I reported.
+Matching the two record sets on their **pattern text**, which no rename touches:
+
+    records this lane froze                     44
+      absent from the landed set                 0
+    records in the landed set that are new       1   contributed by a collaborating lane
+    entries RESHAPED by that lane's pass        12   slug rule-name + an added title
+
+**Nothing was lost, nothing duplicated, no other bundle's records mixed in.** The
+landed set is this lane's 44 plus one addition, beside a report never updated
+for the plus one.
+
+I got there after three confident readings that were each wrong: that another
+bundle's records had been merged in (refuted — none of them appear in either
+sibling bundle); that the set held duplicates (refuted — a normalised key count
+of zero); that four records had been lost (refuted — the four were renames whose
+words changed, so the normaliser could not see them). **Every one of those was a
+name-based comparison, and every one failed the same way.**
+
+That is the rule's own lesson turned on the person writing it: **reconcile two
+versions of a record set on a field the editing pass does not touch.** A name is
+the field most likely to be edited, so it is the worst possible key — and it is
+the one every obvious comparison reaches for first.
+
+What did land, and what the report still says:
+
+    landed record document                45 records
+    landed report — title, sections, status block   44
+    of those 45, in a DIFFERENT shape      12   slug rule-name + a `title` field
+    of those 12, present in this lane       0   they are another lane's records
+
+Two lanes wrote a document of the same kind to the same path. The merge did what
+a merge does — line by line, **no conflict** — and produced a record list that is
+the union of two independent documents beside a report describing one of them.
+Every count in the prose is now wrong and nothing failed.
+
+Run on the landed tree the bundle fails **16 of its own 51 checks**. Four are
+branch-relative and meaningless once the branch has become the trunk. The other
+twelve are real, including **14 cross-reference rows naming record identifiers
+that no longer exist** and **3 emitted backlogs that fail their own sanitiser**.
+
+**The mechanism was confirmed by reproduction, not inferred.** Merging the trunk
+into this lane in a scratch tree reports **zero conflicts** and yields **48
+records against 47 sections** — the same defect, one lane further on.
+
+> A clean merge is not evidence of a correct merge. For a document whose counts,
+> cross-references and prose are one object, a clean merge is the warning sign:
+> a conflict would have stopped the landing and asked a human.
+
+**I tested the remedy instead of asserting it, and the test disproved my own
+prescription.** Replacing the landed bundle wholesale from this lane takes the
+failing checks from 16 to 1 — and the working-tree status showed it **deleting a
+file this lane never wrote**. That file is another lane's DISTILL output, and
+the history says why:
+
+    commits touching this bundle directory, this lane        97
+    commits touching it from ANOTHER lane                     3
+
+That lane ran the distil step against these records, wrote its own document
+beside them, and contributed the 12 records in the other shape. **So this is not
+two strangers' files colliding — it is two lanes collaborating in one directory
+with nothing checking the result as a whole**, and a wholesale replacement would
+have destroyed a peer's work while turning the checks green.
+
+**So the prescription is not replacement.** The sharpest form of this finding is
+that *the consistency check already exists and ships in the same directory*: the
+bundle carries a verifier binding record count, section count, status block and
+every cross-reference to one another, it catches all twelve real failures in
+about a second, and **nothing ran it at landing.**
+
+One further thing the test found: the emitted artefacts carry the plugin version
+they were emitted against, so carrying them across a version bump makes them
+refuse — correctly. Re-emitting at the landing base clears it. That is a step a
+lander must take, not a defect in either lane.
+
+**And the check has a home, measured rather than proposed.** The obvious one is
+closed: the landing hygiene script is entry one of **47** in the protected-path
+manifest with the `authority` role, so no lane can wire anything into it. The
+**emitter** is available on every count that matters:
+
+| | |
+|---|---|
+| in the protected manifest? | **no** |
+| already takes the record set? | **yes** — it is the required input |
+| already run by every capture lane? | **yes** — it is the step that produces the sketches |
+| already writes markdown? | **yes** — 9 references |
+
+So the change is one optional argument naming the report, and a refusal when
+that report's record count, section count, status block or cross-references
+disagree with the set it was handed. Absent the argument it behaves exactly as
+today, so nothing existing breaks.
+
+**That placement is what makes this rule compound rather than repair.** The
+bundle in front of you can be fixed by hand once. Every bundle after it gets the
+check for free from a step no lane can skip — which is the difference between a
+lesson and a program, and the reason this loop exists.
+
+**(o)** yes — the landed state is the original, and the check that catches it is
+a comparison the bundle already knows how to make.
+**(d)** yes — it keys on a document type owned by one lane sharing a path, and
+names no lane.
+
 
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
@@ -1743,6 +2019,17 @@ stands: a maintainer receiving these ten directories can reproduce nothing. What
 the tree DOES support is the correlation — 10 of 10 arms with a non-redundant
 accumulator fail, 0 of 52 preserving arms do — which is a netlist property and is
 the lead worth having.
+
+*And the family's loss is larger than the crash count, which changes how urgent
+this is.* The affected family holds **18** arms. **10** hit the fault. A further
+**2** produced no number because the resume path — the mitigation, working as
+designed — consumed the remainder of their hour-long trial budget. So the real
+loss is **12 of 18**, and two of those twelve are attributable to the RECOVERY
+rather than to the crash. A fix that merely let the repair pass skip the
+offending instance quickly would recover those two on top of the ten, and the
+current mitigation cannot be left standing as the answer. Nothing was done to
+make any of the twelve pass: no repair step disabled by hand, no budget raised
+for them, no routed database patched.
 
 **(o)** yes — the samples ARE the original, retained.
 **(d)** the enhancement is stated as a behaviour, not as a patch to these ten
@@ -1805,13 +2092,15 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **15** steps. Without them **18 of the
-44 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **4** steps. Without them **4 of the
+48 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
 record was added at a step main does not carry; they are derived from the two
 routing files rather than maintained by hand, and the derivation is one command.*
+
+*Three, not the eighteen this sentence said an hour ago, and the difference is not an edit here.* Fifteen of those steps **landed with the frozen bundle**, so relative to the point this branch left they are no longer additions. The figure is derived against the MERGE-BASE rather than against main's tip — comparing to the tip answers *how does my tree differ from main today*, which on the day this was written meant 503 commits of main's work and 131 plugin files this branch never touched.
 
 *This read "every record here" until the universal claims in this report were
 audited against their denominators. It was true when written — all sixteen steps
@@ -2057,7 +2346,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          41     (26 when the rubric was applied)
+    Bucket-A records                          45     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -2138,9 +2427,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 44 records**:
+the patterns were unchecked by anything. Over **all 48 records**:
 
-    pairs compared                      946
+    pairs compared                      1128
     maximum similarity                 0.41
     pairs above 0.40                      0
 
@@ -2427,8 +2716,8 @@ instead of the text.
 
 **This is where the ladder ends.** Figures that are projections of repository
 data can be bound, and now are. What a binding proves can be tested, and was.
-Whether a name is honest can be read, and was, for the verifier's 51 checks. The
-same question about 35 records needs 35 readings, and the honest report is the
+Whether a name is honest can be read, and was, for the verifier's 54 checks. The
+same question about 48 records needs 48 readings, and the honest report is the
 three that were done rather than a number that would look derived.
 
 ## Three check NAMES promised more than their predicates deliver
@@ -3123,7 +3412,7 @@ settled it, and reading main properly is what exposed the relocation.
 Three consequences, all now in the tree:
 
 - **The bundle is at the canonical path** and UPDATES the landed one. The
-  fourteen records that landed with the snapshot are a subset of the thirty-one
+  fourteen records that landed with the snapshot are a subset of those
   here; the single one not carried forward is the optional-import rule, which its
   own corpus sweep DEMOTED from Bucket A to C-2, so it survives as a C record
   rather than being dropped.
@@ -3230,9 +3519,386 @@ a declared path rather than guessing among candidates, standing outside the
 layer it was captured in, which is the whole argument for distilling a landed
 fix into a rule.
 
+## Four classes checked this pass and deliberately NOT recorded
+
+All four looked like records. None survived measurement, and the reasons are
+different enough to be worth separating.
+
+**A gate's exit code must be exercised through the process boundary.** The
+corpus lane drives five CLIs as subprocesses and says why: the flow acts on the
+exit code, and an in-process entry-point call leaves the verdict-to-exit-code
+mapping unmeasured. Real rule, and this layer already obeys it — of 20 `ppa_*`
+commands, **20 are driven as a subprocess somewhere in the suite.** The screen
+is loose (it asks whether a test file naming the command also spawns a process),
+but it is loose in the direction of over-reporting coverage, so a 20 of 20 from
+it is weak evidence of a gap and adequate evidence of none. No record.
+
+**A null count must not be read as zero.** This one is a genuine class — an
+absent count means the tool did not report, not that it found nothing — and
+nothing in the record set covers the CONSUMER side of it; the existing record
+covers the producer emitting the null. A pattern sweep returns **37** sites
+defaulting a violation-, error- or failure-named count to zero. I validated two
+before believing it:
+
+| site | verdict |
+|---|---|
+| a crosstalk gate reading a count out of a tool's report | **correct** — the default sits *after* an explicit presence check that reports the missing field |
+| a schema gate defaulting three counts | **correct** — it is reading its own result object, in a print |
+
+Two of two are correct, and the first is the remedy shape rather than the
+defect: *check presence, then default.* So 37 is a vocabulary count, not a
+defect population, and recording it would repeat the A-5 error I have now made
+and caught several times over. The class stays unrecorded until somebody
+measures it with a screen that can tell an external artefact from a locally
+built dictionary — which is the honest statement of what is missing, and is
+itself the harder half of the rule.
+
+
+**A bounded search reporting nothing must state its bound.** The cross-layer
+lane states it while obeying it: its refutation pass found no counterexample in
+twelve cycles from reset, and it published that as *"a bounded search, not a
+proof… so the difference between refuted and unproven stays visible."* Distinct
+from the record this batch already carries, which separates *unproven because
+the budget ended* from *unproven because the method finished* — this separates
+*no counterexample within a bound* from *no counterexample*.
+
+My screen for it returned **184 programs**, and it is the worst screen in this
+batch. It matched the word *bounded* anywhere in a file, so it collected
+watchdogs, docker memory helpers and two dozen protocol synthesisers. The real
+population is the sites that actually invoke a bounded solver — about **seven**,
+identifiable by a depth or sequence flag — and **four of those already name
+their bound**.
+
+The two remaining were not instances either, and the second is the best
+illustration this batch produced:
+
+| candidate | what it actually is |
+|---|---|
+| a vector generator matching `bmc` | emits a formal harness and states its mode |
+| a USB-PD synthesiser matching `bmc` | **`bmc` is Biphase Mark Coding**, a line code — nothing to do with bounded model checking |
+
+The file's own comment warns that this acronym collides and guards its matching
+against exactly that. **My screen walked into the trap the file it matched was
+written to avoid.** No record: the class is real, the tree has roughly seven
+sites, and most of them already comply.
+
+## Six refusals, one principle: two absences compare EQUAL
+
+Three separate readings this pass landed on the same sentence written three
+different ways, so the family is worth stating once rather than three times.
+
+**The principle.** Wherever a verdict is reached by comparing two things, an
+absence must not be an admissible value — because *two absences compare equal*,
+and equality is read as agreement. A blank is not a wildcard; it is the one
+value that makes any two subjects look identical.
+
+| enforcement point | what it refuses | how I know |
+|---|---|---|
+| `PPA-C-007` | GROUPING two runs on an identity that is `NOT_MEASURED` | **driven** — four UNDETERMINED rows, each naming the identity it cannot support a claim about |
+| `VERDICT_SENTINEL` | COMPARING a verdict metric whose value is `""` | **driven** — *"two of them compare EQUAL, so two circuits nobody compared would read as agreeing"* |
+| `VERDICT_NOT_A_STRING` | the same field in the OTHER direction — a number wearing `unit: verdict` | **driven** — *"a verdict encoded as a number is a number downstream"* |
+| `SCOPE_UNDECLARED` | an arm carrying a number with no scope at all | **driven, by accident** — a malformed probe of mine tripped it |
+| `SCOPE_INCOMPLETE` | required scope keys absent, *"both arms declaring nothing would otherwise satisfy equality"* | cited |
+| `SCOPE_SENTINEL` | required scope keys present but `null` or `""` | cited — *"State the field or omit the key."* |
+
+**And the remedy is layered, which is the part worth copying.** One function
+carries four of these, each closing the degenerate case the previous one opens:
+
+    compare the scope dicts for EQUALITY      no blind spot by construction
+      ...but both arms could declare nothing  -> require a key list
+      ...but both could declare it null       -> refuse the sentinel
+      ...but one could carry no scope at all  -> refuse the undeclared
+
+Its docstring argues the first line better than I can: *a checker with three
+hand-written comparisons acquires a fourth blind spot the day somebody adds a
+fifth scope key, whereas requiring the dicts to be equal has none — a key that
+exists is compared, and a key that does not exist yet is compared the moment it
+does.*
+
+That is the same shape as **A-3**, one level up: assert the whole structure
+rather than enumerate the fields, and the guard covers what has not been
+invented yet. Three of the six are logged above as ALREADY-PROGRAM claims; the
+value of naming the family is that an implementer building any new comparison
+now has all four layers in one place instead of rediscovering them in the order
+they were originally discovered — which, judging by the three distinct code
+names, is how they were.
+
+
+**An emitted artefact must agree with the exit code.** The feasibility lane
+states this as a defect the repository *has shipped before*: **a `--json` file
+that looked clean beside an honest exit code.** Real, uncovered by any record
+here — and I could not measure it, across two screens.
+
+The first looked for a verdict-bearing key as a JSON literal: **271 of 650**
+programs appeared to carry none. That screen is wrong, and I knew a
+counter-example by name — most emitters serialise a dataclass, so the field is a
+class declaration and not a literal. Including declarations took it to **200**.
+
+Still not a population. Much of the 200 are *generators* whose JSON is a product
+rather than a verdict, and "no verdict field" is correct for those. So I drove
+one that is unambiguously a check: it exits **1** and writes
+`['program', 'version', 'summary', 'findings']` — no verdict key. But its
+`findings` list carries the failure, so a reader of the file alone *can* tell.
+That is not the defect the lane describes.
+
+**Zero confirmed instances, and the screen is the reason.** "Carries no verdict
+key" and "looks clean while the exit code says otherwise" are different
+properties, and only the second is the defect. A screen that can tell them apart
+has to compare the artefact's CONTENT against the exit code — run the program
+both ways and diff what it wrote — which is a fixture harness, not a grep. That
+is the honest statement of what building this rule costs, and it is why no
+record claims it.
+
+## The records quote numbers and mostly do not quote the command
+
+Found by trying to re-derive my own figures rather than by reading the brief
+again, which is the only reason it was found at all.
+
+Two records claim a count over the program tree — how many programs walk a
+repository index, how many reference the split-out corpus. Re-measuring both
+today gave **different numbers**. That is *not* proof they went stale: my screen
+today is not the screen that produced them, and comparing counts from two
+different screens is the error this batch has already recorded twice. It is
+proof of something else — **I could not tell**, because the record states the
+number and not the question.
+
+    records                                            47
+      fix text quotes a figure                         35
+        names a literal command                         6
+        states WHAT was measured and over what scope   35   (hand-read, not detected)
+        states a predicate another reader could re-run  9   (the three reconstructed here, plus six that already did)
+
+The brief is explicit about this: *the command, the number, the before and
+after.* On the strict reading, 29 figure-bearing records fall short.
+
+**That strict figure is the one I first reported, and it was wrong by half.** I
+counted records "carrying a screen" by searching for the marker phrases I had
+been writing — so the detector measured *my own vocabulary* and missed every
+record that stated its screen in other words, including one that already carried
+a full re-run *"with the screen stated above"*. Measured on the property instead
+of the phrasing, the records with a bare number are **12**, not the 24 I
+reported one commit ago. That is the same error this batch has now recorded
+about a dozen times, committed inside the audit whose entire subject is it.
+
+**The strict reading overstates it, and saying so is not a defence.** The
+brief's operative test is what a record must let a reader do — *what it
+returned, on what input* — and many records meet that without a shell line: A-40
+says a corpus of one manifest-less run exits 1 and the same corpus plus an
+unreadable manifest exits 2, which is an input and a return. What is missing in
+those is reproducibility of the *population* figures, not of the defect.
+
+So the honest split is: the defect measurements are mostly reproducible from
+what the record says; **the population figures mostly are not**, and those are
+exactly the numbers a later reader will want to re-check when the tree has
+moved. Three records measured today now carry their commands, including the
+detail that cost me two attempts — the run directories have to be named with the
+prefix the gate's own discovery uses, or both arms read zero and the effect
+vanishes.
+
+**Four figures have now been re-derived, and the result is reassuring in a way
+worth stating**, because "I could not reproduce it" is easy to mistake for "it
+was wrong":
+
+| figure | recorded | today | what moved |
+|---|---:|---:|---|
+| programs walking a repository index | 37 | **38** | the tree grew by one |
+| programs naming the split-out corpus | 98 | **99** | the tree grew by one |
+| programs directly under the program directory | 1238 | **1240** | the tree grew by two |
+| gates the wiring enumeration counts | 619 | **624** | the tree grew by five |
+| commands the layer presents | 19 | **20** | the tree grew by one |
+| emitter sites writing a basis stamp | 16 | **15** | **does not fully reproduce — see below** |
+| evidence artefacts carrying a digest | 525 of 525 | **525 of 525** | **reproduces exactly** |
+| schema files in the layer's schema directory | 14 | **15** | the tree grew by one |
+| document types emitted | 29 | **≥25** | a literal screen cannot settle it — see below |
+| axes constant across a 21-arm sweep | 24 of 54 | **24 of 53–55** | the flagged count is exact; the denominator brackets it |
+
+**Six re-derivations. Five are small growths and none is a screen mismatch.** The numbers
+were sound; what was missing was the question that produced them. That is a
+better outcome than it looked when the first two disagreed, and it is only
+knowable because the screens are now written down.
+
+**The sixth is the useful one, because it did not come out clean.** Counting the
+stamp as an emitted literal gives 15 against 16 recorded. That is the right
+order of magnitude and almost certainly the same question — but I cannot
+attribute the difference of one. It could be a site removed; it could be my
+pattern, because at least one occurrence in that file spaces the token
+differently from the others. What I *can* say is that the off-by-one is *inside*
+the right screen rather than *between* screens: a broader count of every mention
+of the token gives 41, and every mention that is not a read or a parse gives 37,
+both far enough away to prove they answer a different question. The record says
+all of that rather than quietly restating 16.
+
+One of the six is taken from the gate itself rather than counted independently,
+deliberately: an independent count would have to re-derive what counts as a
+gate, and a second definition of one population is exactly how two figures about
+one thing begin to disagree.
+
+**Three more were screened after that correction, and the split between what I
+could fix and what I could not is the useful part.** Those three were figures I
+measured myself in this pass, so the question was still in hand: the distinct
+output paths in the flow document, the presence-and-absence of two hook paths,
+and the axis structure read from the policy module rather than counted in
+source. Writing their screens took minutes because nothing had to be
+reconstructed.
+
+The remaining **nine** were measured earlier in the batch, before screens were
+being written down at all. Re-deriving them means reconstructing the question
+first — which is exactly the cost this record documents, now paid at the wrong
+end. **That asymmetry is the whole argument for the rule:** a screen written
+beside its number costs nothing, and the same screen recovered afterwards costs
+a search that may not converge, as the basis-stamp figure above shows.
+
+**One figure reproduced exactly, and it explains which numbers need re-checking
+at all.** 21 trial contracts, 525 evidence artefacts, 525 carrying a digest —
+identical to the record, where every other re-derivation had drifted by one to
+five. The difference is the kind of population. The drifting figures count files
+in a source tree that grows; this one counts entries in **committed evidence**,
+which cannot move without a commit that changes it. So a figure over published
+artefacts is worth quoting without a date and a figure over a working tree is
+not — which is a cheaper rule than re-checking everything.
+
+**And one re-derivation produced a number that is smaller than the record, which
+cannot be growth.** A literal match for the type identifier assigned to a
+document's schema field gives 25 against 29 recorded. Fewer is not growth, so it
+is the screen — and the same search shows why: many producers assign the
+identifier from a module constant rather than writing it inline, so a literal
+match misses them and **25 is a floor, not a count.** It is consistent with 29
+and does not confirm it.
+
+Re-deriving that side properly means resolving constants to their values, which
+means reading the modules rather than grepping them. Worth knowing before
+starting, **because the grep looks like it worked.** The rule itself is
+unaffected: the floor already exceeds the schema count, so types without a
+schema exist whichever figure is right.
+
+**The invariance figure reconstructed further than I expected, and it corrected
+the heuristic above.** Grouping every entry in the 21 published trials' flat
+record files by metric identifier and counting those holding one value across
+all arms gives **24** constant — identical to the record — over **53** axes when
+restricted to measured records, or **55** when derived ones are admitted. The
+number the rule turns on is settled; the recorded 54 sits between the two, so
+the whole remaining ambiguity is one inclusion decision about derived records.
+
+**And it breaks the direction heuristic, which needs a precondition I did not
+state.** "Larger means growth" assumes the population *can* grow. This one is
+committed evidence, which cannot — so a larger answer here means only a broader
+screen. The heuristic misleads on exactly the artefacts that are most stable,
+and the record now says so.
+
+Two traps it cost, both this batch's own class: the contract document's metrics
+key is **empty** on these arms (the measurements live in a sibling file), so a
+sweep aimed at the contract returns 0 axes from 21 arms and looks like a clean
+corpus.
+
+**The last six were hand-read, and the number I have been tracking was wrong in
+every one of its six revisions.** I reported the bare-number count as 24, then
+12, then 9, 8, 7, 6 — each time from a phrase detector searching for the marker
+words I happened to be writing. Reading the final six by hand: **none of them is
+a bare number.** Every one states what was measured and the scope it was
+measured over — *verified input by input… read directly*, *corpus-swept on this
+tree*, *measured on this layer: 6 contract pairs*, *measured on this tree: 48
+consumers*.
+
+So the real gap was never "a number with no context". It is narrower and
+harder: **a number whose exact predicate another reader could re-run.** My
+detector never measured that property once, across six commits of reporting it.
+
+**That is this batch's central class, arriving in the audit written about it,
+for the fourth time** — and the correction only came from abandoning the screen
+and reading six items, which took less time than any of the six re-measurements
+that produced the wrong figures.
+
+What the three full reconstructions in this pass show is what "re-runnable"
+actually costs: the digest figure reproduced exactly in one attempt, the
+invariance figure took four attempts and settled its load-bearing half while
+bracketing its denominator, and the emitted-type figure could not be settled by
+any grep because the identifiers are assigned through constants.
+
+**So I hand-read the rest — all 35 — and the count is 3.** Not 24, 12, 9, 8, 7
+or 6. Three records state a figure without saying enough about how it was taken
+for another reader to re-run it. Everything else states its scope, and a good
+deal of it states more than any detector I wrote ever credited:
+
+- one decomposes **52 of 52** across three independent lanes — 29, 13 and 10 —
+  so the total can be checked a lane at a time;
+- one specifies the predicate as a procedure: *join backslash continuations
+  first, then extract each quoted invocation, then decide acceptance from the
+  program's own declared options*;
+- **two say outright that the screen was validated before the figure was
+  believed** — which is the standard this whole section is arguing for, already
+  met, in records written before the argument existed.
+
+**The three are named here rather than left for someone to find**, because
+"three fall short" with no names is the same defect one level up:
+
+| record | what it says | what is missing |
+|---|---|---|
+| ~~a scope key the producer cannot establish is omitted~~ | **closed** — reproduces exactly, by parse | needed an AST parse; a grep finds **zero** of five, see below |
+| ~~layer membership is declared not inferred from a filename prefix~~ | **closed** — carries a stated, re-runnable screen | the original 32 could **not** be recovered; a supplied screen replaces it, see below |
+| ~~a verdict reachable by exhaustion must say whether it exhausted~~ | **closed** — the screen is the emitted field list; the two runs are now named by their published figures | — |
+
+**The third closed too, so all three named gaps are shut.** Its screen is the
+emitted vocabulary: list every field name the equivalence program writes — there
+are **23** — and look for one saying how far the inductive method got or whether
+a budget ended it. There are **0**. It *does* emit a depth for the other half of
+its method, the bounded-refutation depth, which is what makes the omission
+legible rather than merely absent: the author knew a depth was worth publishing
+and published the one belonging to the cheap pass.
+
+The two runs are now named by their published figures — a latency-offset arm
+that proved **201 of 202** points and stopped in **3.8 s** with one point
+neither proved nor refuted, and a non-redundant-accumulator arm that reached
+**36 of 37** after **1795 s** when its budget expired, at induction step 19 of
+an estimated 33. Same verdict, same result shape. **The first needs a different
+relation and more time would not help it; the second needs only more time** —
+and a consumer choosing between those responses has nothing in the emitted
+fields to choose on but elapsed seconds, which is a heuristic, not a statement.
+
+**A second closed, and it reproduces exactly — but only by parsing.** The
+module's eight-key scope constructor is called 5 times. Two pass a literal null
+for both the corner and the clock; four pass a null clock; **three** pass a null
+clock while carrying no resolved corner — two null outright, one a conditional
+that yields null on the branch that matters. Three is the recorded figure,
+recovered without ambiguity.
+
+**The reusable part is why a grep cannot do it.** The nulls are *positional
+arguments*, so searching for a key name beside a null finds **zero of the five**
+and reads as a module with no nulls in it at all. A reader who greps here
+concludes the exact opposite of the truth — which is worse than getting no
+answer, and is the strongest argument in this section for stating the screen
+rather than the number.
+
+The other figure in that record, a count of refusals on one field, is **cited
+from a comment in the program** rather than measured, and stays labelled that
+way. A number from a comment and a number from the tree are different kinds of
+claim, and collapsing them would hide which one the record rests on.
+
+**One of the three closed earlier, and how it closed is the point.** The original
+figure of 32 could not be reproduced: three readings of *a test file selecting a
+population by filename prefix* gave **52** for any identifier-then-star glob,
+**38** excluding the universal every-test prefix, and **17** also requiring the
+source extension. The recorded 32 matches none and sits between two — so the
+original scope is **lost rather than drifted**, and the tell is the magnitude: a
+drift moves a figure by a few, these differ by tens in both directions.
+
+So the record now carries a **supplied** screen rather than a recovered one —
+the broad reading, 52 today — and says which it is. That is a real closure: the
+figure is re-runnable by anyone now, even though the number it replaces is gone.
+The broad reading is deliberate, because the rule's point is that most such
+selectors are *correct* and the record's job is to size the population a
+discriminator must sort, not to count defects.
+
+I caught the naming omission re-reading my own paragraph, which is the fourth
+time this section has had to correct itself and the reason it is worth as much space
+as the records it audits. **That number comes from reading 35 records, not from
+a screen** — which is the only reason I trust it, and it took less time than the
+six re-measurements that produced the six wrong ones. A figure
+without its question is a memory, which is the brief's own word for what this
+loop exists to stop producing.
+
 ## Summary
 
-**STATUS**: 44 records emitted and validated — 41 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 48 records emitted and validated — 45 Bucket A, 2 C, 1 T, zero B,
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -3260,7 +3926,7 @@ bucket. My 37 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 19 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43 |
+| **EXTRACT-NEW** | 23 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43, A-44, A-45, A-46, A-47 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -3269,7 +3935,7 @@ the routing rather than remembered — the first version of this list named thre
 rules against one file and was already out of date by five:
 
     6 rules -> plugin_change_pytest_gate      A-3, A-4, A-13, A-22, A-26, A-30
-    5 rules -> enhancement_emit               A-9, A-23, A-27, A-29, A-31
+    6 rules -> enhancement_emit               A-9, A-23, A-27, A-29, A-31, A-47
     4 rules -> ppa_head_to_head_check         A-2, A-5, A-11, A-35
     3 rules -> ppa_search_run                 A-7, A-8, A-19
     3 rules -> cli_exit                       A-21, A-37, A-39
@@ -3419,6 +4085,10 @@ gap was non-empty every single time it was measured.
 | A-41 | 138 gate output paths | **2 confirmed** | a gate's output path equals a producer's; the overwrite is documented in the producer's own source and repaired after the fact |
 | A-42 | 3 tracked-set generators | **2 unguarded** | guards the query FAILING but not the query answering about the previous commit |
 | A-43 | 3 tests reference the hook | **0 assert installation** | the tracked hook is present, the installed one is absent, and 9 pushes this batch went ungated |
+| A-44 | 14 reduce-to-one sites | **4 unsorted** | the same glob is sorted in one program and unsorted in another; a repaired instance let a nested snapshot certify the outer project |
+| A-45 | 6 multi-group axes | **5 mix kinds** | 1 equivalence argument exists and it covers the one pair that does not mix; a SATISFIED group beats an UNDETERMINED one |
+| A-46 | 650 verdict emitters | **≤36 stamp a tree** | a brief that was right about an unfetchable tree cost a full remote-ref sweep and a scratch reconstruction to adjudicate |
+| A-47 | the landed bundle | **45 records vs 44 sections** | 97 commits this lane, 3 another; the bundle's own verifier catches all 12 real failures in a second and nothing ran it at landing |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |
@@ -3510,9 +4180,37 @@ route so the next reader can see it was asked rather than skipped.
 
 ## Next
 
+**This bundle ships in two pieces, and the split is a batch decision, not a
+technical one.** The branch that carries it into the current batch was FROZEN
+while the batch was being assembled — ten of sixteen member branches had moved
+within two hours, so every re-merge invalidated the report describing it. The
+frozen branch holds 44 records and 19 already-program claims, and it verifies
+`rc 0` on its own tree; that is what lands.
+
+Everything measured after the freeze is on **`next/ppa-capture-followups`**,
+which branches from the frozen tip and rides the following batch. It is not
+merged into the frozen branch:
+
+| after the freeze | |
+|---|---|
+| new records | **A-44** (a search reduced to one result without counting it), **A-45** (whichever proof group has data decides the verdict) |
+| new already-program claim | the twentieth — an empty value is not a value, because two empties compare equal |
+| refinements to frozen records | **two** — A-5 gains the demonstration its count was missing, A-36 gains a detector needing no second source |
+| new synthesis | the six-refusals family, and two classes checked and deliberately NOT recorded |
+
+The three staleness guards in the verifier — the introducing-sentence count, the
+stated check count, and the per-record reading cost — are **in the frozen
+branch**, not here. I wrote otherwise in the first draft of this paragraph and
+checked it against the frozen tip before shipping, which is the only reason it
+does not say so still.
+
+**If you are reading the frozen bundle, it does not know this branch exists**; if
+you are reading this one, the counts here are the larger set.
+
+
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            51 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            54 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -3532,7 +4230,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     51 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     54 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other

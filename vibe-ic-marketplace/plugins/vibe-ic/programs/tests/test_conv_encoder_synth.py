@@ -101,3 +101,63 @@ def test_dataset_record_emits_when_present():
     assert "module convolutional_encoder" in rtl
     # the harness reads dut.shift_reg by name
     assert "shift_reg" in rtl
+
+
+# ── polarity: a PROMPT states a retired polynomial as readily as a live one ──
+#
+# Found by `prose_polarity_census`. `_parse_generators` published a denied
+# generator polynomial as a stated one, and that value decides which encoder is
+# SYNTHESISED. It compounds with `setdefault`, which keeps the first match: a
+# retired polynomial stated before the live one took its place outright.
+
+def _gens(prompt):
+    import conv_encoder_synth as M
+    return M._parse_generators(prompt)
+
+
+def test_a_retired_polynomial_is_not_read_as_stated():
+    assert _gens('g1 = "111" is no longer used. The encoder uses g2 = "101".') \
+        == [(2, "101")]
+
+
+def test_an_explicitly_negated_polynomial_is_not_read():
+    assert _gens('The encoder does not use g1 = "111".') == []
+
+
+def test_a_retired_value_does_not_take_the_live_one_s_place():
+    """`setdefault` keeps the FIRST match, so a denial stated before the live
+    statement did not merely add a wrong entry -- it displaced the right one."""
+    assert _gens('g1 = "111" is no longer used.\nThe encoder uses g1 = "110".') \
+        == [(1, "110")]
+
+
+def test_a_denial_wrapped_across_two_lines_is_still_a_denial():
+    """Breaking on every "\\n" would have missed this -- the under-reach that
+    publishes the denied value, which is the failure being fixed."""
+    assert _gens('g1 = "111" is no\nlonger used.') == []
+
+
+def test_a_plainly_stated_prompt_still_yields_both():
+    """The control arm: a fix that refused everything would pass the rest."""
+    assert _gens('The encoder uses g1 = "111" and g2 = "101".') \
+        == [(1, "111"), (2, "101")]
+
+
+def test_a_retired_constraint_length_is_not_read_as_stated():
+    """K and the generators together ARE the code. The generators were guarded
+    first and K beside them was not -- two readers of one prompt deciding one
+    encoder between them."""
+    import conv_encoder_synth as M
+    assert M._parse_K("The constraint length K = 7 is no longer used.\n"
+                      "Use K = 5.") == 5
+
+
+def test_a_negated_constraint_length_is_not_read():
+    import conv_encoder_synth as M
+    assert M._parse_K("The encoder does not use constraint length K = 7.") is None
+
+
+def test_a_plainly_stated_constraint_length_is_still_read():
+    """The control arm."""
+    import conv_encoder_synth as M
+    assert M._parse_K("The encoder has constraint length K = 7.") == 7

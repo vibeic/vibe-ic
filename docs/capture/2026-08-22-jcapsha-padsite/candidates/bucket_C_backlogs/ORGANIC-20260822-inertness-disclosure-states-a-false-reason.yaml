@@ -1,0 +1,18 @@
+type: bug
+severity: P1
+component: program:pad_ring_gen
+plugin_version: "1.11.69"
+
+title: >-
+  A shipped step publishes an inertness disclosure whose stated reason is false
+
+pattern: |
+  A step carries, in every report it writes, a machine-readable disclosure asserting that one of its configuration inputs is not honoured by the downstream tool, together with the measurement offered as evidence. The measurement is sound and the assertion drawn from it is wrong, because the tool applies that input to a different part of the layout than the one the sweep observed. The disclosure is therefore a false statement shipped to every reader, in the field whose whole purpose is to be trusted without re-derivation.
+
+suggested_fix: |
+  Replace the reason with what was actually measured and re-derive the verdict. The refusal raised when the input is deliberately set remains correct and should stand; the justification behind it must stop asserting that the tool ignores the input, and should instead say that this step cannot honour it because the step and the tool bind the same word to different parts of the layout.
+
+id: "ORGANIC-20260822-inertness-disclosure-states-a-false-reason"
+submitted_at: "2026-08-22T15:26:20+08:00"
+session_context: >-
+  Found while converging a prior lane's recovery report on a second image and a newer build of the downstream tool. The numbers reproduced exactly; the inference did not survive the tool's own documented option table.

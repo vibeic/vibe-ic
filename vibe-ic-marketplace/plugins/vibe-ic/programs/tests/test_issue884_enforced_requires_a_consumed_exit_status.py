@@ -1260,16 +1260,23 @@ def step(project, plan):
 # ---------------------------------------------------------------------------
 # THE REAL TREE
 # ---------------------------------------------------------------------------
-#: The four gates this audit called ENFORCED while the runner discarded their
+#: The gates this audit called ENFORCED while the runner discarded their
 #: verdict. Repairing a CALL SITE is separate work that changes what a real run
-#: blocks on — a flow-owner decision, not an audit change — so #884 fixes only
+#: blocks on — a flow-owner decision, not an audit change — so #884 fixed only
 #: the auditor. When a repair lands, drop that gate from this tuple in the SAME
 #: change: the entry is a record of debt, never permission to keep it.
+#:
+#: TWO OF THE FOUR LEFT ON THIS TREE, and they left because the call sites were
+#: repaired in `phase3_one_shot_runner.py`, not because this record was tidied.
+#: MEASURED from the audit's own JSON on this tree:
+#:   sdc_syntax_check  ENFORCED   INLINE_BLOCKING           (rc bound and read)
+#:   dfm_screen_check  AUDIT_ONLY INLINE_UNPROVEN, declared="advisory",
+#:                     slots=["advisory_program_exit_zero"]
+#: Neither is a member of "named by a runner and its status thrown away" any
+#: more, so asserting they still are would pin the tree to a state it has left.
 _STATUS_IGNORED_TODAY = (
     "bsdl_emit",
-    "dfm_screen_check",
     "rtl_hygiene_lint",
-    "sdc_syntax_check",
 )
 
 

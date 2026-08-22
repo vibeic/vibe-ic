@@ -1439,7 +1439,17 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
 # forward edge (A7 declares `blocks_on: [A6]`). Only A6's position in this
 # tuple moved with it.
 
-_PASS_TIER_LABELS = frozenset({"PASS", "VACUOUS_PASS", "VACUOUS-PASS"})
+# vibe-ic#901, 2026-08-22 — PARTIALLY-VACUOUS joins the set, and NOT as a
+# convenience: without it steps 4 and D1 drop straight out of the sweep and the
+# pinned tuple SHRINKS, which the assertion below correctly calls the shape that
+# matters ("production gates stopped being able to reach the tier at which the
+# MISSING downgrade fires"). Nothing about those two steps changed — the tier
+# they already reached was split in two by a count, and this reader was still
+# spelling only one half of it. Adding the word keeps the measured set at the
+# same 18 steps; it does not widen enforcement, it stops a rename from silently
+# narrowing it.
+_PASS_TIER_LABELS = frozenset({"PASS", "VACUOUS_PASS", "VACUOUS-PASS",
+                               "PARTIALLY-VACUOUS", "PARTIALLY_VACUOUS"})
 
 
 @lru_cache(maxsize=1)

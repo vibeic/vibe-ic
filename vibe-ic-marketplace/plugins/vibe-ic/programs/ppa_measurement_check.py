@@ -248,6 +248,39 @@ def run_coverage(bundle_path: Path,
     # to end, and it is the more dangerous direction -- an unearned PASS at
     # least looks like a claim, while an unearned NOT_CHECKED looks like
     # diligence.
+    #
+    # ALL THREE OF THOSE REFUSALS WERE PRODUCER DEFECTS, AND ALL THREE ARE
+    # FIXED (v1.11.69). What the wired row reads is NOT: this bundle is the
+    # frozen output of the producers as they were, and the run tree it was
+    # built from (`$HOME/_jxlayer/run/trials/b000`) no longer exists,
+    # so it cannot be regenerated and hand-editing it would be composing the
+    # answer after the exam. It therefore still refuses 54, identically to
+    # before -- and that is the honest state, not a regression.
+    #
+    # What the fixes are measured against instead is the SAME question over run
+    # trees that do still exist. Building a bundle from one with the shipped
+    # producers and handing it to this program:
+    #
+    #     tree                 producers BEFORE      producers AFTER
+    #     subservient          rc 1, 18 refused      rc 2, 0 refused
+    #     spm_core             rc 1, 22 refused      rc 1, 2 refused
+    #
+    #   SCOPE_SENTINEL           `_ppa/timing._scope` wrote every unestablished
+    #                            key as null; PPA_INTERFACES section 2 and this
+    #                            layer both say omit-and-explain. 152 -> 0 over
+    #                            12 run trees.
+    #   SAME_ARTEFACT_TWO_VALUES `_path_scope` trusted endpoint names without
+    #                            checking they were UNIQUE in the view.
+    #   CONFLICTING_RECORD       `_ppa/contract.py` carried no declaration for
+    #                            the artefact conflict this program's own
+    #                            message told the reader to look there for.
+    #                            17 -> 4 over 12 run trees; the 4 that remain
+    #                            are a DIFFERENT defect this fix made visible
+    #                            (two STA reports, one scope, two slacks) and
+    #                            they are correctly refused.
+    #
+    # NAMED MISSING INPUT for the wired row, unchanged and still the reason it
+    # cannot go green: a document declaring a non-empty `expected` list.
     try:
         expected = _expected_from(bundle_doc, expect_path, bundle_path,
                                   len(index), len(refusals))
@@ -535,4 +568,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # PPA_INTERFACES §1: 3 is INTERNAL ERROR. Letting a traceback propagate
+        # exits 1, which is reserved for a FINDING about the design -- so a
+        # crash would reach the roll-up as a verdict nothing reached.
+        #
+        # NEWLY LOAD-BEARING. While this gate took an exact path a crash was a
+        # local accident; with `--corpus` it sweeps a whole campaign, so one
+        # badly shaped document decides the entire row. The same guard
+        # ppa_contract_check has carried from the start.
+        print(f"{cli_exit.MARK_REFUSE} ppa_measurement_check: internal error "
+              f"{type(exc).__name__}: {exc}. Nothing was decided. rc=3 "
+              f"(NOT a finding about any design).", file=sys.stderr)
+        sys.exit(cli_exit.RC_BAD_INVOCATION)

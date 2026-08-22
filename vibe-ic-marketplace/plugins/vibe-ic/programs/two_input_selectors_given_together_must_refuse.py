@@ -131,15 +131,30 @@ def _selectors(tree: ast.AST) -> Tuple[List[str], List[str], Set[str]]:
 
 def _decides_both_given(tree: ast.AST, singles: List[str],
                         colls: List[str]) -> Optional[Tuple[int, str]]:
-    """An `if` TEST naming both, as a conjunction. Never reads the body."""
+    """An `if` TEST naming both, as a conjunction. Never reads the body.
+
+    THE CONJUNCTION IS READ AS A NODE, NOT AS THE SUBSTRING `" and "`, and the
+    negation as `ast.Not`, NOT as the substring `"not "`. Both spellings were
+    string tests, and the second one refused a correct remedy: the tree's own
+    `if args.record is not None and args.corpus is not None:` — which names
+    both, is a conjunction, and refuses — carries `not ` inside `is not None`
+    and was skipped, so a program that DOES decide the both-given case was
+    reported as one that does not. A `not` APPLIED to a selector is a different
+    shape (`if not a.corpus and not a.record:` asks whether NEITHER was given,
+    which decides nothing about both), and that one is still skipped.
+    """
     for n in ast.walk(tree):
         if not isinstance(n, ast.If):
+            continue
+        if not (isinstance(n.test, ast.BoolOp)
+                and isinstance(n.test.op, ast.And)):
+            continue
+        if any(isinstance(x, ast.UnaryOp) and isinstance(x.op, ast.Not)
+               for x in ast.walk(n.test)):
             continue
         try:
             t = ast.unparse(n.test)
         except Exception:                        # noqa: BLE001
-            continue
-        if " and " not in t or "not " in t:
             continue
         if any(re.search(rf"\.{re.escape(s)}\b", t) for s in singles) \
                 and any(re.search(rf"\.{re.escape(c)}\b", t) for c in colls):

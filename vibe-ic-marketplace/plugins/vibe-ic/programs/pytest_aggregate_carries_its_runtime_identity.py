@@ -173,6 +173,48 @@ def _walk(root: Path) -> List[Path]:
     return sorted(out)
 
 
+# The empty population here is not an accident of this checkout, and saying only
+# "none found" invites the reader to conclude the rule has no subject in this
+# repository. It has one; the artefact is just never kept. The single production
+# writer of a run summary puts it in a temporary directory and lets it go, so
+# there is nothing on disk for this gate to judge and nothing for a later reader
+# to compare two runs with. That is worth NAMING in the admission, because "did
+# not look" is only honest when it says what it could not look at.
+_DISPATCHER = Path("tools/ci/_gate_dispatch.sh")
+#: keys that would let two runs be told apart by RUNTIME rather than by corpus.
+_RUNTIME_KEYS = ("python", "platform", "uname", "interpreter", "image",
+                 "hostname")
+
+
+def _run_summary_note(root: Path) -> Optional[str]:
+    """A sentence about this repo's own run-summary producer, or None.
+
+    Guarded on every side: an absent or unreadable dispatcher yields None and the
+    admission falls back to its short form. This must never be the reason the
+    gate fails.
+    """
+    try:
+        d = root / _DISPATCHER
+        if not d.is_file():
+            return None
+        text = d.read_text(encoding="utf-8", errors="replace")
+        if "summary-json" not in text and "summary_json" not in text:
+            return None
+        has_runtime = any(f'"{k}"' in text for k in _RUNTIME_KEYS)
+        if has_runtime:
+            return (f"{_DISPATCHER} does emit a run summary carrying runtime "
+                    f"identity; it is simply not kept in the tree.")
+        return (f"{_DISPATCHER} emits this repository's only run summary and it "
+                f"is not kept in the tree. That document names the CORPUS it "
+                f"ran against (benchmark_data_sha, corpus_inputs) and does not "
+                f"name the RUNTIME it ran on, which is the distinction this "
+                f"rule is about. Out of this gate's scope by the narrowing "
+                f"stated above — a gate profile is not a test aggregate — and "
+                f"recorded here rather than judged.")
+    except OSError:
+        return None
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("root", nargs="?", default=".")
@@ -264,9 +306,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f)
     print(f"examined {found} test aggregate(s) under {str(root)!r}")
     if found == 0:
+        note = _run_summary_note(root)
         print(f"[{NAME}] NOT CHECKED — no test aggregate was found, so nothing "
               f"was judged. This tree is a repository, not a run tree; the "
-              f"rule's subject is the aggregate a test arm writes.",
+              f"rule's subject is the aggregate a test arm writes."
+              + (f" {note}" if note else ""),
               file=sys.stderr)
         return 2
     if findings:

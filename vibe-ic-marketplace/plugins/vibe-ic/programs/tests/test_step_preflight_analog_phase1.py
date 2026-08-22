@@ -48,20 +48,51 @@ import step_preflight as SP                                    # noqa: E402
 
 PLUGIN = PROGRAMS.parent
 
+import _published_corpus as PC                                 # noqa: E402
 
-def _bench_ic() -> Path:
-    """`benchmark-data/ic` lives at the REPO root, not under the plugin. Walk
-    up rather than guessing — a wrong constant here turns every published-cell
-    control below into a silent `skip`, which is the same falsely-clean result
-    the whole campaign is about."""
-    for anc in (PLUGIN, *PLUGIN.parents):
-        cand = anc / "benchmark-data" / "ic"
-        if cand.is_dir():
-            return cand
-    return PLUGIN / "benchmark-data" / "ic"
-
-
-BENCH = _bench_ic()
+# WHERE THE PUBLISHED CELLS ARE, AND THE WALK THAT WENT LOOKING FOR THEM OFF THE
+# END OF THE CHECKOUT
+# ---------------------------------------------------------------------------
+# This used to be a local `_bench_ic()` that walked `PLUGIN` and EVERY ONE of its
+# parents for a `benchmark-data/ic`, reasoning that the corpus "lives at the REPO
+# root, not under the plugin". The reasoning was right in v1.10.55 and the walk
+# was never bounded by it: `PLUGIN.parents` does not stop at the repo root, it
+# runs to `/`.
+#
+# The corpus then left this repository (c5d7f2d00, v1.10.56), so inside any
+# checkout the walk finds nothing and keeps climbing. MEASURED on this fleet,
+# 2026-08-22, from a worktree at `$HOME/_jredmisc/base`:
+#
+#     .../plugins/vibe-ic/benchmark-data/ic      no
+#     .../vibe-ic-marketplace/benchmark-data/ic  no
+#     <repo root>/benchmark-data/ic              no
+#     $HOME/benchmark-data/ic                    HIT   <- a DIFFERENT repository
+#
+# The hit is a separate clone of the published-corpus repo that happens to sit in
+# a developer home directory, with the corpus pointer UNSET — nobody aimed
+# anything at it. Its `ic/spm/v1.9.96_gf180mcuD` still exists as a directory but
+# has held only `reports/` since the cells were withdrawn on 2026-08-20, so
+# `root.is_dir()` was true, the parametrised cases below did NOT skip, and
+# `phase1_one_shot_runner/doc_extract` was REFUSED for want of a
+# `phase1/input_prompt/*` that a husk cannot have:
+#
+#     AssertionError: REFUSED TO RUN: 1 declared input(s) ABSENT
+#     assert 'REFUSED' == 'READY'
+#
+# Both ids in this file were red on `origin/main` a4caccefe on THAT machine and
+# green on a machine without that directory. The subject under test never entered
+# into it, which is the whole reason the walk had to go.
+#
+# Resolution is handed to `_published_corpus`, this repository's ONE answer to
+# "where is the corpus, and may it be absent": the pointer when it is set (and a
+# RAISE, never a skip, when it is set and broken), else this repo's own
+# `benchmark-data` while it still carries cells, else None — and never a
+# directory reached by climbing out of the checkout. An absent corpus is then a
+# NAMED skip that says it could not look, which is what these controls should
+# always have said on a machine that has no corpus.
+def _cell_root(cell: str):
+    """The published cell `cell` under the resolved corpus, or None."""
+    return PC.named_cell(*cell.split("/"))
 
 L_DOCS = (
     "L1_DATASHEET", "L2_FRS", "L3_CMD_PROTOCOL", "L4_REGMAP", "L5_ADI_SPEC",
@@ -398,9 +429,9 @@ _PUBLISHED = ("u_hawaii_adc/v1.9.86_sky130A", "spm/v1.5.65_sky130A",
 
 @pytest.mark.parametrize("cell", _PUBLISHED)
 def test_no_published_cell_is_refused_at_any_newly_wired_site(cell):
-    root = BENCH / cell
-    if not root.is_dir():
-        pytest.skip(f"{cell} not present in this checkout")
+    root = _cell_root(cell)
+    if root is None:
+        pytest.skip(f"{cell}: {PC.SKIP_REASON}")
     refused = []
     for runner, sites in (("phase1_one_shot_runner", ("doc_extract",)),
                           ("analog_one_shot_runner",
@@ -415,8 +446,8 @@ def test_no_published_cell_is_refused_at_any_newly_wired_site(cell):
 
 @pytest.mark.parametrize("cell", _PUBLISHED)
 def test_every_published_cell_still_satisfies_d1s_declaration(cell):
-    root = BENCH / cell
-    if not root.is_dir():
-        pytest.skip(f"{cell} not present in this checkout")
+    root = _cell_root(cell)
+    if root is None:
+        pytest.skip(f"{cell}: {PC.SKIP_REASON}")
     d = SP.decide(root, "phase1_one_shot_runner", "doc_extract")
     assert d.verdict == "READY", d.detail

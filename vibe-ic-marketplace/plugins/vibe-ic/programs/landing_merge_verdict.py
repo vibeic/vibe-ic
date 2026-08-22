@@ -1345,7 +1345,7 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
     # and 96 version-bearing landings later, and every one of those landings
     # was correct to allow it.
     #
-    # The deadline that would end that already exists — `max_commits` in
+    # The deadline that would end that already exists — `max_days` in
     # `tools/ci/gate_red_since.json`, read by `gate_red_since_check` — and
     # nothing ever opens it, because a row is voluntary and pure cost so no row
     # is ever written. This is the forcing function, and it has to be HERE:
@@ -1372,7 +1372,7 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         disclosures.append("INHERITED_RED_DEADLINE_NOT_EVALUATED")
         notes.append(
             "the inherited-red deadline was NOT evaluated — no acknowledgement "
-            "ledger and/or no commit-age function was supplied, so whether a "
+            "ledger and/or no row-age function was supplied, so whether a "
             "gate red on both arms is owned by a live deadline is UNKNOWN here")
     else:
         # IMPORTED HERE, NOT AT MODULE SCOPE. This file is executed by the
@@ -1629,8 +1629,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "and that is DISCLOSED rather than assumed clean")
     ap.add_argument("--red-since-repo", default="",
                     help="a repository containing the commits the ledger's "
-                         "`since` fields cite, used only to count commits "
-                         "behind HEAD. Absent means the same disclosure")
+                         "`since` fields cite, used only to read their dates "
+                         "and age each row in DAYS. Absent means the same "
+                         "disclosure")
     ap.add_argument("--require-composite-gate-record", action="store_true",
                     help="require the B2 rc and matching terminal sentinel; "
                          "used when targeted evidence comes from parallel B1")
@@ -1774,7 +1775,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                    _load_red_since().load_ledger(Path(a.red_since_ledger))
                    if a.red_since_ledger else None),
                commit_age=(
-                   _load_red_since().git_age(Path(a.red_since_repo))
+                   _load_red_since().git_age_days(Path(a.red_since_repo))
                    if a.red_since_repo else None),
                verification_tier=a.verification_tier,
                git_version=a.git_version, tier_reason=a.tier_reason,

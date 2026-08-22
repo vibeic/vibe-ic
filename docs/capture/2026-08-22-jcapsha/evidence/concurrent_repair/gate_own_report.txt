@@ -1,0 +1,7 @@
+      worktree: rc=0 [benchmark_evidence_index] NO_CORPUS: nothing at <TREE>/benchmark-data/ic and VIBE_IC_BENCHMARK_DATA is unset. The published corpus lives in its own repository and this repo is not required to carry i
+  [GATE_CORRUPTED_CHECKOUT] no retired pytest plugin request
+      this gate left the WORKING CHECKOUT modified while being driven (it exited normally). Every gate declared after it would have measured that. Restored: docs/capture/2026-08-22-jcapsha/evidence/rotation_axis/hv.tcl. 
+      checkout: modified
+      worktree: -
+  [HOST_DEPENDENT_VERDICT] published records not superseded
+[FAIL] 17 of 81 probed corpus gate(s) (90 declared) did not give one reproducible verdict across two trees: 6 GATE_CORRUPTED_CHECKOUT, 11 HOST_DEPENDENT_VERDICT.

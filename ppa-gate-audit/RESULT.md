@@ -2343,3 +2343,885 @@ re-filing shipped — passes with the refusal removed, all 17 of them. It pins t
 two document kinds apart; it does not pin the refusal. The red lives in
 `test_issue1121`, and anyone checking that claim by running the ablation file
 alone would get a false all-clear.
+
+
+# Part 22 — a producer that held the datum and reported the datum absent
+
+Part 21 said the rc 0 is unavailable because `h2h_A`'s `timing_wns_ns.rc_corner`
+is null and no artefact states it. The first half is right and the second half
+is **wrong**, and the artefact says so on its own first line.
+
+## The measurement
+
+The report `h2h_A` cites is `phase3/stage3/sta/sta_mcorner_ocv.rpt`. Running the
+SHIPPED backend over it:
+
+    banner: === SETUP corner: process=SS liberty=..__ss_100C_1v60.lib, SPEF=spm.max.spef ===
+       check='setup'  process='SS'  rc_corner=None  spef='spm.max.spef'
+       check='hold'   process='FF'  rc_corner=None  spef='spm.min.spef'
+
+`_ppa/backends/opensta` captures that `SPEF=` token with `_BANNER_SPEF_RE`, off
+the **same banner line** it reads `process=` and `liberty=` from.
+`_ppa/timing.py` then read `sec.rc_corner` only, never `sec.spef`, and wrote:
+
+    "this report names no RC corner for the section; the RC axis is reported
+     by the multi-corner SPEF report, not this one"
+
+That sentence is false for this report. The section names its RC condition — as
+a parasitics file — and the producer was holding it while saying it was absent.
+This is the same class the PPA record gates exist to end, arriving from the
+producer side instead of the gate side.
+
+Scoped by dialect, because only one is affected and overstating it would repeat
+Part 20's mistake:
+
+    dialect A  sta_spef_multicorner.rpt   rc_corner='max'                 -> h2h_B's timing is complete
+    dialect B  sta_mcorner_ocv.rpt        rc_corner=None, spef='spm.max.spef' -> h2h_A
+    dialect C  sta_spef_based.rpt         no banner at all                -> genuinely nothing
+
+## What was repaired, and what deliberately was not
+
+The reason now names the parasitics it is holding. `rc_corner` is **still not
+filled**, and that is the design rather than a half-measure: the token is a FILE
+NAME, and reading `max` out of `x.max.spef` is exactly the filename inference
+`_stage_for` refuses forty lines above — *"inferring `post_route_extracted` from
+the filename would let a pre-layout estimate be compared against sign-off
+evidence"*. A stated gap is the honest outcome; a filled key would be a guess
+wearing a measurement's clothes.
+
+On the real artefact after the repair:
+
+    rc_corner gap -> this section names its parasitics as 'spm.max.spef' but no
+                     normalised RC-corner label, and the file name is NOT read
+                     as one: deriving a corner from a stem is the filename
+                     inference this module refuses elsewhere. The RC identity IS
+                     stated by the report and is not yet carried in scope
+    rc_corner values emitted: {None}
+
+## What this does NOT change, said plainly
+
+**No row turns green.** `h2h_A` stays `SCOPE_SENTINEL` and the cross-layer
+campaign stays rc 2 over 14 records, 0 refused. The corpus is static JSON; the
+records cite a run tree that is not in this repository and cannot be regenerated
+here. Part 21's *verdict* — rc 2 is honest and rc 0 is not available — survives
+intact. What changed is that its stated reason is no longer a denial.
+
+**The remaining repair is a contract change and is named, not done.** Making
+these records decidable means carrying the SPEF identity in scope as itself:
+two arms that both read `spm.max.spef` are at the same RC condition, and that is
+decidable without parsing a corner out of a name. That touches `REQUIRED_SCOPE`
+and `check_scope_parity` and every record already published, so it is the next
+branch's work and not a line to slip into this one.
+
+## The guard
+
+`tests/test_a_producer_may_not_deny_a_datum_it_holds.py`, five assertions:
+the backend really does hold the SPEF while `rc_corner` is None (the premise,
+proven rather than assumed); the reason names it; the reason no longer claims
+the report named no RC corner; the corner is still not invented from the file
+name; and a report that *truly* names nothing keeps the original sentence — so
+the repair cannot become a blanket replacement of a true statement.
+
+NEGATIVE CONTROL, the reason reverted to the denial:
+
+    FAILED ::test_the_reason_names_the_parasitics_the_producer_is_holding
+    FAILED ::test_the_reason_does_not_claim_the_report_named_no_rc_corner
+    2 failed, 3 passed
+
+    E  AssertionError: assert '.spef' in 'this report names no RC corner for
+       the section; the RC axis is reported by the multi-corner SPEF report,
+       not this one'
+
+The three that stay green under the revert are the correct ones to stay green:
+they pin the non-inference and the true-sentence-preserved side, which reverting
+the reason does not touch.
+
+
+# Part 23 — the brief's actual question for the two NOT CHECKED rows: WHICH bug
+
+The brief set a dichotomy for a gate that returns rc 2 over a non-empty
+population. Either it is **missing an artefact it has not named**, or **the
+artefact is there and the gate does not read it** — "declared but inert". It
+said these are different bugs and demanded that each row be classified. Parts
+1-22 established that both rows *name* something. Naming is not the same as
+being right about what is named, and after Part 22 found a producer message
+that was false, the gates' own account of themselves is not evidence.
+
+Both rows were therefore re-derived from the RUN TREE, not from the gate text.
+
+## Row 1 — head-to-head, end-to-end campaign, 2 records
+
+Classification: **missing artefact content, correctly named. Not inert.**
+
+Both records take `timing_wns_ns` from `phase3/stage3/sta/sta_spef_based.rpt`.
+That report is dialect C — no banner at all — so there is genuinely nothing for
+the parser to read an RC condition from, and the gate's rc 2 is earned.
+
+The root cause is one layer further back, and it is the same shape as Part 22.
+The deck that WROTE the report knew:
+
+    sta_spef_based.tcl:6    read_spef .../phase3/stage3/extracted/spm.spef
+    sta_spef_based.tcl:17   puts $_bf "STA_BASIS: POST_ROUTE_SPEF"
+    sta_spef_based.tcl:18   puts $_bf "STA_SIGNOFF_CORNER: SS"
+    sta_spef_based.tcl:19   puts $_bf "STA_BASIS_LIBERTY: ..__ss_100C_1v60.lib"
+    sta_spef_based.tcl:20   puts $_bf "STA_SIGNOFF_CORNER_COUNT: 1"
+
+Five stamps, and **not the SPEF it had just read on line 6**. The two
+multi-corner emitters were taught to stamp their per-stanza basis at v1.11.33;
+this single-corner one still discloses everything about its corner except which
+parasitics produced it. NOT repaired here: it is a change to the deck emitter in
+`phase3_one_shot_runner.py`, a single-writer surface, and it would fix future
+runs only — every published record is static JSON. Named so it is not lost.
+
+## Row 2 — promotion feasibility, cross-layer, 21 adjudicated sets
+
+Classification: **the gate named the WRONG artefact — the one it read rather
+than the one it awaits.** A real defect, repaired here.
+
+Measured in the campaign's own run tree:
+
+    reports/phase3/em.json          EXISTS. `"verdict": "MEASURED"`,
+                                    2431 segments analysed, max segment current
+                                    stated. A healthy artefact.
+    reports/phase3/em_signoff.json  EXISTS, in all 21 trials. Carries a report
+                                    AUTHENTICITY audit (`passed: true`,
+                                    tool_authentic, has_density) and NO
+                                    current-density screen: no violation count,
+                                    no Jmax, no `summary.worst_utilization`.
+
+The `MISSING` line ended `cited artefact: reports/phase3/em.json` — the file
+that is fine. Each record names the artefact it actually wants, itself, in its
+own provenance: `screen_artefact: reports/phase3/em_signoff.json`, **42
+occurrences across the corpus**, and the gate held it and did not print it.
+Sending a reader to a healthy file as the citation for an absent measurement is
+worse than citing nothing: nothing is a gap, this is a misdirection.
+
+The line now reads:
+
+    em: MISSING `reliability.em.violations` at view {"stage":"post_route"}
+    [NOT_MEASURED] -- the current-density screen states verdict 'nothing',
+    which is neither PASS, FAIL nor SKIPPED. read: reports/phase3/em.json
+    -- AWAITED, per the record's own provenance, and NOT the artefact read
+    above: reports/phase3/em_signoff.json
+
+**The verdict is unchanged at rc 2 over 21 sets, 0 infeasible.** The substantive
+gap is real: nothing anywhere in the campaign screens J against a Jmax, so no
+violation count and no utilisation ratio exist to be read. The equivalence axis
+is likewise honestly undetermined — `reports/lec.json` is present, IS read, and
+proves RTL against `post_dft_netlist.v (synth)`, which is not the routed
+netlist. Both remain undecidable. What changed is that the gate now points at
+the thing it needs.
+
+## Two things this repair deliberately does NOT do
+
+**It does not claim the awaited file is absent.** This gate reads a published
+record and never the run tree, so it cannot know — and measured, the file DOES
+exist. What is absent is the verdict, not necessarily the file. An earlier draft
+of this line said "not present" and was corrected before it shipped; a gate
+asserting the state of a filesystem it never opened is the same unearned claim
+in the opposite direction.
+
+**It does not key off the word `screen_artefact`.** The rule is on the SHAPE of
+the provenance value — no whitespace, and a known artefact suffix — because a
+rule fitted to today's key name would miss the next producer's word for the same
+thing. Measured against the corpus, the shape rule selects exactly the 42
+`screen_artefact` values and no prose: `stage_basis` holds the sentence "…the
+worst J/Jmax ratio…", and a looser rule keyed on a slash renders that paragraph
+as a missing file. `tests/…_awaits_not_the_one_it_read.py` pins that case.
+
+## The guard
+
+`tests/test_rc2_names_the_artefact_it_awaits_not_the_one_it_read.py`, 7
+assertions: the population really is non-empty and really is rc 2 (a guard about
+rc 2 that never reaches rc 2 proves nothing); the awaited artefact is named; the
+read artefact is STILL named; the two are ordered and marked so they cannot be
+run together into one undifferentiated list; no presence claim is made; prose is
+never rendered as an artefact; and a record whose provenance names only what was
+already read gains NO `AWAITED` clause — no invented waiting.
+
+NEGATIVE CONTROL, the awaited-artefact naming removed:
+
+    FAILED ::test_the_awaited_artefact_is_named
+    FAILED ::test_the_two_are_distinguishable_and_not_run_together
+    FAILED ::test_the_gate_does_not_claim_the_awaited_file_is_absent
+    3 failed, 4 passed
+
+    E  AssertionError: the gate did not name the artefact the record's own
+       provenance says it is waiting for. An rc 2 that names no missing input
+       is the failure mode this layer exists to end
+
+All three fail on a stated assertion, not on an IndexError — the first draft of
+the third test crashed instead of asserting when nothing was named, which would
+have made its red unreadable, and it was hardened to say so out loud.
+
+
+# Part 24 — a stamp written, tested, and read by nothing
+
+Part 23 classified the end-to-end head-to-head row as "missing artefact
+content, correctly named" and left the cause named but unrepaired: the deck that
+writes `sta_spef_based.rpt` read a SPEF on one line and stamped four other facts
+about the corner on the next five. That classification was right about that one
+emitter and **wrong about the scale of it**.
+
+## The measurement, on `origin/main`
+
+`phase3_one_shot_runner.py` writes seven `STA_*` stamps into the reports it
+emits. `_ppa/backends/opensta.py` — the only reader those reports have on the
+PPA record path — parsed four:
+
+    STA_BASIS                  parsed
+    STA_BASIS_LIBERTY          parsed
+    STA_SIGNOFF_CORNER         parsed
+    STA_SIGNOFF_CORNER_COUNT   parsed
+    STA_BASIS_SPEF             NOT PARSED
+    STA_BASIS_NETLIST          NOT PARSED
+    STA_BASIS_NOTE             NOT PARSED
+
+`STA_BASIS_SPEF` is written by **four** emitters in the runner and asserted by
+an existing test, `test_multicorner_signoff_reports_declare_their_stage.py:172`
+— *"assert `STA_BASIS_SPEF: ` in body"*. The producer side was built, guarded
+and shipped. **No consumer ever read it.** That is the "declared but inert"
+class in its purest form: a disclosure that exists from the emitter's side and
+does not exist from the reader's, with a green test over the half that was done.
+
+What it cost is not hypothetical. The PPA layer discarded the parasitics
+identity, wrote records saying `rc_corner: null`, and `ppa_head_to_head_check`
+then refused those records `SCOPE_SENTINEL` — for a field the artefact chain had
+been stating.
+
+## What the run actually contains, so the scale is not overstated
+
+Measured across the campaign's own trial `b000`:
+
+    aging_sta.rpt              CARRIES  STA_BASIS_SPEF: <top>.max.spef (max-RC / late-path corner)
+    sta_spef_based.rpt         no spef stamp   <- the report the e2e records read
+    sta_mcorner_ocv.rpt        no spef stamp   <- dialect B, names its SPEF on the banner instead
+    sta_spef_multicorner.rpt   no spef stamp   <- dialect A, names its RC corner on the banner
+    post_route_timing.rpt, pre_pnr_timing.rpt, sta_{FF,SS,TT}.rpt   no spef stamp
+
+So on this run exactly one report carries the stamp, and its disclosure was
+thrown away. The three reports the PPA timing layer reads never received it —
+two of them disclose per-stanza on their banners instead, which is finer and
+correct, and the third, `sta_spef_based.rpt`, disclosed nothing at all because
+it has no banner and was not given the stamp.
+
+## The repair, both halves, because either alone is still inert
+
+    _ppa/backends/opensta.py   parses STA_BASIS_SPEF -> Report.basis_spef
+    _ppa/timing.py             relates the whole-file stamp to the bannerless
+                               section, exactly as it already does for
+                               `basis_liberty` and `signoff_corner`
+    phase3_one_shot_runner.py  the single-corner deck now stamps the parasitics
+                               it reads, alongside the four facts it already
+                               stamped
+
+Proven end to end against the real artefact:
+
+    BEFORE   report.basis_spef = None
+             rc_corner gap -> "this report names no RC corner for the section;
+                               the RC axis is reported by the multi-corner SPEF
+                               report, not this one"
+    AFTER    report.basis_spef = .../extracted/<top>.spef
+             rc_corner gap -> "this section names its parasitics as
+                               '.../extracted/<top>.spef' but no normalised
+                               RC-corner label ..."
+    rc_corner values emitted: {None}   — in BOTH cases. Still not invented.
+
+## No row moves, again
+
+    head-to-head (cross-layer)   14 record(s), 0 refused, 2 undetermined -> rc 2
+    head-to-head (end-to-end)     2 record(s), 0 refused, 2 undetermined -> rc 2
+    promotion feasibility        21 set(s), 0 infeasible, 21 undetermined -> rc 2
+
+Published records are static JSON. This repairs what the NEXT run can say about
+itself, and it stops the reader from denying a datum the emitter provided.
+
+## The guard, and why it is a ledger rather than a rule
+
+`tests/test_a_stamp_nothing_reads_is_not_a_disclosure.py`. Every `STA_*` stamp
+the runner writes must be either parsed by the reader **or listed with a
+reason**. Two are listed:
+
+  * `STA_BASIS_NOTE` — free prose for a human; it is not a field, has no
+    grammar, and nothing could compare two of them.
+  * `STA_BASIS_NETLIST` — **a real gap, recorded rather than quietly parsed.**
+    Which netlist was timed IS comparability data. No consumer wants it yet,
+    and adding an unread field to `Report` is the same disease this file exists
+    to name, so it is declared instead of fixed or hidden.
+
+A blanket "every stamp must be parsed" would have shipped red, and a silent
+allowance would have let the next inert stamp in unnoticed. The ledger makes it
+a decision somebody takes on purpose. Three further arms keep the ledger honest:
+an entry that is *also* parsed is refused as stale, every entry must state a
+real reason, and the premise itself is pinned so the rule cannot pass by finding
+nothing to check.
+
+NEGATIVE CONTROLS, three, all on real code rather than a mock:
+
+    A. the parse removed (i.e. exactly main's state)
+       FAILED ::test_every_stamp_is_either_parsed_or_declared_unread
+       FAILED ::test_the_spef_stamp_is_now_actually_read
+       E  AssertionError: these stamps are written into reports by the runner
+          and read by nothing in the PPA reader: ['STA_BASIS_SPEF']
+
+    B. the test file run UNCHANGED against pristine origin/main — the strongest
+       form, because a guard that cannot fail against the pre-fix code proves
+       nothing. Same two reds, same message.
+
+    C. the emitter's stamp line deleted
+       FAILED ::test_the_single_corner_deck_stamps_the_parasitics_it_reads
+
+One note worth keeping, because it nearly went the other way. The emitter arm
+anchors on that deck's own sentence, and the first anchor read past the point
+where the runner splits the f-string across two source lines. The test did not
+quietly match a different emitter — it asserted that its anchor matched zero
+times and said so. A structural test that cannot identify its subject must
+refuse, not guess.
+
+
+# Part 25 — a refusal that hid behind an undetermined, over three published
+# records, in both campaigns
+
+WHAT WAS FOUND. `ppa_head_to_head_check.evaluate` ran `check_scope_parity`
+(which raises at RC_UNDETERMINED, 2) BEFORE `check_stage_basis_agreement`
+(which raises at RC_REFUSED, 1). A record tripping both was reported as
+`[UNDETERMINED] ... SCOPE_*` and its refusal was never printed.
+
+THREE PUBLISHED RECORDS WERE IN EXACTLY THAT STATE, all one shape — a
+`power_mw` taken at `stage='synth'` cited under
+`measurement_basis='post_route_sta'`:
+
+    ppa-crosslayer/records/h2h_A.json      both arms
+    ppa-crosslayer/records/h2h_B.json      both arms
+    ppa-e2e/records/head_to_head.json      both arms
+
+Each states on its face that it holds a sign-off measurement; each actually
+holds a pre-physical synthesis estimate. `STAGE_CONTRADICTS_BASIS` exists to
+say so and could not be reached. This is the THIRD instance of the inversion in
+this family — Part 14 (`run_coverage`) and `ppa_problem_integrity_check`
+carried it before.
+
+DENOMINATOR, so the finding is bounded rather than suggestive: 16 comparison
+records tree-wide, 6 arm-axes contradicting, 13 records clean. Twelve of the
+fourteen cross-layer head-to-heads cite `power_postroute.rpt` at
+`post_route_extracted`; only h2h_A and h2h_B cite `power.rpt` at `synth`.
+
+TWO INDEPENDENT MASKS, and they are worth separating because only one is the
+ordering:
+
+  * h2h_A and ppa-e2e/head_to_head.json were masked by the ORDERING alone —
+    a `timing_wns_ns.rc_corner` sentinel consumed the record first.
+  * h2h_B was masked by a PRODUCER DEFECT: `_ppa/power.metric_records` could
+    not emit the required `mode` key at all (repaired in fd2c7c62c6), so the
+    record was SCOPE_INCOMPLETE before any ordering question arose.
+
+THE PRODUCER FIX WAS INERT. fd2c7c62c6 repaired the producer and NOT ONE
+published record was regenerated to reflect it — measured with
+`git diff --stat 54e5395fa5..HEAD -- '*records/*'`, which is empty. A fix whose
+corpus never moves is the declared-but-inert class pointing at itself.
+
+WHAT WAS CHANGED IN THE RECORDS, and what deliberately was not. h2h_A and
+h2h_B's four `power_mw` scopes gained `mode: "functional"`, DERIVED by running
+the shipped producer's own `_mode_for` over each record's own cited artefact,
+whose sha256 was verified byte-identical to what the record declares, and whose
+`pvt_matrix.json` resolves the mode with no gap. NO NUMBER WAS TOUCHED: the
+producer re-derives 0.000306 W and 0.000302 W against the recorded 0.306 mW and
+0.302 mW — the same figures, and the diff is four added lines.
+
+WHAT IS LEFT FOR THE OWNER, NAMED RATHER THAN CHOSEN QUIETLY. The three records
+still cite a synthesis power number under a sign-off basis, and there are two
+defensible repairs that say DIFFERENT things about what the campaign measured:
+
+    (i)  re-point `power_mw` at `power_postroute.rpt`, which exists for both
+         trials with the sha256 that sibling h2h_C already cites. This CHANGES
+         PUBLISHED FIGURES (baseline 0.306 -> 0.573 mW, subject 0.302 -> 0.54)
+         and it widens the subject's margin — it flatters us, which is the
+         direction to be most suspicious of and the reason it was not taken
+         here.
+    (ii) correct the declared `measurement_basis` to one that covers `synth`,
+         which changes the CLAIM instead of the numbers and flatters nobody.
+
+Choosing between them is a statement about campaign intent that the artefacts
+cannot settle, so it is the owner's and not this lane's.
+
+THE ORDERING REPAIR, and a defect it introduced that was caught before it
+shipped. Moving `check_stage_basis_agreement` ahead of `check_scope_parity` is
+safe because the callee skips an unknown basis and an absent scope by name. It
+did NOT skip a scope that is present but declares no `stage`, so an arm whose
+`area_um2` scope is `{}` was reported as "taken at stage=None -- a stage this
+basis does not cover" — a contradiction that does not exist, replacing the
+accurate SCOPE_INCOMPLETE. A stage that was never stated cannot contradict
+anything, so the callee now defers that case to parity. Caught by
+`test_VACUOUS_both_arms_declaring_an_EMPTY_scope_does_not_buy_equality` going
+red, which is the existing suite doing its job on a change of mine.
+
+ONE EXISTING TEST EXPECTATION WAS CHANGED, and it is flagged rather than
+quietly edited. `test_synthesis_area_is_not_post_route_area` asserted
+`rc == RC_UNDETERMINED` while ALSO admitting `STAGE_CONTRADICTS_BASIS` in its
+code list — a code raised only at RC_REFUSED. The two assertions could not both
+hold; the rc line was reachable only while parity ran first. The guarantee the
+test's name states is unchanged and is now delivered by the stronger code:
+RC_OK stays excluded, and a synthesis area still may not be reported as a
+post-route area.
+
+VERDICTS, measured before and after. NOTHING WAS MADE GREEN; this moves in the
+opposite direction, which the brief permits and the reverse of which it forbids:
+
+    PPA head-to-head records (cross-layer)  14 rec, 0 refused, 2 undet, rc 2
+                                        ->  14 rec, 2 refused, 0 undet, rc 1
+    PPA head-to-head records (end-to-end)    2 rec, 0 refused, 2 undet, rc 2
+                                        ->   2 rec, 1 refused, 1 undet, rc 1
+
+`tools/ci/gate_red_since.json` is NOT edited. A NEW red passes that ledger by
+its own rule, and acknowledging a red found this session would be taking on a
+deadline in order to avoid stating a finding.
+
+rc 0 OVER 14 IS STILL NOT AVAILABLE, and the reason is now correct where Part 21
+had it wrong. Part 21 argued the two records "cannot be regenerated here"
+because their run tree is absent. MEASURED: `/home/reyerchu/_jxlayer/run/trials/`
+IS present on this host and every cited artefact matches its recorded sha256,
+which is how `mode` was recovered at all. What genuinely blocks rc 0 is
+narrower and survives: h2h_A's `timing_wns_ns.rc_corner` is stated in no
+artefact — the dialect-B report names only `SPEF=spm.max.spef`, and reading
+`max` out of a filename is the inference `_stage_for` refuses on principle.
+
+NEGATIVE CONTROLS, four, all on real code:
+
+    A. ordering reverted to parity-before-basis
+       3 failed, 3 passed. The three greens are the right ones: the premise
+       (a basis contradiction with matching scopes was ALWAYS caught), the
+       paired half (a scope defect alone is STILL undetermined), and the
+       corpus premise.
+       E  AssertionError: ... got rc=2 {'code': 'SCOPE_SENTINEL' ...}
+       E  ... the finding never reached a reader: [(h2h_A, 2, SCOPE_SENTINEL),
+          (ppa-e2e/head_to_head.json, 2, SCOPE_SENTINEL)]
+
+    B. the file run UNCHANGED against pristine origin/main — the strongest
+       form, since a guard that cannot fail against pre-fix code proves
+       nothing. 3 failed, 3 passed, and it names ALL THREE records with their
+       distinct masking codes, h2h_B's being SCOPE_INCOMPLETE — the producer
+       mask — and the other two SCOPE_SENTINEL.
+
+    C. the `stage is None` deferral removed
+       FAILED ::test_VACUOUS_both_arms_declaring_an_EMPTY_scope_does_not_buy_equality
+
+    D. the paired half is not decorative: it is what stops the whole file from
+       being satisfied by a checker that has learned to refuse everything, and
+       it stays green under A, B and C.
+
+REGRESSION. 2333 passed, 4 failed, 124 skipped, 17 xfailed over the
+ppa/sta/rc2/ablation selection. The same 4 fail IDENTICALLY on pristine
+origin/main — verified by running them there rather than assumed:
+test_ppa_layer_timing_view_dedup x3, test_ppa_runner_extraction_ledger x1.
+None is mine. chip-AGNOSTIC source guard: PASS, 1553 file(s).
+
+
+# Part 26 — the same mask, four more refusals, and the one deliberately left
+# under it
+
+WHY I WENT LOOKING. Part 25 repaired ONE instance of "an rc 2 that swallows an
+rc 1". The brief's rule is general, so the question of how many OTHER checks
+the same mask covered was mine to answer and not to leave.
+
+THE SWEEP. Every function in `programs/ppa_*.py` and `programs/_ppa/*.py` was
+parsed and its raisable rc set computed transitively (`Refusal(code, msg)`
+defaults to RC_REFUSED; a third argument of `RC_UNDETERMINED` marks the rc-2
+raisers): 585 functions, 68 that can raise, 40 rc-2-only, 9 rc-1-only, 19 both.
+
+STRUCTURE ALONE OVER-FIRES AND IS NOT THE ANSWER. It reported 37 "inversion
+candidates" in `evaluate`, nearly all spurious -- `_load` raising rc 2 ahead of
+every rc-1 check is CORRECT, because a file that will not load supports no
+finding at all. A structural rule that cannot tell that apart would have had me
+"fix" the one ordering in the function that is right. So each candidate was
+probed EMPIRICALLY instead: craft the record, run the real checker, compare the
+verdict alone against the verdict with an unrelated `rc_corner` sentinel added.
+
+MEASURED, and it is wider than Part 25:
+
+    ARM_INFEASIBLE ................... 1 alone -> 2 masked
+    OPPONENT_UNDERBUDGETED ........... 1 alone -> 2 masked
+    OPPONENT_NOT_TUNED ............... 1 alone -> 2 masked
+    BASELINE_TUNING_CONTRADICTS_ROLE . 1 alone -> 2 masked
+    FEASIBILITY_NOT_CHECKED .......... 2 alone -> 2          (not a mask)
+    TUNING_UNDECLARED ................ 2 alone -> 2          (not a mask)
+
+THREE OF THE FOUR ARE THE RIGGED-BENCHMARK REFUSALS #1121 EXISTS TO ENFORCE,
+and the fourth says an arm has DRC violations. Any one of them was invisible
+behind an unrelated incomplete scope key. This was LIVE and not theoretical:
+three published records carry exactly such a sentinel, so a tuning defect in
+any of them would not have reached a reader.
+
+THE LINE IS NOT "1 OUTRANKS 2" APPLIED BLINDLY. It is where a check's evidence
+comes from:
+
+    INDEPENDENT of parity   `feasibility` and `tuning` are read off ONE arm's
+                            own block. An arm with DRC violations is infeasible
+                            and an opponent handed a smaller budget is
+                            under-budgeted, whether or not two scopes line up.
+                            MOVED ABOVE `check_scope_parity`.
+    DEPENDENT on parity     `derive_verdict` / `check_asserted_verdict` compare
+                            the numbers. A verdict refusal drawn from arms
+                            never shown comparable is not independently
+                            demonstrable -- it is a conclusion from a
+                            comparison the checker just said it could not make.
+                            LEFT BELOW parity, deliberately.
+
+That last one is a DECISION and is pinned as one:
+`test_a_verdict_refusal_DELIBERATELY_stays_below_parity` exists so that
+"finish the job and move the verdict check up too" is refused with a reason
+rather than done. VERDICT_UNKNOWN_BASELINE is still masked by a scope defect
+and that is the honest answer, not an unfinished edge.
+
+NO CORPUS VERDICT MOVED. Measured before and after on both campaigns:
+cross-layer 14 records / 2 refused / rc 1, end-to-end 2 records / 1 refused /
+rc 1, feasibility 21 sets / rc 2 -- identical to Part 25. This repair closes a
+latent class; it does not restate the corpus.
+
+NEGATIVE CONTROL F -- feasibility and tuning put back below parity:
+
+    4 failed, 11 passed
+    FAILED ::test_a_parity_independent_refusal_survives_a_scope_defect[_infeasible-ARM_INFEASIBLE]
+    FAILED ::...[_underbudgeted-OPPONENT_UNDERBUDGETED]
+    FAILED ::...[_our_search_space-BASELINE_TUNING_CONTRADICTS_ROLE]
+    FAILED ::...[_not_tuned-OPPONENT_NOT_TUNED]
+    E  AssertionError: ARM_INFEASIBLE is demonstrable from the record itself,
+       and an unrelated incomplete scope key hid it. got rc=2
+       {'code': 'SCOPE_SENTINEL', ...}
+
+The 11 that stay green include the PREMISE arm for each of the four (the same
+code fires on a clean record, so the test above is not asserting nothing) and
+the deliberate-exception test.
+
+A NOTE ON THE REGRESSION COUNT, because it moved from 4 to 5 and the fifth is
+not mine. `test_issue1241_vendored_attribution_wired.py::test_the_audit_
+returns_a_clean_verdict` fails with `subprocess.TimeoutExpired` after 30s.
+MEASURED directly on both trees: `checker_execution_wiring_audit.py` takes
+23.8s on this branch and 24.0s on pristine origin/main against a 30s budget --
+this branch is marginally FASTER. It tips over only when the host is loaded,
+reproduces identically on main, and is environmental rather than a regression.
+
+
+# Part 27 — the rest of the family, and a licence clause nothing enforced
+
+MY OWN SWEEP HAD A BLIND SPOT AND THIS PART EXISTS BECAUSE OF IT. Part 26's
+detector looked for a `try/except Refusal` inside a function and found exactly
+ONE evaluator, `ppa_head_to_head_check.evaluate`. That is the same mistake this
+lane keeps finding in other people's guards: a denominator of one, reported as
+coverage. MEASURED: of ten checkers in the family, NINE raise `Refusal` zero
+times -- they decide by RETURN VALUE, so the detector was blind to 9/10 of the
+population it claimed to have swept.
+
+WHAT THE RE-SWEEP FOUND, stated as a NEGATIVE RESULT because that is what it is:
+
+  1. CORPUS AGGREGATION IS SOUND. Every one of those nine gates aggregates
+     through one shared seam, `_ppa_corpus.worst_rc`. Probed directly rather
+     than read: worst_rc([2,1]) == 1, worst_rc([1,2]) == 1, worst_rc([0,2]) ==
+     2, worst_rc([3,1]) == 1. A refusal outranks an undetermined and the result
+     is order-independent, so no gate can lose a finding at corpus level.
+
+  2. `ppa_measurement_check.run_coverage` -- the Part 14 repair -- is INTACT,
+     with its reasoning still in the source above the fix.
+
+  3. `_ppa/feasibility.py` INVERTS THIS RULE ON PURPOSE, and the inversion is
+     correct. At SET level UNDETERMINED (rc 2) outranks INFEASIBLE (rc 1),
+     because "rc=1 asserts a complete finding about the design, and a run that
+     could not see all of its evidence must not make one". Per CANDIDATE the
+     precedence is the other way round and already tested. Nothing here
+     overturns either.
+
+THE REAL FINDING IS THE CLAUSE THAT LICENSES (3). The inversion is acceptable
+only because of one sentence in that module's docstring:
+
+    "Nothing is lost: both block, every per-candidate verdict is in the JSON,
+     and every finding is printed regardless of which code is returned."
+
+NOTHING ENFORCED IT. That sentence is the entire difference between a
+documented design decision and the defect this layer exists to end, and it was
+carried by prose alone. If a later change stopped printing the INFEASIBLE line
+whenever the set returns 2, a MEASURED DRC VIOLATION would vanish behind a NOT
+CHECKED while the docstring went on claiming otherwise -- and the deliberate
+inversion would have become the accidental one, silently.
+
+MEASURED TRUE TODAY, on a set built to hold both at once: one candidate with a
+real MEASURED DRC violation, one with an unmeasured axis.
+
+    rc                                     2   (the documented precedence)
+    "INFEASIBLE" on stdout                 yes
+    the violated candidate NAMED           yes -- `cand_violated: INFEASIBLE
+                                           drc:FEAS_VIOLATION`
+    per-candidate verdicts in the JSON     cand_violated=INFEASIBLE,
+                                           cand_unmeasured=UNDETERMINED
+
+Now pinned by `test_the_set_level_inversion_still_prints_and_records_every_
+finding`, which asserts the precedence itself as well, so the test is anchored
+to the design rather than silently passing if the precedence ever changed
+underneath it.
+
+NEGATIVE CONTROL G -- the per-candidate line withheld when the set is
+UNDETERMINED, which is exactly the regression the clause forbids:
+
+    1 failed, 15 passed
+    E  AssertionError: the set returned 2 and the INFEASIBLE finding was NOT
+       printed. That is the sentence licensing the inversion, and it is now
+       false: a measured violation is hidden behind a NOT CHECKED.
+
+REGRESSION. 2340 passed, 5 failed, 124 skipped, 17 xfailed, 2 errors over the
+full selection. FOUR fail identically on pristine origin/main. The fifth and
+both errors are `checker_execution_wiring_audit.py` exceeding a 30s subprocess
+timeout: measured at 23.8s on this branch and 24.0s on main, and the SAME
+selection run smaller -- so less host load -- returns 4 failed, 0 errors, with
+that test PASSING. Load-dependent, environmental, not a regression.
+chip-AGNOSTIC source guard: PASS, 1553 file(s).
+
+
+# Part 28 — the family's REAL denominator, and the licence clause is TWO gates
+
+I OVERSTATED MY OWN COVERAGE IN PART 27 AND THIS PART CORRECTS IT. Part 27
+said the family was swept "10 of 10". What was actually verified was the shared
+`worst_rc` seam plus two gates in depth. A per-record mask inside any other
+gate would NOT have been caught by `worst_rc` being correct, so that claim was
+broader than its evidence -- the same shape of overstatement this lane exists
+to find.
+
+THE REAL DENOMINATOR IS SMALLER AND NOW MEASURED. Of the eleven PPA programs,
+`repo_hygiene_gates.sh` invokes SIX, and those six carry the eleven wired rows:
+
+    ppa_head_to_head_check      3 invocations   repaired, Parts 25-26
+    ppa_contract_check          3               verified below
+    ppa_problem_integrity_check 2               verified below
+    ppa_measurement_check       1               Part 14 repair, intact
+    ppa_feasibility_check       1               Part 27, licence now pinned
+    ppa_pareto_check            1               THIS PART
+
+The other five (`ppa_signoff_records`, `ppa_page_claim_check`,
+`ppa_area_threshold_check`, `power_total_vs_budget_check`,
+`ppa_pr_scope_check`) are wired ZERO times and decide no published row.
+
+CONTRACT AND PROBLEM-INTEGRITY: SOUND, and by construction rather than luck.
+Both COLLECT findings and rank afterwards -- `findings = schema_findings(...)`,
+`findings.extend(C.validate(...))`, then `rc = C.rc_from(findings)`. There is
+no early return that can outrun a later finding; the only short-circuits are
+genuine prerequisites (unreadable file, top level not an object), which are the
+`_load` case and correct. `rc_from` was probed rather than read:
+
+    rc_from([UNDETERMINED, FAIL]) = 1     <- order-independent
+    rc_from([FAIL, UNDETERMINED]) = 1
+    rc_from([UNDETERMINED])       = 2
+    rc_from([NOTE])               = 0
+
+and its own docstring states the rule: "a confirmed finding outranks an
+unchecked one, and the report lists both regardless."
+
+PARETO: THE SECOND DELIBERATE INVERSION, LICENSED BY THE SAME UNPINNED
+SENTENCE. `_ppa/pareto.frontier_exit_code` inverts exactly as the feasibility
+CLI does and says so in terms:
+
+    "UNDETERMINED outranks REFUSED: a run that could not establish every
+     comparison must not publish a complete claim about which design won. Both
+     block, and every finding is printed whichever code is returned."
+
+MEASURED as the pure function: a FAIL-material code alone returns 1, an
+undetermined-material code alone returns 2, both together return 2. So the
+inversion is real, deliberate, and -- exactly like Part 27's -- its entire
+licence was one sentence that nothing enforced. TWO of the six wired gates were
+in that state, which makes it a pattern in this family rather than an oddity of
+one file.
+
+MEASURED TRUE TODAY at the CLI, on a set built to hold both at once: a
+PUBLISHED frontier that disagrees with the recomputation (rc-1 material)
+alongside a candidate whose objective metric is unmeasured (which drives the rc
+to 2).
+
+    rc                                   2
+    findings in the JSON                 PARETO_FRONTIER_DISAGREES,
+                                         PARETO_UNDETERMINED_JUDGED_BETTER
+    both printed                         yes
+
+A FIXTURE THAT PROVED NOTHING, CAUGHT BEFORE IT WAS WRITTEN INTO A TEST. The
+first attempt at this case set a `score` key on a candidate to trigger
+PARETO_COLLAPSED_SCALAR and produced `findings: []` -- rc 2 for the unrelated
+reason, and an assertion that would have passed while measuring nothing. The
+collapsed-scalar and frontier-disagreement checks read the PUBLISHED FRONTIER
+document, not the candidate list. The test now asserts its own premise
+(`PARETO_FRONTIER_DISAGREES in codes`) so it cannot go vacuous the same way.
+
+NEGATIVE CONTROL H -- the per-finding print withheld when the frontier gate
+returns 2:
+
+    1 failed, 16 passed
+    E  AssertionError: PARETO_FRONTIER_DISAGREES is in the JSON but was NOT
+       printed while the gate returned 2. That is the sentence licensing this
+       inversion, and it is now false: a published frontier known to be wrong
+       is sitting behind a NOT CHECKED.
+
+REGRESSION. 2039 passed, 4 failed, 124 skipped, 17 xfailed. The same 4 fail
+identically on pristine origin/main. chip-AGNOSTIC source guard: PASS, 1553
+file(s). No program changed in this part -- test and prose only, no verdict
+moves.
+
+STATE OF THE CLASS, over the denominator that is actually wired:
+    2 gates were defective   -- head_to_head (five ways) and measurement, both repaired
+    2 gates invert on purpose -- feasibility and pareto, both licences now enforced
+    2 gates collect-then-rank -- contract and problem_integrity, verified sound
+    the shared corpus seam    -- probed, order-independent, sound
+
+
+# Part 29 — a correction: Part 28's "wired ZERO times" was false, and the
+# sweep finished properly
+
+WHAT PART 28 SAID, AND IT IS WRONG. It stated that the five PPA programs absent
+from `repo_hygiene_gates.sh` are "wired ZERO times and decide no published
+row". That was derived from grepping ONE wiring surface. MEASURED across the
+tree, there are at least four surfaces, and three of those five ARE wired:
+
+    power_total_vs_budget_check   flow/phase1_phase2_phase3.yaml  <- the
+                                  canonical 44-step flow, step "Power analysis
+                                  (pre/post-layout)", stage4
+    ppa_pr_scope_check            gatekeeper_review.py            <- the MERGE
+                                  gate, and it carries a row in
+                                  tools/ci/gate_red_since.json
+    ppa_area_threshold_check      benchmark/cvdp_gate.py
+    ppa_page_claim_check          ppa_report_gen.py
+
+Two of those gate consequential things -- the flow and the merge queue -- so
+"decides no published row" was not a harmless imprecision. The error is the
+same one this lane keeps finding: a denominator taken from the first place I
+looked, reported as the whole population. It is the THIRD time in this run of
+work that a coverage sentence of mine has had to be narrowed, and the pattern
+is worth more than the individual corrections: EVERY time, the sweep was real
+and the SCOPE CLAIM around it was broader than the evidence.
+
+ALL FOUR WERE THEN CHECKED FOR THE MASKING CLASS. Every one is SOUND, each by
+its own construction, and none needed a change:
+
+  `ppa_pr_scope_check` -- `verdict_of` collects all question rows and ranks
+      afterwards, hard findings first, and documents the exact rule this lane
+      has been enforcing: "FAIL beats UNDETERMINED beats PASS ... A real
+      finding is never silenced by something the run could not determine; that
+      is the direction in which a mistake is survivable." Its one
+      `except _Refusal` wraps INPUT ACQUISITION only -- a prerequisite, and the
+      reason the Part 26 sweep correctly did not flag it.
+
+  `power_total_vs_budget_check` -- one judgement produces one verdict, so there
+      are not two independent checks for one to mask the other. Its one
+      override is `basis_conflict and requirement is not None ->
+      J_UNDETERMINED`, which REPLACES the judgement rather than ordering behind
+      it. That is CORRECT and is the same category as `check_asserted_verdict`
+      staying below parity in Part 26: when the activity bases conflict the
+      watt figure is not comparable to the budget AT ALL, so "over budget" is
+      not independently demonstrable and there is no finding being withheld --
+      unlike the feasibility case, where the DRC violation IS established on
+      its own. The gate says so to the reader in terms: "Fix the measurement or
+      declare the basis; do not widen the budget."
+
+  `ppa_page_claim_check` -- collect-then-rank (`findings = check_page(...) +
+      check_claims(...)`, then `if findings: return RC_REFUSED`). Its early
+      RC_UNDETERMINED returns are genuine prerequisites: the page is absent,
+      the claims document will not parse, no claims are declared.
+
+  `ppa_area_threshold_check` -- a benchmark BLOCK gate reached through
+      `cvdp_gate.run_ppa_area_threshold`. Its verdict vocabulary is BLOCK/not,
+      not the rc-1/rc-2 split, so the class does not apply to it.
+
+  `ppa_signoff_records` -- the one genuinely unwired name, and it is a PRODUCER
+      rather than a gate: it WRITES records and returns only RC_OK,
+      RC_UNDETERMINED and RC_BAD_INVOCATION. It has no RC_REFUSED anywhere, so
+      there is no rc 1 for an rc 2 to hide. Structurally immune.
+
+THE SWEEP IS NOW COMPLETE OVER A DENOMINATOR THAT WAS MEASURED RATHER THAN
+ASSUMED -- all eleven PPA programs, across four wiring surfaces:
+
+    2 were defective     head_to_head (five ways), measurement -- repaired
+    2 invert on purpose  feasibility, pareto -- both licences now enforced
+    4 collect-then-rank  contract, problem_integrity, pr_scope, page_claim
+    1 single-judgement   power_total_vs_budget -- override argued and correct
+    1 different verdict  area_threshold (BLOCK vocabulary)
+    1 producer           signoff_records -- no RC_REFUSED to hide
+    shared corpus seam   worst_rc -- probed, order-independent, sound
+
+No program changed in this part. Prose only, and it exists because a claim I
+had already landed was false.
+
+
+# Part 30 — the producer half: three tools that reported success over a verdict
+
+HOW THIS WAS REACHED, AND IT IS THE FOURTH CORRECTION TO A COVERAGE SENTENCE OF
+MINE. Part 29 said the sweep was complete over "four wiring surfaces". That
+number came from the greps I happened to run. Enumerating every tracked,
+invocation-capable file that references a PPA gate returns 33, and the class I
+had missed entirely is the CAMPAIGN TOOLING under `ppa-crosslayer/tools/` and
+`ppa-e2e/tools/` -- including the two tools that WROTE the corpus this audit is
+about.
+
+THE FINDING. `ppa-crosslayer/tools/head_to_head.py` writes a record into
+`records/`, runs `ppa_head_to_head_check.py` on it, prints the return code, and
+then `return 0` -- unconditionally. Its `ppa-e2e` twin does the same, and there
+the plumbing makes it starker: `main` computes `max(a or 0, b or 0)`, so the
+worst-rc machinery existed and was being fed a hardcoded success.
+`ppa-crosslayer/tools/gen_declaration.py` carries the asymmetric half -- it
+propagates `contract_build`'s rc sixteen lines up and discards
+`contract_check`'s, and the discarded one is the half that JUDGES rather than
+produces.
+
+SCOPED HONESTLY, BECAUSE MY FIRST DRAFT OVERSTATED IT. The verdict is NOT
+thrown away. Those tools pass `--json <tag>_report.json`, and the reports do
+carry `"ok": false` with the refusal -- `h2h_A_report.json` was opened and
+checked rather than assumed. The defect is the EXIT STATUS alone. That still
+warrants repair: an exit code is what an orchestrator reads, and a build step
+that reports success having just been told rc 1 misreports to its caller
+whatever it wrote to disk. "The gate was ignored" was the more dramatic claim
+and the false one.
+
+REPAIRED: all three now return the checker's `returncode`. The record file is
+deliberately LEFT ON DISK when refused -- a refused record is the evidence
+needed to fix it, and unlinking it would trade one silent outcome for another.
+
+THE GUARD IS A LEDGER, for the same reason the STA-stamp guard is. Every
+campaign tool invoking a `*_check.py` through `subprocess` must route that
+`returncode` to its own exit status, or be listed with a reason. Three entries
+are listed, each stating why:
+
+    analyze.py        collects rc into a `fails` list and reports that list
+    readjudicate.py   raises SystemExit on a non-zero producer rc, and records
+                      the second invocation's code as `_exit_code_observed`
+    build_arm.py      a BUILDER, not a publisher: it reads the feasibility
+                      report it just produced and writes the adjudication
+                      FORWARD AS DATA -- `feasibility_verdict` and the per-axis
+                      statuses land in assembly.json
+
+`build_arm.py` was found BY THE GUARD, not by my survey, which is the argument
+for having written it. Three further arms keep the ledger honest: a stale entry
+that now propagates is refused, every entry must state a reason, and the
+premise is pinned so the rule cannot pass by finding nothing.
+
+A DEFECT IN MY OWN TEST, SURFACED BY THE NEGATIVE CONTROL. `_verdict_is_consumed`
+read `.value` on both `ast.Return` and `ast.Raise`. `ast.Raise` carries its
+expression on `.exc`, so every `raise` reached raised AttributeError -- and the
+control therefore "failed" by CRASHING rather than asserting. A red nobody can
+read is not a red. Repaired, and the reason is recorded in the helper's own
+docstring: a structural test that cannot read its own subject must not be
+counted as having checked it. Without running the control I would have shipped
+a guard that was green by luck.
+
+TWO STALE REPORTS, WHICH MY OWN EARLIER CHANGE CAUSED. Regenerating all
+fourteen `h2h_*_report.json` against the current gate showed all fourteen
+"drifting" -- but for twelve of them the only difference is the absolute
+`record` path baked in at generation time, which is an artefact of where the
+regeneration ran and not a drift. For h2h_A and h2h_B the refusal block itself
+was superseded (SCOPE_SENTINEL / SCOPE_INCOMPLETE -> STAGE_CONTRADICTS_BASIS)
+by the Part 25 ordering repair. Only that block was rewritten, leaving the
+original `record` path intact so no spurious diff is introduced: 4 lines
+changed across the two files.
+
+NEGATIVE CONTROL I -- the four propagations reverted to `return 0`:
+
+    1 failed, 3 passed
+    E  AssertionError: these tools run a checker and never route its
+       `returncode` to their own exit status, so they report SUCCESS to their
+       caller over a refusal. ... ['ppa-crosslayer/tools/gen_declaration.py::
+       build (`c`)', 'ppa-crosslayer/tools/head_to_head.py::main (`r`)',
+       'ppa-e2e/tools/head_to_head.py::build (`r`)']
+
+NO VERDICT MOVED. cross-layer 14 records / 2 refused / rc 1, end-to-end 2 / 1
+refused / rc 1 -- unchanged. Regression 2043 passed, 4 failed, the same four
+identical on pristine origin/main. chip-AGNOSTIC source guard: PASS.

@@ -231,6 +231,15 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
         "ppa_contract_build.py": ["--declaration", j, "--root", str(tmp_path),
                                   "--out", str(tmp_path / "o.json")],
         "ppa_contract_check.py": ["--contract", j],
+        # The ablation kind's gate, handed a well-formed JSON that declares no
+        # schema. MEASURED before listing: rc 2 with a `[CANNOT CHECK]` line
+        # naming the schema it declares and the schema it would have been
+        # judged against, and no traceback. It refuses to apply
+        # `ablation.v1.schema.json` to a document that does not claim it --
+        # "applying the wrong schema would read as a broken ablation rather
+        # than as the wrong document" -- which is the verdict this arm wants
+        # in place of a crash.
+        "ppa_ablation_check.py": ["--record", j],
         # A well-formed JSON that is not a spare plan: it names no `count`, no
         # `instances` and no `tie_off`, so every row must come out
         # NOT_MEASURED with a reason rather than the reader falling over --

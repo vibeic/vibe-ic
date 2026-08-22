@@ -274,6 +274,18 @@ def main(argv=None) -> int:
         for k in stale:
             print(f"   {k}")
     if rc == 0:
+        # A GREEN FROM AN EMPTY DENOMINATOR IS NOT A PASS. With nothing parsed
+        # there is no population, and "every revision read is immutable" is a universally
+        # quantified claim over the empty set -- vacuously true, and
+        # indistinguishable to a caller from the same sentence over a real tree.
+        # `gate_zero_denominator_refuses_check` refuses exactly this shape; it
+        # cannot see this file (its population is `*_check.py`), so the refusal is
+        # made here instead of relied upon there.
+        if denom.get("modules_parsed", 0) == 0:
+            print("[CANNOT DETERMINE] reference_control_resolved_through_a_mutable_ref: modules parsed is 0 -- "
+                  "nothing was examined, so there is no verdict. NOT a pass.")
+            return 2
+
         print("[PASS] reference_control_resolved_through_a_mutable_ref: every "
               "revision read is immutable or inventoried.")
     return rc

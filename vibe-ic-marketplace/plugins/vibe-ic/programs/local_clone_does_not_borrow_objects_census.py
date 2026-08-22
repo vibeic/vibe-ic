@@ -195,6 +195,7 @@ _SH_CLONE = re.compile(r"\bgit\s+(?:-[^\s]+\s+)*clone\b[^\n;&|]*")
 def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     findings: List[dict] = []
     py = sh = clones = 0
+    files_walked = 0
     bases = [root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
              root / "tools"]
     for base in bases:
@@ -203,6 +204,7 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
         for p in sorted(base.rglob("*")):
             if not p.is_file() or "node_modules" in p.parts:
                 continue
+            files_walked += 1
             # A test that BUILDS the shape to prove the guard refuses it is not
             # a preparation site. See "Out of scope by construction".
             if "tests" in p.parts or p.name.startswith("test_"):
@@ -245,7 +247,9 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
                             "file": rel,
                             "line": text[:m.start()].count("\n") + 1,
                             "option": opt, "how": "shell"})
-    return findings, {"python_modules": py, "shell_scripts": sh,
+    return findings, {
+        "files_walked": files_walked,
+        "python_modules": py, "shell_scripts": sh,
                       "git_clone_invocations": clones,
                       "borrowing_clones": len(findings)}
 
@@ -322,6 +326,18 @@ def main(argv=None) -> int:
         for k in stale:
             print(f"   {k}")
     if rc == 0:
+        # A COUNT OVER AN EMPTY POPULATION IS NOT A COUNT. `[CENSUS] 0 site(s)`
+        # is honest only if something was read; over a tree this program parsed
+        # NOTHING it is indistinguishable from a clean result. Measured: on an
+        # empty tree this returned 0 -- and still 0 under `--strict`, so the
+        # "--strict is where a caller asks for the refusal" argument did not cover
+        # it either. Exiting 0 is a census's contract for a REAL population, not a
+        # licence to report over none.
+        if denom.get("files_walked", 0) == 0:
+            print("[CANNOT DETERMINE] local_clone_does_not_borrow_objects_census: 0 python modules and 0 shell scripts were read -- "
+                  "nothing was read, so the count is not a measurement. NOT a pass.")
+            return 2
+
         print(f"[CENSUS] {len(findings)} site(s) classified, "
               f"{len(known)} recorded as known debt, "
               f"{len(new)} unrecorded. This is a count, not a "

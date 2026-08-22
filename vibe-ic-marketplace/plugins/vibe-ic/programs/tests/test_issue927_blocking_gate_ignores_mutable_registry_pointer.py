@@ -125,15 +125,50 @@ def test_a_blocking_gate_never_defaults_to_a_floating_reference(rel):
         f"image through _eda_image.judged_image()")
 
 
-@pytest.mark.parametrize("rel", _BLOCKING_IMAGE_GATES)
+def _starts_a_container(rel: str) -> bool:
+    """Does this gate launch a container of its own?"""
+    src = (_PROGRAMS / rel).read_text(encoding="utf-8")
+    return "docker\", \"run\"" in src or '"run",' in src
+
+
+#: THE APPLICABLE SUBSET, DERIVED — NOT A SKIP INSIDE THE TEST.
+#:
+#: This used to be `pytest.skip(f"{rel} starts no container of its own")` in the
+#: body, and it was the wrong construct twice over. It is not a verification that
+#: could not happen: the clause below is VACUOUS for a gate that starts no
+#: container, which is an applicability question about the SUBJECT, decided from
+#: the repository, with no dependence on the host at all. And spelled as a skip
+#: whose reason contains the word "container" it was read by
+#: `test_not_verified_tier::test_no_new_undeclared_infrastructure_skip_appears`
+#: as a NEW undeclared infrastructure-absent skip — a claim that this host could
+#: not verify something. It never made that claim.
+#:
+#: Declaring it NOT_VERIFIED to satisfy that guard would have been a lie in the
+#: other direction, so the skip is gone instead: the applicable set is derived
+#: once, here, and pinned non-empty below so an empty subset FAILS rather than
+#: quietly asserting nothing.
+_CONTAINER_STARTING_GATES = tuple(
+    rel for rel in _BLOCKING_IMAGE_GATES if _starts_a_container(rel))
+
+
+def test_at_least_one_blocking_gate_starts_a_container():
+    """The premise of the parametrisation below. If no gate matches, that test
+    runs zero cases and reports green over nothing — the silent-skip shape one
+    layer up."""
+    assert _CONTAINER_STARTING_GATES, (
+        "no blocking image gate starts a container, so "
+        "test_a_blocking_gate_does_not_pull_by_default asserts nothing; either "
+        "the detection in _starts_a_container has rotted or the gates stopped "
+        "running containers")
+
+
+@pytest.mark.parametrize("rel", _CONTAINER_STARTING_GATES)
 def test_a_blocking_gate_does_not_pull_by_default(rel):
     """`docker run` FETCHES an absent reference. MEASURED 2026-08-21: the deleted
     anchor named 0.3.16 while this host had 0.3.13, and `docker run` began pulling
     it inside a hygiene gate. A gate that silently downloads gigabytes is a gate
     people route around, which is the same end state as deleting it."""
     src = (_PROGRAMS / rel).read_text(encoding="utf-8")
-    if "docker\", \"run\"" not in src and '"run",' not in src:
-        pytest.skip(f"{rel} starts no container of its own")
     assert "--pull" in src and "never" in src, (
         f"{rel} runs a container without `--pull never`, so an image this host "
         f"does not have becomes an unbounded fetch inside a gate")

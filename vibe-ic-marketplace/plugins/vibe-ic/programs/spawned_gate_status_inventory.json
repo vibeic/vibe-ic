@@ -6,18 +6,6 @@
       "reason": "INSTANCE 2 of the pair the 2026-08-21 capture measured. 294 lines whose subject is whether the full suite RAN, with zero occurrences of subprocess, Popen, os.system, check_output and returncode: it decides by matching a command line as text and publishes a verdict about something it never observed. Recorded, not repaired — giving it a way to observe a run is a change to what it BLOCKS on."
     },
     {
-      "key": "A::vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py::flow_compliance_check.py",
-      "reason": "INSTANCE 1 of that pair, and the reason the rule carries clause A. The comment above the call reads 'This direct, BLOCKING flow_compliance re-run ... so the orchestrator's headline can never lag its own sign-off'; the call passes check=False, binds no result, and sits inside a handler that catches every exception and continues. Its exit status is consumed by nothing."
-    },
-    {
-      "key": "A::vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py::thermal_screen_check.py",
-      "reason": "Found by construction, not by anyone noticing — which is what the rule was asked for. The enclosing function's own docstring says it 'Returns True when the JSON is produced (any verdict)', so the spawn is deliberately advisory and the artefact carries the verdict. That intent is stated in a docstring several lines up and nowhere at the call site. One ADVISORY comment on the call's own line closes it and removes this row."
-    },
-    {
-      "key": "A::vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py::dfm_screen_check.py",
-      "reason": "The same shape as the thermal screen beside it, and found the same way. Closed by declaring the advisory intent at the call site."
-    },
-    {
       "key": "A::vibe-ic-marketplace/plugins/vibe-ic/programs/verilogeval_tier_pipeline.py::spec_conformance_check.py",
       "reason": "A conformance spawn inside a tier pipeline whose result is unbound with check off, enclosed by a handler that swallows everything. Whether the tier should turn on this verdict is a decision for the lane that owns the pipeline; this row records that the decision is currently made by silence."
     },

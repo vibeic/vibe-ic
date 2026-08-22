@@ -251,6 +251,30 @@ from pathlib import Path
 _LOADER_NAME_RE = re.compile(
     r"spec_from_file_location\(\s*[\"\']([A-Za-z_]\w*)[\"\']")
 
+#: A `.py` FILENAME carried as a quoted literal ANYWHERE in a test — the THIRD
+#: route a real dependency travels, and the one an import graph is structurally
+#: blind to.
+#:
+#: MEASURED on 4232a7301e, the commit that put a hygiene-record handover on
+#: `gatekeeper_review`'s argv. Its sibling guard imports two modules and WAS
+#: selected; the guard that owns the property — "the CLI offers no way to skip
+#: the hygiene set" — reaches its subject like this:
+#:
+#:     subprocess.run([sys.executable,
+#:                     str(_PROGRAMS / "gatekeeper_review.py"), "--help"])
+#:
+#: A path assembled from a constant and handed to a subprocess. No import, no
+#: `spec_from_file_location`, so no edge — and the ONLY guard on that program's
+#: CLI surface went unselected while that program was being changed.
+#:
+#: Deliberately keyed on the BASENAME WITH ITS EXTENSION rather than on the bare
+#: stem `_build_reference_index` uses. The stem occurs in prose, in comments and
+#: in unrelated identifiers; `"gatekeeper_review.py"` occurs where something
+#: RUNS it. Measured over the same change set: 12 test files name a changed
+#: program this way, 10 were already selected, so the rule adds TWO — 122 -> 124
+#: files, against 138 for promoting `--mode reference` to the default.
+_DRIVER_PY_LITERAL_RE = re.compile(r"[\"\']([A-Za-z_][\w.\-/]*\.py)[\"\']")
+
 #: The SAME call, read for the file it actually loads rather than for the alias
 #: it binds it under (vibe-ic#1176). `_LOADER_NAME_RE` keys the edge on argument
 #: one, so a test that renames the module on the way in carries an edge under a
@@ -614,6 +638,14 @@ def _build_import_edge_index(
                 stem = Path(_norm(lit.group(1))).stem
                 if stem in source_stems:
                     names.add(stem)
+        # …and the THIRD edge kind: a test that DRIVES the program as a
+        # subprocess, naming its file instead of importing it. Same standing as
+        # the two above — a STATED dependency, not a mention — because a `.py`
+        # basename in a quoted literal is what running a program looks like.
+        for m in _DRIVER_PY_LITERAL_RE.finditer(text):
+            stem = Path(_norm(m.group(1))).stem
+            if stem in source_stems:
+                names.add(stem)
 
         for n in names:
             idx.setdefault(n, set()).add(rel)

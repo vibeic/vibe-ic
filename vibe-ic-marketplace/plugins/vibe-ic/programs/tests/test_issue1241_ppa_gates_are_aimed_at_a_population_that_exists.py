@@ -65,6 +65,10 @@ PPA_RECORD_CHECKERS = {
     "ppa_feasibility_check.py": ("--candidates", "--corpus"),
     "ppa_pareto_check.py": ("--candidates", "--frontier"),
     "ppa_problem_integrity_check.py": ("--baseline", "--candidate", "--corpus"),
+    # Wired by "PPA ablation records (within-project)". A record gate like the
+    # rest: it selects on the DECLARED schema through the shared seam, so the
+    # population counter below reaches it by its own predicate.
+    "ppa_ablation_check.py": ("--record", "--corpus"),
 }
 
 #: A path under here is the published corpus in the other repository. Finding
@@ -77,12 +81,32 @@ def _logical_lines(text: str):
     return re.sub(r"\\\n\s*", " ", text).splitlines()
 
 
+def _wiring_text() -> str:
+    """The wiring file, or a SKIP that names what could not be read.
+
+    `programs/tests/` ships with the plugin and `tools/ci/` does not, so on an
+    installed plugin this file has no subject. `_invocations` guarded that from
+    the start; `test_no_ppa_exemption_still_claims_that_no_record_has_been_filed`
+    read WIRING directly and did not, so THREE of four reads were guarded and the
+    fourth raised FileNotFoundError. MEASURED by moving the wiring file aside and
+    running this file's whole family: 1 failed, 44 passed, 9 skipped — the one
+    failure being that traceback, about nothing to do with exemptions.
+
+    A guard that ERRORS because its subject is absent is
+    blocking-because-unreadable, which is the state this family exists to keep
+    apart from a finding.
+    """
+    if not WIRING.is_file():
+        pytest.skip(f"{WIRING} is not in this checkout — the plugin's tests ship "
+                    "without tools/ci/, so this guard has no subject here. "
+                    "NOT a pass and NOT a finding.")
+    return WIRING.read_text(encoding="utf-8")
+
+
 def _invocations():
     """(checker, {flag: raw-argument}) for every PPA record gate in the wiring."""
-    if not WIRING.is_file():                       # pragma: no cover
-        pytest.skip(f"wiring not present at {WIRING}")
     out = []
-    for line in _logical_lines(WIRING.read_text(encoding="utf-8")):
+    for line in _logical_lines(_wiring_text()):
         stripped = line.lstrip()
         if stripped.startswith("#") or "$PG/ppa_" not in line:
             continue
@@ -137,7 +161,8 @@ def _population(checker: str, flag: str, path: Path) -> int:
     # its population, never a re-implementation that can drift from it.
     predicate = {"ppa_contract_check.py": "is_contract",
                  "ppa_feasibility_check.py": "is_candidate_set",
-                 "ppa_problem_integrity_check.py": "is_contract"}.get(checker)
+                 "ppa_problem_integrity_check.py": "is_contract",
+                 "ppa_ablation_check.py": "is_ablation"}.get(checker)
     if predicate is None:
         raise AssertionError(f"no population counter for {checker} --corpus")
     import _ppa_corpus as corpus_seam
@@ -219,9 +244,48 @@ def test_no_ppa_exemption_still_claims_that_no_record_has_been_filed():
     # this wiring file does, to record what it was corrected from — and a test
     # that could not tell a quotation from a live declaration would force the
     # history to be deleted to stay green.
-    guilty = [line for line in _logical_lines(WIRING.read_text(encoding="utf-8"))
+    guilty = [line for line in _logical_lines(_wiring_text())
               if line.lstrip().startswith("uncheckable_until")
               and "no run in this repository has filed one yet" in line]
     assert guilty == [], (
         "a PPA exemption still declares that no record has been filed here:\n  "
         + "\n  ".join(g[:160] for g in guilty))
+
+
+#: A wired `ppa_*` gate this family deliberately does not cover, with the reason.
+#: Empty, and it must stay a DECLARATION rather than a silence: the test below
+#: forces a new wired ppa gate to be either covered or named here.
+NOT_A_RECORD_GATE: dict = {}
+
+
+def test_the_family_list_covers_every_wired_ppa_gate():
+    """THE LIST'S OWN BLIND SPOT, and it is the one this file kept.
+
+    `_invocations()` iterates `PPA_RECORD_CHECKERS` and matches only those keys,
+    so `found` is a SUBSET of the list by construction and
+    `test_the_wiring_still_invokes_every_ppa_record_gate` can only fail when a
+    LISTED gate stops being wired. A gate ADDED to the wiring and missing from
+    the list is invisible to it — the assertion reads as a completeness check
+    and is a deletion check.
+
+    That is not hypothetical in this lane: the symlink table carried the same
+    shape and TWO corpus walks (`ppa_pareto_check`, `ppa_measurement_check`)
+    were added under it without anything going red.
+
+    MEASURED when written: 6 wired, 6 listed, nothing missing — so this closes a
+    latent hole rather than reporting a live one, which is the moment it is
+    cheapest to close.
+    """
+    wired = set()
+    for line in _logical_lines(_wiring_text()):
+        if not line.startswith(("run ", "run_tolerating_uncheckable ",
+                                "run_writing_the_corpus ")):
+            continue
+        wired.update(re.findall(r"\$PG/(ppa_[a-z0-9_]+\.py)", line))
+    assert wired, ("the wiring invokes no ppa_* gate at all; this detector has "
+                   "gone dark rather than the family having gone away")
+    uncovered = sorted(wired - set(PPA_RECORD_CHECKERS) - set(NOT_A_RECORD_GATE))
+    assert not uncovered, (
+        "a ppa_* gate is wired and this family neither covers it nor declares "
+        "why it is out of scope:\n  " + "\n  ".join(uncovered)
+        + "\n(add it to PPA_RECORD_CHECKERS, or to NOT_A_RECORD_GATE with a reason)")

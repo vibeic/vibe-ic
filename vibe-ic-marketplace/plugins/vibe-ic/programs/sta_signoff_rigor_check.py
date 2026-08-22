@@ -199,11 +199,29 @@ def _check_types_violations(report_text: str) -> List[str]:
             if "(VIOLATED)" in line.upper():
                 found.append(line.strip()[:160])
     for m in _RECOVERY_REMOVAL_ENDPOINT_RE.finditer(report_text):
-        # bounded look-ahead: the path's own slack line follows shortly after
-        # its Endpoint line, well before the NEXT "Startpoint:" block begins.
-        window = report_text[m.end():m.end() + 2000]
-        next_start = window.find("Startpoint:")
-        scope = window if next_start == -1 else window[:next_start]
+        # BOUNDED BY THE NEXT PATH, NOT BY A BYTE COUNT (2026-08-22).
+        #
+        # This used to take a 2000-character window first and look for the next
+        # "Startpoint:" inside it. The structural bound is correct and the byte
+        # window was redundant AND lossy: in OpenSTA output the `slack
+        # (VIOLATED)` line comes AFTER the whole path detail, so on a long path
+        # it sits past 2000 characters and the violation was silently dropped.
+        #
+        # MEASURED on a synthetic recovery path, slack line unchanged:
+        #     10 detail lines   slack  481 bytes after the Endpoint  -> reported
+        #     60 detail lines   slack 2681 bytes after               -> MISSED
+        #    200 detail lines   slack 8941 bytes after               -> MISSED
+        #
+        # A real sign-off path routinely exceeds 45 lines, so this reported a
+        # clean result over a report containing a genuine recovery/removal
+        # violation — a false clean, which is the one direction a sign-off
+        # rigor check must never fail in.
+        #
+        # The MPW loop above already does this correctly: it bounds by its own
+        # structural stoppers and uses no byte window at all. Same rule here.
+        rest = report_text[m.end():]
+        next_start = rest.find("Startpoint:")
+        scope = rest if next_start == -1 else rest[:next_start]
         if _SLACK_VIOLATED_RE.search(scope):
             found.append(m.group(0).strip()[:160])
     return found

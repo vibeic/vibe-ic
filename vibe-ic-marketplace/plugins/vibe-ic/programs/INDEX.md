@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1197
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1197)
+- **Total programs (excluding helpers / shims):** 1204
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1204)
 
 ### Per-class applicability counts
 
@@ -19,13 +19,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1188 |
+| `any` | 1195 |
 
 ## Alphabetical listing
 
 | Program | Applicable classes | Wave | Title |
 |---|---|---|---|
 | `a2b_protocol_synth` | any | — | Automotive Audio Bus (A2B) protocol synth helper. |
+| `absence_verdict_names_its_search_space_check` | any | — | "not found" must say WHERE it looked. |
 | `acceptance_control_check` | any | — | the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch. |
 | `acceptance_evidence_in_fix_comment_check` | any | v0.2.97 | Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A |
 | `accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family: |
@@ -179,6 +180,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `changelog_command_reproducibility_check` | any | — | anti-fabrication gate (v1.6.43). |
 | `changelog_metric_reproducibility_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `checker_execution_wiring_audit` | any | — | a checker only its own TEST runs has zero coverage of real inputs. |
+| `checker_population_is_structural_not_filename_shaped_census` | any | — | Programs that behave like checkers but are invisible to the wiring audit. |
 | `checkpoint_gate_check` | any | — | deterministic phase-transition checkpoint gate. |
 | `chip_clock_toggle_divider_when_master_already_target_check` | any | v0.119.30 | gate (LL-30) catching the antipattern of introducing a toggle-divider for the chip's core clock when the FPGA master clock is already at ... |
 | `chip_gds_canonical_real_file_check` | any | — | top-level chip GDS files at canonical paths must be REAL files, not symlinks pointing elsewhere. |
@@ -851,6 +853,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | Power report check — wrapper for eda_report_audit --mode power. |
 | `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks. |
+| `ppa_ablation_check` | any | — | `ppa_ablation_check.py` — every `vibeic.ppa.ablation.v1` document, validated. |
 | `ppa_agent_context_build` | any | — | CLI: build the read-only, hash-bound agent context from a manifest. |
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
 | `ppa_closure_run` | any | — | execute one declared closed_loop edge, or report that nothing can execute it. |
@@ -883,6 +886,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
 | `prompt_example_selftest` | any | — | RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL. |
+| `prose_polarity_census` | any | — | how many prose extractors do NOT consult polarity, counted with a predicate sharper than the gate's, and never blocking on it. |
 | `prose_polarity_consulted_check` | any | — | A prose extractor that never asks whether the sentence DENIES the value. |
 | `protocol_delimiter_consistency_check` | any | v0.99 | Verify the RTL FSM that validates end-of-frame fires on the spec's canonical trailing delimiter, not a proxy signal (idle_long, timeout, ... |
 | `protocol_detector_lib` | any | v0.1.95 | Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95). |
@@ -1172,6 +1176,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ucie_protocol_synth` | any | v0.1.89 | Universal Chiplet Interconnect Express (UCIe 1.1) protocol synth helper. |
 | `ufs_protocol_synth` | any | v0.1.89 | UFS (Universal Flash Storage) protocol synth helper. |
 | `upf_syntax_check` | any | — | upf_syntax_check.py -- Deterministic UPF file syntax checker. |
+| `upstream_contract_parity_check` | any | — | a re-implementation must be pinned to the thing it re-implements. |
+| `upstream_mirror_is_pinned_check` | any | — | a re-implementation must be pinned to the thing it re-implements. |
+| `upstream_reimplementation_pin_check` | any | — | a re-implementation must be pinned to the thing it re-implements. |
 | `url_oracle_guard` | any | — | RTL-as-oracle prohibition for cited-URL handling. |
 | `usb4_protocol_synth` | any | v0.1.89 | USB4 protocol synth helper. |
 | `usb_pd_protocol_synth` | any | — | USB Power Delivery (USB-PD) protocol synth helper. |
@@ -1269,9 +1276,10 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1188 programs)
+### `any` (1195 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
+- `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
 - `acceptance_evidence_in_fix_comment_check` — Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A  _[v0.2.97]_
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -1423,6 +1431,7 @@ _(no programs in this group)_
 - `changelog_command_reproducibility_check` — anti-fabrication gate (v1.6.43).
 - `changelog_metric_reproducibility_check` — anti-fabrication gate (v1.6.38).
 - `checker_execution_wiring_audit` — a checker only its own TEST runs has zero coverage of real inputs.
+- `checker_population_is_structural_not_filename_shaped_census` — Programs that behave like checkers but are invisible to the wiring audit.
 - `checkpoint_gate_check` — deterministic phase-transition checkpoint gate.
 - `chip_clock_toggle_divider_when_master_already_target_check` — gate (LL-30) catching the antipattern of introducing a toggle-divider for the chip's core clock when the FPGA master clock is already at ...  _[v0.119.30]_
 - `chip_gds_canonical_real_file_check` — top-level chip GDS files at canonical paths must be REAL files, not symlinks pointing elsewhere.
@@ -2091,6 +2100,7 @@ _(no programs in this group)_
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — Power report check — wrapper for eda_report_audit --mode power.
 - `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks.
+- `ppa_ablation_check` — `ppa_ablation_check.py` — every `vibeic.ppa.ablation.v1` document, validated.
 - `ppa_agent_context_build` — CLI: build the read-only, hash-bound agent context from a manifest.
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
 - `ppa_closure_run` — execute one declared closed_loop edge, or report that nothing can execute it.
@@ -2123,6 +2133,7 @@ _(no programs in this group)_
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
 - `prompt_example_selftest` — RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL.
+- `prose_polarity_census` — how many prose extractors do NOT consult polarity, counted with a predicate sharper than the gate's, and never blocking on it.
 - `prose_polarity_consulted_check` — A prose extractor that never asks whether the sentence DENIES the value.
 - `protocol_delimiter_consistency_check` — Verify the RTL FSM that validates end-of-frame fires on the spec's canonical trailing delimiter, not a proxy signal (idle_long, timeout, ...  _[v0.99]_
 - `protocol_detector_lib` — Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95).  _[v0.1.95]_
@@ -2410,6 +2421,9 @@ _(no programs in this group)_
 - `ucie_protocol_synth` — Universal Chiplet Interconnect Express (UCIe 1.1) protocol synth helper.  _[v0.1.89]_
 - `ufs_protocol_synth` — UFS (Universal Flash Storage) protocol synth helper.  _[v0.1.89]_
 - `upf_syntax_check` — upf_syntax_check.py -- Deterministic UPF file syntax checker.
+- `upstream_contract_parity_check` — a re-implementation must be pinned to the thing it re-implements.
+- `upstream_mirror_is_pinned_check` — a re-implementation must be pinned to the thing it re-implements.
+- `upstream_reimplementation_pin_check` — a re-implementation must be pinned to the thing it re-implements.
 - `url_oracle_guard` — RTL-as-oracle prohibition for cited-URL handling.
 - `usb4_protocol_synth` — USB4 protocol synth helper.  _[v0.1.89]_
 - `usb_pd_protocol_synth` — USB Power Delivery (USB-PD) protocol synth helper.

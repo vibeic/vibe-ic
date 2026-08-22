@@ -226,9 +226,31 @@ def _undecided_coverage(result: feas.FeasibilityResult) -> List[str]:
             metric = cov.get("metric") or "<metric not named>"
             reason = str(cov.get("reason") or "the record states no reason")
             cited = [str(x) for x in (cov.get("sources") or []) if str(x)]
-            where = (f" cited artefact: {', '.join(sorted(cited))}"
+            where = (f" read: {', '.join(sorted(cited))}"
                      if cited else
                      " no artefact is cited: nothing was produced to read")
+            # WHAT IS AWAITED, NAMED SEPARATELY FROM WHAT WAS READ. This line
+            # used to end at the source path, and on this repository's own
+            # corpus that path is `reports/phase3/em.json` -- a file that
+            # EXISTS and states `verdict: MEASURED` over 2431 segments. A
+            # reader sent there by a `MISSING` line finds a healthy artefact
+            # and learns nothing about what to produce. The artefact actually
+            # awaited is the current-density SCREEN the record names in its own
+            # provenance, and it is now printed as the thing being waited for.
+            # An rc 2 that names the file it read instead of the file it needs
+            # is the failure mode this layer exists to end.
+            awaiting = [str(x) for x in (cov.get("awaiting") or []) if str(x)]
+            if awaiting:
+                # NOT "not present". This gate reads a PUBLISHED record, never
+                # the run tree, so it cannot know whether the file exists --
+                # and MEASURED, `em_signoff.json` DOES exist in the campaign's
+                # runs; it carries a report-authenticity audit and no
+                # current-density screen. What is absent is the VERDICT, not
+                # necessarily the file, and saying otherwise would be this
+                # gate asserting something it never looked at.
+                where += (" -- AWAITED, per the record's own provenance, and "
+                          "NOT the artefact read above: "
+                          + ", ".join(sorted(awaiting)))
             view = cov.get("view")
             at = f" at view {cj.dumps(view)}" if view else ""
             out.append(f"{axis.name}: MISSING `{metric}`{at} [{state}] "
@@ -469,4 +491,20 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # PPA_INTERFACES §1: 3 is INTERNAL ERROR. Letting a traceback propagate
+        # exits 1, which is reserved for a FINDING about the design -- so a
+        # crash would reach the roll-up as a verdict nothing reached.
+        #
+        # NEWLY LOAD-BEARING. While this gate took an exact path a crash was a
+        # local accident; with `--corpus` it sweeps a whole campaign, so one
+        # badly shaped document decides the entire row. The same guard
+        # ppa_contract_check has carried from the start.
+        print(f"{MARK_CANNOT} ppa_feasibility_check: internal error "
+              f"{type(exc).__name__}: {exc}. Nothing was decided. rc=3 "
+              f"(NOT a finding about any design).", file=sys.stderr)
+        sys.exit(3)

@@ -92,13 +92,21 @@ last EXPLICITLY, and records the occurrence count.
 
 WHAT THIS MODULE DELIBERATELY DOES NOT DO
 -----------------------------------------
-* It does not reconcile the log against the metrics JSON. Measured on four
-  independent runs of build 26Q3-1535 they DISAGREE — e.g. JSON wirelength 39925
-  where the log's last total says 39887, JSON vias 4079 where the log says 4046 —
-  reproducibly and in the same direction. Both records are emitted with the same
-  `metric` and `scope` and a different `source.path`; ruling on the conflict is
-  `_ppa/contract.py`'s job. A parser that silently picked one would delete the
-  evidence that there was ever a question.
+* It does not DECIDE which of the log and the metrics JSON is right. Measured
+  on four independent runs of build 26Q3-1535 they DISAGREE — e.g. JSON
+  wirelength 39925 where the log's last total says 39887, JSON vias 4079 where
+  the log says 4046. A parser that silently picked one would delete the evidence
+  that there was ever a question.
+
+  What it DOES do, from v1.11.69, is APPLY a decision somebody else wrote down.
+  `_ppa/contract.py:METRIC_ARTEFACT_AUTHORITY` names three metrics, the artefact
+  order for each, and the measurement behind it (the JSON's last entry matches
+  the `routed.def` that ships in 10 of 10 uncontaminated run trees; the log's
+  last total matches in 6, and in none of the 4 where they differ). `parse_run`
+  reads that table, keeps the authoritative reading, and writes the overridden
+  one into `source.overridden_by_authority` beside it. Nothing is deleted and
+  nothing outside those three metrics is touched — those are still emitted
+  twice with different `source.path` and still refused by the index.
 * It does not report a post-repair DRV residual. `[INFO RSZ-00xx] Found N slew
   violations` is printed by `repair_design` BEFORE it repairs, and no build on
   record re-prints a count afterwards; the metric names therefore end in
@@ -121,7 +129,8 @@ import math
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import (Any, Dict, List, Mapping, Optional, Sequence,
+                    Tuple)
 
 _HERE = Path(__file__).resolve()
 _PROGRAMS = _HERE.parents[2]                       # plugins/vibe-ic/programs
@@ -129,6 +138,12 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 from _ppa import canonical_json as _cj             # noqa: E402
+# THE DECLARATION, not a policy this module invented. `_ppa/contract.py` names
+# which artefact of this tool is authoritative for which metric and states the
+# measurement that decided it; `parse_run` reads that table. The dependency is
+# a backend importing a DECLARATION, not a backend importing a domain rule: it
+# gains no ability to decide anything, only to obey something written down.
+from _ppa import contract as _contract            # noqa: E402
 # ONE implementation of the router's iterative DRC trajectory, shared with
 # `signoff_audit` and `phase3_one_shot_runner`. Re-deriving the regex here would
 # create a second reader that can disagree with them about one number, which is
@@ -512,6 +527,11 @@ def parse_log(path) -> ParseOutcome:
         "tool_commit": o.tool_version,
         "parser": PARSER,
         "parser_sha256": _parser_sha256(),
+        # WHICH ARTEFACT OF THIS TOOL. A fact about where the bytes came from,
+        # which a backend IS entitled to state -- and the key the declared
+        # authority in `_ppa/contract.py` is keyed on. Without it a resolution
+        # would have to infer the artefact from a filename.
+        "kind": "log",
     }
     o.sources.append({"path": str(p), "sha256": source["sha256"], "kind": "log"})
     e = _LogEmitter(o, text, source)
@@ -737,7 +757,16 @@ def _emit_route(o: ParseOutcome, e: _LogEmitter, text: str) -> None:
                 "route.wirelength.by_layer.um", "MEASURED", "um",
                 _scope("detailed_route", layer=layer), src, value=_f(val)))
         if not rows:
+            # NAME THE WINDOW, not just the pattern. "no rows matched" and
+            # "the window I matched in was empty" print the same way and are
+            # different findings — the second is a bug in the block bounds
+            # above, and a reader cannot tell them apart without the offsets.
             o.note("ROUTE_WIRELENGTH_BY_LAYER_ABSENT",
+                   searched_in=(f"the router log, chars [{start}:{stop}] — the "
+                                f"window after the LAST of {len(total_hits)} "
+                                f"`Total wire length` match(es) and before the "
+                                f"next `Total number of vias`"),
+                   searched_window_chars=stop - start,
                    detail="no `Total wire length on LAYER` rows follow the last total")
 
     # The router's own DRC trajectory, through the ONE shared reader.
@@ -1013,6 +1042,7 @@ def parse_metrics_json(path) -> ParseOutcome:
         "tool_commit": None,
         "parser": PARSER,
         "parser_sha256": _parser_sha256(),
+        "kind": "metrics_json",          # see the note in `parse_log`
     }
     o.sources.append({"path": str(p), "sha256": source["sha256"],
                       "kind": "metrics_json"})
@@ -1057,13 +1087,108 @@ def parse_metrics_json(path) -> ParseOutcome:
     return o
 
 
+def _apply_declared_authority(o: "ParseOutcome") -> None:
+    """Collapse the identities a DECLARATION settles, and name what it overrode.
+
+    THIS IS NOT THE PARSER PICKING A WINNER. `_ppa/contract.py` names three
+    metrics, the artefact order for each, and the measurement that decided it;
+    this function reads that table and does what it says. A metric absent from
+    it is untouched and the index goes on refusing the conflict, which is why
+    the table is opt-in BY NAME rather than by prefix.
+
+    NOTHING IS DELETED. The losing reading -- its value, its artefact, its
+    hash -- is written into the winner's `source.overridden_by_authority`, so
+    "these two artefacts disagreed and here is which one this project believes
+    and why" survives in the document. A resolution that made the loser vanish
+    would destroy the evidence that there was ever a question, and that is the
+    whole objection to a parser settling anything.
+    """
+    groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for rec in o.records:
+        # EVERY status, not only MEASURED. "the log could not read this figure
+        # and the JSON reports 1" is the same disagreement wearing a different
+        # spelling, and the index refuses it identically (different `status` is
+        # a conflict). `resolve_metric_conflict` is what refuses to let a
+        # reading with no number WIN.
+        if rec.get("metric") not in _contract.METRIC_ARTEFACT_AUTHORITY:
+            continue
+        groups.setdefault(
+            (str(rec.get("metric")), _cj.digest_of(rec.get("scope") or {})),
+            []).append(rec)
+
+    def _is(rec: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+        """Whether `rec` is the original of the COPY `other`.
+
+        `resolve_metric_conflict` returns copies -- deliberately, so a caller
+        cannot mutate the declaration's answer -- which means `rec is other` is
+        always False here and would be a dead condition rather than a test.
+        The reading itself is the identity: which artefact, which status, which
+        number.
+        """
+        return ((rec.get("source") or {}).get("path")
+                == (other.get("source") or {}).get("path")
+                and rec.get("status") == other.get("status")
+                and ("value" in rec) == ("value" in other)
+                and rec.get("value") == other.get("value"))
+
+    drop: List[int] = []
+    for (metric, _), recs in sorted(groups.items()):
+        winner, overridden = _contract.resolve_metric_conflict(recs)
+        if winner is None:
+            continue
+        keep = next((rec for rec in recs if _is(rec, winner)), None)
+        if keep is None:                                     # pragma: no cover
+            # The declaration returned a reading this group does not contain.
+            # That cannot happen -- it ranks what it was handed -- and if it
+            # ever does, dropping records on the strength of it would be worse
+            # than leaving the conflict for the index to refuse.
+            continue
+        for rec in recs:
+            if rec is not keep:
+                drop.append(id(rec))
+        keep["source"]["overridden_by_authority"] = [
+            {"path": lost["source"].get("path"),
+             "sha256": lost["source"].get("sha256"),
+             "kind": lost["source"].get("kind"),
+             "status": lost.get("status"),
+             # ABSENT, not null, when the overridden reading carried no number
+             # -- the same no-sentinel rule the records themselves obey.
+             **({"value": lost["value"]} if "value" in lost else
+                {"reason": lost.get("reason")})}
+            for lost in overridden]
+        keep["source"]["authority"] = {
+            "declared_in": "_ppa/contract.py:METRIC_ARTEFACT_AUTHORITY",
+            "order": list(_contract.METRIC_ARTEFACT_AUTHORITY[metric]),
+            "reason": _contract.METRIC_AUTHORITY_REASON[metric],
+        }
+        o.note("METRIC_AUTHORITY_RESOLVED", metric=metric,
+               winner=winner["source"].get("kind"),
+               winning_value=winner.get("value"),
+               overridden=[{"kind": lost["source"].get("kind"),
+                            "status": lost.get("status"),
+                            "value": lost.get("value")}
+                           for lost in overridden],
+               declared_in="_ppa/contract.py:METRIC_ARTEFACT_AUTHORITY")
+    if drop:
+        dropped = set(drop)
+        o.records[:] = [r for r in o.records if id(r) not in dropped]
+
+
 def parse_run(pnr_dir, *, log_name: str = "openroad.log",
-              metrics_name: str = "openroad.metrics.json") -> ParseOutcome:
+              metrics_name: str = "openroad.metrics.json",
+              apply_authority: bool = True) -> ParseOutcome:
     """Parse a PnR output directory: the log, and the metrics JSON if present.
 
-    Records from the two sources are NOT reconciled -- see the module docstring.
     A missing metrics JSON is a diagnostic, not a refusal: most builds do not
     write one.
+
+    THE TWO SOURCES ARE STILL NOT RECONCILED BY THIS PARSER. What changed at
+    v1.11.69 is that a DECLARATION now exists (`_ppa/contract.py`,
+    `METRIC_ARTEFACT_AUTHORITY`) for three named metrics, and this function
+    applies it -- reading a decision, not making one. Everything outside that
+    table is emitted twice exactly as before and refused by the index exactly
+    as before. Pass `apply_authority=False` to see the unsettled records, which
+    is what the regression test for this behaviour does.
     """
     o = ParseOutcome()
     d = Path(pnr_dir)
@@ -1089,6 +1214,8 @@ def parse_run(pnr_dir, *, log_name: str = "openroad.log",
             rec["source"]["tool_commit"] = o.tool_version
     else:
         o.note("METRICS_JSON_NOT_PRESENT", path=str(mj))
+    if apply_authority:
+        _apply_declared_authority(o)
     return o
 
 

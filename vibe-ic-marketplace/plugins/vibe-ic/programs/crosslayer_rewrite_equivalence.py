@@ -163,7 +163,7 @@ def parse_evidence(text: Optional[str]) -> Optional[Dict[str, object]]:
 
 
 def module_params(rtl_text: str, top: str) -> str:
-    """The ANSI parameter header text of module `top` (`""` when it has none).
+    r"""The ANSI parameter header text of module `top` (`""` when it has none).
 
     The delay wrapper MUST carry it. A port declared `[size-1:0]` refers to the
     inner module's parameter, and a wrapper that copies the range text without

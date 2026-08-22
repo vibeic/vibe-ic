@@ -58,19 +58,28 @@ the difference between 17 findings and 1, and it is what correctly clears
 a filter. It also bounds what the rule can see, and that bound is stated here
 rather than left for a reader to discover.
 
-MEASURED on the tree this shipped with: of 22 registry-reading enforcement
-modules, **20 already contain at least one appending loop over a derived
-population**, so a registry-iterating finding loop added to any of them would
-be exculpated and NOT flagged. The clause's reach is **2 of 22** —
-`gate_red_since_check` and `spare_cell_coverage_check`, and the test pins those
-two BY NAME rather than by the number, because one leaving as another entered
-would keep the count and change the set.
+RE-MEASURED on this tree: of 21 registry-reading enforcement modules, **20
+already contain at least one appending loop over a derived population**, so a
+registry-iterating finding loop added to any of them would be exculpated and
+NOT flagged. The clause's reach is **1 of 21** — `gate_red_since_check` — and
+the test pins that set BY NAME rather than by the number, because one leaving
+as another entered would keep the count and change the set.
+
+WHAT MOVED, AND WHY IT IS A DEPARTURE AND NOT A REGRESSION. The reach was 2 of
+22 (`gate_red_since_check` and `spare_cell_coverage_check`) while
+`spare_cell_coverage_check` still read `reports/spare_cell_coverage.json` as an
+input. 4156444923 made that gate the single DECLARING PRODUCER of that path and
+removed the read, so the module stopped reading a tracked registry at all: it
+left the 22-module population, not just the reach. Nothing was exculpated and
+no finding was lost.
 
 That is a FALSE-NEGATIVE boundary, not a false-positive one: everything the
 rule reports is real, and it under-reports by construction.
 
-THE ALTERNATIVE WAS MEASURED, not assumed. Requiring the exculpating loop to
-append to a FINDING-SHAPED collection raises the reach to 10 of 22 — and
+THE ALTERNATIVE WAS MEASURED, not assumed — on the 22-module population above,
+and the figures below are quoted at that population, not re-derived here.
+Requiring the exculpating loop to append to a FINDING-SHAPED collection raises
+the reach to 10 of 22 — and
 returns `checker_execution_wiring_audit:951` as a second finding, which is a
 legitimate staleness check whose own docstring explains why it must go stale.
 One measured false positive on a live blocking gate, for eight modules of
@@ -100,10 +109,11 @@ modules were mis-exculpations, not coverage, and its second finding
 (`checker_execution_wiring_audit:951`) was the false positive that shape
 predicts.
 
-CONCLUSION: 2 of 22 is not an artefact of a loose heuristic. It is the measured
-structure of this population — only two registry-reading enforcement modules
-emit findings from nowhere else. A future lane should NOT spend the dataflow
-change; it has been run.
+CONCLUSION: the reach is not an artefact of a loose heuristic. It is the
+measured structure of this population — 2 of 22 when the variants above were
+run, 1 of 21 today, and in both cases only the registry-reading enforcement
+modules that emit findings from nowhere else. A future lane should NOT spend
+the dataflow change; it has been run.
 
 The run prints the reach every time, so the bound is visible in the verdict and
 not only in this docstring.

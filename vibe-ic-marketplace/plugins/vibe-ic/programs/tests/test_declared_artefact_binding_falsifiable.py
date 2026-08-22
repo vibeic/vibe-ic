@@ -318,7 +318,7 @@ def test_emit_removes_a_record_it_cannot_bind_at_all(tmp_path):
     stats.write_text(json.dumps({
         "measured_from": "phase2/stage2/synth/yosys.log",
         "netlist": "phase2/stage2/synth/netlist.v",
-        "cells": 24, "chip_area_um2": 10.0}))
+        "cells": 24, "chip_area": 10.0}))
     assert _emit(p, capture="") is None
     assert not stats.exists()
 

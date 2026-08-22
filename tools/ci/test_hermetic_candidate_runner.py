@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,8 @@ SPEC.loader.exec_module(runner)
 
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
+import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -39,6 +42,16 @@ root.mkdir(parents=True, exist_ok=True)
 args = sys.argv[1:]
 with (root / "calls.jsonl").open("a", encoding="utf-8") as log:
     log.write(json.dumps(args, sort_keys=True) + "\n")
+
+# CONTAINMENT-ESCAPE SIMULATION. Every docker call happens strictly between the
+# runner's initial and final input digests, so appending here is exactly "a
+# parent-owned input changed while the candidate was running" -- the thing the
+# post-attestation exists to catch. Fired once, so the digest changes once.
+_tamper = os.environ.get("FAKE_DOCKER_TAMPER_PATH")
+if _tamper and not (root / "tampered").exists():
+    (root / "tampered").write_text("1", encoding="utf-8")
+    with open(_tamper, "ab") as _fh:
+        _fh.write(b"ESCAPED\n")
 
 def fail(message, rc=1):
     print(message, file=sys.stderr)
@@ -57,21 +70,47 @@ def load_container(name):
         fail("Error: No such container: " + name)
     return json.loads(path.read_text(encoding="utf-8"))
 
+@contextlib.contextmanager
+def state_lock():
+    """Serialise the state mutations real Docker serialises in its daemon.
+
+    The runner drives `container kill` and `container rm --force` CONCURRENTLY
+    during teardown, which is fine against a real daemon and was not fine here:
+    `kill` does load -> mutate -> save with nothing holding the two ends
+    together, so `rm` could unlink between them and `save` would then RESURRECT
+    the file. Measured 2026-08-22 -- a zero-byte `container.json` left behind,
+    because the stub was torn down between creating the name and writing to it.
+
+    The lock is NOT taken around a whole command. `container start --attach`
+    blocks until the container exits and is itself what `kill` ends, so holding
+    a lock across it would deadlock the pair it is meant to protect.
+    """
+    fd = os.open(str(root / ".state.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
 def save_container(doc, create=False):
     path = container_path(doc["Name"].lstrip("/"))
-    # Two harness races, both of which made a CORRECT runner look like it had
-    # leaked a container it force-removed and verified absent.
-    #   1. `container rm` can land while an attached child is still finishing.
-    #      A removed container must STAY removed; re-creating the record here
-    #      resurrected it after the runner had already checked.
-    #   2. write_text truncates before writing, so a kill in between left a
-    #      0-byte record -- which still `exists()`, and so still read as
-    #      "the container is present".
-    if not create and not path.exists():
-        return
-    tmp = path.parent / (path.name + ".%d.tmp" % os.getpid())
-    tmp.write_text(json.dumps(doc), encoding="utf-8")
-    os.replace(tmp, path)
+    with state_lock():
+        if not create and not path.exists():
+            # REMOVED WHILE THIS COMMAND WAS MID-FLIGHT. Writing now would
+            # resurrect a container the runner has already torn down, and the
+            # test that checks cleanup is owned would see leftover state that
+            # the runner did not leave. Real Docker errors here; this returns
+            # quietly on purpose, because a non-zero exit from a late `kill`
+            # would change the runner's control flow rather than just its
+            # bookkeeping, and the fake exists to be deterministic about the
+            # latter.
+            return
+        # ATOMIC, so a stub killed mid-write can never leave a zero-byte file
+        # where a valid document or no document are the only two honest states.
+        tmp = path.parent / (path.name + "." + str(os.getpid()) + ".tmp")
+        tmp.write_text(json.dumps(doc), encoding="utf-8")
+        os.replace(str(tmp), str(path))
 
 if args[:2] == ["image", "inspect"]:
     print(json.dumps([{"Architecture": "amd64", "Id": IMAGE_ID,
@@ -143,10 +182,16 @@ elif args[:2] == ["container", "create"]:
         kind = fields["type"]
         destination = fields["dst"]
         if kind == "bind":
+            # A DAEMON THAT REPORTS A WRITABLE PARENT-OWNED BIND. The runner
+            # asks docker what it ACTUALLY mounted rather than trusting the
+            # flags it passed, so this is how that question is made to matter.
+            _rw = "readonly" not in flags
+            if destination == os.environ.get("FAKE_DOCKER_WRITABLE_DEST"):
+                _rw = True
             mounts.append({
                 "Destination": destination,
-                "Mode": "ro" if "readonly" in flags else "rw",
-                "Propagation": "rprivate", "RW": "readonly" not in flags,
+                "Mode": "rw" if _rw else "ro",
+                "Propagation": "rprivate", "RW": _rw,
                 "Source": fields["src"], "Type": "bind",
             })
         else:
@@ -307,12 +352,13 @@ elif args[:2] == ["container", "kill"]:
 elif args[:2] == ["container", "rm"]:
     name = args[-1]
     path = container_path(name)
-    if not path.exists():
-        fail("Error: No such container: candidate")
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if doc["State"]["Running"] and "--force" not in args:
-        fail("container is running")
-    path.unlink()
+    with state_lock():
+        if not path.exists():
+            fail("Error: No such container: candidate")
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if doc["State"]["Running"] and "--force" not in args:
+            fail("container is running")
+        path.unlink()
     print(doc["Name"].lstrip("/"))
 else:
     fail("unsupported fake Docker command: " + repr(args))
@@ -359,10 +405,15 @@ def case(tmp_path: Path):
     }
 
 
-def invoke(case, *, behavior="good", command=None):
+def invoke(case, *, behavior="good", command=None, tamper=None,
+           writable_dest=None):
     env = dict(os.environ)
     env["FAKE_DOCKER_STATE"] = str(case["state"])
     env["FAKE_DOCKER_BEHAVIOR"] = behavior
+    if tamper is not None:
+        env["FAKE_DOCKER_TAMPER_PATH"] = str(tamper)
+    if writable_dest is not None:
+        env["FAKE_DOCKER_WRITABLE_DEST"] = writable_dest
     cmd = [
         sys.executable, str(RUNNER_PATH), "run",
         "--docker-bin", str(case["docker"]),
@@ -809,3 +860,156 @@ printf 'VIBEIC_PROGRESS {"completed":1,"nonce":"%s","schema":1,"scope":"live","s
         "provisioner_absent": True,
         "volume_absent": True,
     }
+
+
+#: Enough concurrent pairs that the race cannot hide. The unfixed stub leaked on
+#: 41 of 200 trials (~20%), so P(a broken stub shows zero leaks here) is about
+#: 0.8**60 -- roughly one in seven hundred thousand. Fewer trials would make
+#: this guard itself flaky, which is the failure it exists to remove.
+_RACE_TRIALS = 60
+
+
+def test_the_fake_docker_serialises_kill_against_rm(case):
+    """A container the runner REMOVED must not come back.
+
+    `test_malformed_progress_is_norecord_and_cleanup_is_owned` was
+    intermittently red -- green three times in a row one hour and red in every
+    interleaved round the next -- and the only failing assertion was that
+    `container.json` is gone. The leftover file was ZERO BYTES, which named it:
+    the runner drives `kill` and `rm --force` concurrently during teardown, and
+    the stub did load -> mutate -> save with nothing holding the ends together,
+    so `rm` could unlink between them and `save` resurrected the file.
+
+    This drives that pair directly instead of waiting for host load to expose
+    it. Measured over the stub at each commit: 41 leaks in 200 trials before the
+    fix, 0 after.
+    """
+    state = case["state"]
+    state.mkdir(parents=True, exist_ok=True)
+    name = "vibeic-candidate-race-probe"
+    doc = {
+        "Name": "/" + name, "Id": "2" * 64,
+        "State": {"Running": True, "Status": "running", "ExitCode": 0,
+                  "Pid": 1234, "Restarting": False},
+        "Mounts": [], "Config": {}, "HostConfig": {},
+    }
+    env = dict(os.environ)
+    env["FAKE_DOCKER_STATE"] = str(state)
+
+    def drive(argv):
+        subprocess.run([sys.executable, str(case["docker"])] + argv,
+                       env=env, capture_output=True, text=True)
+
+    survivors = []
+    for _ in range(_RACE_TRIALS):
+        (state / "container.json").write_text(json.dumps(doc), encoding="utf-8")
+        killer = threading.Thread(target=drive,
+                                  args=(["container", "kill", name],))
+        remover = threading.Thread(target=drive,
+                                   args=(["container", "rm", "--force", name],))
+        killer.start(); remover.start()
+        killer.join(); remover.join()
+        leftover = state / "container.json"
+        if leftover.exists():
+            survivors.append(leftover.stat().st_size)
+            leftover.unlink()
+
+    assert not survivors, (
+        f"{len(survivors)} of {_RACE_TRIALS} kill/rm races left a container "
+        f"the runner had removed, sizes {sorted(set(survivors))}. A `save` that "
+        "lands after an `unlink` resurrects torn-down state, and a stub killed "
+        "mid-write leaves a zero-byte document where a valid one or none are "
+        "the only honest states.")
+
+
+
+
+# ===========================================================================
+# THE PARENT-OWNED INPUTS ARE POST-ATTESTED
+# ===========================================================================
+@pytest.mark.parametrize("owned", ["corpus", "subject", "selection"])
+def test_a_parent_owned_input_changed_during_the_arm_is_refused(case, owned):
+    """The properties `test_landing_merge_verdict` names, asserted against the
+    interface THIS repository actually has.
+
+    WHY THIS TEST EXISTS. Six landing properties -- a green test cannot move B1
+    to another commit; index flags cannot hide changed B1 bytes; replace-refs
+    cannot redefine the verified tree; the caller's checkout is never touched;
+    a relinked parent selection is NORECORD; a B2 corpus mutation is
+    post-attested and NORECORD -- are all ONE mechanism here:
+
+        final_inputs[k] != initial_inputs[k]
+            -> Refusal("candidate input changed between pre-arm and stopped copy")
+
+    MEASURED 2026-08-22 on a4caccefe: that sentence occurs EXACTLY ONCE in the
+    whole repository, in the implementation, and in no test. The six tests that
+    would have covered these properties asserted them through a DIFFERENT
+    design's interface -- shell messages such as "changed or could not
+    re-attest" that this implementation never emits -- so they are red, and
+    they guard nothing. Deleting any clause of the comparison above would
+    therefore have been caught by nothing at all.
+
+    The tamper is driven through the fake docker, which fires strictly between
+    the initial and the final digest, so what is exercised is the real
+    comparison and not a stub of it. `subject` and `selection` are included
+    because the same clause is what makes the B1 properties hold; parametrising
+    proves the guard is per-input and not a single lucky branch.
+    """
+    target = {
+        "corpus": case["corpus"] / "one.def",
+        "subject": case["subject"] / "candidate.py",
+        "selection": case["selection"],
+    }[owned]
+    before = target.read_bytes()
+    proc = invoke(case, tamper=target)
+    assert target.read_bytes() != before, (
+        "the escape hook did not fire, so this arm proves nothing")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "candidate input changed between pre-arm and stopped copy" in (
+        proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    assert not case["receipt"].exists(), (
+        "a run whose inputs moved under it must leave NO receipt -- that is "
+        "what makes it NORECORD rather than a recorded pass")
+
+
+def test_the_same_run_without_the_tamper_is_recorded(case):
+    """The paired control. Without it the test above could pass because the
+    harness refuses everything, which is the failure mode a one-sided
+    containment test always has."""
+    proc = invoke(case)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "candidate input changed between pre-arm and stopped copy" not in (
+        proc.stdout + proc.stderr)
+    assert case["receipt"].exists(), "the clean run must leave a receipt"
+
+
+@pytest.mark.parametrize("destination", ["/corpus", "/subject", "/runtime"])
+def test_a_writable_parent_owned_bind_is_refused_before_the_candidate_runs(
+        case, destination):
+    """The PREVENTION half of the same six properties, and the layer that makes
+    the post-attestation above belt-and-braces rather than the only defence.
+
+    The candidate cannot move B1, hide changed B1 bytes, redefine the verified
+    tree or mutate the corpus because it cannot WRITE any of them: every
+    parent-owned bind is mounted read-only, and the runner re-reads the mount
+    table the daemon reports and refuses if what actually got mounted is
+    writable --
+
+        if item.get("RW") is not False:
+            raise Refusal(f"candidate {role} bind is not exact/read-only")
+
+    MEASURED 2026-08-22 on a4caccefe: that sentence, like the post-attestation
+    one, appears ONCE in the repository and in no test. The only read-only
+    assertion anywhere covered the runtime OVERLAY -- not corpus, not subject,
+    not runtime, which are the three that carry the properties.
+
+    Asked through a daemon that REPORTS a writable bind, because trusting the
+    flags the runner itself passed would test nothing: the whole point of
+    re-reading the mount table is that the daemon is not assumed to have obeyed.
+    """
+    proc = invoke(case, writable_dest=destination)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "is not exact/read-only" in (proc.stdout + proc.stderr), (
+        proc.stdout + proc.stderr)
+    assert not case["receipt"].exists(), (
+        "a run that could not vouch for its own mounts must leave NO receipt")

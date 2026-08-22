@@ -19,15 +19,43 @@ taste — it is that `_dispatch` REFUSES the purchase by construction:
     "<label>" is a dispatcher-owned population refusal and cannot consume an
     uncheckable exemption — an unknown denominator must remain blocking
 
-THE GAP THIS CLOSES
-===================
-That refusal was unpinned. Nothing in `programs/tests/` armed an
-`uncheckable_until` in front of an attested-population loop and asserted that
-the exemption is rejected: the existing empty-corpus tests
+WHAT THIS FILE ADDS, STATED AFTER MEASURING IT
+=============================================
+An earlier revision of this docstring said the refusal was UNPINNED. **It is
+not, on this base.** `test_routed_def_corpus_dispatch.py::
+test_a_population_refusal_cannot_buy_an_uncheckable_exemption` landed in
+`e1b98d8f9` (2026-08-22 00:06, closing #1763) and pins exactly that arm. The
+claim was true of the tree the earlier lineage measured and false of this one,
+so it is replaced here by what was measured rather than assumed.
+
+MEASURED by deleting the mode-2 `elif` from the TRACKED dispatcher and restoring
+it with a reverse edit (`sha256 e4088103...` identical before and after):
+
+    test                                              control   arm deleted
+    base test_a_population_refusal_cannot_buy_...       pass        FAIL
+    ARM A  test_an_exemption_cannot_buy_off_...         pass        FAIL
+    ARM C  test_a_refused_exemption_does_not_leak_...   pass        pass
+
+So, honestly:
+
+* ARM A2 is new subject matter. It states the record/console contradiction as a
+  DEFECT to be repaired rather than as behaviour to be characterised, and is
+  filed as vibe-ic#1770. The base test asserts the SAME hazard as today's
+  behaviour, from the opposite direction, so the two move together: the repair
+  reddens the base test and XPASSes this one.
+* ARM C is new subject matter and is NOT about this arm -- it survives the
+  mutation, as the third row says. It pins the #584 no-leak property on the
+  mode-2 path specifically.
+* ARMs A and B OVERLAP the base test. They drive the dispatcher without
+  `--shard`, so they are an independent driver of the same subject, kept as
+  controls. They are not coverage this file introduced and are not claimed as
+  such.
+
+The half of the original claim that survives: the general empty-corpus tests
 (`test_empty_corpus_gate_keeps_the_array_invariant`,
-`test_issue1025_empty_corpus_sweep_blocks`, `test_issue1075_...`) all drive the
-loop with NO exemption armed, so every one of them stays green if the `elif`
-branch that raises the wiring error is deleted.
+`test_issue1025_empty_corpus_sweep_blocks`, `test_issue1075_...`) do all drive
+the loop with NO exemption armed and are verdict-identical across the mutation.
+That is why the base test had to be written at all.
 
 Deleting it is a one-line change with a silent blast radius: an
 `uncheckable_until` written at the wiring site would then be CONSUMED by the
@@ -145,7 +173,8 @@ def test_an_exemption_cannot_buy_off_an_empty_population_refusal(tmp_path):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "MEASURED DEFECT 2026-08-22, filed not fixed. `_dispatch` raises the "
+    "MEASURED DEFECT 2026-08-22, filed as vibe-ic#1770, not fixed. "
+    "`_dispatch` raises the "
     "wiring error for a mode-2 population refusal and then appends the date "
     "to GATE_EX_UNTIL anyway, so the record states the refused exemption as a "
     "GRANTED one: exempt_until=2999-01-01, exemption_expired=false, and "
@@ -161,7 +190,10 @@ def test_an_exemption_cannot_buy_off_an_empty_population_refusal(tmp_path):
     "REQUIRED_AUTHORITY_PATHS in protected_landing_transition.py, so it can "
     "only move through a base-authorised PREPARE/ACTIVATE transition and not "
     "through this candidate. STRICT: when it is fixed this XPASSes and this "
-    "marker must be deleted. See "
+    "marker must be deleted -- AND SO MUST THE LAST TWO ASSERTIONS OF "
+    "test_a_population_refusal_cannot_buy_an_uncheckable_exemption, which "
+    "pins the same hazard as CURRENT behaviour and reddens on the repair. "
+    "See vibe-ic#1770 and "
     "docs/findings/2026-08-22-routed-def-corpus-adjudication.md."))
 def test_the_record_does_not_state_a_refused_exemption_as_a_granted_one(tmp_path):
     """ARM A2 — the record must agree with the sentence the dispatcher printed.

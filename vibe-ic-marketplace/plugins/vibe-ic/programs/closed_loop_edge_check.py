@@ -2,6 +2,16 @@
 """closed_loop_edge_check.py — a declared `closed_loop` must be an edge
 something can actually take, or the declaration is decoration.
 
+CHIP_AGNOSTIC: strict — no process, vendor or PDK name anywhere in this file,
+DOCSTRING INCLUDED. This is STRICTER than the repo-wide `source_chip_agnostic_check`,
+which permits open-PDK names and clears 508 programs that carry one legitimately.
+That gate's PASS is not this file's verdict; `test_closed_loop_edge_check::test_the_program_names_no_process_or_vendor_token` is, and it reads the WHOLE file.
+
+MEASURED, which is why this paragraph exists: a docstring paragraph naming two open
+PDKs was added to this file, the repo-wide gate returned PASS over 1544 files, and
+this file's own test was red. The rule was real and invisible. Identify a library by
+its cell count and the registry population it came from, never by its name.
+
 THE DEFECT, MEASURED ON main @ 46db018669 (v1.11.7)
 ====================================================
 The canonical flow declares NINETEEN `closed_loop:` blocks. **Nothing in this

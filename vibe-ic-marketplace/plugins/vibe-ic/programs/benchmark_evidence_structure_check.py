@@ -187,6 +187,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -246,6 +247,12 @@ _MANIFEST_LINE_RE = re.compile(r"^\S+ \d+B sha256:[0-9a-fA-F]{64}$")
 # Converged verdict tokens (order matters: match the most specific first).
 _VERDICT_TOKENS = ("PASS_WITH_WAIVERS", "PASS", "FAIL")
 _CONVERGED = ("PASS", "PASS_WITH_WAIVERS")
+
+
+#: How each `FolderResult.kind` reads in the roll-up. A kind with no entry here
+#: still prints, under its own name — the line must never lose a population just
+#: because nobody added a label for it.
+_KIND_LABEL = {"cell": "published cell", "ic-root": "IC-level root"}
 
 
 @dataclass
@@ -391,6 +398,32 @@ def _has_file(d: Path) -> bool:
         if files:
             return True
     return False
+
+
+def _nested_duplicate_dirs(folder: Path) -> List[str]:
+    """Directories nested DIRECTLY inside a same-named parent, cell-relative.
+
+    `reports/reports`, `phase3/phase3` — not `phase3` and `reports/phase3`,
+    which is the canonical layout and appears in every conformant cell. The
+    subject is the ADJACENCY, so the test that matters is `name == parent name`
+    and never "this name occurs twice in the tree".
+
+    Symlinks are not followed: a cell may carry tracked symlinks, and a link
+    that happens to point at its own parent would otherwise be reported as a
+    nesting the publisher cannot remove by deleting a directory.
+    """
+    hits: List[str] = []
+    for root, dirs, _files in os.walk(folder, followlinks=False):
+        parent = Path(root).name
+        for d in dirs:
+            if d == parent and Path(root) != folder:
+                hits.append(Path(root, d).relative_to(folder).as_posix())
+        # A child of the cell root cannot duplicate the cell's own version
+        # directory name, so the `!= folder` guard above is not a special case
+        # for the root — it is what keeps `v9.9.9_pdk/v9.9.9_pdk` out of scope
+        # of a rule about a run tree's INTERNAL shape. IC_LEVEL_LAYOUT owns
+        # what may sit beside a cell.
+    return sorted(hits)
 
 
 # --------------------------------------------------------------------------
@@ -558,6 +591,44 @@ def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
         res.ok("GDS_MANIFEST")
     else:
         res.fail("GDS_MANIFEST", msg)
+
+    # ---- NESTED_DUPLICATE ------------------------------------------------
+    # `u_hawaii_adc x sky130A` was withdrawn from the published corpus on
+    # 2026-08-20 because one run wrote TWO completion audits: `reports/audit/…`
+    # saying PASS, and `reports/reports/audit/…` — one directory too deep —
+    # saying FAIL, 3.5 s earlier. Every consumer reads the first, so the FAIL
+    # was invisible and the public matrix showed a converged cell.
+    #
+    # The corpus repository turned that into an instruction for a human
+    # (`INDEX.md` rule 3, "Check for a nested `reports/reports/` before
+    # committing"). Nothing implemented it, and the corpus accumulated two more
+    # spellings of the same bug that the instruction does not name.
+    #
+    # IT IS ALSO WHAT LETS THE ROUTED-DEF HYGIENE CORPUS REPORT EMPTY WHILE
+    # FULL. `tools/ci/routed_def_corpus.py` counts a routed DEF only at exactly
+    # six components below `ic/`; at `phase3/phase3/stage3/pnr/routed.def` it is
+    # seven, so the producer exits 0 having printed nothing — the same bytes an
+    # empty corpus produces — and the blocking row keeps saying "is EMPTY". The
+    # producer is a protected authority file and is right as written. The
+    # publish path is the side that must refuse a shape the gate cannot see.
+    #
+    # MEASURED over the whole historical published-cell corpus (5 cells, 388
+    # distinct directories): one hit, and it is the withdrawn cell. 387 clean.
+    nested = _nested_duplicate_dirs(folder)
+    if nested:
+        res.fail("NESTED_DUPLICATE",
+                 "run tree nests a directory inside a same-named parent: "
+                 + ", ".join(nested)
+                 + " — a consumer reads ONE depth, so the same artefact at two "
+                   "depths gives two answers and only one of them is read. This "
+                   "is the shape a published cell was withdrawn for on "
+                   "2026-08-20 (a second, contradictory completion audit at "
+                   "reports/reports/), and at phase3/phase3/stage3/pnr/ it also "
+                   "puts a routed DEF where the routed-DEF hygiene corpus "
+                   "cannot count it. Move the contents up one level and delete "
+                   "the duplicated directory.")
+    else:
+        res.ok("NESTED_DUPLICATE")
 
     # ---- NO_RAW_GEOMETRY -------------------------------------------------
     scan, mode = _raw_scan_set(folder, include_staged)
@@ -1129,8 +1200,33 @@ def main(argv: Optional[List[str]] = None) -> int:
                 + "; ".join(f"{r.ic or Path(r.path).name}={_n_entries(r.examined or 0)}"
                             for r in skipped)
                 + ") — counted as neither conformant nor nonconformant")
+    # THE FRACTION DOES NOT SAY WHAT IT COUNTED, and over this corpus the two
+    # possible answers differ by every published cell in the repository.
+    # MEASURED on `vibeic/benchmark-data`, `--tree` at two commits:
+    #
+    #     146d665 (pre-withdrawal)  kinds {ic-root: 9, cell: 4}  "13/13 conformant"
+    #     3b58ccd42 (today)         kinds {ic-root: 9, cell: 0}   "9/9 conformant"
+    #
+    # Both lines are TRUE and neither states the cell count, so a reader of the
+    # CI log gets the same sentence shape from a corpus with four published
+    # cells and from a corpus with none. The per-unit rows and `--json` already
+    # separate them (`kind`); the ROLL-UP did not, and the roll-up is what a
+    # reader takes the impression from.
+    #
+    # THE CELL COUNT IS PRINTED EVEN WHEN IT IS ZERO, and especially then: a
+    # clause that appears only when there are cells would leave the empty corpus
+    # with exactly the silence this discloses. Every other kind is derived from
+    # the results rather than named here, so a kind added later cannot fall out
+    # of the line without anyone noticing.
+    by_kind = Counter(r.kind for r in examined)
+    cells = by_kind.pop("cell", 0)
+    others = ", ".join(f"{n} {_KIND_LABEL.get(k, k)}(s)"
+                       for k, n in sorted(by_kind.items()))
+    population = (f" — over {cells} published cell(s)"
+                  + (f" and {others}" if others else ""))
     print(f"\nbenchmark_evidence_structure_check: "
-          f"{passed}/{len(examined)} conformant, {failed} nonconformant{tail}")
+          f"{passed}/{len(examined)} conformant, {failed} nonconformant"
+          f"{tail}{population}")
 
     if args.json:
         Path(args.json).write_text(

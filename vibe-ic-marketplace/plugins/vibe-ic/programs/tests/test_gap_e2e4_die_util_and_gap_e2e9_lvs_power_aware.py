@@ -298,6 +298,27 @@ class TestRunExtractionLvsPowerAwareWiring:
             if "magic -dnull" in cmd:
                 spice_out.write_text(
                     ".subckt top a\nX0 a sky130_fd_sc_hd__inv_1\n.ends\n")
+                # W2.3 — MODEL THE TOOL, NOT JUST ITS NETLIST. The extraction
+                # recipe emits `feedback save <ext_dir>/extract_feedback.txt`,
+                # and magic 8.3.681 writes that file on EVERY extraction: 0
+                # bytes when it filed no feedback areas. That empty file is a
+                # MEASURED zero illegal overlaps.
+                #
+                # This fake wrote the `.sp` and not the feedback file, which is
+                # a state real magic cannot produce -- an extraction that ran
+                # and dumped no feedback channel. `magic_illegal_overlap_check`
+                # correctly calls that EXTRACTION_FEEDBACK_ABSENT (rc 1, "an
+                # unmeasured nothing", not a zero) and `_run_extraction_lvs`
+                # correctly aborts before netgen, so all three arms below
+                # returned LVS_EXTRACTION_ILLEGAL_OVERLAP and never reached the
+                # power-aware verdict logic they exist to test.
+                #
+                # Writing it EMPTY is deliberate and is the only value that
+                # keeps these arms honest: a clean extraction. An arm that
+                # wanted a non-empty feedback channel would be testing the
+                # overlap gate, which has its own suite.
+                (spice_out.parent
+                 / mod._mio.FEEDBACK_NAMES[0]).write_text("")
                 return (0, "0 errors\nMAGIC_EXT2SPICE_DONE", "")
             if "netgen -batch lvs" in cmd:
                 lvs_rpt.parent.mkdir(parents=True, exist_ok=True)

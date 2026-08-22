@@ -138,9 +138,10 @@ def _config(**over) -> dict:
         "PAD_CORNER_SITE_NAME": "io_corner_site",
         "PAD_EDGE_SPACING": 10,
         "PAD_ROTATION_HORIZONTAL": "R0",
-        # librelane's default, and the ONLY value this step proceeds on: the
-        # placer does not read this variable (measured), so a declared
-        # non-default is refused NOT_DETERMINED rather than silently ignored.
+        # librelane's default, and the ONLY value this step proceeds on. The
+        # placer DOES read this variable (measured — it moves the S/N rows);
+        # this step does not implement it, so a declared non-default is
+        # refused NOT_DETERMINED rather than silently ignored.
         "PAD_ROTATION_VERTICAL": "R0",
         "PAD_ROTATION_CORNER": "R0",
         "PAD_CORNER": "pad_corner",
@@ -1163,14 +1164,24 @@ def test_a_vertical_side_sums_the_master_width_not_its_height(tmp_path):
 
 def test_the_vertical_sides_carry_the_orientation_the_placer_produces(tmp_path):
     """THE DEF MUST NOT CONTRADICT ITSELF. The orientation written is the one
-    the tool actually produces — measured MXR90 west, R90 east — so the
-    footprint a DEF reader derives matches the geometry this step recorded."""
+    the tool actually produces, ON ALL FOUR SIDES — measured at librelane's
+    default: SOUTH R0->N, NORTH MX->FS, WEST MXR90->FW, EAST R90->W — so the
+    footprint a DEF reader derives matches the geometry this step recorded.
+
+    NORTH IS HERE BECAUSE IT WAS WRONG. This step used to compute NORTH as
+    rotate_cw(PAD_ROTATION_HORIZONTAL, 2), which is S (R180) at the default,
+    where the placer produces MX (FS): the same bounding box, MIRRORED rather
+    than rotated, so pin positions differ. Part 3 of the ruling was applied to
+    the vertical sides and missed this one."""
     root = _project(tmp_path)
     assert _gen(root) == 0
     rep, _ = CHK._unwrap(_report(root))
     got = {p["side"]: p["orient"] for p in rep["pads"]}
-    assert got["W"] == PR.VERTICAL_SIDE_ORIENT["W"] == PR.ORIENT_ALIASES["MXR90"]
-    assert got["E"] == PR.VERTICAL_SIDE_ORIENT["E"] == PR.ORIENT_ALIASES["R90"]
+    assert got["S"] == PR.SIDE_ORIENT["S"] == PR.ORIENT_ALIASES["R0"]
+    assert got["N"] == PR.SIDE_ORIENT["N"] == PR.ORIENT_ALIASES["MX"], (
+        "NORTH must be the placer's MX (FS), not rotate_cw(..., 2) -> S")
+    assert got["W"] == PR.SIDE_ORIENT["W"] == PR.ORIENT_ALIASES["MXR90"]
+    assert got["E"] == PR.SIDE_ORIENT["E"] == PR.ORIENT_ALIASES["R90"]
     # and the DEF says the same thing the report does
     for pad in rep["pads"]:
         assert f"( {pad['x']} {pad['y']} ) {pad['orient']} ;" in \
@@ -1182,11 +1193,14 @@ def test_the_vertical_sides_carry_the_orientation_the_placer_produces(tmp_path):
 
 
 def test_a_declared_non_default_vertical_rotation_is_not_determined(tmp_path):
-    """DEGRADE LOUDLY. The placer does not read this variable. Honouring it
-    silently is a lie and ignoring it silently is the defect. An author who
-    sets a knob is entitled to be told the knob does nothing — and being told
-    is rc 2, not rc 0 and not rc 1: it is `I cannot honour what you asked`,
-    which is neither a pass nor a finding about the design."""
+    """DEGRADE LOUDLY. THIS DOCSTRING SAID "the placer does not read this
+    variable" AND "the knob does nothing", AND BOTH WERE WRONG — the placer
+    reads it and moves the S/N rows with it; it is THIS STEP that does not
+    implement it. Honouring it silently is a lie and ignoring it silently is
+    the defect. An author who sets a knob is entitled to be told it was not
+    honoured here — and being told is rc 2, not rc 0 and not rc 1: it is `I
+    cannot honour what you asked`, which is neither a pass nor a finding about
+    the design."""
     root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R90"))
     assert _gen(root) == 2
     rep, _ = CHK._unwrap(_report(root))
@@ -1208,30 +1222,53 @@ def test_every_non_default_vertical_rotation_is_refused(tmp_path, value):
     assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
 
 
-def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert(
+def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_unhonoured(
         tmp_path):
     """The other half of the rule, and the half that keeps it honest. A run at
     librelane's default is indistinguishable from a run that set nothing, so it
-    proceeds — and the report SAYS the variable is inert, with the measurement,
-    rather than leaving a reader to find out."""
+    proceeds — and the report SAYS the variable is NOT HONOURED HERE, with the
+    measurement, rather than leaving a reader to find out."""
     root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R0"))
     assert _gen(root) == 0
     rep, _ = CHK._unwrap(_report(root))
-    inert = rep["rotation_vertical_inert"]
-    assert inert["variable"] == "PAD_ROTATION_VERTICAL"
-    assert inert["honoured"] is False
-    assert inert["measured_orientation"] == {"W": "MXR90", "E": "R90"}
-    assert "four SEPARATE OpenROAD processes" in inert["reason"]
-    assert inert["librelane_default"] == PR.ROTATION_DEFAULT
+    rec = rep["rotation_vertical_not_honoured"]
+    assert rec["variable"] == "PAD_ROTATION_VERTICAL"
+    assert rec["honoured"] is False
+    assert rec["measured_orientation"] == {"W": "MXR90", "E": "R90"}
+    assert rec["librelane_default"] == PR.ROTATION_DEFAULT
 
 
-def test_the_inert_disclosure_is_in_every_report_including_the_skip(tmp_path):
+def test_the_disclosure_is_in_every_report_including_the_skip(tmp_path):
     """A disclosure only present on the happy path is not a disclosure."""
     for cfg in (None, _config(), _config(PAD_ROTATION_VERTICAL="R90")):
         root = _project(tmp_path / f"p{id(cfg)}", config=cfg)
         _gen(root)
         rep, _ = CHK._unwrap(_report(root))
-        assert rep["rotation_vertical_inert"]["honoured"] is False
+        assert rep["rotation_vertical_not_honoured"]["honoured"] is False
+
+
+def test_the_disclosure_does_not_claim_the_variable_is_inert(tmp_path):
+    """THE CLAIM THIS PINS WAS SHIPPED WRONG, so it is pinned rather than
+    trusted. The report used to say PAD_ROTATION_VERTICAL was INERT and that
+    'the placer does not read it'. RE-MEASURED 2026-08-22 in OpenROAD
+    26Q3-1581, holding one parameter and varying the other across all four
+    sides: `-rotation_horizontal` moves WEST and EAST, `-rotation_vertical`
+    moves SOUTH and NORTH. The parameters are named for the ROW AXIS, not the
+    side. The original probe varied PAD_ROTATION_VERTICAL while watching only
+    WEST and EAST -- the wrong pairing -- so it correctly saw no change and the
+    wrong conclusion was drawn from a correct measurement.
+
+    The honest claim is NOT HONOURED BY THIS STEP, which is weaker and true.
+    This test fails if 'inert' or 'does not read' comes back."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R0"))
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    assert "rotation_vertical_inert" not in rep, (
+        "the key asserts inertness in the schema itself")
+    rec = rep["rotation_vertical_not_honoured"]
+    blob = json.dumps(rec)
+    _assert_no_retracted_claim(blob, "the disclosure")
+    assert "does not implement" in blob.lower()
 
 
 def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
@@ -1249,7 +1286,7 @@ def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
     root = _project(tmp_path)
     assert _gen(root) == 0
     declared = PR.normalise_orient(_config()["PAD_ROTATION_VERTICAL"])
-    assert declared != PR.VERTICAL_SIDE_ORIENT["W"], (
+    assert declared != PR.SIDE_ORIENT["W"], (
         "premise: the declared rotation and the placer's are different")
     victim = next(p["instance"] for p in CHK._unwrap(_report(root))[0]["pads"]
                   if p["side"] == "W")
@@ -1469,3 +1506,593 @@ def test_the_header_count_matches_what_the_module_actually_names():
     assert len(actually) == named_claim, (
         f"header claims {named_claim} named; the modules name "
         f"{len(actually)}: {sorted(actually)}")
+
+
+def test_north_pads_are_mirrored_not_rotated(tmp_path):
+    """THE DEFECT, STATED AS A VALUE THE OLD CODE CAN PRODUCE.
+
+    Deliberately uses NO constant this change introduces, so the pre-fix tree
+    runs it and answers WRONGLY rather than raising AttributeError. An
+    AttributeError control observes nothing: it proves a rename happened, not
+    that a defect existed.
+
+    MEASURED, OpenROAD 26Q3-1581, librelane's default rotations, north pad:
+    orient MX, whose DEF spelling is FS. The pre-fix step computed NORTH as
+    rotate_cw(PAD_ROTATION_HORIZONTAL, 2) = S (R180). S and FS share a bounding
+    box and differ by a mirror, so the fit arithmetic cannot see the difference
+    and a DEF reader deriving pin positions can."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    north = sorted({p["orient"] for p in rep["pads"] if p["side"] == "N"})
+    assert north == ["FS"], (
+        f"north pads carry {north}; the placer produces MX -> 'FS'. "
+        f"'S' is a 180-degree ROTATION where the tool applies a MIRROR")
+    # and the DEF agrees with the report, since that is the whole point
+    text = _ring_def(root).read_text()
+    for pad in (p for p in rep["pads"] if p["side"] == "N"):
+        assert f"( {pad['x']} {pad['y']} ) FS ;" in text
+
+
+def test_corners_alternate_rotation_and_mirror(tmp_path):
+    """TWO OF FOUR CORNERS WERE WRONG IN EVERY RING THIS STEP EVER WROTE.
+
+    Uses no constant this change introduces, so the pre-fix tree runs it and
+    answers wrongly rather than raising AttributeError.
+
+    MEASURED, OpenROAD 26Q3-1581, `place_corners` after `make_io_sites
+    -rotation_corner R0`: SW=R0, SE=MY, NE=R180, NW=MX -> N, FN, S, FS. THE
+    PLACER ALTERNATES ROTATION AND MIRROR. The pre-fix step walked
+    rotate_cw(PAD_ROTATION_CORNER, i) -- N, E, S, W -- a pure rotation, so SE
+    and NW came out E and W. A square corner cell has the same bounding box
+    either way, which is why no fit check could ever have caught it."""
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    got = {c["position"]: c["orient"] for c in rep["corners"]}
+    assert got == {"SW": "N", "SE": "FN", "NE": "S", "NW": "FS"}, (
+        f"corners are {got}; the placer produces "
+        f"{{'SW': 'N', 'SE': 'FN', 'NE': 'S', 'NW': 'FS'}} -- a pure rotation "
+        f"gives E and W where the tool mirrors")
+    text = _ring_def(root).read_text()
+    for c in rep["corners"]:
+        assert f"( {c['x']} {c['y']} ) {c['orient']} ;" in text
+
+
+# ANSWERING `real_artefact_test_backing_check`, WHICH REPORTS 0 OF 91 HERE.
+# That number is correct and the doctrine asks for a mutation run or a reason;
+# both are given.
+#
+# THE REASON: this module's strongest tests are driven by neither a fixture nor
+# a checked-in artefact. They query the INSTALLED PDK and, below, the ACTUAL
+# OPENROAD BINARY. The check has no category for that, and its worry does not
+# apply to it -- "a suite that cannot distinguish the change from its own
+# absence" is about fixtures authored alongside the code, which cannot disagree
+# with it. A tool CAN disagree, and did: it is how three shipped orientations
+# were found to be wrong.
+#
+# THE MUTATION RUN, which is what the doctrine says actually proves the point:
+#   SIDE_ORIENT["N"]  -> its shipped-wrong value  => this test RED, naming FS vs S
+#   CORNER_ORIENT SE  -> its shipped-wrong value  => this test RED, naming FN vs E
+# Both are the ORIGINAL defects, reproduced and caught.
+#
+# ── the orientations, MEASURED against the placer rather than pinned ─────────
+#
+# THREE DEFECTS CAME FROM PINNING THEM BY HAND. `SIDE_ORIENT` and
+# `CORNER_ORIENT` now hold the placer's own values, but a CONSTANT CAN DRIFT
+# FROM THE TOOL EXACTLY AS THE OLD COMPUTATION DID -- the previous values were
+# also written down deliberately, and were also wrong. This asks OpenROAD.
+#
+# It skips where the tool or the PDK is absent, which is every host run here;
+# it bites in the container, which is where the suite is measured.
+
+_ORIENT_PROBE = """
+read_lef {tlef}
+foreach f [glob {iolefs}] {{ read_lef $f }}
+make_fake_io_site -name S_IO  -width 0.1 -height 355
+make_fake_io_site -name S_COR -width 355 -height 355
+read_def {defp}
+make_io_sites -horizontal_site S_IO -vertical_site S_IO -corner_site S_COR \\
+  -offset 26 -rotation_horizontal R0 -rotation_vertical R0 -rotation_corner R0
+place_corners {corner}
+place_pad -row IO_SOUTH -location 500 ps -master {pad}
+place_pad -row IO_NORTH -location 500 pn -master {pad}
+place_pad -row IO_WEST  -location 500 pw -master {pad}
+place_pad -row IO_EAST  -location 500 pe -master {pad}
+set b [ord::get_db_block]
+foreach n {{ps pn pw pe}} {{ puts "ORIENT $n [[$b findInst $n] getOrient]" }}
+foreach i [$b getInsts] {{
+  if {{[string match "*{corner}*" [[$i getMaster] getName]]}} {{
+    set bb [$i getBBox]
+    puts "CORNER [$i getName] [$i getOrient] [$bb xMin] [$bb yMin]"
+  }}
+}}
+exit 0
+"""
+
+
+@pytest.mark.skipif(shutil.which("openroad") is None,
+                    reason="openroad not on PATH on this host")
+@pytest.mark.skipif(not _trees_with_an_io_library(),
+                    reason="no installed PDK ships an IO cell library")
+def test_the_placer_agrees_with_the_orientation_constants(tmp_path):
+    """ASK THE TOOL, do not pin it. Three shipped defects were orientations
+    written down by hand -- NORTH rotated where the placer mirrors, and two of
+    four corners likewise. The constants now hold the right values; this is
+    what keeps them right.
+
+    Fails loudly if a future OpenROAD changes the convention, which is the
+    outcome worth having: a constant that silently disagrees with the tool is
+    the defect this test exists to prevent, in its next incarnation."""
+    root, tree = _trees_with_an_io_library()[0]
+    lib = _library_for(root, tree)
+    pad = next((m for m, (w, h) in sorted(lib.masters.items())
+                if w < h and w > 1.0), None)
+    corner = next((m for m, (w, h) in sorted(lib.masters.items())
+                   if w == h and w > 100.0), None)
+    if not (pad and corner):
+        pytest.skip(f"{tree}: no distinguishable pad/corner master")
+    tlefs = sorted(Path(root, tree).glob("libs.ref/*/techlef/*.tlef"))
+    iolefs = sorted(Path(f).parent for f in lib.lefs)
+    if not tlefs or not iolefs:
+        pytest.skip(f"{tree}: no tech LEF or IO LEF directory")
+
+    die = 4000000
+    defp = tmp_path / "probe.def"
+    defp.write_text(
+        'VERSION 5.8 ;\nDIVIDERCHAR "/" ;\nBUSBITCHARS "[]" ;\n'
+        "DESIGN probe ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+        f"DIEAREA ( 0 0 ) ( {die} {die} ) ;\nCOMPONENTS 4 ;\n"
+        + "".join(f"- {n} {pad} ;\n" for n in ("ps", "pn", "pw", "pe"))
+        + "END COMPONENTS\nEND DESIGN\n")
+    tcl = tmp_path / "probe.tcl"
+    tcl.write_text(_ORIENT_PROBE.format(
+        tlef=tlefs[0], iolefs=f"{iolefs[0]}/*.lef", defp=defp,
+        corner=corner, pad=pad))
+
+    r = subprocess.run(["openroad", "-no_init", "-exit", str(tcl)],
+                       capture_output=True, text=True, timeout=600)
+    got = {}
+    for ln in r.stdout.splitlines():
+        f = ln.split()
+        if f[:1] == ["ORIENT"]:
+            got[{"ps": "S", "pn": "N", "pw": "W", "pe": "E"}[f[1]]] = f[2]
+    if len(got) != 4:
+        pytest.skip(f"probe did not place four pads: {r.stdout[-400:]}")
+
+    # the tool's names, in DEF spelling, are what the constants must hold
+    measured = {s: PR.ORIENT_ALIASES[o] for s, o in got.items()}
+    assert measured == PR.SIDE_ORIENT, (
+        f"{tree}: the placer produces {measured}; SIDE_ORIENT holds "
+        f"{PR.SIDE_ORIENT}. A constant has drifted from the tool -- which is "
+        f"exactly how NORTH came to carry a rotation where the placer mirrors")
+
+    # AND THE CORNERS, which were the larger defect: two of four carried a
+    # rotation where the placer mirrors. Positions identify which corner is
+    # which -- the instance names are the tool's, not ours.
+    seen = {}
+    for ln in r.stdout.splitlines():
+        f = ln.split()
+        if f[:1] != ["CORNER"]:
+            continue
+        x, y = int(f[3]), int(f[4])
+        pos = ("S" if y < die // 2 else "N") + ("W" if x < die // 2 else "E")
+        seen[pos[::-1] if pos in ("WS", "WN", "ES", "EN") else pos] = \
+            PR.ORIENT_ALIASES[f[2]]
+    if len(seen) == 4:
+        assert seen == PR.CORNER_ORIENT, (
+            f"{tree}: the placer produces {seen}; CORNER_ORIENT holds "
+            f"{PR.CORNER_ORIENT}. The placer ALTERNATES rotation and mirror "
+            f"(R0, MY, R180, MX); a pure rotate_cw walk gives E and W where it "
+            f"writes FN and FS, which is the defect this pins")
+
+
+
+#: The sentences `main` shipped as live claims about the placer, VERBATIM, for
+#: scanning SOURCE. Every one is false: `-rotation_vertical` moves the S/N rows,
+#: so the placer reads the variable. The retraction that replaced them is worded
+#: so that it does not contain them, which is why a verbatim scan works here.
+RETRACTED_CLAIMS = (
+    "`PAD_ROTATION_VERTICAL` IS INERT",
+    "The same measurement shows the placer does not read it.",
+    "placer ignores it",
+    "the knob does nothing",
+)
+
+#: The same falsehoods as the shortest fragment that still identifies one, for
+#: scanning EMITTED text — the report and the console.
+#:
+#: THIS LIST EXISTS BECAUSE THE TWO GUARDS DISAGREED. The record guard listed
+#: three phrases and did not list `placer ignores it`, so that one sentence
+#: survived in the console line the whole time the commit next to it was
+#: removing `is inert` from the record. One vocabulary, checked in both places,
+#: is the fix — a second list is a second thing to forget to update.
+RETRACTED_PHRASES = (
+    "is inert",
+    "does not read it",
+    "the knob does nothing",
+    "placer ignores it",
+)
+
+
+
+
+
+def _assert_no_retracted_claim(text: str, where: str) -> None:
+    """No retracted falsehood in EMITTED text, verbatim or reworded."""
+    low = text.lower()
+    for lie in RETRACTED_PHRASES:
+        assert lie not in low, (
+            f"{where} carries the retracted claim {lie!r}: the placer DOES "
+            f"read PAD_ROTATION_VERTICAL — it moves the S/N rows. This step "
+            f"is what does not implement it.")
+
+
+
+
+
+def test_the_module_docstring_does_not_carry_the_inert_claim():
+    """THE WRONG CLAIM LIVED IN THE DOCSTRING, AND THAT IS WHERE IT WAS READ
+    FROM. The record-level guard above watches the emitted JSON; nothing
+    watched the prose, which is what a human opens and what the "it is inert"
+    conclusion was reported upward from.
+
+    A wrong claim that a knob is inert is worse than a missing one: it tells
+    the next author the parameter cannot matter, so nobody varies it again.
+    This test fails if any of the four shipped sentences returns to either
+    module, and fails if the retraction that replaced them is deleted."""
+    for mod in (GEN, PR):
+        src = Path(mod.__file__).read_text()
+        for claim in RETRACTED_CLAIMS:
+            assert claim not in src, (
+                f"{Path(mod.__file__).name} carries the retracted claim "
+                f"{claim!r}; -rotation_vertical moves the S/N rows, so the "
+                f"placer does read PAD_ROTATION_VERTICAL")
+    # and the retraction is stated, not silently substituted: a reader who
+    # believed the old sentence has to be able to see it withdrawn.
+    prose = " ".join(GEN.__doc__.split())
+    assert 'THIS SECTION SAID "IS INERT"' in prose
+    assert "AND BOTH WERE WRONG" in prose
+
+
+@pytest.mark.parametrize("var", ["PAD_ROTATION_HORIZONTAL",
+                                 "PAD_ROTATION_VERTICAL",
+                                 "PAD_ROTATION_CORNER"])
+
+
+def test_the_refusal_names_the_variable_actually_declared(tmp_path, var,
+                                                          capsys):
+    """THE REFUSAL BROADENED TO THREE VARIABLES AND ITS REPORT DID NOT.
+
+    All three are named for the ROW AXIS and this step implements none of
+    them, so a declared non-default on any one is refused. But the rule id,
+    the `variables_absent` entry and the console line were still the literal
+    `PAD_ROTATION_VERTICAL`, so a run refused for declaring
+    PAD_ROTATION_HORIZONTAL was told to go look at a variable it had left
+    alone. A refusal that names the wrong input is a refusal a reader cannot
+    act on.
+
+    The console line is checked too, because it is the half a human reads and
+    it is where `placer ignores it` — the retracted claim — survived the
+    correction that removed it from the record."""
+    root = _project(tmp_path, config=_config(**{var: "R90"}))
+    assert _gen(root) == 2
+    rep, _ = CHK._unwrap(_report(root))
+    assert f"{var}_NOT_HONOURED" in _rules(root)
+    assert rep["missing_inputs"][0]["variables_absent"] == [var]
+    assert var in rep["reason"]
+    printed = capsys.readouterr().out
+    assert f"{var}_NOT_HONOURED" in printed
+    # BOTH halves, through the one shared vocabulary. An earlier draft of this
+    # test left the `reason` assertion OUTSIDE the loop, so it re-used the
+    # leaked loop variable and checked exactly one of the four claims against
+    # exactly one of the two texts. Planting `placer ignores it` in the emitted
+    # reason passed it 3/3.
+    _assert_no_retracted_claim(printed, "the console line")
+    _assert_no_retracted_claim(rep["reason"], "the refusal reason")
+
+
+
+
+# --------------------------------------------------------------------------- #
+# a refuted finding must lose its identifier
+# --------------------------------------------------------------------------- #
+def test_the_report_key_does_not_assert_the_refuted_premise(placed):
+    """`PAD_ROTATION_VERTICAL` is NOT inert; it steers the SOUTH and NORTH rows,
+    and this step does not implement it. The distinction is not cosmetic: the
+    old key `rotation_vertical_inert` asserted the refuted proposition IN THE
+    SCHEMA, where every consumer keys on it and none of them reads the
+    retraction published elsewhere."""
+    rep, _ = CHK._unwrap(_report(placed))
+    assert "rotation_vertical_not_honoured" in rep, sorted(rep)
+    assert "rotation_vertical_inert" not in rep, (
+        "the report still carries a key asserting the variable is inert")
+    rec = rep["rotation_vertical_not_honoured"]
+    assert rec["honoured"] is False
+    assert "does not implement it" in rec["reason"], rec["reason"]
+    assert "the placer does not read it" not in rec["reason"], (
+        "the reason still says the tool ignores the variable, which is the "
+        "claim that was measured false")
+
+
+
+
+
+
+def test_no_identifier_in_the_pad_ring_producer_asserts_inertness():
+    """The general rule, not the one variable: a proposition the project has
+    recorded as FALSE may not survive in an IDENTIFIER — a name, a schema key,
+    a function. Every consumer keys on the identifier and none of them reads
+    the retraction published elsewhere.
+
+    PROSE IS DELIBERATELY NOT POLICED, and the first version of this test got
+    that wrong. It scanned every string literal and excluded the specific
+    sentences I had written, which made it pass on my edit and FAIL on an
+    independent fix of the same defect (`origin/jpadsite/pad-site`) whose
+    docstring retracts the claim by QUOTING it — 'THIS SECTION SAID "IS INERT"
+    … AND BOTH WERE WRONG'. A retraction has to be able to name what it
+    retracts. A guard whose pass condition is "contains the phrases the author
+    happened to use" is fitted to one edit, not to the rule; measured
+    three ways, this version FAILS on main, and PASSES on both independent
+    fixes."""
+    import ast
+    src = (PROGRAMS / "pad_ring_gen.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and "INERT" in node.id.upper():
+            offenders.append(f"name: {node.id}")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)) and "inert" in node.name.lower():
+            offenders.append(f"def: {node.name}")
+        elif isinstance(node, ast.Dict):
+            for k in node.keys:
+                if (isinstance(k, ast.Constant) and isinstance(k.value, str)
+                        and "inert" in k.value.lower()):
+                    offenders.append(f"schema key: {k.value!r}")
+    assert not offenders, (
+        f"identifiers still assert a proposition measured false: {offenders}")
+
+
+
+
+@pytest.mark.parametrize("kind,was,now", [("pad", "FS", "S"),
+                                          ("corner", "FN", "E")])
+def test_the_gate_refuses_a_mirror_written_where_the_report_says_a_rotation(
+        tmp_path, kind, was, now):
+    """THE CORRECTION WAS UNENFORCED IN THE ARTEFACT IT IS ABOUT.
+
+    Three commits on this branch moved NORTH and two corners from a ROTATION to
+    the MIRROR the placer produces. Nothing then stopped `padring.def` from
+    carrying the rotation again: every check in `pad_ring_check` re-derives the
+    FOOTPRINT from the DEF orientation, and a mirror and a rotation share a
+    bounding box. MEASURED on the gate before this rule existed — north pad
+    FS -> S, and corner FN -> E — each left it rc 0 with ZERO findings.
+
+    Which is the exact failure mode part 3 of the flow owner's ruling names:
+    the fit arithmetic cannot see it and a DEF reader deriving pin positions
+    can. This test asserts the blindness is gone AND asserts the premise that
+    made it blind, so the rule cannot be quietly replaced by an extent check.
+    """
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    # the good path passes, so the refusal below is the rule firing and not
+    # the fixture being broken
+    assert _chk(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    if kind == "pad":
+        entry = next(p for p in rep["pads"] if p["side"] == "N")
+    else:
+        entry = next(c for c in rep["corners"] if c["position"] == "SE")
+    assert entry["orient"] == was
+
+    # PREMISE: the swap is invisible to every extent-based check in the gate.
+    size = (75.0, 350.0) if kind == "pad" else (355.0, 355.0)
+    assert PR.footprint(size, was, UNITS) == PR.footprint(size, now, UNITS), (
+        f"premise: {was} and {now} must share a bounding box, or this test "
+        f"would be proving the footprint check rather than the orientation one")
+
+    line = _line(root, entry["instance"])
+    assert line.rstrip().endswith(f"{was} ;")
+    _edit_def(root, line, line.rsplit(" ", 2)[0] + f" {now} ;")
+    assert _chk(root) == 1
+    assert "PAD_ORIENT_DISAGREES_WITH_DEF" in _rules(root)
+    assert "a mirror is not a rotation" in " ".join(
+        f["message"] for f in _report(root)["findings"])
+
+
+def test_the_doctrine_this_probe_broke_is_cited_by_a_name_that_exists():
+    """A CITATION THAT ROTS IS WORSE THAN NONE — it sends the next author to a
+    file that is not there, and prose cannot notice.
+
+    The docstring points at the program stating the rule the original probe
+    broke: an axis holding one value across differing arms is not evidence the
+    lever does nothing, it is evidence the axis was not measured under it. Cited
+    by PROGRAM NAME rather than by file:line, because a line-anchored citation
+    rots on any edit above it; this one rots only on a rename, which is exactly
+    what this test catches."""
+    cited = "metric_constant_across_differing_arms_is_not_measured"
+    assert cited in GEN.__doc__, "the cross-reference was dropped"
+    assert (PROGRAMS / f"{cited}.py").is_file(), (
+        f"pad_ring_gen cites {cited!r} and no such program exists — the "
+        f"citation was not updated when the program moved or was renamed")
+
+    # `_pad_ring` points the next author at the test that re-derives the eight
+    # orientations from the placer. That pointer is the difference between a
+    # constant somebody must trust and one anybody can re-check, so it is not
+    # allowed to name a test that has been renamed away.
+    named = "test_the_shipped_orientations_are_what_the_placer_produces"
+    assert named in Path(PR.__file__).read_text(), (
+        "_pad_ring no longer points at the test that re-derives SIDE_ORIENT "
+        "and CORNER_ORIENT from the tool")
+    assert named in globals(), (
+        f"_pad_ring points at {named!r} and this module defines no such test "
+        f"— the pointer rotted when the test was renamed")
+
+
+# --------------------------------------------------------------------------- #
+# the eight orientations, asked of the PLACER rather than of ourselves
+# --------------------------------------------------------------------------- #
+# EVERY OTHER TEST IN THIS FILE PINS THE CONSTANTS AGAINST THEMSELVES. They
+# assert that the report carries `SIDE_ORIENT` and that `SIDE_ORIENT` is a
+# particular dict, so an author who changed both together would pass all of
+# them. The only thing tying the eight values to reality was a docstring
+# saying MEASURED — which is precisely the shape of the claim this branch
+# exists to retract, one nobody could falsify without redoing the work.
+#
+# So this asks the tool. It names no kit: the IO library, its pad master, its
+# corner and its site width are all discovered by reading LEF, so it runs
+# against whatever is installed and stays inside the chip-AGNOSTIC rule the
+# tests above enforce on this very file.
+_HAVE_OPENROAD = shutil.which("openroad") is not None
+_PDK_ROOT = os.environ.get("PDK_ROOT") or ""
+
+_LEF_MACRO = re.compile(r"^\s*MACRO\s+(\S+)", re.M)
+_LEF_CLASS = re.compile(r"^\s*CLASS\s+([A-Z]+)(?:\s+([A-Z]+))?", re.M)
+_LEF_SITE = re.compile(r"^\s*SITE\s+(\S+)\s*;", re.M)
+_LEF_SIZE = re.compile(r"^\s*SIZE\s+([\d.]+)\s+BY\s+([\d.]+)", re.M)
+
+
+def _lef_cells(text: str):
+    """(name, class, subclass, site, w, h) for each MACRO in one LEF."""
+    out = []
+    for chunk in text.split("MACRO ")[1:]:
+        blk = "MACRO " + chunk
+        m, c, z = _LEF_MACRO.search(blk), _LEF_CLASS.search(blk), _LEF_SIZE.search(blk)
+        if not (m and c and z):
+            continue
+        s = _LEF_SITE.search(blk)
+        out.append((m.group(1), c.group(1), c.group(2) or "",
+                    s.group(1) if s else "", float(z.group(1)), float(z.group(2))))
+    return out
+
+
+def _find_io_library(pdk_root: str):
+    """The first installed kit carrying a PAD-class cell and a corner."""
+    for kit in sorted(Path(pdk_root).iterdir()):
+        tlefs = sorted(kit.glob("libs.ref/*/techlef/*.tlef"))
+        if not tlefs:
+            continue
+        for libdir in sorted(kit.glob("libs.ref/*/lef")):
+            cells = [c for lef in sorted(libdir.glob("*.lef"))
+                     for c in _lef_cells(lef.read_text(errors="replace"))]
+            pads = [c for c in cells if c[1] == "PAD" and c[2] != "SPACER" and c[3]]
+            spacers = [c for c in cells if c[1] == "PAD" and c[2] == "SPACER" and c[3]]
+            corners = [c for c in cells if c[1] == "ENDCAP"]
+            if not (pads and corners):
+                continue
+            pad = max(pads, key=lambda c: c[5])
+            cor = max(corners, key=lambda c: c[4])
+            return {"tech_lef": str(tlefs[0]), "lef_dir": str(libdir),
+                    "pad_master": pad[0], "pad_site": pad[3],
+                    "pad_w": pad[4], "pad_h": pad[5],
+                    "corner_master": cor[0],
+                    "corner_site": cor[3] or (pad[3] + "_CORNER"),
+                    "corner_w": cor[4], "corner_h": cor[5],
+                    "site_w": min([s[4] for s in spacers] or [pad[4]])}
+    return None
+
+
+_PLACER_TCL = """\
+read_lef {tech_lef}
+make_fake_io_site -name {pad_site} -width {site_w} -height {pad_h}
+make_fake_io_site -name {corner_site} -width {corner_w} -height {corner_h}
+foreach lef [glob {lef_dir}/*.lef] {{ read_lef $lef }}
+read_def {def_path}
+make_io_sites -horizontal_site {pad_site} -vertical_site {pad_site} \\
+    -corner_site {corner_site} -offset {offset} \\
+    -rotation_horizontal {rot} -rotation_vertical {rot} -rotation_corner {rot}
+place_pad -row IO_SOUTH -location {loc} -master {pad_master} ps
+place_pad -row IO_NORTH -location {loc} -master {pad_master} pn
+place_pad -row IO_WEST  -location {loc} -master {pad_master} pw
+place_pad -row IO_EAST  -location {loc} -master {pad_master} pe
+place_corners {corner_master}
+set blk [ord::get_db_block]
+foreach i [$blk getInsts] {{
+    set b [$i getBBox]
+    puts "ORIENT [$i getName] [$i getOrient] \\
+[expr ([$b xMin]+[$b xMax])/2] [expr ([$b yMin]+[$b yMax])/2]"
+}}
+set d [$blk getDieArea]
+puts "DIE [$d xMin] [$d yMin] [$d xMax] [$d yMax]"
+"""
+
+_PLACER_DEF = """VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN probe ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( {d} {d} ) ;
+COMPONENTS 0 ;
+END COMPONENTS
+END DESIGN
+"""
+
+
+def _measure_placer_orientations(lib, work: Path, rot: str):
+    """Run upstream's own call shape and read the orientations back from odb."""
+    side = max(int((lib["corner_w"] * 2 + lib["pad_w"] * 4 + 200) * 1000),
+               2_000_000)
+    dp = work / "probe.def"
+    dp.write_text(_PLACER_DEF.format(d=side))
+    tp = work / "probe.tcl"
+    tp.write_text(_PLACER_TCL.format(
+        def_path=dp, offset=int(lib["corner_w"] / 10) or 1,
+        loc=int(side / 2000 / 2), rot=rot, **lib))
+    run = subprocess.run(["openroad", "-no_init", "-exit", str(tp)],
+                         capture_output=True, text=True, timeout=900)
+    got, die = {}, None
+    for ln in run.stdout.splitlines():
+        f = ln.split()
+        if ln.startswith("ORIENT ") and len(f) >= 5:
+            got[f[1]] = (f[2], int(f[3]), int(f[4]))
+        elif ln.startswith("DIE ") and len(f) >= 5:
+            die = tuple(int(x) for x in f[1:5])
+    assert len(got) >= 8 and die, (
+        f"the placer produced {len(got)} instance(s), not the 4 pads and 4 "
+        f"corners this probe places — it did not run, so it measured nothing"
+        f"\n--- stdout ---\n{run.stdout[-2000:]}"
+        f"\n--- stderr ---\n{run.stderr[-2000:]}")
+    mx, my = (die[0] + die[2]) / 2.0, (die[1] + die[3]) / 2.0
+    sides = {n[1:].upper(): PR.normalise_orient(o)
+             for n, (o, _, _) in got.items() if n[0] == "p" and len(n) == 2}
+    corners = {}
+    for name, (orient, cx, cy) in got.items():
+        if name.startswith("p") and len(name) == 2:
+            continue
+        # by QUADRANT, never by the tool's own instance naming
+        corners[("S" if cy < my else "N") + ("W" if cx < mx else "E")] = \
+            PR.normalise_orient(orient)
+    return sides, corners
+
+
+@pytest.mark.skipif(not _HAVE_OPENROAD,
+                    reason="openroad not on PATH (container-only tool)")
+@pytest.mark.skipif(not (_PDK_ROOT and Path(_PDK_ROOT).is_dir()),
+                    reason="no PDK_ROOT on this host")
+def test_the_shipped_orientations_are_what_the_placer_produces(tmp_path):
+    """THE ONLY TEST HERE THAT CAN FALSIFY THE EIGHT CONSTANTS.
+
+    `SIDE_ORIENT` and `CORNER_ORIENT` are the corrections this branch carries.
+    Every other test compares them with a report this code produced FROM them,
+    so all of those pass for any self-consistent pair of wrong values. This one
+    runs upstream's own call shape — make_io_sites, place_pad on each side,
+    place_corners, at librelane's default rotation — and compares what the tool
+    put in the database with what we ship.
+
+    IT IS THE TEST THE ORIGINAL PROBE NEEDED. That probe measured correctly and
+    inferred wrongly because nothing re-asked the question afterwards; a claim
+    about a tool that cannot be re-derived from the tool is a claim on trust.
+    """
+    lib = _find_io_library(_PDK_ROOT)
+    if lib is None:
+        pytest.skip("no installed kit carries an IO cell library with a corner")
+    sides, corners = _measure_placer_orientations(lib, tmp_path,
+                                                  PR.ROTATION_DEFAULT)
+    assert sides == dict(PR.SIDE_ORIENT), (
+        f"the placer orients the sides {sides}; this step ships "
+        f"{dict(PR.SIDE_ORIENT)}. The DEF must carry what the tool produces")
+    assert corners == dict(PR.CORNER_ORIENT), (
+        f"the placer orients the corners {corners}; this step ships "
+        f"{dict(PR.CORNER_ORIENT)}. A square corner cell hides this in every "
+        f"extent check — only a DEF reader sees it")
