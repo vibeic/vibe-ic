@@ -748,6 +748,13 @@ def test_a_source_that_will_not_parse_is_REPORTED_not_silently_skipped(tmp_path)
                       if ":::" in ln)
     r = _run(progs, tests, "--json", tmp_path / "r.json")
     out = r.stdout + r.stderr
+    # THE VERDICT, not only the report. thing_emit.py is the ONLY program here
+    # and it no longer parses, so nothing is compared -- that is VACUOUS, and a
+    # test that checked the [UNPARSED] line alone would have gone green on a
+    # PASS, which is precisely the manufactured pass this file refuses.
+    assert r.returncode == RC_VACUOUS, (
+        "the only program could not be read, so nothing was compared and this "
+        "must not read as a pass:\n" + out)
     assert "[UNPARSED]" in r.stdout, (
         "a source this guard could not read left the reach in silence:\n" + out)
     assert "thing_emit.py" in r.stdout and "could NOT read it" in r.stdout, out
@@ -918,6 +925,13 @@ def test_a_TEST_that_will_not_parse_is_reported_too(tmp_path):
                       if ":::" in ln)
     r = _run(progs, tests, "--json", tmp_path / "r.json")
     out = r.stdout + r.stderr
+    # THE VERDICT. Here the EMITTER still parses and its own two denominators
+    # agree with its three sites, so something IS compared and the run is a real
+    # PASS carrying the [UNPARSED] line -- the opposite of the companion test
+    # above, and the reason both verdicts are now asserted rather than assumed
+    # to be the same.
+    assert r.returncode == RC_PASS, (
+        "a broken TEST took the emitter's own self-check down with it:\n" + out)
     assert "[UNPARSED]" in r.stdout, (
         "an unreadable TEST left the reach in silence:\n" + out)
     assert "test_thing_emit.py" in r.stdout, out
