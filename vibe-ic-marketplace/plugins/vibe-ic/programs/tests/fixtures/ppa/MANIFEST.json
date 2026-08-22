@@ -1,0 +1,218 @@
+{
+  "schema": "vibeic.ppa.fixture_manifest.v1",
+  "why": "A fixture whose provenance is unknown is a fixture nobody can trust on the day it disagrees with them. Every file under fixtures/ppa/ is listed here with where it came from, what property it carries, and the sha256 it had when that property was verified. test_ppa_fixture_integrity.py fails if a file is edited, if a file appears without an entry, or if any listed property stops holding.",
+  "regenerate_hashes": "python3 programs/tests/test_ppa_fixture_integrity.py --regen",
+  "note_on_absent_paths": "vacuous/absent_report.rpt is NOT listed and must NOT exist. It is a fixture that works by not being there; see vacuous/README.md.",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "sha256:3d516e7c3c3b35e245d698eb63cf94e380b51eccb9ea27796eea7b7d394df503",
+      "bytes": 5248,
+      "origin": "Written for this fixture tree.",
+      "carries": "What is here, what each fixture proves, and the three measured facts a consumer needs before using them."
+    },
+    {
+      "path": "area/stage_pair/expected.json",
+      "sha256": "sha256:67fbf0440f374981422a605076648f00649925bb52f32ec878d3a6a8486a4cf1",
+      "bytes": 4129,
+      "origin": "Written for this fixture.",
+      "carries": "The known answer: UNDETERMINED, plus the 262==262 trap and why the pair cannot be reconciled without the core box that neither artefact contains."
+    },
+    {
+      "path": "area/stage_pair/post_route_floorplan_pdn.json",
+      "sha256": "sha256:da3db3e84e9b33f8a5688cacf22ec10bcea14ec020bbf6af6e60292df8c411e4",
+      "bytes": 1246,
+      "origin": "vibeic benchmark-data, ic/ tree. That tree left this repository at v1.10.56 (commit e23d0be5e, 'benchmark-data, benchmark_external and IP move to their own repositories'), so the path below is relative to the benchmark-data repository, not to this one. Source: ic/spm/v1.9.96_gf180mcuD/reports/phase3/pnr/floorplan_pdn.json. VERBATIM, unmodified.",
+      "carries": "Post-route area: die_area_units 230400000000 DEF-units^2, 262 COMPONENTs, util 20.567%. Same design and same run as its sibling -- ONLY the stage differs."
+    },
+    {
+      "path": "area/stage_pair/synthesis_area_source_line.txt",
+      "sha256": "sha256:7cbe9d2cea34f1f7dfeb183b5b0beaebe7f83aed0f572689ce7aa217d106549f",
+      "bytes": 49,
+      "origin": "vibeic benchmark-data, ic/ tree. That tree left this repository at v1.10.56 (commit e23d0be5e, 'benchmark-data, benchmark_external and IP move to their own repositories'), so the path below is relative to the benchmark-data repository, not to this one. Source: ic/spm/v1.9.96_gf180mcuD/phase2/stage2/synth/synth.log, line 726 (the only 'Chip area' line in that log).",
+      "carries": "The one raw yosys line the synthesis figure is parsed from, so the parse can be checked against the tool's own words."
+    },
+    {
+      "path": "area/stage_pair/synthesis_stats.json",
+      "sha256": "sha256:357a2a1129f3133872b4ef675eb0edf9627b3cd0a18398d2a9414c23fe293d50",
+      "bytes": 1757,
+      "origin": "vibeic benchmark-data, ic/ tree. That tree left this repository at v1.10.56 (commit e23d0be5e, 'benchmark-data, benchmark_external and IP move to their own repositories'), so the path below is relative to the benchmark-data repository, not to this one. Source: ic/spm/v1.9.96_gf180mcuD/phase2/stage2/synth/stats.json. VERBATIM, unmodified.",
+      "carries": "Synthesis-stage area: chip_area 8047.6032 cell-library area units, 262 cells."
+    },
+    {
+      "path": "drc/zero_three_ways/deck.drc",
+      "sha256": "sha256:b3814d567e36061120f8e08472eaf25fce395e6302c490af66473be0351cc106",
+      "bytes": 290,
+      "origin": "Written for this fixture.",
+      "carries": "Six lines, two real KLayout DRC rules. Small on purpose: the full gf180mcuD deck would ship 763 categories, none of which is the property under test."
+    },
+    {
+      "path": "drc/zero_three_ways/deck_broken.drc",
+      "sha256": "sha256:e45286d80057ffd6e638b17f48d256c35643cac589114a6d5080220fcee281ce",
+      "bytes": 291,
+      "origin": "Written for this fixture: deck.drc with `input` -> `inputX`.",
+      "carries": "Aborts on line 4, after report() on line 3. The deck that produces the never-ran artefact."
+    },
+    {
+      "path": "drc/zero_three_ways/deck_never_ran/drc.xml",
+      "sha256": "sha256:4e88f3fc2409b4d4ff552cd907b7f6b45b19e7840f8fa002e1b061ca058fa543",
+      "bytes": 412,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. KLayout 0.30.10, deck_broken.drc. Exit 1 -- and the file was written ANYWAY, because report() runs before the error.",
+      "carries": "Zero violations because NO RULE EVER REGISTERED: 0 categories. Distinguishable from the other two, unlike them from each other."
+    },
+    {
+      "path": "drc/zero_three_ways/deck_never_ran/layout.gds.gz",
+      "sha256": "sha256:728a48d20e119e49e24356a914c71938a575914a7d1ec190bc4f2fd27759f100",
+      "bytes": 302,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. Same bytes as ran_and_found_none/layout.gds. Stored gzipped (`gzip -n -9`, so the bytes are deterministic): the repo's .gitignore ignores `*.gds` as EDA tool output, and `*.gds.gz` is outside that pattern, so the fixture is trackable without a .gitignore negation. drc_vacuous_pass_check.measure_layout reads .gds.gz with the same pure-Python record walk it uses for .gds -- MEASURED: shapes=3/0/3.",
+      "carries": "Real geometry, deliberately. It rules out 'the layout was empty' as the explanation and leaves only 'the deck never ran'."
+    },
+    {
+      "path": "drc/zero_three_ways/expected.json",
+      "sha256": "sha256:3606cbf6728cc0e75176c5a3b8dfa504d6d5690a74418524eec3907cab223dd3",
+      "bytes": 5820,
+      "origin": "Written for this fixture.",
+      "carries": "The known answer for all three, and the four-row discriminator table every lane should implement identically."
+    },
+    {
+      "path": "drc/zero_three_ways/mklayout_empty.py",
+      "sha256": "sha256:94efe65fcdf2a3572a7eeeab70a3dfed37407fc67b1a8064a8f81edf0960d0f8",
+      "bytes": 133,
+      "origin": "Written for this fixture.",
+      "carries": "Regenerates the empty layout."
+    },
+    {
+      "path": "drc/zero_three_ways/mklayout_populated.py",
+      "sha256": "sha256:edd8dcee90ffe4a4a5b08abdaa870af3c6f5f9f75dc76e54233567e08f4d1802",
+      "bytes": 334,
+      "origin": "Written for this fixture.",
+      "carries": "Regenerates the populated layout."
+    },
+    {
+      "path": "drc/zero_three_ways/ran_and_found_none/drc.xml",
+      "sha256": "sha256:0abbbf4dc0b2639b0db3735290135e331b55bb1816a99f4cc8009a242ce74a28",
+      "bytes": 702,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. KLayout 0.30.10, deck.drc over layout.gds. Exit 0.",
+      "carries": "Zero violations, EARNED. 2 categories, 0 items, 3 shapes in the layout."
+    },
+    {
+      "path": "drc/zero_three_ways/ran_and_found_none/layout.gds.gz",
+      "sha256": "sha256:728a48d20e119e49e24356a914c71938a575914a7d1ec190bc4f2fd27759f100",
+      "bytes": 302,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. KLayout 0.30.10 via mklayout_populated.py. Stored gzipped (`gzip -n -9`, so the bytes are deterministic): the repo's .gitignore ignores `*.gds` as EDA tool output, and `*.gds.gz` is outside that pattern, so the fixture is trackable without a .gitignore negation. drc_vacuous_pass_check.measure_layout reads .gds.gz with the same pure-Python record walk it uses for .gds -- MEASURED: shapes=3/0/3.",
+      "carries": "Three legal metal1 rectangles. The geometry that makes the clean above earned."
+    },
+    {
+      "path": "drc/zero_three_ways/ran_on_empty_layout/drc.xml",
+      "sha256": "sha256:0abbbf4dc0b2639b0db3735290135e331b55bb1816a99f4cc8009a242ce74a28",
+      "bytes": 702,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. KLayout 0.30.10, deck.drc over an EMPTY layout. Exit 0.",
+      "carries": "Zero violations, VACUOUS. BYTE-IDENTICAL to ran_and_found_none/drc.xml -- that identity is the finding: no report-only gate can ever tell the two apart."
+    },
+    {
+      "path": "drc/zero_three_ways/ran_on_empty_layout/layout.gds.gz",
+      "sha256": "sha256:2f812b907ca249066ce0914c85c571525b27417ddbce2c54d929bfb106bacb44",
+      "bytes": 110,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. KLayout 0.30.10 via mklayout_empty.py. Stored gzipped (`gzip -n -9`, so the bytes are deterministic): the repo's .gitignore ignores `*.gds` as EDA tool output, and `*.gds.gz` is outside that pattern, so the fixture is trackable without a .gitignore negation. drc_vacuous_pass_check.measure_layout reads .gds.gz with the same pure-Python record walk it uses for .gds -- MEASURED: shapes=3/0/3.",
+      "carries": "A top cell with NO geometry. 0 shapes. The only place the difference from its sibling exists."
+    },
+    {
+      "path": "power/activity_basis_pair/constraint.sdc",
+      "sha256": "sha256:cc07accfabe7a4ef13a1fd0680bb1726d6a010c9e7d584ca0255490b64c61282",
+      "bytes": 287,
+      "origin": "Written for this fixture.",
+      "carries": "Shared by BOTH runs. Its being one file is what makes the pair a basis comparison."
+    },
+    {
+      "path": "power/activity_basis_pair/power_vcd.tcl",
+      "sha256": "sha256:61a1098e98b0fae27c57f1096b5cdadefbfa54c3f324b2ba391201259259e23f",
+      "bytes": 539,
+      "origin": "Written for this fixture.",
+      "carries": "The exact recipe for the VCD half. Differs from its sibling in the activity-basis lines only."
+    },
+    {
+      "path": "power/activity_basis_pair/power_vectorless.tcl",
+      "sha256": "sha256:1869f94c867265068984fd93c0223b91064d6fce97c5874ae8fc1e79c5971e5c",
+      "bytes": 623,
+      "origin": "Written for this fixture.",
+      "carries": "The exact recipe for the vectorless half, so the pair is regenerable."
+    },
+    {
+      "path": "power/activity_basis_pair/tb.v",
+      "sha256": "sha256:a49e1d2ad3334bb1c7398cb33e0f455a7ffa0efcb3f5dbd25bc90cdce616a07c",
+      "bytes": 911,
+      "origin": "Written for this fixture.",
+      "carries": "Deterministic gate-level testbench (fixed LFSR seed, no $random) that produces the VCD. The VCD itself is 577 KB and is not shipped; sha256:f36673ae5027e29d32e84454a8b4ad1349c9a874734bab161f8533644536ac7a."
+    },
+    {
+      "path": "power/activity_basis_pair/vector_vcd.rpt",
+      "sha256": "sha256:2fec6a5bd38bbdd0c34a779bfbb6187883589788f7566acad1b30f43f4abf8ab",
+      "bytes": 1938,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. Same netlist, liberty, SDC and tool as its sibling; `sta -no_init -no_splash -exit power_vcd.tcl`.",
+      "carries": "Activity basis vector_vcd, 932 pin activities annotated. Total 2.4617e-03 W -- 49.2% higher than the vectorless number for the same silicon."
+    },
+    {
+      "path": "power/activity_basis_pair/vectorless_sdc.rpt",
+      "sha256": "sha256:8975440c0043b3ebbdf0d7ceaa70fdf1464cbcd8db8be1624fd15c29ebda3828",
+      "bytes": 1954,
+      "origin": "Generated for this fixture tree with real tools in the pinned image ghcr.io/vibeic/vibeic-eda:0.3.16. Regeneration commands are in the sibling expected.json. OpenSTA 2.7.0, `sta -no_init -no_splash -exit power_vectorless.tcl`, on the REAL published netlist ic/spm/v1.9.96_gf180mcuD/phase2/stage2/synth/chip_top_synth.v (sha256:59d48a1e762533eb7f8da668d73a829febdb82b14b7c958a778d4a16092f8f38, which matches the netlist_sha256 recorded in that run's stats.json).",
+      "carries": "Activity basis vectorless_sdc. Total 1.6496e-03 W. Half of the pair that differs ONLY in basis."
+    },
+    {
+      "path": "sta/known_answer/expected.json",
+      "sha256": "sha256:892b3543fc4e2079dedb86fbcb8f77404d0f10074ad151e20e80eb49f896a3c9",
+      "bytes": 2597,
+      "origin": "Written for this fixture.",
+      "carries": "The known answer: 2 MEASURED + 1 NOT_MEASURED, and the four things a consumer must not do."
+    },
+    {
+      "path": "sta/known_answer/views.declared.json",
+      "sha256": "sha256:1b8e52955c10cb41b368ff49074be5ce58e4c36ce102c4fa85c4172c20d5c902",
+      "bytes": 1798,
+      "origin": "Written for this fixture. The tt corner it declares is the one the real run declares in ic/spm/v1.9.96_gf180mcuD/reports/phase3/multi_corner_spef_stance.json (sha256 of that file not carried here; it is not shipped) and in reports/phase3/sta/sta_corner_record_completeness.json (sha256:c7680e3670cb27b13505f9298bf83ef75923a981ff124bd3a2471911d78d551c).",
+      "carries": "The DECLARED set. Without it a missing view is indistinguishable from a view nobody asked for."
+    },
+    {
+      "path": "sta/known_answer/views/hold_ff_n40c_5v50.rpt",
+      "sha256": "sha256:0e424c61408034fae39a65d87ebcb29528c71f85dd512fbb5f69452ae5145e6c",
+      "bytes": 2657,
+      "origin": "vibeic benchmark-data, ic/ tree. That tree left this repository at v1.10.56 (commit e23d0be5e, 'benchmark-data, benchmark_external and IP move to their own repositories'), so the path below is relative to the benchmark-data repository, not to this one. Source: ic/spm/v1.9.96_gf180mcuD/reports/phase3/sta_mcorner_ocv.rpt, sha256:1d44efe6867bba44e8f8be2e6027cdf4ef03a081edcd58de3ad6a0800d854930, lines 104-138 of 201. Trim: whole lines removed only; nothing edited.",
+      "carries": "The hold view with a KNOWN answer: 'worst slack min 0.57'. The second MEASURED view."
+    },
+    {
+      "path": "sta/known_answer/views/setup_ss_125c_4v50.rpt",
+      "sha256": "sha256:c25558003140dc5cddfba2e4845c2cb68eb50abbb59246044858a567e7895e4e",
+      "bytes": 2675,
+      "origin": "vibeic benchmark-data, ic/ tree. That tree left this repository at v1.10.56 (commit e23d0be5e, 'benchmark-data, benchmark_external and IP move to their own repositories'), so the path below is relative to the benchmark-data repository, not to this one. Source: ic/spm/v1.9.96_gf180mcuD/reports/phase3/sta_mcorner_ocv.rpt, sha256:1d44efe6867bba44e8f8be2e6027cdf4ef03a081edcd58de3ad6a0800d854930, lines 1-35 of 201. Trim: whole lines removed only; nothing edited.",
+      "carries": "The setup view with a KNOWN answer: 'worst slack max 14.56'. The MEASURED half of the STA fixture."
+    },
+    {
+      "path": "vacuous/README.md",
+      "sha256": "sha256:5a6292316c7a2b90c6104dbc19b4e4ce2501ca6bdff5a0f87b1eb9ab533e497d",
+      "bytes": 1715,
+      "origin": "Written for this fixture.",
+      "carries": "The two ways of having nothing, and the rule that they must not produce the same verdict."
+    },
+    {
+      "path": "vacuous/empty_but_present.rpt",
+      "sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "origin": "Created empty for this fixture.",
+      "carries": "'I read it and it was empty.' 0 bytes, and the integrity check fails if it ever gains any."
+    },
+    {
+      "path": "waiver/no_owner/expected.json",
+      "sha256": "sha256:a6768edfba999360505b3dceef4db10c7df0974d534323c170344917672d74ee",
+      "bytes": 1819,
+      "origin": "Written for this fixture.",
+      "carries": "Which of the three are owned, and why a presence check on the approver key is not enough."
+    },
+    {
+      "path": "waiver/no_owner/waivers.json",
+      "sha256": "sha256:993dac7dcb36fcf78cd5e8422858c54f89f5a762508a013c637e4a183cd4c7a1",
+      "bytes": 2159,
+      "origin": "Shape and entry id 36 taken from a real published waivers.json, vibeic benchmark-data, ic/ tree. That tree left this repository at v1.10.56 (commit e23d0be5e, 'benchmark-data, benchmark_external and IP move to their own repositories'), so the path below is relative to the benchmark-data repository, not to this one. Source: ic/edge_llm_accel/waivers.json. Entries 41 and 42 written for this fixture.",
+      "carries": "Three waivers, one owned. Entry 36 is the real unowned-but-looks-owned case (approver: 'tapeout-review-pending')."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "kind": "vibeic.package-invariants-enrollment",
+  "note": "Packages that MUST carry an INVARIANTS.json at their root. Enrollment is a SEPARATE memory from the file itself on purpose: if 'enrolled' meant 'has the file', deleting the file would delete the obligation and package_invariants_check would go green on exactly the act it exists to catch. Adding an entry is free. Removing one is only legitimate when the package directory is genuinely gone, and it also has to get past the floor pinned in programs/tests/test_package_invariants_check.py::test_enrollment_floor.",
+  "packages": [
+    "tools/ci",
+    "tools/phase1_engine",
+    "vibe-ic-marketplace/plugins/vibe-ic/agents",
+    "vibe-ic-marketplace/plugins/vibe-ic/commands",
+    "vibe-ic-marketplace/plugins/vibe-ic/ip-catalog",
+    "vibe-ic-marketplace/plugins/vibe-ic/skills"
+  ]
+}
