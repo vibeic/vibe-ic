@@ -274,7 +274,11 @@ class TestRewriteFloorplanDie:
         #    stops being true the two can drift again, which no output check on
         #    the builder alone would notice.
         src = inspect.getsource(mod._build_pnr_tcl_text)
-        assert "_floorplan_geometry_tcl(" in src, (
+        # `\b` and not a bare substring: `in` also matches a DIFFERENT function
+        # whose name merely ends with this one (`_INLINED_floorplan_geometry_
+        # tcl(`), which is exactly how a drift would be spelled. Measured -- a
+        # substring check passed that mutation.
+        assert re.search(r"\b_floorplan_geometry_tcl\(", src), (
             "_build_pnr_tcl_text no longer builds its floorplan geometry with "
             "_floorplan_geometry_tcl, so the emit and the retry-loop rewrite "
             "can drift apart -- the exact failure that builder exists to "
