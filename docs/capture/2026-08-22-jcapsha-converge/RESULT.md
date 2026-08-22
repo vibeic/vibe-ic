@@ -745,3 +745,52 @@ and not my edit.
 the pad-ring source — six commits, it fixes NORTH and two CORNERS with an A/B,
 and my rename duplicates its `c56b8e1b1` without adding to it. Take this branch
 for the register, the pins, the routing entry, the capture and the guard.
+
+
+---
+
+## F1's rule found its author
+
+I went looking for whether my two pin tests SKIP in CI — a pin that never runs
+where the gate matters is decorative. That question stays open (there is no
+`.github/workflows/`, and env-skipping has precedent here: `test_pad_ring.py`
+:851 skips with "no `PDK_ROOT` on this host"). The search turned up something
+worse, in code I shipped on this branch
+(`evidence/F1_RULE_APPLIED_TO_MY_OWN_CHECKER.md`).
+
+`upstream_contract_parity_check.py` re-reads the upstream file only when
+`--distribution-root` is given. Without one, the register's own snapshot is the
+denominator. **The verdict was byte-identical in both modes**, so a reader could
+not tell
+
+    "our re-implementations agree with UPSTREAM"
+
+from
+
+    "our re-implementations agree with OUR OWN RECORD of upstream"
+
+and only one of those is a statement about upstream. That is F1's class exactly
+— "not found" versus "not looked for" — in the program written to enforce the
+lesson.
+
+Fixed with a BASIS line printed at EVERY verdict, including failing ones,
+because a disclosure only on the happy path is not one:
+
+    BASIS: the register's RECORDED SNAPSHOTS for all 3 entry/entries. Upstream
+           was NOT re-read on this run — pass --distribution-root …
+
+    BASIS: upstream re-read under /usr/local/lib/python3.12/dist-packages for
+           3 of 3 entry/entries.
+
+**A result falls out of it:** the second form is the first time all three
+entries have been re-verified against a live distribution in one pass — 3 of 3,
+PASS, inside `ghcr.io/vibeic/vibeic-eda:0.3.24`. Every recorded sha256 in the
+register is byte-current with the shipped image.
+
+Three tests, and the mutation removes the CALL while deliberately leaving the
+helper in the source, so it cannot pass by deleting the string the tests grep
+for: 3 failed / 22 passed, restored 25 passed, checker byte-identical.
+
+Every other instance of this class on this branch was in code someone else
+wrote. This one is mine, in the program whose entire purpose is to stop a claim
+about upstream from going unchecked.
