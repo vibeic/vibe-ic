@@ -315,9 +315,15 @@ the tool suggested it.
                                                 flag pair, and what it does
                                                 NOT establish
     evidence/rotation_axis/HV_MEASURED_raw.txt  four separate processes, raw
+
+Both probes WRITE the DEF they read, so this bundle tracks no tool output and
+the reproduction needs only the two `.tcl` files and the image. Both were
+re-run from the committed copies after that change and reproduce the captured
+measurement byte for byte.
     evidence/rotation_axis/hv.tcl               the 2x2 probe
     evidence/rotation_axis/axis.tcl             the positive control
-    evidence/rotation_axis/probe.def            the input both read
+    evidence/rotation_axis/axis_control.txt     its complete row report, all
+                                                eight rows, not a grep of four
     evidence/mutation_sweep.txt                 12 of 12 killed, restored green
     evidence/mutation_sweep.py                  the sweep, reverse-edit restore
     recoveries.json                             4 records: 3 A, 1 T
