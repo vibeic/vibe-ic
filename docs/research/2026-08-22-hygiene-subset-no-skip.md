@@ -3745,3 +3745,54 @@ tree. The match above is evidence that the pair is consistent today, not a
 number to transcribe. That is the rule this entire branch was written to
 demonstrate, and the one place where trusting a printed value instead of
 re-deriving it would reproduce §9 exactly.
+
+## 55. The last stale pointer was one of mine, and it was asserting its own truth
+
+Having swept nine memory files for descriptions that had stopped covering their
+contents, I applied the same question to the artefacts this branch publishes,
+and found one: **`fix/jland67-hygiene-subset-honoured-squashed`**.
+
+Its commit message says, in its own first line, *"SQUASHED PRESENTATION of
+`fix/jland67-hygiene-subset-honoured`, byte-identical final tree"*. Measured:
+
+```
+squashed 0becaa967d   tree 198bbeb924e5d922…
+branch   46eb14d3ba   tree 73671d53269ffe4e…      NOT identical
+```
+
+I stopped refreshing it when the CODE froze, on the reasoning that the remedy it
+exists for is about code. That reasoning was fine and the conclusion was wrong,
+because **the artefact does not claim to carry the code — it claims to be
+byte-identical.** A claim does not stop being made when the thing behind it
+stops changing.
+
+Refreshed, and the claim now holds:
+
+```
+squashed 39e453df03   tree 73671d53269ffe4e…
+branch   46eb14d3ba   tree 73671d53269ffe4e…      IDENTICAL
+546487a8a3..39e453df03  landing_collateral_revert_check  rc 0
+```
+
+**This is the same defect the whole night has been about, and this is the fifth
+distinct place it turned up**, which is why it is worth one more section:
+
+| the artefact | its stale pointer | § |
+| --- | --- | --- |
+| `gatekeeper-land.sh` | its digest pin | 9 |
+| `gatekeeper-land-differential.sh` | the test fixture's program list | 53 |
+| this document | a header caching counts other sections moved | 43 |
+| nine memory files | descriptions that stopped covering their contents | — |
+| the squashed branch | a commit message asserting byte-identity | 55 |
+
+Every one: the artefact correct, the pointer stale, the failure silent, and
+invisible from inside the artefact. You see it only by comparing the declaration
+against the thing declared — which is a two-sided check, and therefore exactly
+the kind nothing routine performs.
+
+**The rule I would take from all five**, and it is the one this branch's own fix
+implements: *when a thing and its declaration must agree, make the agreement
+machine-checked, or expect it to drift.* `ci_harness_timeout_ceiling_check`
+exists because someone reached that conclusion about the lander. The fixture,
+the header, the memory descriptions and this branch's own squashed twin have no
+such check, and all four drifted within a single session.
