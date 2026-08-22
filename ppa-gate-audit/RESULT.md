@@ -3064,3 +3064,80 @@ STATE OF THE CLASS, over the denominator that is actually wired:
     2 gates invert on purpose -- feasibility and pareto, both licences now enforced
     2 gates collect-then-rank -- contract and problem_integrity, verified sound
     the shared corpus seam    -- probed, order-independent, sound
+
+
+# Part 29 — a correction: Part 28's "wired ZERO times" was false, and the
+# sweep finished properly
+
+WHAT PART 28 SAID, AND IT IS WRONG. It stated that the five PPA programs absent
+from `repo_hygiene_gates.sh` are "wired ZERO times and decide no published
+row". That was derived from grepping ONE wiring surface. MEASURED across the
+tree, there are at least four surfaces, and three of those five ARE wired:
+
+    power_total_vs_budget_check   flow/phase1_phase2_phase3.yaml  <- the
+                                  canonical 44-step flow, step "Power analysis
+                                  (pre/post-layout)", stage4
+    ppa_pr_scope_check            gatekeeper_review.py            <- the MERGE
+                                  gate, and it carries a row in
+                                  tools/ci/gate_red_since.json
+    ppa_area_threshold_check      benchmark/cvdp_gate.py
+    ppa_page_claim_check          ppa_report_gen.py
+
+Two of those gate consequential things -- the flow and the merge queue -- so
+"decides no published row" was not a harmless imprecision. The error is the
+same one this lane keeps finding: a denominator taken from the first place I
+looked, reported as the whole population. It is the THIRD time in this run of
+work that a coverage sentence of mine has had to be narrowed, and the pattern
+is worth more than the individual corrections: EVERY time, the sweep was real
+and the SCOPE CLAIM around it was broader than the evidence.
+
+ALL FOUR WERE THEN CHECKED FOR THE MASKING CLASS. Every one is SOUND, each by
+its own construction, and none needed a change:
+
+  `ppa_pr_scope_check` -- `verdict_of` collects all question rows and ranks
+      afterwards, hard findings first, and documents the exact rule this lane
+      has been enforcing: "FAIL beats UNDETERMINED beats PASS ... A real
+      finding is never silenced by something the run could not determine; that
+      is the direction in which a mistake is survivable." Its one
+      `except _Refusal` wraps INPUT ACQUISITION only -- a prerequisite, and the
+      reason the Part 26 sweep correctly did not flag it.
+
+  `power_total_vs_budget_check` -- one judgement produces one verdict, so there
+      are not two independent checks for one to mask the other. Its one
+      override is `basis_conflict and requirement is not None ->
+      J_UNDETERMINED`, which REPLACES the judgement rather than ordering behind
+      it. That is CORRECT and is the same category as `check_asserted_verdict`
+      staying below parity in Part 26: when the activity bases conflict the
+      watt figure is not comparable to the budget AT ALL, so "over budget" is
+      not independently demonstrable and there is no finding being withheld --
+      unlike the feasibility case, where the DRC violation IS established on
+      its own. The gate says so to the reader in terms: "Fix the measurement or
+      declare the basis; do not widen the budget."
+
+  `ppa_page_claim_check` -- collect-then-rank (`findings = check_page(...) +
+      check_claims(...)`, then `if findings: return RC_REFUSED`). Its early
+      RC_UNDETERMINED returns are genuine prerequisites: the page is absent,
+      the claims document will not parse, no claims are declared.
+
+  `ppa_area_threshold_check` -- a benchmark BLOCK gate reached through
+      `cvdp_gate.run_ppa_area_threshold`. Its verdict vocabulary is BLOCK/not,
+      not the rc-1/rc-2 split, so the class does not apply to it.
+
+  `ppa_signoff_records` -- the one genuinely unwired name, and it is a PRODUCER
+      rather than a gate: it WRITES records and returns only RC_OK,
+      RC_UNDETERMINED and RC_BAD_INVOCATION. It has no RC_REFUSED anywhere, so
+      there is no rc 1 for an rc 2 to hide. Structurally immune.
+
+THE SWEEP IS NOW COMPLETE OVER A DENOMINATOR THAT WAS MEASURED RATHER THAN
+ASSUMED -- all eleven PPA programs, across four wiring surfaces:
+
+    2 were defective     head_to_head (five ways), measurement -- repaired
+    2 invert on purpose  feasibility, pareto -- both licences now enforced
+    4 collect-then-rank  contract, problem_integrity, pr_scope, page_claim
+    1 single-judgement   power_total_vs_budget -- override argued and correct
+    1 different verdict  area_threshold (BLOCK vocabulary)
+    1 producer           signoff_records -- no RC_REFUSED to hide
+    shared corpus seam   worst_rc -- probed, order-independent, sound
+
+No program changed in this part. Prose only, and it exists because a claim I
+had already landed was false.
