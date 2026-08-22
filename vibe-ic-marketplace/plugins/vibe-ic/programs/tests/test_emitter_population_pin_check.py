@@ -1,6 +1,26 @@
 """`emitter_population_pin_check` must refuse a population that is stated twice
 and disagrees with itself.
 
+HOW MUCH OF THIS SUITE ACTUALLY COVERS THE FIX
+==============================================
+"Every fix ships with a test that goes RED without the fix" is easy to satisfy
+one commit at a time and easy to stop satisfying. Measured by swapping in
+3c3c51aee's 326-line program and running this file against it:
+
+    67 of 83 RED, 16 green.
+
+Ten of the sixteen are the author's originals, which test behaviour that already
+worked. The other six are: two that read files other than the program (the CI
+wiring, the polarity baseline), three that pin PRE-EXISTING behaviour against
+regression, and one structural invariant that held before as well. None is
+vacuous.
+
+Three did have to be fixed to reach that number. They asserted only that a
+marker was ABSENT -- which a program with no such tier passes trivially, so they
+would have survived the feature being deleted. They now assert the tier RAN and
+reported zero. Re-run the swap to reproduce; a test drifting onto the green list
+is a test that stopped covering the thing it names.
+
 MEASURED 2026-08-21: a lane added a THIRD repair to a post-route block, moved the
 emitter's own printed denominator from two to three, and left the test asserting
 the old ratio. The population moved and the pin did not, so the test failed for
@@ -2357,6 +2377,11 @@ def test_a_clean_tree_invents_no_substitution(tmp_path):
     progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
     r = _run(progs, tests)
     assert "[SUBSTITUTED]" not in r.stdout, r.stdout + r.stderr
+    # ABSENCE IS NOT ENOUGH. Measured: this test also passes against the
+    # pre-polarity program, which has no substitution tier at all -- so on its
+    # own it survives the feature being deleted. The tier must be shown to have
+    # RUN and reported zero.
+    assert "0 source(s) whose bytes were SUBSTITUTED" in r.stdout, r.stdout
 
 
 def test_a_legitimate_replacement_character_is_not_a_substitution(tmp_path):
@@ -2376,6 +2401,7 @@ def test_a_legitimate_replacement_character_is_not_a_substitution(tmp_path):
     assert "[SUBSTITUTED]" not in r.stdout, (
         "a clean file containing U+FFFD was reported as mangled:\n"
         + r.stdout + r.stderr)
+    assert "0 source(s) whose bytes were SUBSTITUTED" in r.stdout, r.stdout
 
 
 def test_the_vacuous_reason_does_not_deny_a_population_it_could_not_read(
@@ -2581,6 +2607,13 @@ def test_an_unmatched_pin_is_reach_and_never_a_finding(tmp_path):
     r = _run(progs, tests)
     assert r.returncode in (RC_PASS, RC_VACUOUS), r.stdout + r.stderr
     assert "[FAIL]" not in r.stdout, r.stdout
+    # and the pin was actually COUNTED, so this is "reach, not a finding" and
+    # not "no pin was ever seen". Written POSITIVELY: my first attempt at this
+    # said `"0 test pin(s) ..." not in stdout`, which is another absence and is
+    # trivially true of a program that prints no such clause at all -- measured,
+    # it did not move this test off the pre-fix program's passing list.
+    assert "1 test pin(s) the named program does not state a literal for" \
+        in r.stdout, r.stdout
 
 
 # ── --json - , the corpus spelling ──────────────────────────────────────────
