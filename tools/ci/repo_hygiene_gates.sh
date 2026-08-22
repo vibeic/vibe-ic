@@ -293,7 +293,7 @@ run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pa
 # MEASURED 2026-08-22:
 #   cross-layer  b000     vs 20 trials  ->  20 comparable, rc 0
 #   end-to-end   baseline vs 60 trials  ->  60 comparable, rc 0
-uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+uncheckable_until 2027-02-28 "PASSES today over 210 pairs — 21 contracts in 1 problem group, every pair inside the group compared. It was 20 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 # `--baseline` IS GONE, and dropping it is what makes this row decide anything.
 # MEASURED on a758f4adc, exactly as the line below was written:
 #
@@ -316,7 +316,7 @@ uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract 
 run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --corpus "$ROOT/ppa-crosslayer"
-uncheckable_until 2027-02-28 "PASSES today over 60 pairs; rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+uncheckable_until 2027-02-28 "PASSES today over 1830 pairs — 61 contracts in 1 problem group, every pair inside the group compared. It was 60 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --corpus "$ROOT/ppa-e2e"
