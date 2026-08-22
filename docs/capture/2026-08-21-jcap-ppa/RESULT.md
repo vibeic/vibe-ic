@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 38 records, and the eighteen already-program claims of which seventeen hold
+# The PPA cluster, DISTILLED — 39 records, and the eighteen already-program claims of which seventeen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 38 records](#the-38-records)
+- [The 39 records](#the-39-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -88,7 +88,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 35 | deterministic rules — the default, and every one names its predicate |
+| **A** | 36 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -230,7 +230,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 38 records
+## The 39 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1015,8 +1015,8 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            35     (22 when the rule was written)
-    distinct target programs    18
+    Bucket-A records            36     (22 when the rule was written)
+    distinct target programs    19
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
@@ -1466,6 +1466,38 @@ refusal demanded.
 
 ---
 
+### A-38 · a scope key the producer cannot establish is omitted, not emitted as null · `ppa.timing_scope`
+
+Found by reading a lane record's **mutation-arms** section — material the coverage
+note admitted it had skipped. Every party to this defect has already said it is
+wrong:
+
+    the interface document, in bold   a scope key present and null is WORSE
+                                      than one that is absent
+    the comparison gate               refuses on it by name
+    a program's own comment           44 occurrences of that refusal, one field
+    the timing module                 emits it anyway, at 3 call sites
+
+And the corner it cannot establish is the **governing setup corner**, so the rows
+most needed for a sign-off comparison are exactly the ones carrying the sentinel.
+
+**The fix is already demonstrated one module over.** The power producer had this
+same defect; the lane that repaired it left a mutation arm behind — revert the
+fix so the keys are emitted as null rather than omitted, and a named test goes
+red. The pattern to copy, the test shape to copy, and the sentence to cite all
+exist. What is missing is the same edit in a sibling file.
+
+*The request mapping had this as "partly A-2, from the producer side". Measuring
+it showed otherwise: A-2 is about whether a required key is PRESENT; this is a
+key that is present and null, which the interface calls worse than absent. The
+mapping was an assessment and this is a measurement.*
+
+**(o)** yes. **(d)** yes — the predicate is a null in any emitted scope, so it
+covers every producer and every key, which is what makes it worth building rather
+than editing the one module.
+
+---
+
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1569,8 +1601,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **10** steps. Without them **12 of the
-38 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **11** steps. Without them **13 of the
+39 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -1821,7 +1853,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          35     (26 when the rubric was applied)
+    Bucket-A records                          36     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1902,9 +1934,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 38 records**:
+the patterns were unchecked by anything. Over **all 39 records**:
 
-    pairs compared                      703
+    pairs compared                      741
     maximum similarity                 0.41
     pairs above 0.40                      0
 
@@ -2341,7 +2373,7 @@ what it contains. Mapped properly:
 |---|---|---|
 | 1 | give the runner a first-class synthesis-strategy flag | **now recorded as A-33** — verified: the runner exposes 3 place-and-route knobs and no synthesis actuator, and the search that hit this compensated by hand in 6 of 9 staged files |
 | 2 | state that an artefact the search may rewrite cannot sit in the `problem` identity | **now recorded as A-32**, and measured wider than the request: the scheme declares five identities and exactly one states what may not sit in it |
-| 3 | the timing module should omit scope keys it cannot establish, not write null | partly **A-2**, from the producer side |
+| 3 | the timing module should omit scope keys it cannot establish, not write null | **now recorded as A-38** — the mapping said "partly A-2", and measuring it showed otherwise: A-2 is about a key's PRESENCE, this is a present-but-null key the interface calls worse than absent |
 | 4 | fix the Phase-3 power session or stop the report claiming post-PnR | the class is **F-7** in the eighteen |
 | 5 | a `drv` producer | **A-1** exactly — the axis with no producer for any of its proof names |
 | 6 | declare the schema library or bundle it | the bundled-schema ALREADY-PROGRAM, plus **C-2** for the version matrix |
@@ -2896,7 +2928,7 @@ rather than in a command line that would fail for whoever tried it.
 
 ## Summary
 
-**STATUS**: 38 records emitted and validated — 35 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 39 records emitted and validated — 36 Bucket A, 2 C, 1 T, zero B,
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -2918,13 +2950,13 @@ artefacts; all 17 are present.*
 
 The skill splits Bucket A into ALREADY-PROGRAM / EXTRACT-NEW / AUGMENT-EXISTING /
 KEEP-JUDGMENT, and the implementing lane needs the split more than it needs the
-bucket. My 35 resolve as:
+bucket. My 36 resolve as:
 
 | resolution | n | records |
 |---|---:|---|
 | ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 13 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37 |
+| **EXTRACT-NEW** | 14 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -3073,6 +3105,7 @@ gap was non-empty every single time it was measured.
 | A-35 | 1 required scope key, 5 carried | **0 name the composition** | one component IS named — `fill` — and the rest are not |
 | A-36 | declaration honoured verbatim | **0 satisfiability checks** | and the producible set is not declared anywhere, so build that first |
 | A-37 | 23 refusal messages | **0 carry a remedy** | the first clean sweep in this lane to survive its own control |
+| A-38 | 3 null-emitting sites | **44 recorded refusals** | the doc forbids it in bold, the gate refuses it, a sibling module already fixed it |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |

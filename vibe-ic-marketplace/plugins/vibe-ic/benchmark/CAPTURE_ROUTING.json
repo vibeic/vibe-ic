@@ -274,6 +274,10 @@
     "phase2.rewrite_equivalence": {
       "bucket_A_program": "programs/crosslayer_rewrite_equivalence.py",
       "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
+    },
+    "ppa.timing_scope": {
+      "bucket_A_program": "programs/_ppa/timing.py",
+      "bucket_B_skill_file": "skills/sta-review/SKILL.md"
     }
   },
   "default_routing": {

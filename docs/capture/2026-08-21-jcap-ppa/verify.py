@@ -121,7 +121,12 @@ check("summary file list agrees with disk",
 
 # 8. every sketch resolves back to a section by name
 def slug(x: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", x.lower()).strip("_")[:80]
+    # MIRROR THE EMITTER, do not normalise independently. The emitter maps each
+    # non-alphanumeric character to a separator WITHOUT collapsing runs, so ", "
+    # becomes two. This function collapsed them, and the two agreed for 37 rule
+    # names because not one contained a comma. The 38th did, and the check that
+    # resolves a sketch to its section failed on a document that was correct.
+    return "".join(c if c.isalnum() else "_" for c in x.lower()).strip("_")[:80]
 byslug = {slug(h) for _, h in heads}
 defs = [d for f in CAND.glob("*.py")
         for d in re.findall(r"^def rule_(\w+)\(", f.read_text(), re.M)]
