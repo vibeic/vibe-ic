@@ -96,6 +96,25 @@ population is rc=2 with zero finding lines. It is proven able to fail.
    why `only_the_declaring_step_writes_its_output` exits 1 on this repository —
    a statement about the REPOSITORY, not about any run — and it must not be
    wired as a blocking gate until these are resolved.
+
+   **One of the six needs no judgement.** Resolved against the declaring step's
+   own `programs:` key, which is where the flow names a PRODUCER (gate clauses
+   name VERIFIERS and must not be read as ownership):
+
+   | declared output | step | flow-declared producer | verdict |
+   |---|---|---|---|
+   | `reports/spare_cell_coverage.json` | 18 | `spare_cell_coverage_check` | **owner is declared**; `phase3_one_shot_runner` is the interloper |
+   | `L21_POWER_INTENT.json` | D1 | — | flow declares no producer |
+   | `eco_log.json` | 32 | — | flow declares no producer |
+   | `no_eco_needed.flag` | 32 | — | flow declares no producer |
+   | `extraction_coverage_report.json` | D1 | — | flow declares no producer |
+   | `extraction_coverage_report.md` | D1 | — | flow declares no producer |
+
+   So ONE has an unambiguous answer already written in the flow, and FIVE are
+   declared by steps that name no producer at all — for those the flow cannot
+   name an owner and a person must. That second fact is worth its own attention:
+   an output the flow REQUIRES but for which it names nobody responsible is how
+   two writers arrive in the first place.
 2. **`clock_tree.rpt` is declared sign-off evidence and carries no stage stamp**,
    and the stamp has exactly two values. A report written after CTS and before
    routing can answer neither honestly. Closing it needs a third value in the
