@@ -256,3 +256,40 @@ def test_a_plainly_stated_pair_is_still_published():
     """The control arm. A fix that refused everything would pass the four tests
     above and be worthless."""
     assert _pairs("Data is packed from 8-bit to 32-bit words.") == {(8, 32)}
+
+
+# ── polarity for the siblings of the guarded width-pair reader (#712) ───────
+#
+# `_detect_width_pairs` was guarded and its ten siblings were not, so one spec
+# was read by two rules. Byte order and rounding are what the arithmetic IS.
+
+def test_a_retired_byte_order_is_not_read_as_stated():
+    assert M._detect_byte_order(
+        "Little-endian packing is no longer used.\n"
+        "The packing is big-endian.") == "big-endian"
+
+
+def test_a_retired_saturation_requirement_is_not_evidence_for_it():
+    """It returned the sentence RETIRING saturation as the evidence FOR it."""
+    assert M._detect_saturation(
+        "Saturation on overflow is no longer used; the result wraps.") is None
+
+
+def test_a_retired_rounding_mode_is_dropped_and_the_live_one_kept():
+    assert M._detect_rounding_modes(
+        "Round-half-up is no longer used.\nRounding truncates.") \
+        == [("round_toward_zero", "truncates")]
+
+
+def test_a_MODE_DESCRIPTION_containing_a_negative_word_is_not_a_denial():
+    """The false refusal this nearly shipped, caught by the suite. VERBATIM from
+    the corpus: "RTZ: Truncate the fractional part without rounding up." The
+    full negation vocabulary reads "without" and drops a correctly stated mode,
+    so the rounding path asks only whether the mode was RETIRED.
+
+    What that misses is stated in `_first_not_retired`: "does not use
+    round-half-up" is not caught, because the vocabulary that catches it is the
+    one that breaks this line."""
+    modes = {t for t, _ in M._detect_rounding_modes(
+        "RTZ: Truncate the fractional part without rounding up.\n")}
+    assert "round_toward_zero" in modes
