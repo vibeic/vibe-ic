@@ -19,6 +19,7 @@
 > | Are the other reds new? | No. 17 reds examined, every one not fixed here is red on CLEAN MAIN | §36–37 |
 > | Is it landed? | Yes — batch `2d98cacd4b`, lander hash and pin verified together, 148 passed | §29 |
 > | Should the batch be re-assembled for my finding? | **NO.** The base already fails that gate on `jrows`'s finding; mine is additive | §30 |
+> | **How did the defect get IN?** | The no-skip test is NOT selected by the default targeted mode for a change to `gatekeeper_review.py` — and the #565 gap report says `NOT selected 0` because it shares the blind spot | **§39** |
 > | What is still open? | `jrows`'s revert; two flow-level defects (§18, §28); the end-to-end run, blocked by `argparse` 1.4.0 in the user site (§31) | — |
 >
 > **Superseded, do not act on:** §23's trade (both bullets — see §30) · §26's
@@ -26,7 +27,15 @@
 > first "shadows stdlib" wording (§31's own correction) · §3's "~550 s" (§3's
 > correction) · §13's "clears 6" (§22 — it is seven).
 >
-> §32 is the register of all 15 corrected claims and all 12 instruments that
+> **If you read only one section beyond the fix, read §39.** It is the only part
+> of this document that explains how `4232a7301` reached the batch at all, and
+> the only finding here that is about the gate rather than about this branch:
+> a bounded selection is fine, but its DISCLOSURE is computed by the same
+> analysis it audits, so it reports "0 dropped" and means "0 that I can see".
+> 15% of the tests tree reaches its subject by a route that analysis cannot
+> follow.
+>
+> §32 is the register of all 16 corrected claims and all 12 instruments that
 > answered the wrong question. If you are auditing this work, start there.
 
 
