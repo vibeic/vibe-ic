@@ -15,6 +15,17 @@ wiring, the polarity baseline), three that pin PRE-EXISTING behaviour against
 regression, and one structural invariant that held before as well. None is
 vacuous.
 
+THE SWAP RUN THE OTHER WAY, because "my tests pass" is not the same claim as
+"the author's contract still holds": 3c3c51aee's ORIGINAL test file, unmodified,
+against this program -- 10 passed. Exactly one of the author's test bodies
+differs here at all, `test_the_shipped_corpus_is_clean`, and only in taking the
+shared `real_run` fixture instead of spawning its own subprocess; its single
+assertion is AST-identical, compared node by node. A fixture can narrow where a
+literal command cannot, so
+`test_the_shared_run_really_sweeps_the_whole_shipped_tree` checks the sweep
+against the tree on disk -- measured: point the fixture at a subdirectory and
+the author's test still passes while that one fails.
+
 Three did have to be fixed to reach that number. They asserted only that a
 marker was ABSENT -- which a program with no such tier passes trivially, so they
 would have survived the feature being deleted. They now assert the tier RAN and
@@ -174,6 +185,28 @@ def test_no_counter_with_a_threshold_is_silently_missed():
         "these emitted counters state a membership at MIN_POPULATION sites or "
         "more AND a literal threshold, and this guard compared neither: "
         + repr(missed))
+
+
+def test_the_shared_run_really_sweeps_the_whole_shipped_tree(real_run):
+    """`test_the_shipped_corpus_is_clean` is the author's, and the ONE change
+    this branch made to it was replacing its own subprocess with this fixture --
+    its assertion is AST-identical, checked. But a fixture can narrow where a
+    literal command could not: point it at a subdirectory and the author's test
+    still passes, over less.
+
+    So the sweep is checked against the tree itself, using the corpus disclosure
+    the verdict now carries."""
+    _r, doc = real_run
+    on_disk_programs = len(list(PROGRAMS_DIR.glob("*.py")))
+    on_disk_tests = len(list(TESTS_DIR.rglob("test_*.py")))
+    assert doc["corpus"] == {"programs": on_disk_programs,
+                             "tests": on_disk_tests}, (
+        "the shared run did not cover the shipped tree -- the author's corpus "
+        f"test is passing over less than it did: {doc['corpus']} vs "
+        f"{{'programs': {on_disk_programs}, 'tests': {on_disk_tests}}}")
+    assert on_disk_programs > 100 and on_disk_tests > 100, (
+        "the tree this ran against holds almost nothing, so agreement with it "
+        "is not evidence")
 
 
 def test_the_shipped_corpus_is_clean(real_run):
