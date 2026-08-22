@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 37 records, and the eighteen already-program claims of which seventeen hold
+# The PPA cluster, DISTILLED — 38 records, and the eighteen already-program claims of which seventeen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 37 records](#the-37-records)
+- [The 38 records](#the-38-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -86,7 +86,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 34 | deterministic rules — the default, and every one names its predicate |
+| **A** | 35 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -228,7 +228,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 37 records
+## The 38 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1013,7 +1013,7 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            34     (22 when the rule was written)
+    Bucket-A records            35     (22 when the rule was written)
     distinct target programs    16
     targets that are unwired     0
 
@@ -1435,6 +1435,35 @@ and any view vocabulary the flow later gains.
 
 ---
 
+### A-37 · a refusal that names the obstacle also names the remedy · `ppa.cli_contract`
+
+The last unmined item in the brief's sources, and the first clean sweep in this
+lane whose screen survived its own control.
+
+    refusal messages in the layer            23
+    carrying an executable remedy             0
+
+**The screen was validated before the figure was believed**, because a zero from
+an unvalidated screen is the failure this report has recorded six times. It
+detects 2 of 3 known remedy phrasings and rejects 2 of 2 messages that carry
+none — so it under-detects by about a third, and the honest reading is *very
+small*, not *provably zero*. It missed one of its own controls because my verb
+list has no entry for "wrap".
+
+**The cost is on record from the lane that paid it.** A contract builder refuses
+an image reference given in tag form, for a good reason, and prints no hint. The
+request that came out of it names the exact command that resolves the refusal and
+says printing that command would have saved a cycle — which is a cycle spent
+rediscovering something the program had already established.
+
+**(o)** yes — on the refusal that produced the request.
+**(d)** yes: the predicate is a remedy on any refusal whose accepted form is
+derivable from what the program already checked, so it covers a flag the program
+declares, a validator's own pattern, and a command whose output is the value the
+refusal demanded.
+
+---
+
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1538,8 +1567,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **11** steps. Without them **11 of the
-37 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **10** steps. Without them **12 of the
+38 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -1790,7 +1819,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          34     (26 when the rubric was applied)
+    Bucket-A records                          35     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1844,9 +1873,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 37 records**:
+the patterns were unchecked by anything. Over **all 38 records**:
 
-    pairs compared                      666
+    pairs compared                      703
     maximum similarity                 0.41
     pairs above 0.40                      0
 
@@ -2236,7 +2265,7 @@ what it contains. Mapped properly:
 | 7 | report how far the equivalence induction got | **now recorded as A-34** — the program already emits a depth field for its refutation half and none for its induction half |
 | 8 | the post-route repair crash, ten reproductions | **T-1** exactly |
 | 9 | name the taps in the area taxonomy | **now recorded as A-35, and my assessment was wrong** — tested, the required scope is 1 key and the composition is not among the 5 carried, so the required-key rule cannot reach it |
-| 10 | the smaller ones | its substantive half is **now recorded as A-36**; the other half — a refusal that gives a good reason and no resolving command — is left as the actionability item it is |
+| 10 | the smaller ones | **both halves now recorded** — the satisfiability item as **A-36**, and the refusal-without-a-remedy item as **A-37**, which measures 23 refusals in the layer and 0 carrying one |
 
 **Four are covered exactly, one partly, five are not mined.** They are listed
 rather than absorbed, because a request that is neither paid nor recorded is
@@ -2784,7 +2813,7 @@ rather than in a command line that would fail for whoever tried it.
 
 ## Summary
 
-**STATUS**: 37 records emitted and validated — 34 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 38 records emitted and validated — 35 Bucket A, 2 C, 1 T, zero B,
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -2812,7 +2841,7 @@ bucket. My 27 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 12 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36 |
+| **EXTRACT-NEW** | 13 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -2957,6 +2986,7 @@ gap was non-empty every single time it was measured.
 | A-34 | 2 runs, 3.8 s and 1795 s | **identical JSON** | the depth field exists for the other half of the method |
 | A-35 | 1 required scope key, 5 carried | **0 name the composition** | one component IS named — `fill` — and the rest are not |
 | A-36 | declaration honoured verbatim | **0 satisfiability checks** | and the producible set is not declared anywhere, so build that first |
+| A-37 | 23 refusal messages | **0 carry a remedy** | the first clean sweep in this lane to survive its own control |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |
