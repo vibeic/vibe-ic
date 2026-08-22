@@ -1885,6 +1885,42 @@ def test_the_lower_bound_set_does_not_leak_between_programs(tmp_path):
         ("aa_helper.py", "_n")], doc
 
 
+def test_the_lower_bound_rule_reaches_every_denominator_kind(tmp_path):
+    """The lower-bound path was only ever exercised with a COMPARISON
+    denominator, and `_DEN_TEMPLATES` has three kinds. The polarity path had the
+    identical gap and it was closed earlier on this branch; this is the same
+    sweep for the rule added later.
+
+    A kind that fell out of the rule would fail in the CONFIDENT direction: a
+    retired `($_n/3)` or `of 3 repairs` compared against a literal site count
+    that only counts what is written, refusing a truthful emitter.
+
+    `denominator_kind` is asserted, not just the count. It is the field that
+    tells a reader WHICH of the three statements was declined, and the evidence
+    test for this line does not check it -- a record that says "something was
+    undecidable" without saying which sends them to read all three."""
+    head = ('def _repair(name):\n'
+            '    return "  if {[catch {%s}]} { incr _n }\\n" % name\n\n\n'
+            'def script():\n    return ("  set _n 0\\n" + _repair("a")\n'
+            '            + _repair("b") + _repair("c") + ')
+    kinds = {"comparison": '  if {$_n >= 3} { puts ALL }',
+             "ratio": '  puts "($_n/3) refused"',
+             "prose": '  puts "PARTIAL: $_n of 3 repairs refused"'}
+    for kind, line in kinds.items():
+        emitter = head + repr(line + "\n") + ")\n"
+        progs, tests = _tree(tmp_path / kind, emitter,
+                             "def test_x():\n    assert True\n")
+        r = _run(progs, tests, "--json", tmp_path / f"{kind}.json")
+        doc = json.loads((tmp_path / f"{kind}.json").read_text())
+        assert doc["findings"] == [], (
+            f"{kind}: a truthful helper-assembled emitter was refused: {doc}")
+        assert [d["denominator_kind"] for d in doc["not_determined"]] == [kind], (
+            f"{kind}: the lower-bound rule did not reach this kind, or recorded "
+            f"it under another name: {doc['not_determined']}")
+        # only this counter exists, so declining it leaves nothing compared
+        assert r.returncode == RC_VACUOUS, r.stdout + r.stderr
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
