@@ -191,8 +191,12 @@ def _transition_pair(*, replacement_state="PASS", benchmark_sha=_BENCHMARK_SHA):
         receipts.append({
             "schema": 1, "complete": True, "label": row["label"],
             "argv_sha256": rec["argv_sha256"], "returncode": rc,
+            "semantic": {key: rec[key] for key in (
+                "returncode", "verdict_line", "finding_identities",
+                "semantic_sha256")},
             "owned": {
-                "protocol": 1, "rc": rc, "body": "independent output\n",
+                "protocol": 1, "rc": rc,
+                "body": rec["verdict_line"] + "\n",
                 "problem": None, "outcome": "natural", "launched": True,
                 "census_ok": True, "final_descendants": [], "observed": [],
                 "capability_error": "",
@@ -481,6 +485,20 @@ def test_whole_record_refuses_a_forged_redundant_count():
     assert "ran count" in str(e.value)
 
 
+def test_whole_record_refuses_pass_rc_zero_with_failure_semantics():
+    """A self-consistent digest cannot turn measured red output into PASS."""
+    base = _record(_base_gates())
+    candidate = _record(_base_gates())
+    row = candidate["gates"][0]
+    candidate["process_attestations"][0] = A.process_attestation(
+        row["label"], "[FAIL] checker found a real defect\n", 0,
+        ["python3", "checker.py", row["label"]])
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "claims PASS" in str(e.value)
+    assert "[FAIL] checker found a real defect" in str(e.value)
+
+
 def test_whole_record_does_not_accept_bool_as_an_integer_count():
     base = _record(_base_gates())
     candidate = _record(_base_gates(), declared=True)
@@ -617,6 +635,29 @@ def test_transition_refuses_without_parent_owned_evidence():
     assert "parent-owned canonical manifest" in str(e.value)
 
 
+def test_parent_evidence_requires_activation_not_a_copied_phase1_empty_record():
+    """An explicit bootstrap request cannot degrade into an ordinary no-op."""
+    phase1_base, _expanded, evidence = _transition_pair()
+    candidate = copy.deepcopy(phase1_base)
+    with pytest.raises(H.Refusal) as e:
+        H.delta(phase1_base, candidate, evidence)
+    assert "retained the base declaration set" in str(e.value)
+
+
+def test_cli_parent_evidence_requires_activation_not_a_copied_empty_record(
+        tmp_path):
+    phase1_base, _expanded, evidence = _transition_pair()
+    base_path = _write(tmp_path, "phase1-base.json", phase1_base)
+    candidate_path = _write(
+        tmp_path, "candidate-copy.json", copy.deepcopy(phase1_base))
+    evidence_path = _write(tmp_path, "parent-transition.json", evidence)
+    rc, out = _run(
+        base_path, candidate_path,
+        extra=("--trusted-transition-evidence", str(evidence_path)))
+    assert rc == H.RC_REFUSED
+    assert "retained the base declaration set" in out
+
+
 def test_transition_refuses_a_forged_positive_item_count():
     base, candidate, evidence = _transition_pair()
     candidate["corpora"][0]["items"] = 2
@@ -658,7 +699,7 @@ def test_transition_refuses_a_self_consistent_candidate_lie_against_parent_rc():
     _refresh(candidate)  # makes a fully self-consistent rc-1 FAIL attestation
     with pytest.raises(H.Refusal) as e:
         H.delta(base, candidate, evidence)
-    assert "OS return-code receipt" in str(e.value)
+    assert "complete process-semantic receipt" in str(e.value)
 
 
 def test_transition_refuses_a_self_consistent_wrong_command_digest():
@@ -670,7 +711,26 @@ def test_transition_refuses_a_self_consistent_wrong_command_digest():
     candidate["process_attestations"][1] = forged
     with pytest.raises(H.Refusal) as e:
         H.delta(base, candidate, evidence)
-    assert "ordinal, command and OS return-code" in str(e.value)
+    assert "ordinal, command and complete process-semantic" in str(e.value)
+
+
+def test_transition_refuses_candidate_semantics_that_disagree_with_parent():
+    base, candidate, evidence = _transition_pair()
+    row = candidate["gates"][1]
+    candidate["process_attestations"][1] = A.process_attestation(
+        row["label"], "[PASS] candidate-authored substitute\n", 0,
+        ["python3", "checker.py", row["label"]])
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "complete process-semantic receipt" in str(e.value)
+
+
+def test_transition_refuses_malformed_parent_semantic_digest():
+    base, candidate, evidence = _transition_pair()
+    evidence["execution_receipts"][0]["semantic"]["semantic_sha256"] = "0" * 64
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "digest mismatch" in str(e.value)
 
 
 def test_transition_refuses_missing_parent_execution_receipt():
@@ -834,3 +894,57 @@ def test_the_three_exit_codes_are_distinct():
     run that found a problem — and both become `not clean`."""
     assert len({H.RC_OK, H.RC_INTRODUCED, H.RC_REFUSED}) == 3
     assert (H.RC_OK, H.RC_INTRODUCED, H.RC_REFUSED) == (0, 1, 2)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# vibe-ic#1764 — the delta may not re-collapse what the dispatcher split
+# ══════════════════════════════════════════════════════════════════════
+
+def _corpus_row(name, expansion):
+    """One `corpora` row as `gate_dispatch_over` writes it.
+
+    `items` is 0 in BOTH states on purpose: that integer is exactly what made
+    the two indistinguishable, and a consumer that keys off it alone will read
+    "somebody measured a population of zero" over a corpus nothing opened.
+    """
+    return {"name": name, "items": 0, "gates": 1, "expansion": expansion}
+
+
+def test_a_corpus_nothing_opened_is_not_reported_as_one_that_was_read():
+    """Both states, in one call, because the defect is about the PAIR."""
+    # BOTH corpora on BOTH arms: the two runs must declare the same gate set
+    # for either to be a denominator for the other, and the property under
+    # test is the PARTITION between them, not a difference between the arms.
+    def population(corpus):
+        row = _gate(f'corpus "{corpus}" population', "NOT_CHECKED",
+                    corpus=corpus)
+        row["corpus_item"] = 0
+        row["corpus_items"] = 0
+        return row
+
+    def arm():
+        return _record(
+            _base_gates() + [population("read but empty"),
+                             population("never opened")],
+            corpora=[_corpus_row("read but empty", "EXPANDED"),
+                     _corpus_row("never opened", H.NO_CORPUS_EXPANSION)])
+
+    d = H.delta(arm(), arm())
+
+    assert d["empty_corpora"] == ["read but empty"], d["empty_corpora"]
+    assert d["absent_corpora"] == ["never opened"], d.get("absent_corpora")
+    assert "never opened" not in d["empty_corpora"], (
+        "a corpus whose producer resolved nothing is reported under the "
+        "sentence for a corpus that WAS read and holds none — the dispatcher "
+        "stopped collapsing these and the delta put it back (vibe-ic#1764)")
+    assert "read but empty" not in d["absent_corpora"]
+
+
+def test_a_refusal_still_carries_both_corpus_lists():
+    """A caller reads these with `.get`, and an absent key must not be a state
+    the reader has to guess about — the same reason `exempt_until` is always
+    present on a gate."""
+    refused = H.compare(Path("/nonexistent-base.json"),
+                        Path("/nonexistent-cand.json"), _HOST, _HOST)
+    assert refused["status"] == H.REFUSED
+    assert refused["empty_corpora"] == [] and refused["absent_corpora"] == []

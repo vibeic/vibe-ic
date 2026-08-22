@@ -200,6 +200,12 @@ ROUTED_DEF_GATE_LABELS = (
 
 _FULL_GIT_OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_FINDING_LINE = re.compile(
+    r"^\s*(?:"
+    r"\[(?:FAIL|FAILED|ERROR|UNDETERMINED|NOT[ _]CHECKED|NORECORD)\]"
+    r"|FAILED\s+|ERROR\s+|FAIL(?:ED)?[\s:]"
+    r"|AssertionError[\s:]|E\s{2,})",
+    re.IGNORECASE)
 
 TERMINAL_STATES = (
     "PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS", "OUT_OF_SCOPE",
@@ -329,9 +335,25 @@ def _corpus_producer_failures(doc: dict) -> List[str]:
             if c.get("expansion") == "PRODUCER_FAILED"]
 
 
+#: `gate_dispatch_over`'s expansion state for a corpus that was never opened
+#: (vibe-ic#1764).  Its `items` is 0 like an empty corpus's is, and that is
+#: exactly why it needs its own name here: `items: 0` off a corpus that WAS
+#: read is a measured population, and off this one it is the absence of a
+#: measurement.  Reporting them under one sentence is the defect the
+#: dispatcher stopped doing; a consumer that re-collapses them downstream has
+#: only moved it.
+NO_CORPUS_EXPANSION = "NO_CORPUS"
+
+
+def _absent_corpora(doc: dict) -> List[str]:
+    return [str(c.get("name", "?")) for c in (doc.get("corpora") or [])
+            if c.get("expansion") == NO_CORPUS_EXPANSION]
+
+
 def _empty_corpora(doc: dict) -> List[str]:
     return [str(c.get("name", "?")) for c in (doc.get("corpora") or [])
-            if int(c.get("items") or 0) == 0]
+            if int(c.get("items") or 0) == 0
+            and c.get("expansion") != NO_CORPUS_EXPANSION]
 
 
 def _exact_int(value: object, what: str, *, minimum: int = 0) -> int:
@@ -369,6 +391,44 @@ def _benchmark_oid(doc: dict, arm: str) -> str:
     return oid
 
 
+def _validated_semantic(payload: object, what: str) -> dict:
+    """Validate the exact semantic record emitted by the trusted helper."""
+    fields = {
+        "returncode", "verdict_line", "finding_identities", "semantic_sha256",
+    }
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise Refusal(f"{what} has no exact process semantic record")
+    rc = payload.get("returncode")
+    verdict = payload.get("verdict_line")
+    findings_ = payload.get("finding_identities")
+    if (isinstance(rc, bool) or not isinstance(rc, int)
+            or not isinstance(verdict, str) or not verdict
+            or not isinstance(findings_, list)
+            or not all(isinstance(item, str) and item
+                       for item in findings_)):
+        raise Refusal(f"{what} has malformed process semantics")
+    if findings_ != sorted(set(findings_)) \
+            or any(_FINDING_LINE.match(item) is None for item in findings_):
+        raise Refusal(
+            f"{what} does not carry the canonical set of recognized process "
+            f"finding identities")
+    # A verdict line is one of the lines the helper scans.  It cannot identify
+    # a failure while the same record's finding set claims none.
+    if _FINDING_LINE.match(verdict) is not None and verdict not in findings_:
+        raise Refusal(f"{what} omits its failure-bearing verdict line")
+    semantic = {
+        "returncode": rc,
+        "verdict_line": verdict,
+        "finding_identities": findings_,
+    }
+    expected = hashlib.sha256(json.dumps(
+        semantic, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":")).encode("utf-8")).hexdigest()
+    if payload.get("semantic_sha256") != expected:
+        raise Refusal(f"{what} has a process-attestation digest mismatch")
+    return payload
+
+
 def _attestation_valid_for(row: dict, rec: dict, arm: str) -> None:
     """Validate the process record rather than counting an arbitrary dict."""
     label = str(row.get("label", ""))
@@ -390,35 +450,23 @@ def _attestation_valid_for(row: dict, rec: dict, arm: str) -> None:
             or _SHA256.fullmatch(rec["argv_sha256"]) is None):
         raise Refusal(
             f"the {arm} gate {label!r} has an invalid attested argv digest")
-    rc = rec.get("returncode")
-    findings_ = rec.get("finding_identities")
-    if (isinstance(rc, bool) or not isinstance(rc, int)
-            or not isinstance(rec.get("verdict_line"), str)
-            or not isinstance(findings_, list)
-            or not all(isinstance(item, str) for item in findings_)):
-        raise Refusal(
-            f"the {arm} gate {label!r} has malformed process evidence")
-    semantic = {
-        "returncode": rc,
-        "verdict_line": rec["verdict_line"],
-        "finding_identities": findings_,
-    }
-    expected = hashlib.sha256(json.dumps(
-        semantic, sort_keys=True, ensure_ascii=False,
-        separators=(",", ":")).encode("utf-8")).hexdigest()
-    if rec.get("semantic_sha256") != expected:
-        raise Refusal(
-            f"the {arm} gate {label!r} has a process-attestation digest "
-            f"mismatch")
+    semantic = _validated_semantic(
+        {key: rec.get(key) for key in (
+            "returncode", "verdict_line", "finding_identities",
+            "semantic_sha256")},
+        f"the {arm} gate {label!r}")
+    rc = semantic["returncode"]
+    findings_ = semantic["finding_identities"]
     stated = rec.get("state", "")
     if stated not in ("", row.get("state")):
         raise Refusal(
             f"the {arm} gate {label!r} says {row.get('state')!r} but its "
             f"process attestation says {stated!r}")
     state = str(row.get("state", ""))
-    if state == "PASS" and rc != 0:
+    if state == "PASS" and (rc != 0 or findings_):
         raise Refusal(
-            f"the {arm} gate {label!r} claims PASS over process rc {rc}")
+            f"the {arm} gate {label!r} claims PASS over process rc {rc} "
+            f"and finding identities {findings_!r}")
     if state == "NOT_CHECKED" and rc != 2:
         raise Refusal(
             f"the {arm} gate {label!r} claims NOT_CHECKED over process rc "
@@ -552,7 +600,13 @@ def _validate_record(doc: dict, arm: str) -> Dict[str, dict]:
                            f"the {arm} corpus {name!r} items")
         gate_count = _exact_int(meta.get("gates"),
                                 f"the {arm} corpus {name!r} gates")
-        if meta.get("expansion") not in ("EXPANDED", "PRODUCER_FAILED"):
+        # NO_CORPUS is vibe-ic#1764's third state and it is ACCEPTED, not
+        # refused: the dispatcher already blocks on its row, and refusing the
+        # whole delta here would replace one true sentence ("nothing was
+        # opened") with a false one about a malformed record. It is NOT folded
+        # into EXPANDED — `items: 0` under EXPANDED is a measured population.
+        if meta.get("expansion") not in (
+                "EXPANDED", "PRODUCER_FAILED", NO_CORPUS_EXPANSION):
             raise Refusal(
                 f"the {arm} corpus {name!r} has unknown expansion state")
         associated = [row for row in gates if row.get("corpus") == name]
@@ -705,7 +759,7 @@ def _trusted_routed_evidence(doc: object) -> dict:
         raise Refusal("parent-owned evidence has no execution receipts")
     receipt_by_label = {}
     receipt_fields = {"schema", "complete", "label", "argv_sha256",
-                      "returncode", "owned"}
+                      "returncode", "semantic", "owned"}
     owned_fields = {"protocol", "rc", "body", "problem", "outcome",
                     "launched", "census_ok", "final_descendants", "observed",
                     "capability_error"}
@@ -723,6 +777,13 @@ def _trusted_routed_evidence(doc: object) -> dict:
                 or isinstance(rc, bool) or not isinstance(rc, int)
                 or not isinstance(owned, dict) or set(owned) != owned_fields):
             raise Refusal(f"parent-owned receipt for {label!r} is not exact")
+        semantic = _validated_semantic(
+            receipt.get("semantic"),
+            f"parent-owned receipt for {label!r}")
+        if semantic["returncode"] != rc:
+            raise Refusal(
+                f"parent-owned receipt for {label!r} has inconsistent "
+                f"return codes")
         protocol, owned_rc = owned.get("protocol"), owned.get("rc")
         observed = owned.get("observed")
         if (type(protocol) is not int or protocol != 1
@@ -830,13 +891,16 @@ def _corpus_transition(base: dict, cand: dict, only_base: Counter,
         expected = trusted["gates"][label]
         receipt = trusted["receipts"][label]
         attested = cand_attestations[label]
+        candidate_semantic = {key: attested[key] for key in (
+            "returncode", "verdict_line", "finding_identities",
+            "semantic_sha256")}
         if (row.get("corpus_item") != expected["ordinal"]
                 or row.get("corpus_items") != items
                 or attested["argv_sha256"] != expected["argv_sha256"]
-                or attested["returncode"] != receipt["returncode"]):
+                or candidate_semantic != receipt["semantic"]):
             raise Refusal(
                 f"candidate gate {label!r} does not match its parent-owned "
-                f"ordinal, command and OS return-code receipt")
+                f"ordinal, command and complete process-semantic receipt")
         rc, state = receipt["returncode"], row["state"]
         expected_state = "PASS" if rc == 0 else "NOT_CHECKED" if rc == 2 else "FAIL"
         if state != expected_state and state != "WROTE_CORPUS":
@@ -908,6 +972,18 @@ def delta(base: dict, cand: dict,
     b_ident, c_ident = Counter(ident(g) for g in bg), Counter(ident(g) for g in cg)
     only_base, only_cand = b_ident - c_ident, c_ident - b_ident
     transition = None
+    if trusted_transition_evidence is not None and not (only_base or only_cand):
+        # The outer verifier supplies this record only for the one bootstrap
+        # landing.  Treating it as an optional hint would let a candidate keep
+        # the EMPTY declaration (or silently fail to activate the producer)
+        # and receive an ordinary CLEAN comparison without ever proving the
+        # manifest expansion.  Validate even on this refusal path so malformed
+        # or wrong-corpus evidence never acquires a second, weaker meaning.
+        _trusted_routed_evidence(trusted_transition_evidence)
+        raise Refusal(
+            "parent-owned routed-DEF transition evidence was supplied, but "
+            "the candidate retained the base declaration set instead of "
+            "performing the one exact EMPTY-to-expanded transition")
     if only_base or only_cand:
         # One named, fully attested bootstrap replacement is recognised here.
         # `_corpus_transition` itself proves that these counters contain
@@ -955,6 +1031,10 @@ def delta(base: dict, cand: dict,
         # A loop that expanded over nothing declares no gate, so it is invisible
         # in `gates` by construction — the case a reader most needs told.
         "empty_corpora": sorted(set(_empty_corpora(base)) | set(_empty_corpora(cand))),
+        # NOT folded into `empty_corpora` above: one of these was READ and
+        # holds none, the other was never opened (vibe-ic#1764).
+        "absent_corpora": sorted(
+            set(_absent_corpora(base)) | set(_absent_corpora(cand))),
         "base_findings": sum(b_find.values()),
         "candidate_findings": sum(c_find.values()),
         "declared": len(cg),
@@ -1000,7 +1080,8 @@ def compare(base_path: Path, cand_path: Path, base_host: str,
     except Refusal as exc:
         return {"status": REFUSED, "refusal": str(exc), "introduced": [],
                 "carried": [], "cleared": [], "no_verdict_either_side": [],
-                "empty_corpora": [], "base_findings": None,
+                "empty_corpora": [], "absent_corpora": [],
+                "base_findings": None,
                 "candidate_findings": None, "declared": None}
 
 

@@ -110,6 +110,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import _corpus_location as _corpus         # sibling program, one seam for all
+import _semantic_child_progress as _semantic_progress
 
 _ROUTING_NAME = "CITATION_ROUTING.txt"
 
@@ -128,6 +129,18 @@ _RESOLVES = "RESOLVES"
 # treated as one of them.
 _DISCLOSURES = {"OUT_OF_PUBLISHED_SCOPE", "DANGLING", "DANGLING_UNDER_PASS",
                 "UNFOLLOWABLE_ABSOLUTE"}
+
+PROGRESS_SCOPE = "issue1710:citation-routing-is-true"
+_ACTIVE_PROGRESS = None
+
+
+def _checkpoint(unit: str) -> None:
+    if _ACTIVE_PROGRESS is not None:
+        _ACTIVE_PROGRESS.checkpoint(unit)
+
+
+def _record_unit(kind: str, root: Path, path: Path) -> str:
+    return f"record:{kind}:{path.relative_to(root).as_posix()}"
 
 
 def parse_routing(text: str) -> Tuple[List[Tuple[str, str, str]], List[str]]:
@@ -172,8 +185,10 @@ def resolves(cell: Path, doc: str, cited: str) -> bool:
         base = base.parent
 
 
-def audit_cell(cell: Path) -> Dict:
-    text = (cell / _ROUTING_NAME).read_text(encoding="utf-8", errors="replace")
+def audit_cell(cell: Path, text: Optional[str] = None) -> Dict:
+    if text is None:
+        text = (cell / _ROUTING_NAME).read_text(
+            encoding="utf-8", errors="replace")
     rows, unknown = parse_routing(text)
     claimed = [(d, c) for d, c, k in rows if k == _RESOLVES]
     false_claims = [(d, c) for d, c in claimed if not resolves(cell, d, c)]
@@ -183,19 +198,52 @@ def audit_cell(cell: Path) -> Dict:
             "unparsed": unknown}
 
 
-def tracked_routing_files(root: Path) -> Optional[List[Path]]:
+def tracked_routing_files(root: Path, progress_unit: Optional[str] = None
+                          ) -> Optional[List[Path]]:
     """Every tracked CITATION_ROUTING.txt. None when git cannot answer — an
     untracked scan would judge a working tree nobody published."""
     try:
         r = subprocess.run(["git", "-C", str(root), "ls-files",
                             f"*/{_ROUTING_NAME}"],
-                           capture_output=True, text=True, errors="replace",
-                           timeout=55)
+                           capture_output=True, text=True, errors="replace")
     except (OSError, subprocess.SubprocessError):
+        if progress_unit is not None:
+            _checkpoint(progress_unit)
         return None
+    if progress_unit is not None:
+        _checkpoint(progress_unit)
     if r.returncode != 0:
         return None
     return [root / ln for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def semantic_progress_units(root: Path, corpus: Optional[Path] = None
+                            ) -> List[str]:
+    """Exact finite work manifest for a trusted parent invoking this gate."""
+    root = root.resolve()
+    units = ["index:repository"]
+    files = tracked_routing_files(root)
+    if files is None:
+        return units
+    work = [(root, "repository", path) for path in files]
+    if corpus is not None:
+        corpus = corpus.resolve()
+        if not corpus.is_dir():
+            return units
+        units.append("checkout:corpus")
+        if _corpus.not_a_checkout_reason(
+                corpus, f"tracked {_ROUTING_NAME}",
+                timeout=None, strict=True):
+            return units
+        units.append("index:corpus")
+        corpus_files = tracked_routing_files(corpus)
+        if not corpus_files:
+            return units
+        work.extend((corpus, "corpus", path) for path in corpus_files)
+    for base, kind, path in work:
+        units.extend(_semantic_progress.file_progress_units(
+            path, _record_unit(kind, base, path)))
+    return units
 
 
 def main(argv=None) -> int:
@@ -214,12 +262,13 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
 
-    files = tracked_routing_files(root)
+    files = tracked_routing_files(root, "index:repository")
     if files is None:
         print("[CANNOT DETERMINE] citation_routing_is_true: git could not list "
               "tracked files, so no published record was read. NOT a pass.",
               file=sys.stderr)
         return 2
+    work = [(path, _record_unit("repository", root, path)) for path in files]
 
     # THE CORPUS IS ADDED, NOT SWAPPED IN, AND THE OVERRIDE IS ANNOUNCED (#1710).
     # This gate's subject ships INSIDE published cells, so it left with them in
@@ -240,13 +289,17 @@ def main(argv=None) -> int:
                   f"not an absent corpus, and --corpus-may-be-absent does not "
                   f"excuse it.", file=sys.stderr)
             return 2
-        _loose = _corpus.not_a_checkout_reason(corpus,
-                                               f"tracked {_ROUTING_NAME}")
+        semantic = (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled)
+        _loose = _corpus.not_a_checkout_reason(
+            corpus, f"tracked {_ROUTING_NAME}",
+            timeout=None if semantic else 60, strict=semantic)
+        _checkpoint("checkout:corpus")
         if _loose:
             print(f"UNDETERMINED: {_loose} Point {CORPUS_ENV} at a clone.",
                   file=sys.stderr)
             return 2
-        corpus_files = tracked_routing_files(corpus)
+        corpus_files = tracked_routing_files(corpus, "index:corpus")
         if corpus_files is None:
             print(f"[CANNOT DETERMINE] citation_routing_is_true: git could not "
                   f"list tracked files under {env_tree}, so the corpus was not "
@@ -263,6 +316,8 @@ def main(argv=None) -> int:
             return 2
         print(f"note: {len(corpus_files)} tracked {_ROUTING_NAME} under "
               f"{env_tree}, {len(files)} under {root}", file=sys.stderr)
+        work.extend((path, _record_unit("corpus", corpus, path))
+                    for path in corpus_files)
         files = files + corpus_files
 
     if not files:
@@ -282,7 +337,12 @@ def main(argv=None) -> int:
               f"not carry a corpus.", file=sys.stderr)
         return 2
 
-    reports = [audit_cell(f.parent) for f in files]
+    reports = []
+    for path, unit in work:
+        text = _semantic_progress.read_text_chunks(
+            path, unit, _ACTIVE_PROGRESS)
+        reports.append(audit_cell(path.parent, text))
+        _checkpoint(_semantic_progress.file_judged_unit(path, unit))
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(reports, indent=2))
 
@@ -317,5 +377,15 @@ def main(argv=None) -> int:
     return 0
 
 
+def _entrypoint() -> int:
+    global _ACTIVE_PROGRESS
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        _ACTIVE_PROGRESS = progress
+        try:
+            return main()
+        finally:
+            _ACTIVE_PROGRESS = None
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_entrypoint())

@@ -90,6 +90,31 @@ class KLayoutRunner:
             timeout: int = 1800) -> Tuple[int, str, str]:
         raise NotImplementedError
 
+    # ── Running something that is NOT a KLayout batch script ────────────────
+    # A PDK ships its seal-ring / filler generators as ordinary `python3 <script>
+    # --opt ...` CLIs that `import pya` (this is how LibreLane invokes them:
+    # `KLayout.SealRing.run_generic` builds exactly such an argv). They must run
+    # in the SAME environment KLayout lives in, which is what this class already
+    # resolves — but not through `-r`, because their argv is their own.
+    #
+    # Paths are NOT translated here. The caller decides which arguments are
+    # project paths (translate with `cpath`) and which are already environment-
+    # native — a PDK under /foss/pdks inside the container has no host
+    # counterpart, so translating it would corrupt a perfectly valid path.
+    def run_argv(self, argv: Sequence[str], env: Dict[str, str],
+                 *, timeout: int = 1800) -> Tuple[int, str, str]:
+        raise NotImplementedError
+
+    def exists(self, path) -> bool:
+        """True when `path` is a readable file IN THIS RUNNER'S environment."""
+        return Path(str(path)).is_file()
+
+    def klayout_bin(self) -> str:
+        """The KLayout GUI-class binary, for callers that need its own CLI
+        (`-n <tech>`, `-rd k=v`). NOT `self._bin`: a host runner may have
+        resolved `strmrun`, which is a script runner and accepts neither."""
+        return shutil.which("klayout") or "klayout"
+
 
 class HostRunner(KLayoutRunner):
     kind = "host"
@@ -111,6 +136,19 @@ class HostRunner(KLayoutRunner):
             return 124, "", f"klayout timed out after {timeout}s"
         except OSError as exc:
             return 127, "", f"klayout launch failed: {exc}"
+        return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+    def run_argv(self, argv, env, *, timeout=1800):
+        full = dict(os.environ)
+        full.setdefault("QT_QPA_PLATFORM", "offscreen")
+        full.update({k: str(v) for k, v in env.items()})
+        try:
+            cp = subprocess.run([str(a) for a in argv], env=full,
+                                capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return 124, "", f"command timed out after {timeout}s"
+        except OSError as exc:
+            return 127, "", f"launch failed: {exc}"
         return cp.returncode, cp.stdout or "", cp.stderr or ""
 
 
@@ -160,6 +198,33 @@ class ContainerRunner(KLayoutRunner):
         except OSError as exc:
             return 127, "", f"docker exec failed: {exc}"
         return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+    def run_argv(self, argv, env, *, timeout=1800):
+        exports = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env.items())
+        cmd = "export QT_QPA_PLATFORM=offscreen && "
+        if exports:
+            cmd += f"export {exports} && "
+        cmd += " ".join(shlex.quote(str(a)) for a in argv)
+        try:
+            cp = subprocess.run(["docker", "exec", self._c, "bash", "-lc", cmd],
+                                capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return 124, "", f"command (container) timed out after {timeout}s"
+        except OSError as exc:
+            return 127, "", f"docker exec failed: {exc}"
+        return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+    def klayout_bin(self) -> str:
+        return "klayout"
+
+    def exists(self, path):
+        try:
+            cp = subprocess.run(
+                ["docker", "exec", self._c, "test", "-f", str(path)],
+                capture_output=True, text=True, timeout=30)
+            return cp.returncode == 0
+        except Exception:                                    # noqa: BLE001
+            return False
 
 
 def _container_has_klayout(container: str) -> bool:

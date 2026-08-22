@@ -153,8 +153,17 @@ def test_PAIRED_the_correct_spelling_still_writes_the_named_file(tmp_path):
     scratch = tmp_path / "aimed.json"
     shutil.copy(REAL_BASELINE, scratch)
     before_real = _findings(REAL_BASELINE)
+    # The scratch file is a COPY of the shipped register, and this fixture's
+    # one-run corpus is smaller than the population that register describes, so
+    # the aimed write LOWERS the denominator and needs the reason vibe-ic#1704
+    # requires. That is the rule under test one file over; here it is fixture
+    # setup, so the reason simply says what this write is.
     rc, out = _run("--corpus", str(corpus), "--baseline", str(scratch),
-                   "--write-baseline")
+                   "--write-baseline", "--shrink-reason",
+                   "aiming a copy of the shipped register at a single-run "
+                   "synthetic corpus built by this test; the drop is the "
+                   "fixture's own population, not anything measured about the "
+                   "published one.")
     assert rc == 0, out
     assert str(scratch) in out, f"did not name the file it wrote:\n{out}"
     assert _findings(REAL_BASELINE) == before_real, (

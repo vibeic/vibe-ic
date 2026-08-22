@@ -43,11 +43,47 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import resolves however this is invoked
+import _docker_memory as _dmem  # every `docker run` carries the ceiling
 
 RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
 
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.6"
+# WHICH IMAGE THIS JUDGES — a DIGEST, resolved now, not a version remembered in
+# the source tree. `tools/vibeic-eda/VERSION` used to answer this, and it cost a
+# PR in this repo per vibeic-eda release; MEASURED 2026-08-21 it also named an
+# image this host does not have, so the gate's real behaviour was a
+# multi-gigabyte pull or a timeout, never a verdict. See `_eda_image.judged_image`.
+#
+# Resolved LAZILY: at import time this would put a docker round-trip in front of
+# every `--help`.
+import _eda_image as _img
+
+
+def default_image(explicit=None, *, allow_pull: bool = False) -> "_img.JudgedImage":
+    """The image this run judges, pinned by digest.
+
+    NOT `resolve()`. That asks the registry every time and returns whatever came
+    back; a gate reporting FAIL about an image's CONTENTS has to say WHICH bytes
+    it read, or its red is not attributable to anything. `judged_image()` prefers
+    the image already on this host and hands back both facts the report needs —
+    the DIGEST to replay with, and the image's own
+    `org.opencontainers.image.version` label for a human to read.
+    """
+    judged = _img.judged_image(explicit=explicit, allow_pull=allow_pull)
+    why = _img.unidentified_reason(judged)
+    if why:
+        # rc RC_CANNOT_CHECK is this program's word for NOTHING WAS MEASURED, and it is a
+        # different number from its word for a finding. A run that never opened
+        # an image, or opened one that would not say which release it is, must
+        # not report about silicon. That is the repository's rule in the
+        # direction that INVENTS a defect rather than hiding one.
+        print("[CANNOT CHECK] sta_engine_parity_check: " + why + ". Nothing was measured.",
+              file=sys.stderr)
+        raise SystemExit(RC_CANNOT_CHECK)
+    return judged
 
 #: Commands that exist ONLY on `vibeic/sta-timing-eco`, taken from its diff
 #: against upstream master rather than from memory. Every one must be reachable
@@ -71,6 +107,17 @@ foreach c $cmds {{
 """
 
 
+def _pull_flags(pull: bool) -> List[str]:
+    """`--pull never` unless the caller opted in.
+
+    A gate handed a digest this host does not have starts a multi-gigabyte fetch
+    and then reports a timeout as "could not check". Refusing to pull turns that
+    into an immediate, readable rc 2 naming the image — and leaves the download
+    where it belongs, with the operator.
+    """
+    return [] if pull else ["--pull", "never"]
+
+
 def _run(argv: List[str], timeout: int = 180) -> Tuple[int, str, str]:
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
@@ -82,7 +129,7 @@ def _run(argv: List[str], timeout: int = 180) -> Tuple[int, str, str]:
 
 
 def _probe(image: str, entrypoint: str, commands: Tuple[str, ...],
-           positional: bool) -> Tuple[Dict[str, bool], str]:
+           positional: bool, *, pull: bool = False) -> Tuple[Dict[str, bool], str]:
     """{command: present} for one engine, or ({}, reason).
 
     `positional` is not cosmetic and is not guessed: `openroad` takes the script
@@ -98,7 +145,10 @@ def _probe(image: str, entrypoint: str, commands: Tuple[str, ...],
         Path(d, "probe.tcl").write_text(tcl, encoding="utf-8")
         args = (["-no_init", "/w/probe.tcl"] if positional
                 else ["-no_init", "-exit", "/w/probe.tcl"])
-        rc, out, err = _run(["docker", "run", "--rm", "-v", f"{d}:/w",
+        rc, out, err = _run(["docker", "run", "--rm",
+                             *_dmem.docker_memory_flags(),
+                             *_pull_flags(pull),
+                             "-v", f"{d}:/w",
                              "--entrypoint", entrypoint, image, *args],
                             timeout=300)
     if rc == 127:
@@ -147,7 +197,7 @@ puts "EQ_MIN [format %.9f [sta::worst_slack -min]]"
 """
 
 
-def _equivalence(image: str) -> Tuple[Dict[str, str], str]:
+def _equivalence(image: str, *, pull: bool = False) -> Tuple[Dict[str, str], str]:
     """{engine: "max|min"} — the same timing question asked of both.
 
     Command PRESENCE is not equivalence. vibeic-eda#8 measured 20/20 core
@@ -165,7 +215,10 @@ def _equivalence(image: str) -> Tuple[Dict[str, str], str]:
         for entry, positional in (("openroad", False), ("sta", True)):
             args = (["-no_init", "/w/eq.tcl"] if positional
                     else ["-no_init", "-exit", "/w/eq.tcl"])
-            rc, so, se = _run(["docker", "run", "--rm", "-v", f"{d}:/w",
+            rc, so, se = _run(["docker", "run", "--rm",
+                               *_dmem.docker_memory_flags(),
+                               *_pull_flags(pull),
+                               "-v", f"{d}:/w",
                                "--entrypoint", entry, image, *args], timeout=300)
             vals = {}
             for line in (so or "").splitlines():
@@ -179,22 +232,23 @@ def _equivalence(image: str) -> Tuple[Dict[str, str], str]:
     return out, ""
 
 
-def check(image: str, commands: Tuple[str, ...], *, equivalence: bool = True) -> dict:
+def check(image: str, commands: Tuple[str, ...], *, equivalence: bool = True,
+          pull: bool = False) -> dict:
     if not commands:
         return {"error": "no commands to probe; a check of zero commands finds "
                          "zero disagreements and cannot report parity"}
     # `sta` takes the script positionally, `openroad` after -exit. Established
     # from each binary's own -help rather than assumed.
-    ored, err1 = _probe(image, "openroad", commands, positional=False)
+    ored, err1 = _probe(image, "openroad", commands, positional=False, pull=pull)
     if err1:
         return {"error": f"openroad: {err1}"}
-    sta, err2 = _probe(image, "sta", commands, positional=True)
+    sta, err2 = _probe(image, "sta", commands, positional=True, pull=pull)
     if err2:
         return {"error": f"sta: {err2}"}
 
     eq_err, eq_vals = "", {}
     if equivalence:
-        eq_vals, eq_err = _equivalence(image)
+        eq_vals, eq_err = _equivalence(image, pull=pull)
 
     only_openroad = sorted(c for c in commands if ored.get(c) and not sta.get(c))
     only_sta = sorted(c for c in commands if sta.get(c) and not ored.get(c))
@@ -210,21 +264,34 @@ def check(image: str, commands: Tuple[str, ...], *, equivalence: bool = True) ->
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--image", default=None,
+                    help="EDA image, ideally a digest; default: the newest "
+                         "vibeic-eda image on this host, pinned to its digest")
     ap.add_argument("--baseline", default=None,
                     help="JSON register of ALREADY-KNOWN divergences. Only NEW "
                          "ones fail; the recorded set is reported every run so "
                          "it stays visible rather than becoming permission.")
     ap.add_argument("--json", default=None)
+    ap.add_argument("--allow-pull", action="store_true",
+                    help="permit `docker run` to FETCH the image if this host "
+                         "does not have it. Off by default: a multi-gigabyte "
+                         "download inside a gate is the operator's call.")
     a = ap.parse_args(argv)
 
-    res = check(a.image, SUPERSET_COMMANDS)
+    # `--image` defaults to None so `--help` costs no docker call; the resolution
+    # happens here, once, when an image is actually needed. `default_image`
+    # exits RC_CANNOT_CHECK when there is nothing to judge.
+    judged = default_image(a.image, allow_pull=a.allow_pull)
+    res = check(judged.ref, SUPERSET_COMMANDS, pull=a.allow_pull)
     if a.json:
         from pathlib import Path
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.json).write_text(json.dumps(
-            {"program": "sta_engine_parity_check", **res}, indent=2) + "\n",
-            encoding="utf-8")
+        # `verdict_report` REFUSES a body that cannot name the image it judged.
+        # A report without the digest is not a report: it can be neither replayed
+        # nor attributed, which is the property the deleted anchor stood in for.
+        body = _img.verdict_report("sta_engine_parity_check", judged, res)
+        Path(a.json).write_text(json.dumps(body, indent=2) + "\n",
+                                encoding="utf-8")
 
     if "error" in res:
         print(f"[NOT CHECKED] {res['error']}. This is NOT 'the engines agree'.",
@@ -242,6 +309,8 @@ def main(argv=None) -> int:
     if res.get("equivalence") and not res.get("equivalent"):
         print(f"[FAIL] the two engines computed DIFFERENT timing for the same "
               f"design in {res['image']}:", file=sys.stderr)
+        print(f"  This is a fact about THAT IMAGE, not about the change under "
+              f"test. Re-run it with --image {res['image']}.", file=sys.stderr)
         for eng, v in sorted(res["equivalence"].items()):
             mx, _, mn = v.partition("|")
             print(f"    {eng:9s} worst_slack max={mx} min={mn}", file=sys.stderr)
@@ -301,6 +370,8 @@ def main(argv=None) -> int:
     if res["only_openroad"] or res["only_sta"]:
         print(f"[FAIL] the two timing engines in {res['image']} do not agree.",
               file=sys.stderr)
+        print(f"  This is a fact about THAT IMAGE, not about the change under "
+              f"test. Re-run it with --image {res['image']}.", file=sys.stderr)
         print(f"  openroad has {res['openroad_present']}/{res['probed']}, "
               f"sta has {res['sta_present']}/{res['probed']}", file=sys.stderr)
         if res["only_openroad"]:

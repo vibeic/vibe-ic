@@ -474,6 +474,120 @@ def acceptance_control_gate(repo: Path, base: str, head: str) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# ppa_pr_scope_check (#1347) — the PPA Appendix-C merge condition, BLOCKING.
+#
+# WHY HERE AND NOWHERE ELSE. This program answers "may this change-set merge?"
+# It needs a base and a head, and it needs them to be the ones being reviewed.
+# That rules out `tools/ci/repo_hygiene_gates.sh` on its own written contract:
+# "WHAT DOES NOT [belong here]: anything needing a commit RANGE or a base SHA
+# — those are event-shaped and stay inline in the workflow that has the
+# context." It rules out the flow definition, which reviews a DESIGN and has no
+# notion of a change-set. `.github/workflows/` is disabled in this repository,
+# so the one live place holding a base/head under review is this program — the
+# gate a maintainer runs before every push, whose MERGE_OK reads as "this will
+# land green". The verdict is literally a merge condition; it belongs at the
+# merge decision.
+#
+# WHAT BLOCKS, AND THE ONE THING THAT DOES NOT YET
+# ------------------------------------------------
+# The checklist's merge condition is "every applicable question has verifiable
+# evidence, and every inapplicable question has a machine-checkable reason".
+# Answering it needs an answers document, and MEASURED on this tree there is
+# not one anywhere: `grep -rl vibeic.ppa.pr_answers` matches only the checker
+# itself. So `answers_document_present: false` is currently the state of every
+# branch in flight, and wiring THAT as blocking would turn every open PR red on
+# the day it landed — which is how a gate gets switched off rather than obeyed.
+#
+# The split is therefore on the report's own `answers_document_present` flag:
+#
+#   document supplied  -> FULLY BLOCKING. Every finding the checker can make is
+#                         a real finding: a question with nothing behind it, and
+#                         AUTHOR_OVERRIDE_REFUSED, where the author marked an
+#                         applicable question N/A and the detector disagreed.
+#   no document        -> REPORTED, not blocking, naming how many questions
+#                         apply so the gap is visible on every single review.
+#
+# This is a claim and it has an expiry condition, stated so it can be held to:
+# THE MOMENT an answers-document convention exists in this repository — a
+# declared path, and this branch's own document at it — the `not present` arm
+# becomes blocking and this comment goes away. Nothing else needs to change;
+# the checker already returns rc 1 for that case today.
+#
+# rc 2 is NOT CHECKED, never a pass: the content arm needs a diff, and given
+# only a path list it reports the surfaces it did NOT look for. "I could not
+# read it" and "I read it and it was empty" must not share a verdict.
+# --------------------------------------------------------------------------
+#: WHERE A BRANCH PUTS ITS APPENDIX-C ANSWERS. A gate that never passes
+#: `--answers` can only ever see `answers_document_present: false`, which is
+#: the one arm that does not block — i.e. a wiring that cannot fail, which is
+#: not a wiring. Declaring the path is what makes the blocking arm REACHABLE:
+#: an author who writes this file gets the full merge condition enforced.
+#: It sits beside `PULL_REQUEST_TEMPLATE.md` because it is the machine half of
+#: the same document.
+_PPA_ANSWERS_REL = ".github/ppa_pr_answers.json"
+
+
+def ppa_pr_scope_gate(repo: Path, base: str, head: str,
+                      answers: Optional[Path] = None) -> GateResult:
+    name = "ppa_pr_scope_check"
+    prog = _PROGRAMS_DIR / "ppa_pr_scope_check.py"
+    if not prog.is_file():
+        return GateResult(name, -1, f"checker missing at {prog}")
+    if answers is None:
+        cand = repo / _PPA_ANSWERS_REL
+        answers = cand if cand.is_file() else None
+    # The report is written to a TEMPORARY path, never into the repository.
+    # It declares `verdict: FAIL`, and a `reports/**/*.json` carrying that is
+    # what `step_internal_fail_bubble_up_check` refuses. A review artefact is
+    # not a step artefact and must not be able to be mistaken for one.
+    with tempfile.TemporaryDirectory(prefix="ppa_pr_scope_") as td:
+        out = Path(td) / "ppa_pr_scope.json"
+        argv = ["--repo", str(repo), "--base", base, "--head", head,
+                "--json", str(out)]
+        if answers is not None:
+            argv += ["--answers", str(answers)]
+        rc, so, se = _run_program(prog, argv)
+        rep = None
+        if out.is_file():
+            try:
+                rep = json.loads(out.read_text(encoding="utf-8"))
+            except ValueError:
+                rep = None
+
+    if rc == 2:
+        return GateResult(name, -1,
+                          "NOT CHECKED — the change-set could not be read, or "
+                          "a one-armed run could not look for the "
+                          "content-reachable surfaces")
+    if rc == 3:
+        return GateResult(name, 1, f"bad invocation: {(se or so).strip()[:200]}")
+    if rc == 0:
+        n = ((rep or {}).get("summary") or {}).get("applicable", "?")
+        return GateResult(name, 0, f"merge condition met ({n} applicable)")
+
+    # rc 1 — a finding about the PR.
+    summary = (rep or {}).get("summary") or {}
+    by_status = summary.get("by_status") or {}
+    applicable = summary.get("applicable", "?")
+    if rep is not None and rep.get("answers_document_present") is False:
+        return GateResult(
+            name, 0,
+            f"REPORTED, not blocking — {applicable} of the 20 Appendix-C "
+            f"questions apply to this change-set and no answers document was "
+            f"supplied at {_PPA_ANSWERS_REL}. Adding that file makes every "
+            f"one of them blocking; until the convention is required "
+            f"repo-wide, its absence is reported and not blocking.")
+    bad = ", ".join(f"{k}={v}" for k, v in sorted(by_status.items())
+                    if k not in ("NOT_APPLICABLE", "SATISFIED"))
+    qs = [str(q.get("question")) for q in (rep or {}).get("questions") or []
+          if q.get("status") not in ("NOT_APPLICABLE", "SATISFIED")]
+    return GateResult(
+        name, 1,
+        f"the merge condition is VIOLATED — {bad or 'see report'}"
+        + (f" (Q{', Q'.join(qs[:8])})" if qs else ""))
+
+
+# --------------------------------------------------------------------------
 # real_artefact_test_backing_check (#400) — ADVISORY.
 #
 # A change whose tests are ALL synthetic fixtures authored alongside it cannot
@@ -996,6 +1110,201 @@ _HYGIENE_PARALLEL_REL = (
 _HYGIENE_STALL_GRACE_S = 1800
 
 
+# --------------------------------------------------------------------------
+# THE PUBLISHED CORPUS IS AN INPUT TO THIS GATE, SO THIS GATE RESOLVES IT.
+#
+# WHAT WAS WRONG
+# --------------
+# v1.10.56 moved the published cells into their own repository
+# (https://github.com/vibeic/benchmark-data.git).  `tools/ci/routed_def_corpus.py`
+# enumerates the corpus "published cells carrying a routed DEF" from the tree
+# `$VIBE_IC_BENCHMARK_DATA` names, and `repo_hygiene_gates.sh:591` wires that
+# producer with `GATE_DISPATCH_ATTEST_POPULATION=1`, so a population of zero is
+# a BLOCKING dispatcher-owned refusal (`_gate_dispatch.sh:1270`) that cannot be
+# excused (`_dispatch` mode 2, ll. 637-641/667-670).  That refusal is CORRECT.
+#
+# What was wrong is that this program — the one a maintainer runs before every
+# push — never resolved the corpus at all.  It inherited whatever the operator
+# happened to have exported, so on an ordinary checkout the set spent four
+# minutes and then certified nothing, and no line in the run named the cause or
+# the remedy.
+#
+# MEASURED (2026-08-20, clean origin/main 3199e9b3, this host):
+#     pointer UNSET -> 75 of 80 decided, 71 passed, 4 failed, 5 NOT CHECKED,
+#                      the routed-DEF corpus EMPTY and BLOCKING, 239s wasted.
+#     — and "EMPTY" is how that row READ at the time, not what happened
+#       (vibe-ic#1764). With the pointer unset nothing was OPENED; the corpus
+#       was NOT FOUND. Both are blocking NOT CHECKED and the measurement above
+#       stands, but the two now get different rows, and the pointer-unset run
+#       is the NOT FOUND one.
+#     pointer SET   -> 77 of 83 decided, 73 passed, 4 failed, 6 NOT CHECKED, 241s,
+#                      and `published-evidence index honest` FAILS — a real,
+#                      committed-INDEX-is-stale defect the empty corpus hid
+#                      outright.
+#
+# WHY RESOLVE-AND-REFUSE AND NOT "LET AN EMPTY CORPUS BE A STATED NOT_CHECKED"
+# ---------------------------------------------------------------------------
+# The second option is one line and it is the wrong line, on this repository's
+# own recorded evidence:
+#
+#   * `_corpus_location.py:41-46,63-66` — "nothing anywhere + the CALL SITE
+#     opted in -> NO_CORPUS (rc 0) ... an rc 0 for a scan that did not happen is
+#     the false certificate this whole gate suite exists to remove, and the only
+#     thing keeping it from becoming the general answer is that somebody has to
+#     type it."
+#   * `_gate_dispatch.sh:637-641` — mode 2 is private precisely so an empty
+#     population "must never acquire the non-fatal tolerance that a human may
+#     buy with `uncheckable_until`"; ll. 667-670 make attaching one a WIRING
+#     ERROR.  Softening the empty corpus means deleting a guard whose comment
+#     records the measured reason it exists.
+#   * `repo_hygiene_gates.sh:539-547` — the last time this exact corpus read as
+#     CHECKED while nothing in it was opened (the `$ROOT/$ABSOLUTE` prefix bug),
+#     four gates were absorbed under exemptions whose stated reasons were FALSE.
+#     The comment ends: "the empty-population refusal above cannot see this,
+#     because the population is 1, not 0."  At 0 the blocking refusal is the
+#     only thing left that can notice.
+#   * The LANDING arm already resolves it and already dies loudly when it
+#     cannot (`tools/gatekeeper-verify-merge.sh:617-640`).  A review that is
+#     PERMISSIVE where landing is STRICT is the "MERGE_OK, then main went RED"
+#     shape this whole gate was written to end (see the block at line 928).
+#
+# So the corpus is resolved HERE, with the SAME precedence the landing arm uses
+# — one order, not two — and a corpus that cannot be resolved is rc 2 with the
+# cause and the remedy named, BEFORE the four-minute set is spent.
+#
+# WHY THE BOUND SHA IS EXPORTED TOO
+# ---------------------------------
+# `_corpus_location.resolve()` prefers a NAMED root over the pointer, and some
+# gates compute that named root by walking `Path(__file__).parents` (e.g.
+# `l_doc_field_producer_check.py:299-302`), which climbs out of the repository.
+# MEASURED on this host: those gates adopted `$HOME/benchmark-data` and printed
+# "VIBE_IC_BENCHMARK_DATA=… is set and NOT followed".  A pointer that can be
+# shadowed by whatever happens to sit above the checkout is not a binding.
+# `GATEKEEPER_BENCHMARK_DATA_SHA` is the mechanism this repo already built for
+# exactly that (`_corpus_location.py:137-156`): with it set, the pointer wins
+# unconditionally and every candidate-local shadow is refused.  It also reaches
+# the record as `corpus_inputs.benchmark_data_sha`, which the landing arm's
+# `hygiene_record_binds_benchmark()` already validates.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO
+# ----------------------------------
+# It does not fetch and it does not judge CURRENCY.  Binding the checkout's HEAD
+# says WHICH tree was scanned, which is the property a review needs; proving the
+# tree equals the canonical `origin/main` is the landing arm's job and it owns a
+# whole program for it (`tools/ci/benchmark_data_landing_checkout.py measure`).
+# A review gate that reached the network would be a review gate that fails when
+# the network does.
+# --------------------------------------------------------------------------
+_CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+_CORPUS_CHECKOUT_ENV = "VIBEIC_BENCHMARK_DATA_CHECKOUT"
+_CORPUS_BOUND_SHA_ENV = "GATEKEEPER_BENCHMARK_DATA_SHA"
+_CORPUS_DEFAULT_DIRNAME = "_matrix_benchmark_data"
+_CORPUS_SUBDIR = "ic"
+_CORPUS_ORIGIN = "https://github.com/vibeic/benchmark-data.git"
+_OID_CHARS = set("0123456789abcdef")
+
+
+def _corpus_remedy() -> str:
+    return (f"Remedy: clone the published corpus and name it — "
+            f"`git clone {_CORPUS_ORIGIN} ~/{_CORPUS_DEFAULT_DIRNAME}`, or "
+            f"export {_CORPUS_ENV}=<path to that clone>.")
+
+
+def _published_corpus_binding() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """`(env additions, refusal)` for the published-corpus checkout.
+
+    Exactly one of the two is None.  The refusal is a complete sentence naming
+    the slot that supplied the path, what was wrong with it, and the remedy —
+    it is the whole verdict a reader gets, so it may not be a bare word.
+    """
+    slots = (
+        (_CORPUS_ENV, os.environ.get(_CORPUS_ENV) or None),
+        (_CORPUS_CHECKOUT_ENV, os.environ.get(_CORPUS_CHECKOUT_ENV) or None),
+    )
+    named: Optional[Path] = None
+    slot = ""
+    for key, value in slots:
+        if value:
+            named, slot = Path(value), key
+            break
+    if named is None:
+        home = os.environ.get("HOME") or ""
+        if not home:
+            return None, (f"ERROR — the published corpus could not be located: "
+                          f"neither {_CORPUS_ENV} nor {_CORPUS_CHECKOUT_ENV} is "
+                          f"set and HOME is unset, so there is no default "
+                          f"checkout to fall back on. NOTHING WAS SCANNED and "
+                          f"the hygiene set was NOT run. " + _corpus_remedy())
+        named = Path(home) / _CORPUS_DEFAULT_DIRNAME
+        slot = ""
+
+    if not named.is_dir():
+        # SET AND WRONG IS NOT ABSENT (`_corpus_location.py:26-29`), and NOTHING
+        # ANYWHERE is not a pass either. The two are different states with
+        # different remedies, so they get different sentences; neither is rc 0.
+        if slot:
+            return None, (f"ERROR — the published corpus at {named} (from "
+                          f"{slot}) is not a readable directory, so the "
+                          f"per-cell gates had nothing to examine. A pointer "
+                          f"that is set and wrong is a broken configuration, "
+                          f"not an absent corpus. NOTHING WAS SCANNED and the "
+                          f"hygiene set was NOT run. " + _corpus_remedy())
+        return None, (f"ERROR — no published-corpus checkout: {_CORPUS_ENV} and "
+                      f"{_CORPUS_CHECKOUT_ENV} are both unset and the default "
+                      f"{named} does not exist. The published cells moved to "
+                      f"their own repository in v1.10.56, so this tree carries "
+                      f"none and the per-cell gates would examine 0 of them. "
+                      f"NOTHING WAS SCANNED and the hygiene set was NOT run. "
+                      + _corpus_remedy())
+
+    resolved = named.resolve()
+    # The producer reads git's INDEX (`tools/ci/routed_def_corpus.py:42-83`), so
+    # a loose directory enumerates zero cells and that zero is "I could not
+    # look", not "there are none" — the one substitution this whole module
+    # exists to refuse.
+    top = _git_text(resolved, ["rev-parse", "--show-toplevel"])
+    if top is None or Path(top).resolve() != resolved:
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"is not the ROOT of a git checkout"
+                      + (f" (git reports its root as {top})" if top else "")
+                      + f". The corpus producer reads git's INDEX; over a "
+                      f"tarball fetch, an archive export or a dead clone it "
+                      f"would enumerate zero cells and that is 'I could not "
+                      f"look', not 'there are none'. NOTHING WAS SCANNED and "
+                      f"the hygiene set was NOT run. " + _corpus_remedy())
+
+    if not (resolved / _CORPUS_SUBDIR).is_dir():
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"is a git checkout but carries no {_CORPUS_SUBDIR}/ "
+                      f"directory, so it is not the published-cell repository "
+                      f"this gate needs. NOTHING WAS SCANNED and the hygiene "
+                      f"set was NOT run. " + _corpus_remedy())
+
+    sha = _git_text(resolved, ["rev-parse", "HEAD"])
+    if (sha is None or len(sha) not in (40, 64)
+            or any(ch not in _OID_CHARS for ch in sha)):
+        return None, (f"ERROR — the published corpus at {resolved} (from {slot}) "
+                      f"has no readable HEAD commit, so the verdicts could not "
+                      f"be bound to the tree that produced them. NOTHING WAS "
+                      f"SCANNED and the hygiene set was NOT run. "
+                      + _corpus_remedy())
+
+    return {_CORPUS_ENV: str(resolved), _CORPUS_BOUND_SHA_ENV: sha}, None
+
+
+def _git_text(cwd: Path, argv: List[str]) -> Optional[str]:
+    """One line of git output, or None when git could not answer."""
+    try:
+        proc = subprocess.run(["git", "-C", str(cwd), *argv],
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.strip()
+    return out or None
+
+
 def repo_hygiene_gate(repo: Path,
                       script: Optional[Path] = None,
                       stall_grace: int = _HYGIENE_STALL_GRACE_S,
@@ -1026,11 +1335,24 @@ def repo_hygiene_gate(repo: Path,
                           f"skipped — 0 gate(s) consulted: {_HYGIENE_SCRIPT_REL} "
                           f"not present under {repo}")
 
+    # BEFORE the four-minute set, not after it. A corpus that cannot be
+    # resolved makes every per-cell verdict impossible, so spending the set to
+    # discover that costs four minutes and reports the consequence instead of
+    # the cause. `script is not None` is the unit-test seam (see the docstring):
+    # a fixture script wires no corpus and must not be made to need one.
+    corpus_env: Dict[str, str] = {}
+    if script is None:
+        corpus_env_or_none, corpus_refusal = _published_corpus_binding()
+        if corpus_refusal is not None:
+            return GateResult(name, 2, corpus_refusal)
+        corpus_env = corpus_env_or_none or {}
+
     with tempfile.TemporaryDirectory(prefix="hygiene_summary_") as td:
         summary_path = Path(td) / "summary.json"
         progress = None
         try:
-            env = None
+            env = os.environ.copy()
+            env.update(corpus_env)
             if progress_out is not None:
                 progress = Path(progress_out).resolve()
                 progress.parent.mkdir(parents=True, exist_ok=True)
@@ -1038,7 +1360,6 @@ def repo_hygiene_gate(repo: Path,
                     progress.unlink()
                 except FileNotFoundError:
                     pass
-                env = os.environ.copy()
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(progress)
             def _popen(argv, **kwargs):
                 return subprocess.Popen(
@@ -1146,6 +1467,110 @@ def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
     if rc == 2:
         return GateResult(name, -1, f"skipped — {line}")
     return GateResult(name, rc, line or (err.strip()[:200] or "no output"))
+
+
+def _declared_labels(repo: Path, script: Optional[Path] = None) -> Optional[list]:
+    """The labels THIS tree declares, from a `--list` run. 0.12 s, measured."""
+    path = Path(script) if script is not None else (repo / _HYGIENE_SCRIPT_REL)
+    if not path.is_file():
+        return None
+    with tempfile.TemporaryDirectory(prefix="hygiene_list_") as td:
+        out = Path(td) / "list.json"
+        try:
+            # watchdog-exempt: `--list` DECLARES the gate set and executes no
+            # gate — `gate_dispatch_init` parses it, every gate is recorded
+            # LISTED, and `gate_dispatch_finish` writes the record and exits.
+            # No tool subprocess is launched, so there is nothing here that can
+            # escape supervision. MEASURED at 0.12 s over 85 gates, and bounded
+            # anyway by the `timeout=` below rather than by that measurement.
+            subprocess.run(["bash", str(path), "--list",
+                            "--summary-json", str(out)],
+                           cwd=str(repo), capture_output=True, timeout=120)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return [str(g.get("label")) for g in (doc.get("gates") or [])]
+
+
+def hygiene_gate_from_record(repo: Path, record: Path,
+                             record_rc: Optional[int],
+                             script: Optional[Path] = None) -> GateResult:
+    """Adjudicate a hygiene record the CALLER already produced.
+
+    IN-PROCESS CALLERS ONLY. THERE IS NO CLI FLAG AND THERE MUST NOT BE.
+    `review()` reaches this through `hygiene_record_in=`, a FUNCTION KEYWORD in
+    the same spirit as `repo_hygiene_gate`'s `script=` seam and under the same
+    rule that function's docstring states.
+
+    v1.11.67 put it on the command line as `--hygiene-record-in`, argued as a
+    change of RUNNER rather than of SUBJECT: the set still runs in full, in the
+    lander's own hygiene lane, and this reads that run's record instead of
+    paying for a second one. The distinction is real and it is why this
+    function exists. It is not a reason to expose it to `argv`, and the two
+    gates that said so were right.
+
+    THE RECORD IS CHECKED, NOT TRUSTED — AND A SHAPE IS NOT A PROVENANCE.
+    The record must exist and parse; it must carry the exit status of the run
+    that produced it, supplied separately by the caller that watched it; and
+    the gates it names must be exactly the set this tree declares, obtained
+    from a `--list` run costing well under a second. Those four are everything
+    this function knows, and all four are properties of the FILE. MEASURED on
+    this repo: `--list` reports 86 declared labels in 0.62 s, and a 6 KB record
+    marking every one of them PASS makes this function return rc 0 green,
+    summarised as `86/86 gate(s) ran`, over a set that never ran. The forgery
+    is not hard and does not need to be; it needs a caller who can name a path.
+
+    So the checks defend an in-process caller that has already run the set from
+    a corrupted or truncated record. They do not, and cannot, defend against
+    the caller itself, which is exactly what a command line is. See
+    `tests/test_hygiene_handover_is_in_process_only.py`, which binds that rule
+    to the KEYWORD rather than to any spelling of a flag.
+
+    Every failure to establish the four is rc 2 UNDETERMINED and BLOCKING.
+    Never rc 0: "I could not check the record" must not reach a verdict as "the
+    record was clean", which is this repo's `_vacuous_exit` convention applied
+    to the handover itself.
+    """
+    name = "repo_hygiene_gates"
+    record = Path(record)
+    if not record.is_file():
+        return GateResult(name, 2,
+                          f"UNDETERMINED — no hygiene record at {record}: the "
+                          f"caller named a record it did not produce, so 0 "
+                          f"gate state(s) could be adjudicated")
+    try:
+        doc = json.loads(record.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return GateResult(name, 2,
+                          f"UNDETERMINED — the hygiene record at {record} does "
+                          f"not parse: {exc}")
+    if record_rc is None:
+        return GateResult(name, 2,
+                          "UNDETERMINED — a hygiene record was supplied with no "
+                          "exit status. The record says WHICH gates were red; "
+                          "only the run's rc says whether the set completed, "
+                          "and a killed run leaves a record that looks finished")
+    declared = _declared_labels(repo, script)
+    if declared is None:
+        return GateResult(name, 2,
+                          "UNDETERMINED — could not ask this tree which gates it "
+                          "declares, so a supplied record cannot be checked "
+                          "against it")
+    named = sorted(str(g.get("label")) for g in (doc.get("gates") or []))
+    if named != sorted(declared):
+        missing = sorted(set(declared) - set(named))
+        extra = sorted(set(named) - set(declared))
+        return GateResult(name, 2,
+                          f"UNDETERMINED — the supplied record names "
+                          f"{len(named)} gate(s) and this tree declares "
+                          f"{len(declared)}: {len(missing)} not in the record "
+                          f"({', '.join(missing[:4])}), {len(extra)} not "
+                          f"declared ({', '.join(extra[:4])})")
+    result = _hygiene_verdict(doc, int(record_rc))
+    return GateResult(result.name, result.rc,
+                      f"{result.summary} [adjudicated from the caller's record "
+                      f"of a run that exited {int(record_rc)}, "
+                      f"{len(declared)} declared gate(s) matched]")
 
 
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
@@ -1384,7 +1809,9 @@ def review(base: str, head: str, *,
            batch: bool = False,
            hygiene_script: Optional[Path] = None,
            hygiene_report: Optional[Path] = None,
-           hygiene_progress: Optional[Path] = None) -> Verdict:
+           hygiene_progress: Optional[Path] = None,
+           hygiene_record_in: Optional[Path] = None,
+           hygiene_record_rc: Optional[int] = None) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
 
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
@@ -1455,6 +1882,7 @@ def review(base: str, head: str, *,
     gates.append(one_commit_gate(repo, base, head, batch=batch))
     gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(acceptance_control_gate(repo, base, head))
+    gates.append(ppa_pr_scope_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
@@ -1474,9 +1902,14 @@ def review(base: str, head: str, *,
         _record = (Path(hygiene_report).resolve() if hygiene_report is not None
                    else Path(_td) / "hygiene.json")
         _record.parent.mkdir(parents=True, exist_ok=True)
-        gates.append(repo_hygiene_gate(repo, script=hygiene_script,
-                                       summary_out=_record,
-                                       progress_out=hygiene_progress))
+        if hygiene_record_in is not None:
+            _record = Path(hygiene_record_in).resolve()
+            gates.append(hygiene_gate_from_record(
+                repo, _record, hygiene_record_rc, script=hygiene_script))
+        else:
+            gates.append(repo_hygiene_gate(repo, script=hygiene_script,
+                                           summary_out=_record,
+                                           progress_out=hygiene_progress))
         gates.append(gate_red_since_gate(repo, _record))
 
     # 5. verdict.
@@ -1570,6 +2003,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=("persist the complete repo-hygiene summary/attestation JSON at "
               "this path instead of keeping it only for the in-process "
               "gate-red-since adjudication"))
+    # THERE IS NO `--hygiene-record-in`, AND THERE MUST NOT BE. `review()`
+    # takes `hygiene_record_in=` as a FUNCTION KEYWORD, in the same spirit as
+    # `repo_hygiene_gate`'s `script=` seam and under the same rule that
+    # function's docstring states: no CLI flag, because a command-line way to
+    # hand this gate a substitute for running it is a skip button on the one
+    # gate whose entire purpose is that it cannot be forgotten.
+    #
+    # v1.11.67 grew one, argued as a change of RUNNER rather than of SUBJECT.
+    # The argument does not survive contact with the command line: every check
+    # `hygiene_gate_from_record` makes is a check of the record's SHAPE — it
+    # exists, it parses, an rc came with it, and it names exactly the labels a
+    # 0.12 s `--list` run reports — and a shape is not a provenance. Measured
+    # here: with `--list` naming this tree's declared labels, a record marking
+    # every one of them PASS is a few lines of JSON, and the gate returns rc 0
+    # green over a set that never ran. A caller who can pass a path can pass
+    # that path.
+    #
+    # So the handover keeps its ten tests and its callers inside this process,
+    # and `argv` cannot reach it.
     ap.add_argument(
         "--gate-progress", dest="hygiene_progress", default=None,
         help=("append one owner-only JSONL process attestation after each "

@@ -463,6 +463,17 @@ def _build_corpus_figures() -> CorpusFigures:
     table["matrix_dimensions"] = lambda f: len(_dimensions())
     table["ledger_cells"] = lambda f: len(f.step_ids()) * len(_dimensions())
 
+    def _informational_gates(_f):
+        # Dimension 9's subject: the gates whose FAIL `flow_compliance_check`
+        # removes from `failing`. Read off the live frozenset, never counted by
+        # hand — the README publishes this number as the size of a hole, and a
+        # stale "4" would read as a disclosed known gap while describing a set
+        # that had grown.
+        import flow_compliance_check as _fcc
+        return len(_fcc.INFORMATIONAL_GATES)
+
+    table["informational_gates"] = _informational_gates
+
     for kind in F.OUTPUT_KINDS:
         table[f"required_outputs_{kind.lower()}"] = _out_kind(kind)
     for kind in F.GATE_CLAUSE_KINDS:
@@ -777,6 +788,42 @@ _LABEL_KEYS = ("enforced", "contradicted", "waived", "na",
                "waived_contradicted", "na_contradicted",
                "enforced_skipped", "waived_skipped", "na_skipped")
 
+#: WHICH PRINTED COLUMN EACH LABEL LANDS IN — and the reason this mapping is
+#: written down instead of being implicit in `render`'s f-string (vibe-ic#1296).
+#:
+#: `_LABEL_KEYS` made the HEADLINE partition. It did nothing for the TABLE, which
+#: is the thing a reader actually reads per dimension, and whose own comment
+#: claimed "Every one of the 504 is now in exactly one". MEASURED on `7c376e348`,
+#: that sentence was false for 53 cells: the six printed columns totalled
+#: `17+44+367+0+8+15 = 451` against 504, and dimension 3 published a row that
+#: summed to 11 of its 63 cells — the 52 whose predicate could not run appeared
+#: in no column, at no dimension, and in no total.
+#:
+#: A dropped cell reads as a dimension with nothing to report, which is the exact
+#: opposite of what it means. So every label a cell can carry is mapped to a
+#: column HERE, `render` refuses when a label has no entry, and the columns are
+#: checked to partition each row as well as the total.
+#:
+#: `None` means "not a column of its own": the ENFORCED cells are already printed
+#: SPLIT across own / substituted / undeclared, and folding them back into one
+#: column is the disclosure loss #889 removed.
+_LABEL_COLUMN = {
+    "enforced": None,
+    "contradicted": "contradicted",
+    "waived_contradicted": "contradicted",
+    "na_contradicted": "contradicted",
+    "enforced_skipped": "not_measured",
+    "waived_skipped": "not_measured",
+    "na_skipped": "not_measured",
+    "waived": "waived",
+    "na": "na",
+}
+
+#: The columns `render` prints, in printed order. The three ENFORCED columns come
+#: from `substitution_census()`; the rest are folded from `_LABEL_COLUMN`.
+_ENFORCED_COLUMNS = ("own", "substituted", "undeclared")
+_LABEL_COLUMNS = ("contradicted", "not_measured", "waived", "na")
+
 
 def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
     """``([per-dimension row], totals)`` recomputed from the live suite."""
@@ -833,10 +880,36 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
             "waived_skipped": per.count("WAIVED-SKIPPED"),
             "na_skipped": per.count("NA-SKIPPED"),
         })
+    _fold_label_columns(rows)
     totals = {k: sum(r[k] for r in rows)
-              for k in ("own", "substituted", "undeclared") + _LABEL_KEYS}
+              for k in _ENFORCED_COLUMNS + _LABEL_COLUMNS + _LABEL_KEYS}
     totals["cells"] = len(states)
+    totals["cells_per_dim"] = len(states) // len(DIMENSIONS) if DIMENSIONS else 0
     return rows, totals
+
+
+def _fold_label_columns(rows: List[Dict]) -> None:
+    """Give every census label a printed column, or refuse by name.
+
+    This is the structural half of vibe-ic#1296. `render` used to name its
+    columns inline, so a label `_join_axes` had learned to emit — `-SKIPPED` —
+    was counted by the headline and printed by nothing. Folding through
+    `_LABEL_COLUMN` means a tenth label cannot be added without either giving it
+    a column or reddening here, which is the same contract `_LABEL_KEYS` already
+    holds the headline to.
+    """
+    unmapped = sorted(set(_LABEL_KEYS) - set(_LABEL_COLUMN))
+    if unmapped:
+        raise SystemExit(
+            f"census label(s) with no table column: {unmapped}. The headline "
+            f"counts them and the per-dimension table would not, so every one "
+            f"of them would vanish from the rows a reader reads. Map each to a "
+            f"column in _LABEL_COLUMN (or to None if it is already printed "
+            f"split) rather than leaving it out of the table.")
+    for row in rows:
+        for column in _LABEL_COLUMNS:
+            row[column] = sum(row[key] for key, col in _LABEL_COLUMN.items()
+                              if col == column)
 
 
 def _extra_labels(totals: Dict[str, int]) -> str:
@@ -856,6 +929,47 @@ def _extra_labels(totals: Dict[str, int]) -> str:
         if totals.get(key):
             parts.append(f"{totals[key]} {word}")
     return (", " + ", ".join(parts)) if parts else ""
+
+
+def _check_table_partitions(rows: List[Dict], totals: Dict[str, int]) -> None:
+    """The TABLE must account for every cell, per row and in the total.
+
+    The headline had this guard (`_LABEL_KEYS`) and the table did not, which is
+    the whole of vibe-ic#1296: the two disagreed by 53 cells and nothing said
+    so. Checked per ROW as well, because a total that reconciles can still hide
+    a dimension that dropped cells against another that double-counted them —
+    and the row is what a reader reads.
+    """
+    per_dim = totals.get("cells_per_dim") or 0
+    for r in rows:
+        printed = sum(r[c] for c in _ENFORCED_COLUMNS + _LABEL_COLUMNS)
+        if per_dim and printed != per_dim:
+            raise SystemExit(
+                f"the published row for dimension {r['dim']} accounts for "
+                f"{printed} of its {per_dim} cells. A row that does not "
+                f"partition publishes a dimension as smaller than it is; the "
+                f"cells it drops are not reported anywhere. Give every label a "
+                f"column in _LABEL_COLUMN rather than adjusting a figure.")
+    printed = sum(totals[c] for c in _ENFORCED_COLUMNS + _LABEL_COLUMNS)
+    if printed != totals["cells"]:
+        raise SystemExit(
+            f"the published total row accounts for {printed} of "
+            f"{totals['cells']} cells. Every cell must be in exactly one "
+            f"column; see _LABEL_COLUMN.")
+
+
+def _verdict_partition(totals: Dict[str, int]) -> str:
+    """``"504/504 accounted"`` — or a refusal a reader can act on.
+
+    Printed on the verdict line itself so that the sum a reader would have to do
+    by hand is already done. The gate's PASS line published five figures that
+    summed to 451 while announcing 504, and no reader adds up a verdict line.
+    """
+    printed = sum(totals[c] for c in _ENFORCED_COLUMNS + _LABEL_COLUMNS)
+    if printed != totals["cells"]:
+        return (f"UNACCOUNTED: {totals['cells'] - printed} of "
+                f"{totals['cells']} cells are in no column")
+    return f"{printed}/{totals['cells']} accounted"
 
 
 def render(rows: List[Dict], totals: Dict[str, int]) -> str:
@@ -957,20 +1071,45 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     # enforcement axis (see census_rows) is only half the repair: without a
     # column of its own, a contradicted cell would appear in NO column, and a
     # row that silently drops cells is the erasure-by-omission this file warns
-    # about six lines from here. Every one of the 504 is now in exactly one.
+    # about six lines from here.
+    #
+    # NOT MEASURED gets one for the same reason, and vibe-ic#1296 is what it
+    # cost to leave it out. `-SKIPPED` was added to `_join_axes` and to
+    # `_LABEL_KEYS`, so the headline reconciled — and this table, which names its
+    # columns inline, kept printing six. MEASURED on `7c376e348`: the total row
+    # published 451 of 504 cells and dimension 3 published 11 of its 63, the
+    # other 52 appearing nowhere. A dimension whose predicates could not run
+    # reads, in that row, as a dimension with nothing to report.
+    #
+    # The columns are folded from `_LABEL_COLUMN` and the partition is asserted
+    # below for every ROW as well as the total, so this cannot be lost again by
+    # adding a label.
+    _check_table_partitions(rows, totals)
     out.append("| dim | question | ENFORCED: own | ENFORCED: substituted "
-               "| ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |")
+               "| ENFORCED: undeclared | CONTRADICTED | NOT MEASURED "
+               "| WAIVED | NA |")
     out.append("|-----|----------|--------------:|----------------------:"
-               "|---------------------:|-------------:|-------:|---:|")
+               "|---------------------:|-------------:|-------------:"
+               "|-------:|---:|")
     for r in rows:
         out.append(
             f"| {r['dim']} | `{r['name']}` — {r['question']} "
             f"| {r['own']} | {r['substituted']} | {r['undeclared']} "
-            f"| {r['contradicted']} | {r['waived']} | {r['na']} |")
+            f"| {r['contradicted']} | {r['not_measured']} "
+            f"| {r['waived']} | {r['na']} |")
     out.append(
         f"| **total** | | **{totals['own']}** | **{totals['substituted']}** "
         f"| **{totals['undeclared']}** | **{totals['contradicted']}** "
+        f"| **{totals['not_measured']}** "
         f"| **{totals['waived']}** | **{totals['na']}** |")
+    out.append("")
+    out.append(
+        f"**NOT MEASURED is not a pass and not a defect.** Those "
+        f"{totals['not_measured']} cells have a predicate that declined to run, "
+        f"naming a resource it could not reach — most often a published corpus "
+        f"this checkout does not carry. They are counted here so a dimension "
+        f"whose cells could not be driven cannot read as a dimension with "
+        f"nothing to report; read them as UNKNOWN, never as coverage.")
     out.append("")
     out.append("Regenerate (never edit this block by hand, and never quote it "
                "without re-running):")
@@ -1222,11 +1361,19 @@ def _run(args: argparse.Namespace) -> int:
             return 1
         if fig_rc:
             return fig_rc
+        # THE VERDICT LINE PARTITIONS TOO (vibe-ic#1296). It read
+        # `own=17 substituted=44 undeclared=367; WAIVED=8 NA=15` — 451 of 504,
+        # the same 53 cells the table dropped — so the one line a landing
+        # reviewer actually reads carried the defect after the page was fixed.
+        # A gate that prints a denominator must print the WHOLE denominator.
         print(f"[PASS] 63x8 census fresh: {totals['cells']} cells over "
               f"{len(rows)} dimensions; ENFORCED own={totals['own']} "
               f"substituted={totals['substituted']} "
               f"undeclared={totals['undeclared']}; "
-              f"WAIVED={totals['waived']} NA={totals['na']}.")
+              f"CONTRADICTED={totals['contradicted']} "
+              f"NOT-MEASURED={totals['not_measured']} "
+              f"WAIVED={totals['waived']} NA={totals['na']} "
+              f"({_verdict_partition(totals)}).")
         return 0
 
     # The block is written FIRST and the figure verdict returned after, so a
@@ -1241,8 +1388,11 @@ def _run(args: argparse.Namespace) -> int:
         print(f"wrote {path}: ENFORCED own={totals['own']} "
               f"substituted={totals['substituted']} "
               f"undeclared={totals['undeclared']}; "
+              f"CONTRADICTED={totals['contradicted']} "
+              f"NOT-MEASURED={totals['not_measured']} "
               f"WAIVED={totals['waived']} NA={totals['na']}; "
-              f"{totals['cells']} cells.")
+              f"{totals['cells']} cells "
+              f"({_verdict_partition(totals)}).")
     return fig_rc
 
 

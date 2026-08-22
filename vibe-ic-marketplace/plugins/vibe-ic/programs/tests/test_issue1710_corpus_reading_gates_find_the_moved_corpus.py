@@ -57,6 +57,13 @@ from pathlib import Path
 
 import pytest
 
+import _pytest_progress_plugin
+import citation_routing_is_true_check as _routing_gate
+import evidence_citation_resolves_check as _evidence_gate
+import l4_systemrdl_export as _l4_gate
+import l_doc_field_producer_check as _l_doc_gate
+import repo_hygiene_parallel as _parallel
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 REPO = PROGRAMS.parents[3]
 L_DOC = PROGRAMS / "l_doc_field_producer_check.py"
@@ -64,6 +71,70 @@ EVIDENCE = PROGRAMS / "evidence_citation_resolves_check.py"
 ROUTING = PROGRAMS / "citation_routing_is_true_check.py"
 L4 = PROGRAMS / "l4_systemrdl_export.py"
 ENV = "VIBE_IC_BENCHMARK_DATA"
+OWNED = PROGRAMS / "_owned_process_supervisor.py"
+
+
+def _atomic_owned(argv, *, env):
+    """Run one intentionally indivisible fixture operation to final zero."""
+    rc, body, problem = _parallel._run(
+        list(argv), REPO, env, stall_grace_s=float("inf"), atomic=True)
+    if problem:
+        raise AssertionError(
+            "OWNED_CHILD_NORECORD: " + problem + "\n" + body[-5000:])
+    return rc, body
+
+
+def _arg_value(args: tuple[str, ...], option: str, default: str) -> str:
+    try:
+        return args[args.index(option) + 1]
+    except (ValueError, IndexError):
+        return default
+
+
+def _resolved_ic_corpus(module_file: str, supplied: Path | None
+                        ) -> Path | None:
+    here = Path(module_file).resolve()
+    named = next((base / "benchmark-data" / "ic" for base in here.parents
+                  if (base / "benchmark-data" / "ic").is_dir()), None)
+    if named is not None:
+        return named
+    candidate = supplied / "ic" if supplied is not None else None
+    return candidate if candidate is not None and candidate.is_dir() else None
+
+
+def _progress_plan(prog: Path, args: tuple[str, ...], env_tree: str | None
+                   ) -> tuple[str, list[str]]:
+    """Trusted pytest-side finite manifest for the exact checker invocation."""
+    supplied = Path(env_tree).resolve() if env_tree is not None else None
+    if prog == L_DOC:
+        programs = Path(_arg_value(args, "--programs", str(PROGRAMS)))
+        corpus = _resolved_ic_corpus(_l_doc_gate.__file__, supplied)
+        units = (_l_doc_gate.semantic_progress_units(programs, corpus)
+                 if corpus is not None else [])
+        return _l_doc_gate.PROGRESS_SCOPE, units
+    if prog == EVIDENCE:
+        corpus = _resolved_ic_corpus(_evidence_gate.__file__, supplied)
+        units = (_evidence_gate.semantic_progress_units(
+            corpus, write_baseline="--write-baseline" in args,
+            require_checkout=(supplied is not None and
+                              corpus == supplied / "ic"))
+                 if corpus is not None else [])
+        return _evidence_gate.PROGRESS_SCOPE, units
+    if prog == ROUTING:
+        root = Path(_arg_value(args, "--root", "."))
+        units = _routing_gate.semantic_progress_units(root, supplied)
+        return _routing_gate.PROGRESS_SCOPE, units
+    if prog == L4:
+        # A set-and-broken pointer returns before even the repository root is
+        # walked.  Otherwise audit-corpus adds the supplied corpus to --root.
+        if supplied is not None and not supplied.is_dir():
+            units = []
+        else:
+            root = Path(_arg_value(args, "--root", str(REPO)))
+            units = _l4_gate.semantic_progress_units(
+                root, [supplied] if supplied is not None else [])
+        return _l4_gate.PROGRESS_SCOPE, units
+    raise AssertionError(f"no semantic progress plan for {prog}")
 
 
 def _run(prog: Path, *args: str, env_tree: str | None = None):
@@ -78,22 +149,96 @@ def _run(prog: Path, *args: str, env_tree: str | None = None):
     env.pop(ENV, None)                      # never inherit the developer's own
     if env_tree is not None:
         env[ENV] = env_tree
-    r = subprocess.run([sys.executable, str(prog), *args], env=env,
-                       capture_output=True, text=True, timeout=300)
-    return r.returncode, (r.stdout + r.stderr)
+    scope, units = _progress_plan(prog, args, env_tree)
+    rc, out, problem = _parallel._run(
+        [sys.executable, str(prog), *args], REPO, env,
+        semantic_progress_scope=scope,
+        semantic_progress_units=units,
+        domain_progress_callback=_pytest_progress_plugin.domain_progress)
+    return rc, out + (("\n" + problem) if problem else "")
 
 
-def _git(cwd: Path, *a: str) -> None:
-    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=120,
-                   capture_output=True)
+def _git(cwd: Path, completed: int, total: int, *a: str) -> None:
+    # Each git command is one intentionally indivisible fixture transition.
+    # Natural exit/final-zero owns completion; the finite five-step builder
+    # relays a real checkpoint after every completed operation.
+    rc, body = _atomic_owned(
+        ["git", "-C", str(cwd), *a], env=dict(os.environ))
+    assert rc == 0, f"git {' '.join(a)} exited {rc}:\n{body[-3000:]}"
+    _pytest_progress_plugin.domain_progress(
+        "issue1710-git-fixture", completed, total)
 
 
 def _commit(root: Path) -> None:
-    _git(root, "init", "-q")
-    _git(root, "config", "user.email", "t@t")
-    _git(root, "config", "user.name", "t")
-    _git(root, "add", "-Af")
-    _git(root, "commit", "-qm", "corpus")
+    commands = (
+        ("init", "-q"),
+        ("config", "user.email", "t@t"),
+        ("config", "user.name", "t"),
+        ("add", "-Af"),
+        ("commit", "-qm", "corpus"),
+    )
+    for completed, command in enumerate(commands, 1):
+        _git(root, completed, len(commands), *command)
+
+
+def test_atomic_child_preserves_a_natural_nonzero_result():
+    rc, body = _atomic_owned(
+        [sys.executable, "-c",
+         "import sys; print('MEASURED_CHILD_RED'); sys.exit(7)"],
+        env=dict(os.environ))
+    assert rc == 7
+    assert "MEASURED_CHILD_RED" in body
+
+
+def test_atomic_child_with_live_descendant_is_norecord_after_cleanup(tmp_path):
+    """Natural root exit cannot erase unfinished owned work."""
+    pid_file = tmp_path / "escaped.pid"
+    grandchild = "import time; time.sleep(30)"
+    child = (
+        "import pathlib,subprocess,sys\n"
+        f"p=subprocess.Popen([sys.executable,'-c',{grandchild!r}], "
+        "start_new_session=True)\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))\n")
+    with pytest.raises(AssertionError, match="OWNED_CHILD_NORECORD"):
+        _atomic_owned([sys.executable, "-c", child], env=dict(os.environ))
+    escaped_pid = int(pid_file.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(escaped_pid, 0)
+
+
+def test_atomic_policy_rejects_a_progress_log_before_launch(tmp_path):
+    marker = tmp_path / "child-launched"
+    result_path = tmp_path / "owned-result.json"
+    progress_path = tmp_path / "progress.log"
+    progress_path.touch()
+    proc = subprocess.run(
+        [sys.executable, str(OWNED), "--result", str(result_path),
+         "--cwd", str(REPO), "--stall-grace", "1", "--poll", ".1",
+         "--atomic", "--progress", str(progress_path), "--",
+         sys.executable, "-c",
+         f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        cwd=str(REPO), capture_output=True, text=True)
+    assert proc.returncode == 2
+    assert "not allowed with argument" in proc.stderr
+    assert not marker.exists() and not result_path.exists()
+
+
+def test_atomic_api_rejects_a_progress_log_before_launch(tmp_path):
+    import _owned_process_supervisor as owned  # noqa: PLC0415
+
+    marker = tmp_path / "api-child-launched"
+    progress_path = tmp_path / "progress.log"
+    progress_path.touch()
+    record = owned.run_owned(
+        [sys.executable, "-c",
+         f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        REPO, dict(os.environ), progress_path=progress_path,
+        stall_grace_s=1, poll_s=.1, output_progress=False)
+    assert record.rc == 2
+    assert record.launched is False
+    assert record.outcome == "policy_refused"
+    assert "INVALID_PROGRESS_POLICY" in str(record.problem)
+    assert not marker.exists()
 
 
 def _empty_register(tmp_path: Path) -> str:
@@ -249,6 +394,31 @@ def test_l4_passes_a_clean_supplied_corpus(clean):
         f"already reported '0 of 201 documents -> PASS' once\n{out}")
 
 
+def test_each_real_checker_relays_its_exact_finite_manifest(
+        clean, tmp_path, monkeypatch):
+    calls = [
+        (L_DOC, ("--corpus-may-be-absent", "--baseline",
+                 _empty_register(tmp_path))),
+        (EVIDENCE, ("--corpus-may-be-absent",)),
+        (ROUTING, ("--root", str(REPO), "--corpus-may-be-absent")),
+        (L4, ("audit-corpus", "--root", str(REPO),
+              "--corpus-may-be-absent")),
+    ]
+    for prog, args in calls:
+        relayed = []
+        monkeypatch.setattr(
+            _pytest_progress_plugin, "domain_progress",
+            lambda scope, completed, total:
+                relayed.append((scope, completed, total)))
+        scope, units = _progress_plan(prog, args, str(clean))
+        rc, out = _run(prog, *args, env_tree=str(clean))
+        assert rc == 0, out
+        assert relayed == [
+            (scope, completed, len(units))
+            for completed in range(1, len(units) + 1)
+        ], (prog.name, units, relayed, out)
+
+
 # ===========================================================================
 # 3. NOTHING ANYWHERE + the caller said so -> NO_CORPUS, rc 0, and it SAYS
 #    nothing was scanned. This is the case that unblocks the removal.
@@ -339,6 +509,18 @@ def test_routing_a_present_but_unversioned_corpus_is_undetermined(tmp_path):
     assert rc == 2, out
     assert "not a git checkout" in out, out
     assert "NO_CORPUS" not in out, out
+
+
+def test_routing_repository_index_failure_finishes_its_exact_progress_fsm(
+        tmp_path):
+    loose_root = tmp_path / "not-a-repository"
+    loose_root.mkdir()
+    rc, out = _run(ROUTING, "--root", str(loose_root),
+                   "--corpus-may-be-absent")
+    assert rc == 2, out
+    assert "git could not list tracked files" in out, out
+    assert "SEMANTIC_PROGRESS_NORECORD" not in out, (
+        "the exact index-attempt unit was omitted from the child protocol")
 
 
 def test_the_checkout_arm_of_the_same_corpus_still_catches_the_defect(tmp_path):
