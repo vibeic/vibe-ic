@@ -611,7 +611,8 @@ baked in.
 **That forwarding is the wider surface, so it was measured, not reasoned about.**
 Six programs route the flag into `refuse`, and the PPA family reaches it through
 `_ppa_corpus.open_corpus`.  Three of those gates, both states, flag on and off,
-`VIBE_IC_BENCHMARK_DATA` unset:
+`VIBE_IC_BENCHMARK_DATA` unset (**a 3-gate sample — widened to all 13 in 5b,
+which supersedes this table**):
 
 | gate | state | `--corpus-may-be-absent` | rc |
 |---|---|---|---|
@@ -652,3 +653,55 @@ never collapsed the pair because it never overloaded rc 0 that way, and this
 section verifies that by running it rather than by trusting the comment that
 says so.  Nothing here was changed; a sweep whose answer is *"no sibling has
 it"* ships as evidence, not as a patch.
+
+### 5b. The sweep above sampled 3 gates and generalised — here are all 13
+
+Section 5 measured three PPA gates and concluded about a family.  That is the
+same weak-selector move section 2b caught in section 2, and catching it once is
+not a licence to repeat it, so the claim is re-derived over **every production
+program that reaches `_corpus_location.refuse`** — 13 of them, both states, flag
+on and off.  52 cells.
+
+The gates split by how they take their corpus, and the split matters because it
+changes which state A is reachable:
+
+| how the corpus is named | gates |
+|---|---|
+| `--corpus DIR` on the command line | `ppa_head_to_head_check`, `ppa_contract_check`, `ppa_measurement_check`, `ppa_feasibility_check`, `ppa_pareto_check`, `ppa_problem_integrity_check`, `cross_layer_reference_check`, `step_internal_fail_bubble_up_check` |
+| resolved from the pointer / default only | `published_record_staleness_check`, `l_doc_field_producer_check`, `evidence_citation_resolves_check`, `tracked_symlink_portability_check`, `citation_routing_is_true_check`, `benchmark_evidence_index`, `benchmark_evidence_structure_check`, `tracked_symlink_target_present_check` |
+
+**Result — the one column that matters is the last.**
+
+| state | pointer | `--corpus-may-be-absent` | rc |
+|---|---|---|---|
+| **A** absent | unset, nothing anywhere | no | **2** UNDETERMINED |
+| **A** absent | unset, nothing anywhere | yes | **0**, `NO_CORPUS` named |
+| **A'** absent | **set and wrong** | no | **2** UNDETERMINED |
+| **A'** absent | **set and wrong** | yes | **2** — the opt-in does *not* excuse a broken pointer |
+| **B** read, empty | either | no | **2** |
+| **B** read, empty | either | **yes** | **2** — never 0, in every gate measured |
+
+**State B is rc 2 in all of its cells, in all 13 gates, with the opt-in flag on.**
+(`benchmark_evidence_index` answers rc **1** there — a refusal, stronger still.)
+No operator flag anywhere in this family can turn a corpus that was read and
+holds nothing into a pass.  That is the property vibe-ic#1764 is about, and it
+holds across the family without exception.
+
+**And the sweep surfaced a fourth outcome being kept correctly distinct.** Row
+A' was not in section 5's sample and is the interesting one: with the pointer
+*set and pointing at nothing*, the opt-in is ignored and the rc stays 2.  That is
+`_corpus_location` honouring its own header — a pointer that is SET AND WRONG is
+an operator mistake, not "the corpus lives elsewhere", and no flag may excuse it.
+So the four outcomes the header names are all separately observable in one run:
+
+    pointer set and wrong        -> 2, always, opt-in ignored
+    no corpus anywhere, no flag  -> 2
+    no corpus anywhere, opt-in   -> 0, NO_CORPUS, names what it looked for
+    corpus read, holds none      -> 2 (or 1), names the population it read
+
+**What this corrects in section 5.** The conclusion did not move — no sibling
+shares vibe-ic#1764's collapse — but section 5 supported it over 3 of 13 gates
+and one of the two state-A variants, and said so as if it had checked the family.
+It now rests on all 13 and on both variants.  A record that widens its own
+selector twice is a record whose selector can be trusted the third time; one that
+quietly kept the sample is not.
