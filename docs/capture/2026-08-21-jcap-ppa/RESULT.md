@@ -1088,7 +1088,16 @@ whatever root it is handed:
     resolved instead by                                       an environment variable
     the hygiene gate is invoked with                          this repository's root only
 
-The tree was moved out, the product still consumes it in 98 places, and **every
+*The screen behind 37 and 98 was not recorded, so these figures cannot be
+re-derived from this report — the third instance of `A-27` inside this document,
+after the provenance split and the declared-output-path breakdown. Attempting it
+returned 88 and 364 against 37 and 98, which is not evidence that the tree moved:
+it is evidence that a plausible screen and the original screen are different
+screens. The figures are dated to the base and are not re-derived here. The
+RELATION they support — a root-scoped gate covering a root the consumed tree is
+no longer under — does not depend on either count and is verifiable on its own.*
+
+The tree was moved out, the product still consumes it in many places, and **every
 root-scoped gate stopped covering it at that moment** — with no change to any
 gate's name, wiring or verdict. The population simply got smaller and nothing
 could say so. The split is recorded as a layout improvement; the loss of coverage
