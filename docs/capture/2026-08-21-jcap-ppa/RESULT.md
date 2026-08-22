@@ -2284,6 +2284,21 @@ does not exist yet — that is its stated reason for being Bucket C, since no
 emitter records the inputs its check would read. T-1's measurement lives in its
 sample fields, where the ladder puts it, and is dense with figures there.
 
+**And the batch cannot answer that question about itself, which is worth saying
+rather than fixing by retrofit.** Counting the records that carry an explicit
+additional-instance marker — a convention I used deliberately — gives 4 of 37.
+But others demonstrate multiplicity without it: one names four fresh offenders
+across three sibling lanes, one spans 52 of 52 across three lanes, one has three
+independent confirmations. So the marker undercounts, and it undercounts because
+**I applied my own convention inconsistently**, not because the instances are
+absent.
+
+The consequence is concrete and it is what `A-11` just demonstrated: a reader
+deciding which rules survive a point fix cannot get that from this document at a
+glance. Retrofitting a marker across thirty-seven records would make the number
+look derived when it would in fact be re-read — so the honest statement is the
+one above, and the four that carry it are the four that carry it.
+
 *A measured population is not the same as a measured SECOND instance, and the
 table cannot tell them apart.* That distinction is what made `A-11` survive main
 repairing its motivating site: the record named two instances and only one was
