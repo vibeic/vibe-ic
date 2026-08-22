@@ -1059,6 +1059,14 @@
           "path": "reports/phase3/drc_signoff.rpt",
           "size_bytes": 139888
         },
+        "reports/phase3/drc_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "measured 2026-08-22 from the SAME declared run root as `drc_signoff.rpt` above, which carries both `provenance.jsonl` and `reports/orchestrator/` and so is admissible under this manifest's own criterion. Not every run root produces the .json form (the flow's own note: 16 roots carry the .rpt, 3 carry the .json); this entry records where one DID, which is what the manifest is for.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/drc_signoff.json",
+          "path": "reports/phase3/drc_signoff.json",
+          "size_bytes": 1919
+        },
         "reports/phase3/lvs.rpt": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
