@@ -121,3 +121,32 @@ to be batchbig REBASED onto the new base, which is what a landing actually does.
     1. agent/jrows-prepare-for-batchbig   via the plain lander (breaks the deadlock)
     2. land/batchbig-assembled            rebased onto it — verifies as ACTIVATE
     3. agent/jrows-on-batchbig            no protected paths, no pair needed
+
+
+---
+
+## THIS DELTA, MEASURED AGAINST THE BATCH IT LANDS ON
+
+Two arms over the 72 non-matrix files `ci_targeted_test_select --base
+origin/batchbig` picks for the 14 this delta changes, run at host load 6 after
+three deferrals at loads of 26, 61 and 90 — a wall-clock minimum and several
+gates in this repository are demonstrably load-sensitive, and a measurement
+taken while the machine is saturated is not one:
+
+    base (land/batchbig-assembled 0617b1dc6)   2 failed / 1934 passed
+    candidate (this delta)                     1 failed / 1978 passed
+
+    NEW on the candidate            0
+    only on the base                1
+
+The one only-on-base id is `test_the_bound_is_what_refuses_and_not_some_other_clause`,
+and this delta genuinely FIXES it — deterministically, confirmed twice on each
+arm (base fails 2/2, candidate passes 2/2). The cause is not luck: the batch
+carries the pre-ceiling version of that test, which reports "its stated bound is
+not what is deciding this" for a row where the CEILING is deciding — and the two
+corpus rows are now 501 behind against `MAX_BOUND_COMMITS = 500`, so they walk
+straight into it.
+
+The one failure remaining on the candidate is on BOTH arms: batchbig's ninth
+row, `PPA head-to-head records (cross-layer campaign)`, carries no
+`bound_because`. Not introduced here, and not mine to fill in.
