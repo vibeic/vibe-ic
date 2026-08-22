@@ -400,6 +400,32 @@ def _has_file(d: Path) -> bool:
     return False
 
 
+def _nested_duplicate_dirs(folder: Path) -> List[str]:
+    """Directories nested DIRECTLY inside a same-named parent, cell-relative.
+
+    `reports/reports`, `phase3/phase3` — not `phase3` and `reports/phase3`,
+    which is the canonical layout and appears in every conformant cell. The
+    subject is the ADJACENCY, so the test that matters is `name == parent name`
+    and never "this name occurs twice in the tree".
+
+    Symlinks are not followed: a cell may carry tracked symlinks, and a link
+    that happens to point at its own parent would otherwise be reported as a
+    nesting the publisher cannot remove by deleting a directory.
+    """
+    hits: List[str] = []
+    for root, dirs, _files in os.walk(folder, followlinks=False):
+        parent = Path(root).name
+        for d in dirs:
+            if d == parent and Path(root) != folder:
+                hits.append(Path(root, d).relative_to(folder).as_posix())
+        # A child of the cell root cannot duplicate the cell's own version
+        # directory name, so the `!= folder` guard above is not a special case
+        # for the root — it is what keeps `v9.9.9_pdk/v9.9.9_pdk` out of scope
+        # of a rule about a run tree's INTERNAL shape. IC_LEVEL_LAYOUT owns
+        # what may sit beside a cell.
+    return sorted(hits)
+
+
 # --------------------------------------------------------------------------
 # RESULT.md verdict extraction.
 # --------------------------------------------------------------------------
@@ -565,6 +591,44 @@ def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
         res.ok("GDS_MANIFEST")
     else:
         res.fail("GDS_MANIFEST", msg)
+
+    # ---- NESTED_DUPLICATE ------------------------------------------------
+    # `u_hawaii_adc x sky130A` was withdrawn from the published corpus on
+    # 2026-08-20 because one run wrote TWO completion audits: `reports/audit/…`
+    # saying PASS, and `reports/reports/audit/…` — one directory too deep —
+    # saying FAIL, 3.5 s earlier. Every consumer reads the first, so the FAIL
+    # was invisible and the public matrix showed a converged cell.
+    #
+    # The corpus repository turned that into an instruction for a human
+    # (`INDEX.md` rule 3, "Check for a nested `reports/reports/` before
+    # committing"). Nothing implemented it, and the corpus accumulated two more
+    # spellings of the same bug that the instruction does not name.
+    #
+    # IT IS ALSO WHAT LETS THE ROUTED-DEF HYGIENE CORPUS REPORT EMPTY WHILE
+    # FULL. `tools/ci/routed_def_corpus.py` counts a routed DEF only at exactly
+    # six components below `ic/`; at `phase3/phase3/stage3/pnr/routed.def` it is
+    # seven, so the producer exits 0 having printed nothing — the same bytes an
+    # empty corpus produces — and the blocking row keeps saying "is EMPTY". The
+    # producer is a protected authority file and is right as written. The
+    # publish path is the side that must refuse a shape the gate cannot see.
+    #
+    # MEASURED over the whole historical published-cell corpus (5 cells, 388
+    # distinct directories): one hit, and it is the withdrawn cell. 387 clean.
+    nested = _nested_duplicate_dirs(folder)
+    if nested:
+        res.fail("NESTED_DUPLICATE",
+                 "run tree nests a directory inside a same-named parent: "
+                 + ", ".join(nested)
+                 + " — a consumer reads ONE depth, so the same artefact at two "
+                   "depths gives two answers and only one of them is read. This "
+                   "is the shape a published cell was withdrawn for on "
+                   "2026-08-20 (a second, contradictory completion audit at "
+                   "reports/reports/), and at phase3/phase3/stage3/pnr/ it also "
+                   "puts a routed DEF where the routed-DEF hygiene corpus "
+                   "cannot count it. Move the contents up one level and delete "
+                   "the duplicated directory.")
+    else:
+        res.ok("NESTED_DUPLICATE")
 
     # ---- NO_RAW_GEOMETRY -------------------------------------------------
     scan, mode = _raw_scan_set(folder, include_staged)
