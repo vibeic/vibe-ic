@@ -4619,3 +4619,59 @@ it. A whole-lane count would have been the wrong instrument for a race, which is
 That also means main's TRUE red count in this lane is 22 or 25 depending on
 whether the race fires — so anyone comparing arms here must interleave, and must
 not read a 22-vs-25 difference as a regression.
+
+## 67. How to land this — the order, and what each branch is worth on its own
+
+Six branches, all off `main` `a4caccefea`, all `next/`. The set trial-merges
+clean in this order (§65) and was measured together, not only in pieces (§66).
+**Nothing here depends on the pending ruling**; the blocked items are separate
+and none of them is a prerequisite for any of these.
+
+    1  next/differential-fixture-carries-the-wired-gates    832264e58e
+       1 file, +108/-2, no production code.  16 reds -> 0.
+       Verify: pytest tools/test_gatekeeper_land_differential.py  (30 passed)
+
+    2  next/ppa-head-to-head-fixture-declares-a-contract    d89088ee62
+       7 commits, 12 files.  1 red closed; fixture debt 14 -> 4, gates carrying
+       BOTH directions 10 -> 20.
+       Verify: pytest tools/ci/test_gate_fixtures_discriminate.py  (25 passed)
+
+    3  next/fake-docker-state-is-serialised                 c4ab7f64e1
+       1 file.  A kill/rm race in the test harness, not the runner.
+       Verify: the guard it ships — 60 concurrent rounds, 1.4 s.  Do NOT verify
+       by re-running the flaky test: it passed 8/8 after the fix AND unfixed
+       main passed 5/5 interleaved (§62). Sampling cannot see this one.
+
+    4  next/retire-five-stale-acknowledgements              9c25882dac
+       A TWO-COMMIT STACK containing next/liar-census-shrink-pin-follows-the-flow
+       (9554367ecc). Landing this branch lands both. They are separate branches
+       because they are separate subjects, and stacked because they both delete
+       rows from one JSON array and collided (§65).
+       Verify: pytest tools/test_liar_census.py  (114 passed), and the ledger
+       holds exactly ['L-doc field producer', 'evidence citation resolves'].
+
+    5  next/jland67-landing-path-record                     the document
+       Docs only. Independent of the rest.
+
+**The aggregate, interleaved twice:** `main 22 failed / 722 passed` becomes
+`merged 4 failed / 753 passed`, identical counts and identical name sets in both
+rounds. The four survivors are documented as blocked in §60, §31 and §63.
+
+### What a lander should NOT be surprised by
+
+* **`gate_mutation_fixture_check` stays red**, deliberately. Four gates still owe
+  fixtures: three cannot be fixtured at all as declared (§60) and one is
+  parked by its own comment (§60). The debt shrank; it did not close.
+* **The two ledger rows that remain are still red and long past their bounds.**
+  Their dates are untouched on purpose. One needs a cross-repository change and
+  the other's mechanical half is a `--write-baseline`, which is forbidden here
+  even though the row's own field recommends it (§64).
+* **This host cannot run the landing tier at all** — `argparse` 1.4.0 in the user
+  site (§31, §56). None of this was landed from 8HD-9 and none of it can be.
+
+### And the one decision that unblocks the rest
+
+§58's selector rule, §60's three self-locating gates, and §63's drifted protected
+tuple are **one PREPARE**, not three problems: the manifest needs a real
+authorised protected move, and either of the first two supplies it. That is
+stated in full at §63 with the measurement behind it.
