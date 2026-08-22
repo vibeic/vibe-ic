@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "HDLC / SDLC (ISO/IEC 13239) is a wire-level data link protocol spec; no confidentiality / integrity / authentication features beyond the FCS. Any node tapping the link can read every frame. Built-in security primitive is the 16-bit CRC-CCITT FCS (anti-corruption only, NOT anti-tampering — an attacker can easily recompute the FCS after modifying a frame). Modern data-link security on HDLC-based links (V.42bis + V.92 modem encryption, PPP PAP/CHAP/EAP authentication and PPP CCP encryption, ISDN B-channel encryption, IPsec at the network layer above HDLC) is layered on top — not part of ISO/IEC 13239."
-  }
-}
