@@ -1,0 +1,35 @@
+VERSION 5.7 ;
+  NOWIREEXTENSIONATPIN ON ;
+  DIVIDERCHAR "/" ;
+  BUSBITCHARS "[]" ;
+MACRO m_supply_probe
+  CLASS BLOCK ;
+  FOREIGN m_supply_probe ;
+  ORIGIN 0.000 0.000 ;
+  SIZE 100.000 BY 100.000 ;
+  PIN VDDA
+    DIRECTION INOUT ;
+    USE POWER ;
+    PORT
+      LAYER met1 ;
+        RECT 0.000 0.000 1.000 1.000 ;
+    END
+  END VDDA
+  PIN VSSA
+    DIRECTION INOUT ;
+    USE GROUND ;
+    PORT
+      LAYER met1 ;
+        RECT 0.000 2.000 1.000 3.000 ;
+    END
+  END VSSA
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.000 4.000 1.000 5.000 ;
+    END
+  END A
+END m_supply_probe
+END LIBRARY
