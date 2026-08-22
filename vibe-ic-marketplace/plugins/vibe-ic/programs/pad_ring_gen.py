@@ -399,6 +399,23 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
         # 6-7. the remainder, halved, is the pad-to-corner spacing
         rest = space_for_fill - between * (n - 1)
         to_corner, odd = divmod(rest, 2)
+        # THE `odd` REFUSAL IS A DELIBERATE DIVERGENCE FROM UPSTREAM. Do not
+        # "fix" it back. `pad_cfg.tcl` computes
+        #     space_side = round((space_for_fill - filler*(n-1)) / 2 * 1000)/1000
+        # in MICRONS, so a remainder that will not halve evenly becomes a
+        # fractional micron. This step works in INTEGER DEF UNITS, where that
+        # value cannot be expressed: an odd remainder has no halving into two
+        # EQUAL gaps, and silently taking the floor would put the ring one DEF
+        # unit off-centre with no record of it. Refusing is stricter than the
+        # tool this step models, and it is the same rule read in a unit system
+        # that cannot round.
+        #
+        # COMPARED STEP BY STEP against pad_cfg.tcl 2026-08-22 in
+        # ghcr.io/vibeic/vibeic-eda:0.3.16: of its eight steps, seven are
+        # identical here -- including step 5-6, where this step floors twice and
+        # upstream once, which is not a difference because
+        # floor(floor(a)/w) == floor(a/w) for integer w. Step 7 is the only
+        # divergence and this comment is it.
         # 8. refuse a corner spacing that is not a multiple of the site width
         if odd or to_corner % site_w:
             findings.append(_finding(
