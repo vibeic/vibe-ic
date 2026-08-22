@@ -44,8 +44,12 @@ import argparse
 import json
 import os
 import time
+import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _shape_refusal as _sr  # noqa: E402  (#991)
 
 # ── Liveness doctrine (v0.3.46, addressing the budget-guess critique) ───────
 # The STUCK signal is NOT "elapsed > a guessed per-step duration budget".
@@ -180,17 +184,39 @@ def _newest_artifact_mtime(project: Path, phase: str) -> Optional[float]:
     return newest if newest > 0 else None
 
 
-def _completed_steps(report: dict) -> List[dict]:
-    steps = report.get("steps") or report.get("plan") or []
-    return steps if isinstance(steps, list) else []
+def _completed_steps(report: dict
+                     ) -> Tuple[List[dict], Optional[Dict[str, Any]]]:
+    """`(steps, mismatch)`.
+
+    #991 — this was `steps if isinstance(steps, list) else []`, and the
+    coerced empty was BYTE-IDENTICAL to a report with no `steps` key: both
+    produced `current_step: null, steps_completed: 0`, and 86 of the 176
+    reports published in this tree legitimately have no `steps` key at all.
+    MEASURED, the two states are NOT equivalent for this program — a report
+    whose plan is unreadable also loses the per-step silence window, so
+    `max_silence_s` silently reverts from the step's own tolerance to the
+    600s default and a healthy quiet step is called STUCK.
+    """
+    for key in ("steps", "plan"):
+        v = (report or {}).get(key)
+        if v:                     # preserves the original `or` chain exactly:
+            return _sr.read_list(v, key)   # a falsy value falls through
+    return [], None
 
 
-def _current_step(report: Optional[dict]) -> Tuple[Optional[str], int]:
-    """Return (current_step_name, n_completed). The current step is the
-    first non-terminal one, else the last."""
+def _current_step(report: Optional[dict]
+                  ) -> Tuple[Optional[str], int, Optional[Dict[str, Any]]]:
+    """Return (current_step_name, n_completed, plan_mismatch). The current
+    step is the first non-terminal one, else the last. `plan_mismatch` is the
+    stated description of a plan this program could not read — never `None`
+    merely because the plan was empty."""
     if not report:
-        return None, 0
-    steps = _completed_steps(report)
+        return None, 0, None
+    steps, mismatch = _completed_steps(report)
+    if mismatch is not None:
+        # NOT "no steps done". This program does not know how many are done;
+        # saying 0 would be a measurement it did not make.
+        return None, 0, mismatch
     done = 0
     for s in steps:
         if not isinstance(s, dict):
@@ -200,10 +226,10 @@ def _current_step(report: Optional[dict]) -> Tuple[Optional[str], int]:
                   "ENV_UNAVAILABLE", "COVERAGE-INCOMPLETE"):
             done += 1
         else:
-            return str(s.get("name") or "?"), done
+            return str(s.get("name") or "?"), done, None
     last = steps[-1].get("name") if steps and isinstance(steps[-1], dict) \
         else None
-    return last, done
+    return last, done, None
 
 
 def _last_log_line(log: Optional[Path]) -> str:
@@ -255,7 +281,7 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
     now = time.time() if now is None else now
     report = _read_report(project, phase)
     verdict_in_report = (report or {}).get("verdict")
-    cur_step, n_done = _current_step(report)
+    cur_step, n_done, plan_unreadable = _current_step(report)
     log = _newest_log(project, phase)
     # Heartbeat = the most recent of (live log mtime, newest artifact
     # mtime). A run that touches EITHER is making progress. `silence` is
@@ -278,6 +304,13 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
         "phase": phase,
         "current_step": cur_step,
         "steps_completed": n_done,
+        # #991 — stated, not inferred. `None` when the plan was readable (or
+        # legitimately absent); otherwise the description of what arrived, so
+        # `current_step: null, steps_completed: 0` can never be read as "this
+        # run has not started a step" when the truth is "I could not read the
+        # plan". `steps_completed` is 0 in BOTH cases and only this key tells
+        # them apart.
+        "plan_unreadable": plan_unreadable,
         "pid": resolved_pid,
         "pid_alive": alive,
         "heartbeat_log": str(log) if log else None,
@@ -369,6 +402,23 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
 def summarize(rep: dict) -> str:
     st = rep.get("state")
     step = rep.get("current_step")
+    # #991 — the ONE line an operator actually reads. Without this, an
+    # unreadable plan renders as `step 'None' (0 done)`, which is exactly what
+    # a run that has completed nothing renders as, and the silence window that
+    # decided this verdict silently reverted to the default. Prefixed rather
+    # than appended so it cannot be cut off by a terminal width.
+    _pu = rep.get("plan_unreadable")
+    _pfx = ""
+    if _pu:
+        _pfx = (f"PLAN UNREADABLE ({_sr.sentence(_pu)}) — `current_step` and "
+                f"`steps_completed` below are NOT measurements, and the "
+                f"silence window is the {rep.get('max_silence_s')}s DEFAULT "
+                f"rather than this step's own. ")
+        return _pfx + _summarize_state(rep, st, step)
+    return _summarize_state(rep, st, step)
+
+
+def _summarize_state(rep: dict, st: Any, step: Any) -> str:
     if st == "DONE":
         return f"DONE — verdict={rep.get('verdict')} ({rep['phase']})"
     if st == "DIED":
