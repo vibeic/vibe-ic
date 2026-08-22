@@ -119,6 +119,15 @@ made the first sweep report argparse errors as findings.
   is not runnable at this hour. A site among those would not appear here.
 - **One corpus, one shape.** Every row is the population of *this* corpus today.
   A gate whose subject is absent for a different reason could answer differently.
+- **The sweep was not purely read-only, and that is a property of the method
+  rather than of the gates.** Driving `cross_layer_reference_check` left
+  `reports/phase1/cross_layer_reference_check.json` in the scanned tree — it is
+  a producer as well as a checker, which the dispatcher models with its own
+  `WROTE_CORPUS` state, so this is expected behaviour and not a finding. It is
+  recorded because a census that describes itself as "run each gate and read
+  what it says" should say that running one of them changed a tree. Nothing
+  tracked was modified, and the artefact was removed.
+
 - **Not wired as anything.** Per the standing ruling on wide-population sweeps,
   this is a CENSUS that records debt. It is not a gate, it is not blocking, and
   it exists so the next person starts from a measured bound instead of a guess.
