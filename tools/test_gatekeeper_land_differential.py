@@ -146,8 +146,14 @@ def _write_stub_tree(root: Path) -> None:
         "print(out)\n"
         "raise SystemExit(1 if out.strip() else 0)\n")
 
+    # `SMOKE_BASENAMES` is read as a MODULE ATTRIBUTE by the differential's
+    # floor derivation, which imports this file; the selection is printed only
+    # when the file is RUN. Printing at import time would put the selection into
+    # the floor derivation's own stdout, and the floor would not parse.
     (prog / "ci_targeted_test_select.py").write_text(
-        f"print({SELECTED!r})\n")
+        f"SMOKE_BASENAMES = ({Path(SELECTED).name!r},)\n"
+        f"if __name__ == '__main__':\n"
+        f"    print({SELECTED!r})\n")
 
     # The test arm. It records WHEN it ran, so concurrency is MEASURED rather
     # than assumed, and writes the junit the real driver would write.
@@ -215,8 +221,17 @@ def _write_stub_tree(root: Path) -> None:
     # `gate_process_attestation` is what the record helper below builds its
     # process attestations with — the same module the real dispatcher uses, so
     # the stub cannot attest in a dialect the validator would never see.
+    # The three gates wired into the differential by d5646372f each decide
+    # whether the arms launch AT ALL, and every case below asserts what the arms
+    # then did — so the REAL verdict is what has to run here, not a stub of it.
+    # `_gate_usage_exit` and `_vacuous_exit` are imported by all three from
+    # beside themselves.
     for mod in ("hygiene_finding_delta.py", "_atomic_artefact.py",
-                "gate_process_attestation.py"):
+                "gate_process_attestation.py",
+                "landing_noop_verdict_check.py",
+                "attestation_preflight_check.py",
+                "generated_test_list_min_guard.py",
+                "_gate_usage_exit.py", "_vacuous_exit.py"):
         shutil.copy(REPO / PLUGIN_REL / "programs" / mod, prog / mod)
 
     (root / "tools" / "stub_hygiene_record.py").write_text(_HYGIENE_RECORD)
@@ -285,6 +300,7 @@ def test_every_program_the_differential_invokes_is_provided_by_the_fixture():
         + "\nProvide each in _write_stub_tree: copy it when a case needs its "
           "real verdict, stub it when it does not."
     )
+
 
 @pytest.fixture()
 def synthetic():
