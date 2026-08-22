@@ -22,12 +22,13 @@
 > | Is it landed? | **Yes — on `main`.** `a4caccefea` (v1.11.69) carries the wiring with ZERO declared hygiene CLI options (checked by AST; a grep says 2 and both are prose), the verbatim path line, budget 1800, the seam guard and the no-skip test. 9 passed and ceiling rc 0 there. *(The batch-merge row this replaced described §29 and was two versions stale.)* | **§41, §43** |
 > | Should the batch be re-assembled for my finding? | **NO.** The base already fails that gate on `jrows`'s finding; mine is additive | §30 |
 > | **Is there a gate defect?** | Yes: the no-skip test is unreachable by the default targeted mode, and the #565 gap report says `NOT selected 0` because it shares the blind spot. **How the defect got in is NOT established** — its sibling test WAS selected and red, so the selector gap explains one of the two reds, not both | **§39, corrected by §47** |
-> | Can §20–56 be landed from here? | **Not from 8HD-9 as it stands.** The MERGE is verified green (3 conflicts, take the branch, rc 0, 149 passed — §54) but the LANDER refuses its tier on this host over an `argparse` 1.4.0 backport in the user site. Fix the host first, then merge | **§56** |
-> | What is still open? | `jrows`'s revert; two flow-level defects (§18, §28); the end-to-end run, blocked by `argparse` 1.4.0 in the user site (§31). **The 16 red lander tests of §44 are NO LONGER open** — fixed on `fix/jland67-differential-fixture-lacks-wired-gates`, off `main`, 16 failed → 30 passed | **§57** |
+> | Can §20–64 be landed from here? | **Not from 8HD-9 as it stands.** The MERGE is verified green (3 conflicts, take the branch, rc 0, 149 passed — §54) but the LANDER refuses its tier on this host over an `argparse` 1.4.0 backport in the user site. Fix the host first, then merge | **§56** |
+> | What did this session produce? | **Six branches, all `next/`.** Reds closed on `main`: the 16 lander tests (§57), the PPA fixture-pair (§59), the liar-census shrink pin (§61), the hermetic-runner race (§62). Gate-fixture debt 14 → 4 (§59–60). Five stale ledger rows retired (§64) | **§57–64** |
+> | What is still open, and why | `jrows`'s revert; two flow-level defects (§18, §28); the `argparse` 1.4.0 host lane (§31). **Four things are blocked on ONE ruling**: the selector rule (§58), the three self-locating gates (§60), the drifted protected tuple (§63) — a PREPARE needs a real approved move, and either of the first two supplies it. The last two ledger rows are a cross-repo change and a `--write-baseline` this brief forbids (§64) | **§58, §60, §63–64** |
 >
 > **WHAT IN THIS TABLE CAN GO STALE, and what it is pinned to.** Rows about what
 > this BRANCH does — fixed, wiring, rename, breakage — are measurements of a
-> frozen tree and stay true. Four rows describe a MOVING world: *are the other
+> frozen tree and stay true. FIVE rows describe a MOVING world: *are the other
 > reds new* and *is there a gate defect* describe `main`; *can §20–56 be landed
 > from here* describes this host; *what is still open* is a list that others can
 > close. **All four are as measured against `main` a4caccefea on 2026-08-22 —
