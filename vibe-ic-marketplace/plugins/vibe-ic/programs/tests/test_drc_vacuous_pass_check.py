@@ -349,3 +349,72 @@ def test_unbound_layouts_require_unanimity(tmp_path):
     _write_gds(tmp_path / "real_top.gds", n_shapes=900)
     (tmp_path / "drc.rpt").write_text("DRC complete\n0 violations\n")
     assert dvp.audit(tmp_path).verdict == "PASS"
+
+
+def test_the_earned_finding_does_not_claim_the_deck_was_adequate(tmp_path):
+    """The message must scope its claim to what this gate actually measured.
+
+    WHAT WENT WRONG. This finding read "earned DRC-clean". This gate answers
+    exactly one question -- is the 0 vacuous because the layout is empty? -- and
+    never looks at WHICH deck produced the 0, so a router in-loop pass and a
+    foundry sign-off deck are indistinguishable to it.
+
+    OBSERVED on a full run: the sign-off DRC was killed at its wall-clock cap
+    and wrote no report; the surviving report was the router's in-loop
+    projection covering antenna and via only -- no spacing, no width, no
+    min-area; and this line stamped PASS / "earned DRC-clean" over a layout
+    independently measured to carry ~1,968 unpatchable min-area shapes.
+    `drc_signoff.json` had it right (`passed=false`, `is_signoff_deck=false`)
+    and even warned that the spacing and width categories were absent, so the
+    truth was on disk and this sentence contradicted it.
+
+    The 29 tests that already existed all assert on `rule ==
+    "DRC_CLEAN_EARNED"` and never on the message, so the overclaiming sentence
+    was unguarded -- which is why it could be written, and why it needs a guard
+    of its own rather than relying on the rule name.
+    """
+    log = tmp_path / "magic.drc.log"
+    log.write_text(
+        "Loading top\n"
+        "Reading cell top\n"
+        "12345 rectangles\n"
+        "DRC checking complete.\n"
+        "Total DRC errors found: 0\n"
+    )
+    res = dvp.audit(tmp_path)
+    earned = [f for f in res.findings if f.rule == "DRC_CLEAN_EARNED"]
+    assert earned, "the not-vacuous finding is missing entirely"
+    msg = earned[0].message
+
+    # It must NOT assert the thing it cannot know.
+    assert "earned DRC-clean" not in msg, (
+        f"the finding still claims the deck was adequate for sign-off, which "
+        f"this gate never checks: {msg!r}")
+
+    # It MUST say what it did establish, and where deck adequacy actually lives.
+    assert "NOT vacuous" in msg, msg
+    assert "drc_signoff.json" in msg, (
+        f"the reader is not pointed at the artefact that owns deck adequacy: "
+        f"{msg!r}")
+
+
+def test_the_verdict_itself_is_unchanged_by_the_wording_fix(tmp_path):
+    """Guard the guard: this was a DISCLOSURE change, not a verdict change.
+
+    Narrowing the sentence must not turn a genuinely non-vacuous zero into a
+    failure -- that would restate published results, which is a separate
+    decision from fixing an overclaiming string.
+    """
+    log = tmp_path / "magic.drc.log"
+    log.write_text(
+        "Loading top\n"
+        "Reading cell top\n"
+        "12345 rectangles\n"
+        "DRC checking complete.\n"
+        "Total DRC errors found: 0\n"
+    )
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "PASS"
+    assert res.passed is True
+    assert all(f.severity != "ERROR" for f in res.findings
+               if f.rule == "DRC_CLEAN_EARNED")

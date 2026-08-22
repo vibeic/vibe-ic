@@ -15,7 +15,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py verilogeval-v2 \
 # 4. Drive batches per blind_instructions_shape_c.md
 #    Per problem: LLM authors spec.yaml + sample.sv from the prompt only,
 #    then run:
-#    python3 ${CLAUDE_PLUGIN_ROOT}/benchmark-harness/gates_atomic.py \\
+#    python3 ${CLAUDE_PLUGIN_ROOT}/benchmark/gates_atomic.py \\
 #        --prob <Prob> \\
 #        --workdir ~/runs/verilogeval_v2_001/work \\
 #        --dataset ~/datasets/verilog-eval/dataset_spec-to-rtl \\
