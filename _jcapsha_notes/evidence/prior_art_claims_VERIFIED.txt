@@ -1,0 +1,13 @@
+CLAIM A -- the canonical disclosure predicate, run on the pre-fix refusal
+    text     : PAD_SITE_NOT_FOUND: PAD_SITE_NAME='io_site' is not a SITE in the IO cell libra…
+    matches  : True   (matched '0')
+    => a disclosure guard is CLEAN (does not fire) on the buggy tree. Claim A holds: True
+
+CLAIM B -- does any program pin OUR computation against upstream's?
+    programs that BOTH reference an upstream tree AND compare: 6
+      _pad_ring.py
+      caravel_wrapper_harden_driver.py
+      die_finishing_gen.py
+      digital_hardmacro_check.py
+      digital_hardmacro_gen.py
+      phase3_one_shot_runner.py

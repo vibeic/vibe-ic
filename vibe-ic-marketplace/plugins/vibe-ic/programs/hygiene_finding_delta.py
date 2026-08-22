@@ -1039,8 +1039,19 @@ def delta(base: dict, cand: dict,
         "candidate_findings": sum(c_find.values()),
         "declared": len(cg),
     }
-    if transition is not None:
-        result["corpus_transitions"] = [transition]
+    # STATED ALWAYS, EMPTY WHEN EMPTY. This key used to be written only when
+    # there WAS a transition, so a reader — and a test — could not tell "the
+    # producer examined the corpora and found no transition" from "the producer
+    # never ran". MEASURED: `test_end_to_end_post_bootstrap_equal_corpus_uses_
+    # ordinary_delta` read it as `.get("corpus_transitions", []) == []` and
+    # passed through the empty<->empty path for a record that had no such key at
+    # all, which is the exact path its own name says it is NOT measuring. Its
+    # sibling one screen above subscripts the same key bare and would have
+    # raised KeyError on that record. Same rule as `empty_corpora` and
+    # `no_verdict_either_side` beside it, and the same rule this repository
+    # applies to every other denominator: a population that is not stated is a
+    # silence, and a silence reads as a pass.
+    result["corpus_transitions"] = [] if transition is None else [transition]
     return result
 
 
@@ -1081,6 +1092,11 @@ def compare(base_path: Path, cand_path: Path, base_host: str,
         return {"status": REFUSED, "refusal": str(exc), "introduced": [],
                 "carried": [], "cleared": [], "no_verdict_either_side": [],
                 "empty_corpora": [], "absent_corpora": [],
+                # Carried here too, for the reason the key exists at all: a
+                # REFUSED record that omitted it would be the one shape in
+                # which "no transition" and "nobody looked" are still the same
+                # bytes, and it is the shape a reader trusts least.
+                "corpus_transitions": [],
                 "base_findings": None,
                 "candidate_findings": None, "declared": None}
 
@@ -1132,7 +1148,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"  no verdict on EITHER side (excuses nothing): {lbl}")
     for name in d["empty_corpora"]:
         print(f"  loop corpus expanded over 0 item(s) on some arm: {name}")
-    for transition in d.get("corpus_transitions", []):
+    # A BARE SUBSCRIPT, like its two siblings above: a record that does not
+    # state this population is a defect in the producer and must say so,
+    # not render as "there were none".
+    for transition in d["corpus_transitions"]:
         print(
             f"  exact corpus transition: {transition['corpus']} "
             f"{transition['base_items']} -> {transition['candidate_items']} "

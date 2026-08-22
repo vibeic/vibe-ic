@@ -1,0 +1,5 @@
+validators with a PREFIX:IDENTIFIER vocabulary : 1
+
+  backlog_sanitize_check.py
+      prefixes  : skill|program|mcp|flow
+      id class  : [\w_-]   admits a dot: False

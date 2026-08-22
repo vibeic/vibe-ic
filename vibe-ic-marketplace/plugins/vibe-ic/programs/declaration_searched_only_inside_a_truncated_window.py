@@ -62,6 +62,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
 _INVENTORY_NAME = "truncated_window_search_inventory.json"
 
 #: Below this a constant bound is an index or a field width, not a window.
@@ -71,20 +74,99 @@ _SEARCH_METHODS = ("find", "rfind", "index", "startswith", "endswith", "count")
 _RE_SEARCHES = ("search", "match", "findall", "fullmatch", "finditer", "split")
 
 
-def _window_bound(node: ast.Subscript) -> Optional[Tuple[str, int]]:
-    """('head'|'tail', N) when this subscript is a constant-size slice."""
+def _module_int_constants(tree: ast.AST) -> Dict[str, int]:
+    """Module-level `NAME = <int literal>` bindings this rule may resolve.
+
+    WHY A SAME-NODE PREDICATE IS NOT ENOUGH (measured 2026-08-22). This rule
+    read the upper bound as an `ast.Constant` and nothing else, so
+    `text[:DECL_WINDOW_BYTES]` — behaviourally IDENTICAL to `text[:4000]` — was
+    lexically invisible to it. Two agents found the same 4000-byte truncation
+    on the same day; one recorded the site as debt under a may-only-shrink
+    inventory, the other extracted the number into a NAMED constant so two
+    copies of it could not drift. Both repairs are right, and composed they
+    turned the detector blind: the window was still 4000 bytes and the row
+    recording it matched nothing. A rule defeated by extract-a-constant is a
+    rule that gets quieter every time the tree gets tidier.
+
+    CONSERVATIVE ON PURPOSE — a name resolves only if it is bound EXACTLY ONCE
+    anywhere in the module and that one binding is a module-level integer
+    literal. A name that is also a parameter, a loop variable, an import, an
+    `except ... as`, a re-binding or an `AugAssign` is not resolved at all,
+    because this rule reports a size to a reader and a size it inferred from
+    the wrong binding would be worse than the blindness it replaces. `True` and
+    `False` are `int` in Python and are excluded: a flag is not a window.
+    """
+    bound: Dict[str, int] = {}
+
+    def seen(name: str) -> None:
+        bound[name] = bound.get(name, 0) + 1
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            seen(node.id)
+        elif isinstance(node, ast.arg):
+            seen(node.arg)
+        elif isinstance(node, ast.alias):
+            seen((node.asname or node.name).split(".")[0])
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            seen(node.name)
+
+    literal: Dict[str, int] = {}
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.Assign):
+            targets, value = list(node.targets), node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        n = _int_literal(value)
+        if n is None:
+            continue
+        for t in targets:
+            if isinstance(t, ast.Name):
+                literal[t.id] = n
+    return {k: v for k, v in literal.items() if bound.get(k) == 1}
+
+
+def _int_literal(node: Optional[ast.AST]) -> Optional[int]:
+    """The integer a node IS, or None. `True`/`False` are not integers here."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) \
+            and not isinstance(node.value, bool):
+        return node.value
+    return None
+
+
+def _as_int(node: Optional[ast.AST], consts: Dict[str, int]) -> Optional[int]:
+    """The integer a bound EVALUATES to: a literal, or a resolvable NAME."""
+    n = _int_literal(node)
+    if n is not None:
+        return n
+    if isinstance(node, ast.Name):
+        return consts.get(node.id)
+    return None
+
+
+def _window_bound(node: ast.Subscript,
+                  consts: Optional[Dict[str, int]] = None
+                  ) -> Optional[Tuple[str, int]]:
+    """('head'|'tail', N) when this subscript is a constant-size slice.
+
+    `consts` is the module's resolvable `NAME = <int>` table; omitted, the rule
+    reads literals only, which is what it did before `_module_int_constants`.
+    """
+    consts = consts or {}
     sl = node.slice
     if not isinstance(sl, ast.Slice) or sl.step is not None:
         return None
     lo, hi = sl.lower, sl.upper
-    if lo is None and isinstance(hi, ast.Constant) and \
-            isinstance(hi.value, int) and hi.value >= _WINDOW_FLOOR:
-        return "head", hi.value
+    hi_n = _as_int(hi, consts)
+    if lo is None and hi_n is not None and hi_n >= _WINDOW_FLOOR:
+        return "head", hi_n
     if hi is None and isinstance(lo, ast.UnaryOp) and \
-            isinstance(lo.op, ast.USub) and isinstance(lo.operand, ast.Constant) \
-            and isinstance(lo.operand.value, int) \
-            and lo.operand.value >= _WINDOW_FLOOR:
-        return "tail", lo.operand.value
+            isinstance(lo.op, ast.USub):
+        lo_n = _as_int(lo.operand, consts)
+        if lo_n is not None and lo_n >= _WINDOW_FLOOR:
+            return "tail", lo_n
     return None
 
 
@@ -171,11 +253,12 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
                 continue
             parsed += 1
             pm = _parents(tree)
+            consts = _module_int_constants(tree)
             rel = p.relative_to(root).as_posix()
             for n in ast.walk(tree):
                 if not isinstance(n, ast.Subscript):
                     continue
-                w = _window_bound(n)
+                w = _window_bound(n, consts)
                 if w is None:
                     continue
                 windows += 1
@@ -225,7 +308,7 @@ def main(argv=None) -> int:
             if inv_path.exists() else []
         known = {r["key"] for r in rows}
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract
         print(f"[CANNOT DETERMINE] declaration_searched_only_inside_a_truncated_"

@@ -1,6 +1,26 @@
 #!/usr/bin/env python3
 """slot_pad_budget_check — does this design's interface FIT the purchased slot?
 
+ENFORCEMENT: blocking
+=====================
+A DOES_NOT_FIT verdict (rc 1) FAILs the step that guards it. The declaration
+opens this line deliberately: `flow_gate_enforcement_audit` reads it anchored,
+and a mention inside a sentence is not a declaration (#886).
+
+Blocking is only true because `design_one_shot_runner.step_slot_pad_budget`
+SPAWNS this program and maps its exit status to the step verdict. The
+`program_exit_zero` clause in the flow definition is not, by itself, enough:
+those clauses are evaluated by `flow_compliance_check`, which the runner
+invokes as `final_audit` -- the LAST step, after every artefact is written.
+That is the measured #306 defect, and a gate wired only in the YAML can
+describe a run that already happened but cannot refuse one.
+
+WHAT BLOCKING DOES NOT YET MEAN. The FAIL reddens the step and the run's
+aggregate verdict; it does not itself skip Phase 3. Making a pad-budget
+refusal cascade into "do not place and route this" is a policy change to the
+runner's step plan and is left to the maintainer, named here rather than
+implied.
+
 WHY THIS EXISTS
 ===============
 MEASURED (gf180mcuD chip-path campaign, 2026-08-20). Nine benchmark ICs were
@@ -15,7 +35,30 @@ step 0.5ic.
     opentitan_aes            515                     52                9.9x
     ibex                     262                     52                5.0x
     edge_llm_accel           120                     52                2.3x
-    edge_llm_matmul_accel    107                     52                2.1x
+    edge_llm_matmul_accel    109                     52                2.1x
+
+THE LAST ROW READ 107 UNTIL IT WAS RE-MEASURED. It is 109, and the two bits are
+worth the paragraph because they are a rule, not a typo. That design declares
+TWO clocks and TWO resets -- its own `clk`/`rst_n` and a bus-side pair. A slot
+publishes ONE dedicated clock pad and ONE dedicated reset pad, so exactly one of
+each rides for free and the SECOND pair must consume signal budget like any
+other port. Counting them is what makes 109.
+
+Do not "fix" the clk/rst recogniser to match the bus-side spellings. Excluding a
+port declares that a dedicated pad exists for it, which SHRINKS the budget, and
+a smaller interface is how a design that cannot be bonded out reads as FITS.
+Over-counting a clock can only refuse a design that would have fitted; the
+inverse silently ships one that cannot be bonded. There is a test pinning the
+second pair as counted.
+
+THOSE ARE ELABORATED COUNTS, and saying so costs one line and saves a reader an
+hour. Every figure above assumes the design's width parameters were SUPPLIED.
+Run the same design without them and this program does not return a smaller
+number -- it returns UNDECIDED, because a width nobody supplied is not a pad
+count it may invent. Re-measured on the published corpus: the first row sums to
+502 of its elaborated total with four widths unresolved, and the verdict is
+UNDECIDED, not a 502-bit refusal. A reader who compares an unelaborated run
+against this table and finds it short has found that rule, not a defect.
 
 The pad inventory is not a guess and not a constant written into this file: step
 0.5ic ingests the shuttle operator's own slot files, and each one LISTS ITS PADS
@@ -50,26 +93,6 @@ WHAT IS DECIDED, AND WHAT IS NOT
     NOT DECIDED anything about area, timing or routability -- a design can fit
                the pads and still not fit the die
 
-ENFORCEMENT: blocking
-=====================
-A DOES_NOT_FIT verdict (rc 1) FAILs the step that guards it. The declaration
-opens this line deliberately: `flow_gate_enforcement_audit` reads it anchored,
-and a mention inside a sentence is not a declaration (#886).
-
-Blocking is only true because `design_one_shot_runner.step_slot_pad_budget`
-SPAWNS this program and maps its exit status to the step verdict. The
-`program_exit_zero` clause in the flow definition is not, by itself, enough:
-those clauses are evaluated by `flow_compliance_check`, which the runner
-invokes as `final_audit` -- the LAST step, after every artefact is written.
-That is the measured #306 defect, and a gate wired only in the YAML can
-describe a run that already happened but cannot refuse one.
-
-WHAT BLOCKING DOES NOT YET MEAN. The FAIL reddens the step and the run's
-aggregate verdict; it does not itself skip Phase 3. Making a pad-budget
-refusal cascade into "do not place and route this" is a policy change to the
-runner's step plan and is left to the maintainer, named here rather than
-implied.
-
 VERDICTS AND EXIT CODES
 =======================
     FITS               rc 0   the declared interface fits a slot as declared
@@ -79,9 +102,22 @@ VERDICTS AND EXIT CODES
                               same-width in/out pair -- with the shortfall
     UNDECIDED          rc 2   no slots ingested, or no port list could be read.
                               A question that could not be asked has not passed.
+    (usage error)      rc 3   the COMMAND LINE was rejected -- an unknown flag,
+                              a missing positional, a `--param` value that is
+                              not an integer, or a `--json` destination that
+                              climbs out of the project. NOTHING was examined,
+                              and that is a verdict about the CALLER, not about
+                              the design.
 
 rc 2 is the flow's "could not measure" tier. It is NEVER returned for a design
 that simply does not fit: that is an answer, and it is rc 1.
+
+rc 3 AND rc 2 ARE DIFFERENT ON PURPOSE (#712). argparse exits 2 by default, and
+2 is the vacuous tier here, so a mistyped invocation would have reported "I
+examined nothing" -- indistinguishable from the honest skip a cell/IP design
+gets. `_gate_usage_exit.GateArgumentParser` moves it to 3, which the flow reads
+as a FAIL rather than folding into a pass. `--help` still exits 0: that is a
+successful invocation and must not read as a failure to a wrapper.
 
 Chip-, PDK-, operator- and vendor-AGNOSTIC. Every number comes from the ingested
 slot files and the design's own RTL at runtime. No slot geometry, pad count,
@@ -98,6 +134,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082
+import _gate_usage_exit as _usage  # noqa: E402  vibe-ic#712
 
 # --------------------------------------------------------------------------- #
 # pad roles -- derived from the operator's OWN instance names, never assumed
@@ -315,6 +352,92 @@ _DIR_RE = re.compile(r"^(input|output|inout)\b(.*)$", re.S)
 _RANGE_RE = re.compile(r"\[\s*([^\]:]+?)\s*:\s*([^\]]+?)\s*\]")
 
 
+def _token_value(tok: str, params: Optional[Dict[str, int]]) -> Optional[int]:
+    """A dimension token's value, or None when it cannot be resolved WITHOUT
+    GUESSING. Shared by the packed-range reader and the unpacked-array reader
+    so the two cannot disagree about what `BDW-1` means."""
+    tok = tok.strip().strip("`")
+    try:
+        return int(tok, 0)
+    except ValueError:
+        pass
+    # NAME, NAME-1, NAME+1 -- resolved ONLY from caller-supplied values
+    mm = re.match(r"^`?([A-Za-z_]\w*)\s*([-+])\s*(\d+)$", tok)
+    if mm and params and mm.group(1) in params:
+        base = params[mm.group(1)]
+        return base - int(mm.group(3)) if mm.group(2) == "-" else base + int(mm.group(3))
+    if params and tok in params:
+        return params[tok]
+    return None
+
+
+#: A port INITIALISER -- `output reg rvfi_valid = 1'b0`. Legal, and it sits
+#: after the name, so a last-token read returns the literal instead.
+_PORT_INIT_RE = re.compile(r"=\s*[^=].*$", re.S)
+#: Trailing UNPACKED dimensions -- `csr_pmp_addr_i [PMPNumRegions]`. Also after
+#: the name, and unlike a packed range they MULTIPLY the port's bit count.
+_UNPACKED_RE = re.compile(r"((?:\s*\[[^\]]*\])+)\s*$")
+_DIM_RE = re.compile(r"\[([^\]]*)\]")
+#: A packed range written with NO SPACE around it -- `output reg [3:0]one`, or
+#: `input wire[7:0]bus` with the type glued on too. Both legal.
+#: Legal Verilog, and the range then arrives glued to the identifier as one
+#: token, so a last-token read returns `[3:0]one` as the port's name. The WIDTH
+#: is unaffected (the range reader searches, it does not tokenise); this is a
+#: name-only defect, and a wrong name mis-fires the clk/rst exclusion and the
+#: fold-candidate match, both of which key on it. Measured on 4 real ports.
+_GLUED_NAME_RE = re.compile(
+    r"^(?:[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)?(?:\[[^\]]*\])+([A-Za-z_]\w*)$")
+
+
+def split_port_tail(tail: str) -> Tuple[str, List[str]]:
+    """`(tail_without_suffixes, unpacked_dimension_texts)`.
+
+    MEASURED over 6,760 module headers of published RTL: 174 ports came back
+    named `1'b0`, `64'd0` or `[PMPNumRegions]`. Both causes sit AFTER the port
+    name, where a last-token read finds them instead of the name.
+
+    The unpacked case is the one that moves a NUMBER, and it moves it the
+    dangerous way. `input logic [33:0] csr_pmp_addr_i [PMPNumRegions]` is
+    4 x 34 bits; reading only the packed range reports 34. A smaller interface
+    than the design has is how a design that cannot be bonded out reads as
+    FITS -- the exact verdict this program exists to refuse.
+    """
+    t = tail
+    m = _UNPACKED_RE.search(t)
+    dims: List[str] = []
+    if m and t[:m.start()].strip():          # never strip the ONLY token
+        dims = _DIM_RE.findall(m.group(1))
+        t = t[:m.start()]
+    t = _PORT_INIT_RE.sub("", t)
+    return t, dims
+
+
+def unpacked_count(dims: List[str],
+                   params: Optional[Dict[str, int]] = None) -> Optional[int]:
+    """How many elements the unpacked dimensions describe, or None.
+
+    None is the honest answer for `[PMPNumRegions]` with no supplied value,
+    and None reaches the verdict as UNDECIDED rather than as a number this
+    program invented -- the same rule `_width` already follows for a
+    parameterised packed range.
+    """
+    total = 1
+    for d in dims:
+        d = d.strip()
+        if ":" in d:
+            lo, hi = d.split(":", 1)
+            a, b = _token_value(lo, params), _token_value(hi, params)
+            if a is None or b is None:
+                return None
+            total *= abs(a - b) + 1
+        else:
+            n = _token_value(d, params)
+            if n is None:
+                return None
+            total *= n
+    return total
+
+
 def _width(rest: str, params: Optional[Dict[str, int]] = None) -> Optional[int]:
     """Declared bit width, or None when it cannot be resolved WITHOUT GUESSING.
 
@@ -337,20 +460,7 @@ def _width(rest: str, params: Optional[Dict[str, int]] = None) -> Optional[int]:
     lo, hi = m.group(1), m.group(2)
 
     def _val(tok: str) -> Optional[int]:
-        tok = tok.strip().strip("`")
-        # a bare literal
-        try:
-            return int(tok, 0)
-        except ValueError:
-            pass
-        # NAME, NAME-1, NAME+1 -- resolved ONLY from caller-supplied values
-        mm = re.match(r"^`?([A-Za-z_]\w*)\s*([-+])\s*(\d+)$", tok)
-        if mm and params and mm.group(1) in params:
-            base = params[mm.group(1)]
-            return base - int(mm.group(3)) if mm.group(2) == "-" else base + int(mm.group(3))
-        if params and tok in params:
-            return params[tok]
-        return None
+        return _token_value(tok, params)
 
     a, b = _val(lo), _val(hi)
     if a is None or b is None:
@@ -457,12 +567,25 @@ def parse_top_ports(text: str, top: str,
                 unparsed.append(decl[:60])
             continue
         direction, tail = dm.group(1), dm.group(2)
-        toks = tail.replace(")", " ").split()
+        # An initialiser and an unpacked array both sit AFTER the name, so the
+        # last token is not the name until they are removed. See
+        # `split_port_tail` for the measurement that found this.
+        head, unpacked = split_port_tail(tail)
+        toks = head.replace(")", " ").split()
         if not toks:
             continue
         name = toks[-1].strip(";,")
+        glued = _GLUED_NAME_RE.match(name)
+        if glued:
+            name = glued.group(1)
+        width = _width(head, params)
+        if unpacked:
+            n = unpacked_count(unpacked, params)
+            # None x anything stays None: an array whose length nobody supplied
+            # is UNDECIDED, never a guessed pad count.
+            width = None if (width is None or n is None) else width * n
         ports.append({"dir": direction, "name": name,
-                      "width": _width(tail, params),
+                      "width": width,
                       "conditional": name in conditional})
     if ports:
         ports[0]["_unparsed_chunks"] = unparsed
@@ -647,15 +770,19 @@ def _discover_rtl(project: str) -> List[str]:
     The obvious wiring is `--rtl phase2/stage1/rtl/*.v` in the flow clause.
     It is a trap. `flow_compliance_check._resolve_program_cmd` expands globs
     in a clause into SEPARATE argv tokens, `--rtl` consumes exactly one, and
-    every remaining file arrives as an extra positional. argparse rejects
-    that with **exit 2** -- and exit 2 is this flow's VACUOUS_PASS tier. The
-    gate would report a disclosed skip on every multi-file design, forever,
-    and the skip would look like the ordinary "no slots ingested" one.
+    every remaining file arrives as an extra positional, which is rejected.
 
-    So the clause carries no glob and the expansion happens here, where a
-    directory that does not exist is an ANSWER (`[]` -> rc 2 UNDECIDED with a
-    reason naming the directory) rather than a usage error wearing the same
-    exit code as a skip.
+    THE TRAP WAS SILENT AND IS NOW LOUD, and both halves are worth keeping.
+    Until this program adopted the rc-3 usage tier (#712), that rejection was
+    argparse's default **exit 2** -- this flow's VACUOUS_PASS -- so the gate
+    would have reported a disclosed skip on every multi-file design, forever,
+    looking exactly like the ordinary "no slots ingested" one. It is rc 3 now,
+    which the flow reads as FAIL, so the same mistake breaks the step visibly.
+
+    The clause still carries no glob: a loud break is still a break. The
+    expansion happens here instead, where a directory that does not exist is an
+    ANSWER (`[]` -> rc 2 UNDECIDED with a reason naming the directory) and not
+    a usage error at all.
     """
     d = os.path.join(project, *_RTL_DIR_REL)
     if not os.path.isdir(d):
@@ -690,7 +817,15 @@ def _load_slots(project: str) -> Dict[str, Dict[str, Any]]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(
+    # `GateArgumentParser`, not the stdlib one. argparse exits 2 on a rejected
+    # command line, and 2 is THIS FLOW'S VACUOUS_PASS tier -- so a malformed
+    # gate clause would report "I examined nothing" and the step would go green
+    # over a gate that never ran. That collision is not hypothetical here: it
+    # is the reason the flow clause for this program carries no glob (a glob
+    # expands into surplus positionals, which argparse rejects). Routing around
+    # the trap left it armed for the next editor; rc 3 disarms it, and the flow
+    # reads an unsentinelled 3 as FAIL -- loud, which is the whole point.
+    ap = _usage.GateArgumentParser(
         description="Decide whether a design's declared interface fits a "
                     "purchased shuttle slot, from the slot files step 0.5ic "
                     "already ingested. Front-door arithmetic, not a build.")
@@ -712,9 +847,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             try:
                 params[k.strip()] = int(v.strip(), 0)
             except ValueError:
-                print(f"slot_pad_budget_check: --param {kv} is not an integer",
-                      file=sys.stderr)
-                return 2
+                # A value this program cannot read is the CALLER being
+                # wrong, not this program examining nothing. Same tier as any
+                # other rejected command line (#712).
+                _usage.usage_error("slot_pad_budget_check",
+                                   f"--param {kv} is not an integer")
+                return _usage.RC_USAGE
 
     slots = _load_slots(a.project)
     # An explicit --rtl always wins; discovery is the fallback the flow uses.
@@ -743,11 +881,46 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = int(rep["rc"])
 
     if a.out_json:
+        # WHERE A RELATIVE --json LANDS (#712). It used to land wherever the
+        # CALLER happened to be standing, because nothing resolved it against
+        # the project. Both wirings run with `cwd=<project>` so they were
+        # unaffected, but the contract was loose enough that
+        # `--json ../../x.json` wrote outside the project entirely. MEASURED
+        # while testing exactly that: a probe put a report in the repository
+        # root and another in the invoking user's home directory.
+        #
+        # A relative destination is now resolved against the PROJECT, which is
+        # what both callers already meant, and one that climbs out of it is a
+        # rejected command line (rc 3) rather than a silent write somewhere
+        # nobody will look. An ABSOLUTE path is left alone: that is an explicit
+        # choice by the caller, not an accident.
+        #
+        # HONEST LIMIT: containment is checked on the LOGICAL path. A symlink
+        # inside the project that points out of it still leads out. That is a
+        # layout its owner chose, and refusing it would break projects that
+        # legitimately share a reports tree.
+        out_path = a.out_json
+        if not os.path.isabs(out_path):
+            proj = os.path.abspath(a.project)
+            cand = os.path.normpath(os.path.join(proj, out_path))
+            if cand != proj and not cand.startswith(proj + os.sep):
+                _usage.usage_error(
+                    "slot_pad_budget_check",
+                    f"--json {a.out_json} climbs out of the project")
+                return _usage.RC_USAGE
+            out_path = cand
         # vibe-ic#1082 — a declared report destination is written through
         # `_atomic_artefact`, never a bare `open(..., 'w')`: a reader that finds
         # the file half-written cannot tell a truncated report from a short one.
-        write_json(a.out_json, rep, indent=2, sort_keys=True)
-    print(f"slot_pad_budget_check: {rep['verdict']}")
+        write_json(out_path, rep, indent=2, sort_keys=True)
+    # `[CANNOT CHECK]` on the UNDECIDED line, per the house convention recorded
+    # in docs/PPA_INTERFACES.md §1: "print a marker ... so a 2 can never be read
+    # as a silent skip". This program is not a `ppa_*` module and that section
+    # does not formally bind it, but rc 2 here IS the silent-skip shape — no
+    # slots ingested, or no port list found — and a bracketed marker makes the
+    # disclosed skip greppable beside every other gate that discloses one.
+    _mark = "[CANNOT CHECK] " if rep["verdict"] == "UNDECIDED" else ""
+    print(f"{_mark}slot_pad_budget_check: {rep['verdict']}")
     if rep["verdict"] == "UNDECIDED":
         print(f"  {rep.get('reason', 'no reason recorded')}")
     else:

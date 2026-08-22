@@ -82,6 +82,14 @@ def _drive(rtl, with_slots: bool):
     return passed, snippet.startswith(F._VACUOUS_HINT_PREFIX), rep
 
 
+# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
+# whole PROCESS down rather than failing one test, so a subprocess bound must
+# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
+# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
+# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
+# number that can never be reached.
+_CHILD_TIMEOUT_S = 60
+
 # --------------------------------------------------------------------------- #
 # the wiring exists, and it is in a slot that can fail
 # --------------------------------------------------------------------------- #
@@ -218,18 +226,43 @@ def test_the_step_is_APPENDED_TO_THE_PLAN_not_merely_defined():
         f"plan, so it never runs. plan.append targets: {sorted(appended)[:8]}...")
 
 
+def test_the_declaration_survives_the_docstring_growing():
+    """`flow_gate_enforcement_audit.declared_intent` searches only the first
+    4000 characters of the file. That bound is invisible from inside the
+    docstring, so ADDING PROSE ABOVE the declaration silently un-declares the
+    gate — the line is still there, still opens its own line, and the audit
+    reports `declared: None`.
+
+    Measured, on this branch: two explanatory paragraphs pushed the line to
+    byte 4371 and the gate went UNDECLARED while every other check stayed
+    green. The declaration now sits at the top of the docstring, and this test
+    is the guard that keeps it there."""
+    import flow_gate_enforcement_audit as A
+    src = (PROG / "slot_pad_budget_check.py").read_text(encoding="utf-8")
+    idx = src.find("ENFORCEMENT:")
+    assert idx >= 0, "the gate declares no enforcement intent at all"
+    # The bound is IMPORTED, never re-typed: a number kept in two places is a
+    # number that will disagree, and this guard would then quietly stop
+    # guarding the thing it names.
+    assert idx < A.DECL_WINDOW_BYTES, (
+        f"the ENFORCEMENT declaration sits at byte {idx}, past the "
+        f"{A.DECL_WINDOW_BYTES}-byte window `declared_intent` reads. It is "
+        f"present and unread, which the audit reports as UNDECLARED — move it "
+        f"back above the prose.")
+
+
 def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
     """The doctrine property itself (§3/§5), pinned so it cannot regress to
     AUDIT_ONLY. A dict `.get(rc, ...)` instead of a branch on `rc` is enough to
     lose it — that spelling reports INLINE_UNPROVEN, and unknown is not yes."""
-    import subprocess
-    import tempfile as _tf
-    out = Path(_tf.mkdtemp(prefix="fga1347_")) / "fga.json"
-    subprocess.run([sys.executable,
-                    str(PROG / "flow_gate_enforcement_audit.py"),
-                    "--json", str(out)],
-                   capture_output=True, text=True, timeout=600)
-    doc = json.loads(out.read_text())
+    # Called IN-PROCESS, not spawned. The audit scans ~1240 programs and takes
+    # ~24s; as a child it was bounded at 60s (the harness ceiling), which left
+    # 2.5x headroom and MEASURABLY was not enough — this test flaked at machine
+    # load ~17 and passed at load ~5. In-process the work is identical but the
+    # only bound is pytest's own 180s item timeout, which is 7x headroom.
+    # A flake is worse than no test: its green is the one that gets believed.
+    import flow_gate_enforcement_audit as A
+    doc = A.audit(PLUGIN / "flow" / "phase1_phase2_phase3.yaml", PROG)
     mine = [g for g in doc["gates"] if g.get("gate") == "slot_pad_budget_check"]
     assert mine, "the audit does not see the gate at all"
     assert mine[0]["enforcement"] == "ENFORCED", mine[0]
@@ -304,14 +337,11 @@ def test_the_three_step_verdicts_are_three_distinct_values():
 # agent remembers to. FLOW / PROG / CI / TOOLS fire without anyone choosing.
 
 def _wiring_audit_report() -> dict:
-    import subprocess
-    import tempfile as _tf
-    out = Path(_tf.mkdtemp(prefix="cew1347_")) / "cew.json"
-    subprocess.run([sys.executable,
-                    str(PROG / "checker_execution_wiring_audit.py"),
-                    "--json", str(out)],
-                   capture_output=True, text=True, timeout=600)
-    return json.loads(out.read_text())
+    """In-process, for the same reason as the enforcement audit above: as a
+    spawned child this scan takes ~23s against a 60s harness ceiling, and 2.5x
+    headroom measurably was not enough under machine load."""
+    import checker_execution_wiring_audit as C
+    return C.audit(PLUGIN, PLUGIN.parents[2])
 
 
 def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
@@ -452,3 +482,260 @@ def test_all_four_verdicts_are_reachable_through_the_wiring():
                        (T._RTL_FOLDABLE, True), (T._RTL_FITS, False)):
         seen.add(_drive(rtl, slots)[2]["verdict"])
     assert seen == {"DOES_NOT_FIT", "FITS", "FITS_AFTER_FOLD", "UNDECIDED"}, seen
+
+
+# --------------------------------------------------------------------------- #
+# a malformed clause must be LOUD, not a disclosed skip  (#712 rc-3 tier)
+# --------------------------------------------------------------------------- #
+# The tests above keep the SHIPPED clause glob-free, because a glob expands
+# into surplus positionals that argparse rejects. But argparse rejects with
+# exit 2, and 2 is this flow's VACUOUS_PASS tier — so the malformed clause read
+# as "I examined nothing" and the step went green over a gate that never ran.
+#
+# Keeping the clause correct routed AROUND that trap and left it armed for the
+# next editor. `_gate_usage_exit.GateArgumentParser` disarms it: a rejected
+# command line is rc 3, and the flow reads an unsentinelled 3 as FAIL.
+#
+# MEASURED, same clause, same project, on either side of the adoption:
+#     before -> VACUOUS_PASS (silent skip)
+#     after  -> FAIL (step goes red)
+
+_TRAP_CLAUSE = ("slot_pad_budget_check . --rtl phase2/stage1/rtl/*.v "
+                "--json reports/x.json")
+
+
+def _two_file_project() -> Path:
+    p = _project(T._RTL_FITS, with_slots=True)
+    (p / "phase2" / "stage1" / "rtl" / "other.v").write_text(
+        "module other (input wire a);\nendmodule\n")
+    return p
+
+
+def test_a_malformed_clause_FAILS_and_is_not_a_disclosed_skip():
+    passed, snippet = F._check_program_exit_zero(_two_file_project(), _TRAP_CLAUSE)
+    assert passed is False, "a clause the program rejects reported a pass"
+    assert not snippet.startswith(F._VACUOUS_HINT_PREFIX), (
+        "a rejected command line landed in the VACUOUS tier — 'you called me "
+        "wrongly' is being reported as 'I examined nothing'")
+
+
+def test_the_usage_tier_is_distinct_from_the_vacuous_one():
+    """rc 3 = you called it wrong; rc 2 = there was nothing to examine. The
+    program's whole contract rests on those not collapsing."""
+    import subprocess
+    prog = str(PROG / "slot_pad_budget_check.py")
+
+    def rc(*args):
+        return subprocess.run([sys.executable, prog, *args],
+                              capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S).returncode
+
+    assert rc("--not-a-flag") == 3          # rejected command line
+    assert rc() == 3                        # missing positional
+    assert rc(".", "--param", "X=nope") == 3   # a value it cannot read
+    assert rc("--help") == 0                # a successful invocation
+    assert rc(str(Path(tempfile.mkdtemp(prefix="noslots_")))) == 2   # genuine UNDECIDED
+
+
+def test_help_still_exits_zero_so_wrappers_do_not_read_it_as_failure():
+    import subprocess
+    r = subprocess.run([sys.executable, str(PROG / "slot_pad_budget_check.py"),
+                        "--help"], capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
+    assert r.returncode == 0 and "usage" in r.stdout.lower()
+
+
+def test_the_runner_treats_a_REJECTED_command_line_as_its_own_failure():
+    """#712, one level out from the clause. Once the gate adopted the rc-3
+    usage tier, 3 became reachable in the runner — and the runner's mapping
+    sent anything that was not 0 or 1 to SKIP, so "I called my own gate
+    wrongly" would have been reported as "the gate had nothing to say".
+
+    The argv it rejected was built by this very step, so the fault is the
+    caller's. FAIL, for the same reason the merge gate blocks on rc 3."""
+    R = _runner()
+    orig = R.subprocess.run
+    try:
+        R.subprocess.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
+        sr = R.step_slot_pad_budget(_project(T._RTL_FITS, with_slots=True),
+                                    "chip_top")
+    finally:
+        R.subprocess.run = orig
+    assert sr.extras["exit_code"] == 3
+    assert sr.status == "FAIL", (
+        f"a rejected command line reported {sr.status!r} — the usage tier "
+        f"collapsed back into the skip tier")
+    assert "REJECTED" in sr.detail
+
+
+def test_the_runner_reads_the_usage_rc_from_the_module_that_owns_it():
+    """Resolved, not written as a literal 3 beside a module that defines it —
+    two spellings of one constant is how tiers drift apart."""
+    R = _runner()
+    import _gate_usage_exit as _u
+    assert R._usage_rc() == _u.RC_USAGE == 3
+
+
+def test_the_runners_four_tiers_are_four_distinct_readings():
+    R = _runner()
+    orig = R.subprocess.run
+    try:
+        R.subprocess.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
+        usage = R.step_slot_pad_budget(_project(T._RTL_FITS, True), "chip_top").status
+    finally:
+        R.subprocess.run = orig
+    fits = R.step_slot_pad_budget(_project(T._RTL_FITS, True), "chip_top").status
+    red = R.step_slot_pad_budget(_project(_HOPELESS, True), "chip_top").status
+    skip = R.step_slot_pad_budget(_project(T._RTL_FITS, False), "chip_top").status
+    assert (fits, red, skip, usage) == ("PASS", "FAIL", "SKIP", "FAIL")
+    # the two FAILs are the same verdict but must be distinguishable by rc
+    assert skip != usage, "a skip and a rejected command line share a reading"
+
+
+# --------------------------------------------------------------------------- #
+# the wiring goes red on REAL published silicon, not only on fixtures
+# --------------------------------------------------------------------------- #
+# Everything above drives synthetic Verilog. The brief's requirement was "prove
+# each wiring can go RED", and a fixture I wrote proves the logic, never the
+# artefacts — which is the exact wording of the gate this branch exists to
+# close. The published corpus carries the ICs this program's docstring cites as
+# its measured evidence, so the refusal can be driven on them.
+#
+# MEASURED through `design_one_shot_runner.step_slot_pad_budget`, real RTL plus
+# an ingested 52-signal-pad slot:
+#
+#     opentitan_aes           DOES_NOT_FIT   515 bits   9.90x   (docstring: 515, 9.9x)
+#     ibex                    DOES_NOT_FIT   262 bits   5.04x   (docstring: 262, 5.0x)
+#     edge_llm_matmul_accel   DOES_NOT_FIT   109 bits   2.10x   (docstring: 109, 2.1x)
+#     sha256                  FITS_AFTER_FOLD 75 bits           (docstring: 75, fits)
+#
+# The table read 107 for `edge_llm_matmul_accel` when these tests were written.
+# It reads 109 now: re-measuring showed the design declares TWO clocks and TWO
+# resets, only one pair of which rides the slot's dedicated pads, and the table
+# had waived both. The correction landed in the docstring; this comment quoted
+# the old value for three commits afterwards, which is why the agreement is now
+# ASSERTED below instead of narrated here.
+
+import shutil as _shutil  # noqa: E402
+import _hostpaths  # noqa: E402
+
+_SLOT_PADS = 52
+
+
+def _real_ic_project(ic: str) -> Path:
+    """A real published IC's RTL, COPIED, with a slot ingested beside it.
+
+    Copied because the step writes a report and the corpus is not ours to
+    write into.
+    """
+    rtl = _hostpaths.require_corpus("ic", ic, "phase2", "stage1", "rtl")
+    d = Path(tempfile.mkdtemp(prefix=f"realic_{ic[:8]}_"))
+    (d / "phase2" / "stage1").mkdir(parents=True)
+    _shutil.copytree(rtl, d / "phase2" / "stage1" / "rtl",
+                     symlinks=True, ignore_dangling_symlinks=True)
+    s = d / "input" / "submission_template" / "slots"
+    s.mkdir(parents=True)
+    (s / "slot_1x1.json").write_text(json.dumps(T._slot_ingested()))
+    return d
+
+
+@pytest.mark.parametrize("ic,bits", [("opentitan_aes", 515), ("ibex", 262)])
+def test_a_real_IC_that_cannot_be_bonded_out_turns_the_step_RED(ic, bits):
+    R = _runner()
+    sr = R.step_slot_pad_budget(_real_ic_project(ic), "chip_top")
+    assert sr.status == "FAIL", f"{ic} was not refused: {sr.detail[:120]}"
+    assert sr.extras["exit_code"] == 1
+    assert str(bits) in sr.detail, (
+        f"{ic}: the declared bit count is not in the operator-visible line")
+
+
+def test_the_real_sha256_fits_only_after_a_fold_and_says_so():
+    """The other direction, and the one arithmetic alone gets wrong: 75 bits
+    against 52 pads LOOKS unbuildable and is not, because two same-width buses
+    share one bidirectional group. The gate must not refuse it."""
+    R = _runner()
+    sr = R.step_slot_pad_budget(_real_ic_project("sha256"), "chip_top")
+    assert sr.status == "PASS", f"a fittable design was refused: {sr.detail[:120]}"
+    assert "FITS_AFTER_FOLD" in sr.detail
+
+
+# --------------------------------------------------------------------------- #
+# EVERY gate's declaration, not just this branch's two
+# --------------------------------------------------------------------------- #
+# The two per-file guards above protect the two gates this branch wired. They
+# say nothing about the other forty-three.
+#
+# SURVEYED: 45 programs carry a real (anchored) ENFORCEMENT declaration and
+# none is currently unread — so this is a fragility, not an outstanding bug.
+# The thinnest margin measured was 91 bytes. One paragraph added above that
+# line and the gate goes silently UNDECLARED, with nothing else turning red;
+# that is precisely how it happened twice on this branch.
+#
+# Anchored via the audit's OWN `_DECL_RE`. A survey using
+# `text.find("ENFORCEMENT:")` counts prose MENTIONS as declarations — measured,
+# it produced three false alarms, one of them a runner whose docstring mentions
+# the token at byte 1.3 million.
+
+def test_no_gate_declaration_anywhere_sits_outside_the_readers_window():
+    import flow_gate_enforcement_audit as A
+    progs = PROG
+    unread, thin = [], []
+    for p in sorted(progs.glob("*.py")):
+        m = A._DECL_RE.search(p.read_text(errors="replace"))
+        if not m:
+            continue                      # no declaration is a different question
+        margin = A.DECL_WINDOW_BYTES - m.start()
+        if margin <= 0:
+            unread.append(f"{p.stem} at byte {m.start()}")
+        elif margin < 200:
+            thin.append(f"{p.stem} margin {margin}B")
+    assert not unread, (
+        "these gates DECLARE an enforcement intent the audit never reads — "
+        "present, correctly spelt, and reported as UNDECLARED:\n  "
+        + "\n  ".join(unread)
+        + "\nMove the declaration above the prose; the window is "
+          f"{A.DECL_WINDOW_BYTES} bytes.")
+    assert not thin, (
+        "a declaration is within 200 bytes of vanishing; one paragraph added "
+        "above it un-declares the gate silently:\n  " + "\n  ".join(thin))
+
+
+def test_the_docstrings_cited_table_matches_what_the_program_measures():
+    """The table in `slot_pad_budget_check`'s docstring is the program's own
+    published evidence. Nothing re-derived it, so it drifted: one row read 107
+    against a measured 109 until this branch corrected it, and a comment in
+    THIS file went on quoting the old value for three commits afterwards.
+
+    Asserted rather than narrated. Both sides come from the tree — the claimed
+    bits are parsed out of the docstring table, the measured bits come from
+    driving the real published RTL through the same code path the gate uses.
+    Corpus-gated, so it skips where the corpus is not configured."""
+    import re
+    import slot_pad_budget_check as S   # this module has no `S` alias
+    doc = _hostpaths.require_corpus("ic")          # skips without a corpus
+    src = (PROG / "slot_pad_budget_check.py").read_text(encoding="utf-8")
+    rows = dict(re.findall(r"^    ([a-z_0-9]+)\s+(\d+)\s+52\s", src, re.M))
+    assert rows, "the docstring publishes no measured table any more"
+
+    checked, wrong = 0, []
+    for ic, top in (("opentitan_aes", "chip_top"), ("ibex", "chip_top")):
+        claimed = rows.get(ic)
+        if claimed is None:
+            continue
+        rtl = doc / ic / "phase2" / "stage1" / "rtl"
+        if not rtl.is_dir():
+            continue
+        ports = None
+        for f in sorted(rtl.iterdir()):
+            if f.suffix in (".v", ".sv"):
+                ports = S.parse_top_ports(f.read_text(errors="replace"), top)
+                if ports:
+                    break
+        if not ports:
+            continue
+        measured = S.interface_budget(ports)["signal_bits"]
+        checked += 1
+        if measured != int(claimed):
+            wrong.append(f"{ic}: table says {claimed}, program measures {measured}")
+    assert checked, "no cited IC could be measured from the configured corpus"
+    assert not wrong, (
+        "the docstring's published evidence no longer matches what the program "
+        "produces:\n  " + "\n  ".join(wrong))

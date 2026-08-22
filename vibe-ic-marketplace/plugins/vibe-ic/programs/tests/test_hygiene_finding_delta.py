@@ -572,6 +572,37 @@ def test_structural_empty_refuses_a_mismatched_attestation_identity():
 # The one bootstrap declaration transition: exact or refused
 # ══════════════════════════════════════════════════════════════════════
 
+def test_a_delta_with_no_transition_still_states_the_population_as_empty():
+    """THE DIRECTION THAT MAKES THE ONE ABOVE MEAN SOMETHING.
+
+    `corpus_transitions` used to be written only when there WAS a transition,
+    so a record produced by a run that examined the corpora and found none was
+    byte-identical to a record produced by a run in which the producer never
+    executed. MEASURED: the end-to-end post-bootstrap test read the key with
+    `.get(..., [])`, matched a record that did not have it, and reported the
+    equal-corpus path as proved while never reaching it. Empty is a population;
+    absent is a silence.
+
+    AND THE SECOND ARM IS THE POST-BOOTSTRAP PROPERTY ITSELF: two runs whose
+    corpus is ALREADY EXPANDED and equal must produce an ordinary CLEAN delta
+    and demand no second one-use transition. That is the claim
+    `test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta` is named
+    for and cannot reach — its stub knob does not cross the hermetic arm's
+    `env -i` profile (`hermetic_candidate_runner.py:793`,
+    `gatekeeper-verify-merge.sh:512-535` passes an exact `--env` list), so on
+    any docker-capable host BOTH its arms run the ordinary one-gate dispatch
+    and the corpora are equal because neither expanded. It is pinned here,
+    where `delta` is handed the expanded records directly and the assertion can
+    actually fail.
+    """
+    base, candidate, _evidence = _transition_pair()
+    for arm, pair in (("EMPTY on both arms", base), ("EXPANDED on both", candidate)):
+        d = H.delta(pair, pair)
+        assert "corpus_transitions" in d, (arm, sorted(d))
+        assert d["corpus_transitions"] == [], (arm, d["corpus_transitions"])
+        assert d["status"] == H.CLEAN, (arm, d)
+
+
 def test_exact_attested_routed_def_empty_to_expanded_transition_is_clean():
     """Common red is carried; the exact manifest population is introduced."""
     base, candidate, evidence = _transition_pair()
@@ -948,3 +979,8 @@ def test_a_refusal_still_carries_both_corpus_lists():
                         Path("/nonexistent-cand.json"), _HOST, _HOST)
     assert refused["status"] == H.REFUSED
     assert refused["empty_corpora"] == [] and refused["absent_corpora"] == []
+    # THE THIRD LIST, ADDED FOR THE SAME REASON AND AFTER THE SAME DEFECT:
+    # `corpus_transitions` was written only when there WAS a transition, so
+    # both the refusal record and every no-transition record left the reader
+    # guessing between "none" and "never looked".
+    assert refused["corpus_transitions"] == [], refused

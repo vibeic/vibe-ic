@@ -144,6 +144,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
 _INVENTORY_NAME = "registry_iteration_domain_inventory.json"
 
 #: A name a finding is collected onto. Deliberately a suffix/substring match on
@@ -583,7 +586,7 @@ def main(argv=None) -> int:
         known = {r["key"] for r in inv_rows}
 
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings,
                  "inventory_rows": len(inv_rows)}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract

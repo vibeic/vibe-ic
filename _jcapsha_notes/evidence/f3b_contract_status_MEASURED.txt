@@ -1,0 +1,11 @@
+instance                                      (a) record  (b) rc2
+adder_map_techmap.py                                  NO      yes
+iterative_recurrence_timing_diagnosis.py              NO      yes
+analog_hardmacro_gds_emit.py                          NO      yes
+analog_lef_gds_outline_check.py                       NO      yes
+
+what each one is:
+  adder_map_techmap.py                         a declared techmap that silently does not bind
+  iterative_recurrence_timing_diagnosis.py     a delay target the mapper ignores
+  analog_hardmacro_gds_emit.py                 FOREIGN not honoured by stream-out
+  analog_lef_gds_outline_check.py              FOREIGN not honoured by stream-out

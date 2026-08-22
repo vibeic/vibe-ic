@@ -1,0 +1,13 @@
+module                              declaration parsers
+_pad_ring.py                                          1   ['parse_lef_sites']
+_tapeout_declaration.py                               0   []
+analog_real_corner_sweep.py                           0   []
+die_finishing_gen.py                                  0   []
+fault_atpg_run.py                                     0   []
+not_verified_tier.py                                  0   []
+pad_ring_gen.py                                       0   []
+phase1_doc_one_shot_runner.py                         0   []
+phase3_one_shot_runner.py                             0   []
+signoff_ladder_run.py                                 0   []
+
+in-scope modules that OWN a declaration parser: 1 of 10

@@ -72,6 +72,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _prose_polarity                                         # noqa: E402
 
 _INVENTORY_NAME = "constitutive_denial_inventory.json"
@@ -249,7 +252,7 @@ def main(argv=None) -> int:
             if inv_path.exists() else []
         known = {r["key"] for r in rows}
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings,
                  "table_keys": sorted(_prose_polarity.CONSTITUTIVE_IDIOMS)},
                 indent=2) + "\n")

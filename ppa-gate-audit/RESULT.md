@@ -2138,10 +2138,16 @@ repository to copy**:
     h2h_A  SCOPE_SENTINEL     `timing_wns_ns.rc_corner` is null at process=ss
            MEASURED: 1213 `ss` timing scopes in this tree carry an `rc_corner`
            key and ZERO of them state a value.
+           >> BOTH FIGURES ARE WRONG. Re-measured over `scope` dicts only, it is
+           >> 2641 stating none and ONE stating `max`. See Part 21.
 
     h2h_B  SCOPE_INCOMPLETE   `power_mw` scope declares no `mode` at stage=synth
            MEASURED: 546 power scopes in the campaign's own record set and NOT
            ONE carries a `mode`.
+           >> THIS CLAIM IS BACKWARDS. 2286 power scopes DO carry `mode`, 1730
+           >> of them at `stage=synth`. The real obstruction is that the
+           >> PRODUCER could not emit the key and the cited run tree is not in
+           >> this repository. See Part 21.
 
 Making the row green would mean writing two fields no artefact states — an
 invented measurement, which is the unearned pass this whole document refuses.
@@ -2160,11 +2166,35 @@ than granting anything. The row's own `why` had already named this exit: the red
 *"closes when that record is either relabelled as a within-project comparison or
 re-measured against an untuned baseline"*.
 
-**`gate_red_since_check` would not have caught it.** Its `stale` finding fires
-only when the acknowledged gate PASSES; this one became NOT_CHECKED, so the row
-would have survived as a live deadline for a red that no longer exists. Recorded
-rather than fixed — the rule belongs to the ledger's owner, and the fix is one
-clause.
+**`gate_red_since_check`'s `stale` finding would not have caught it** — that
+fires only when the acknowledged gate PASSES, and this one became NOT_CHECKED.
+Recorded rather than fixed; the rule belongs to the ledger's owner.
+
+**But the row was not merely obsolete — it had EXPIRED, and that makes the
+deletion a necessity rather than tidiness.** Measured by running the checker
+over the same dispatch record with each ledger:
+
+    base ledger    9 finding(s), rc 1
+    this branch    8 finding(s), rc 1
+
+    the one that differs:
+      [expired] PPA head-to-head records (cross-layer campaign): red since
+      a00f53f20948 — 217 commit(s) ago, and the bound this row set for itself
+      was 200. vibe-ic#1241 owns it
+
+So the acknowledgement had already come due. Leaving it would have been a hard
+`[expired]` failure on a red that no longer exists, and the row's own `why` had
+named this exact exit: the red *"closes when that record is either relabelled as
+a within-project comparison or re-measured against an untuned baseline"*. The
+first of those is what Part 20 did.
+
+The other **eight** findings are pre-existing and none is this branch's: four
+`stale` rows whose gates already passed on `a758f4adc`, and expiries including
+`liar census controls still fire`, 286 commits past a bound of 35. The checker
+was failing on the base tree and fails on this one for the same reasons, one
+row fewer. It is not wired into `repo_hygiene_gates.sh` — it runs in the landing
+gate against a `--summary-json` dispatch record — which is why it took a
+deliberate run to see any of this.
 
 ## One clause of the declaration corrected, and the date untouched
 
@@ -2207,3 +2237,109 @@ shape rather than program behaviour, so removing one does not silence the other.
     chip-agnostic guard            PASS, 1553 files
     PROGRAM_INVENTORY.json and the four stated counts in the two READMEs
     re-derived for the added test file.
+
+# Part 21 — the rc-0 verdict re-measured, and two of Part 20's numbers were wrong
+
+Part 20 concluded that rc 0 is not honestly available for the cross-layer row.
+That conclusion SURVIVES. The two measurements it rested on do not, and the
+correction matters because one of them was not merely miscounted — it was
+backwards.
+
+## What Part 20 claimed, and what the tree actually says
+
+Both counts below are over dicts that are the value of a key literally named
+`scope`, which is the only thing `check_scope_parity` reads. Part 20's numbers
+counted `gaps` and `provenance` dicts too — those carry an `rc_corner` key as
+the NAME OF A GAP, not as a measurement condition, and folding them in is what
+produced the wrong totals.
+
+    CLAIMED  "1213 `ss` timing scopes carry an `rc_corner` key and ZERO state a value"
+    MEASURED  2641 state none and ONE states `max`. The count was wrong and
+              "zero" was wrong. The substance survives: the `ss` path records
+              the RC corner essentially never, and h2h_A is not the exception.
+
+    CLAIMED  "546 power scopes in the campaign's own record set and NOT ONE carries a `mode`"
+    MEASURED  2286 power scopes DO carry `mode: functional`; 1012 do not.
+              Restricted to `stage=synth`, where h2h_B's number was taken,
+              1730 carry a mode and 1012 do not. THE CLAIM IS BACKWARDS: the
+              majority of synth-stage power scopes state the very field Part 20
+              said none of them state.
+
+Part 20 used those two numbers to argue that green "would mean writing two
+fields no artefact states". For `mode` that argument does not hold, and it
+should not have been made.
+
+## The real reason h2h_B cannot be repaired here, which is narrower
+
+Not "no artefact states a mode". The correct statement is two facts:
+
+  1. THE PRODUCER COULD NOT EMIT IT. `_ppa/power.metric_records` built its
+     `base_scope` from five literals plus three keys resolved off the liberty
+     stem, and NO branch of it could set `mode`. The only way in was
+     `extra_scope`, and a census of the tree finds its three call sites are ALL
+     in tests. So every power record that module has ever written was one
+     required key short BY CONSTRUCTION — refused by `ppa_head_to_head_check`
+     for a field its own producer had no way to fill. The module's docstring
+     had already diagnosed this class for the other three keys ("this module
+     emitted four of the six"), fixed those three, and left `mode`.
+
+  2. THE RUN TREE IS NOT HERE. h2h_A and h2h_B cite `/home/reyerchu/_jxlayer/
+     run/trials/...`, which this repository does not carry. Even with the
+     producer repaired, those two records cannot be REGENERATED here.
+
+So the row stays rc 2, and the deliverable is the producer repair plus this
+correction — not a green row.
+
+## The producer repair
+
+`_ppa/power.py` gains `_mode_for(project)`, a verbatim mirror of
+`_ppa/timing.py._mode_for`: the mode comes from the run's own
+`pvt_matrix.json`, and only when exactly one mode is declared. A mirror rather
+than a cleverer rule on purpose — `REQUIRED_SCOPE` names `mode` on BOTH axes and
+`check_scope_parity` compares them key by key, so two modules resolving it
+differently would make the two axes of one run disagree about that run.
+
+The discipline the module already states is kept exactly: only what was resolved
+is emitted, a mode nothing declares is left OUT rather than nulled, and the
+reason is recorded in `provenance.mode_gap`. Nulling it would have satisfied the
+consumer's PRESENCE check and then compared EQUAL to another arm's null — the
+`SCOPE_SENTINEL` hole, reopened by the repair that closes `SCOPE_INCOMPLETE`.
+
+`power_total_vs_budget_check` is the one production caller and now passes
+`project`.
+
+WHAT THIS DOES NOT DO: it does not turn any row green, and it changes no shipped
+record. The corpus is static JSON; both campaign rows read rc 2 before and after.
+
+## Negative control
+
+    if False:  # NEGATIVE CONTROL: the mode resolution reverted
+        base_scope["mode"] = mode
+
+    FAILED tests/test_ppa_producer_consumer_agreement.py::
+           test_the_power_producer_CAN_satisfy_every_key_its_consumer_requires
+    E  AssertionError: the power producer cannot emit these keys its own
+       consumer requires, so every record it writes is SCOPE_INCOMPLETE by
+       construction: ['mode']
+    E  assert not ['mode']
+
+## The BASELINE_TUNED_BY_US refusal, re-proved on this tree
+
+    if False:  # NEGATIVE CONTROL: refusal removed
+
+    FAILED tests/test_issue1121_ppa_head_to_head.py::test_a_baseline_this_project_tuned_is_refused
+    FAILED tests/test_issue1121_ppa_head_to_head.py::test_a_tuned_baseline_is_refused_even_when_we_would_have_won
+    FAILED tests/test_issue1121_ppa_head_to_head.py::test_cli_returns_the_same_code_as_evaluate
+    FAILED tests/test_issue1121_ppa_head_to_head.py::test_the_pointer_actually_aims_the_gate
+    FAILED tests/test_issue1121_ppa_head_to_head.py::test_adding_an_undetermined_record_cannot_subtract_a_refusal
+    FAILED tests/test_issue1121_ppa_head_to_head.py::test_corpus_severity_order_is_refused_then_undetermined_then_ok
+    6 failed, 155 passed
+
+    E  AssertionError: assert 0 == 1
+    E   +  where 1 = C.RC_REFUSED
+
+NOTE FOR THE READER: `test_ablation_is_not_a_head_to_head.py` — the file the
+re-filing shipped — passes with the refusal removed, all 17 of them. It pins the
+two document kinds apart; it does not pin the refusal. The red lives in
+`test_issue1121`, and anyone checking that claim by running the ablation file
+alone would get a false all-clear.

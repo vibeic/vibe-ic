@@ -69,6 +69,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _gate_invocation                                        # noqa: E402
 
 _INVENTORY_NAME = "declared_invocation_parser_inventory.json"
@@ -207,7 +210,7 @@ def main(argv=None) -> int:
             if inv_path.exists() else []
         known = {r["key"] for r in rows}
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract
         print(f"[CANNOT DETERMINE] declared_invocation_accepted_by_its_own_"

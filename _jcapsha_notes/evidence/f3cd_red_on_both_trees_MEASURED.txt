@@ -1,0 +1,33 @@
+F3c AND F3d ARE RED ON `main` AND RED ON THE UN-LANDED FIX BRANCH.
+
+Measured 2026-08-22 by running each candidate test's own predicate against the
+file as it exists on each ref (`git show <ref>:<path>`), not against a checkout,
+so no tree was modified and nothing could be left behind.
+
+  ref                        F3d: how the DERIVED sides are obtained
+  origin/main                N = rotate_cw (a ROTATION)   E = rotate_cw
+  origin/jpadsite/pad-site   N = rotate_cw (a ROTATION)   E = (NO CALL AT ALL)
+
+  ref                        F3c: which sides each rotation variable drives
+  origin/main                HORIZONTAL -> [N,S]   VERTICAL -> [E,W]
+  origin/jpadsite/pad-site   HORIZONTAL -> [N,S]   VERTICAL -> (nothing)
+  the tool's documented      HORIZONTAL -> [E,W]   VERTICAL -> [N,S]
+  contract
+
+WHY THIS IS A DIFFERENT STATUS FROM F1 AND F2, AND THE DIFFERENCE DECIDES THE
+LANDING ORDER. F1 and F2 are red on `main` and GREEN on the fix branch: they are
+correct guards waiting on that branch to land, and landing it turns them green.
+F3c and F3d are red on BOTH. Landing the fix branch does not turn them green,
+because they are not guarding a defect that branch repairs.
+
+AND THE `(NO CALL AT ALL)` IS THE FINDING, not a detail of it. The fix branch
+was built on the conclusion that `PAD_ROTATION_VERTICAL` is inert, so it
+REMOVED the variable's effect rather than routing it to the sides the tool
+documents it for. The tool does read it -- it drives north and south. So the
+branch takes a variable that was misrouted and makes it genuinely inert, which
+is the one outcome that makes the original diagnosis true after the fact.
+
+NOT A REASON TO HOLD THE BRANCH. The site fix it exists for is real, verified on
+four PDK trees, and independent of all of this. These two records are the
+argument for a FOLLOW-UP, and they are filed as Bucket A with their reds shown
+rather than attached to that branch as a review objection.

@@ -1,0 +1,15 @@
+# Bucket A — program-rule sketches for programs/phase3_one_shot_runner.py
+# Corpus-sweep REQUIRED before merging into programs/phase3_one_shot_runner.py.
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
+# Pattern: A runner reads configuration from a directory inside the design's own input tree and reports the ingest by naming that path. When a caller has no first-class way to set the knob, it stages the file there, and the audit line then attributes to the design a value the caller chose. The record carries no field for who declared it, so the distinction survives only in whatever comment the author thought to write. Detect by requiring each ingested input to carry a declarer, and refuse an ingest that cannot say.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_an_ingested_input_records_who_declared_it(sample_text, ports):
+    """An ingested input records who declared it.
+
+An audit line that names only the path it read attributes the content to whoever owns the path. Where a caller can write into that path, the line reports the caller's choice as the design's declaration, and every downstream reader inherits the attribution. Carry the declarer beside the value, so the difference between what the design specified and what a run injected is a field rather than a comment."""
+    # Expected signal: the ingest refuses, or records a declarer, for configuration staged into the design's input tree by the caller
+    # Suggested fix action: MEASURED on the runner and on the artefacts a real search left behind. The runner exposes 3 place-and-route knobs on its command line and 0 synthesis actuators -- nothing matching a strategy, a recipe or an adder map. The only synthesis input it reads is a directory inside the design's input tree, and its audit header names that path and nothing else. Searched for any field recording authorship of that input: 9 candidate mentions in the runner, every one unrelated. So a lever admitted as changing no design can only be turned by writing into the design's own inputs, after which the audit line reports it as the design's declaration. WHAT MAKES IT A RULE RATHER THAN A COMPLAINT: the search that hit this compensated BY HAND. It staged 9 files and wrote the disclosure into the comment header of 6 of them -- the first line of one reads that the strategy is declared by the search and not by the design. That is the correct fact, recorded in the one place no consumer parses, by an author who happened to be careful. BUILD: give the ingest a declarer field, populate it from the caller rather than from the path, and refuse an ingest whose declarer is unknown; then give the knob a first-class flag so the honest path does not require writing into the design at all. The predicate is presence of a declarer per ingested input, the population is every ingest the runner performs, and the refusal names the input and the path it came from.
+    return []  # list of findings — TODO implement

@@ -2171,7 +2171,40 @@ def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
 
 def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
         sandbox, tmp_path):
-    """After activation, evidence must not demand another one-use transition."""
+    """After activation, evidence must not demand another one-use transition.
+
+    WHAT THIS ARM MEASURES, AND WHAT IT PROVABLY CANNOT — because the previous
+    version of this test claimed the second as well.
+
+    `.get("corpus_transitions", [])` made "the producer never ran" and "the
+    producer ran and found nothing" the same verdict, and the first was what
+    was happening: the key was ABSENT from the delta. `hygiene_finding_delta`
+    now STATES the population on every record, empty when empty, so the key is
+    present here and the two are distinguishable — that half is repaired at the
+    producer, where it belongs.
+
+    The other half cannot be repaired here. `GATEKEEPER_STUB_ROUTED_TRANSITION`
+    and `GATEKEEPER_STUB_BASE_EXPANDED` are passed to the VERIFIER, and the
+    land arms it launches are hermetic: `gatekeeper-verify-merge.sh`
+    `launch_hermetic_land_arm` hands the runner an exact `--env` list and
+    `hermetic_candidate_runner.py` execs it under `env -i`, so no ambient
+    variable crosses that boundary — by design, and the receipt attests the
+    exact environment. MEASURED on this tree: both arms therefore run the
+    ordinary one-gate dispatch, base and candidate publish a BYTE-IDENTICAL
+    `hygiene.json`, and the delta reports `declared: 1` with no routed-DEF
+    loop on either side. The corpora here are equal because NEITHER expanded,
+    which is the empty<->empty path and not the one this test is named for.
+    The sibling above, which needs the transition to actually happen, is red on
+    pristine origin/main a4caccefe for exactly this reason (KeyError there,
+    `0 == 1` here) and is not this batch's.
+
+    So this arm asserts what it genuinely establishes end to end — the wiring
+    reaches a CLEAN ordinary delta, the population is STATED, and no second
+    one-use transition is demanded — and the expanded<->expanded equality it
+    cannot construct is pinned in
+    `test_hygiene_finding_delta.test_a_delta_with_no_transition_still_states_
+    the_population_as_empty`, which hands `delta` the expanded records directly.
+    """
     r, doc = _verify(
         sandbox, "routed_transition", tmp_path,
         env_extra={
@@ -2183,7 +2216,11 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
     assert doc["verdict"] == "LAND_OK"
     delta = doc["hygiene_finding_delta"]
     assert delta["status"] == "CLEAN", delta
-    assert delta.get("corpus_transitions", []) == []
+    assert "corpus_transitions" in delta, (
+        "the delta does not STATE its corpus-transition population, so "
+        "'none' and 'nobody looked' are the same bytes again: "
+        + repr(sorted(delta)))
+    assert delta["corpus_transitions"] == []
     assert "trusted EMPTY→expanded evidence supplied" not in r.stdout
 
 
@@ -2212,10 +2249,25 @@ def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
 
     r, doc = _verify(repo, "wrong_head", tmp_path)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
+    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
+    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
+    # in that worktree — it runs in a container on a read-only, object-exact
+    # subject — so the tamper cannot reach it and the attestation has nothing to
+    # catch. The check was not deleted; it was moved and generalised into
+    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
+    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
+    # is therefore deliberate, not a convenience — and the guarantee is now
+    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
+    # redefine is unchanged.
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
+    # The tamper did NOT take: the tree that lands is the tree that was verified.
+    assert doc["expected_tree"] == doc["verified_tree"], doc
+    # And it never reached the real worktree.
+    assert doc["candidate_test_worktree_status"] == "clean", doc
+    # But it WAS observed — a silently-ignored tamper would be the real defect.
+    assert any("test_moves_the_detached_subject_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
 
 
 def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
@@ -2247,10 +2299,25 @@ def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
 
     r, doc = _verify(repo, "hidden_dirty", tmp_path)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
+    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
+    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
+    # in that worktree — it runs in a container on a read-only, object-exact
+    # subject — so the tamper cannot reach it and the attestation has nothing to
+    # catch. The check was not deleted; it was moved and generalised into
+    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
+    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
+    # is therefore deliberate, not a convenience — and the guarantee is now
+    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
+    # redefine is unchanged.
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
+    # The tamper did NOT take: the tree that lands is the tree that was verified.
+    assert doc["expected_tree"] == doc["verified_tree"], doc
+    # And it never reached the real worktree.
+    assert doc["candidate_test_worktree_status"] == "clean", doc
+    # But it WAS observed — a silently-ignored tamper would be the real defect.
+    assert any("test_hides_changed_subject_bytes_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
 
 
 def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
@@ -2298,10 +2365,26 @@ def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
         for ref in replace_refs.stdout.splitlines():
             _git(repo, "update-ref", "-d", ref)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
+    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
+    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
+    # in that worktree — it runs in a container on a read-only, object-exact
+    # subject — so the tamper cannot reach it and the attestation has nothing to
+    # catch. The check was not deleted; it was moved and generalised into
+    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
+    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
+    # is therefore deliberate, not a convenience — and the guarantee is now
+    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
+    # redefine is unchanged.
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
+    # The tamper did NOT take: the tree that lands is the tree that was verified.
+    assert doc["expected_tree"] == doc["verified_tree"], doc
+    # And it never reached the real worktree.
+    assert doc["candidate_test_worktree_status"] == "clean", doc
+    # But it WAS observed — a silently-ignored tamper would be the real defect.
+    assert any("test_redefines_head_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
+    assert "candidate worktree raw attestation failed" not in r.stdout
 
 
 def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
@@ -2341,20 +2424,40 @@ def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
     assert not list(cache.glob("*"))
 
 
-def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
-        sandbox, tmp_path):
-    """B1/B2 finish before A artifacts exist; A1/A2 then run in parallel."""
-    probe = tmp_path / "parallel-arms"
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)},
-    )
+def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
+    """All four arms produce their record. NOT an ordering guard — see below.
+
+    This used to assert `A2.started`/`B1.started`/`B2.started` in a probe
+    directory the stub wrote from inside the arm. Since the arms became
+    hermetic that could never work: `GATEKEEPER_CONCURRENCY_PROBE_DIR` is not
+    on `_LAND_REVIEWED_ENV_NAMES`, so the arm never saw it, and the directory
+    is a host path no arm can write to anyway. The probe held exactly the three
+    `cleanup.*` files the VERIFIER writes on the host, and nothing else.
+
+    The verdict document already carries per-arm evidence, and the line below
+    was already asserting one of them. Use it for all four. This is stronger
+    than the marker it replaces: a marker proved an arm STARTED, a record
+    proves it COMPLETED.
+
+    NOT GUARDED, and it was not guarded before either: the old name promised
+    "B1/B2 finish before A artifacts exist; A1/A2 then run in parallel", but
+    marker existence never showed ordering, and the verdict document carries no
+    timestamps. Renamed to what is actually asserted rather than leaving a name
+    that over-promises. A real ordering guard needs a per-arm completion record
+    with times, which `landing_completion_record.py` could carry but does not
+    surface to the verdict today.
+    """
+    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
-    assert {p.name for p in probe.iterdir()} >= {
-        "A2.started", "B1.started", "B2.started"}
-    assert doc["base_land"] is not None
-    assert doc["delta"]["new_failures"] == []
+    # A2 (base gate arm) and B2 (candidate gate arm) each produced a record.
+    assert doc["base_land"] is not None, "arm A2 produced no landing record"
+    assert doc["land"] is not None, "arm B2 produced no landing record"
+    # A1/B1 (the aggregate test arms) each measured a non-zero suite.
+    delta = doc["delta"]
+    assert delta["base_total"] > 0, f"arm A1 measured nothing: {delta}"
+    assert delta["candidate_total"] > 0, f"arm B1 measured nothing: {delta}"
+    assert delta["new_failures"] == []
 
 
 def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
@@ -2508,12 +2611,41 @@ fi
                  str(_BENCHMARK_TEST["remote"])},
     )
     pid_file = probe / f"{hung_arm}.pid"
-    deadline = time.monotonic() + 12
+    # Wait on the same suite ceiling the cleanup wait below uses. The old bound
+    # here was a 12s wall-clock estimate, which the verifier outlives on a cold
+    # cache purely by doing its honest work.
+    deadline = time.monotonic() + _T
     while time.monotonic() < deadline and not pid_file.is_file():
         if proc.poll() is not None:
             break
         time.sleep(0.05)
-    assert pid_file.is_file(), proc.communicate(timeout=2)
+    if not pid_file.is_file():
+        # NEVER evaluate the diagnosis inside the assert message. Against a
+        # verifier that is still running, `proc.communicate(timeout=2)` raises
+        # TimeoutExpired, and that exception REPLACES the AssertionError: the
+        # failure then reads "timed out after 2 seconds", which points at the
+        # verifier as the thing that hung. That is the exact inverse of the
+        # common case, where the verifier ran to completion and it is the
+        # CONTROL ARM that never existed. It also leaks the verifier, because
+        # nothing ever reaps it. Settle the process first, then report which of
+        # the two distinguishable things actually happened.
+        still_running = proc.poll() is None
+        if still_running:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        stdout, stderr = proc.communicate()
+        if still_running:
+            why = (f"the verifier was still running after {_T}s and the "
+                   f"{hung_arm} control arm never announced itself")
+        else:
+            why = (f"the verifier EXITED rc={proc.returncode} without ever "
+                   f"running the {hung_arm} control arm: the injected hang was "
+                   f"unreachable, so this test measured NOTHING about "
+                   f"interrupt cleanup")
+        pytest.fail(f"{why}\n=== verifier stdout ===\n{stdout}\n"
+                    f"=== verifier stderr ===\n{stderr}")
     arm_pid = int(pid_file.read_text().strip())
 
     if pid_only_term:

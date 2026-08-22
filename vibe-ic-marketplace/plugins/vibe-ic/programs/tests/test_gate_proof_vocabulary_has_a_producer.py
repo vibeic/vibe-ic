@@ -115,6 +115,14 @@ def test_the_shipped_tree_is_RED_on_drv():
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}"
     assert "drv" in r.stdout
     assert "timing.drv.violations" in r.stdout
+    # RE-DERIVED 2026-08-22 on the composed tree: 9 -> 10. A sibling lane in
+    # the same batch adds an `eco_readiness` axis to `_ppa/search_feasibility`
+    # DEFAULT_AXES, and this figure is the population the finding below is
+    # measured against, so it moves with it. The finding itself is unchanged in
+    # kind: `drv` still proves from names nobody produces. `eco_readiness` now
+    # joins it, and its missing name is `design_for_eco.spares.count` — whose
+    # producer is the open flow-ownership question on
+    # `reports/spare_cell_coverage.json`, NOT something to waive here.
     assert _count(r.stdout, "feasibility axes") == 10, (
         f"the axis population moved; re-derive the finding\n{r.stdout}")
 

@@ -76,6 +76,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
 _DEFAULT_FLOOR = 2.0
 
 _CLOCKS = ("monotonic", "time", "perf_counter", "process_time", "monotonic_ns")
@@ -290,7 +293,7 @@ def main(argv=None) -> int:
             return 2
         findings, denom = scan(root, a.floor)
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"floor_s": a.floor, "denominators": denom,
                  "findings": findings}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract

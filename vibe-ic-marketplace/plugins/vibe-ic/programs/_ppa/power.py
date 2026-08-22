@@ -171,6 +171,53 @@ _VECTOR_BASES = (BASIS_VCD, BASIS_SAIF)
 _SUM_RTOL = 0.02
 
 
+#: Where a run declares the operating MODE it analysed. Same three locations
+#: `_ppa/timing.py` reads, because it is the same declaration about the same
+#: run: a power number and a timing number taken from one run were taken in one
+#: mode, and two modules disagreeing about where that is written would make the
+#: two axes incomparable for a reason that has nothing to do with the silicon.
+_PVT_MATRIX = (
+    "phase2/stage2/constraints/pvt_matrix.json",
+    "constraints/pvt_matrix.json",
+    "phase3/stage3/constraints/pvt_matrix.json",
+)
+
+
+def _mode_for(project: Path) -> Tuple[Optional[str], Optional[str]]:
+    """The run's operating MODE, from `pvt_matrix.json`'s own `modes` list.
+
+    A VERBATIM MIRROR OF `_ppa/timing.py._mode_for`, and deliberately not a
+    cleverer rule: `REQUIRED_SCOPE["power_mw"]` and `REQUIRED_SCOPE[
+    "timing_wns_ns"]` both name `mode`, `check_scope_parity` compares the two
+    scopes key by key, and a power module that resolved the mode by a different
+    rule from its timing sibling would produce two records that disagree about
+    the mode of ONE run.
+
+    Exactly one declared mode is attributable to a report that never names one.
+    Two or more is not: the reports carry no mode marker, so choosing between
+    them would be invention. Zero declared modes is likewise null, and in every
+    null case the REASON is returned beside it and is recorded in `provenance.
+    mode_gap` -- a scope key this module could not fill says WHY, rather than
+    arriving as a bare absence the reader has to explain.
+    """
+    path = next((project / rel for rel in _PVT_MATRIX
+                 if (project / rel).is_file()), None)
+    if path is None:
+        return None, "no pvt_matrix.json declaring a mode"
+    pvt = _load_json(path)
+    if not isinstance(pvt, dict):
+        return None, "no pvt_matrix.json declaring a mode"
+    modes = pvt.get("modes")
+    if not isinstance(modes, list) or not modes:
+        return None, "pvt_matrix.json declares no modes"
+    modes = [str(m) for m in modes]
+    if len(set(modes)) != 1:
+        return None, ("pvt_matrix.json declares %d modes (%s) and the power "
+                      "reports name none" % (len(set(modes)),
+                                             ",".join(sorted(set(modes)))))
+    return modes[0], None
+
+
 def _num(tok: Any) -> Optional[float]:
     try:
         f = float(tok)
@@ -428,6 +475,7 @@ def _record(metric: str, status: str, value: Optional[float],
 
 def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
                    scenario: str = "default",
+                   project: Optional[Path] = None,
                    extra_scope: Optional[Dict[str, Any]] = None
                    ) -> List[Dict[str, Any]]:
     """Every figure the artefact states, as `vibeic.ppa.metric.v1` records.
@@ -472,9 +520,34 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
                      ("temperature_c", pvt.temperature_c)):
         if val is not None:
             base_scope[key] = val
+    # ── the sixth required key, and the one this module never emitted ──────
+    # The comment above says this module "emitted four of the six" and then
+    # fixed three; `mode` was the fourth and stayed unemittable, because
+    # `base_scope` has no branch that can set it and no production caller
+    # passes `extra_scope` (MEASURED: the only three `extra_scope=` call sites
+    # in the tree are in tests). So every power record this module has ever
+    # written was SCOPE_INCOMPLETE at `ppa_head_to_head_check` BY
+    # CONSTRUCTION -- refused for a key the producer had no way to fill, while
+    # the timing sibling read it from `pvt_matrix.json` all along.
+    #
+    # Resolved by the SAME rule as `_ppa/timing.py`, and emitted under the SAME
+    # discipline as the three above: only what was resolved is emitted, a mode
+    # nothing declares is left OUT rather than nulled, and the refusal stands
+    # with the reason recorded in `provenance.mode_gap`.
+    mode, mode_gap = (_mode_for(project) if project is not None
+                      else (None, "no project directory was given to resolve "
+                                  "the mode from"))
+    if mode is not None:
+        base_scope["mode"] = mode
     provenance = {"activity_corroboration": act.get("corroboration"),
                   "activity_reason": act.get("reason"),
+                  # NOT the scope's `mode`. This is the ACTIVITY token
+                  # (`vcd`/`saif`/`vectorless`) that `POWER_ANALYSIS_MODE:`
+                  # states; the scope's `mode` is the operating mode
+                  # (functional/scan) and is `mode_gap`'s subject. Two
+                  # different axes that the word "mode" spells the same.
                   "declared_mode": act.get("declared_mode"),
+                  "mode_gap": mode_gap,
                   # The parser's own account of what it could not read, kept
                   # beside the scope it did not fill. `ambiguous:...` means the
                   # stem carried two candidates and it refused to pick one.
@@ -914,6 +987,7 @@ SCHEMA_PATH = "schemas/ppa/power.v1.schema.json"
 
 def power_document(report: Dict[str, Any], *, stage: str = "unknown",
                    scenario: str = "default",
+                   project: Optional[Path] = None,
                    extra_scope: Optional[Dict[str, Any]] = None
                    ) -> Dict[str, Any]:
     """One `vibeic.ppa.power.v1` document for one power artefact.
@@ -928,7 +1002,7 @@ def power_document(report: Dict[str, Any], *, stage: str = "unknown",
         "stage": stage,
         "activity": report.get("activity") or {},
         "metrics": metric_records(report, stage=stage, scenario=scenario,
-                                  extra_scope=extra_scope),
+                                  project=project, extra_scope=extra_scope),
         "split_consistency": report.get("split_consistency"),
         "group_sum_consistency": report.get("group_sum_consistency"),
         "source": _source(report),

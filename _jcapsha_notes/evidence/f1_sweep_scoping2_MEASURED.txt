@@ -1,0 +1,12 @@
+upstream variables total 406, pdk-scoped 145
+
+module                            pdk-scoped reads  unaccounted   names
+_pad_ring.py                                    11            0   -
+die_finishing_gen.py                            16           15   KLAYOUT_ANTENNA_OPTIONS, KLAYOUT_ANTENNA_RUNSET, KLAYOUT_DEF_LAYER_MAP, KLAYOUT_DENSITY_OPTIONS, KLAYOUT_DENSITY_RUNSET, KLAYOUT_DRC_OPTIONS, KLAYOUT_DRC_RUNSET, KLAYOUT_FILLER_OPTIONS, KLAYOUT_FILLER_SCRIPT, KLAYOUT_LVS_OPTIONS, KLAYOUT_LVS_SCRIPT, KLAYOUT_PROPERTIES, KLAYOUT_TECH, KLAYOUT_XOR_IGNORE_LAYERS, KLAYOUT_XOR_TILE_SIZE
+digital_hardmacro_check.py                       2            2   GND_PIN, VDD_PIN
+digital_hardmacro_gen.py                         2            2   GND_PIN, VDD_PIN
+phase3_one_shot_runner.py                        0            0   -
+
+modules that would FIRE: 3/5
+
+CONTROL — the same module on origin/main (pre-fix): unaccounted []

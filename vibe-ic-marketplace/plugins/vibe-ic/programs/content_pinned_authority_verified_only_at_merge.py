@@ -71,6 +71,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
 _MANIFEST_REL = "tools/ci/protected_landing_transition.json"
 
 #: Named, not inferred: the report has to say what to re-run, and a reader who
@@ -156,7 +159,7 @@ def main(argv=None) -> int:
             return 2
         findings, denom = scan(root, manifest)
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract
         print(f"[CANNOT DETERMINE] content_pinned_authority_verified_only_at_"
