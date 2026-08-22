@@ -12,12 +12,19 @@ Its `_writes_a_declared_value` misses two spellings. A match bound by a `for`
 TARGET never enters `_match_derived_names`, which walks only `ast.Assign`; and
 `out.setdefault(KEY, set()).add(VALUE)` is read for `setdefault`'s DEFAULT and
 not for the value pushed into the container it returns. Measured on the corpus
-this ships in:
+this ships in, at 769ff000ea, BEFORE the repairs listed under WHAT READING THEM
+ACTUALLY FOUND:
 
     the gate's own census                     : 213   (= its baseline)
     + matches bound by a `for` target         : 240   (27 more)
     + setdefault(...).add(...) as a write     : 232   (19 more)
     both                                      : 259   (46 more)
+
+EVERY FIGURE IN THIS FILE IS A SNAPSHOT, and the run prints the current ones.
+Ten repairs are in flight on sibling branches and each removes an entry, so a
+reader who lands some of them and sees smaller numbers is watching the
+instrument work, not fail. Re-derive, never re-read: `prose_polarity_census.py`
+prints the census, the split and the calibration on every run.
 
 Sharpening the GATE would therefore fail CI on 46 extractors that predate the
 change, and they cannot be recorded, because the register may only shrink. A
