@@ -1441,18 +1441,34 @@ def test_the_report_key_does_not_assert_the_refuted_premise(placed):
 
 def test_no_identifier_in_the_pad_ring_producer_asserts_inertness():
     """The general rule, not the one variable: a proposition the project has
-    recorded as FALSE may not survive in an identifier. Prose may discuss it —
-    and does, in three places that deny it — but no NAME may assert it."""
+    recorded as FALSE may not survive in an IDENTIFIER — a name, a schema key,
+    a function. Every consumer keys on the identifier and none of them reads
+    the retraction published elsewhere.
+
+    PROSE IS DELIBERATELY NOT POLICED, and the first version of this test got
+    that wrong. It scanned every string literal and excluded the specific
+    sentences I had written, which made it pass on my edit and FAIL on an
+    independent fix of the same defect (`origin/jpadsite/pad-site`) whose
+    docstring retracts the claim by QUOTING it — 'THIS SECTION SAID "IS INERT"
+    … AND BOTH WERE WRONG'. A retraction has to be able to name what it
+    retracts. A guard whose pass condition is "contains the phrases the author
+    happened to use" is fitted to one edit, not to the rule; measured
+    three ways, this version FAILS on main, and PASSES on both independent
+    fixes."""
+    import ast
     src = (PROGRAMS / "pad_ring_gen.py").read_text(encoding="utf-8")
-    tree = __import__("ast").parse(src)
-    ast = __import__("ast")
+    tree = ast.parse(src)
     offenders = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and "INERT" in node.id.upper():
-            offenders.append(node.id)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if "inert" in node.value.lower() and "not inert" not in node.value.lower() \
-                    and "READ AS INERTNESS" not in node.value:
-                offenders.append(f"string literal: {node.value[:60]!r}")
+            offenders.append(f"name: {node.id}")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)) and "inert" in node.name.lower():
+            offenders.append(f"def: {node.name}")
+        elif isinstance(node, ast.Dict):
+            for k in node.keys:
+                if (isinstance(k, ast.Constant) and isinstance(k.value, str)
+                        and "inert" in k.value.lower()):
+                    offenders.append(f"schema key: {k.value!r}")
     assert not offenders, (
-        f"identifiers or emitted strings still assert inertness: {offenders}")
+        f"identifiers still assert a proposition measured false: {offenders}")

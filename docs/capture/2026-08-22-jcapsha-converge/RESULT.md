@@ -632,3 +632,75 @@ correct, and its exemplar is already in the tree at `pad_ring_gen.py:712` — a
 rule with a working instance and no checker is in better shape than a checker
 with no working instance, which is what the other two attempts would have
 shipped.
+
+
+---
+
+## I ran the probe myself, and two things changed
+
+Every section above carried F3's refutation as SOMEONE ELSE'S measurement and
+said so. That caveat is withdrawn
+(`evidence/rotation_reprobe/MEASURED_BY_JCAPSHA.md`).
+
+Four SEPARATE `docker run` processes, image 0.3.24, **OpenROAD 26Q3-1607 — a
+different build from either prior lane**:
+
+    ##### H=R0  V=R0   ps0=R0   pn0=MX     pw0=MXR90  pe0=R90
+    ##### H=R90 V=R0   ps0=R0   pn0=MX     pw0=MX     pe0=R180
+    ##### H=R0  V=R90  ps0=R90  pn0=MYR90  pw0=MXR90  pe0=R90
+    ##### H=R0  V=MX   ps0=MX   pn0=R0     pw0=MXR90  pe0=R90
+
+Identical value for value. `-rotation_horizontal` steers the VERTICAL sides;
+`-rotation_vertical` steers the HORIZONTAL ones. Independently confirmed.
+
+**And the consequence I had flagged but refused to act on is confirmed too**,
+from the other side as well — driving main's own producer and reading its DEF:
+
+| side | main emits | tool produces | |
+|---|---|---|---|
+| SOUTH | `N` | `N` | match |
+| **NORTH** | **`S`** (a 180° rotation) | **`FS`** (a MIRROR) | **DIFFERS** |
+| WEST | `FW` | `FW` | match |
+| EAST | `W` | `W` | match |
+
+Main emits no `FS` and no `FN` anywhere. **I did not fix it**: the verified fix,
+with an A/B showing 21 orientations changed and positions identical, is already
+on `origin/jpadsite/pad-site` (`6c3ebe447`, `725f9352f`), which is not an
+ancestor of main. Re-implementing it would be the near-duplicate this branch
+exists to warn about. What is added is independent confirmation that it is live.
+
+## Two disclosures about my own F4 work
+
+**The rename is a near-duplicate.** `c56b8e1b1` on that same branch makes it,
+with the same names and the same reasoning. I arrived at it independently and
+did not check the sibling branch first — the exact failure I documented in the
+F2 case, committed by me, three sections later. The lander should take
+`jpadsite/pad-site` as the vehicle; it is the bigger verified change set.
+
+**And my general guard was fitted to my own prose.** Its first version scanned
+every string literal for "inert" and excluded the phrases I happened to have
+written. Measured three ways:
+
+    origin/main (the defect)              FAIL
+    jpadsite/pad-site (independent fix)   FAIL   <-- wrong
+    this branch (my fix)                  PASS
+
+It failed the independent fix because that docstring retracts the claim by
+QUOTING it: `THIS SECTION SAID "IS INERT" … AND BOTH WERE …`. **A retraction has
+to be able to name what it retracts.** A guard whose pass condition is
+"contains the author's own sentences" is fitted to one edit, which is what this
+whole branch is about — and I had done it in the test written to enforce the
+rule.
+
+Narrowed to what the rule is actually about — `ast.Name` ids, `def`/`class`
+names, and string literals used as DICT KEYS, never prose:
+
+    origin/main (the defect)              FAIL  [name: ROTATION_VERTICAL_INERT,
+                                                 schema key: 'rotation_vertical_inert']
+    jpadsite/pad-site (independent fix)   PASS
+    this branch (my fix)                  PASS
+
+A guard satisfied by an implementation it has never seen, and refusing the tree
+both implementations were written against, is the strongest evidence available
+that it enforces the rule and not the edit. It was only obtainable because a
+second independent fix existed to test it against.
