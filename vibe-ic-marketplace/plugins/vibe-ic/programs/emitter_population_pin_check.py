@@ -123,16 +123,35 @@ EXIT CODES
        how many of each, always, and a reader taking rc=0 to mean the whole tree
        was checked is reading more than this exit code carries.
     1  REFUSED — the emitter line, the test line and the two values are printed
-    2  VACUOUS — nothing was compared, for one of TWO reasons the run
-       distinguishes: no counter with a literal denominator and no paired pin
-       exists here (`no-population-stated-twice`), or every one that does exist
-       was withheld above (`declined-every-comparison`). Both announced through
-       `_vacuous_exit`; the second is the one worth coming back to.
+    2  VACUOUS — nothing was compared, and the run says WHICH of four, because
+       each is a different claim and only one of them is about the tree:
+         `corpus-holds-no-program`   the directory holds no program at all, so
+                                     nothing here is a statement about any tree
+         `declined-every-comparison` every population that exists was withheld
+                                     above -- the one worth coming back to
+         `source-bytes-substituted`  the sources were read through byte
+                                     substitution, so a population may not have
+                                     survived to be seen
+         `no-population-stated-twice` the tree was read and states none
+       Announced through `_vacuous_exit`. Pinned against the code by
+       `test_the_documented_vacuous_reasons_are_the_ones_emitted` -- this list
+       said TWO for three commits after the third and fourth were added.
     3  the command line was rejected (`_gate_usage_exit`)
+
+HOW CI RUNS IT, WHICH IS WHY 2 IS NOT 0
+=======================================
+`tools/ci/repo_hygiene_gates.sh` wires it as `run "a printed population agrees
+with its pin"`, and `run` is `_dispatch 0 0`: rc 2 FAILS the suite. It is not
+`run_tolerating_uncheckable`, which exists for probes that need a clean tree and
+treats rc 2 as "could not check". So "this is NOT a pass" is enforced by the
+wiring and not merely asserted in the text above -- change one and the other
+stops meaning what it says.
 
 USAGE
 -----
     emitter_population_pin_check.py [--programs DIR] [--tests DIR] [--json OUT]
+    --json -   puts the report document on stdout and the human report on
+               stderr, the spelling 34 programs in this corpus share
 
 THE REACH, AND WHY IT IS FOUR
 ============================
@@ -144,6 +163,37 @@ blind to almost everything. It is not. Measured on 8efee1b4ce:
     programs whose EMITTED script contains `incr `   : 4
       yielding a counter with a literal denominator  : 1   (3 denominators)
       with no numeric comparison on that counter     : 3
+
+THE PIN SIDE, AND THE TWENTY-FOUR IT DOES NOT REACH
+===================================================
+`pins_unmatched` counts pins dropped because the named program states no literal
+for that phrase. It does NOT count pins in a test whose named program emits no
+matchable phrase at all: `if not em: continue` fires first, before `pins_of` is
+ever called. Sized on cd8687da8b, so the limit is a number rather than an
+admission:
+
+    test files                                         : 2727
+      naming no program in this corpus                 : 1104
+      naming a program that emits no matchable phrase  : 1396
+        of those, carrying a pin nobody looked at      :   18   (24 pins)
+
+Each of those 24 is correctly undecidable -- a program that states no `of N ...`
+anywhere offers nothing for a pin to disagree with -- and the reach sentence
+already in the verdict describes them exactly. Reaching them means calling
+`pins_of` on every parsed test instead of on the 227 that clear `em`: measured
+3.65s on top of 9.5s, +37%. The previous commit refused a +41% walk to carry one
+disclosure number, and this is the same trade at the same price, so it gets the
+same answer. Reproduce either figure by walking `tests/` with `pins_of`.
+
+DEGENERATE TAILS. `PHRASE` takes `of <digits> <words>`, and 9 of the corpus's 82
+emitter tails are junk that prose produced: `and`, `or`, `L`, `V`, `Gb`, `MHz`,
+`APs`, `Cat`. A pin matching one of those would produce a comparison, and a
+comparison against junk can produce a WRONG red -- the worst outcome this file
+has. Measured: no test in the corpus pins any of the nine, so the risk is
+theoretical rather than live. Tightening `PHRASE` on no evidence of harm would
+narrow the extractor to fix a fault nobody has, which is the trade this file
+argues against everywhere else, so it is recorded and not acted on.
+
 
 The other three state a membership and never state a threshold, so there is no
 second statement for the first to disagree with -- nothing was skipped. The
@@ -185,9 +235,8 @@ need not read the source:
                          program computes the value. Nothing to compare, so not
                          a finding; counted because the alternative is dropping
                          it in silence. It counts pins from tests that named a
-                         program which emits SOMETHING; a test naming a program
-                         that emits nothing matchable is not reached at all, and
-                         that limit is not in this number.
+                         program which emits SOMETHING; the limit is SIZED under
+                         THE REACH, not merely admitted.
     substituted          sources whose BYTES would not decode as UTF-8. Read with
                          substitution, so the text analysed is not the file; what
                          substitution mangles goes unmatched, and an unmatched
@@ -224,6 +273,7 @@ chip-AGNOSTIC: Python and Tcl text structure. No design, PDK, vendor or SKU.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import sys
 from pathlib import Path
@@ -365,6 +415,34 @@ def emitted_script_of(tree: ast.AST) -> str:
         (n.lineno, n.col_offset, n.value) for n in _emitted_nodes(tree)))
 
 
+def _in_an_emitted_comment(script: str, at: int) -> bool:
+    """True when the EMITTED line holding `at` is a Tcl comment.
+
+    Not a polarity question, which is why it is answered here rather than by
+    `_prose_polarity`: this set claims to hold every phrase the emitter CAN
+    PRINT, and a comment is not printed. Reading one as printable is wrong on
+    the set's own terms, whatever the comment says.
+
+    It matters because the failure is a FALSE PASS, the silent direction. An
+    emitted script carrying
+
+        # the summary no longer prints "of 3 repairs refused"
+        puts "PARTIAL: $_n of 2 repairs refused"
+
+    offered BOTH 3 and 2 as values the emitter states, so a test still pinning
+    the retired 3 was found in that set and raised nothing -- a denial counted
+    as a confirmation, #712's own shape, in a function the #712 gate does not
+    audit (`_writes_a_declared_value` is False here, for reasons of spelling
+    recorded in `phrases_of`).
+
+    A LINE, not a scope: only the text before the match on its own line is
+    examined, so `puts "# of 3 things"` -- a printed line that happens to carry
+    a hash -- is kept. Dropping that would be the false refusal `phrases_of`
+    exists to avoid, and this fix must not buy one direction with the other."""
+    start = script.rfind("\n", 0, at) + 1
+    return script[start:at].lstrip().startswith("#")
+
+
 def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
     """``{tail: {(value, lineno)}}`` -- every population phrase the emitter CAN
     print.
@@ -459,6 +537,8 @@ def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
     out: Dict[str, Set[Tuple[str, int]]] = {}
     for node in _emitted_nodes(tree):
         for m in PHRASE.finditer(node.value):
+            if _in_an_emitted_comment(node.value, m.start()):
+                continue
             out.setdefault(m.group(2).strip(), set()).add(
                 (m.group(1), node.lineno))
     return out
@@ -686,6 +766,25 @@ def counters_of(tree: ast.AST) -> Tuple[
         if word:
             refused.append(("increment", m.group(0), word))
             continue
+        # A COMMENTED `incr` IS NOT A SITE, and this is the SILENT
+        # direction: `# incr _n for the third repair, added later` carries no
+        # denial word, so it was COUNTED, and an emitter that really increments
+        # twice then AGREED with its stated denominator of 3. A real
+        # disagreement, masked by a line that never executes.
+        #
+        # AFTER the polarity consult, not before. A denied `incr` almost always
+        # lives in a comment, so checking this first turned a REPORTED
+        # `[POLARITY]` refusal into a silent skip -- measured, it took 11 tests
+        # with it -- and trading a false pass for a disclosure loss is not a
+        # trade this file may make. In this order nothing that was reported
+        # becomes silent; only what was wrongly counted stops being counted.
+        #
+        # Nor is the skip itself reach: a comment is not a claim the script
+        # makes, and this program does not report every line that stated
+        # nothing. What polarity refuses IS a claim, in text meant to be read,
+        # and that is why it is printed.
+        if _in_an_emitted_comment(src, m.start()):
+            continue
         names[m.group(1)] = names.get(m.group(1), 0) + 1
     rows = []
     for name, sites in sorted(names.items()):
@@ -698,6 +797,12 @@ def counters_of(tree: ast.AST) -> Tuple[
                 word = denial(m)
                 if word:
                     refused.append((f"{kind} denominator", m.group(0), word))
+                    continue
+                # A threshold stated only in a COMMENT is not a threshold the
+                # script states to anyone; counting it invents the second
+                # statement this file exists to compare the first against.
+                # After polarity, for the reason given at the `incr` scan.
+                if _in_an_emitted_comment(src, m.start()):
                     continue
                 if (kind, value) not in dens:
                     dens.append((kind, value))
@@ -765,6 +870,13 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for node in _emitted_nodes(tree):
         for m in INCR.finditer(node.value):
+            # POLARITY FIRST, THEN THE COMMENT RULE -- the order `counters_of`
+            # uses, and here it is load-bearing for a second reason. With the
+            # comment rule first this consult became DEAD: measured, deleting
+            # it outright left all 88 tests green, and
+            # `test_a_DENIED_incr_cannot_excuse_a_real_disagreement` went on
+            # passing for a reason other than the one it names. Unreachable
+            # code that a test appears to cover is worse than no code.
             # POLARITY, THE SAME QUESTION `counters_of` ASKS OF THE SAME TEXT.
             # Without this the two readers disagree about one script: a denied
             # `incr` is refused as a member there and counted as evidence of a
@@ -780,6 +892,11 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
             lo, hi = sentence_scope(node.value, m.start(), m.end(),
                                     extra_breaks=_RECORD_BREAKS)
             if is_denied(node.value[lo:hi]):
+                continue
+            # A COMMENTED `incr` is not evidence of a multiplier either, and
+            # the two readers must not disagree about one script -- that
+            # divergence is #711 itself.
+            if _in_an_emitted_comment(node.value, m.start()):
                 continue
             cur, host = node, None
             while id(cur) in parent:
@@ -849,6 +966,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.tests.is_dir():
         return _usage.usage_error(TOOL, f"--tests {args.tests} is not a "
                                         f"directory")
+    # CHECKED BEFORE THE WORK, not after it. `--json <a directory>` used to run
+    # the whole sweep and then die on IsADirectoryError -- a traceback wearing
+    # rc 1, this program's REFUSAL code, so a mistyped argument was
+    # indistinguishable from a population disagreement.
+    if args.json is not None and str(args.json) != "-" and args.json.is_dir():
+        return _usage.usage_error(TOOL, f"--json {args.json} is a directory")
 
     sources = {p.stem: p for p in sorted(args.programs.glob("*.py"))}
     findings: List[dict] = []
@@ -1071,8 +1194,31 @@ def main(argv: Optional[List[str]] = None) -> int:
               "unparsed": unparsed, "not_determined": undecidable,
               "substituted": substituted,
               "findings": findings}
-    if args.json:
-        _atomic.write_json(args.json, report)
+    # `--json -` PUTS THE DOCUMENT ON STDOUT. 34 programs in this corpus
+    # implement that spelling, and `_vacuous_exit` routes its sentinel to stderr
+    # expressly because of it: "these gates support ``--json -``, which puts the
+    # report document on stdout, and a sentinel line mixed into that stream
+    # would make the document unparseable". This program had a `--json` flag and
+    # none of that, so the convention produced a junk file NAMED `-`.
+    #
+    # Where it departs from those 34: they print the human report only when
+    # --json is ABSENT, and this one keeps printing it -- to STDERR, so stdout
+    # stays a parseable document. The reach is printed, always; suppressing it
+    # to honour a convention would trade this file's own rule for someone's
+    # output shape, and stderr costs the document nothing.
+    to_stderr = False
+    if args.json is not None:
+        if str(args.json) == "-":
+            print(json.dumps(report, indent=2))
+            to_stderr = True
+        else:
+            try:
+                _atomic.write_json(args.json, report)
+            except OSError as e:
+                return _usage.usage_error(
+                    TOOL, f"--json {args.json} could not be written: "
+                          f"{e.strerror or e}")
+    out = sys.stderr if to_stderr else sys.stdout
 
     for u in undecidable:
         print(f"  [NOT DECIDABLE] {u['program']}: counter ${u['counter']} is "
@@ -1080,20 +1226,20 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"in a helper called {u['emitted_per_site']}x, so that is a LOWER "
               f"BOUND, not a count; its {u['denominator_kind']} denominator "
               f"says {u['denominator']} and the shortfall is exactly what a "
-              f"helper produces — NOT compared")
+              f"helper produces — NOT compared", file=out)
     for u in unparsed:
         print(f"  [UNPARSED] {u} — this guard could NOT read it, so nothing in "
-              f"it was examined")
+              f"it was examined", file=out)
     for b in substituted:
         print(f"  [SUBSTITUTED] {b['source']}: {b['characters']} character(s) "
               f"of this file do NOT decode as UTF-8 and were replaced before "
               f"it was read, so what was analysed is not the file — any "
               f"population the replacement landed in went unmatched and is "
-              f"NOT in the counts above")
+              f"NOT in the counts above", file=out)
     for d in denied:
         print(f"  [POLARITY] {d['where']}: {d['what']} `{d['matched']}` sits "
               f"in a statement that DENIES it (\"{d['denial']}\") and is NOT "
-              f"counted")
+              f"counted", file=out)
 
     if counters_examined == 0 and pins_examined == 0:
         # WHY IT IS EMPTY, because the two reasons are not the same fact. "No
@@ -1125,7 +1271,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "this tree may well state one twice" if substituted
                 else "no emitted population is stated twice here")
         print(f"[VACUOUS] {TOOL}: {said}, so nothing was compared; this is NOT "
-              f"a pass [{head}]")
+              f"a pass [{head}]", file=out)
         return _vac.RC_VACUOUS
 
     if findings:
@@ -1135,19 +1281,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                       f"is incremented at {f['increment_sites']} site(s) but "
                       f"its {f['denominator_kind']} denominator says "
                       f"{f['denominator']} — the emitter states one population "
-                      f"twice and disagrees with itself")
+                      f"twice and disagrees with itself", file=out)
             else:
                 print(f"  [POPULATION] {f['test']}:{f['test_line']} pins "
                       f"\"of {f['pinned']} {f['phrase']}\", but "
                       f"{f['program']} (line(s) "
                       f"{', '.join(str(x) for x in f['program_lines'])}) states "
                       f"{', '.join(f['emitted'])} — the population moved and "
-                      f"the pin did not")
+                      f"the pin did not", file=out)
         print(f"[FAIL] {TOOL}: {len(findings)} population(s) stated twice and "
-              f"disagreeing [{head}]")
+              f"disagreeing [{head}]", file=out)
         return _vac.RC_FAIL
 
-    print(f"[PASS] {TOOL}: every population stated twice agrees [{head}]")
+    print(f"[PASS] {TOOL}: every population stated twice agrees [{head}]", file=out)
     return _vac.RC_PASS
 
 

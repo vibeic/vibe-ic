@@ -1,6 +1,37 @@
 """`emitter_population_pin_check` must refuse a population that is stated twice
 and disagrees with itself.
 
+HOW MUCH OF THIS SUITE ACTUALLY COVERS THE FIX
+==============================================
+"Every fix ships with a test that goes RED without the fix" is easy to satisfy
+one commit at a time and easy to stop satisfying. Measured by swapping in
+3c3c51aee's 326-line program and running this file against it:
+
+    67 of 83 RED, 16 green.
+
+Ten of the sixteen are the author's originals, which test behaviour that already
+worked. The other six are: two that read files other than the program (the CI
+wiring, the polarity baseline), three that pin PRE-EXISTING behaviour against
+regression, and one structural invariant that held before as well. None is
+vacuous.
+
+THE SWAP RUN THE OTHER WAY, because "my tests pass" is not the same claim as
+"the author's contract still holds": 3c3c51aee's ORIGINAL test file, unmodified,
+against this program -- 10 passed. Exactly one of the author's test bodies
+differs here at all, `test_the_shipped_corpus_is_clean`, and only in taking the
+shared `real_run` fixture instead of spawning its own subprocess; its single
+assertion is AST-identical, compared node by node. A fixture can narrow where a
+literal command cannot, so
+`test_the_shared_run_really_sweeps_the_whole_shipped_tree` checks the sweep
+against the tree on disk -- measured: point the fixture at a subdirectory and
+the author's test still passes while that one fails.
+
+Three did have to be fixed to reach that number. They asserted only that a
+marker was ABSENT -- which a program with no such tier passes trivially, so they
+would have survived the feature being deleted. They now assert the tier RAN and
+reported zero. Re-run the swap to reproduce; a test drifting onto the green list
+is a test that stopped covering the thing it names.
+
 MEASURED 2026-08-21: a lane added a THIRD repair to a post-route block, moved the
 emitter's own printed denominator from two to three, and left the test asserting
 the old ratio. The population moved and the pin did not, so the test failed for
@@ -154,6 +185,28 @@ def test_no_counter_with_a_threshold_is_silently_missed():
         "these emitted counters state a membership at MIN_POPULATION sites or "
         "more AND a literal threshold, and this guard compared neither: "
         + repr(missed))
+
+
+def test_the_shared_run_really_sweeps_the_whole_shipped_tree(real_run):
+    """`test_the_shipped_corpus_is_clean` is the author's, and the ONE change
+    this branch made to it was replacing its own subprocess with this fixture --
+    its assertion is AST-identical, checked. But a fixture can narrow where a
+    literal command could not: point it at a subdirectory and the author's test
+    still passes, over less.
+
+    So the sweep is checked against the tree itself, using the corpus disclosure
+    the verdict now carries."""
+    _r, doc = real_run
+    on_disk_programs = len(list(PROGRAMS_DIR.glob("*.py")))
+    on_disk_tests = len(list(TESTS_DIR.rglob("test_*.py")))
+    assert doc["corpus"] == {"programs": on_disk_programs,
+                             "tests": on_disk_tests}, (
+        "the shared run did not cover the shipped tree -- the author's corpus "
+        f"test is passing over less than it did: {doc['corpus']} vs "
+        f"{{'programs': {on_disk_programs}, 'tests': {on_disk_tests}}}")
+    assert on_disk_programs > 100 and on_disk_tests > 100, (
+        "the tree this ran against holds almost nothing, so agreement with it "
+        "is not evidence")
 
 
 def test_the_shipped_corpus_is_clean(real_run):
@@ -1027,11 +1080,18 @@ def test_a_TEST_that_will_not_parse_is_reported_too(tmp_path):
 
 #: The denial is WRAPPED: the words that deny sit on the line above the `incr`
 #: they govern. This is the cost `_RECORD_BREAKS` knowingly accepts.
+# The wrapped denial moved from COMMENT lines to PRINTED ones. Not to make a
+# test pass: `_in_an_emitted_comment` now drops a commented `incr` whatever its
+# polarity, so the comment-borne version counts 2 -- the RIGHT answer -- and the
+# under-reach it demonstrated is simply gone there. The cost itself is not gone;
+# measured, a denial wrapped across two PRINTED lines still yields 3 sites
+# against a denominator of 2. The assertions below are unchanged; only the
+# vehicle moved to where the phenomenon still lives.
 EMITTER_WRAPPED_DENIAL = (
     'def script() -> str:\n'
     '    return """\n'
-    '  # the third repair is deliberately absent: there is no\n'
-    '  # incr _n in the fallback branch\n'
+    '  puts "the third repair is deliberately absent: there is no"\n'
+    '  puts "incr _n in the fallback branch"\n'
     '  if {[catch {a}]} { incr _n }\n'
     '  if {[catch {b}]} { incr _n }\n'
     '  puts "PARTIAL: $_n of 2 repairs refused"\n'
@@ -1066,6 +1126,9 @@ def test_the_accepted_under_reach_fails_LOUDLY(tmp_path):
     the property the design was chosen for. Its companion is
     `test_a_denial_is_bounded_by_the_line_it_is_written_on`, which pins the same
     declaration from the other side."""
+    # (The same wrapping inside COMMENT lines no longer miscounts at all --
+    # see `test_a_wrapped_denial_in_a_comment_no_longer_miscounts` -- so this
+    # fixture states the denial in `puts` lines, where the cost is still real.)
     progs, tests = _tree(tmp_path, EMITTER_WRAPPED_DENIAL, PIN_2)
     r = _run(progs, tests, "--json", tmp_path / "r.json")
     assert r.returncode == RC_FAIL, (
@@ -1690,6 +1753,44 @@ def test_the_real_tree_has_no_undecidable_population(real_run):
     assert doc["counters_examined"] == 3, doc
 
 
+# The same shape as EMITTER_DENIED_INCR_IN_A_HELPER, with the denial on a
+# PRINTED line instead of a comment line. That difference is the whole point:
+# once a commented `incr` stopped being a site, the comment version was skipped
+# by EITHER rule, so neither was individually necessary -- deleting the polarity
+# consult in `multiplied_counters` outright left all 88 tests green. Measured.
+EMITTER_DENIED_INCR_PRINTED_IN_A_HELPER = (
+    'def _unused(name):\n'
+    '    return "  puts \\"the fallback does not incr _n; it re-issues %s\\"\\n" % name\n\n\n'
+    'def script():\n    return ("  set _n 0\\n"\n'
+    '            + _unused("a") + _unused("b")\n'
+    '            + "  if {[catch {x}]} { incr _n }\\n"\n'
+    '            + "  if {$_n >= 2} { puts ALL }\\n")\n')
+
+
+def test_a_denial_on_a_PRINTED_line_still_cannot_excuse_a_disagreement(tmp_path):
+    """The polarity consult in `multiplied_counters`, made necessary again.
+
+    Its companion states the denial in a comment, and since a commented `incr`
+    stopped being a site that fixture is skipped by either rule -- so it no
+    longer proves the consult does anything. Measured: with only that test,
+    deleting the consult left the whole suite green, and the test went on
+    passing under a name describing work it no longer forced.
+
+    Here the denial is PRINTED. The comment rule does not apply, so the consult
+    is the only thing standing between a denied `incr` and a lower-bound excuse
+    for a real disagreement."""
+    progs, tests = _tree(tmp_path, EMITTER_DENIED_INCR_PRINTED_IN_A_HELPER,
+                         "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_FAIL, (
+        "a denied `incr` on a printed line was read as evidence of a "
+        "multiplier and excused a real disagreement:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["not_determined"] == [], doc
+    assert len(doc["findings"]) == 1, doc
+    assert any(d["what"] == "increment" for d in doc["denied_by_polarity"]), doc
+
+
 EMITTER_DENIED_INCR_IN_A_HELPER = (
     'def _unused(name):\n'
     '    return "  # the fallback does not incr _n; it re-issues %s\\n" % name\n\n\n'
@@ -2151,6 +2252,20 @@ def test_the_verdict_is_byte_identical_across_runs(tmp_path):
         '        "  if {[catch {x}]} { incr _b }\\n"\n'
         '        "  if {[catch {y}]} { incr _b }\\n"\n'
         '        "  if {$_b >= 2} { puts B }\\n")\n', encoding="utf-8")
+    # TWO undecodable sources. `substituted` is a report list like the others
+    # and it was added FOUR commits after this fixture was written, so until now
+    # it was the one list this test could not have caught reordering in -- the
+    # rule above, unapplied to the newest list.
+    (progs / "cc_bytes.py").write_bytes(
+        b'def s():\n    return "  incr _c \xff\xfe\\n"\n')
+    (progs / "dd_bytes.py").write_bytes(
+        b'def s():\n    return "  incr _d \xff\xfe\\n"\n')
+    # THREE, not two, for the reason `unparsed` carries three: measured, a
+    # set-built two-entry list survived one attempt in three by luck. n entries
+    # give at most n! orderings, and two of them agreeing across three runs is
+    # not a rare accident.
+    (progs / "ee_bytes.py").write_bytes(
+        b'def s():\n    return "  incr _e \xff\xfe\\n"\n')
     (tests / "test_aa_denial.py").write_text(
         'from aa_denial import s\n\n\ndef test_p():\n'
         '    assert "of 2 repairs refused" in s()\n', encoding="utf-8")
@@ -2167,10 +2282,13 @@ def test_the_verdict_is_byte_identical_across_runs(tmp_path):
 
     # and the run really did populate every list that could reorder
     doc = json.loads((tmp_path / "r0.json").read_text())
-    for key in ("denied_by_polarity", "not_determined", "unparsed"):
-        assert len(doc[key]) >= 2, (
-            f"{key} holds {len(doc[key])} entry -- a list of one cannot REORDER, "
-            f"so this fixture cannot detect the defect the test exists for")
+    for key in ("denied_by_polarity", "not_determined", "unparsed",
+                "substituted"):
+        floor = 3 if key in ("unparsed", "substituted") else 2
+        assert len(doc[key]) >= floor, (
+            f"{key} holds {len(doc[key])} entry, below the floor of {floor} "
+            f"-- too few orderings for three runs to disagree reliably, so this "
+            f"fixture cannot detect the defect the test exists for")
     # `unparsed` carries THREE, not two, because the control's strength depends
     # on it. n entries give at most n! orderings, so three runs agreeing by luck
     # costs (1/n!)^2 -- 1/4 at two entries. MEASURED rather than trusted, by
@@ -2340,6 +2458,11 @@ def test_a_clean_tree_invents_no_substitution(tmp_path):
     progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
     r = _run(progs, tests)
     assert "[SUBSTITUTED]" not in r.stdout, r.stdout + r.stderr
+    # ABSENCE IS NOT ENOUGH. Measured: this test also passes against the
+    # pre-polarity program, which has no substitution tier at all -- so on its
+    # own it survives the feature being deleted. The tier must be shown to have
+    # RUN and reported zero.
+    assert "0 source(s) whose bytes were SUBSTITUTED" in r.stdout, r.stdout
 
 
 def test_a_legitimate_replacement_character_is_not_a_substitution(tmp_path):
@@ -2359,6 +2482,7 @@ def test_a_legitimate_replacement_character_is_not_a_substitution(tmp_path):
     assert "[SUBSTITUTED]" not in r.stdout, (
         "a clean file containing U+FFFD was reported as mangled:\n"
         + r.stdout + r.stderr)
+    assert "0 source(s) whose bytes were SUBSTITUTED" in r.stdout, r.stdout
 
 
 def test_the_vacuous_reason_does_not_deny_a_population_it_could_not_read(
@@ -2564,6 +2688,471 @@ def test_an_unmatched_pin_is_reach_and_never_a_finding(tmp_path):
     r = _run(progs, tests)
     assert r.returncode in (RC_PASS, RC_VACUOUS), r.stdout + r.stderr
     assert "[FAIL]" not in r.stdout, r.stdout
+    # and the pin was actually COUNTED, so this is "reach, not a finding" and
+    # not "no pin was ever seen". Written POSITIVELY: my first attempt at this
+    # said `"0 test pin(s) ..." not in stdout`, which is another absence and is
+    # trivially true of a program that prints no such clause at all -- measured,
+    # it did not move this test off the pre-fix program's passing list.
+    assert "1 test pin(s) the named program does not state a literal for" \
+        in r.stdout, r.stdout
+
+
+# ── --json - , the corpus spelling ──────────────────────────────────────────
+# 34 programs here implement `if args.json == "-"`, and `_vacuous_exit` routes
+# its sentinel to stderr expressly because of it: the document owns stdout. This
+# program had a --json flag and none of that, so the convention wrote a junk
+# file NAMED `-`.
+
+def test_json_dash_puts_a_parseable_document_on_stdout(tmp_path):
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tests, "--json", "-")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    doc = json.loads(r.stdout)          # must parse ALONE, nothing mixed in
+    assert doc["tool"] == "emitter_population_pin_check", doc
+    assert not (tmp_path / "-").exists(), "a file named '-' was created"
+
+
+def test_json_dash_does_not_lose_the_human_report(tmp_path):
+    """Where this departs from those 34: they print the human lines only when
+    --json is absent. The reach is printed, ALWAYS -- so it moves to stderr,
+    which costs the document nothing."""
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tests, "--json", "-")
+    assert "COMPARED out of a corpus of" in r.stderr, r.stderr
+    assert "COMPARED out of a corpus of" not in r.stdout, (
+        "the human report is mixed into the document stream:\n" + r.stdout)
+
+
+def test_a_json_path_still_reports_on_stdout(tmp_path):
+    """Only the dash moves the stream. A path argument is unchanged."""
+    progs, tests = _tree(tmp_path)
+    j = tmp_path / "r.json"
+    r = _run(progs, tests, "--json", str(j))
+    assert "COMPARED out of a corpus of" in r.stdout, r.stdout
+    assert json.loads(j.read_text())["tool"] == "emitter_population_pin_check"
+
+
+def test_json_at_a_directory_is_a_usage_error_before_the_work(tmp_path):
+    """It used to run the whole sweep and die on IsADirectoryError: a traceback
+    wearing rc 1, this program's REFUSAL code, so a mistyped argument was
+    indistinguishable from a population disagreement."""
+    progs, tests = _tree(tmp_path)
+    d = tmp_path / "adir"
+    d.mkdir()
+    r = _run(progs, tests, "--json", str(d))
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_USAGE, out
+    assert "Traceback" not in out, out
+    assert "is a directory" in out, out
+
+
+# ── the document stream, on EVERY verdict path ──────────────────────────────
+# A single print that forgets `file=out` puts a human line after the closing
+# brace and the document stops parsing. That is not hypothetical: the commit
+# that introduced `--json -` left exactly one behind, on the refusal path, where
+# the PASS-path test could not see it.
+
+CLEAN_EMIT = (
+    'def script():\n'
+    '    return ("  set _n 0\\n"\n'
+    '            "  if {[catch {a}]} { incr _n }\\n"\n'
+    '            "  if {[catch {b}]} { incr _n }\\n"\n'
+    '            "  puts \\"PARTIAL: $_n of 2 repairs refused\\"\\n"\n'
+    '            "  if {$_n >= 2} { puts ALL }\\n")\n')
+
+
+def _verdict_tree(tmp_path, kind):
+    progs = tmp_path / "progs"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    if kind == "vacuous":
+        return progs, tests
+    (progs / "thing_emit.py").write_text(CLEAN_EMIT, encoding="utf-8")
+    pin = "of 2 repairs refused" if kind != "refusal" else "of 3 repairs refused"
+    (tests / "test_thing_emit.py").write_text(
+        f'from thing_emit import script\n\n\n'
+        f'def test_it():\n    assert "{pin}" in script()\n', encoding="utf-8")
+    if kind == "substituted":
+        (progs / "bad_emit.py").write_bytes(b'def s():\n    return "\xff\xfe x"\n')
+    return progs, tests
+
+
+@pytest.mark.parametrize("kind", ["pass", "refusal", "vacuous", "substituted"])
+def test_json_dash_keeps_stdout_parseable_on_every_verdict(tmp_path, kind):
+    progs, tests = _verdict_tree(tmp_path, kind)
+    r = _run(progs, tests, "--json", "-")
+    try:
+        doc = json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        raise AssertionError(
+            f"a human line leaked into the document on the {kind} path ({e}):\n"
+            + r.stdout) from None
+    assert doc["tool"] == "emitter_population_pin_check"
+    if kind == "refusal":
+        assert r.returncode == RC_FAIL, r.stdout + r.stderr
+        assert "[POPULATION]" in r.stderr, r.stderr
+
+
+def test_every_print_after_the_stream_is_chosen_goes_through_it():
+    """The structural twin of the test above, and the one that scales: it fails
+    on a print added later without `file=out`, before anyone has to construct a
+    tree that reaches that line. Read from the AST, because a regex over the
+    source cannot tell which multi-line call carries the keyword -- the leak it
+    is guarding against was left by exactly that mistake."""
+    import ast as _ast
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    main = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.FunctionDef) and n.name == "main")
+    anchor = max(n.lineno for n in _ast.walk(main)
+                 if isinstance(n, _ast.Assign)
+                 and getattr(n.targets[0], "id", "") == "out")
+    unrouted = sorted(n.lineno for n in _ast.walk(main)
+                      if isinstance(n, _ast.Call)
+                      and getattr(n.func, "id", "") == "print"
+                      and "file" not in {k.arg for k in n.keywords}
+                      and n.lineno > anchor)
+    assert not unrouted, (
+        "these print() calls run after the output stream is chosen and do not "
+        f"use it, so `--json -` emits them into the document: {unrouted}")
+
+
+def test_the_documented_vacuous_reasons_are_the_ones_emitted():
+    """The EXIT CODES section said VACUOUS had TWO reasons for three commits
+    after the third and fourth were added. Both sides are derived -- the code's
+    from the `reason` assignment in `main`, the docs' from the backticked tokens
+    in the section -- so neither can be the checker's own memory of the answer."""
+    import ast as _ast
+    import re as _re
+    src = PROG.read_text(encoding="utf-8")
+    tree = _ast.parse(src)
+    main = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.FunctionDef) and n.name == "main")
+    emitted = set()
+    for node in _ast.walk(main):
+        if (isinstance(node, _ast.Assign)
+                and getattr(node.targets[0], "id", "") == "reason"):
+            emitted |= {c.value for c in _ast.walk(node.value)
+                        if isinstance(c, _ast.Constant)
+                        and isinstance(c.value, str)}
+    assert emitted, "no `reason` assignment found in main -- probe is broken"
+
+    doc = _ast.get_docstring(tree)
+    section = doc.split("2  VACUOUS", 1)[1].split("\n    3  ", 1)[0]
+    documented = set(_re.findall(r"`([a-z][a-z-]{5,})`", section))
+    assert emitted == documented, (
+        "the vacuous reason tokens and their documentation have drifted\n"
+        f"  emitted but undocumented: {sorted(emitted - documented)}\n"
+        f"  documented but not emitted: {sorted(documented - emitted)}")
+
+
+# ── the wiring the exit codes depend on ─────────────────────────────────────
+
+def _ci_wiring_file():
+    """Searched upward rather than counted: `parents[4]` is true today and is a
+    fact about where the plugin sits, not about this program."""
+    for parent in PROG.parents:
+        cand = parent / "tools" / "ci" / "repo_hygiene_gates.sh"
+        if cand.is_file():
+            return cand
+    return None
+
+
+def test_ci_wires_this_gate_so_that_a_vacuous_run_fails():
+    """rc 2 says "nothing was compared, this is NOT a pass". That sentence is
+    only true if the harness treats rc 2 as a failure, and the harness has a
+    wrapper that does NOT: `run_tolerating_uncheckable` exists for probes that
+    need a clean tree and reads rc 2 as "could not check".
+
+    Rewire this gate to that wrapper and every VACUOUS verdict this file works
+    to produce becomes a green run, silently. The docstring claims the wiring;
+    this checks it."""
+    wiring = _ci_wiring_file()
+    if wiring is None:
+        pytest.skip("tools/ci/repo_hygiene_gates.sh is not in this checkout, so "
+                    "the wiring claim cannot be checked from here")
+    lines = [ln.strip() for ln in wiring.read_text(errors="replace").splitlines()
+             if "emitter_population_pin_check" in ln
+             and not ln.lstrip().startswith("#")]
+    assert lines, (
+        "no line in the CI script runs this gate: it is not wired, and a gate "
+        "nothing runs cannot refuse anything")
+    for ln in lines:
+        # The specific consequence FIRST. Checked the other way round, every
+        # rewiring reported only "not plain `run`", which names the symptom and
+        # not what it costs.
+        assert not ln.startswith("run_tolerating_uncheckable"), (
+            "wired as tolerating-uncheckable: rc 2 stops failing the suite and "
+            f"every VACUOUS verdict becomes a silent green: {ln!r}")
+        assert ln.startswith("run "), (
+            "this gate is wired through a wrapper that is not plain `run`, so "
+            f"its exit codes may not mean what its docstring says: {ln!r}")
+
+
+# ── every reach quantity reaches STDOUT, not only the document ──────────────
+
+def _main_assignments():
+    import ast as _ast
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    main = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.FunctionDef) and n.name == "main")
+    found = {}
+    for n in _ast.walk(main):
+        if isinstance(n, _ast.Assign) and isinstance(n.targets[0], _ast.Name):
+            found[n.targets[0].id] = n.value
+    return _ast, main, found
+
+
+def test_every_reach_quantity_in_the_document_also_reaches_the_head_line():
+    """A tier added to `--json` and forgotten in the verdict is invisible to
+    everyone reading a terminal, which is most readers -- CI runs this gate with
+    no --json at all. That is the silent narrowing this file exists to refuse,
+    committed against its own reader.
+
+    Both sides are derived from the code: the head's referenced names and the
+    report's value expressions, compared by NAME. A hand-kept list of "tiers
+    that should be in the head" would be one more thing to forget, and forgetting
+    is the failure being guarded.
+
+    WHAT IT DOES NOT CATCH, measured rather than assumed: a tier whose value is
+    built ONLY from names the head already mentions -- `"phantom": len(unparsed)
+    + 1` slips through, because the intersection is non-empty. Every tier in
+    this file arrived with its own variable (`substituted`, `pins_unmatched`),
+    which this does catch; the composed case is real and uncovered, and saying
+    so is worth more than a stronger-sounding claim."""
+    _ast, main, found = _main_assignments()
+    head, report = found["head"], found["report"]
+    head_names = {x.id for x in _ast.walk(head) if isinstance(x, _ast.Name)}
+
+    # `tool` is the line's own prefix and `findings` has its own [POPULATION]
+    # lines -- both DISCLOSED, neither a count in the bracket. Exempt, and the
+    # exemption for `findings` is checked below rather than trusted.
+    exempt = {"tool", "findings"}
+    missing = []
+    for k, v in zip(report.keys, report.values):
+        if k.value in exempt:
+            continue
+        names = {x.id for x in _ast.walk(v) if isinstance(x, _ast.Name)}
+        if not names & head_names:
+            missing.append(k.value)
+    assert not missing, (
+        "these reach quantities are in the --json document and nowhere in the "
+        f"verdict line, so a reader without --json cannot see them: {missing}")
+
+    printed = set()
+    for n in _ast.walk(main):
+        if isinstance(n, _ast.Call) and getattr(n.func, "id", "") == "print":
+            printed |= {x.id for x in _ast.walk(n) if isinstance(x, _ast.Name)}
+    assert "findings" in printed, (
+        "`findings` is exempt from the head line because it is printed "
+        "separately, and it is no longer printed")
+
+
+# ── the fix is the one the gate asked for ───────────────────────────────────
+
+def test_the_extractor_still_looks_like_an_extractor_and_consults_polarity():
+    """#712's census fell 214 -> 213 when this branch landed. There are two ways
+    to make that happen and only one of them is the fix.
+
+    The honest one: the extractor still SEARCHES PROSE and still WRITES A
+    DECLARED VALUE -- the gate goes on counting it as the kind of function it
+    audits -- and it now consults the polarity vocabulary. The other one is to
+    stop looking like an extractor: restructure until `_searches_prose` returns
+    False and the row leaves the census with nothing fixed. Both produce 213,
+    and the brief's rule is that the second is the one thing that may not be
+    done.
+
+    Checked with the gate's OWN predicates rather than a reimplementation of
+    them, because a private copy of "what counts as an extractor" would drift
+    from the thing that actually decides the census."""
+    import ast as _ast
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    try:
+        import prose_polarity_consulted_check as gate
+        searches = gate._searches_prose
+        writes = gate._writes_a_declared_value
+        consults = gate._consults_polarity
+        aliases_of = gate._aliases
+    except (ImportError, AttributeError) as e:
+        pytest.skip(f"the #712 gate's predicates are not importable here ({e}), "
+                    f"so this cannot be checked from this checkout")
+
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    aliases = aliases_of(tree)
+    assert aliases, (
+        "this program imports no polarity vocabulary at all, so nothing here "
+        "can be consulting it")
+
+    audited = [fn for fn in _ast.walk(tree)
+               if isinstance(fn, _ast.FunctionDef)
+               and searches(fn) and writes(fn)]
+    assert audited, (
+        "the #712 gate no longer counts ANY function here as an extractor. The "
+        "census would read 213 either way -- this is what closing the row by "
+        "hiding from it looks like, and it is the one move the brief forbids")
+
+    blind = [fn.name for fn in audited if not consults(fn, aliases)]
+    assert not blind, (
+        f"these are extractors by the gate's own definition and consult no "
+        f"polarity: {blind}")
+
+
+# ── a phrase in an emitted COMMENT is not a phrase the emitter prints ───────
+
+COMMENT_EMITTER = '''\
+def script() -> str:
+    return (
+        "  # the summary no longer prints \\"of 3 repairs refused\\"\\n"
+        "  set _n 0\\n"
+        "  if {[catch {a}]} { incr _n }\\n"
+        "  if {[catch {b}]} { incr _n }\\n"
+        "  puts \\"PARTIAL: $_n of 2 repairs refused\\"\\n"
+        "  if {$_n >= 2} { puts ALL }\\n"
+    )
+'''
+
+
+def test_a_pin_on_a_value_only_a_COMMENT_states_is_refused(tmp_path):
+    """The FALSE PASS this found. `phrases_of` offered both 3 and 2 as values
+    the emitter states, because the retired 3 appears in an emitted comment
+    saying it is no longer printed. A test still pinning 3 was found in that
+    set and raised nothing -- a denial counted as a confirmation, #712's own
+    shape, in a function the #712 gate does not audit."""
+    progs, tests = _tree(
+        tmp_path, COMMENT_EMITTER,
+        'from thing_emit import script\n\n\n'
+        'def test_it():\n    assert "of 3 repairs refused" in script()\n')
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_FAIL, (
+        "a test pinning a value the emitter says it NO LONGER prints was "
+        "accepted, because a comment supplied it:\n" + out)
+    assert "[POPULATION]" in r.stdout, out
+    assert "states 2" in r.stdout, out
+
+
+def test_a_printed_line_carrying_a_hash_is_still_a_phrase(tmp_path):
+    """The other direction, which the fix must not buy the first one with. Only
+    the text BEFORE the match on its own line is examined, so a `puts` whose
+    output happens to contain a hash is still a phrase the emitter prints --
+    refusing it would be the false refusal `phrases_of` exists to avoid."""
+    emitter = ('def script() -> str:\n'
+               '    return (\n'
+               '        "  set _n 0\\n"\n'
+               '        "  if {[catch {a}]} { incr _n }\\n"\n'
+               '        "  if {[catch {b}]} { incr _n }\\n"\n'
+               '        "  puts \\"# $_n of 2 repairs refused\\"\\n"\n'
+               '        "  if {$_n >= 2} { puts ALL }\\n"\n'
+               '    )\n')
+    progs, tests = _tree(
+        tmp_path, emitter,
+        'from thing_emit import script\n\n\n'
+        'def test_it():\n    assert "of 2 repairs refused" in script()\n')
+    r = _run(progs, tests)
+    assert r.returncode == RC_PASS, (
+        "a phrase on a PRINTED line was dropped because the line carries a "
+        "hash:\n" + r.stdout + r.stderr)
+    assert "1 test pin(s) COMPARED" in r.stdout, r.stdout
+
+
+def test_a_wrapped_denial_in_a_comment_no_longer_miscounts(tmp_path):
+    """The under-reach `test_the_accepted_under_reach_fails_LOUDLY` demonstrates
+    used to be reachable through COMMENT lines too, and there it produced a
+    count of 3 for a script with two repairs -- announced, but wrong.
+
+    It is no longer reachable that way: a commented `incr` is not a site
+    whatever its polarity, so the count is 2 and the emitter agrees with itself.
+    Pinned because it is a real improvement to a documented cost, and an
+    improvement nobody checks is one that can quietly go away."""
+    emitter = ('def script() -> str:\n'
+               '    return """\n'
+               '  # the third repair is deliberately absent: there is no\n'
+               '  # incr _n in the fallback branch\n'
+               '  if {[catch {a}]} { incr _n }\n'
+               '  if {[catch {b}]} { incr _n }\n'
+               '  puts "PARTIAL: $_n of 2 repairs refused"\n'
+               '  if {$_n >= 2} { puts ALL }\n'
+               '"""\n')
+    progs, tests = _tree(tmp_path, emitter, PIN_2)
+    r = _run(progs, tests)
+    assert r.returncode == RC_PASS, (
+        "a commented `incr` is being counted as a site again:\n"
+        + r.stdout + r.stderr)
+    assert "3 site(s)" not in r.stdout, r.stdout
+
+
+# ── guards a mutation sweep found nothing was holding ───────────────────────
+# Deleting each `if ...: continue` in turn and running this file: 8 of 20
+# survived. Three are behaviour-neutral on the shipped tree (measured, byte
+# identical --json) and are fast paths, not guards. The rest are these.
+
+def test_a_denominator_stated_only_in_a_COMMENT_is_not_a_denominator(tmp_path):
+    """The comment rule's other half. The `incr` side had a test; this one did
+    not, and deleting it left the whole suite green."""
+    emitter = ('def script():\n    return ("  set _n 0\\n"\n'
+               '            "  # if {$_n >= 2} { puts ALL }\\n"\n'
+               '            "  if {[catch {a}]} { incr _n }\\n"\n'
+               '            "  if {[catch {b}]} { incr _n }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["counters_examined"] == 0, (
+        "a threshold written only in a comment was compared as though the "
+        "script stated it:\n" + r.stdout)
+    assert r.returncode == RC_VACUOUS, r.stdout + r.stderr
+
+
+def test_a_commented_incr_in_a_HELPER_is_not_evidence_of_a_multiplier(tmp_path):
+    """`multiplied_counters` reads the same text as `counters_of` and must
+    reach the same answer -- two readers disagreeing about one script is #711
+    itself. Its comment rule had no test either."""
+    emitter = ('def _dead(name):\n'
+               '    return "  # incr _n would go here for %s\\n" % name\n\n\n'
+               'def script():\n    return ("  set _n 0\\n"\n'
+               '            + _dead("a") + _dead("b")\n'
+               '            + "  if {[catch {x}]} { incr _n }\\n"\n'
+               '            + "  if {$_n >= 2} { puts ALL }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["not_determined"] == [], (
+        "commented `incr`s in a helper were read as evidence of a multiplier "
+        "and excused a real disagreement:\n" + r.stdout)
+    assert r.returncode == RC_FAIL, r.stdout + r.stderr
+
+
+def test_a_tests_directory_that_does_not_exist_is_rc3(tmp_path):
+    """`--programs` had this test and `--tests` did not, so deleting its check
+    cost nothing. Both arguments, both rejected before the work."""
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tmp_path / "no_such_tests_dir")
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_USAGE, out
+    assert "Traceback" not in out, out
+    assert "--tests" in out and "not a directory" in out, out
+
+
+def test_a_pin_in_a_test_naming_a_silent_program_is_deliberately_not_reached(
+        tmp_path):
+    """THE DOCUMENTED LIMIT, pinned as a decision rather than left as an
+    accident. `pins_unmatched` counts pins whose named program states no literal
+    for that phrase; it does NOT count pins in a test whose named program emits
+    nothing matchable, because `if not em` returns before `pins_of` is called.
+
+    Measured on the shipped tree by deleting that guard: `pins_unmatched` goes
+    10 -> 34, which is the 24 this file's docstring sizes. Reaching them costs
+    `pins_of` over every parsed test and changes no verdict, so the guard stays
+    -- and this test is what makes changing it a visible decision."""
+    emitter = 'def script():\n    return "  puts \\"nothing countable here\\"\\n"\n'
+    progs, tests = _tree(
+        tmp_path, emitter,
+        'from thing_emit import script\n\n\n'
+        'def test_it():\n    assert "of 7 widgets seen" in script()\n')
+    j = tmp_path / "r.json"
+    _run(progs, tests, "--json", str(j))
+    doc = json.loads(j.read_text())
+    assert doc["pins_unmatched"] == 0, (
+        "this pin was reached after all -- the limit the docstring sizes has "
+        "changed, and the 24 it names are now counted: " + repr(doc))
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────
