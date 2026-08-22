@@ -816,6 +816,40 @@ check("the contention table matches the routing it is derived from",
       _stated == _live_rows,
       f"stated {dict(sorted(_stated.items()))} vs routed {dict(sorted(_live_rows.items()))}")
 
+# 49. the routing figures the report quotes -- how many steps this branch adds
+# against the base, and how many records would be UNROUTED without them -- are a
+# projection of two files the repository holds. I re-derived them by hand five
+# times in one session and they went stale twice anyway, each time because a
+# record was added at a step the base does not carry. Derive them.
+_bR = _sp2.run(["git", "show",
+                "origin/main:vibe-ic-marketplace/plugins/vibe-ic/benchmark/CAPTURE_ROUTING.json"],
+               capture_output=True, text=True, cwd=str(ROOT))
+if _bR.returncode == 0:
+    def _steps(txt):
+        d = json.loads(txt)
+        return next(v for v in d.values() if isinstance(v, dict)
+                    and any(isinstance(x, dict) and "bucket_A_program" in x for x in v.values()))
+    _base_steps = set(_steps(_bR.stdout))
+    _new_steps = set(ROUTING["steps"]) - _base_steps
+    _at_new = sum(1 for r in RECS if r.get("step") in _new_steps)
+    _q = re.search(r"gains \*\*(\d+)\*\* steps\. Without them \*\*(\d+) of the\s+(\d+)\s+records\*\*",
+                   MD, re.S)
+    control("routing-figures", bool(_base_steps) and bool(_q))
+    # the same projection carries one more figure a record quotes: how many
+    # distinct programs the batch routes at. It was 16 and is 18, stale for the
+    # same reason and caught by the same derivation.
+    _ntp = len({ROUTING["steps"][r["step"]]["bucket_A_program"]
+                for r in RECS if r["bucket"] == "A" and r.get("step") in ROUTING["steps"]})
+    _qtp = re.search(r"^ {4,}distinct target programs\s+(\d+)", MD, re.M)
+    check("the quoted distinct-target-program count is the routed one",
+          bool(_qtp) and int(_qtp.group(1)) == _ntp,
+          f"live {_ntp}, quoted {_qtp.group(1) if _qtp else '-'}")
+    check("the quoted routing figures are derived from the two routing files",
+          bool(_q) and (int(_q.group(1)), int(_q.group(2)), int(_q.group(3)))
+                       == (len(_new_steps), _at_new, len(RECS)),
+          f"live ({len(_new_steps)}, {_at_new}, {len(RECS)}); quoted "
+          + (f"({_q.group(1)}, {_q.group(2)}, {_q.group(3)})" if _q else "not found"))
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
