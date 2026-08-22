@@ -6571,3 +6571,79 @@ rest on, measured in the arms' own state rather than argued from a neighbouring 
 core-limited, build-to 6.139–6.171 mm. What moves is that the report's account of why
 the arms are stuck is now a measurement in their own state, and the probe that produced
 it took sixteen minutes.
+
+---
+
+## J84 — the CONTROL was saved by the very rung the arms are trapped in, and the difference between them is one number
+
+The control `sha256` printed `POST_HOLD_LEGALIZE_OK **disp=full-die** 2300x2300`. **It
+was rung 5 that saved it** — the same rung five matmul arms have been inside for between
+one and thirteen hours. That kills the obvious reading of J80/J83 ("rung 5 is useless,
+put rung 6 first") before it can be written down, and it makes the real question sharper.
+
+### Every structural ratio between them is 1.8×–6.5×. Exactly two are not.
+
+```
+                            control sha256   matmul die 3800     ratio
+design cells (post-hold)             63131            391980      6.2x
+post-hold utilisation %               12.1              47.3      3.9x
+clock buffers CTS created              365              2363      6.5x
+max level of the clock tree              6                11      1.8x
+SINK-master instances                  390               707      1.8x
+--------------------------------------------------------------------
+ROOT-master instances                    1              2055   2055.0x
+residual entering rung 5                 1              2344   2344.0x
+```
+
+**The residual is not explained by size.** matmul is 6.2× the cells at 3.9× the
+utilisation and has 2 344× the illegal cells. The only quantity that moves with the
+residual is the count of ROOT-master (`clkbuf_16`, 28.000 µm) instances, and it moves
+with it almost exactly.
+
+### And the relation is arithmetic, at both designs and at four dies
+
+```
+              root-master   residual   residual - root
+control                 1          1                0
+matmul 3800          2055       2344              289
+matmul 4200          2055       2296              241
+matmul 5153          2055       2418              363
+matmul 5434          2055       2409              354
+```
+
+**`residual ≈ root_master_count + ~300`.** And J83 is the causal half rather than the
+correlational one: downsizing exactly those instances takes the residual from **2 344 to
+303**, and **2 344 − 2 055 = 289 against a measured 303** — 4.8 % apart. The whole
+residual is the root-master population plus a base of roughly three hundred that the
+downsize does not touch.
+
+### What CTS actually did, which is where this starts
+
+Both designs were invoked identically:
+`clock_tree_synthesis -buf_list {clkbuf_4} -root_buf {clkbuf_16}`.
+
+* **control**: `Root buffer is clkbuf_16`, `Sink buffer is clkbuf_4`, 365 buffers
+  created, max level 6 — and the post-CTS census is **1 × clkbuf_16, 390 × clkbuf_4.**
+  The root master was used exactly once, at the root. That is the intended shape.
+* **matmul**: same invocation, 2 363 buffers created, max level 11 — and the census is
+  **2 055 × clkbuf_16, 707 × clkbuf_4.** The root master was used **2 055 times**, at
+  levels that are not the root.
+
+A 28.000 µm cell is **50 sites** wide. 2 055 of them at 47.3 % utilisation is what has
+no legal site to go to, and it is why the same rung that resolves a residual of 1 in the
+control does not resolve 2 344 here. **The flow already knows this happens** — rung 6
+exists to downsize exactly those instances — so what J83 measured is the flow's own
+workaround for its own CTS behaviour, sitting behind an unbounded search.
+
+### Recorded, not acted on
+
+**No `-root_buf` was changed and nothing was downsized by hand**, here or anywhere in
+this report. The ladder was not reordered. The comparison is n = 2 designs, which is
+thin for a general claim about CTS, and it is published as two measured cases plus one
+causal experiment rather than as a rule.
+
+**No verdict moves.** `edge_llm_matmul_accel` stays UNDETERMINED and core-limited at
+6.139–6.171 mm; this changes nothing about the die, only about what the arms are waiting
+for. The decision it raises — whether the ladder should be allowed to reach its own
+workaround — is written out in §8 with both sides and their measured costs, because it
+trades a bounded harm against an unbounded one and that is not mine to settle.

@@ -432,7 +432,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J83). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J84). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -3171,6 +3171,53 @@ a detail, either way.
 ---
 
 ## 8. What this job put back into the plugin
+
+### ★ A DECISION, written out rather than taken (J84)
+
+**It is not mine to settle, so it is stated with both sides and their measured costs.**
+
+**The situation.** The post-hold ladder has nine rungs. Rung 5 is a full-die
+displacement search — non-destructive, and **unbounded in time**. Rung 6 downsizes every
+clock buffer wider than the CTS sink buffer — fast and effective, and **destructive**: it
+weakens the clock tree the flow just built.
+
+**Both are load-bearing, and that is the whole problem:**
+
+* **Rung 5 saved the control.** `sha256` printed `POST_HOLD_LEGALIZE_OK **disp=full-die**
+  2300x2300`. Rungs 1–4 recovered 0/1; rung 5 recovered 1/1. Put rung 6 first and that
+  design's clock root gets downsized for nothing.
+* **Rung 5 is where the arms are trapped.** Five of them, one to thirteen hours, and the
+  one furthest in has bought **255 of 2 296 (11.1 %)** in over ten hours of one core.
+  Rung 6, measured in their own post-hold state, takes **2 344 → 303 (−87.1 %) in
+  16 min 35 s** (J83).
+
+**Why the two designs differ, measured (J84).** Every structural ratio between them is
+1.8×–6.5× — cells 6.2×, utilisation 3.9×, clock buffers 6.5×, tree depth 1.8×. Exactly
+two ratios are not: **ROOT-master instances 1 vs 2 055**, and **residual 1 vs 2 344**.
+`residual ≈ root_master_count + ~300` at both designs and all four measured dies, and
+J83 is the causal half: removing exactly those instances' excess width leaves **303**
+against a predicted 2 344 − 2 055 = **289**.
+
+**The options, with what each costs by measurement and not by estimate:**
+
+| option | cost to the control | cost to a matmul-shaped design | new parameter |
+|---|---|---|---|
+| **A. leave it** | none | unbounded — no verdict in 13 h and counting | none |
+| **B. reorder: rung 6 before rung 5** | **1** instance swapped, 79.03 µm² — its clock ROOT weakened | 13 h → 16 min | none |
+| **C. skip rung 5 when the residual entering it exceeds N** | none at N > 1 | 13 h → 16 min | **N**, and choosing it is the judgment |
+| **D. bound rung 5 by time** | none | 13 h → bound + 16 min | a timeout, which OpenROAD's `detailed_placement` does not expose |
+
+**What I did NOT do.** Nothing was reordered, no `-root_buf` was changed, no cell was
+downsized by hand, and no arm was stopped to make a point. **B costs the control a real
+timing change** — one clock root, from 28.000 µm to 7.840 µm — and a legalizer cannot
+see what that costs; **C is defensible and its only difficulty is that N is a number
+somebody picks**, which is the shape this report refuses elsewhere; **D is the cleanest
+and is not reachable from Tcl.** The evidence for all four rows is in `findings.md`
+J53/J80/J81/J83/J84 and re-runnable from `meas/_j80` and `meas/_j83`.
+
+**No verdict depends on this.** All six stand as published, and
+`edge_llm_matmul_accel` is core-limited at 6.139–6.171 mm whichever rung eventually
+answers.
 
 ### ★ And the adjudication itself is now published under a name (J82)
 
