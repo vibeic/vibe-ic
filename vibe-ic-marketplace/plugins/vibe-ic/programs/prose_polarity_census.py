@@ -46,6 +46,40 @@ private copies of a negation vocabulary is the defect #712 exists to answer, and
 a census that re-implemented `_searches_prose` would drift from the thing that
 actually decides the census.
 
+WHAT THIS CENSUS IS NOT: THE SIZE OF THE PROBLEM
+================================================
+This file counts a WRITE SHAPE. Counted by INPUT instead -- every function whose
+first parameter is named `prompt`, `spec`, `spec_text`, `doc`, `doc_text` or `md`
+AND which matches a regex against it -- the population at 769ff000ea is:
+
+    functions fed a prompt/spec/doc and matching on it : 231
+    of those, consulting ANY polarity                  :   0
+
+Two were checked rather than counted, and both are real:
+
+    mealy_sequence_synth::_is_moore
+        "The detector is not a Moore machine; it is Mealy."  -> True.
+        A prompt that explicitly refuses Moore selects Moore synthesis.
+    crc_synth::_parse_poly
+        "The polynomial 0x04C11DB7 is no longer used; use 0x1021."
+        -> 0x04C11DB7, the retired one. A CRC that will not interoperate.
+
+Note the first is a PREDICATE, not a keyed write, so no widening of this
+census's predicate would ever reach it. The harm is the same: a denied statement
+read as an assertion.
+
+THIS IS NOT A LIST TO ACT ON, and that is the point of keeping it out of the
+count. 231 is unreadable, and a census nobody reads records nothing -- the
+narrower predicate here is what made seven defects findable by reading 46. The
+number is recorded so the next person knows the census is a WINDOW on the
+problem and not its measure, and does not mistake `newly_visible` going to zero
+for the problem being over.
+
+Reproduce: walk every program, take functions whose first argument is named for
+a document and which call `finditer`/`re.search` on it, and check for any of
+`is_denied`, `sentence_scope`, `NEGATION_RE`, `_negated`.
+
+
 A THIRD SPELLING EXISTS, AND IS REFUSED
 =======================================
 `out.append({...})` -- a list of records -- writes a declared value as surely as
