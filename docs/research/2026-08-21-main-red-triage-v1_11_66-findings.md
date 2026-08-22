@@ -5589,6 +5589,61 @@ thing to do" are different, and I gave the first when the second was true and
 written down twenty lines above the code I was reading.**
 
 
+## M105 — "the pointer is not a fix" was wrong, and #1703 explains every number I measured
+
+M98 concluded: *"setting `VIBE_IC_BENCHMARK_DATA` has closed ZERO tests and
+revealed SEVEN. **It is not a fix and must never be quoted as one.**"* **That
+sentence is wrong, and `run_roots()`'s own docstring is where the right answer
+was.**
+
+**WHAT #1703 WAS.** The published cells left this repository for
+`vibeic/benchmark-data`. `_published_corpus` established the pointer seam, the
+cell predicate's skip quoted it verbatim — **and `run_roots()` never read it**:
+
+> This function never read it, so **the pointer switched the skip OFF without
+> switching discovery ON.** Measured on `origin/main` at `ee849c19e` [...]
+> **50 failed, 11 passed** [...] and every one of the 50 read
+> `[0 admissible run roots searched: []]` **while the cells sat unread on disk.
+> That is not a stricter answer, it is a confident wrong one** [...] The
+> documented remedy was worse than the skip it replaced.
+
+**IT IS FIXED**, and the fix is visible in the code I ran: `corpus = _offered_corpus()`,
+with `_corpus_candidate(meta["rel"], corpus)` added to the candidate list.
+
+**AND THAT IS WHY MY NUMBERS LOOK THE WAY THEY DO.** Under the broken version the
+pointer produced 50 confident-wrong failures. Under the fixed one it produced:
+
+    52 passed  ->  106 passed        54 cells that had NO COLOUR now PASS
+    61 skipped ->    0 skipped
+     6 failed  ->   11 failed        5 revealed, 0 of the original 6 closed
+
+**Calling that "not a fix" was exactly backwards.** It is the difference between
+**61 cells reporting nothing and 54 of them reporting a measured pass.** I wrote
+the sentence because I was watching the failure count, which went up — the same
+error as reading `12 failed` beside `61 skipped` and quoting the first.
+
+**The 6 stay red for a reason no corpus changes, and the module says so.**
+`_ADMISSIBILITY` admits `repo` and `published` kinds only; the six cite `home`
+roots, and **#527 removed host-searched roots on purpose**: *"a tree the
+repository does not carry cannot make this dimension's answer the same on two
+hosts."* **So M86/M87's "publish a run tree" and M96's "publish THOSE runs" are
+both incomplete: a `home` root cannot become admissible by publishing anywhere —
+the RECORD has to be re-pointed to a `repo` or `published` kind.**
+
+**CORRECTING M104 TOO.** I wrote that `corpus_root() is None` is *"a property of
+one machine"* and therefore illegal under #527. **Half right.** The module now
+resolves an OFFERED corpus and keeps #527 by a different route: *"it is never
+SEARCHED for — the operator names it"*, and *"trackedness is still decided by
+`git ls-tree -r HEAD` in the tree that holds the root, so it is the CORPUS COMMIT
+that answers."* **The premise is a commit fact about a named corpus, not a machine
+fact.** What remains true is narrower and still decisive: the *skip* is illegal in
+a cell test, and the corpus being optional is what the skip exists to tolerate.
+
+**Third time in this document the repository had already written down what I was
+measuring my way toward** — the anti-skip gate, the #527 doctrine, and now #1703.
+**Each was in a docstring above the code I was reading.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
