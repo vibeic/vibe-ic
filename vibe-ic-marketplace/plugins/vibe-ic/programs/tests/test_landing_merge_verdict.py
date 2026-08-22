@@ -2189,7 +2189,33 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
 
 def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
         sandbox, tmp_path):
-    """Clean porcelain is not proof that B1 tested the requested commit."""
+    """Clean porcelain is not proof that B1 tested the requested commit.
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED; only the interface it is asked through has moved.
+
+    This test was authored 2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier
+    and required rc 2 plus the shell text "candidate worktree raw attestation
+    failed". Two days later 7c376e3481 activated the hermetic candidate runner,
+    which answers the same question by PREVENT-DURING: every parent-owned input
+    is bind-mounted read-only, the mount table the daemon REPORTS is re-read and
+    refused if writable, and the inputs are digested before and after the arm.
+    That verifier never emits the old text, so the assertion could not pass --
+    and, worse, the stimulus it plants can no longer SUCCEED, so the old shape
+    was asserting detection of something that can no longer occur.
+
+    WHAT IS ASSERTED NOW, and why it still has teeth. The tamper is planted
+    exactly as before and the branch must be REFUSED -- but the refusal must be
+    because the tamper FAILED, not because it succeeded and was noticed. So the
+    candidate's own tampering test is required to appear as a NEW FAILURE the
+    branch owns. If prevention were ever removed, that test would do its work
+    and PASS, it would vanish from the new-failure list, and this assertion goes
+    red. The verified tree is separately required to equal the expected tree, so
+    a tamper that redefined what was under test cannot read as a clean refusal.
+
+    The post-attestation half -- the digest comparison that catches a tamper
+    which somehow got through -- is guarded directly at its seam in
+    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
+    """
     repo = tmp_path / "wrong-head-repo"
     cloned = subprocess.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
@@ -2212,15 +2238,45 @@ def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
 
     r, doc = _verify(repo, "wrong_head", tmp_path)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "test_moves_the_detached_subject_but_stays_green" in r.stdout, (
+        "the candidate's tampering test is not reported as a failure this "
+        "branch owns -- which means it SUCCEEDED and stayed green, and the "
+        "property this test exists for has been lost:\n" + r.stdout)
+    assert doc["verified_tree"] == doc["expected_tree"], (
+        "the tree under test is not the tree that was expected, so the tamper "
+        "redefined what was verified rather than merely failing", doc)
 
 
 def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
         sandbox, tmp_path):
-    """The subject index is not evidence that the subject bytes stayed fixed."""
+    """The subject index is not evidence that the subject bytes stayed fixed.
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED; only the interface it is asked through has moved.
+
+    This test was authored 2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier
+    and required rc 2 plus the shell text "candidate worktree raw attestation
+    failed". Two days later 7c376e3481 activated the hermetic candidate runner,
+    which answers the same question by PREVENT-DURING: every parent-owned input
+    is bind-mounted read-only, the mount table the daemon REPORTS is re-read and
+    refused if writable, and the inputs are digested before and after the arm.
+    That verifier never emits the old text, so the assertion could not pass --
+    and, worse, the stimulus it plants can no longer SUCCEED, so the old shape
+    was asserting detection of something that can no longer occur.
+
+    WHAT IS ASSERTED NOW, and why it still has teeth. The tamper is planted
+    exactly as before and the branch must be REFUSED -- but the refusal must be
+    because the tamper FAILED, not because it succeeded and was noticed. So the
+    candidate's own tampering test is required to appear as a NEW FAILURE the
+    branch owns. If prevention were ever removed, that test would do its work
+    and PASS, it would vanish from the new-failure list, and this assertion goes
+    red. The verified tree is separately required to equal the expected tree, so
+    a tamper that redefined what was under test cannot read as a clean refusal.
+
+    The post-attestation half -- the digest comparison that catches a tamper
+    which somehow got through -- is guarded directly at its seam in
+    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
+    """
     repo = tmp_path / "hidden-dirty-repo"
     cloned = subprocess.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
@@ -2247,15 +2303,36 @@ def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
 
     r, doc = _verify(repo, "hidden_dirty", tmp_path)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "test_hides_changed_subject_bytes_but_stays_green" in r.stdout, (
+        "the candidate's tampering test is not reported as a failure this "
+        "branch owns -- which means it SUCCEEDED and stayed green, and the "
+        "property this test exists for has been lost:\n" + r.stdout)
+    assert doc["verified_tree"] == doc["expected_tree"], (
+        "the tree under test is not the tree that was expected, so the tamper "
+        "redefined what was verified rather than merely failing", doc)
 
 
 def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
         sandbox, tmp_path):
-    """Mutable refs/replace cannot redefine the literal tree B1 must attest."""
+    """Mutable refs/replace cannot redefine the literal tree B1 must attest.
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED; only the interface it is asked through has moved. Authored
+    2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier and required rc 2 plus
+    "candidate worktree raw attestation failed"; 7c376e3481 replaced that with
+    PREVENT-DURING -- read-only parent-owned binds, the reported mount table
+    re-read and refused if writable, and the inputs digested before and after
+    the arm. The old text is never emitted, and the planted tamper can no longer
+    succeed, so the old shape asserted detection of something that cannot occur.
+
+    Now: the branch must be REFUSED, and refused because the tamper FAILED. The
+    candidate's own tampering test must appear as a NEW FAILURE it owns -- if
+    prevention were removed it would do its work, PASS, leave that list, and
+    this goes red. The verified tree must separately equal the expected tree, so
+    a tamper that redefined what was under test cannot read as a clean refusal.
+    The digest half is guarded at its seam in
+    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
+    """
     repo = tmp_path / "replace-ref-repo"
     cloned = subprocess.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
@@ -2298,10 +2375,14 @@ def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
         for ref in replace_refs.stdout.splitlines():
             _git(repo, "update-ref", "-d", ref)
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "candidate worktree raw attestation failed" in r.stdout
-    assert "after candidate zero-census" in r.stderr
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "test_redefines_head_but_stays_green" in r.stdout, (
+        "the candidate's tampering test is not reported as a failure this "
+        "branch owns -- which means it SUCCEEDED and stayed green, and the "
+        "property this test exists for has been lost:\n" + r.stdout)
+    assert doc["verified_tree"] == doc["expected_tree"], (
+        "refs/replace redefined the tree that was verified rather than merely "
+        "failing to", doc)
 
 
 def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
