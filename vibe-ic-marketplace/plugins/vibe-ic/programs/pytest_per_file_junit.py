@@ -839,6 +839,67 @@ class _ProgressStreamSet:
         self.error = ""
         self.score = 0
 
+    # THE READ SIDE OF THE JOIN.  `_HermeticProgressRelay.observe` is written
+    # against ONE interpreter's probe: it reads `declared_items`, `item_order`,
+    # `finished` and `domain_progress`.  Substituting this set for that probe
+    # without these four accessors raised AttributeError inside the watchdog
+    # sample, which the relay never sees as its own refusal — the arm simply
+    # died with no terminal progress record and the hermetic runner reported
+    # "candidate ended without the exact semantic terminal record".
+    #
+    # THE JOIN IS CONSERVATIVE, NEVER OPTIMISTIC.  `declared_items` is the
+    # relay's own gate: it stays None (relay silent) until EVERY admitted
+    # stream has declared the same collected selection in the same order, so a
+    # half-collected or disagreeing session cannot make the relay compute a
+    # denominator from a partial view.  `complete()` below is unchanged and is
+    # still the only thing that decides whether the session finished.
+    def _declared_streams(self) -> Optional[List["_SemanticProgressProbe"]]:
+        probes = list(self.streams.values())
+        if self.error or not probes:
+            return None
+        first = probes[0]
+        if first.declared_items is None:
+            return None
+        for probe in probes[1:]:
+            if (probe.declared_items != first.declared_items
+                    or probe.item_order != first.item_order):
+                return None
+        return probes
+
+    @property
+    def declared_items(self) -> Optional[int]:
+        probes = self._declared_streams()
+        return None if probes is None else probes[0].declared_items
+
+    @property
+    def item_order(self) -> List[str]:
+        probes = self._declared_streams()
+        return [] if probes is None else list(probes[0].item_order)
+
+    @property
+    def finished(self) -> Set[str]:
+        # Each worker runs only its share; the set of items this SESSION has
+        # finished is their union.  A single-main session degenerates to that
+        # main's own set.
+        out: Set[str] = set()
+        for probe in self.streams.values():
+            out |= probe.finished
+        return out
+
+    @property
+    def domain_progress(self) -> Dict[Tuple[str, str], Tuple[int, int]]:
+        # A nested domain belongs to whichever process ran that item, so at
+        # most one stream carries a given key in a distributed session.  Keep
+        # the furthest-advanced observation if two ever report the same key;
+        # the enclosing relay only ever compares it forward.
+        merged: Dict[Tuple[str, str], Tuple[int, int]] = {}
+        for probe in self.streams.values():
+            for key, value in probe.domain_progress.items():
+                current = merged.get(key)
+                if current is None or value[0] > current[0]:
+                    merged[key] = value
+        return merged
+
     def close(self) -> None:
         for probe in self.streams.values():
             try:
@@ -906,6 +967,30 @@ class _ProgressStreamSet:
         try:
             current = os.stat(self.directory)
             held = os.fstat(self.dir_fd)
+            # REWIND FIRST.  `os.listdir(fd)` is `fdopendir(dup(fd))`, and a
+            # dup SHARES the file offset, so the second listing of the same
+            # directory fd resumes where the first one stopped -- at
+            # end-of-directory.  On ext4 the kernel re-seeds the readdir cursor
+            # and the defect is invisible; on TMPFS it is not, and the hermetic
+            # candidate profile mounts `/tmp` as a tmpfs.
+            #
+            # MEASURED inside that container: `os.listdir(self.dir_fd)` -> []
+            # at the same instant `os.listdir(self.directory)` ->
+            # ['m.7.1.jsonl'].  Every re-list ran ONE CALL BEHIND, so a pytest
+            # arm that finished inside two poll intervals had its stream
+            # admitted only by `complete()` -- after the last observer sample.
+            # The hermetic relay therefore emitted no checkpoint and no
+            # terminal record, `hermetic_candidate_runner` refused with
+            # "candidate ended without the exact semantic terminal record",
+            # no B1 receipt was written, and `gatekeeper-verify-merge.sh`
+            # answered rc=2 to a known-GOOD branch and a known-BAD one alike:
+            # 22 reds in `test_landing_merge_verdict`, and a merge gate that
+            # could not discriminate.  A green fast arm and a hung arm are not
+            # allowed to look the same.
+            #
+            # The fd still pins the directory INODE (the identity clause
+            # below), so rewinding relaxes no property this class enforces.
+            os.lseek(self.dir_fd, 0, os.SEEK_SET)
             names = sorted(os.listdir(self.dir_fd))
         except OSError as exc:
             self._fail(f"progress directory unavailable: {exc}")
@@ -994,6 +1079,35 @@ class _ProgressStreamSet:
                            f"completed ({len(finished)}/{expected})")
         return True, ""
 
+    def item_counts(self) -> Tuple[Optional[int], Optional[int]]:
+        """(items finished, items the session declared), or (None, None).
+
+        The two numbers the SESSION JOIN above compares, exposed so a caller can
+        say WHY a record is incomplete from the supervisor's OWN state instead
+        of searching the child's output for a marker the child may legitimately
+        print.  MEASURED, why that matters: the driver's own test file prints
+        `WATCHDOG_STALLED:` inside its assertion dumps, and a substring
+        classifier therefore reported a 44-second run as a 300 s stall, twice.
+
+        (None, None) whenever the shape is anything other than one main stream
+        or a consistent set of workers -- an unknown count must never be read as
+        a known one.
+        """
+        mains = [pr for n, pr in self.streams.items()
+                 if self.kinds[n] == "main"]
+        workers = [pr for n, pr in self.streams.items()
+                   if self.kinds[n] == "worker"]
+        if len(mains) == 1 and not workers:
+            return len(mains[0].finished), mains[0].declared_items
+        if workers and not mains:
+            declared = {pr.declared_items for pr in workers}
+            if len(declared) == 1 and None not in declared:
+                finished: Set[str] = set()
+                for probe in workers:
+                    finished |= probe.finished
+                return len(finished), declared.pop()
+        return None, None
+
 
 def read_selection(path: Path) -> List[str]:
     return [l.strip() for l in
@@ -1035,6 +1149,45 @@ def _selection_identity_problem(selection: Sequence[str],
     return ""
 
 
+def _aggregate_coverage(suites: Sequence[ET.Element],
+                       selection: Sequence[str],
+                       cwd: Optional[str],
+                       ) -> Tuple[str, List[str], List[str]]:
+    """(identity error or "", selected-but-absent, reported-but-unselected).
+
+    ONE definition of "did every selected file contribute a testcase", so the
+    human-facing refusal below and any caller that needs the COUNTS cannot
+    drift apart.  When the first element is non-empty the two lists are empty
+    and mean nothing: identity could not be established, which is never a pass.
+    """
+    selected: Dict[str, str] = {}
+    for raw in selection:
+        identity = _file_identity(raw, cwd)
+        if identity is None:
+            return f"selected path has no stable identity: {raw!r}", [], []
+        if identity in selected:
+            return ("selection names the same file more than once: "
+                    f"{selected[identity]!r}, {raw!r}"), [], []
+        selected[identity] = raw
+
+    reported: Dict[str, str] = {}
+    for suite in suites:
+        for testcase in suite.iter("testcase"):
+            raw = testcase.get("file")
+            if not isinstance(raw, str) or not raw:
+                return ("aggregate JUnit contains a testcase with no file "
+                        "identity"), [], []
+            identity = _file_identity(raw, cwd)
+            if identity is None:
+                return ("aggregate JUnit testcase has no stable file identity: "
+                        f"{raw!r}"), [], []
+            reported[identity] = raw
+
+    missing = [selected[key] for key in sorted(set(selected) - set(reported))]
+    extra = [reported[key] for key in sorted(set(reported) - set(selected))]
+    return "", missing, extra
+
+
 def _aggregate_coverage_problem(suites: Sequence[ET.Element],
                                 selection: Sequence[str],
                                 cwd: Optional[str]) -> str:
@@ -1045,30 +1198,9 @@ def _aggregate_coverage_problem(suites: Sequence[ET.Element],
     the report and let a two-file denominator look like a one-file green run.
     Extra files are equally invalid because they answer a different selection.
     """
-    selected: Dict[str, str] = {}
-    for raw in selection:
-        identity = _file_identity(raw, cwd)
-        if identity is None:
-            return f"selected path has no stable identity: {raw!r}"
-        if identity in selected:
-            return ("selection names the same file more than once: "
-                    f"{selected[identity]!r}, {raw!r}")
-        selected[identity] = raw
-
-    reported: Dict[str, str] = {}
-    for suite in suites:
-        for testcase in suite.iter("testcase"):
-            raw = testcase.get("file")
-            if not isinstance(raw, str) or not raw:
-                return "aggregate JUnit contains a testcase with no file identity"
-            identity = _file_identity(raw, cwd)
-            if identity is None:
-                return ("aggregate JUnit testcase has no stable file identity: "
-                        f"{raw!r}")
-            reported[identity] = raw
-
-    missing = [selected[key] for key in sorted(set(selected) - set(reported))]
-    extra = [reported[key] for key in sorted(set(reported) - set(selected))]
+    problem, missing, extra = _aggregate_coverage(suites, selection, cwd)
+    if problem:
+        return problem
     if missing or extra:
         return ("aggregate JUnit does not exactly cover the selected files "
                 f"(missing={missing}, extra={extra})")
@@ -1518,16 +1650,160 @@ def _install_shutdown_handlers() -> None:
     signal.signal(signal.SIGINT, _shutdown_handler)
 
 
+def _red_node_ids(suites: Sequence[ET.Element]) -> List[str]:
+    """`classname::name` for every red testcase, in report order."""
+    ids: List[str] = []
+    for suite in suites:
+        for testcase in suite.iter("testcase"):
+            for child in testcase:
+                if child.tag.rsplit("}", 1)[-1] in _RED_TAGS:
+                    classname = testcase.get("classname") or ""
+                    name = testcase.get("name") or ""
+                    ids.append(f"{classname}::{name}" if classname else name)
+                    break
+    return ids
+
+
+def _declared_failure_bound(pytest_argv: Sequence[str]) -> Optional[int]:
+    """The failure bound THIS driver was told to hand pytest, or None.
+
+    Read from the driver's OWN argument vector.  The child's output is not
+    consulted: pytest prints `stopping after N failures`, but so can any test
+    that quotes it, and a classifier that greps the subject for its own markers
+    is the defect this function exists to avoid repeating.
+    """
+    argv = list(pytest_argv)
+    bound: Optional[int] = None
+
+    def _bind(value: int) -> None:
+        nonlocal bound
+        if value >= 1:
+            bound = value if bound is None else min(bound, value)
+
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--maxfail" and index + 1 < len(argv):
+            try:
+                _bind(int(argv[index + 1]))
+            except ValueError:
+                pass
+            index += 2
+            continue
+        if arg.startswith("--maxfail="):
+            try:
+                _bind(int(arg.split("=", 1)[1]))
+            except ValueError:
+                pass
+        elif arg == "--exitfirst" or (
+                len(arg) > 1 and arg[0] == "-" and arg[1] != "-"
+                and "x" in arg[1:]):
+            _bind(1)
+        index += 1
+    return bound
+
+
+def _maxfail_truncation(bound: Optional[int], rc: Optional[int], red: int,
+                        sink: Dict[str, object], covered: int, total: int,
+                        extra: Sequence[str]) -> Optional[str]:
+    """Name a session that stopped at its OWN declared failure bound.
+
+    WHY THIS IS NOT A RELAXATION.  The verdict does not move: a truncated
+    session is still an absolute refusal, because the failures it recorded are a
+    PREFIX of the failure set and a prefix cannot be differenced against another
+    arm.  What moves is what the reader is told.  MEASURED at 288dc9fc8 on a
+    116-file selection, the landing gate said `aggregate JUnit does not exactly
+    cover the selected files (missing=[108 paths])` -- "cross-file/order
+    semantics are UNKNOWN" -- when the truth was "ten tests in file 8 of 116
+    failed and pytest stopped there, as `--maxfail=10` told it to".  One reading
+    sends the reader to the harness; the other sends them to ten named tests.
+    The condition was reproduced byte-identically in five landing rounds and
+    nobody chased it, which is what an unknowable-looking refusal costs.
+
+    EVERY CLAUSE IS SUPERVISOR-SIDE and every one must hold, so an unknown is
+    never dressed up as a known:
+      * the bound is the one THIS driver declared (`_declared_failure_bound`);
+      * the process exited normally (`natural_exit`), so the stall lease did not
+        fire -- a genuine hang stays `AGGREGATE_NORECORD`;
+      * nothing leaked and the descendant census closed;
+      * the lifecycle join reported fewer finished items than the session
+        declared, which is what a truncation IS;
+      * pytest's status is exactly 1 (ran, had failures) and the JUnit carries
+        exactly `bound` red cases -- one fewer or one more is a different event;
+      * no EXTRA file was reported, because an unselected file in the report
+        means the run answered a different question and the bound explains none
+        of it.
+    """
+    if bound is None or bound < 1 or rc != 1 or red != bound or extra:
+        return None
+    if (sink.get("natural_exit") is not True
+            or sink.get("leaked") is not False
+            or sink.get("cleanup_ok") is not True
+            or sink.get("protocol_complete") is not False):
+        return None
+    finished = sink.get("items_finished")
+    declared = sink.get("items_declared")
+    if not isinstance(finished, int) or not isinstance(declared, int):
+        return None
+    if finished >= declared:
+        return None
+    return (f"{bound} failures reached at file {covered}/{total}, "
+            f"{finished}/{declared} items — the recorded failures are a "
+            "PREFIX of the failure set, not the failure set; REFUSED")
+
+
+def _sink_protocol_error(sink: Dict[str, object]) -> str:
+    """The lifecycle join's OWN complaint, or "" when it did not make one."""
+    if sink.get("protocol_complete") is not False:
+        return ""
+    detail = sink.get("protocol_error")
+    return detail if isinstance(detail, str) and detail else ""
+
+
 def _norecord_reason(rc: Optional[int], out: str, incomplete: bool,
-                     stall_after: float) -> str:
-    """Explain UNKNOWN without calling every instrumentation refusal a stall."""
-    if "WATCHDOG_STALLED:" in out:
+                     stall_after: float, *, stalled: bool,
+                     protocol_error: str) -> str:
+    """Explain UNKNOWN without calling every instrumentation refusal a stall.
+
+    ``stalled`` IS THE SUPERVISOR'S OWN VERDICT -- ``_watchdog``'s
+    ``outcome == "stalled"``, carried here through the outcome sink -- and it is a
+    REQUIRED argument because what it replaces was a substring test on the CHILD'S
+    OUTPUT, and the child is entitled to print anything at all.
+
+    MEASURED on clean origin/main 49d2b3328, with this driver unchanged,
+    ``programs/tests/test_pytest_per_file_junit.py`` driven one file at a time
+    exactly as the landing gate drives it:
+
+        10 failed, 11 passed in 24.13s
+        PROGRESS_PROTOCOL_INCOMPLETE: m.16.1.jsonl: session finished before every
+                                      selected item completed (21/72)
+        AGGREGATE_NORECORD  STALLED after 300 s with no validated pytest lifecycle
+                            progress
+
+    A 24-second run, a natural exit, truncated by its own ``--maxfail`` bound --
+    reported as a 300-second hang.  The whole 440-line buffer held exactly ONE
+    ``WATCHDOG_STALLED:`` and it sat inside a pytest assertion dump belonging to
+    that file's own test OF THE STALL DETECTOR.  The watchdog never fired.  The
+    label sent two readers hunting a hang that does not exist and hid the real
+    cause, which was a failure bound.
+
+    ``test_protocol_refusal_is_not_mislabeled_as_a_stall`` existed throughout and
+    passed throughout, because it only ever exercised the half where the marker is
+    ABSENT.  The half that matters is pinned now.
+    """
+    if stalled:
         return (f"STALLED after {stall_after:g} s with no validated pytest "
                 "lifecycle progress")
-    marker = "PROGRESS_PROTOCOL_INCOMPLETE:"
-    if marker in out:
-        detail = out.split(marker, 1)[1].splitlines()[0].strip()
-        return f"pytest progress protocol incomplete: {detail}"
+    # THE DETAIL COMES FROM THE PROBE, NOT FROM THE BUFFER, for the same reason
+    # `stalled` does. MEASURED on this file with only the `stalled` half repaired:
+    # the per-file arm reported "no pytest progress stream was produced" for a
+    # session whose OWN probe had just said "session finished before every selected
+    # item completed (29/83)" -- because the first `PROGRESS_PROTOCOL_INCOMPLETE:`
+    # in the buffer belonged to a NESTED driver run this file spawns as its
+    # subject. An empty `protocol_error` means the supervisor did not supply one,
+    # which falls through to the liveness sentence below rather than guessing.
+    if protocol_error:
+        return f"pytest progress protocol incomplete: {protocol_error}"
     if "DESCENDANT_CLEANUP_INCOMPLETE:" in out:
         return "pytest descendant cleanup could not prove a final empty census"
     if "LIVE_DESCENDANTS_CLEANED:" in out:
@@ -1545,8 +1821,17 @@ def _run_progress_supervised(
             Callable[["_SemanticProgressProbe"], None]] = None,
         poll_s: Optional[float] = None,
         collect_only: bool = False,
+        outcome_sink: Optional[Dict[str, object]] = None,
         ) -> Tuple[Optional[int], str, bool]:
-    """Run until natural completion; stop only after semantic events stall."""
+    """Run until natural completion; stop only after semantic events stall.
+
+    ``outcome_sink`` is filled, when supplied, with the supervisor's OWN view of
+    how the session ended -- natural exit, leak, cleanup, the lifecycle join and
+    its item counts -- so a caller can classify an incomplete record without
+    grepping the child's output.  It is left untouched on the early refusals
+    below (no subreaper, no pidfd, no census): a caller that finds no keys must
+    treat the shape as unknown, which is the fail-closed direction.
+    """
     global _ACTIVE_JOB, _IN_SHUTDOWN
     _IN_SHUTDOWN = False
     if not _enable_subreaper():
@@ -1661,6 +1946,8 @@ def _run_progress_supervised(
         # "no nested progress" to the enclosing semantic lease.
         _progress_sample()
         protocol_complete, protocol_error = probe.complete()
+        # BEFORE `probe.close()` below: the counts live in the probe.
+        items_finished, items_declared = probe.item_counts()
     finally:
         probe.close()
         shutil.rmtree(progress_path, ignore_errors=True)
@@ -1699,15 +1986,71 @@ def _run_progress_supervised(
         out += f"\nPROGRESS_PROTOCOL_INCOMPLETE: {protocol_error}\n"
     incomplete = (result.outcome != "natural" or bool(leaked)
                   or not post_exit_cleanup_ok or not protocol_complete)
+    if outcome_sink is not None:
+        outcome_sink.update({
+            "natural_exit": result.outcome == "natural",
+            # `_watchdog` outcome vocabulary: natural | stalled | ceiling |
+            # aborted. "stalled" is the ONLY one that means the forward-progress
+            # lease expired, and it is the fact `_norecord_reason` needs.
+            "stalled": result.outcome == "stalled",
+            "leaked": bool(leaked),
+            "cleanup_ok": bool(post_exit_cleanup_ok),
+            "protocol_complete": bool(protocol_complete),
+            "protocol_error": protocol_error,
+            "items_finished": items_finished,
+            "items_declared": items_declared,
+        })
     return result.rc, out, incomplete
+
+
+def _declared_rootdir(pytest_argv: Sequence[str],
+                      cwd: Optional[str]) -> List[str]:
+    """Make the selection and the JUnit share ONE coordinate system.
+
+    The aggregate coverage check compares the paths the caller SELECTED against
+    the ``file`` attributes pytest REPORTED.  The selection is resolved against
+    this session's working directory; pytest's ``file`` attribute is relative to
+    its ``rootdir``, which pytest infers from the arguments' nearest ini file.
+    When those two directories differ, every selected file is simultaneously
+    "missing" and "extra" and a completely green session is refused as UNKNOWN.
+
+    MEASURED at 49d2b3328 on the landing gate's ``full:unselectable-tests``
+    lane: 111 files selected as ``vibe-ic-marketplace/plugins/vibe-ic/...`` with
+    cwd at the repository root, ``rc=0``, 852 cases, ``784 passed, 60 skipped,
+    5 xfailed, 3 xpassed``, ZERO failures -- and refused, ``missing=111`` of 111
+    with ``extra=110``, because the plugin subtree carries its own ``pytest.ini``
+    and the repository root carries none, so rootdir was the plugin and every
+    reported path came back plugin-relative.  The comparison matched nothing, so
+    that lane's aggregate arm had never measured anything, and "UNKNOWN" and
+    "broken" look the same from outside.
+
+    The frame is therefore DECLARED to pytest rather than inferred on either
+    side.  MEASURED, same tree: the ini file is still discovered and applied
+    with rootdir moved (``rootdir: <repo root>``, ``configfile:
+    vibe-ic-marketplace/plugins/vibe-ic/pytest.ini``), so ``addopts`` and the
+    conftest-loaded plugins -- ``suite_write_guard`` among them -- are
+    unaffected; only the frame the report is written in moves.  ``testpaths`` IS
+    resolved against rootdir and does move, which cannot matter here: it applies
+    only when no argument is given, and this driver always names every file
+    explicitly and refuses an empty selection (rc 3).
+
+    A caller that already declared a rootdir keeps it.  This adds a frame; it
+    never overrides one.
+    """
+    for arg in pytest_argv:
+        if arg == "--rootdir" or arg.startswith("--rootdir="):
+            return []
+    anchor = Path(cwd).resolve() if cwd else Path.cwd()
+    return [f"--rootdir={anchor}"]
 
 
 def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
             stall_after: float, cwd: Optional[str], *,
             progress_relay_path: Optional[Path] = None,
+            outcome_sink: Optional[Dict[str, object]] = None,
             ) -> Tuple[Optional[int], str, bool]:
     """One pytest session for one file, supervised by forward progress."""
-    cmd = list(pytest_argv) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
         "-p", _PROGRESS_PLUGIN,
         # xunit1 CARRIES THE `file` ATTRIBUTE and xunit2 drops it. The merge
         # gate answers "did every file we selected actually run" off that
@@ -1719,7 +2062,8 @@ def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
         test_file,
     ]
     return _run_progress_supervised(
-        cmd, stall_after, cwd, progress_relay_path=progress_relay_path)
+        cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
+        outcome_sink=outcome_sink)
 
 
 def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
@@ -1728,22 +2072,24 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
                   progress_relay_path: Optional[Path] = None,
                   progress_observer: Optional[
                       Callable[["_SemanticProgressProbe"], None]] = None,
+                  outcome_sink: Optional[Dict[str, object]] = None,
                   ) -> Tuple[Optional[int], str, bool]:
     """Run the original whole-selection pytest shape as a semantics canary."""
-    cmd = list(pytest_argv) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
         "-p", _PROGRESS_PLUGIN,
         "-o", "junit_family=xunit1", f"--junitxml={junit_path}",
         *test_files,
     ]
     return _run_progress_supervised(
         cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
-        progress_observer=progress_observer)
+        progress_observer=progress_observer, outcome_sink=outcome_sink)
 
 
 def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
                 stall_after: float, cwd: Optional[str], *,
                 progress_relay_path: Optional[Path] = None,
                 poll_s: Optional[float] = None,
+                outcome_sink: Optional[Dict[str, object]] = None,
                 ) -> Tuple[Optional[int], str, bool]:
     """Run one collect-only session with the strict lifecycle protocol.
 
@@ -1752,12 +2098,12 @@ def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
     FSM must also observe a count-preserving collect-only terminal followed by
     ``session_finish``.
     """
-    cmd = list(pytest_argv) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
         "-p", _PROGRESS_PLUGIN, "--collect-only", *test_files,
     ]
     return _run_progress_supervised(
         cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
-        poll_s=poll_s, collect_only=True)
+        poll_s=poll_s, collect_only=True, outcome_sink=outcome_sink)
 
 
 def _write_json_atomic(path: Path, payload: object) -> None:
@@ -1815,11 +2161,12 @@ def _fallback_worker_main(spec_path: Path) -> int:
     suites: Optional[List[ET.Element]] = None
     cases = 0
     red = 0
+    sink: Dict[str, object] = {}
     try:
         rc, out, killed = run_one(
             spec["pytest_argv"], test_file, junit_path,
             float(spec["stall_after"]), spec["cwd"],
-            progress_relay_path=relay)
+            progress_relay_path=relay, outcome_sink=sink)
         sys.stdout.write(out)
         if not out.endswith("\n"):
             sys.stdout.write("\n")
@@ -1840,7 +2187,9 @@ def _fallback_worker_main(spec_path: Path) -> int:
 
     has_record = suites is not None
     reason = ("" if has_record else
-              _norecord_reason(rc, out, killed, float(spec["stall_after"])))
+              _norecord_reason(rc, out, killed, float(spec["stall_after"]),
+                               stalled=sink.get("stalled") is True,
+                               protocol_error=_sink_protocol_error(sink)))
     try:
         _write_json_atomic(meta_path, {
             "schema": 1,
@@ -1901,11 +2250,13 @@ def _collect_worker_main(spec_path: Path) -> int:
     rc: Optional[int] = None
     out = ""
     incomplete = True
+    sink: Dict[str, object] = {}
     try:
         rc, out, incomplete = run_collect(
             spec["pytest_argv"], spec["test_files"],
             float(spec["stall_after"]), spec["cwd"],
-            progress_relay_path=relay, poll_s=float(spec["poll_s"]))
+            progress_relay_path=relay, poll_s=float(spec["poll_s"]),
+            outcome_sink=sink)
         sys.stdout.write(out)
         if out and not out.endswith("\n"):
             sys.stdout.write("\n")
@@ -1917,7 +2268,9 @@ def _collect_worker_main(spec_path: Path) -> int:
 
     reason = ("" if not incomplete else
               _norecord_reason(rc, out, incomplete,
-                               float(spec["stall_after"])))
+                               float(spec["stall_after"]),
+                               stalled=sink.get("stalled") is True,
+                               protocol_error=_sink_protocol_error(sink)))
     try:
         _write_json_atomic(meta_path, {
             "schema": 1,
@@ -2554,25 +2907,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             aggregate_path = tmp / "aggregate.xml"
             print(f"=== [aggregate] {len(selection)} file(s) in one pytest "
                   "process", flush=True)
+            aggregate_sink: Dict[str, object] = {}
             aggregate_rc, out, aggregate_killed = run_aggregate(
                 pytest_argv, selection, aggregate_path,
                 a.aggregate_stall_after, a.cwd,
                 progress_relay_path=(Path(a.progress_relay)
                                      if a.progress_relay else None),
                 progress_observer=(hermetic_progress.observe
-                                   if hermetic_progress is not None else None))
+                                   if hermetic_progress is not None else None),
+                outcome_sink=aggregate_sink)
             sys.stdout.write(out)
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
             aggregate_suites = _load_suites(aggregate_path)
             aggregate_coverage_problem = ""
+            aggregate_missing: List[str] = []
+            aggregate_extra: List[str] = []
             if aggregate_suites is not None:
                 for suite in aggregate_suites:
                     cases, red = _count(suite)
                     aggregate_cases += cases
                     aggregate_red += red
-                aggregate_coverage_problem = _aggregate_coverage_problem(
+                (aggregate_coverage_problem, aggregate_missing,
+                 aggregate_extra) = _aggregate_coverage(
                     aggregate_suites, selection, a.cwd)
+                if not aggregate_coverage_problem and (aggregate_missing
+                                                       or aggregate_extra):
+                    aggregate_coverage_problem = (
+                        "aggregate JUnit does not exactly cover the selected "
+                        f"files (missing={aggregate_missing}, "
+                        f"extra={aggregate_extra})")
             # rc 0/1 are pytest's complete normal outcomes. Everything else is
             # interrupted/internal/usage/no-collection and cannot certify the
             # whole-selection semantics even if a partial XML happened to parse.
@@ -2581,9 +2945,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     or aggregate_rc not in (0, 1)
                     or aggregate_coverage_problem):
                 aggregate_incomplete = True
+                # NAME THE CAUSE FIRST when it is knowable. `AGGREGATE_NORECORD`
+                # is still printed underneath, unchanged: `tools/gatekeeper-land.sh`
+                # and `landing_merge_verdict` key the absolute refusal off that
+                # exact marker, and this line adds information rather than
+                # renaming the verdict — the landing refuses either way.
+                if aggregate_suites is not None:
+                    truncation = _maxfail_truncation(
+                        _declared_failure_bound(pytest_argv), aggregate_rc,
+                        aggregate_red, aggregate_sink,
+                        len(selection) - len(aggregate_missing),
+                        len(selection), aggregate_extra)
+                    if truncation is not None:
+                        print(f"AGGREGATE_TRUNCATED  {truncation}", flush=True)
+                        for node_id in _red_node_ids(aggregate_suites):
+                            print(f"    {node_id}", flush=True)
+                        aggregate_coverage_problem = (
+                            "aggregate session stopped at its own declared "
+                            "failure bound after "
+                            f"{aggregate_sink['items_finished']}"
+                            f"/{aggregate_sink['items_declared']} items"
+                            + (f", so {len(aggregate_missing)} of "
+                               f"{len(selection)} selected file(s) were never "
+                               f"launched: {aggregate_missing}"
+                               if aggregate_missing else
+                               " (every selected file was launched)"))
                 why = (aggregate_coverage_problem or _norecord_reason(
                     aggregate_rc, out, aggregate_killed,
-                    a.aggregate_stall_after))
+                    a.aggregate_stall_after,
+                    stalled=aggregate_sink.get("stalled") is True,
+                    protocol_error=_sink_protocol_error(aggregate_sink)))
                 print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
                       "are UNKNOWN, not clean", flush=True)
                 aggregate_suites = None
@@ -2712,11 +3103,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     continue
                 per = tmp / f"{i:05d}.xml"
                 print(f"=== [{i}/{len(selection)}] {test_file}", flush=True)
+                file_sink: Dict[str, object] = {}
                 rc, out, killed = run_one(pytest_argv, test_file, per,
                                           a.stall_after, a.cwd,
                                           progress_relay_path=(
                                               Path(a.progress_relay)
-                                              if a.progress_relay else None))
+                                              if a.progress_relay else None),
+                                          outcome_sink=file_sink)
                 sys.stdout.write(out)
                 if not out.endswith("\n"):
                     sys.stdout.write("\n")
@@ -2737,7 +3130,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 results.append(FileResult(
                     test_file, rc, killed, suites, cases, red,
                     norecord_reason=_norecord_reason(
-                        rc, out, killed, a.stall_after)))
+                        rc, out, killed, a.stall_after,
+                        stalled=file_sink.get("stalled") is True,
+                        protocol_error=_sink_protocol_error(file_sink))))
                 state = ("NORECORD" if suites is None
                          else ("red" if red or rc != 0 else "ok"))
                 print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "

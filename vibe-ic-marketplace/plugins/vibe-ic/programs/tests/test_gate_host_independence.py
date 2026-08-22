@@ -313,25 +313,63 @@ def test_pytest_parenthesized_minute_clock_is_not_semantic_output():
     assert G._verdict_line("107 passed, 1 failed in 66.28s (0:01:06)") != a
 
 
-def test_539_a_gate_that_needs_the_network_is_EXCLUDED_in_the_real_script():
-    """#539. The rule, asserted over the REAL script rather than a fixture: a
-    gate that requires a REMOTE cannot be inside a two-invocation determinism
-    comparison, because its two answers can differ for a reason that is not in
-    the commit. v1.7.92 went red exactly that way.
+def _script_with(tmp_path, body: str):
+    p = tmp_path / "gates.sh"
+    p.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+    return p
 
-    Stated as a PROPERTY of the command, not as an expected list of labels — a
-    hand-maintained roster here would be the second list this repo keeps
-    removing, and it would not notice a NEW remote-reaching gate. This is what
-    makes the exclusion by rule rather than by luck.
 
-    A first version only checked "every exclusion states a reason", which
-    passes over a script with no exclusions at all — the vacuous shape this
-    module exists to refuse.
+def test_539_the_exclusion_rule_BITES_on_a_remote_reaching_gate(tmp_path):
+    """#539's rule, proved on a fixture that CONTAINS the thing it is about.
+
+    A gate that requires a REMOTE cannot sit inside a two-invocation determinism
+    comparison: its two answers can differ for a reason that is not in the
+    commit, which is how v1.7.92 went red on a gate whose code is perfectly
+    host-independent and green on the identical commit when re-run.
+
+    This half is the NON-VACUITY PROOF for the half below, and it is why the two
+    are separate now. They used to be one test that asserted the real script
+    still CONTAINED a `--require-remote` gate, so the rule was only ever
+    exercised while such a gate happened to exist. When the last one was deleted
+    — `sync_image_version --report-upstream --require-remote` went with the image
+    anchor it reported on — that test failed for the one reason a rule-checker
+    must not: its subject was gone, not broken. A rule whose only exerciser is
+    the tree it polices is a rule that stops being checked the moment the tree
+    gets cleaner.
+    """
+    undeclared = _script_with(tmp_path, (
+        'run "reaches a registry" "$ROOT" python3 x.py --require-remote\n'))
+    gates = G.corpus_gates(undeclared)
+    assert [g for g in gates if "--require-remote" in g.cmd], gates
+    assert all(g.excluded is None for g in gates), (
+        "the parser reported an exclusion nobody declared, so the real-script "
+        "assertion below could pass on an unexcluded remote gate")
+
+    declared = _script_with(tmp_path, (
+        "# host-independence: EXCLUDE — resolves a tag on a remote registry, so "
+        "two invocations can differ for a reason that is not in the commit\n"
+        'run "reaches a registry" "$ROOT" python3 x.py --require-remote\n'))
+    gates = G.corpus_gates(declared)
+    assert gates and gates[0].excluded, gates
+    assert len(gates[0].excluded) > 20, gates[0]
+
+
+def test_539_every_remote_reaching_gate_in_the_real_script_is_EXCLUDED():
+    """The same rule over the REAL script. Stated as a PROPERTY of the command,
+    never as an expected list of labels — a hand-maintained roster here would be
+    the second list this repo keeps removing, and it would not notice a NEW
+    remote-reaching gate.
+
+    ZERO is currently the true count, and it is PRINTED rather than passed over:
+    "there are none" and "I did not look" must not read the same. The rule itself
+    is proved to bite by the fixture test above, so an empty set here is a fact
+    about the script and not a hole in the check.
     """
     gates = G.corpus_gates(_REPO / "tools" / "ci" / "repo_hygiene_gates.sh")
+    assert gates, "the real script parsed to no gates at all — nothing was read"
     remote = [g for g in gates if "--require-remote" in g.cmd]
-    assert remote, ("no remote-reaching gate found in the real script — this "
-                    "assertion would otherwise pass over nothing")
+    print(f"host-independence: {len(remote)} remote-reaching gate(s) of "
+          f"{len(gates)} in repo_hygiene_gates.sh")
     for g in remote:
         assert g.excluded is not None, (
             f"{g.label} reaches a remote and is still probed twice", g)
