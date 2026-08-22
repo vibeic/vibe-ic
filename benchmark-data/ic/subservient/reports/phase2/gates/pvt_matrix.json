@@ -1,7 +1,0 @@
-{
-  "program": "pvt_matrix_check",
-  "version": "1.0.0",
-  "verdict": "FAIL",
-  "corner_count": 0,
-  "reason": "corners is empty/missing — an empty list is not a PVT matrix (#442); discover >=2 Liberty corners or document single-corner explicitly"
-}
