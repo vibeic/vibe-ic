@@ -201,6 +201,43 @@ branches. Of the fifteen still on the remote:
     a landing that takes the branch but not its last few commits takes the work
     and leaves the corrections.
 
+AND THE REPO HAS NO GATE FOR IT, WHICH I CHECKED RATHER THAN ASSUMED. I said
+in passing that no gate can detect this. That is a claim about a repository that
+gates its own process heavily, so it needed testing. It holds, and the gap is
+exact:
+
+    gatekeeper_stale_branch_check.py  EXISTS and is the MIRROR of this. Its
+        predicate is `merge-base(base, head) == base tip` — is the BRANCH
+        current with respect to MAIN — and it runs at REVIEW time. It was
+        written for PRs #246/#247, where a branch cut from an old base would
+        phantom-revert main's newer work. It guards the landing REMOVING main's
+        work.
+    landing_collateral_revert_check.py  EXISTS and guards a squash reverting
+        work landed BESIDE it in the same push (five stacked PRs, 2026-08-03).
+
+    Neither asks the question this finding turns on, which is the other
+    direction entirely:
+
+        DOES MAIN NOW CONTAIN THE BRANCH'S TIP?
+        merge-base(main, branch) == branch tip
+
+    One predicate, the mirror of a predicate the repository already trusts
+    enough to have fossilized. `git merge-base --is-ancestor <branch> main` is
+    the whole implementation.
+
+    ITS DRY RUN, on the landing that prompted it: 4 branches PASS, 10 FAIL with
+    60 commits between them, and 1 (fix/routed-def-corpus-adjudication) needs the
+    0-ahead case handled — not an ancestor, but nothing ahead, because main holds
+    the same content under a different commit. So the rule needs "not an ancestor
+    AND commits ahead > 0", and that third case is exactly the kind of exemption
+    this repository asks a rule to state rather than discover later.
+
+    WHY NO EXISTING GATE COULD HAVE CAUGHT IT, stated as the reason rather than
+    the observation: the five commits I traced in full are ALL test-hardening.
+    They add no rule and change no verdict, so the wired suite is green with them
+    and green without them. They ARE the detection, which is precisely why their
+    absence cannot be detected by running the detectors.
+
 ALL 32 ON THE LANDED MAIN: rc0 = 26, rc1 = 5, rc2 = 1 (the branch tips were
 25 / 6 / 1), and the single difference is that regression, not an improvement.
 The five that are red:
