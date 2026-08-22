@@ -1190,3 +1190,21 @@ proven against history, ten against constructed input.
 
 `pytest_aggregate...` returning 2 on both arms is the rc contract working — a bare
 tree has no aggregate to read, and it says so rather than passing.
+
+### Does the real-history control survive landing? Yes — checked, not assumed
+
+An A/B against `main` is a wasting asset: the moment this branch lands, both
+main-side defects are fixed and the control that proved the gates evaporates. So the
+question is whether the fixtures preserve the shapes independently.
+
+They do, and both were already there:
+
+    prepared_checkout   test_uninspected_checkout_goes_red      (the main-side shape)
+                        test_inspected_checkout_passes          (its paired green)
+    provenance          test_a_typed_source_beside_a_resolved_subject_goes_red
+                        test_the_antenna_emitter_no_longer_types_its_source
+                                                                (revert-proof anchored
+                                                                 on the real repo file)
+
+Nothing to add. Worth stating anyway, because "the A/B proved it" and "the proof is
+still there after landing" are different claims, and only the second one is durable.
