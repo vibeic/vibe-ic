@@ -51,7 +51,7 @@ def _run_engine(src: Path, out_dir: Path):
     return subprocess.run(
         [sys.executable, "-m", "phase1_engine.cli", "run-all",
          str(src), str(out_dir), "--ic-name", "pulse_div"],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=60,
         cwd=str(repo_root), env=env)
 
 
@@ -95,7 +95,7 @@ def test_runner_prompt_mode_emits_flat_and_precheck_passes(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
          str(proj), "--ic-name", "pulse_div"],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
     gd = proj / "phase1" / "generated_docs"
     n = len(list(gd.glob("L*.json")))
@@ -106,7 +106,7 @@ def test_runner_prompt_mode_emits_flat_and_precheck_passes(tmp_path):
     r2 = subprocess.run(
         [sys.executable, str(PROGRAMS / "design_one_shot_runner.py"),
          str(proj), "--dry-run"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     assert f"{n}/13 L docs present" in r2.stdout, r2.stdout + r2.stderr
 
 
@@ -121,7 +121,7 @@ def test_precheck_names_nested_path_explicitly(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "design_one_shot_runner.py"),
          str(proj)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 1
     rpt = json.loads(
         (proj / "reports" / "orchestrator" / "phase2_one_shot.json").read_text())

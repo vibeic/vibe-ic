@@ -85,3 +85,60 @@ def test_sequential_golden_skipped():
     # a clocked golden is out of the combinational K-map class -> never floors.
     gold = "module RefModule(input clk,input a,input b,input c,output reg out);\n always @(posedge clk) out<=a&b&c;\nendmodule\n"
     assert S.semantic_floor_evidence(KMAP_OR, gold) is None
+
+
+# --- the CLI layer, which nothing above reached
+
+def _mod():
+    import semantic_spec_floor_check as M
+    return M
+
+
+def test_a_semantic_floor_exits_3(tmp_path, monkeypatch):
+    """The exit code is the gate; the six tests above only read the evidence.
+
+    They all drive `semantic_floor_evidence()` and assert on its reason string,
+    so the reason -> exit-code mapping was never measured. The flow reads the
+    exit code. `gate_cli_mutation_probe` neutered the CLI and all six stayed
+    green, which is the definition of a gate that has stopped gating.
+
+    And 3 is not an arbitrary number here: a semantic FLOOR is "this problem is
+    not solvable from the prompt", which the harness treats differently from an
+    ordinary failure. Collapsing it to 1 would silently reclassify every floor
+    as a defect, so the literal value is pinned.
+    """
+    M = _mod()
+    p, r = tmp_path / "p.txt", tmp_path / "r.v"
+    p.write_text("do the thing")
+    r.write_text("module m; endmodule")
+    monkeypatch.setattr(M, "semantic_floor_evidence",
+                        lambda prompt, ref, timeout: "prompt states no width")
+    assert M.main(["--prompt", str(p), "--ref", str(r)]) == 3
+
+
+def test_no_floor_exits_0(tmp_path, monkeypatch):
+    """…or the test above is satisfied by a gate that always returns 3."""
+    M = _mod()
+    p, r = tmp_path / "p.txt", tmp_path / "r.v"
+    p.write_text("an 8-bit adder")
+    r.write_text("module m; endmodule")
+    monkeypatch.setattr(M, "semantic_floor_evidence",
+                        lambda prompt, ref, timeout: None)
+    assert M.main(["--prompt", str(p), "--ref", str(r)]) == 0
+
+
+def test_the_reason_reaches_the_json_report(tmp_path, monkeypatch):
+    """The exit code says THAT; the report says WHY, and the campaign ledger
+    reads the report. A gate that exits 3 with an empty reason cannot be
+    triaged."""
+    import json
+    M = _mod()
+    p, r, j = tmp_path / "p.txt", tmp_path / "r.v", tmp_path / "out.json"
+    p.write_text("x")
+    r.write_text("y")
+    monkeypatch.setattr(M, "semantic_floor_evidence",
+                        lambda prompt, ref, timeout: "no polynomial stated")
+    assert M.main(["--prompt", str(p), "--ref", str(r), "--json", str(j)]) == 3
+    d = json.loads(j.read_text())
+    assert d["semantic_floor"] is True
+    assert d["reason"] == "no polynomial stated"

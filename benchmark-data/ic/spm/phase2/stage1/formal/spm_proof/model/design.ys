@@ -1,9 +1,0 @@
-# running in spm_proof/src/
-read_verilog -sv spm.v
-read_verilog -sv spm_formal.sv
-prep -top spm_formal
-
-hierarchy -smtcheck
-rename -witness
-write_jny -no-connections ../model/design.json
-write_rtlil ../model/design.il

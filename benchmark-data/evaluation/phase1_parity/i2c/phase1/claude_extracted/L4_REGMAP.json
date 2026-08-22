@@ -1,5 +1,0 @@
-{
-  "ic_name": "I2C-bus (UM10204)",
-  "register_map_present": false,
-  "notes": "I2C is a wire-level protocol specification, not a peripheral block guide. There is no architectural register map at the protocol layer. Concrete I2C-controller IP blocks define their own register file (typically: address register, data register, status/interrupt register, control register, baud rate register) at the SoC integration level — covered by individual block guides, not by UM10204."
-}

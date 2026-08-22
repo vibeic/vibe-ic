@@ -93,6 +93,15 @@ def _build_constraints(l3: dict) -> Dict[str, List[dict]]:
        evidence: free string}
     """
     out: Dict[str, List[dict]] = {}
+    # A pre_wake_false constraint asserts a WAKE-PULSE / command-response
+    # protocol. When the L3 records `opcode_synthesis_skipped_reason` (no
+    # half-duplex, no command-table heading), the opcodes came SOLELY from an
+    # HDL `typedef enum` harvest (the design's own ISA table, not a wire
+    # command set) and there is no wake protocol -- so a pre-wake negative
+    # test must NOT be required. Symmetric with gen_l10_test_cases, keyed on
+    # the same L3 signal. chip-AGNOSTIC: a real command-driven IC has no skip
+    # reason and still requires (and still fails without) the pre-wake test.
+    _no_wake_protocol = bool(l3.get("opcode_synthesis_skipped_reason"))
     for op in l3.get("opcodes", []):
         if not isinstance(op, dict):
             continue
@@ -125,7 +134,7 @@ def _build_constraints(l3: dict) -> Dict[str, List[dict]]:
                     cs.append({"kind": kind, "bound": v,
                                "evidence": f"L3.{f}"})
         # pre_wake_allowed=false
-        if op.get("pre_wake_allowed") is False:
+        if op.get("pre_wake_allowed") is False and not _no_wake_protocol:
             cs.append({"kind": "pre_wake_false", "bound": None,
                        "evidence": "L3.pre_wake_allowed"})
         # happy_path / response_payload_template
