@@ -331,3 +331,28 @@ def test_the_live_polynomial_beside_a_retired_one_is_taken():
 def test_a_plainly_stated_polynomial_is_still_read():
     """The control arm: a fix that read nothing would pass the rest."""
     assert _poly("The CRC polynomial is 0x04C11DB7.") == (0x04C11DB7, 32)
+
+
+def test_a_retired_init_value_is_not_read_as_stated():
+    """The polynomial was guarded first and its siblings were not -- two readers
+    of one document disagreeing about a denial, in one file."""
+    import crc_synth as M
+    assert M._parse_init("The init value 0xFFFFFFFF is no longer used.\n"
+                         "Use init = 0x0000.") == 0
+
+
+def test_a_retired_reflect_setting_is_not_read_as_stated():
+    import crc_synth as M
+    assert M._parse_reflect_xor(
+        "reflect_in = true is no longer used.\n"
+        "reflect_in = false and reflect_out = false, xor_out = 0."
+    ) == (False, False, 0)
+
+
+def test_the_plainly_stated_convention_is_still_read():
+    """The control arm for both siblings."""
+    import crc_synth as M
+    assert M._parse_init("init = 0xFFFFFFFF") == 0xFFFFFFFF
+    assert M._parse_reflect_xor(
+        "reflect_in = true and reflect_out = true, xor_out = 0xFFFFFFFF."
+    ) == (True, True, 0xFFFFFFFF)
