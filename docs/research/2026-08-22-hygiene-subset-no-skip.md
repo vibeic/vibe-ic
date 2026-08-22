@@ -3888,3 +3888,88 @@ themselves**, which is the same shape as §33 and §39 (a selector gap and a
 disclosure gap, each harmless-looking alone) and as the fixture and the script
 in §53. The composition is where the failure lives, and nothing in a document
 checks that its own sections agree about what a reader should do.
+
+## 57. The 16 red lander tests are fixed — on a different branch, because the defect is not on this one
+
+§44 recorded 16 red tests in `tools/test_gatekeeper_land_differential.py`, identical
+on the merged tree and on clean `main`, and left them as an owner item. They are now
+closed. The work is **not** on this branch and could not be: `d5646372f` — the commit
+that introduces the defect — is not an ancestor of this branch's head, so the file it
+breaks is 22/22 green here and the red is unreproducible. Measuring against the right
+reference meant branching off `main`:
+
+    fix/jland67-differential-fixture-lacks-wired-gates    (off a4caccefea)
+
+**The defect.** `d5646372f` wired three gates into `tools/gatekeeper-land-differential.sh`
+— `landing_noop_verdict_check`, `attestation_preflight_check`,
+`generated_test_list_min_guard` — and did not add them to the synthetic repo the tests
+build. The driver then died before any arm started:
+
+    python3: can't open file '.../programs/landing_noop_verdict_check.py'
+
+Sixteen tests, every one of them naming a **path** rather than a property, and none of
+them naming the commit that caused it. The 12 that pass are the 12 that never drive the
+script.
+
+**The fix is the fixture, not the wiring.** The three gates close real holes and the
+commit that added them is right. What was missing is that a fixture has to carry every
+program the thing it drives invokes. So the **real** programs are copied in, with the two
+sibling helpers all three import — not stubbed to succeed. A pass-stub would have turned
+16 reds green while leaving the wiring untested, which is the shape this whole document
+is about.
+
+**And then the refusal MOVED rather than cleared** — the finding worth keeping:
+
+    before          python3: can't open file '.../landing_noop_verdict_check.py'
+    after the copy  the selector's own smoke floor could not be derived, so the
+                    selection has no denominator to be judged against
+
+    16 failed both times.
+
+The driver does not only *execute* the selector, it *imports* it and counts how many of
+`SMOKE_BASENAMES` resolve against the candidate tree; that count is the selection floor.
+The fixture's selector was `print(SELECTED)` — no such attribute, and a module-level
+print that lands on the floor computation's own stdout. Had I been reading the count I
+would have concluded the copy did nothing. **The count was identical and the cause had
+changed completely**, which is [[compare-signatures-not-counts]] arriving in the middle
+of its own document.
+
+Final: **16 failed / 12 passed → 30 passed** (28 existing plus the two guards below).
+
+**Two guards, both red without the fix, both under a tenth of a second** against the
+17 s a driver run costs:
+
+* every program the driver invokes is present in the synthetic repo — RED naming all
+  three missing programs by name;
+* the stub selector answers the *import*, silently, with a floor ≥ 1 — RED with
+  `AttributeError: module 'ci_targeted_test_select' has no attribute 'SMOKE_BASENAMES'`.
+
+The first derives its expectation by parsing the driver, so it asserts that parse is
+non-empty before trusting it, and I drove that by pointing the pattern at a path that
+cannot occur: `the parse found []`. A derived requirement that derives nothing is
+satisfied by every tree.
+
+**Why nobody saw it:** this file lives at the repo root under `tools/`, which the
+targeted selector is plugin-scoped by construction and cannot select. Only
+`gatekeeper-land.sh`'s repo-tools lane runs it — the same blind spot recorded in
+[[repo-root-tools-tests-are-outside-every-selection]].
+
+### The mistake I made proving it, which is the eleventh instance of an old one
+
+Driving the three mutations, I restored the file between them with
+`git checkout -q -- $F` — while the guards I was driving were **written but not yet
+committed**. The restore took the file back to `HEAD`, which had the fixture fix and not
+the guards. Mutation A ran against the real guards and went correctly red. Mutations B
+and C ran against a file that no longer contained the tests, and pytest said:
+
+    28 deselected in 0.04s
+
+Exit 0, no failure, no error. It reads as *the mutation was harmless*. It means *the test
+you are driving is gone*, because `-k` matching nothing is not an error. The only thing
+on screen that distinguished the two was `29 deselected` in the working case versus
+`28 deselected` in the broken one.
+
+Three habits would each have caught it, and I had skipped all three: commit before you
+mutate; assert the mutation **applied** (`assert n != s`); assert the target was
+**collected** (`--collect-only -k <expr> | grep -c '::'` ≥ 1). All three are in the
+re-run, which is why B and C are trustworthy now.
