@@ -38,6 +38,25 @@ OTHERWISE. It claims the artefact cannot tell the two apart, and that a
 constant must therefore be published as NOT MEASURED UNDER THIS LEVER rather
 than as a measured invariance.
 
+THE POWER AXIS IS ALREADY KNOWN TO THIS LANE, AND SAYING SO MATTERS.
+`ppa-e2e/records/summary.json` records it explicitly:
+
+    "power_invariance": {"n": 60, "distinct_values": 1,
+                         "values": {"0.000306": 60},
+                         "baseline": 0.000306,
+                         "diagnostic_postroute": 0.000573}
+
+So this gate does NOT discover the power constant — the lane measured it,
+named it, and published both numbers beside each other. What the gate adds is
+that the same question is now asked of every axis by RULE rather than by a
+hand-written diagnostic for the one axis somebody suspected: six of the seven
+constants it reports have no such entry in `summary.json`, and nothing was
+asking about them.
+
+That the lane had to write `power_invariance` by hand is the rule's own
+argument. A constant is not self-evidently a defect or self-evidently fine;
+somebody has to look, and a rule looks every time.
+
 ONE OF THE SEVEN IS CORROBORATED FROM A SECOND, INDEPENDENT CAPTURE.
 `power.total_w = 0.000306 W` is 0.306 mW — the exact figure the chip capture's
 `declared_basis_matches_the_session_inputs` record names as a PRE-LAYOUT
