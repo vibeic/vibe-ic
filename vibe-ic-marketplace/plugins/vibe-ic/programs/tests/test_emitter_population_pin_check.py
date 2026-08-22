@@ -2151,6 +2151,20 @@ def test_the_verdict_is_byte_identical_across_runs(tmp_path):
         '        "  if {[catch {x}]} { incr _b }\\n"\n'
         '        "  if {[catch {y}]} { incr _b }\\n"\n'
         '        "  if {$_b >= 2} { puts B }\\n")\n', encoding="utf-8")
+    # TWO undecodable sources. `substituted` is a report list like the others
+    # and it was added FOUR commits after this fixture was written, so until now
+    # it was the one list this test could not have caught reordering in -- the
+    # rule above, unapplied to the newest list.
+    (progs / "cc_bytes.py").write_bytes(
+        b'def s():\n    return "  incr _c \xff\xfe\\n"\n')
+    (progs / "dd_bytes.py").write_bytes(
+        b'def s():\n    return "  incr _d \xff\xfe\\n"\n')
+    # THREE, not two, for the reason `unparsed` carries three: measured, a
+    # set-built two-entry list survived one attempt in three by luck. n entries
+    # give at most n! orderings, and two of them agreeing across three runs is
+    # not a rare accident.
+    (progs / "ee_bytes.py").write_bytes(
+        b'def s():\n    return "  incr _e \xff\xfe\\n"\n')
     (tests / "test_aa_denial.py").write_text(
         'from aa_denial import s\n\n\ndef test_p():\n'
         '    assert "of 2 repairs refused" in s()\n', encoding="utf-8")
@@ -2167,10 +2181,13 @@ def test_the_verdict_is_byte_identical_across_runs(tmp_path):
 
     # and the run really did populate every list that could reorder
     doc = json.loads((tmp_path / "r0.json").read_text())
-    for key in ("denied_by_polarity", "not_determined", "unparsed"):
-        assert len(doc[key]) >= 2, (
-            f"{key} holds {len(doc[key])} entry -- a list of one cannot REORDER, "
-            f"so this fixture cannot detect the defect the test exists for")
+    for key in ("denied_by_polarity", "not_determined", "unparsed",
+                "substituted"):
+        floor = 3 if key in ("unparsed", "substituted") else 2
+        assert len(doc[key]) >= floor, (
+            f"{key} holds {len(doc[key])} entry, below the floor of {floor} "
+            f"-- too few orderings for three runs to disagree reliably, so this "
+            f"fixture cannot detect the defect the test exists for")
     # `unparsed` carries THREE, not two, because the control's strength depends
     # on it. n entries give at most n! orderings, so three runs agreeing by luck
     # costs (1/n!)^2 -- 1/4 at two entries. MEASURED rather than trusted, by
