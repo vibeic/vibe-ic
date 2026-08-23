@@ -11,6 +11,7 @@ arms differ by exactly the field under test and naming that field in the test
 name is the documentation.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -235,14 +236,14 @@ def test_a_list_only_record_is_vacuous():
 # ---------------------------------------------------------------------------
 # The CLI — exit codes, driven as a subprocess so the real argv path runs
 # ---------------------------------------------------------------------------
-def _cli(tmp_path, record, ledger_rows, name="r"):
+def _cli(tmp_path, record, ledger_rows, name="r", repo=ROOT):
     rec = tmp_path / f"{name}.json"
     rec.write_text(json.dumps(record))
     led = tmp_path / f"{name}_ledger.json"
     led.write_text(json.dumps({"acknowledged": ledger_rows}))
     return subprocess.run(
         [sys.executable, str(PROG), "--record", str(rec), "--ledger", str(led),
-         "--repo", str(ROOT)], capture_output=True, text=True, timeout=60)
+         "--repo", str(repo)], capture_output=True, text=True, timeout=60)
 
 
 def test_cli_exits_0_when_every_red_is_new(tmp_path):
@@ -267,40 +268,51 @@ def test_cli_exits_2_and_announces_vacuous_on_an_empty_record(tmp_path):
     assert "[VACUOUS]" in res.stdout
 
 
-def _real(rev="HEAD~5"):
-    """A real commit of this repository AND its real date, or (None, None).
+def _real_history(tmp_path):
+    """A real seven-commit clock whose dates the fixture, not its host, owns.
 
-    Both are needed together. A row carrying the stub `DATE` against a real
-    `since` is a `misdated` finding — the row and its own anchor disagreeing —
-    which is the cross-check doing its job and not the clause under test in
-    either arm below.
+    The landing verifier intentionally materializes a deterministic squash
+    commit dated at the epoch.  Reading this test's surrounding checkout made
+    the candidate clock run backwards while the base clock ran forwards, so an
+    unchanged gate looked like a candidate-only red.  A private real Git
+    history still exercises the subprocess and date-reading path, without
+    letting the verifier's transport commit redefine the stimulus.
     """
-    sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", rev],
-                         capture_output=True, text=True).stdout.strip()
-    if not sha:
-        return None, None
-    return sha, G.git_commit_date(ROOT)(sha)
+    repo = tmp_path / "real-history"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                   check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email",
+                    "test@example.invalid"], check=True)
+    for day in range(1, 8):
+        (repo / "clock").write_text(f"{day}\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "clock"], check=True)
+        stamp = f"2026-01-{day:02d}T00:00:00+00:00"
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", f"day {day}"],
+            check=True, env={**os.environ, "GIT_AUTHOR_DATE": stamp,
+                             "GIT_COMMITTER_DATE": stamp})
+    anchor = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD~5"], check=True,
+        capture_output=True, text=True).stdout.strip()
+    return repo, anchor, G.git_commit_date(repo)(anchor)
 
 
 def test_cli_exits_1_on_an_expired_row_against_real_git_history(tmp_path):
     """The one case that uses the REAL clock rather than an injected one, so a
     broken `git_age_days` cannot hide behind the pure-function tests above."""
-    head, when = _real()
-    if not head:
-        pytest.skip("shallow history")
+    repo, head, when = _real_history(tmp_path)
     res = _cli(tmp_path, _record(("a gate", "FAIL")),
-               [_row(since=head, since_date=when, max_days=0)])
+               [_row(since=head, since_date=when, max_days=0)], repo=repo)
     assert res.returncode == 1, res.stdout + res.stderr
     assert "expired" in res.stdout
 
 
 def test_cli_exits_0_for_the_same_history_inside_the_bound(tmp_path):
-    head, when = _real()
-    if not head:
-        pytest.skip("shallow history")
+    repo, head, when = _real_history(tmp_path)
     res = _cli(tmp_path, _record(("a gate", "FAIL")),
                [_row(since=head, since_date=when,
-                     max_days=G.MAX_BOUND_DAYS)])
+                     max_days=G.MAX_BOUND_DAYS)], repo=repo)
     assert res.returncode == 0, res.stdout + res.stderr
 
 
