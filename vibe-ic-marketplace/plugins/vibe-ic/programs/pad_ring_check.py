@@ -3,15 +3,13 @@
 artefacts, the ring is checked for ABUTMENT, and a skip must name what it
 skipped over.
 
-ENFORCEMENT: advisory here — this gate is not in
-``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
-it inline at all. It runs when ``flow_compliance_check`` evaluates step 15.5ic's
-``program_exit_zero`` clause, so its rc IS that step's verdict — "advisory"
-names the RUNNER channel it is absent from, not a verdict this gate cannot
-reach. Declared because vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
-enforcement decision nobody made; wiring it into the runner would change what a
-real run blocks on, which is the flow owner's call and is recorded, not taken
-here. Kept in the first 4 kB: `declared_intent` reads only `text[:4000]`.
+ENFORCEMENT: blocking — ``phase3_one_shot_runner.step_pad_ring_gen`` invokes
+this independent checker inline before routing. Any nonzero rc makes that step
+non-PASS; ``_prepare_padring_for_route`` then returns no routing consumer and
+the PnR step fails with ``PADRING_PREROUTE_BLOCKED``. Canonical step 15.5ic
+also consumes the same rc through a blocking ``program_exit_zero`` clause.
+This token names the measured runner/flow control path, not finding severity.
+Kept in the first 4 kB because ``declared_intent`` reads only ``text[:4000]``.
 
 WHAT THIS REFUSES
 =================

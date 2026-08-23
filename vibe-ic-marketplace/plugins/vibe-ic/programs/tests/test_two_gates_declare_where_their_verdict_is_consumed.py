@@ -16,25 +16,18 @@ It is the same class `test_issue1035_five_gates_declare_where_they_are_enforced`
 closed for five gates and `test_macro_obs_gate_enforcement_declared` for two
 more, hit by two that landed since.
 
-WHAT THE LABEL DOES NOT BUY. Both gates now read `ENFORCEMENT: advisory`, and
-that token on its own is worth nothing: `advisory` with no reason is the state
-the audit is complaining about with a label on it. So this file does NOT stop at
-"the declaration exists". Each declaration names a CONCRETE precondition that
-must change before the gate can be wired inline, and the tests below RE-MEASURE
-those preconditions on every run:
+WHAT THE LABEL DOES NOT BUY. A declaration token on its own is worth nothing:
+the tests below re-measure the wiring and verdict it describes rather than
+stopping at "the declaration exists". Both gates were later promoted to real
+inline blockers, so both declarations now say `blocking`:
 
   * `area_total_vs_budget_check` — the flow's only producer of the area figure,
     `synth_area_stats_emit`, declines to name the figure's unit, so through the
     flow this gate can reach ONLY rc 2 INCOMPLETE. An inline wiring would put a
     control-flow decision on an rc 1 no run can arrive at.
-  * `tapeout_docs_gen` — it takes `--project` and emits HTML, so
-    `phase3_one_shot_runner._run_declared_signoff_gate`, which invokes every
-    entry as `<prog> <project> ... --json <out>`, structurally cannot call it.
-
-If either precondition stops holding — someone teaches the stats emitter the
-Liberty's unit, or gives the document generator a verdict artefact and the
-table's call shape — the test that measures it goes RED and the declaration has
-to be re-decided rather than quietly outliving its reason.
+  * `tapeout_docs_gen` — Batch73 added a dedicated producer dispatch and
+    canonical step 37.5ic consumes its rc in a blocking `program_exit_zero`
+    slot. The producer row and the gate clause are separately measured below.
 
 AND THE THIRD ANSWER, CONSIDERED AND REFUTED BY MEASUREMENT. `tapeout_docs_gen`
 reads like a generator, and "a generator does not belong in the gate population"
@@ -54,7 +47,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
-import re
 import subprocess
 import sys
 import textwrap
@@ -68,17 +60,22 @@ _FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 _BASELINE = _PROGRAMS / "flow_gate_enforcement_baseline.json"
 _AUDIT = _PROGRAMS / "flow_gate_enforcement_audit.py"
 
-#: (gate, flow step it guards, the slot it is wired in). The slot is DATA, not a
-#: constant: `advisory` answers the RUNNER axis and must never be quoted as
-#: licence to move either clause out of the flow's blocking slot.
 #: (gate, flow step, slot, DECLARED intent). The intent is DATA now, not a
 #: constant: `area_total_vs_budget_check` was declared `advisory` when this file
-#: was written and is `blocking` since its wiring landed, while
-#: `tapeout_docs_gen` is still `advisory`. Sharing one expected value hid that
-#: difference and would have let either drift onto the other's answer.
+#: was written and is `blocking` since its wiring landed; Batch73 made the same
+#: transition for `tapeout_docs_gen` through its dedicated step dispatcher.
 _GATES = (
     ("area_total_vs_budget_check", "9", "program_exit_zero", "blocking"),
-    ("tapeout_docs_gen", "37.5ic", "program_exit_zero", "advisory"),
+    ("tapeout_docs_gen", "37.5ic", "program_exit_zero", "blocking"),
+)
+
+#: Batch73's runner now consumes these three verdicts inline.  Keep this set
+#: explicit so the declaration correction cannot silently regress back into
+#: the audit's non-blocking disclosure class.
+_BATCH73_INLINE_BLOCKERS = (
+    "pad_assignment_gen",
+    "pad_ring_check",
+    "tapeout_docs_gen",
 )
 
 #: 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` enforces (the
@@ -143,20 +140,16 @@ def test_the_declaration_did_not_move_the_gate_between_flow_slots(
         gate, step, slot, _intent):
     """THE PAIRED HALF OF THE DECLARATION.
 
-    `advisory` answers "no runner spawns this inline". It is NOT a statement
-    that the finding may be ignored, and it must never be cited to move a clause
-    from `program_exit_zero` to `advisory_program_exit_zero`, where
-    `_evaluate_gate` records the finding and passes the step anyway. Both of
-    these sit in the blocking slot on a measured argument recorded at their flow
-    rows; if this declaration ever becomes the reason one of them moves, this
-    assertion is what fails."""
+    Both declarations describe runner wiring and both clauses remain in the
+    blocking slot. They must never be cited to move a clause from
+    `program_exit_zero` to `advisory_program_exit_zero`, where `_evaluate_gate`
+    records the finding and passes the step anyway."""
     mod = _audit_mod()
     slots = sorted({c["slot"] for c in mod.clauses_in_flow(_FLOW)
                     if c["gate"] == gate})
     assert slots == [slot], (
         f"{gate} (step {step}) is wired in {slots}, not [{slot!r}]; the "
-        f"`ENFORCEMENT: advisory` declaration answers a different axis and is "
-        f"not permission to move this clause")
+        f"declaration is not permission to move this clause")
 
 
 # ─────────────────────────────────────────────────── axis 3: end to end, rc 0
@@ -192,6 +185,25 @@ def test_the_audit_exits_zero_and_names_neither_gate(tmp_path):
         assert gate not in undeclared
         assert gate not in contradicting
         assert gate not in orphaned
+
+
+def test_batch73_inline_blockers_declare_the_wiring_they_already_have():
+    """Declaration-vs-wiring control for the three Batch73 promotions.
+
+    This reads the audit's semantic result, not source substrings.  It fails if
+    a runner/gate change demotes the real wiring, if a declaration drifts back
+    to advisory, or if the three re-enter ``declared_weaker_than_wired``.
+    """
+    rep = _audit_mod().audit(_FLOW, _PROGRAMS)
+    rows = {row["gate"]: row for row in rep["gates"]}
+    weaker = {row["gate"] for row in rep["declared_weaker_than_wired"]}
+    for gate in _BATCH73_INLINE_BLOCKERS:
+        row = rows[gate]
+        assert row["enforcement"] == "ENFORCED", row
+        assert row["wiring"] == "INLINE_BLOCKING", row
+        assert row["declared"] == "blocking", row
+        assert row["slots"] == ["program_exit_zero"], row
+        assert gate not in weaker, rep["declared_weaker_than_wired"]
 
 
 def test_the_recorded_register_did_not_grow_to_absorb_the_two():
@@ -626,54 +638,31 @@ def test_the_document_generator_carries_a_verdict_not_only_documents(tmp_path):
     assert "NOT RELEASABLE" in (bad.stderr or ""), bad.stderr[-1000:]
 
 
-def test_the_inline_signoff_table_still_cannot_call_the_document_generator():
-    """PRECONDITION 1 of `tapeout_docs_gen`'s `advisory` declaration.
-
-    `_run_declared_signoff_gate` invokes every entry of
-    `_DECLARED_SIGNOFF_GATES` as `<prog> <project> [extra argv] --json <out>`.
-    This program takes `--project`, has no positional and no `--json`, so it
-    cannot be an entry in that table until it emits a verdict artefact and
-    accepts that call shape. MEASURED by handing it the call shape.
-    """
-    cp = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "tapeout_docs_gen.py"),
-         "/nonexistent/project", "--json", "/nonexistent/out.json",
-         "--out-dir", "/nonexistent/docs"],
-        capture_output=True, text=True, timeout=_TIMEOUT)
-    assert cp.returncode == 2 and "unrecognized arguments" in cp.stderr, (
-        f"tapeout_docs_gen now accepts the inline sign-off table's call shape "
-        f"(rc={cp.returncode}). The structural half of its `ENFORCEMENT: "
-        f"advisory` reason no longer holds — only the blast-radius half is "
-        f"left, and the declaration has to be re-decided.\n"
-        f"{cp.stdout[-800:]}\n{cp.stderr[-800:]}")
-
-
-def test_the_call_shape_that_precondition_is_written_against_is_still_the_one():
-    """The other end of the same precondition, read from the runner's own AST.
-
-    Anchored on the FUNCTION, never on a line number: a line-anchored citation
-    rots silently the first time anything above it moves.
-    """
+def test_the_runner_dispatches_the_document_generator_on_canonical_37_5ic():
+    """Measure the dedicated producer path that made the declaration blocking."""
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     tree = ast.parse(src)
     fn = next((n for n in ast.walk(tree)
                if isinstance(n, ast.FunctionDef)
-               and n.name == "_run_declared_signoff_gate"), None)
-    assert fn is not None, (
-        "phase3_one_shot_runner._run_declared_signoff_gate is gone; the "
-        "wiring tapeout_docs_gen's ENFORCEMENT block names no longer exists "
-        "and the promotion path must be re-derived")
+               and n.name == "step_tapeout_docs_gen"), None)
+    assert fn is not None, "phase3_one_shot_runner.step_tapeout_docs_gen is gone"
     body = ast.get_source_segment(src, fn) or ""
-    assert '"--json"' in body, (
-        "the inline sign-off wiring no longer passes `--json`, so the reason "
-        "tapeout_docs_gen cannot join it has changed")
-    table = re.search(r"_DECLARED_SIGNOFF_GATES\s*=\s*\((.*?)\n\)", src,
-                      re.DOTALL)
-    assert table, "_DECLARED_SIGNOFF_GATES is no longer a literal tuple"
-    assert "tapeout_docs_gen" not in table.group(1), (
-        "tapeout_docs_gen is now an entry in _DECLARED_SIGNOFF_GATES, i.e. it "
-        "IS wired inline — its declaration must say `blocking`, and the audit "
-        "will file `advisory` as a contradiction")
+    assert '"37.5ic"' in body, body[:1200]
+    assert '"tapeout_docs_gen.py"' in body, body[:1200]
+    assert "subprocess.run" in body and "returncode" in body, body[:1600]
+    assert "step_tapeout_docs_gen(project)" in src, (
+        "the dedicated function exists but the phase-3 plan no longer calls it")
+
+
+def test_canonical_37_5ic_consumes_the_document_verdict_in_a_blocking_slot():
+    """The producer dispatch does not replace the blocking flow verdict."""
+    mod = _audit_mod()
+    row = {r["gate"]: r for r in mod.audit(_FLOW, _PROGRAMS)["gates"]}[
+        "tapeout_docs_gen"]
+    assert row["enforcement"] == "ENFORCED", row
+    assert row["wiring"] == "INLINE_BLOCKING", row
+    assert row["declared"] == "blocking", row
+    assert row["slots"] == ["program_exit_zero"], row
 
 
 # ═════════════════════════════════════════════════════════════ THE PAIRED GUARD
@@ -710,7 +699,8 @@ _FLOW_DOC = textwrap.dedent("""\
 
 def _synthetic(root: Path, gates: dict):
     """A synthetic plugin tree: every gate wired into the flow's BLOCKING slot
-    and NOTHING invoking any of them — the shape both real gates are in."""
+    and NOTHING invoking any of them — the shape the historical undeclared
+    finding and the remaining advisory control exercise."""
     progs = root / "programs"
     progs.mkdir(parents=True, exist_ok=True)
     for name, body in gates.items():
@@ -760,13 +750,11 @@ def test_the_control_a_declared_gate_beside_it_stays_green(tmp_path):
 
 def test_the_control_declaring_blocking_without_the_wiring_still_fails(
         tmp_path):
-    """WHY `advisory` IS THE HONEST TOKEN AND NOT THE CONVENIENT ONE.
+    """A blocking flow slot alone is not proof of inline runner wiring.
 
-    Both real gates sit in the flow's BLOCKING slot, so `ENFORCEMENT: blocking`
-    is a tempting thing to write in them. It would be a DIFFERENT claim — that a
-    runner can stop the step — and the audit files it as a `contradiction::`,
-    which fails just as hard and in a register whose debt is paid down
-    differently. This control proves that branch is live."""
+    A gate that nothing invokes cannot honestly claim blocking merely because
+    its flow clause uses a blocking slot. The audit files that as a
+    `contradiction::`; this control proves that branch remains live."""
     mod = _audit_mod()
     flow, progs = _synthetic(tmp_path / "t", {
         "overclaiming_check": _DECLARING_BLOCKING})
