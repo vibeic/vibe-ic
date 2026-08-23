@@ -6,7 +6,7 @@ The plugin is no longer "compliance regexes over agent prose". It is **1281 top-
 programs** (1204 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
 77 are helper modules and shims) that run the flow, **60 skills** that back the programs up
 where judgment is genuinely required, **6 slash commands**, **9 agents**, and
-**2834 test files**. Programs decide; skills only fill the holes the programs
+**2835 test files**. Programs decide; skills only fill the holes the programs
 deliberately leave.
 
 ## ► The one front door
@@ -229,7 +229,7 @@ plugins/vibe-ic/
 │   ├── l_doc_taxonomy.py          — L1..L27 layer definitions
 │   ├── _commercial_pdk.py         — config-driven commercial-PDK resolution
 │   ├── gds_antenna/, metal_fill/  — sub-packages
-│   └── tests/                     — 2834 test files
+│   └── tests/                     — 2835 test files
 ├── skills/                        — 60 skills, each with SKILL.md + compliance.yaml
 │   └── <skill>/tests/             — 81 per-skill compliance regression files
 ├── commands/                      — 6 slash commands + _anti_fabrication_rules.md
@@ -243,7 +243,7 @@ plugins/vibe-ic/
 
 ## Test suite
 
-**2834 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+**2835 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
 under `skills/*/tests/`.
 
 Run it the CI way — a bare `pytest` from the plugin root, exactly as
