@@ -789,6 +789,30 @@ if (not stat.S_ISREG(sealed.st_mode) or sealed.st_nlink != 1
 PY
 }
 
+reattest_corpus_snapshot_against_arm_receipt() {
+  # $BENCHMARK_B2 is not a benchmark-data CHECKOUT. It is built by
+  # materialize_hermetic_git_subject -- `git init` over an object-exact tree --
+  # so it has no `origin` remote and benchmark_data_landing_checkout.py can
+  # only ever answer "origin must be exactly ...; observed ['<missing or
+  # unreadable>']". Re-attest it as what it IS: its tree digest must still
+  # equal the one the arm receipt already bound, which is the same digest
+  # compare_hermetic_shared_inputs reads. Measured: a mutated byte and an added
+  # file both change it; a perfect restore does not, which is also true of the
+  # checkout validator this replaces.
+  PYTHONDONTWRITEBYTECODE=1 python3 -B - "$RUNTIME_SNAPSHOT" "$1" "$2" <<'PY'
+import importlib.util, pathlib, sys
+runtime = pathlib.Path(sys.argv[1])
+path = runtime / "tools" / "ci" / "hermetic_candidate_runner.py"
+spec = importlib.util.spec_from_file_location("_trusted_corpus_reattest", path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+record = module.strict_load_receipt(pathlib.Path(sys.argv[3]))
+observed = module._tree_digest(pathlib.Path(sys.argv[2]), "corpus")
+raise SystemExit(0 if observed == record["inputs"]["corpus"] else 2)
+PY
+}
+
 build_trusted_transition_evidence() {
   rm -f "$TRUSTED_TRANSITION_EVIDENCE"
   run_owned_operational "$TRUSTED_REPO" \
@@ -803,7 +827,7 @@ build_trusted_transition_evidence() {
   # The independent receipts read B2 after its pre-arm validation.  Re-attest
   # those exact bytes now so a mutation during parent execution cannot be
   # cleaned up and laundered into the evidence file.
-  validate_benchmark_snapshot "$BENCHMARK_B2" \
+  reattest_corpus_snapshot_against_arm_receipt "$BENCHMARK_B2" "$B2_RECEIPT" \
     || die "benchmark-data B2 changed during trusted parent evidence execution"
 }
 
