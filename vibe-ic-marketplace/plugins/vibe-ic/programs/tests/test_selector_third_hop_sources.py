@@ -33,8 +33,8 @@ THE TWO HOPS THIS ADDS
    literal, resolved through the same rules a direct edit of those modules takes.
    Live-literal, not lexical: 66 source modules MENTION the flow yaml (537
    dependent tests) but only 23 can open it (159). The 43 that drop out cite it
-   in module docstrings — `phase3_one_shot_runner` at 214 dependents is the
-   expensive one, and it never reads the file.
+   in module docstrings — `design_one_shot_runner` has 138 import-edge
+   dependents on this tree, yet its mentions remain prose-only.
 
 2. `_LOADER_CALL_RE` — the loader edge keyed on the file LOADED, not the alias
    BOUND. `spec_from_file_location("fcc_i492_conv", … / "flow_compliance_check.py")`
@@ -155,25 +155,25 @@ def test_the_third_hop_finds_the_programs_that_can_open_the_flow():
 def test_the_third_hop_excludes_modules_that_only_CITE_the_flow():
     """The live-literal discriminator, which is what makes hop 3 affordable.
 
-    `phase3_one_shot_runner` names the yaml in prose only and carries 214
-    dependent tests. A lexical hop would select all of them for a change it
-    cannot observe. This is the assertion that keeps hop 3 from becoming the
-    blast radius #1176 warned about.
+    `design_one_shot_runner` names the yaml in prose only and carries 138
+    import-edge dependents on this tree. A lexical hop would select all of them
+    for a change it cannot observe. This is the assertion that keeps hop 3 from
+    becoming the blast radius #1176 warned about.
     """
-    src = (PLUGIN_ROOT / "programs" / "phase3_one_shot_runner.py").read_text(
+    src = (PLUGIN_ROOT / "programs" / "design_one_shot_runner.py").read_text(
         encoding="utf-8", errors="replace")
     pat = S._tool_ref_pattern(FLOW_KEY)
     assert pat.search(src), (
-        "phase3_one_shot_runner no longer mentions the flow yaml at all; this "
+        "design_one_shot_runner no longer mentions the flow yaml at all; this "
         "test's premise is stale — pick another prose-only citer or drop it")
     assert not S._names_key_as_live_literal(src, pat), (
-        "phase3_one_shot_runner now holds the flow path as a live literal. If "
+        "design_one_shot_runner now holds the flow path as a live literal. If "
         "that is deliberate the module really can open the flow and this test "
         "should be re-pointed; if not, the discriminator has broken open.")
 
     idx = S._build_key_source_index(
         PLUGIN_ROOT, {FLOW_KEY}, S._source_stems(PLUGIN_ROOT))
-    assert "phase3_one_shot_runner" not in idx.get(FLOW_KEY, set())
+    assert "design_one_shot_runner" not in idx.get(FLOW_KEY, set())
 
 
 def test_a_loader_edge_is_keyed_on_the_file_loaded_not_the_alias_bound():

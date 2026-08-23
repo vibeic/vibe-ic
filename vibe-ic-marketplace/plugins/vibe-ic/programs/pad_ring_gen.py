@@ -153,10 +153,11 @@ a rule id and a message inside `reports/phase3/padring.json` — see
 `_pad_ring`'s table of which of their exits became data.
 
 NOT PERFORMED HERE, and said in the artefact rather than left to be noticed:
-IO filler placement (upstream's chip flow inserts filler as its own later
-step; the gaps are recorded instead, and `fillers_placed` is null and never
-0), bond pads, and IO terminals. Each declared-but-unperformed variable is
-echoed into the report's `unperformed` block.
+bond pads and IO terminals. IO filler placement IS performed here because the
+canonical flow has no later IO-filler step: the later OpenROAD
+`filler_placement` inserts standard-cell row fillers, not PAD-class cells. A
+PASS therefore means the emitted DEF contains the declared filler instances
+and every adjacent ring cell actually touches.
 
 EXIT
     0  PASS — a pad ring was placed and written.
@@ -172,7 +173,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from math import gcd
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -306,15 +309,10 @@ ROTATION_VERTICAL_NOT_HONOURED: Dict[str, Any] = {
 }
 
 
-#: What this step declares it does NOT do. In the artefact rather than left
-#: for a reader to notice, and `fillers_placed` stays null rather than 0.
-UNPERFORMED: Dict[str, str] = {
-    "io_filler_placement": (
-        "not performed by this step — upstream's chip flow inserts filler as "
-        "its own later step; the per-gap sizes this ring needs are in "
-        "`abutment.gaps`. `fillers_placed` is null, never 0: an absent "
-        "placement is not a placement of none"),
-}
+#: Optional package operations this step still does not perform. IO filler
+#: placement is deliberately absent from this table: a PASS now materialises
+#: those cells in `padring.def` and records every instance.
+UNPERFORMED: Dict[str, str] = {}
 
 
 def _finding(severity: str, rule: str, message: str) -> Dict[str, str]:
@@ -341,6 +339,7 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
         "padring_def": None,
         "pads": [],
         "corners": [],
+        "fillers": [],
         "abutment": None,
         "fillers_declared": [],
         "fillers_placed": None,
@@ -577,21 +576,200 @@ def _abutment(die: PR.Def, pads: List[Dict[str, Any]],
             "unfillable": unfillable, "filler_widths_dbu": widths}
 
 
+def _filler_plan(gap: int, master_widths: Dict[str, int]
+                 ) -> Optional[List[str]]:
+    """Return a deterministic exact tiling of ``gap`` with PAD fillers.
+
+    The boolean coin-problem check is insufficient for a physical result: the
+    chosen cells must be named and emitted.  Dijkstra over residues modulo the
+    widest filler finds the smallest representable prefix for the target
+    residue; the remainder is filled with that widest master.  Runtime is
+    bounded by the reduced widest filler, not by die width.
+    """
+    if gap < 0:
+        return None
+    if gap == 0:
+        return []
+    by_width: Dict[int, str] = {}
+    for master, width in master_widths.items():
+        if width > 0 and width not in by_width:
+            by_width[width] = master
+    if not by_width:
+        return None
+    scale = 0
+    for width in by_width:
+        scale = gcd(scale, width)
+    if gap % scale:
+        return None
+    target = gap // scale
+    coins = sorted((width // scale, master)
+                   for width, master in by_width.items())
+    modulus, widest_master = coins[-1]
+    if modulus == 1:
+        return [widest_master] * target
+
+    import heapq
+    infinity = target + modulus * modulus + 1
+    dist = [infinity] * modulus
+    prev: List[Optional[Tuple[int, str]]] = [None] * modulus
+    dist[0] = 0
+    queue = [(0, 0)]
+    while queue:
+        total, residue = heapq.heappop(queue)
+        if total != dist[residue]:
+            continue
+        for width, master in coins:
+            nxt = (residue + width) % modulus
+            candidate = total + width
+            if candidate < dist[nxt]:
+                dist[nxt] = candidate
+                prev[nxt] = (residue, master)
+                heapq.heappush(queue, (candidate, nxt))
+    residue = target % modulus
+    if dist[residue] > target:
+        return None
+    plan: List[str] = []
+    while residue:
+        step = prev[residue]
+        if step is None:
+            return None
+        residue, master = step
+        plan.append(master)
+    plan.extend([widest_master] * ((target - dist[target % modulus]) // modulus))
+    plan.sort(key=lambda master: (-master_widths[master], master))
+    return plan
+
+
+def _place_fillers(die: PR.Def, pads: List[Dict[str, Any]],
+                   corners: List[Dict[str, Any]], cfg: Dict[str, Any],
+                   lib: PR.IoLibrary
+                   ) -> Tuple[List[Dict[str, Any]], Dict[str, List[int]],
+                              List[Dict[str, str]]]:
+    """Materialise PAD filler instances in every corner/pad gap."""
+    units = die.units
+    llx, lly, urx, ury = die.box
+    edge = int(round(cfg["edge_spacing_um"] * units))
+    master_widths = {
+        master: int(round(lib.masters[master][0] * units))
+        for master in cfg["fillers"] if master in lib.masters}
+    by_pos = {c["position"]: c for c in corners}
+    ends = {"S": ("SW", "SE"), "N": ("NW", "NE"),
+            "W": ("SW", "NW"), "E": ("SE", "NE")}
+    occupied = set(die.components) | {
+        str(rec["instance"]) for rec in corners + pads}
+    fillers: List[Dict[str, Any]] = []
+    findings: List[Dict[str, str]] = []
+    residual: Dict[str, List[int]] = {}
+    for side in PR.SIDES:
+        axis = "x" if side in PR.HORIZONTAL_SIDES else "y"
+        key, ext = (("x", "width_dbu") if axis == "x"
+                    else ("y", "height_dbu"))
+        lo, hi = (by_pos[pos] for pos in ends[side])
+        chain = [(lo[key], lo[key] + lo[ext], lo["instance"])]
+        chain += sorted((p[key], p[key] + p[ext], p["instance"])
+                        for p in pads if p["side"] == side)
+        chain.append((hi[key], hi[key] + hi[ext], hi["instance"]))
+        chain.sort()
+        side_fillers: List[Dict[str, Any]] = []
+        for gap_i, ((_a0, a1, an), (b0, _b1, bn)) in enumerate(
+                zip(chain, chain[1:])):
+            gap = b0 - a1
+            plan = _filler_plan(gap, master_widths)
+            if plan is None:
+                findings.append(_finding(
+                    "ERROR", "PADRING_FILLER_PLAN_MISSING",
+                    f"side {side}: no exact physical filler plan among the "
+                    f"declared master candidates {master_widths!r} for the "
+                    f"{gap} DEF unit gap between {an!r} and {bn!r}"))
+                continue
+            cursor = a1
+            for fill_i, master in enumerate(plan):
+                orient = PR.SIDE_ORIENT[side]
+                width, height = PR.footprint(lib.masters[master], orient,
+                                             units)
+                along = width if axis == "x" else height
+                base = f"vibeic_iofill_{side}_{gap_i}_{fill_i}"
+                instance = base
+                suffix = 1
+                while instance in occupied:
+                    instance = f"{base}_{suffix}"
+                    suffix += 1
+                occupied.add(instance)
+                if axis == "x":
+                    x = cursor
+                    y = lly + edge if side == "S" else ury - edge - height
+                else:
+                    x = llx + edge if side == "W" else urx - edge - width
+                    y = cursor
+                rec = {
+                    "instance": instance, "master": master, "side": side,
+                    "gap_index": gap_i, "order": fill_i,
+                    "x": x, "y": y, "orient": orient,
+                    "width_dbu": width, "height_dbu": height,
+                }
+                fillers.append(rec)
+                side_fillers.append(rec)
+                cursor += along
+            if cursor != b0:
+                findings.append(_finding(
+                    "ERROR", "PADRING_FILLER_PLAN_RESIDUAL",
+                    f"side {side}: filler plan for {an!r}->{bn!r} ends at "
+                    f"{cursor}, expected {b0} (residual {b0 - cursor})"))
+
+        physical = list(chain)
+        physical += [(rec[key], rec[key] + rec[ext], rec["instance"])
+                     for rec in side_fillers]
+        physical.sort()
+        residual[side] = [b0 - a1 for (_a0, a1, _an),
+                          (b0, _b1, _bn) in zip(physical, physical[1:])]
+    return fillers, residual, findings
+
+
 def _emit_def(die: PR.Def, pads: List[Dict[str, Any]],
-              corners: List[Dict[str, Any]]) -> str:
-    pts = " ".join(f"( {x} {y} )" for x, y in die.diearea)
-    rows = [f"- {c['instance']} {c['master']} + FIXED "
-            f"( {c['x']} {c['y']} ) {c['orient']} ;" for c in corners]
-    rows += [f"- {p['instance']} {p['master']} + FIXED "
-             f"( {p['x']} {p['y']} ) {p['orient']} ;" for p in pads]
-    return "\n".join([
-        "VERSION 5.8 ;", 'DIVIDERCHAR "/" ;', 'BUSBITCHARS "[]" ;',
-        f"DESIGN {die.design or 'top'} ;",
-        f"UNITS DISTANCE MICRONS {die.units} ;",
-        f"DIEAREA {pts} ;", "",
-        f"COMPONENTS {len(rows)} ;", *rows, "END COMPONENTS", "",
-        "END DESIGN", "",
-    ])
+              corners: List[Dict[str, Any]], fillers: List[Dict[str, Any]],
+              source_text: str) -> str:
+    """Return the complete floorplan DEF with ring placements applied.
+
+    `padring.def` is a routing hand-off, not a placement-only sidecar.  The
+    former emitter rebuilt a tiny DEF containing only pad/corner COMPONENTS;
+    it silently dropped every standard-cell component, PIN, NET, ROW, TRACK
+    and SPECIALNET from `floorplan.def`.  No router could consume that file
+    without losing the design.  Preserve every source section byte-for-byte,
+    replacing only the named pad COMPONENT entries and adding corner entries.
+    """
+    section = re.search(
+        r"(?ms)^(?P<indent>\s*)COMPONENTS\s+\d+\s*;(?P<body>.*?)"
+        r"^(?P<endindent>\s*)END\s+COMPONENTS\b",
+        source_text,
+    )
+    if section is None:
+        raise PR.DefError("floorplan DEF has no COMPONENTS section")
+
+    placed = {str(x["instance"]): x for x in corners + pads + fillers}
+    entries: List[str] = []
+    seen = set()
+    for raw in section.group("body").split(";"):
+        body = raw.strip()
+        if not body:
+            continue
+        m = re.match(r"^-\s+(\S+)\s+(\S+)\b", body, re.S)
+        if m and m.group(1) in placed:
+            rec = placed[m.group(1)]
+            body = (f"- {rec['instance']} {rec['master']} + FIXED "
+                    f"( {rec['x']} {rec['y']} ) {rec['orient']}")
+            seen.add(m.group(1))
+        entries.append(body + " ;")
+    for rec in corners + pads + fillers:
+        if rec["instance"] in seen:
+            continue
+        entries.append(
+            f"- {rec['instance']} {rec['master']} + FIXED "
+            f"( {rec['x']} {rec['y']} ) {rec['orient']} ;")
+
+    replacement = (f"COMPONENTS {len(entries)} ;\n"
+                   + "\n".join(entries)
+                   + "\nEND COMPONENTS")
+    return source_text[:section.start()] + replacement + source_text[section.end():]
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -916,9 +1094,50 @@ def main(argv: Optional[List[str]] = None) -> int:
             abutment=abut, spacing=spacing, bterms=bterms,
             fillers_declared=cfg["fillers"])
 
+    fillers, residual_gaps, filler_findings = _place_fillers(
+        die, pads, corners, cfg, lib)
+    findings.extend(filler_findings)
+    abut["planned_gaps"] = abut["gaps"]
+    abut["gaps"] = residual_gaps
+    abut["abuts"] = not any(
+        gap != 0 for gaps in residual_gaps.values() for gap in gaps)
+    errors = [f for f in findings if f["severity"] == "ERROR"]
+    if errors or not abut["abuts"]:
+        if not errors:
+            findings.append(_finding(
+                "ERROR", "PADRING_DOES_NOT_ABUT",
+                "one or more physical gaps remain after IO filler placement"))
+            errors = [findings[-1]]
+        rep = _report(
+            "FAIL", f"{errors[0]['rule']}: {errors[0]['message']}",
+            inputs=inputs, io_cell_library=lib.as_dict(), die=die_rec,
+            config=cfg_rec, pads=pads, corners=corners, fillers=fillers,
+            abutment=abut, spacing=spacing,
+            fillers_declared=cfg["fillers"],
+            fillers_placed=len(fillers), findings=findings)
+        _write(project, args.json, rep)
+        print(f"=== {PROGRAM} ({project.name}) ===")
+        print("  verdict: FAIL")
+        for finding in errors:
+            print(f"  {finding['rule']}: {finding['message']}")
+        return 1
+
     dest = project / PR.PADRING_DEF_REL
     dest.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(dest, _emit_def(die, pads, corners))
+    try:
+        routed_input = _emit_def(
+            die, pads, corners, fillers,
+            fp_path.read_text(errors="replace"))
+    except (PR.DefError, OSError) as exc:
+        return _fail(
+            "PADRING_ROUTING_HANDOFF_UNWRITABLE",
+            f"{PR.FLOORPLAN_DEF_REL}: {exc} — the ring cannot be handed to "
+            "routing without preserving the complete floorplan DEF",
+            die=die_rec, config=cfg_rec, pads=pads, corners=corners,
+            fillers=fillers, fillers_placed=len(fillers),
+            abutment=abut, spacing=spacing, bterms=bterms,
+            fillers_declared=cfg["fillers"])
+    atomic_write_text(dest, routed_input)
 
     notes = list(findings)
     if bterms["pad_signals_not_a_floorplan_bterm"]:
@@ -935,19 +1154,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                             f"step")
     rep = _report(
         "PASS",
-        f"placed {len(pads)} pad(s) and {len(corners)} corner cell(s) from "
+        f"placed {len(pads)} pad(s), {len(corners)} corner cell(s), and "
+        f"{len(fillers)} IO filler cell(s) from "
         f"`{PR.ASSIGNMENT_REL}` onto the die declared by "
         f"`{PR.FLOORPLAN_DEF_REL}`, by upstream's own spacing algorithm; "
-        f"every gap in the ring is closable by the declared filler cells",
+        f"every adjacent ring cell physically touches in the emitted DEF",
         inputs=inputs, io_cell_library=lib.as_dict(), die=die_rec,
         config=cfg_rec, padring_def=PR.PADRING_DEF_REL, pads=pads,
-        corners=corners, abutment=abut, spacing=spacing,
+        corners=corners, fillers=fillers, abutment=abut, spacing=spacing,
         fillers_declared=cfg["fillers"],
+        fillers_placed=len(fillers),
         unperformed=unperformed, bterms=bterms, findings=notes)
     _write(project, args.json, rep)
     print(f"=== {PROGRAM} ({project.name}) ===")
     print("  verdict: PASS")
     print(f"  pads:    {len(pads)}   corners: {len(corners)}")
+    print(f"  fillers: {len(fillers)}")
     print(f"  abuts:   {abut['abuts']}  (filler widths "
           f"{abut['filler_widths_dbu']} DEF units)")
     print(f"  bterms:  {bterms['covered']}/{bterms['total']} covered")

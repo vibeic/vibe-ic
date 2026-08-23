@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """tapeout_docs_gen.py — emit the release documents for a tape-out candidate.
 
-ENFORCEMENT: advisory — no runner spawns this program inline, so its exit status
-cannot stop step 37.5ic while step 37.5ic is running. That is the ONLY axis this
-token names and the one `flow_gate_enforcement_audit` measures. Its peer clause
-on the same step, `tapeout_precheck`, carries the same token for the same reason
-and about the same channel. The other two axes are unchanged:
-
-  * FLOW SLOT — unchanged and BLOCKING. Step 37.5ic wires this in
-    `program_exit_zero`, inside an `all_of` with `tapeout_precheck`.
-  * VERDICT SEVERITY — unchanged. rc 1 when the run is NOT RELEASABLE.
+ENFORCEMENT: blocking — the phase-3 runner dispatches this program through
+``step_tapeout_docs_gen`` on canonical step 37.5ic, before the compliance
+auditor consumes the produced documents. The step's blocking
+``program_exit_zero`` clause then consumes this program's rc inside an
+``all_of`` with ``tapeout_precheck``; rc 1 means NOT RELEASABLE and cannot
+advance as a passing 37.5ic verdict. This token names that measured runner/flow
+control path, not finding severity.
 
 A GENERATOR *AND* A CHECKER, WHICH IS WHY IT STAYS IN THE GATE POPULATION
 ========================================================================
@@ -29,35 +27,15 @@ a MEASURED false VACUOUS_PASS on origin/main 69ce9260d for exactly a
 would delete the only place that verdict is consumed and reinstate the defect
 that comment was written to remove. So it stays, and it declares.
 
-WHAT WOULD HAVE TO CHANGE FOR THIS TO BECOME BLOCKING
-=====================================================
-Two things, and the first is structural rather than a decision:
-
-  1. THE INLINE WIRING CANNOT CALL THIS PROGRAM AS IT STANDS.
-     `phase3_one_shot_runner._run_declared_signoff_gate` invokes every entry of
-     `_DECLARED_SIGNOFF_GATES` as `<prog> <project> [extra argv] --json <out>` —
-     a POSITIONAL project and a `--json` verdict artefact, which `_gate_detail`
-     then reads back for the reason line. This program takes `--project`, has no
-     positional, and emits HTML and no verdict JSON at all. It would first have
-     to emit its `release_blockers()` result as a machine-readable verdict
-     artefact beside the documents and accept that call shape.
-  2. SOMEONE MUST MEASURE THE BLAST RADIUS AND ACCEPT IT. A NOT_MEASURED
-     property is a blocker here exactly like a violated one, so every run that
-     does not carry all 17 metrics returns rc 1 — which, wired inline, stops the
-     run at 37.5ic. `_DECLARED_SIGNOFF_GATES` was wired only after its blast
-     radius was measured over 14 published phase-3 run roots under
-     `benchmark-data/ic`. That corpus is no longer in this repository at all,
-     and `step_internal_fail_bubble_up_baseline.json` records what became of it
-     — measured at both ends by that gate's own `check_corpus`: 16 run trees at
-     the commit that last recorded it, 4 at `vibeic/benchmark-data` 146d665,
-     "12 run trees left, 0 arrived". So the measurement that licensed the last
-     inline wiring cannot currently be repeated for this one. Wiring on an
-     unmeasured blast radius is what that table's own comment refuses, and this
-     declaration does not do it by another route.
-
-Both preconditions are re-measured by `test_two_gates_declare_where_their_
-verdict_is_consumed.py`, which fails when either stops holding. This is NOT a
-claim that the program is audit-only forever.
+WHY THE PRODUCER ROW AND BLOCKING CLAUSE BOTH EXIST
+===================================================
+``step_tapeout_docs_gen`` is the producer dispatch: it runs after artefact
+canonicalisation so the HTML inputs already exist. It does not replace the
+canonical gate clause. Step 37.5ic re-runs the same program through
+``program_exit_zero`` and checks the required document globs; that is where the
+release verdict blocks the flow. Keeping both paths prevents the compliance
+auditor from becoming the first producer of the artefacts it is judging while
+still consuming rc 1 as a refusal.
 
 WHAT THIS IS FOR
 ================

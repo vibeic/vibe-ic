@@ -15,9 +15,10 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
-
 PROGRAMS = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROGRAMS))
+from not_verified_tier import skip_not_verified  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location(
     "_die_fin_pin", PROGRAMS / "die_finishing_gen.py")
 DF = importlib.util.module_from_spec(_spec)
@@ -40,6 +41,15 @@ def _upstream(rel: str):
     return cand if cand.is_file() else None
 
 
+def _skip(rel: str):
+    skip_not_verified(
+        f"upstream {rel} is not on this host: VIBEIC_LIBRELANE_ROOT does not "
+        "carry it and librelane is not importable; the upstream contract was "
+        "not checked",
+        "set VIBEIC_LIBRELANE_ROOT to a complete librelane source tree or "
+        "run this test in the shipped flow image")
+
+
 def _sealring_body(text: str) -> str:
     i = text.find("class SealRing")
     assert i != -1, ("upstream no longer defines a SealRing step — the mirror "
@@ -60,11 +70,7 @@ def test_upstream_sealring_contract_is_the_one_this_module_drives():
     rel = DF.UPSTREAM_MIRROR["upstream"]
     src = _upstream(rel)
     if src is None:
-        pytest.skip(
-            f"upstream {rel} is not on this host: $VIBEIC_LIBRELANE_ROOT is "
-            f"unset or does not carry it and `librelane` is not importable. "
-            f"The question could not be put here; it is put in the container "
-            f"image that ships the flow.")
+        _skip(rel)
     body = _sealring_body(src.read_text(errors="replace"))
 
     for flag in ("--input", "--output", "--die-width", "--die-height"):
@@ -88,8 +94,7 @@ def test_upstream_second_path_still_exports_the_tool_search_path():
     rel = DF.UPSTREAM_MIRROR["upstream"]
     src = _upstream(rel)
     if src is None:
-        pytest.skip(f"upstream {rel} is not on this host — see the skip reason "
-                    f"on the contract pin above.")
+        _skip(rel)
     body = _sealring_body(src.read_text(errors="replace"))
     assert "KLAYOUT_PATH" in body, (
         f"{src}: upstream's second seal-ring path no longer exports "
@@ -116,8 +121,7 @@ def test_upstream_generic_path_maps_die_area_indices_to_the_right_dimension():
     rel = DF.UPSTREAM_MIRROR["upstream"]
     src = _upstream(rel)
     if src is None:
-        pytest.skip(f"upstream {rel} is not on this host — see the skip reason "
-                    f"on the contract pin above.")
+        _skip(rel)
     body = _sealring_body(src.read_text(errors="replace"))
     generic = body[body.find("def run_generic"):body.find("def run_ihp")]
     assert generic, f"{src}: upstream no longer has a generic seal-ring path."

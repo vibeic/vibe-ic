@@ -313,11 +313,32 @@ def main(argv=None) -> int:
         for t in r["real"]:
             print(f"        real: {t}")
     if tot and tot_real == 0:
-        print("   NOTE: every test in this change is a fixture authored "
-              "alongside it. Such a suite cannot distinguish the change from "
-              "its own absence — ask for a mutation run in which a "
-              "REAL-artefact test is among the dead, or say why no in-repo "
-              "artefact exercises this change.")
+        # Say what was MEASURED, and ask for what was not. The count above is
+        # deliberately conservative -- see the _GIT_REPO_READS note: this
+        # program errs toward under-claiming, because over-claiming "real" is
+        # what makes a fixture-only change look backed. That conservatism is a
+        # decided design choice and nothing here changes it.
+        #
+        # What it does NOT license is concluding "every test is a fixture".
+        # A test can drive a real subject that is not a checked-in file --
+        # measured instance: a suite whose tests iterate the host's INSTALLED
+        # PDK trees (no PDK, foundry or library named; skipped honestly where
+        # none is present) scores 0 here and is not synthetic. The program
+        # cannot tell that case from a wholly hand-authored one, so it must
+        # ask rather than assert.
+        print("   NOTE: 0 test(s) here are driven by a CHECKED-IN artefact. "
+              "That is what this program measures, and it deliberately "
+              "under-claims: a test driving a real subject that is not a file "
+              "in this repo -- an installed PDK or toolchain, for instance -- "
+              "also scores 0. This program cannot tell that apart from a suite "
+              "that is wholly hand-authored alongside the change, and the two "
+              "differ completely in what they prove.")
+        print("        So state which it is. If the suite IS wholly "
+              "hand-authored, it cannot distinguish the change from its own "
+              "absence — ask for a mutation run in which a REAL-artefact test "
+              "is among the dead, or say why no in-repo artefact exercises "
+              "this change. If instead it drives a real EXTERNAL subject, name "
+              "the subject and how the test behaves when it is absent.")
     print("   ADVISORY: this reports a split; it does not prove a "
           "real-artefact test is non-vacuous (an implication with a false "
           "antecedent passes either way). Only a mutation run does.")

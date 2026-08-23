@@ -47,12 +47,18 @@ from pathlib import Path
 
 import pytest
 
-PROGRAMS = Path(__file__).resolve().parent.parent
+PROGRAMS = Path(os.environ.get(
+    "VIBEIC_CONTRACT_PROGRAMS",
+    str(Path(__file__).resolve().parent.parent))).resolve()
 sys.path.insert(0, str(PROGRAMS))
 
 import _pad_ring as PR            # noqa: E402
 import pad_ring_check as CHK      # noqa: E402
 import pad_ring_gen as GEN        # noqa: E402
+from not_verified_tier import (   # noqa: E402
+    not_verified_reason,
+    skip_not_verified,
+)
 
 FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
@@ -101,6 +107,10 @@ MACRO pad_fill9
   CLASS PAD ;
   SIZE 9 BY 350 ;
 END pad_fill9
+MACRO pad_fill196
+  CLASS PAD ;
+  SIZE 196 BY 350 ;
+END pad_fill196
 END LIBRARY
 """
 
@@ -145,7 +155,7 @@ def _config(**over) -> dict:
         "PAD_ROTATION_VERTICAL": "R0",
         "PAD_ROTATION_CORNER": "R0",
         "PAD_CORNER": "pad_corner",
-        "PAD_FILLERS": ["pad_fill1"],
+        "PAD_FILLERS": ["pad_fill196"],
         "SIGNAL_MAP": {PADS[n]: n for n in ALL_SIGNALS},
     }
     cfg.update(over)
@@ -238,13 +248,43 @@ def test_a_declared_config_is_placed_and_the_gate_agrees(placed):
     assert _report(placed)["verdict"] == "PASS"
 
 
+def test_padring_def_is_a_complete_routing_handoff_not_a_pad_sidecar(tmp_path):
+    """The router must receive the original design plus the placed ring.
+
+    The old emitter rebuilt a tiny DEF containing only pad/corner COMPONENTS.
+    It could pass the ring gate while dropping the core, PINS, NETS, ROWS and
+    TRACKS that routing needs.  Pin each preserved section and the one intended
+    mutation (pad placement) here.
+    """
+    floorplan = _floorplan().replace(
+        "END DESIGN",
+        "ROW ROW_0 core_site 0 0 N DO 10 BY 1 STEP 500 0 ;\n"
+        "TRACKS X 0 DO 10 STEP 100 LAYER met2 ;\n"
+        "NETS 1 ;\n- ssig0 ( PIN ssig0 ) ;\nEND NETS\nEND DESIGN")
+    root = _project(tmp_path, floorplan=floorplan)
+    assert _gen(root) == 0, _report(root)
+    routed_input = _ring_def(root).read_text()
+    parsed = PR.parse_def(routed_input)
+    assert len(parsed.components) == (
+        1 + len(PADS) + 4 + len(_report(root)["fillers"])), (
+        "routing hand-off component population changed")
+    assert parsed.components["u_core"].master == "CORE_MACRO"
+    assert parsed.components[PADS["ssig0"]].placed
+    assert set(parsed.pins) == set(ALL_SIGNALS)
+    for exact in ("ROW ROW_0 core_site", "TRACKS X 0 DO 10 STEP 100",
+                  "NETS 1 ;", "- ssig0 ( PIN ssig0 ) ;"):
+        assert exact in routed_input, f"routing hand-off dropped {exact!r}"
+
+
 def test_the_spacing_is_upstreams_arithmetic(placed):
     """Steps 1-7 of their numbered algorithm, on the fixture's numbers:
     side 1_280_000, pads 4x75_000, fill 980_000, spacing 196_000, and the
     pad-to-corner spacing 196_000 — every gap a whole number of site widths."""
     rep, _ = CHK._unwrap(_report(placed))
-    gaps = rep["abutment"]["gaps"]
-    assert all(g == 196_000 for side in gaps for g in gaps[side]), gaps
+    planned = rep["abutment"]["planned_gaps"]
+    actual = rep["abutment"]["gaps"]
+    assert all(g == 196_000 for side in planned for g in planned[side]), planned
+    assert all(g == 0 for side in actual for g in actual[side]), actual
     xs = [p["x"] for p in rep["pads"] if p["side"] == "S"]
     assert xs == [556_000, 827_000, 1_098_000, 1_369_000]
 
@@ -414,10 +454,19 @@ def test_a_bterm_that_reaches_no_pad_is_refused(tmp_path):
 
 def test_what_this_step_does_not_do_is_in_the_artefact(placed):
     rep, _ = CHK._unwrap(_report(placed))
-    assert rep["fillers_placed"] is None, (
-        "0 would read as `no fillers were needed`")
-    assert "io_filler_placement" in rep["unperformed"]
-    assert rep["fillers_declared"] == ["pad_fill1"]
+    assert rep["fillers_placed"] == len(rep["fillers"]) == 20
+    assert "io_filler_placement" not in rep["unperformed"]
+    assert rep["fillers_declared"] == ["pad_fill196"]
+    assert all(f["master"] == "pad_fill196" for f in rep["fillers"])
+
+
+def test_removing_one_physical_filler_makes_the_gate_red(placed):
+    rep, _ = CHK._unwrap(_report(placed))
+    victim = rep["fillers"][0]["instance"]
+    line = _line(placed, victim)
+    _edit_def(placed, line + "\n", "")
+    assert _chk(placed) == 1
+    assert "PAD_INSTANCE_ABSENT_FROM_DEF" in _rules(placed)
 
 
 def test_declared_but_unperformed_optional_variables_are_echoed(tmp_path):
@@ -642,12 +691,16 @@ def test_an_absent_floorplan_leaves_coverage_unchecked_and_that_is_not_clean(pla
 # the gate — ABUTMENT
 # --------------------------------------------------------------------------- #
 def test_a_ring_that_places_perfectly_and_does_not_abut_fails(placed):
-    """The gap becomes 195_500 DEF units, which no whole number of 1_000 unit
-    filler cells closes. Nothing about the PLACEMENT is wrong — the pad is on
-    its side, inside the die, the right master, the right size, and it does
-    not overlap. Only the abutment walk sees it."""
-    _edit_def(placed, _line(placed, "pad_ssig1"),
-              "- pad_ssig1 pad_bidir + FIXED ( 826500 10000 ) N ;")
+    """Remove one filler honestly from both report and DEF. Every remaining
+    instance is valid and non-overlapping; only the physical gap is red."""
+    producer, _ = CHK._unwrap(_report(placed))
+    victim = producer["fillers"][0]["instance"]
+    _edit_def(placed, _line(placed, victim) + "\n", "")
+    def drop_filler(rep):
+        rep["fillers"] = [f for f in rep["fillers"]
+                          if f["instance"] != victim]
+        rep["fillers_placed"] = len(rep["fillers"])
+    _rewrite_producer(placed, drop_filler)
     assert _chk(placed) == 1
     rules = _rules(placed)
     assert "PADRING_DOES_NOT_ABUT" in rules
@@ -674,6 +727,32 @@ def test_the_abutment_arithmetic_is_exact_not_a_divisibility_shortcut():
     assert PR.gap_is_fillable(7, [3, 5]) is False
     assert PR.gap_is_fillable(8, [3, 5]) is True
     assert PR.gap_is_fillable(1_000_000, [3, 5]) is True
+
+
+def test_the_filler_plan_materialises_the_exact_coin_solution(
+        tmp_path, monkeypatch):
+    widths = {"f3": 3, "f5": 5}
+    for gap in range(51):
+        plan = GEN._filler_plan(gap, widths)
+        representable = any(3 * a + 5 * b == gap
+                            for a in range(18) for b in range(12))
+        assert (plan is not None) == representable, gap
+        if plan is not None:
+            assert sum(widths[master] for master in plan) == gap
+
+    # The ordinary unfillable-gap path is refused before placement.  Force the
+    # defensive planner branch so an internal invariant failure cannot regress
+    # to an unexplained ``*_MISSING`` verdict that hides what it searched.
+    root = _project(tmp_path)
+    monkeypatch.setattr(GEN, "_filler_plan",
+                        lambda _gap, _master_widths: None)
+    assert _gen(root) == 1
+    findings = [f for f in _report(root)["findings"]
+                if f["rule"] == "PADRING_FILLER_PLAN_MISSING"]
+    assert findings
+    assert all("master candidates" in f["message"] for f in findings)
+    assert all("pad_fill196" in f["message"] for f in findings)
+    assert not _ring_def(root).is_file()
 
 
 # --------------------------------------------------------------------------- #
@@ -909,11 +988,16 @@ def test_the_empty_ring_guard_is_load_bearing(tmp_path, placed):
 def test_the_abutment_guard_is_load_bearing(tmp_path, placed):
     """Remove the abutment walk's refusal and a ring that never touches
     passes — the exact defect no placement check notices."""
-    _edit_def(placed, _line(placed, "pad_ssig1"),
-              "- pad_ssig1 pad_bidir + FIXED ( 826500 10000 ) N ;")
+    producer, _ = CHK._unwrap(_report(placed))
+    victim = producer["fillers"][0]["instance"]
+    _edit_def(placed, _line(placed, victim) + "\n", "")
+    def drop_filler(rep):
+        rep["fillers"] = [f for f in rep["fillers"]
+                          if f["instance"] != victim]
+        rep["fillers_placed"] = len(rep["fillers"])
+    _rewrite_producer(placed, drop_filler)
     mut = _mutant(tmp_path, "pad_ring_check.py",
-                  "not PR.gap_is_fillable(gap, filler_widths)",
-                  "False")
+                  "elif gap > 0:", "elif False:")
     real = _chk(placed)
     r = _run(mut, placed)
     assert real == 1 and r.returncode == 0, (
@@ -2067,9 +2151,16 @@ def _measure_placer_orientations(lib, work: Path, rot: str):
 
 
 @pytest.mark.skipif(not _HAVE_OPENROAD,
-                    reason="openroad not on PATH (container-only tool)")
+                    reason=not_verified_reason(
+                        "openroad not on PATH; the live placer orientation "
+                        "was not measured",
+                        "run this test in the shipped flow image"))
 @pytest.mark.skipif(not (_PDK_ROOT and Path(_PDK_ROOT).is_dir()),
-                    reason="no PDK_ROOT on this host")
+                    reason=not_verified_reason(
+                        "PDK_ROOT does not name an installed PDK tree; the "
+                        "live placer orientation was not measured",
+                        "set PDK_ROOT to the PDK tree mounted in the shipped "
+                        "flow image"))
 def test_the_shipped_orientations_are_what_the_placer_produces(tmp_path):
     """THE ONLY TEST HERE THAT CAN FALSIFY THE EIGHT CONSTANTS.
 
@@ -2086,7 +2177,10 @@ def test_the_shipped_orientations_are_what_the_placer_produces(tmp_path):
     """
     lib = _find_io_library(_PDK_ROOT)
     if lib is None:
-        pytest.skip("no installed kit carries an IO cell library with a corner")
+        skip_not_verified(
+            "the selected PDK tree carries no discoverable IO library with "
+            "a corner cell; the live placer orientation was not measured",
+            "select a PDK tree with the IO LEF/GDS views used by the flow")
     sides, corners = _measure_placer_orientations(lib, tmp_path,
                                                   PR.ROTATION_DEFAULT)
     assert sides == dict(PR.SIDE_ORIENT), (

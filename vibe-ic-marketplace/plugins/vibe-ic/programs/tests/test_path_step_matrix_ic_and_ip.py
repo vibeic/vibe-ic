@@ -48,12 +48,15 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
-PROGRAMS = Path(__file__).resolve().parent.parent
+PROGRAMS = Path(os.environ.get(
+    "VIBEIC_CONTRACT_PROGRAMS",
+    str(Path(__file__).resolve().parent.parent))).resolve()
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
@@ -875,8 +878,8 @@ def _dispatch_index() -> dict:
     spells a subprocess target) or an imported module name. DOCSTRINGS ARE
     EXCLUDED and that exclusion is load-bearing: `pad_assignment_gen`'s
     docstring contains the line `programs/pad_ring_gen.py    reader`, and a
-    text scan counts that as an invocation of the one producer in this list
-    that has none.
+    text scan would count that prose as an invocation even if the real runner
+    reference disappeared.
     """
     import ast
     index = {}
@@ -937,6 +940,7 @@ def _producer_channels() -> dict:
 #: red cell naming which.
 WIRED_PRODUCERS = {
     ("15.5ic", "pad_assignment_gen"),
+    ("15.5ic", "pad_ring_gen"),
     ("26.5ic", "die_finishing_gen"),
     ("37.5ic", "tapeout_docs_gen"),
     ("37.5ip", "digital_hardmacro_gen"),
@@ -944,7 +948,6 @@ WIRED_PRODUCERS = {
 UNWIRED_PRODUCERS = {
     ("0.5ic", "submission_template_ingest"),
     ("0.5ic", "tapeout_declaration_gen"),
-    ("15.5ic", "pad_ring_gen"),
 }
 
 
@@ -992,12 +995,13 @@ def test_the_two_producers_of_the_router_file_are_the_unwired_ones(tmp_path):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "MEASURED GAP. Three programs a path step DECLARES under `programs:` are "
+    "MEASURED GAP. Two programs a path step DECLARES under `programs:` are "
     "invoked by nothing in the shipped tree: `submission_template_ingest` and "
-    "`tapeout_declaration_gen` (step 0.5ic) and `pad_ring_gen` (step 15.5ic). "
+    "`tapeout_declaration_gen` (step 0.5ic). `pad_ring_gen` is no longer in "
+    "this residual: step 15.5ic invokes it at the floorplan-to-route seam. "
     "Measured by AST over every `programs/*.py` — string constants and "
     "imports, docstrings excluded — plus the flow's own gate clauses as the "
-    "second channel. The other four producers are invoked: two by "
+    "second channel. The other five producers are invoked: three by "
     "`phase3_one_shot_runner` and two as their own step's gate clause. "
     "Dimension 1 of the 63x8 matrix does not cover this: it asks whether the "
     "GATE is wired and answers by running `_evaluate_gate`, and all five path "

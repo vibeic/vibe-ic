@@ -230,25 +230,30 @@ look like a contradiction is that `scope.rc_corner` was left unestablished on
 both — the §6.1 sentinel one level OUT, where spelling the absence correctly
 does not help because the axis itself was never read.
 
-It was readable in the artefact the whole time, and unread in three places:
-`opensta.Section.spef` was parsed off the dialect-B banner and never consulted
-by `_ppa/timing`; the whole-file `STA_BASIS_SPEF:` stamp — which two of the
-runner's STA emitters already wrote — had no regex in the backend at all; and
-`_emit_spef_sta` stamped the PROCESS corner and not the parasitics it read, so
-the one axis on which it differs from its sibling was the one axis it left
-unstated. The gap the extractor wrote in place of the corner was itself false:
-*"this report names no RC corner for the section"*, on a section whose banner
-names `SPEF=<top>.max.spef`. **A gap that misdescribes the artefact is worse
-than no gap — it tells a reader to stop looking in the place the answer is.**
+The missing fact was not hidden in the filename. `STA_BASIS_SPEF:` and the
+dialect-B `SPEF=...` banner state a PATH; deriving `max` from
+`<top>.max.spef` would turn a naming convention into measurement identity.
+The extraction/STA invocation already knows which model it selected, so the
+producer now writes that separate fact as `STA_BASIS_CORNER: min|nom|max` in
+the same stanza as the SPEF it read. The OpenSTA backend carries the stamp in
+its `Section`/`Report` schema and `_ppa/timing` alone maps it to
+`scope.rc_corner`.
 
-**A corner is read from a stamp, never inferred from a file name.**
-`<top>.<corner>.spef` with `<corner>` in the closed vocabulary the extraction
-step emits (`min`, `nom`, `max`) is that step's own naming, so reading it back
-is reading a stamp. Anything else — including the un-cornered `<top>.spef` the
-single-corner step really reads — establishes NOTHING and says so, naming the
-file it could not classify. An open "whatever token sits before `.spef`" rule
-would mint an RC corner called `pnr`, and a corner nobody extracted is worse
-than a corner nobody named. Guards:
+The declaration contract is fail-closed and multiplicity-preserving. A stanza
+or unbannered whole-file report may omit the declaration (the corner then
+remains unestablished), may state it once, or may redundantly repeat the same
+case-insensitive value. Every raw declaration is retained in source order.
+Empty, out-of-vocabulary, or mutually different declarations invalidate that
+view; consumers must never choose the first or last value.
+
+**A corner is read from explicit producer evidence, never inferred from a file
+name.** A missing stamp leaves `rc_corner` absent with a gap that names the
+SPEF path; a stamp outside the closed extraction-role vocabulary is INVALID;
+and disagreement between a dialect-A `<x>-RC corner` banner and
+`STA_BASIS_CORNER` invalidates the view instead of picking a side. Thus even a
+suggestive `<top>.max.spef` establishes NOTHING by itself, while an opaque
+`<top>.spef` plus `STA_BASIS_CORNER: max` establishes the producer-selected
+role. Guards:
 `tests/test_ppa_rc_corner_is_an_axis.py`, whose positive control strikes the
 parasitics out of both artefacts and requires the conflict to come BACK — an
 artefact that states nothing about what it was timed against has not become

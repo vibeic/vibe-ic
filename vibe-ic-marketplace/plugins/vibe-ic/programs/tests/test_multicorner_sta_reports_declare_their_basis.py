@@ -181,6 +181,8 @@ def test_every_stanza_of_the_multicorner_spef_report_declares_its_basis(
     for stanza in _stanzas(spef_multicorner_report):
         assert "STA_BASIS: POST_ROUTE_SPEF" in stanza
         assert "STA_BASIS_LIBERTY: " in stanza
+        expected = "max" if stanza.startswith("SETUP") else "min"
+        assert "STA_BASIS_CORNER: %s" % expected in stanza
 
 
 def test_the_multicorner_spef_stamp_names_the_liberty_it_read(
@@ -228,6 +230,8 @@ def test_the_mcorner_ocv_report_declares_its_basis(project, monkeypatch):
     for stanza in _stanzas(text):
         assert "STA_BASIS: POST_ROUTE_SPEF" in stanza
         assert "STA_BASIS_LIBERTY: " in stanza
+        expected = "max" if stanza.startswith("SETUP") else "min"
+        assert "STA_BASIS_CORNER: %s" % expected in stanza
 
 
 def test_the_mcorner_ocv_stamp_names_the_per_corner_liberty(project,
@@ -252,7 +256,19 @@ def test_the_ocv_stamp_says_no_spef_when_it_read_none(project, monkeypatch):
     text = _emit_ocv(project, monkeypatch, spefs={}, nom_spef=None)
     assert "STA_BASIS: POST_ROUTE_NO_SPEF" in text
     assert "STA_BASIS: POST_ROUTE_SPEF" not in text
+    assert "STA_BASIS_CORNER:" not in text, (
+        "a report that read no SPEF fabricated an RC corner")
     assert _sta_basis.declared_basis(text) == "POST_ROUTE"
+
+
+def test_the_ocv_nominal_fallback_stamps_nom_without_using_its_name(
+        project, monkeypatch):
+    nom = P._pl.sta_dir(project) / "opaque.spef"
+    nom.write_text("*SPEF \"IEEE 1481-1998\"\n")
+    text = _emit_ocv(project, monkeypatch, spefs={}, nom_spef=nom)
+    stanzas = _stanzas(text)
+    assert len(stanzas) == 2
+    assert all("STA_BASIS_CORNER: nom" in stanza for stanza in stanzas)
 
 
 def test_the_ocv_stamp_says_pre_layout_when_it_read_the_synth_netlist(

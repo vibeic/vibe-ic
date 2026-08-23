@@ -444,18 +444,42 @@ it differently through hooks it already exposes, and both are written down.
 Ordered by how much they unblock. Every one names the file and the reason;
 `FINDINGS.md` carries the evidence.
 
+**Requests 1 and 2 are SATISFIED and are kept, marked, rather than deleted** —
+the finding was true when it was written and the record of it is worth keeping;
+only the present tense had gone false. A satisfied request left in the present
+tense is a document contradicting the tree it describes: it tells a reader to
+go add three lines that are already there. Measured 2026-08-22 — every
+`sta_*` report on this host written before 2026-08-21 carries no `STA_BASIS`
+and every one written after carries it, and the run trees split on exactly that
+line. **The first LIVE request in this list is #3.**
+
 **1 — `phase3_one_shot_runner.py`: stamp the multi-corner STA emitters** (F-6).
-Three `puts "STA_BASIS: POST_ROUTE_SPEF"` lines, in the emitters that write
-`sta_spef_multicorner.rpt` and `sta_mcorner_ocv.rpt`. Today they stamp nothing,
-48 of 56 timing rows come out `stage=null`, and the *sign-off* corners are the
-ones that cannot be staged. This is the single highest-value fix in the set:
-it is three lines and it unblocks the timing half of feasibility.
+**SATISFIED by `e4c5840d6` (v1.11.57, 2026-08-21)**, which added the stamps and
+the guard `tests/test_multicorner_signoff_reports_declare_their_stage.py`. All
+three emitters — `_emit_spef_sta`, `_emit_corner_spef_sta` and
+`_emit_mcorner_ocv_sta` — now write a `STA_BASIS:` line, and `_ppa/timing`
+resolves the stamp according to what that stanza actually read:
+`PRE_LAYOUT_ESTIMATE` -> `pre_layout_estimate` for RC pre-layout and for OCV
+pre-layout;
+`POST_ROUTE_NO_SPEF` -> `post_route_no_extraction` for routed OCV without SPEF;
+and `POST_ROUTE_SPEF` -> `post_route_extracted` for routed OCV with SPEF. Kept
+as the record of the finding, NOT as a live request. AS WRITTEN: three `puts
+"STA_BASIS: POST_ROUTE_SPEF"`
+lines, in the emitters that write `sta_spef_multicorner.rpt` and
+`sta_mcorner_ocv.rpt`; at the time they stamped nothing, 48 of 56 timing rows
+came out `stage=null`, and the *sign-off* corners were the ones that could not
+be staged.
 
 **2 — `phase3_one_shot_runner.py`: fix the Phase-3 power session** (F-7).
+**SATISFIED by `e4c5840d6` (v1.11.57, 2026-08-21)**: the session links the
+routed netlist and reads the extracted parasitics when they exist, and when
+they do not it degrades LOUDLY — the `POWER_BASIS` stamp, the note and the
+provenance envelope all name what was actually linked. Kept as the record of
+the finding, NOT as a live request. AS WRITTEN:
 `reports/phase3/power_spm.tcl` must `read_verilog` the routed netlist and
 `read_spef` the extracted parasitics, or the report's Substance section must stop
-saying "post-PnR netlist". Today it is 1.873× low with the clock tree at zero.
-Either fix is honest; shipping both statements is not.
+saying "post-PnR netlist"; at the time it was 1.873× low with the clock tree at
+zero. Either fix is honest; shipping both statements is not.
 
 **3 — a `klayout` / `netgen` / `psm` backend, or an extractor that bridges to the
 feasibility namespace** (F-3). Seven of nine axes have no producer. The flow
