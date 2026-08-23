@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -171,6 +173,7 @@ def test_progress_plan_exactly_binds_ordered_selection():
             "scope": "pytest:B1",
             "stall_grace_seconds": 300,
             "units": [
+                "pytest:collection-complete",
                 "pytest:programs/tests/test_a.py",
                 "pytest:programs/tests/test_b.py",
                 "pytest:record-published",
@@ -200,13 +203,39 @@ def test_progress_plan_interleaves_only_parent_owned_matrix_module_units():
         expected.append(S.test_progress_unit(
             S.HERMETIC_MATRIX_FILE, ordinal, spec["items"]))
     assert plan["units"] == [
+        "pytest:collection-complete",
         *expected,
         f"pytest:{S.HERMETIC_MATRIX_FILE}",
         "pytest:record-published",
     ]
     assert sum(row[3] for row in spec["domains"]) == 29
-    assert len(expected) == 58
+    assert len(expected) == 61
     assert len(expected) == len(set(expected))
+
+
+def test_nested_progress_schedule_matches_live_pytest_collection():
+    plugin_root = HERE.parent.parent / S.PLUGIN_REL
+    env = os.environ.copy()
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q",
+         "-p", "no:cacheprovider", *S.HERMETIC_TEST_PROGRESS],
+        cwd=plugin_root, env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, timeout=60, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collected = [
+        line.strip() for line in proc.stdout.splitlines()
+        if any(line.startswith(test_file + "::")
+               for test_file in S.HERMETIC_TEST_PROGRESS)
+    ]
+    for test_file, spec in S.HERMETIC_TEST_PROGRESS.items():
+        nodes = [nodeid for nodeid in collected
+                 if nodeid.startswith(test_file + "::")]
+        assert len(nodes) == spec["items"], (
+            test_file, spec["items"], len(nodes))
+        for ordinal, nodeid, _scope, _total in spec["domains"]:
+            assert nodes[ordinal - 1] == nodeid
 
 
 def test_every_nested_progress_producer_has_one_exact_base_owned_schedule():

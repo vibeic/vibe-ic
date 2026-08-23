@@ -320,6 +320,15 @@ A1_VALIDATION="$RUN/a1-arm-validation.json"
 B1_VALIDATION="$RUN/b1-arm-validation.json"
 A2_VALIDATION="$RUN/a2-arm-validation.json"
 B2_VALIDATION="$RUN/b2-arm-validation.json"
+# BASE-owned, immutable semantic leases.  Exact 779-file collection completed
+# healthily in 316.93 s, after the old 300 s lease, so pytest receives 600 s.
+# The enclosing test-arm lease starts earlier and is deliberately 30 s longer:
+# ordinary inner shutdown policy is 2 s TERM + 1 s KILL confirmation, followed
+# by terminal publication.  A pathological uninterruptible child may still
+# exhaust the outer lease and remains NORECORD.  A2/B2 do no pytest collection
+# and retain their existing 300 s contract.
+TEST_ARM_SEMANTIC_STALL_GRACE=630
+LANDING_ARM_SEMANTIC_STALL_GRACE=300
 # PER-RUN ref names. Two verifications of two different PRs may legitimately be
 # in flight at once (the merge queue is serialized; a gatekeeper reading ahead is
 # not), and a fixed `refs/gk-verify/head` would have had each run fetching over
@@ -411,16 +420,16 @@ build_trusted_test_selection() {
       --candidate-selection "$RUN/selection.txt" \
       --base-progress-plan "$A1_PROGRESS_PLAN" \
       --candidate-progress-plan "$B1_PROGRESS_PLAN" \
-      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+      --stall-grace-seconds "$TEST_ARM_SEMANTIC_STALL_GRACE" \
     || die "BASE-owned targeted selection/finite progress plan is NORECORD"
   python3 "$RUNTIME_SNAPSHOT/tools/ci/landing_completion_record.py" plan \
       --scope landing:A2 \
-      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+      --stall-grace-seconds "$LANDING_ARM_SEMANTIC_STALL_GRACE" \
       --output "$A2_PROGRESS_PLAN" \
     || die "cannot build the A2 parent-owned progress plan"
   python3 "$RUNTIME_SNAPSHOT/tools/ci/landing_completion_record.py" plan \
       --scope landing:B2 \
-      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+      --stall-grace-seconds "$LANDING_ARM_SEMANTIC_STALL_GRACE" \
       --output "$B2_PROGRESS_PLAN" \
     || die "cannot build the B2 parent-owned progress plan"
 }
@@ -1331,7 +1340,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       --candidate-selection "$RUN/selection.after.txt" \
       --base-progress-plan "$RUN/a1-progress-plan.after.json" \
       --candidate-progress-plan "$RUN/b1-progress-plan.after.json" \
-      --stall-grace-seconds "${GATEKEEPER_SEMANTIC_STALL_GRACE:-300}" \
+      --stall-grace-seconds "$TEST_ARM_SEMANTIC_STALL_GRACE" \
     || die "cannot reproduce the BASE-owned selection after candidate exit"
   cmp -s -- "$SELECTION_MANIFEST" "$RUN/test-selection.after.json" \
     || die "BASE-owned selection manifest changed across candidate arms"

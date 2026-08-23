@@ -133,13 +133,17 @@ def test_hermetic_outer_progress_is_exact_selection_order_only():
     assert relay.start()
     relay.observe(_OuterProbe(finished={
         "test_b.py::test_two", "test_forged.py::test_noise"}))
-    assert emitter.rows == [("start", None)]
+    assert emitter.rows == [
+        ("start", None),
+        ("checkpoint", "pytest:collection-complete"),
+    ]
     relay.observe(_OuterProbe(finished={
         "test_a.py::test_one", "test_b.py::test_two",
         "test_forged.py::test_noise"}))
     assert relay.finish()
     assert emitter.rows == [
         ("start", None),
+        ("checkpoint", "pytest:collection-complete"),
         ("checkpoint", "pytest:test_a.py"),
         ("checkpoint", "pytest:test_b.py"),
         ("checkpoint", "pytest:record-published"),
@@ -183,6 +187,7 @@ def test_hermetic_outer_progress_relays_only_exact_parent_matrix_domains():
         }))
     assert emitter.rows == [
         ("start", None),
+        ("checkpoint", "pytest:collection-complete"),
         *[("checkpoint", planner.test_progress_unit(
             test_file, completed, spec["items"]))
           for completed in range(1, first_ordinal)],
@@ -215,7 +220,7 @@ def test_hermetic_outer_progress_relays_only_exact_parent_matrix_domains():
                 if row[0] == "checkpoint"]) == (
                     spec["items"]
                     + sum(row[3] for row in domains)
-                    + 2)
+                    + 3)
 
 
 def test_hermetic_outer_progress_refuses_wrong_matrix_denominator():
@@ -345,6 +350,7 @@ def test_hermetic_relay_reads_the_object_production_actually_hands_it(tmp_path):
         streams.close()
     assert emitter.rows == [
         ("start", None),
+        ("checkpoint", "pytest:collection-complete"),
         ("checkpoint", "pytest:test_a.py"),
         ("checkpoint", "pytest:test_b.py"),
         ("checkpoint", "pytest:record-published"),

@@ -100,6 +100,10 @@ _LAND_PROCESS_ENV = {
 }
 _TEST_PROCESS_ENV = {
     "VIBE_IC_BENCHMARK_DATA": CORPUS_PATH,
+    # Protected-runtime constant.  Keep it runner-owned so an ACTIVATE remains
+    # bootable by the preceding BASE verifier, which cannot know new caller
+    # arguments introduced by the candidate runtime.
+    "VIBEIC_PYTEST_SEMANTIC_STALL_GRACE": "600",
 }
 _TEST_REVIEWED_ENV_NAMES = frozenset({
     "GATEKEEPER_BENCHMARK_DATA_SHA",
@@ -1209,9 +1213,14 @@ def _run_monitored(
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                completed = progress.completed
+                total = len(progress.units)
+                last = progress.units[completed - 1] if completed else "<none>"
+                next_unit = progress.units[completed] if completed < total else "<terminal>"
                 raise Refusal(
                     "candidate semantic progress stalled; no elapsed-runtime "
-                    "verdict was inferred"
+                    "verdict was inferred; "
+                    f"completed={completed}/{total}; last={last}; next={next_unit}"
                 )
             events = selector.select(min(remaining, 0.25))
             for key, _mask in events:

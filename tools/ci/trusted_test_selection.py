@@ -82,26 +82,26 @@ HERMETIC_TEST_PROGRESS = {
         ),
     },
     HERMETIC_MATRIX_FILE: {
-        "items": 29,
+        "items": 32,
         "producer_profiles": (
             ("_run_outcome_reports", "enforcement_census"),
             ("_collect_items_from_paths", "_run_outcome_reports",
              "enforcement_census"),
         ),
         "domains": (
-            (19, HERMETIC_MATRIX_FILE
+            (21, HERMETIC_MATRIX_FILE
              + "::test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress",
              "matrix-outcome-modules", 4),
-            (22, HERMETIC_MATRIX_FILE
+            (25, HERMETIC_MATRIX_FILE
              + "::test_the_outcome_loop_cannot_outlive_the_pytest_harness",
              "matrix-outcome-modules", 8),
-            (23, HERMETIC_MATRIX_FILE
+            (26, HERMETIC_MATRIX_FILE
              + "::test_the_outcome_pool_waits_at_each_wave_boundary",
              "matrix-outcome-modules", 8),
-            (25, HERMETIC_MATRIX_FILE
+            (28, HERMETIC_MATRIX_FILE
              + "::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved",
              "matrix-outcome-modules", 8),
-            (28, HERMETIC_MATRIX_FILE
+            (31, HERMETIC_MATRIX_FILE
              + "::test_the_second_axis_downgrades_a_red_cell_that_the_state_axis_counts",
              "matrix-outcome-modules", 1),
         ),
@@ -116,10 +116,10 @@ HERMETIC_TEST_PROGRESS = {
         ),
     },
     HERMETIC_MUTATION_FILE: {
-        "items": 112,
+        "items": 126,
         "producer_profiles": (("replay_many",),),
         "domains": (
-            (80, HERMETIC_MUTATION_FILE
+            (92, HERMETIC_MUTATION_FILE
              + "::test_lock2_the_mutation_really_reddens_its_witness[D1-BLIND-GATE-PROGRAMS]",
              "matrix-mutation-replays", 24),
         ),
@@ -526,7 +526,12 @@ def progress_plan(selection: Sequence[str], *, scope: str,
     if not parsed or parsed != sorted(set(parsed)):
         raise Refusal("pytest progress selection is not finite/sorted/unique")
     validate_nested_progress_inventory(parsed)
-    units: list[str] = []
+    # Collection is a finite parent-owned phase.  Without this checkpoint a
+    # wide but healthy aggregate can finish collection and execute tests while
+    # the outer runner still sees zero progress until the first scheduled file
+    # completes.  The inner strict lifecycle parser supplies the exact declared
+    # item count; ordinary output cannot produce this transition.
+    units: list[str] = ["pytest:collection-complete"]
     for value in parsed:
         spec = HERMETIC_TEST_PROGRESS.get(value)
         if spec is not None:
