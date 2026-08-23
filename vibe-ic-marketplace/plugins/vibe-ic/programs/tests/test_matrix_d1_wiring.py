@@ -1154,15 +1154,16 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #:     ``submission_template_check`` (a different program), so the ingest is
 #:     named by no gate. `grep -c` over all eight ``programs/*one_shot_runner*.py``
 #:     returns 0 for it, and it is in no umbrella registry.
-#:   pad_ring_gen — step 15.5ic's producer, gate ``pad_ring_check``. Same
-#:     measurement, same zero.
+#:   pad_ring_gen — step 15.5ic's producer, gate ``pad_ring_check``. It had the
+#:     same measurement until the Batch73 cmisc arm wired it through
+#:     ``phase3_one_shot_runner``. It is deliberately absent from the pin below;
+#:     the forward/reverse control beside the census proves dispatch is the only
+#:     channel keeping it out.
 #:
-#: The wider fact behind both, and the reason they are DISCLOSED here rather
-#: than wired: `grep -rn '0\.5ic|15\.5ic|26\.5ic|37\.5ic|37\.5ip'` over those
-#: same eight runners returns ZERO lines. None of the five path-specific steps
-#: is dispatched by any runner at all, so there is no branch to hang either
-#: producer off; wiring one would mean inventing that dispatch, which is a flow
-#: change and not a pin repair. Being here is the DISCLOSURE, not permission.
+#: The wider fact behind both was that no runner dispatched a path-specific
+#: step. The cmisc arm changed that fact for 15.5ic by adding a real runner
+#: branch; submission_template_ingest remains disclosed below because its zero
+#: dispatch measurement is unchanged.
 #: 2026-08-21 — THREE ENTRIES ADDED, FROM TWO SEPARATE CAUSES, and the two are
 #: worth keeping apart because a single-cause story would be wrong here.
 #:
@@ -1214,7 +1215,6 @@ ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("0.5ic", "tapeout_declaration_gen"),
     ("1.6x", "crosslayer_rewrite_equivalence"),
     ("1.6x", "crosslayer_search_space"),
-    ("15.5ic", "pad_ring_gen"),
     ("6", "debug_first_pass"),
     ("6", "fpga_test_harness_gen"),
     ("9", "synth_wrapper_gen"),
@@ -1223,6 +1223,21 @@ ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("39", "signaltap_recompile_sequence_check"),
     ("39", "signaltap_stp_completeness_check"),
 )
+
+
+def _declared_program_orphans(invoked: Optional[frozenset] = None):
+    registry = umbrella_gate_names()
+    invoked = runner_invoked() if invoked is None else invoked
+    orphans = []
+    for sid in F.step_ids():
+        gated = set(F.gate_program_tokens(sid))
+        for prog in F.declared_programs(sid):
+            if F.program_path(prog) is None:
+                continue
+            if prog in gated or prog in registry or prog in invoked:
+                continue
+            orphans.append((F.normalize_id(sid), prog))
+    return tuple(sorted(orphans))
 
 
 def test_probe_declared_programs_array_orphans_are_pinned():
@@ -1243,18 +1258,7 @@ def test_probe_declared_programs_array_orphans_are_pinned():
     getting wired also reddens it, so the population cannot drift in either
     direction unnoticed. It is reported as an open gap, not as coverage.
     """
-    registry = umbrella_gate_names()
-    invoked = runner_invoked()
-    orphans = []
-    for sid in F.step_ids():
-        gated = set(F.gate_program_tokens(sid))
-        for prog in F.declared_programs(sid):
-            if F.program_path(prog) is None:
-                continue  # a `programs:` entry with no file is a different bug
-            if prog in gated or prog in registry or prog in invoked:
-                continue
-            orphans.append((F.normalize_id(sid), prog))
-    measured = tuple(sorted(orphans))
+    measured = _declared_program_orphans()
     assert measured == tuple(sorted(ORPHAN_DECLARED_PROGRAMS)), (
         f"the set of `programs:` entries wired through NONE of the three "
         f"channels changed: measured {list(measured)!r}, pinned "
@@ -1264,6 +1268,16 @@ def test_probe_declared_programs_array_orphans_are_pinned():
         f"Newly wired: {sorted(set(ORPHAN_DECLARED_PROGRAMS) - set(measured))} "
         f"— good news; remove it from the pin in the same change."
     )
+
+
+def test_pad_ring_left_the_orphan_pin_only_because_the_runner_dispatches_it():
+    """Forward/reverse control for the one Batch73 pin removal."""
+    pair = ("15.5ic", "pad_ring_gen")
+    invoked = runner_invoked()
+    assert pair not in ORPHAN_DECLARED_PROGRAMS
+    assert "pad_ring_gen" in invoked, runners_invoking("pad_ring_gen")
+    assert pair not in _declared_program_orphans(invoked)
+    assert pair in _declared_program_orphans(invoked - {"pad_ring_gen"})
 
 
 def test_probe_umbrella_dispatch_is_recorded_from_the_real_runner():

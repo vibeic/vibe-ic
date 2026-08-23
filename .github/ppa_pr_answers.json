@@ -5,61 +5,53 @@
       "question": 1,
       "evidence": [
         {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/_ppa/timing.py"},
-        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_two_reports_timed_against_different_parasitics_are_not_one_identity"},
-        {"kind": "prose", "text": "This change does not create a proxy or feasibility score. It preserves the explicit RC-corner identity of OpenSTA timing metrics and invalidates a view whose explicit identities conflict."}
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_two_reports_timed_against_different_parasitics_are_not_one_identity"}
       ]
     },
     {
       "question": 2,
       "evidence": [
         {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_section_corner_is_read_from_the_explicit_stamp_not_the_spef_name"},
-        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md"},
-        {"kind": "prose", "text": "The changed axis is scope.rc_corner on post-route OpenSTA rows. Stage, mode, process, voltage, temperature, clock and check remain owned by their existing evidence paths. The corner is accepted only from the section banner or STA_BASIS_CORNER, never the SPEF filename."}
+        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md"}
       ]
     },
     {
       "question": 3,
       "evidence": [
-        {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"},
-        {"kind": "prose", "text": "PPA_INTERFACES.md is the producer-consumer contract whose digest is declared above; the source STA report line is retained in each metric row's source reference by the existing timing-row schema."}
+        {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"}
       ]
     },
     {
       "question": 4,
       "evidence": [
         {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_a_declared_view_with_no_report_at_all_becomes_a_not_measured_row"},
-        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_missing_corner_stamp_is_not_recovered_from_any_spef_name"},
-        {"kind": "prose", "text": "No report produces NOT_MEASURED. A report that measured timing but did not establish its RC corner keeps the metric while omitting scope.rc_corner and emitting a named scope gap; it never invents the corner from a filename."}
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_missing_corner_stamp_is_not_recovered_from_any_spef_name"}
       ]
     },
     {
       "question": 5,
       "evidence": [
         {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_missing_input_is_rc2_with_a_printed_marker"},
-        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_the_extractor_never_returns_one"},
-        {"kind": "prose", "text": "No. The timing extractor reserves rc=2 for an explicit UNMEASURED marker and never returns the design-finding rc=1. Corner contradictions are record-level INVALID evidence, not a successful extraction claim."}
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_the_extractor_never_returns_one"}
       ]
     },
     {
       "question": 11,
       "evidence": [
-        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"},
-        {"kind": "prose", "text": "Yes. Both max-then-min and min-then-max controls fail on the pre-fix stamp because only the first observed value survives, and both pass after the schema preserves all declarations and the consumer rejects their disagreement."}
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"}
       ]
     },
     {
       "question": 12,
       "evidence": [
         {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"},
-        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"},
-        {"kind": "prose", "text": "No outward claim exceeds the evidence: the docs allow only missing, one, or semantically identical repeated declarations, and explicitly state that empty, unsupported or conflicting declarations invalidate the view. The bidirectional test exercises the exact first-value-wins harm in both orders."}
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"}
       ]
     },
     {
       "question": 19,
       "evidence": [
-        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_malformed_explicit_corner_declaration_is_invalid"},
-        {"kind": "prose", "text": "The changed parser accepts report text, performs no prompt or MCP dispatch, opens no path from the stamp, and invokes no shell. Empty and arbitrary out-of-vocabulary values are retained as evidence and rejected; the closed min/nom/max vocabulary prevents a raw stamp from becoming a command, path or fabricated metric identity."}
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_malformed_explicit_corner_declaration_is_invalid"}
       ]
     }
   ]
