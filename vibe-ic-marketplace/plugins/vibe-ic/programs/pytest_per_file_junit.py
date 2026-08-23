@@ -326,6 +326,7 @@ class _HermeticAggregateProgress:
                 "file", "pytest:" + test_file, test_file, 0, "", "", 0,
                 0))
         self.emitted = 0
+        self.collection_emitted = False
         self.problem = ""
 
     def _emit(self, state: str, unit: Optional[str] = None) -> bool:
@@ -346,6 +347,10 @@ class _HermeticAggregateProgress:
     def observe(self, probe: "_SemanticProgressProbe") -> None:
         if self.problem or probe.error or probe.declared_items is None:
             return
+        if not self.collection_emitted:
+            if not self._emit("checkpoint", "pytest:collection-complete"):
+                return
+            self.collection_emitted = True
         for test_file in self.selection:
             spec = self.planner.HERMETIC_TEST_PROGRESS.get(test_file)
             ordered_nodes = [
@@ -412,7 +417,8 @@ class _HermeticAggregateProgress:
             self.emitted += 1
 
     def finish(self) -> bool:
-        if self.problem or self.emitted != len(self.schedule):
+        if (self.problem or not self.collection_emitted
+                or self.emitted != len(self.schedule)):
             if not self.problem:
                 self.problem = (
                     "not every selected file reached a validated test_finish")

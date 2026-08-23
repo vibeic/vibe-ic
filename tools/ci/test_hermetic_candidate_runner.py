@@ -460,6 +460,7 @@ def test_fake_docker_exact_profile_lifecycle_and_canonical_receipt(case):
     assert process_env["VIBEIC_REQUIRE_TRUSTED_PYTEST_ENTRY"] == "1"
     assert process_env["GATEKEEPER_VERIFY_ARM"] == "A1"
     assert process_env["GATEKEEPER_BENCHMARK_DATA_SHA"] == "b" * 40
+    assert process_env["VIBEIC_PYTEST_SEMANTIC_STALL_GRACE"] == "600"
     assert process_env["VIBE_IC_BENCHMARK_DATA"] == "/corpus"
     assert process_env["VIBEIC_PYTEST_PROGRESS_FILE"] == \
         "/evidence/pytest-progress.jsonl"
@@ -576,6 +577,7 @@ def test_semantic_stall_has_no_total_runtime_verdict_and_cleans(case):
     assert proc.returncode == 2
     assert "semantic progress stalled" in proc.stderr
     assert "no elapsed-runtime verdict" in proc.stderr
+    assert "completed=0/2; last=<none>; next=load" in proc.stderr
     assert not case["receipt"].exists()
     assert not (case["state"] / "container.json").exists()
     assert not (case["state"] / "exporter.json").exists()
@@ -742,6 +744,12 @@ def test_reviewed_environment_is_arm_conditional_and_path_bound():
     }
     with pytest.raises(runner.Refusal, match="missing"):
         runner._reviewed_process_env(["GATEKEEPER_VERIFY_ARM=A1"])
+    test_fixed = runner._fixed_process_env("A1")
+    assert test_fixed["VIBEIC_PYTEST_SEMANTIC_STALL_GRACE"] == "600"
+    with pytest.raises(runner.Refusal, match="not in the reviewed allowlist"):
+        runner._reviewed_process_env(sorted(test + [
+            "VIBEIC_PYTEST_SEMANTIC_STALL_GRACE=601",
+        ]))
     with pytest.raises(runner.Refusal, match="excess"):
         runner._reviewed_process_env(sorted(test + [
             "GATEKEEPER_HYGIENE_REPORT=/evidence/hygiene.json",
@@ -829,6 +837,7 @@ test "$VIBEIC_REQUIRE_TRUSTED_PYTEST_ENTRY" = 1
 test "$GATEKEEPER_VERIFY_ARM" = A1
 test "$VIBE_IC_BENCHMARK_DATA" = /corpus
 test "$GATEKEEPER_BENCHMARK_DATA_SHA" = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+test "$VIBEIC_PYTEST_SEMANTIC_STALL_GRACE" = 600
 test -z "${STARTUPDIR+x}"
 printf 'VIBEIC_PROGRESS {"nonce":"%s","schema":1,"scope":"live","seq":0,"state":"start","total":1}\n' "$VIBEIC_HERMETIC_PROGRESS_NONCE"
 printf 'candidate evidence\n' > "$VIBEIC_HERMETIC_EVIDENCE_PATH/result.txt"

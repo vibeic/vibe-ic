@@ -12,6 +12,11 @@ esac
   || { echo '[NORECORD] trusted pytest entry is not required' >&2; exit 2; }
 [ "$#" -eq 0 ] \
   || { echo '[NORECORD] hermetic test arm accepts no subject arguments' >&2; exit 2; }
+grace=${VIBEIC_PYTEST_SEMANTIC_STALL_GRACE:-}
+if [ "$grace" != 600 ]; then
+  echo '[NORECORD] hermetic test arm semantic stall grace differs from protected runtime' >&2
+  exit 2
+fi
 
 PROGRAMS="/runtime/vibe-ic-marketplace/plugins/vibe-ic/programs"
 cd /subject/vibe-ic-marketplace/plugins/vibe-ic \
@@ -21,9 +26,11 @@ exec python3 -I -c \
   "$PROGRAMS/pytest_per_file_junit.py" \
   --selection /input/selection \
   --junit /evidence/pytest.xml \
-  --stall-after 300 \
+  --stall-after "$grace" \
   --aggregate-check \
   --aggregate-only \
-  --aggregate-stall-after 300 \
+  --aggregate-stall-after "$grace" \
   --hermetic-progress \
-  -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q -p no:cacheprovider
+  -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" \
+  -o tmp_path_retention_policy=failed \
+  -q -p no:cacheprovider
