@@ -403,7 +403,7 @@ def render(rows: List[Dict[str, str]], retention: Dict[str, str],
     out.append(
         "This tree holds converged evidence AND runs that did not converge, "
         "and the folder name deliberately does not say which "
-        "(`benchmark-data/PUBLISHING.md`: the verdict lives in `RESULT.md`, "
+        "(`PUBLISHING.md`: the verdict lives in `RESULT.md`, "
         "and a `clean_run_*`/`pass_*` prefix would strip the committed phase "
         "folders). This index is the answer that costs no JSON to read.")
     out.append("")

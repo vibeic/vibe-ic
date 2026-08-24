@@ -726,3 +726,79 @@ def test_a_file_above_the_corpus_root_does_not_silence_a_dangling_citation(tmp_p
         "a file above the corpus root silenced a real dangling citation:\n"
         + with_decoy.stdout)
     assert "OUT OF SCOPE" not in with_decoy.stdout, with_decoy.stdout
+
+
+# ── shrinking the register (the ratchet must have a way to be tightened) ─────
+# MEASURED 2026-08-25 on the published corpus: 132 debts paid and 5 NEW dangling
+# citations present at the same moment. `now` (9) was SMALLER than the baseline
+# (136), so the growth guard did not fire and `--write-baseline` returned rc 0,
+# wrote 136 -> 28 and silently waived 5 of the 5 new defects. That is why the
+# operating rule forbids that flag, and why the only remaining way to record a
+# paid debt had to be one that cannot do it.
+
+def _seed(tmp_path, cited: str):
+    """The register lives OUTSIDE the scanned repo here, so these tests measure
+    the shrink rule and not the (separately tested) dirty-tree refusal."""
+    root = _repo(tmp_path / "repo")
+    _doc(root, "EV.md", f"see `{cited}`\n")
+    _git(root, "add", "EV.md")
+    _git(root, "commit", "-q", "-m", "doc")
+    return root
+
+
+def test_shrink_refuses_to_absorb_a_citation_not_already_in_the_register(
+        tmp_path):
+    """The whole point. A shrink is not a place to put a new defect."""
+    root = _seed(tmp_path, "a.log")
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"unresolved": [E._digest("EV.md::known.log")]}))
+    before = bl.read_text()
+    r = _run(root, bl, "--shrink-baseline")
+    assert r.returncode == 1, r.stdout
+    assert "would ABSORB" in r.stdout
+    assert "EV.md::a.log" in r.stdout          # it NAMES what it refused
+    assert bl.read_text() == before, "the register was written anyway"
+
+
+def test_shrink_writes_a_strict_subset_and_keeps_the_rest_of_the_file(
+        tmp_path):
+    """Paid entries leave; nothing is added; unrelated keys survive, because
+    `scope_expansion` records why the register once GREW and that history does
+    not stop being true when it shrinks."""
+    root = _seed(tmp_path, "a.log")
+    bl = tmp_path / "bl.json"
+    still_broken = E._digest("EV.md::a.log")
+    paid = [E._digest(f"EV.md::paid{i}.log") for i in range(3)]
+    bl.write_text(json.dumps({
+        "_comment": "keep me",
+        "unresolved": sorted([still_broken, *paid]),
+        "scope_expansion": {"previous_size": 1, "reason": "x" * 40}}))
+    r = _run(root, bl, "--shrink-baseline")
+    assert r.returncode == 0, r.stdout + r.stderr
+    after = json.loads(bl.read_text())
+    assert after["unresolved"] == [still_broken]
+    assert set(after["unresolved"]) <= set(paid) | {still_broken}
+    assert after["_comment"] == "keep me"
+    assert after["scope_expansion"]["reason"] == "x" * 40
+
+
+def test_shrink_is_refused_from_a_dirty_tree(tmp_path):
+    """Same reason the write path refuses: an untracked artefact satisfies a
+    citation the tree does not ship, so the register would describe the disk."""
+    root = _seed(tmp_path, "a.log")
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"unresolved": [E._digest("EV.md::a.log")]}))
+    (root / "dirt.txt").write_text("untracked\n")
+    r = _run(root, bl, "--shrink-baseline")
+    assert r.returncode == 1, r.stdout
+    assert "DIRTY tree" in r.stdout
+
+
+def test_shrink_needs_a_register_to_shrink(tmp_path):
+    """No baseline is not an empty baseline: shrinking nothing would CREATE a
+    register, which is a write this flag is not allowed to make."""
+    root = _seed(tmp_path, "a.log")
+    bl = tmp_path / "absent.json"
+    r = _run(root, bl, "--shrink-baseline")
+    assert r.returncode == 1, r.stdout
+    assert not bl.exists()

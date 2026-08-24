@@ -51,6 +51,30 @@ baseline file and this gate FAILs on:
 Regenerate it deliberately with `--write-baseline` (and only ever to a
 SMALLER set — the gate re-checks that on the next run).
 
+A RATCHET THAT ONLY TIGHTENS MUST HAVE A WAY TO BE TIGHTENED
+------------------------------------------------------------
+`--write-baseline` records the CURRENT unresolved set, so it can also ABSORB a
+new dangling citation whenever the set happens to have shrunk overall — which
+is why the operating rule for this repo is "never --write-baseline on a hygiene
+gate, including when the gate asks". MEASURED 2026-08-25: with 132 debts paid
+and 5 NEW dangling citations present at the same time, `now` (9) was smaller
+than the baseline (136), so the growth guard above would have PASSED the write
+and the five real defects would have entered the register silently.
+
+That left the gate FAILING for the one reason nobody may act on: the debt was
+PAID. A ratchet that reports failure when you tighten it, and offers only a
+forbidden lever, teaches people to press the forbidden lever. So the asymmetry
+is written into the program instead of into a rule:
+
+    --shrink-baseline    keeps only entries that are STILL unresolved, and
+                         REFUSES if any current unresolved citation is not
+                         already in the baseline. It cannot grow, it cannot
+                         absorb a new defect, and it needs no reason, because
+                         a strict subset of a debt register waives nothing.
+
+Fix the new dangling citations FIRST; then the shrink is only a shrink, and
+the program can prove it rather than the operator asserting it.
+
 WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (#1710's treatment, applied)
 -------------------------------------------------------------------------
 The scan root was the first ancestor directory holding `benchmark-data/ic`, and
@@ -110,7 +134,8 @@ EXIT CODES
     0 = PASS (every citation resolves, or the unresolved set is within a
         baseline that has not grown), or NO_CORPUS (opted in, and it says
         nothing was scanned)
-    1 = FAIL (a new dangling citation, or the baseline grew / went stale)
+    1 = FAIL (a new dangling citation, or the baseline grew / went stale;
+        also a --shrink-baseline that would have absorbed a new citation)
     2 = UNDETERMINED (no scan root, a corpus pointer that is set and wrong, a
         supplied corpus that is not a git checkout, or zero documents scanned)
 """
@@ -814,6 +839,12 @@ def main(argv=None) -> int:
     ap.add_argument("root", nargs="?", default=None)
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--baseline", default=None)
+    ap.add_argument("--shrink-baseline", action="store_true",
+                    help="keep only the baseline entries that are STILL "
+                         "unresolved. Refuses if any unresolved citation is "
+                         "not already in the baseline, so it can never absorb "
+                         "a new defect the way --write-baseline can. This is "
+                         "how a paid debt leaves the register.")
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the CURRENT unresolved set; it may only "
                          "ever shrink from there")
@@ -905,6 +936,52 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
     now = sorted({_key(d) for d in dangling})
+
+    if args.shrink_baseline:
+        prev = _load_baseline(baseline_path)
+        if prev is None:
+            print(f"[FAIL] --shrink-baseline needs a baseline to shrink; "
+                  f"none readable at {baseline_path}.")
+            return 1
+        # Same dirty-tree refusal as the write path, and for the same measured
+        # reason: an untracked local artefact satisfies a citation the published
+        # tree does not ship, so a register written over dirt describes the
+        # author's disk.
+        dirty = _working_tree_dirt(root)
+        if dirty:
+            print(f"[FAIL] refusing to shrink a baseline from a DIRTY tree — "
+                  f"{len(dirty)} untracked/modified path(s) under {root} "
+                  f"would change what resolves.")
+            for d in dirty[:5]:
+                print(f"   {d}")
+            return 1
+        prev_set = set(prev)
+        now_dig = {_digest(k) for k in now}
+        new_debt = sorted(k for k in now if _digest(k) not in prev_set)
+        if new_debt:
+            print(f"[FAIL] refusing to shrink: {len(new_debt)} unresolved "
+                  f"citation(s) are NOT in the baseline, so this write would "
+                  f"ABSORB them. Fix them; a shrink is not a place to put a "
+                  f"new defect.")
+            for k in new_debt[:10]:
+                print(f"   {k}")
+            return 1
+        kept = sorted(d for d in prev if d in now_dig)
+        # The two properties the caller would otherwise have to be trusted on.
+        assert set(kept) <= prev_set, "shrink introduced an entry"
+        assert len(kept) <= len(prev), "shrink grew the register"
+        try:
+            existing = json.loads(baseline_path.read_text(errors="replace"))
+        except (OSError, ValueError):
+            existing = {}
+        out = {k: v for k, v in existing.items()
+               if k not in ("unresolved",)} if isinstance(existing, dict) else {}
+        out["unresolved"] = kept
+        baseline_path.write_text(json.dumps(out, indent=2) + "\n")
+        print(f"shrank {baseline_path}: {len(prev)} -> {len(kept)} entr(ies); "
+              f"{len(prev) - len(kept)} no longer unresolved. Every kept entry "
+              f"was already in the register and no new one was added.")
+        return 0
 
     if args.write_baseline:
         # REFUSE to record a baseline from a DIRTY tree. This is not caution,
