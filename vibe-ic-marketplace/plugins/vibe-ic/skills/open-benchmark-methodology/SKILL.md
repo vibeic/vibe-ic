@@ -492,7 +492,29 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-#### § 4.035 — A VALUE bug and a LATENCY bug listed together are usually ONE bug
+#### § 4.033 — CVDP BARE records: port widths must be SELF-CONTAINED
+
+For a **bare** record — one whose prompt carries no ```verilog skeleton and no
+`Module Name:` line — `cvdp_gate` appends its own harness-toplevel alias wrapper
+and **copies the port list VERBATIM**. So a port whose width depends on a
+MODULE-LOCAL function does not compile in the generated wrapper, and the record
+is BLOCKED as `roundtrip-reparse-failed (#535)`.
+
+Observed 2026-08-24: a `strobe_divider` port declared
+`[log2ceil(MaxRatio_g)-1:0]` — taken straight from the prompt's OWN skeleton —
+blocked exactly this way. Write the width self-contained instead
+(`[$clog2(MaxRatio_g)-1:0]`).
+
+Three things make this worth a rule rather than a footnote:
+* the failure is in **generated code the author never sees**;
+* the block message names the round-trip, not the port, so it does not point at
+  the cause;
+* **copying the prompt's own skeleton is what triggers it** — the instinct that
+  is right everywhere else is wrong here.
+
+Applies to any bare record whose ports use a module-local function.
+
+### § 4.035 — A VALUE bug and a LATENCY bug listed together are usually ONE bug
 
 When a debug/repair prompt documents both a wrong OUTPUT VALUE and a wrong
 CYCLE COUNT, check whether a single missing or mis-sized pipeline stage explains
