@@ -263,7 +263,7 @@ _LANDING_LANE_SHA256 = {
     "run_pytest":
         "1063d696b31fb72b8826c02e965a677c4974a96a68f7c0c12f9dcdf7c3458ab9",
     "run_repo_tools_pytest":
-        "e8575843eb88d9b1ba49c84127dd4237892a4d9d09816c50b2da2b152c2fc58e",
+        "fafa41bc22777096f5a60601f755830b5744ef57e67f92fd1391fa730834c8fd",
     "run_unselectable_pytest":
         "70d7764ca0c83843f0b66a4e768c0ca5b874589894f1c688cb2d831b17863e78",
 }
@@ -294,7 +294,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "cfc5dabcce04cd9a335114b36e6e565f4d9198996d457c917181f8a3f2bef419"
+    "7fa04a680cf72c9b43cabdf6544a68aefd165ccc08c4898e6f92d570ea6fe56f"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -384,10 +384,32 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # execution-prefix digest did NOT move, which is this file's own witness that
 # the change is downstream of the anchor and touches no control flow.
 #
+#
+# RE-PINNED a fourth time. WHAT MOVED, and the witness that nothing else did:
+# the whole-file digest and the execution prefix moved, and of the three lane
+# bodies ONLY `run_repo_tools_pytest` did — `run_pytest` and
+# `run_unselectable_pytest` are byte-identical, which is this file's own
+# independent evidence that no other lane was touched.
+#
+# THE EDIT, reviewed rather than absorbed: `run_repo_tools_pytest`'s discovery
+# gains one `-path 'tools/harvest' -prune -o` clause. `tools/harvest/` holds
+# RESCUE SNAPSHOTS of another workspace's untracked tree; the three test files
+# under it import fixtures that live beside them there, so `find` selected them
+# and all 30 of the stage's ERRORs were theirs. Nothing else in the function
+# moved: same guard, same snapshot/compare, same runner, same flags, same
+# vacuous-corpus refusal, same write-guard. The prefix digest moved only
+# because the function is defined above the anchor.
+#
+# IT IS A PRUNE OF ONE DIRECTORY, NEVER A FILE LIST, and it is checked in both
+# directions by `tools/test_repo_tools_discovery_prunes_harvest.py` — including
+# a control that goes red if `tools/harvest/` ever stops holding a test file,
+# because a prune whose subject has vanished is a no-op that still reads as a
+# guard.
+#
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "710087cd5587fed7498de452fb4360119a6e2fb9f8192f1b4f4570e8d9543be5"
+    "60ef785dc6bbc917989426ac260ab2ed3276d3eec4f9e04b0ae94904b0c53be8"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver

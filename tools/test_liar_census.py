@@ -2424,13 +2424,59 @@ def test_two_clauses_that_are_IDENTICAL_are_two_and_not_one(tmp_path):
     assert d["shrank"] is True, d
 
 
+#: The commit whose flow blob this shrink-detector measures against, and what
+#: that blob declares. BOTH move together or the assertion below is comparing a
+#: count to a different tree's population -- which is the exact failure the
+#: "base that moved" blocks above record, five times.
+_SHRINK_PIN = "e265f228be"
+_SHRINK_PIN_DECLARED = 182
+
+#: The pin this one replaced, kept because the control below is anchored to it
+#: permanently: it is the only tree in this repository's history that can
+#: demonstrate a RE-HOMING, and a control that loses its stimulus stops being a
+#: control without stopping being green.
+_REHOME_PIN = "867de4289"
+_REHOME_CMD_PREFIX = "crosslayer_rewrite_equivalence_check ."
+
+
 def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
-    """The pin above is a count and this is its other half: that the move from
-    179 to 181 was a GROW and not a churn. Measured against the flow blob at
-    `867de4289`, the commit that last moved the literal, read out of git rather
-    than copied into this file -- a fixture copy would rot into the prose the
-    delta function exists to replace. SKIPS rather than lies where the history
-    is not available (a shallow clone, an exported tarball)."""
+    """The pin above is a count and this is its other half: that the move was a
+    GROW and not a churn. Measured against the flow blob at the commit that last
+    moved the literal, read out of git rather than copied into this file -- a
+    fixture copy would rot into the prose the delta function exists to replace.
+    SKIPS rather than lies where the history is not available (a shallow clone,
+    an exported tarball).
+
+    PIN MOVED 867de4289 -> e265f228be (2026-08-24), AND IT IS A DELIBERATE
+    SHRINK BEING AUTHORISED -- the third time this file has had to do that, and
+    the first where the clause did not stop being a flow clause at all.
+
+    MEASURED with `population_delta` over the two blobs, clause SETS diffed on
+    the identity the census uses, not counts compared:
+
+        867de4289   declared=180
+        e265f228be  declared=182
+        ADDED   3   15.5ic program_exit_zero pad_assignment_gen ...
+                    2      program_exit_zero slot_pad_budget_check ...
+                    2      program_exit_zero crosslayer_rewrite_equivalence_check ...
+        REMOVED 1   1.6x   program_exit_zero crosslayer_rewrite_equivalence_check ...
+
+    THE AUTHORISATION, and it is the weakest shrink this file has ever had to
+    authorise: the removed clause and one of the added clauses are the SAME
+    COMMAND. vibe-ic#1779 folded step `1.6x` into step `2`; the gate moved with
+    it, byte for byte. A clause's identity here is `(step, kind, cmd)`, so a
+    step RENUMBER reads as a removal plus an addition even though nothing was
+    retired and nothing stopped running.
+
+    That is not a defect in `population_delta` -- widening the identity to
+    ignore the step would blind it to a gate silently moving to a step that
+    never runs, which is a real way to switch a gate off. It is a shape the
+    identity cannot distinguish on its own, so the distinction is made HERE, by
+    a control that runs rather than by this paragraph:
+    `test_the_1_6x_clause_was_REHOMED_and_not_retired` below pins the old
+    commit permanently and asserts the removed command is still declared
+    somewhere in the live flow. Delete that control and this authorisation
+    becomes prose again."""
     # BOUNDED AT `_T` like every other subprocess this file starts. The harness
     # note beside this gate records that the 180 s session bound is gone and
     # that these inner bounds are now the ONLY one, so an unbounded `git` here
@@ -2441,27 +2487,26 @@ def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
     # says which of the two happened rather than reporting one as the other.
     try:
         blob = subprocess.run(
-            ["git", "show", "867de4289:vibe-ic-marketplace/plugins/vibe-ic/flow/"
-             "phase1_phase2_phase3.yaml"],
+            ["git", "show", _SHRINK_PIN + ":vibe-ic-marketplace/plugins/vibe-ic/"
+             "flow/phase1_phase2_phase3.yaml"],
             cwd=Path(lc.__file__).resolve().parent.parent,
             capture_output=True, text=True, timeout=_T)
     except subprocess.TimeoutExpired:
         pytest.skip(f"`git show` did not answer within {_T}s — the flow blob at "
-                    "867de4289 could not be read, so nothing is claimed here")
+                    f"{_SHRINK_PIN} could not be read, so nothing is claimed here")
     if blob.returncode != 0:
-        pytest.skip("flow blob at 867de4289 is not in this checkout's history")
+        pytest.skip(f"flow blob at {_SHRINK_PIN} is not in this checkout's history")
     pinned = tmp_path / "pinned.yaml"
     pinned.write_text(blob.stdout)
 
     d = lc.population_delta(pinned, lc.FLOW_YAML)
     assert d["removed"] == [], d["removed"]
     assert d["shrank"] is False, d
-    # The tree at the pin measures 180, NOT the 179 the literal was set to in
-    # that same commit -- see the block above. That is the red this control
-    # would have named on the day, and it is left visible here rather than
-    # smoothed over. It is a FIXED COMMIT's blob, so this number is history and
-    # cannot rot.
-    assert d["before"] == 180, d
+    # A FIXED COMMIT's blob, so this number is history and cannot rot. The
+    # previous pin (867de4289) measured 180 -- not the 179 its own commit set
+    # the literal to, which was the red this control would have named on the
+    # day and is recorded in the block above rather than smoothed over.
+    assert d["before"] == _SHRINK_PIN_DECLARED, d
     # DERIVED, NEVER TYPED. Writing `== 181` here would put a SECOND literal in
     # this file that a flow author has to remember, which is the disease this
     # whole change is treating -- the next grow would redden two controls
@@ -2470,6 +2515,71 @@ def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
     # assertion actually worth making, and it survives every grow.
     assert d["after"] == lc.population_report(lc.FLOW_YAML)["declared"], d
 
+
+
+def test_the_1_6x_clause_was_REHOMED_and_not_retired(tmp_path):
+    """The half of the shrink authorisation above that RUNS.
+
+    `population_delta` identifies a clause by `(step, kind, cmd)`, so folding
+    step `1.6x` into step `2` (vibe-ic#1779) reads as one removal and one
+    addition of the SAME command. The paragraph above says that is a re-homing;
+    this asserts it, against the tree where the removal is still visible.
+
+    PINNED AT THE OLD COMMIT ON PURPOSE. Anchoring this to `_SHRINK_PIN` would
+    make it vacuous the moment the pin moved -- the removal it exists to
+    examine would no longer be in the delta, `removed` would be empty, and the
+    assertion would pass over nothing. `_REHOME_PIN` is the only tree that can
+    still supply the stimulus, so it is fixed there and the vacuity is checked
+    rather than assumed.
+
+    WHAT WOULD MAKE THIS RED, and each is a real defect rather than a rename:
+      * the gate is deleted from the flow entirely -> `still_declared` empty;
+      * the gate is moved to a step whose gate clause spells the command
+        differently -> the removed cmd matches nothing;
+      * some OTHER clause is removed between the pin and HEAD and never
+        re-homed -> it appears in `unaccounted`.
+    """
+    try:
+        blob = subprocess.run(
+            ["git", "show", _REHOME_PIN + ":vibe-ic-marketplace/plugins/vibe-ic/"
+             "flow/phase1_phase2_phase3.yaml"],
+            cwd=Path(lc.__file__).resolve().parent.parent,
+            capture_output=True, text=True, timeout=_T)
+    except subprocess.TimeoutExpired:
+        pytest.skip(f"`git show` did not answer within {_T}s — the flow blob at "
+                    f"{_REHOME_PIN} could not be read, so nothing is claimed here")
+    if blob.returncode != 0:
+        pytest.skip(f"flow blob at {_REHOME_PIN} is not in this checkout's history")
+    pinned = tmp_path / "rehome.yaml"
+    pinned.write_text(blob.stdout)
+
+    d = lc.population_delta(pinned, lc.FLOW_YAML)
+
+    # NOT VACUOUS: this pin must still show the removal, or this test is
+    # asserting a property of an empty list.
+    assert d["removed"], (
+        f"no clause is removed between {_REHOME_PIN} and HEAD, so this control "
+        "has lost its stimulus — the re-homing it exists to prove can no longer "
+        "be observed from here"
+    )
+
+    live = {c.cmd for c in lc.discover_clauses(lc.FLOW_YAML)}
+    unaccounted = [c for c in d["removed"] if c["cmd"] not in live]
+    assert not unaccounted, (
+        "these clauses left the flow between the pin and HEAD and their command "
+        "is declared by no step today — that is a RETIREMENT, not a re-homing, "
+        f"and it needs its own authorisation: {[c['cmd'] for c in unaccounted]}"
+    )
+
+    # and the specific one the authorisation names, so a future re-homing of
+    # something else cannot quietly stand in for this one.
+    named = [c for c in d["removed"] if c["cmd"].startswith(_REHOME_CMD_PREFIX)]
+    assert named, (
+        f"{_REHOME_CMD_PREFIX!r} is not among the clauses removed since "
+        f"{_REHOME_PIN}; the authorisation above describes a delta this tree "
+        "no longer has"
+    )
+    assert [c["step"] for c in named] == ["1.6x"], named
 
 def test_an_optional_clause_is_BLOCKING_not_advisory(tmp_path):
     """Its optionality is entirely in WHETHER IT RUNS. Once

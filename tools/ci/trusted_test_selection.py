@@ -115,11 +115,25 @@ HERMETIC_TEST_PROGRESS = {
              "matrix-artefact-replays", 8),
         ),
     },
+    # 126 -> 125 AND ORDINAL 92 -> 91, 2026-08-24. RE-DERIVED, never adjusted to
+    # make the assertion pass: vibe-ic#1779 folded step `1.6x` into step `2`, so
+    # the ledger lost the one parametrised cell that step owned. MEASURED with
+    # the same command `test_nested_progress_schedule_matches_live_pytest_collection`
+    # runs -- `pytest --collect-only -q` from the plugin root, autoload off:
+    #
+    #   collected                                            125
+    #   ...::test_lock2_..._reddens_its_witness[D1-BLIND-GATE-PROGRAMS]   #91
+    #
+    # BOTH NUMBERS MOVE OR NEITHER DOES. The ordinal is a position in the same
+    # list `items` counts, so a cell removed BEFORE the witness shifts it by
+    # exactly one; correcting the count and leaving the ordinal would leave the
+    # schedule pointing at `[D1-UNREACHABLE-CLAUSE]`, which is what position 92
+    # now holds, and the domain assertion would then be checking the wrong test.
     HERMETIC_MUTATION_FILE: {
-        "items": 126,
+        "items": 125,
         "producer_profiles": (("replay_many",),),
         "domains": (
-            (92, HERMETIC_MUTATION_FILE
+            (91, HERMETIC_MUTATION_FILE
              + "::test_lock2_the_mutation_really_reddens_its_witness[D1-BLIND-GATE-PROGRAMS]",
              "matrix-mutation-replays", 24),
         ),

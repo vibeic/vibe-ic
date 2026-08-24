@@ -1097,10 +1097,24 @@ lane_targeted() { fn_capture "full:targeted-tests" run_pytest; }
 # (census / tranche baseline / skip-routing ratchet) that goes stale the moment
 # a file is added, and it would go stale silently and in the safe-looking
 # direction: fewer files still reports PASS.
+#
+# ONE PRUNE, AND IT IS NOT A ROSTER. `tools/harvest/` holds RESCUE SNAPSHOTS —
+# files another workspace left untracked, copied in verbatim so the work was not
+# lost. They are not this repository's tests: they import fixtures that live
+# beside them in the workspace they came from, so `find` selects them and every
+# one dies in setup. Measured on e265f228be, serial: 30 of the 30 ERRORs in this
+# stage were exactly those three files, and there were no others.
+#
+# This stays a PRUNE of one directory, never a list of files: a file list would
+# go stale in the safe-looking direction the moment a snapshot gained a file,
+# which is the disease the comment above is about. And the prune is checked in
+# both directions by `tools/test_repo_tools_discovery_prunes_harvest.py` — an
+# exclusion that cannot go red is an exclusion that hides the thing it excluded.
 run_repo_tools_pytest() {
   local files out rc wg wrc snap list merged
   mapfile -t files < <(cd "$ROOT" && find tools \
-      \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
+      -path 'tools/harvest' -prune -o \
+      \( -name 'test_*.py' -o -name '*_test.py' \) -type f -print | sort)
   # An empty corpus is a VACUOUS pass, not a pass. A gate that reports success
   # over zero items is indistinguishable from one that works, and is worse.
   if [ "${#files[@]}" -eq 0 ]; then

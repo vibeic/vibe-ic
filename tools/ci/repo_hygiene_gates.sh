@@ -643,7 +643,17 @@ run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membersh
 #
 # ONE LINE, no `\` continuation — `gate_discloses_denominator_check.parse_gates`
 # is line-anchored, so a wrapped argv reaches its probe with the tail missing.
-run "closed-loop executable census" "$ROOT" python3 "$PG/closed_loop_executable_coverage_check.py"
+# THE FLOW IS NAMED FROM $ROOT, NOT LEFT TO THE PROGRAM'S OWN LOCATION.
+# Both of these default to `Path(__file__).parent.parent / flow/...`, i.e. the
+# tree the GATE lives in rather than the tree under test. In production those
+# are the same file and the verdict is identical either way -- MEASURED, both
+# gates, before and after this line: same rc, same counts. What changes is that
+# a gate whose input is fixed to its own location cannot be shown to fail:
+# `gate_mutation_fixtures.invoke` redirects $ROOT and nothing else, so no
+# fixture could ever hand either of them a mutant flow, and both sat in
+# `gate_mutation_fixture_check`'s NEW-OR-UNEXCUSED set with no way out of it.
+# Naming the input is what makes the CAN-FAIL direction reachable.
+run "closed-loop executable census" "$ROOT" python3 "$PG/closed_loop_executable_coverage_check.py" --flow "$ROOT/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml"
 
 # vibe-ic#312 family — a checker that reads a field NO document populates sees
 # an empty value, and an empty value is indistinguishable from a clean one.
@@ -1752,7 +1762,17 @@ run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_che
 # rc 0, "checked 22 declared closed_loop edge(s) over 69 step(s); every edge
 # resolves to a declared step, closes a loop, carries a trigger, and leaves a
 # step whose gate can produce a verdict."
-run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py"
+# THE FLOW IS NAMED FROM $ROOT, NOT LEFT TO THE PROGRAM'S OWN LOCATION.
+# Both of these default to `Path(__file__).parent.parent / flow/...`, i.e. the
+# tree the GATE lives in rather than the tree under test. In production those
+# are the same file and the verdict is identical either way -- MEASURED, both
+# gates, before and after this line: same rc, same counts. What changes is that
+# a gate whose input is fixed to its own location cannot be shown to fail:
+# `gate_mutation_fixtures.invoke` redirects $ROOT and nothing else, so no
+# fixture could ever hand either of them a mutant flow, and both sat in
+# `gate_mutation_fixture_check`'s NEW-OR-UNEXCUSED set with no way out of it.
+# Naming the input is what makes the CAN-FAIL direction reachable.
+run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py" --flow "$ROOT/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml"
 
 # The census the two gates above feed into, and the one thing in this family that
 # a HUMAN had to remember to run.
