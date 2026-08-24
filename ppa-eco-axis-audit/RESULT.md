@@ -18,9 +18,17 @@ document is the evidence behind them.
 
 **Code changes** are on `jeco2/eco-axis-bite-audit`, frozen at `22b18cb10`.
 
+> THAT BRANCH NAME NO LONGER RESOLVES. It was DELETED on the remote after the
+> freeze -- `git ls-remote --heads origin` does not list it -- which is why
+> this line cites the sha as well. 22b18cb10 still resolves and is contained
+> by `origin/next/jharv3` and `origin/next/jred-misc`, so the code changes
+> are still reachable; only the name is gone. Section 13 says the same thing
+> where the freeze is described.
+
 **What this is, stated accurately because my first attempt was not.** It began
 as a verbatim copy of the handover as it stood when `jeco2/eco-axis-bite-audit`
-was frozen at `22b18cb10`, and I described it as a snapshot. It has since been
+was frozen at `22b18cb10` (that branch name is now gone from the remote; the
+sha is not) -- and I described it as a snapshot. It has since been
 edited three times — a branch it named was renamed, a citation went stale, and a
 verification was added — so "verbatim snapshot" stopped being true almost
 immediately, which is the same decay this document spends pages on.

@@ -10,37 +10,57 @@ in a direction the convention did not anticipate. The members that fell outside
 are exactly the ones nobody is looking at, so the shrinkage is invisible.
 
 There is no inventory here on purpose. A recorded waiver would make the
-question disappear; a red gate keeps it visible until the two suites below are
-pointed at the relation. Per the 2026-08-22 ruling: an instrument that cannot
+question disappear; a red gate keeps it visible until the four suites below
+are pointed at the relation. Per the 2026-08-22 ruling: an instrument that cannot
 go red on a real defect is not a gate, and a gate that is green because its own
 inventory absorbed the finding is the shape this work exists to remove.
 
 WHAT IS RED, AND WHAT FIXES IT
 ==============================
     layer `ppa`
-        glob-derived   (`ppa_*.py`)                    20
-        relation-derived (executables importing `_ppa`) 26
-        IN THE LAYER, OUTSIDE THE GLOB                   6
+        glob-derived   (`ppa_*.py`)                    21
+        relation-derived (executables importing `_ppa`) 28
+        IN THE LAYER, OUTSIDE THE GLOB                   7
 
         area.py · gate_proof_vocabulary_has_a_producer.py · openroad.py
-        power_total_vs_budget_check.py · readme_ppa_extractor.py · timing.py
+        power_total_vs_budget_check.py · readme_ppa_extractor.py ·
+        records_migrate.py · timing.py
+
+        RE-DERIVED 2026-08-25, and EVERY face of the finding with it. The
+        previous re-derivation moved only the pinned regex in
+        `test_layer_membership_is_declared_not_inferred_from_a_filename_prefix`
+        and left this block, the `used by` list and the sentences below saying
+        20/26/6 and "two suites" -- so the drift arrived in two steps and the
+        second step is what made it visible. A pin with several faces is moved
+        on all of them or on none.
+        The 21/28/7 above and the 10/3/42.9% below were taken by running this
+        program's OWN `_imports` and `_is_executable` over the live tree, not
+        by a filename pattern written for the occasion.
+        WHAT MOVED SINCE 21/27/6: v1.11.81 added `_ppa/records_migrate.py`,
+        which imports the layer package and is executable, and which no
+        `ppa_*.py` glob reaches. The glob did not move. That is the finding.
 
         Restated at the merge with main a4caccefe (v1.11.69), which grew the
-        layer. ONE OF THE SIX IS THIS BRANCH'S OWN
+        layer. ONE OF THEM IS THIS BRANCH'S OWN
         `gate_proof_vocabulary_has_a_producer.py`: it imports `_ppa` and is
         executable, so it is a layer member that the `ppa_*.py` glob does not
-        reach, and the two suites below do not enforce the layer contract on
-        it. That is the defect this gate reports, arriving by the ordinary
+        reach, and the four suites below do not enforce the layer contract
+        on it. That is the defect this gate reports, arriving by the ordinary
         route -- somebody added a member -- which is the point.
 
-    used by  test_ppa_layer_exit_contract.py
+    used by  test_issue1241_corpus_walks_cannot_be_extended_by_a_symlink.py
+             test_ppa_eco_axis_bites_in_the_search_lane.py
+             test_ppa_layer_exit_contract.py
              test_ppa_layer_internal_error_is_not_a_finding.py
 
-Both suites enforce a LAYER-WIDE property — the exit-code contract, and that an
-internal error is not reported as a finding — over a population that omits six
-of the layer's own executables. The first even says so in a comment: "Discovered,
-not listed: a fifteenth program added tomorrow is covered by this file the
-moment it lands, which is the only way a LAYER property stays a layer property."
+FOUR suites, not two: the program reports the selectors it actually found
+(`selected by:` on the finding line) and two more had joined since this
+paragraph was written. They enforce LAYER-WIDE properties — the exit-code
+contract, and that an internal error is not reported as a finding — over a
+population that omits seven of the layer's own executables.
+`test_ppa_layer_exit_contract.py` even says so in a comment: "Discovered, not
+listed: a fifteenth program added tomorrow is covered by this file the moment
+it lands, which is the only way a LAYER property stays a layer property."
 The discovery is real; the SET it discovers is not the layer.
 
 THE REMEDY the record asks for: define the population as every executable that
@@ -55,11 +75,13 @@ compare against the relation: modules that import the package `_<p>` AND are
 EXECUTABLE (they carry an `if __name__ == "__main__"` guard). A finding is a
 prefix whose relation-derived set is not a subset of the glob-derived set.
 
-EXECUTABILITY IS PART OF THE RELATION, not a refinement. Seven modules import
-`_ppa` outside the glob; two of them (`closure.py`, `yosys.py`) carry no entry
-point, so an exit-code contract cannot be enforced on them and they are not
-members of the population these suites test. Counting them would have inflated
-the finding by 40 per cent with modules the rule has nothing to say about.
+EXECUTABILITY IS PART OF THE RELATION, not a refinement. TEN modules import
+`_ppa` outside the glob; three of them (`_ppa_corpus.py`, `closure.py`,
+`yosys.py`) carry no entry point, so an exit-code contract cannot be enforced
+on them and they are not members of the population these suites test. Counting
+them would inflate the finding by 42.9 per cent with modules the rule has
+nothing to say about. (Re-derived 2026-08-25 with this program's own
+`_imports`/`_is_executable`; it read seven/two/40 per cent when written.)
 
 `test_*.py` IS EXCLUDED. A suite globbing `test_*.py` is discovering tests, not
 a layer, and there is no package `_test` for it to relate to.
