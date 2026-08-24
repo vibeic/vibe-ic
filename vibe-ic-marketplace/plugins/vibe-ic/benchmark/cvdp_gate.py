@@ -1928,9 +1928,14 @@ def candidate_tops_from_id(rid):
       3. the reversed multi-token stem — the copilot naming often flips the
          qualifier/head order (stem `64b66b_encoder` → real top `encoder_64b66b`).
     A thin pass-through alias wrapper is emitted for EACH candidate not already
-    declared; unused wrappers are dead code the scorer's `-s <top>` never
-    elaborates, so they are harmless — the ONE wrapper matching the hidden top
-    gives the scorer its root. Empty list for a non-`cvdp_copilot_` id.
+    declared; the ONE wrapper matching the hidden top gives the scorer its root.
+    The unused ones are dead code under `iverilog -s <top>` and yosys
+    `hierarchy -check -top`, but they are NOT unconditionally harmless: a wrapper
+    nothing instantiates is MULTITOP under `verilator --lint-only -Wall`, which
+    exits non-zero on any warning, so a scored `lint` service would fail on the
+    wrapper alone (measured 2026-08-24: MULTITOP in 22 of 23 cid007 lint fails).
+    `alias_wrapper` therefore emits each wrapper inside an `ifndef VERILATOR
+    guard — see its comment for why that is sound here. Empty list for a non-`cvdp_copilot_` id.
     Blindness-clean + chip-AGNOSTIC: pure id-string structure, no chip / vendor /
     SKU literal, no oracle read."""
     prefixed = required_top_from_id(rid)          # cvdp_copilot_<stem> | None
