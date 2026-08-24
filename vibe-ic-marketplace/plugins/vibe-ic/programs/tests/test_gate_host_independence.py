@@ -1070,3 +1070,69 @@ def test_reused_and_fresh_arms_preserve_the_same_stdout_stderr_order(tmp_path):
     res = G.audit(r, timeout=_T, checkout_attestations=att)
     assert res.verdict == "PASS", res
     assert not res.findings, res.findings
+
+
+# ── one ruler for both arms (#gate-host-independence, 2026-08-25) ────────────
+# Arm A can be a PRECOMPUTED record written by `_gate_dispatch.sh`, which
+# normalises against `$ROOT`, `$wd` AND `$VIBE_IC_BENCHMARK_DATA`. This probe
+# normalised against only the two trees, so a gate that NAMES the corpus in its
+# verdict produced `<TREE>/ic` on one side and `/corpus/ic` on the other from
+# the SAME bytes — a disagreement manufactured entirely by the comparison.
+#
+# MEASURED on v1.11.77 with the corpus bound at /corpus: inside the hygiene run
+# the probe reported `6 of 92 ... NON_DETERMINISTIC_VERDICT`, all six being
+# corpus-naming gates (one of them `rc=0 PASS` on all four drives); driving both
+# arms from this probe, one normaliser for both, returned `[PASS] all 92`.
+#
+# Both tests below FAIL against the pre-fix module (roots=(repo_root, wt)) —
+# that is this pair's mutation control.
+
+_DISPATCH_LINE = ("[NOT CHECKED] cross_layer_reference_check --corpus: no "
+                  "published cell under /corpus/ic carries phase1/generated_docs")
+
+
+def test_the_corpus_pointer_is_in_the_comparison_vocabulary(monkeypatch,
+                                                            tmp_path):
+    """The dispatch's third --root must be one this probe also erases."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(corpus))
+    roots = G._compare_roots(tmp_path / "repo", tmp_path / "wt")
+    assert corpus in roots, "the corpus pointer is not part of the comparison"
+    line = f"[NOT CHECKED] no published cell under {corpus}/ic carries x"
+    assert str(corpus) not in G._norm(line, tmp_path / "repo", tmp_path / "wt")
+
+
+def test_two_arms_normalised_by_the_two_writers_agree(monkeypatch, tmp_path):
+    """The real shape: the dispatch record and this probe's own drive.
+
+    The dispatch erases the corpus root; the probe must reach the same
+    `semantic_sha256` for byte-identical output, or every corpus-naming gate
+    reads as non-deterministic.
+    """
+    repo, wt, corpus = tmp_path / "repo", tmp_path / "wt", tmp_path / "corpus"
+    for d in (repo, wt, corpus):
+        d.mkdir()
+    out = f"[NOT CHECKED] no published cell under {corpus}/ic carries docs"
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(corpus))
+
+    dispatch = A.semantic_record(out, 2, roots=(repo, wt, corpus))   # Arm A
+    probe = A.semantic_record(out, 2, roots=G._compare_roots(repo, wt))
+    assert probe["semantic_sha256"] == dispatch["semantic_sha256"]
+
+    # ...and the vocabulary that caused it still disagrees, so this test is
+    # measuring the fix rather than an accident of the fixture.
+    old = A.semantic_record(out, 2, roots=(repo, wt))
+    assert old["semantic_sha256"] != dispatch["semantic_sha256"]
+
+
+def test_an_unset_pointer_leaves_the_vocabulary_unchanged(monkeypatch,
+                                                          tmp_path):
+    """No corpus bound is not an empty corpus root: a blank must not be added,
+    or `_replace_roots` would be handed "" and the guard is what stops it."""
+    monkeypatch.delenv("VIBE_IC_BENCHMARK_DATA", raising=False)
+    assert G._compare_roots(tmp_path / "a", tmp_path / "b") == (
+        tmp_path / "a", tmp_path / "b")
+    monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", "   ")
+    assert G._compare_roots(tmp_path / "a", tmp_path / "b") == (
+        tmp_path / "a", tmp_path / "b")

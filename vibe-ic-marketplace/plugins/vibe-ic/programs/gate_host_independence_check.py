@@ -155,7 +155,7 @@ if str(_HERE) not in sys.path:
 from gate_discloses_denominator_check import (            # noqa: E402
     HOST_INDEPENDENCE_EXCLUDE_RE, parse_declarations)
 from gate_process_attestation import (                    # noqa: E402
-    argv_sha256, load_jsonl, process_attestation)
+    argv_sha256, load_jsonl, normalise_line, process_attestation)
 from hygiene_shard_plan import load_profile, plan          # noqa: E402
 
 #: Scratch prefix.  UNCHANGED from the leaking version on purpose — the reaper
@@ -320,13 +320,52 @@ def _expand(cmd: str, root: Path) -> List[str]:
     return c.split()
 
 
+def _compare_roots(repo_root: Path, wt: Path) -> Tuple[Path, ...]:
+    """Every path that must become `<TREE>` before two arms are compared.
+
+    THE ROOT SET IS HALF OF THE COMPARISON, AND THE TWO SIDES USED DIFFERENT
+    ONES. Arm A can be a PRECOMPUTED record written by `_gate_dispatch.sh`,
+    which normalises against three roots:
+
+        --root "${ROOT:-$wd}" --root "$wd" [--root "$VIBE_IC_BENCHMARK_DATA"]
+
+    while this probe passed only `(repo_root, wt)`. So a gate that NAMES the
+    corpus in its verdict — and the corpus-scanning gates are the ones this
+    probe exists to drive — produced `<TREE>/ic` on Arm A and `/corpus/ic` on
+    Arm B, from the same bytes. Different text, different `semantic_sha256`,
+    reported as a disagreement.
+
+    MEASURED 2026-08-25 on v1.11.77 with the corpus bound at /corpus. Inside
+    the hygiene run (Arm A precomputed) the probe reported
+
+        [FAIL] 6 of 92 probed corpus gate(s) ... 6 NON_DETERMINISTIC_VERDICT
+
+    and all SIX were gates whose verdict line contains the corpus path —
+    including `published-evidence index honest`, whose four recorded drives
+    were all `rc=0 PASS`. Driving BOTH arms from this probe, so that one
+    normaliser saw both, returned
+
+        [PASS] all 92 probed corpus-scanning gate(s) ... give the same verdict
+
+    with zero findings. The gates were reproducible the whole time; the two
+    rulers were not the same ruler.
+
+    Round 2 is why it surfaced as NON_DETERMINISTIC rather than HOST_DEPENDENT:
+    the confirmation drive runs BOTH arms here, so both get this root set, they
+    agree, and the shapes differ between rounds. That reading is accurate about
+    the evidence and wrong about the cause, which is what a shared vocabulary
+    fixes and a suppression would hide.
+    """
+    roots = [repo_root, wt]
+    corpus = os.environ.get("VIBE_IC_BENCHMARK_DATA", "").strip()
+    if corpus:
+        roots.append(Path(corpus))
+    return tuple(roots)
+
+
 def _norm(line: str, repo_root: Path, wt: Path) -> str:
-    """Replace either tree's path with a stable placeholder."""
-    for root in (str(wt.resolve()), str(wt), str(repo_root.resolve()),
-                 str(repo_root)):
-        if root:
-            line = line.replace(root, "<TREE>")
-    return line
+    """One line through the SAME vocabulary the comparison uses."""
+    return normalise_line(line, _compare_roots(repo_root, wt))
 
 
 def _verdict_line(out: str) -> str:
@@ -349,7 +388,7 @@ def _completed_attestation(label: str, proc: subprocess.CompletedProcess,
     """The structured verdict a host comparison consumes."""
     return process_attestation(
         label, (proc.stdout or "") + (proc.stderr or ""), proc.returncode,
-        argv, roots=(repo_root, wt))
+        argv, roots=_compare_roots(repo_root, wt))
 
 
 def _run_gate(argv: List[str], cwd: Path,
@@ -795,7 +834,7 @@ def audit(repo_root: Path, timeout: int = 600,
                                    "nothing trustworthy to compare it with"),
                         "checkout": "NORECORD", "worktree": "NOT RUN"})
                     continue
-                expected_argv = argv_sha256(argv_a, roots=(repo_root, wt))
+                expected_argv = argv_sha256(argv_a, roots=_compare_roots(repo_root, wt))
                 if rec_a.get("argv_sha256") != expected_argv:
                     findings.append({
                         "gate": label,
