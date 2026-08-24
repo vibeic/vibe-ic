@@ -526,7 +526,78 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-#### § 4.031 — Run the preflight with ALL its arguments, or it silently checks less
+#### § 4.029 — The CVDP response format is CONDITIONAL on the expected file COUNT
+
+`src/model_helpers.py :: determine_schema(files)` switches format on how many
+files the problem expects to change:
+
+| expected output files | format the scorer accepts |
+|---|---|
+| exactly 1 | `no_schema=True` — the completion is raw text, written into that file |
+| **more than 1** | **JSON object mapping filename → content**; plain code does not parse |
+
+Emitting plain code unconditionally therefore works for single-file problems and
+**silently produces nothing** for multi-file ones — the extra files never
+materialize and the harness dies on `No such file or directory` /
+`Unable to find the root module`.
+
+Measured on the 2026-08-24 run, excluding the separately-broken cid007:
+
+    expected >1 output file :   0/5   =  0.0%
+    expected  1 output file : 176/257 = 68.5%
+
+**0 out of 5 is not a difficulty cliff.** A whole class failing uniformly is the
+infrastructure signature of § 4.031 — read it that way and check the format
+before triaging the answers.
+
+**Gate rule:** the emit path must read the problem's expected output-file list,
+and refuse to emit a bare code blob when that list has more than one entry.
+Count the expected files BEFORE authoring, not after scoring.
+
+### § 4.030 — NEVER hedge a module name by emitting aliases: it fails strict lint deterministically
+
+Unsure which name a hidden testbench would elaborate, authoring agents emitted
+the same design under two to four names at once — the prose name, a
+`cvdp_copilot_`-prefixed variant, and a **word-reversed** variant:
+
+    module binary_to_gray …            module ethernet_packet_parser …
+    module cvdp_copilot_binary_to_gray …   module cvdp_copilot_ethernet_packet_parser …
+    module gray_to_binary …            module parser_packet_ethernet …
+
+**293 of 302 responses in the 2026-08-24 run did this.** Under iverilog it is
+invisible — the simulator elaborates the named top and ignores the rest, so
+sanity tests scored 38/40. Under `verilator --lint-only -Wall` (which the cid007
+`lint` service runs, and which exits non-zero on ANY warning) it is fatal:
+
+| warning | present in how many of the 23 lint failures |
+|---|---|
+| **MULTITOP** — several modules nothing instantiates | **22** |
+| **DECLFILENAME** — first module ≠ filename | **21** |
+| UNUSEDPARAM / UNUSEDSIGNAL | 8 |
+
+**Proven causally, not inferred.** On `binary_to_gray_0013`, deleting ONLY the
+two alias modules by `module…endmodule` boundary — no other edit — and re-running
+the harness's own lint command gives **EXIT=0, PASS**. One pattern accounts for
+**22 of the 24 remaining cid007 failures**.
+
+**Why the instinct is wrong:** emitting three names does not raise the chance of
+matching the one that is right. Each extra module is another uninstantiated top,
+so the hedge converts *uncertainty about a name* into a *certainty of failing any
+strict lint*. Choose one name — the expected output file's stem, resolved by the
+directory-leaf rule (§ Shape C rule 6) when prose and file layout disagree — and
+emit exactly one top.
+
+**Make it a gate, not advice.** Per GATE-AS-SOLE-EMIT-PATH, free-text guidance
+regresses. The emit path must REFUSE a response that:
+1. contains more than one module that nothing else in the response instantiates;
+2. has a top whose name differs from the expected output file's stem;
+3. carries a `<prefix>_<name>` / reversed-word twin of another module in the file.
+
+The general form, beyond benchmarks: **when unsure between alternatives, choose
+one and state the choice — do not ship all of them.** Shipping every candidate
+looks like caution and behaves like a defect.
+
+### § 4.031 — Run the preflight with ALL its arguments, or it silently checks less
 
 `cvdp_env_preflight.py --image <sim>` returns `PASS, deviations: []` — and that
 PASS covers only the SIM image. The `OSS_PNR_IMAGE` requirement (#714) is
