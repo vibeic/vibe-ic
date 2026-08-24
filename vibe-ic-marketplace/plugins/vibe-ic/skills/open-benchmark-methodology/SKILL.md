@@ -288,10 +288,21 @@ and is exempt):
      advanced by three problems. Treating "idle" as "free" and reassigning its
      batch is a collision every time.
 
-     **To learn whether an agent is alive: take two samples separated in time
-     and look for advancement, or just ASK it** ("one line: still on X, which
-     item?"). Asking is cheap and decisive; inferring is neither, and it was
-     wrong every time it was tried in that run.
+     **To learn whether an agent is alive, ASK IT** — "one line: still on X,
+     which item?". That is the only signal that ATTRIBUTES.
+
+     **File growth does NOT attribute.** Two time-separated samples showing a
+     file advancing prove SOMEONE is writing; they say nothing about WHO. In
+     that run the orchestrator cited a batch going 3/10 → 7/10 → 9/10 as proof
+     that its supposed owner was alive — and it was a DIFFERENT agent's writes
+     entirely. The supposed owner had never written a byte to that file; its
+     own ownership check had refused its first append. So one agent's activity
+     was used as evidence about another agent, and assignments were made on it.
+     That is the roster error one level down, and it is harder to spot because
+     the observation itself is true.
+
+     Use two-sample growth only for the claim it actually supports — **this
+     FILE is live, do not touch it** — never for "agent A is alive".
    - **A handoff needs BOTH sides told AND the old owner's acknowledgement.**
      Inter-agent messages are not synchronous. Twice the new owner was told
      "batch N is yours" and the old owner "drop batch N", and the second
