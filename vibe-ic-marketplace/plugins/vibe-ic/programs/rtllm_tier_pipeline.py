@@ -69,10 +69,10 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 # Reused (import, read — NOT modified) — the shipped pieces this pipeline composes.
-import rtllm_port_bridge as _bridge          # noqa: E402  RTLLM prose -> bullet ports
+import prose_port_block_read as _bridge          # noqa: E402  RTLLM prose -> bullet ports
 import spec_artifact_registry as _registry   # noqa: E402  deterministic emit chain
 try:
-    import rtllm_iface_recover as _iface      # noqa: E402  header-dialect recoverer
+    import prose_interface_recover as _iface      # noqa: E402  header-dialect recoverer
 except Exception:                              # pragma: no cover
     _iface = None
 try:
@@ -364,14 +364,14 @@ def golden_floor_evidence(design_dir: str) -> Optional[str]:
 def build_gate(design_dir: str) -> dict:
     """The CONFORMANCE GATE for this design: the required module name + every port
     the prose `Input ports:` / `Output ports:` header states (name, dir, width).
-    Recovered via the shipped rtllm_port_bridge (a GENERAL prose-port reader, not
+    Recovered via the shipped prose_port_block_read (a GENERAL prose-port reader, not
     keyed to any design name). Every entry is a fact the extractor RECOVERED;
     nothing un-recovered is demanded (§4.05). A port whose width could not be
     reduced to a single integer is DROPPED by the bridge, so it is not falsely
     enforced."""
     prompt = design_prompt(design_dir)
     ins, outs = _bridge.parse_rtllm_ports(prompt)
-    src = "rtllm_port_bridge"
+    src = "prose_port_block_read"
     # CONVERGE lever (T4->T3 / T3->T2): also run the header-dialect recoverer
     # (Inputs:/Outputs:, paren-direction, parameter-expression widths, explicit-
     # range-authoritative). Adopt its result when it recovers a RICHER interface
@@ -382,7 +382,7 @@ def build_gate(design_dir: str) -> dict:
     if _iface is not None and not _flag("RTLLM_DISABLE_IFACE"):
         ri, ro = _iface.recover_ports(prompt)
         if len(ri) + len(ro) > len(ins) + len(outs):
-            ins, outs, src = ri, ro, "rtllm_iface_recover"
+            ins, outs, src = ri, ro, "prose_interface_recover"
     ports = ([{"name": n, "dir": "input", "width": w} for n, w in ins]
              + [{"name": n, "dir": "output", "width": w} for n, w in outs])
     return {

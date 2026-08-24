@@ -75,7 +75,7 @@ if str(_HERE) not in sys.path:
 import spec_artifact_registry as _registry  # noqa: E402  generate(text,top)->(kind,rtl)
 # Supplemental VE-HUMAN structural Tier-1 emitters — a STRICT add-only fallback,
 # consulted only on a registry miss/fail (see deterministic_emit). §4.05-clean.
-import verilogeval_human_tier1_solvers as _supplemental_solvers  # noqa: E402
+import fsm_vector_rtl_emit as _supplemental_solvers  # noqa: E402
 import semantic_spec_floor_check as _semfloor  # noqa: E402  golden-vs-prompt semantic floor
 
 TIER_PROGRAM = 1   # registry DETERMINISTICALLY emits RTL that iverilog-PASSES _test.sv
@@ -391,7 +391,7 @@ def deterministic_emit(prob: dict) -> Tuple[Optional[str], Optional[str]]:
          canonical, mutual-exclusion-checked emitter (owns the 125);
       2. ONLY when the registry MISSES (no hit) OR its hit does NOT iverilog-pass
          the official _test.sv, the supplemental VE-HUMAN structural solver
-         (`verilogeval_human_tier1_solvers.emit`) is tried; its emit replaces the
+         (`fsm_vector_rtl_emit.emit`) is tried; its emit replaces the
          registry's iff it iverilog-VERIFIES. This rescues (a) the gatesv
          neighbour-vector emit the registry mis-widths, and (b) the
          FSM-by-inspection / full-Moore-FSM table shapes the registry SKIPs.

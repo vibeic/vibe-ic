@@ -77,25 +77,11 @@ def _flow_yaml(plugin_root: Optional[Path] = None) -> Path:
     return root / "flow" / "phase1_phase2_phase3.yaml"
 
 
-def flow_step_ids(path: Optional[Path] = None) -> List[str]:
-    """Declared STEP ids, in flow order — from the `steps:` block only.
-
-    The YAML declares two id-bearing blocks: `stages:` (8 entities: stage1,
-    stage_analog, ...) and `steps:`. A bare `- id:` regex over the file returns
-    all 76 and puts the eight STAGES at the head of every "upstream" list, so
-    `upstream_of("D1")` came back naming stage_phase1 through
-    stage5_manufacturing — none of which is a step, let alone one upstream of
-    D1. Scope the scan to the `steps:` block so a stage can never be excused as
-    an un-run step.
-    """
-    try:
-        text = (Path(path) if path else _flow_yaml()).read_text(errors="replace")
-    except OSError:
-        return []
-    m = re.search(r"^steps:\s*$", text, re.M)
-    if not m:
-        return []
-    return re.findall(r"^\s*-\s*id:\s*([\w.\-]+)\s*$", text[m.end():], re.M)
+# ONE definition, in the routing module. This file kept its own copy and the two
+# diverged — a set of 76 including the 8 stage entities here, an ordered list of
+# 68 there — while both claimed to answer "which steps does the flow declare".
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from task_nature_route import flow_step_ids   # noqa: E402
 
 
 def upstream_of(entry_step: str, path: Optional[Path] = None) -> List[str]:

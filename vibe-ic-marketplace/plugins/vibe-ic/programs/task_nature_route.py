@@ -79,6 +79,143 @@ from typing import Any, Dict, List, Optional
 # right about debug and optimization, and the flow's own declarations say the
 # other three need D1's output before their step can read anything. Where those
 # disagree, the YAML wins and the disagreement is recorded, not smoothed over.
+# ── WHERE THE RUN STOPS ──────────────────────────────────────────────────────
+# Entry was only half the question. The task decides BOTH ends:
+#
+#   "怎麼可能為了回答一個 benchmark 的問題,都去跑 Phase 2、Phase 3 的整個流程呢?"
+#                                                — owner directive 2026-08-25
+#
+# and stopping needs TWO fields, not one, because two different things end a run:
+#
+#   answer_step     the step that DECLARES the artefact handed back — a LOCATION
+#                   in the flow, not an instruction to run that step
+#   verify_through  how far the run must actually GO to trust that artefact
+#
+# The distinction in the first line is load-bearing and easy to read backwards.
+# `optimization` enters at 2 and has answer_step 1: the deliverable is the
+# modified RTL, which lives at step 1's declared path (`phase2/stage1/rtl/*`)
+# because that is the step the flow says owns that path — but step 1 never runs,
+# the file is edited in place. `debug` is the same shape. Reading answer_step as
+# "run until here" would send both of them BACKWARDS through the flow.
+# EXECUTION is [entry_step .. verify_through]. answer_step only says what to
+# collect at the end.
+#
+# One field cannot express both, and collapsing them is wrong in both directions.
+# Measured against the three open benchmarks' actual scorers:
+#
+#   * VerilogEval reads `samples/<Prob>_sample01.sv`, RTLLM reads each design's
+#     RTL, CVDP reads a `{id, completion}` RTL string. ALL THREE hand back the
+#     artefact of step 1 (`phase2/stage1/rtl/*.sv OR *.v`) and NONE of them ever
+#     looks at a netlist or a GDS. A run that synthesises for VerilogEval has
+#     burned 156 syntheses nobody reads.
+#   * But CVDP cid007 hands back that same RTL and is GRADED ON AREA — which is
+#     only measurable at step 9. Stopping at 1 ships an answer we cannot know is
+#     good enough.
+#
+# So: same answer_step, different verify_through. A single exit_step would have
+# to pick one of those two mistakes.
+#
+# The same shape appears at the far end of the flow, which is why it is not a
+# benchmark quirk: step 37 emits the GDS you hand a foundry, and step 37.5ic
+# ("Tape-out Precheck") is what says that GDS is actually shippable.
+# answer_step=37, verify_through=37.5ic — identical structure to cid007.
+
+# What the requester wants HANDED BACK. Distinct from the task's nature: the same
+# "design me this chip" nature ends at RTL, at a GDS, or at a foundry package
+# depending on the ask, and the flow has a different artefact for each. Which one
+# a given request means is a READING judgement — "做到 tapeout" alone does not
+# say whether it means the GDS exists, that it is verified shippable, or that it
+# has been handed over — so the skill asks; this table only records what each
+# answer implies once it is known.
+# ── WHAT KIND OF PROOF THE QUESTION DEMANDS ─────────────────────────────────
+# The exit is chosen by EVIDENCE CLASS, not by nature. The same nature asks for
+# different depths depending on the VERB of the demand: "write this module" ends
+# when it lints; "write this module and prove it works" ends when it simulates;
+# "...and prove it can't recur" ends at formal. One nature, three exits.
+#
+# Every step id and every artefact below is verbatim from the flow's own
+# required_outputs, so this table cannot drift from what the steps actually
+# produce without failing validate_entries().
+EVIDENCE_EXIT: Dict[str, Dict[str, Any]] = {
+    "existence":        {"exit_step": "1",
+                         "proves": "the RTL exists",
+                         "artefact": "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"},
+    "lint_validated":   {"exit_step": "2",
+                         "proves": "it elaborates and is hygiene-clean",
+                         "artefact": "reports/phase2/lint/rtl_hygiene.json"},
+    "behaviour":        {"exit_step": "4",
+                         "proves": "it does what the spec says, on OUR testbench",
+                         "artefact": "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml"},
+    "proof":            {"exit_step": "5",
+                         "proves": "the property holds for all inputs, not just the vectors",
+                         "artefact": "phase2/stage1/formal/results.json"},
+    "area":             {"exit_step": "9",
+                         "proves": "how big it is once mapped",
+                         "artefact": "phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json"},
+    "equivalence":      {"exit_step": "13",
+                         "proves": "synthesis/DFT did not change the semantics",
+                         "artefact": "reports/lec.json"},
+    "timing":           {"exit_step": "23",
+                         "proves": "it closes timing after routing",
+                         "artefact": "reports/phase3/sta/post_route_summary.json"},
+    "manufacturability":{"exit_step": "31",
+                         "proves": "it is physically legal to build",
+                         "artefact": "reports/phase3/drc_signoff.json"},
+    "power":            {"exit_step": "33",
+                         "proves": "what it costs to run",
+                         "artefact": "reports/phase3/power.json"},
+    "silicon":          {"exit_step": "37",
+                         "proves": "there is a stream-out to hand over",
+                         "artefact": "phase3/stage4/gds/*.gds"},
+}
+
+# THE BLINDNESS CAP (§ 4.05). An exit may only demand evidence the run can
+# produce WITHOUT the oracle. CVDP's record["harness"] and VerilogEval's
+# `_test.sv` are the graders' own testbenches: a run exits at `behaviour` on ITS
+# OWN bench under phase2/stage1/sim/, never on the hidden one. This is not a
+# separate policy, it is blindness_audit's existing rule expressed as a ceiling
+# on the span — and it is why "the scorer will run a testbench" never justifies
+# raising the exit.
+BLINDNESS_CAP_NOTE = (
+    "evidence must come from the project's own artefacts; the grader's "
+    "testbench and golden are never inputs to choosing or reaching an exit")
+
+
+DELIVERY_TARGETS: Dict[str, Dict[str, Any]] = {
+    "rtl": {
+        "answer_step": "1",
+        "artefact": "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v",
+        "note": "what every open RTL benchmark's scorer actually reads",
+    },
+    "gds": {
+        "answer_step": "37",
+        "artefact": "phase3/stage4/gds/*.gds",
+        "note": "the stream-out exists; NOT a claim that it is shippable",
+    },
+    "shippable_gds": {
+        "answer_step": "37",
+        "verify_through": "37.5ic",
+        "artefact": "phase3/stage4/gds/*.gds + reports/phase3/tapeout_precheck.json",
+        "note": "step 37.5ic is literally named Tape-out Precheck and emits "
+                "shuttle_precheck.json + SIGNOFF_*.html; without it the GDS is "
+                "an artefact, not a sign-off",
+    },
+    "ip_hardmacro": {
+        "answer_step": "37.5ip",
+        "verify_through": "37.5ip",
+        "artefact": "phase3/stage4/hardmacro/*.{lef,lib,gds,v}",
+        "note": "the IP-delivery sibling of 37.5ic — both block on [37, 0.5ic]; "
+                "delivering a block for someone else to integrate, not a die",
+    },
+    "foundry_handoff": {
+        "answer_step": "38",
+        "verify_through": "38",
+        "artefact": "phase3/stage4/foundry_handoff/{mask_spec,wat_plan,"
+                    "corner_test_vectors}.json + scribe_line_layout",
+        "note": "only in scope when the run is actually shipping to a foundry",
+    },
+}
+
 # `route` and `entry_step` answer DIFFERENT questions, and conflating them is how
 # the first draft lost information: `route` says which loop OWNS the transform,
 # `entry_step` says where in the flow the work STARTS. Completion and
@@ -89,6 +226,9 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
     # Pure text spec → brand-new RTL. D1 reads `from: external` (a staged
     # prompt / input doc), so it is satisfiable from the prompt alone.
     "spec_generation": {
+        # the deliverable is step 1's RTL (see DELIVERY_TARGETS);
+        # this says how deep the proof must go before handing it over
+        "default_evidence": "lint_validated",
         "route": "phase1_entry",
         "entry_step": "D1",
         "then": ["1"],
@@ -106,6 +246,9 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
     # step 1 declares it reads ALL of D1's outputs; the supplied RTL is a SEED
     # for that pass, not a substitute for the spec of what to complete.
     "completion": {
+        # the deliverable is step 1's RTL (see DELIVERY_TARGETS);
+        # this says how deep the proof must go before handing it over
+        "default_evidence": "lint_validated",
         "route": "plugin_loop",
         "entry_step": "D1",
         "then": ["1"],
@@ -122,6 +265,9 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
     # Given RTL → change its behaviour per a spec delta (functional ECO).
     # Verified by 2 (rewrite fidelity) / 4 (simulation) / 5 (formal), NOT by 13.
     "functional_modification": {
+        # the deliverable is step 1's RTL (see DELIVERY_TARGETS);
+        # this says how deep the proof must go before handing it over
+        "default_evidence": "behaviour",
         "route": "plugin_loop",
         "entry_step": "D1",
         "then": ["1"],
@@ -140,6 +286,9 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
     # from existing RTL alone, which is exactly what an optimization supplies.
     # Step 9 follows because area is only measurable after synthesis.
     "optimization": {
+        # the deliverable is step 1's RTL (see DELIVERY_TARGETS);
+        # this says how deep the proof must go before handing it over
+        "default_evidence": "area",
         "route": "plugin_loop",
         "entry_step": "2",
         "then": ["9"],
@@ -156,6 +305,9 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
     # requirement is visible before the run, not discovered as a refusal; when
     # they cannot be staged, `fallback_entry_step` says where to go and why.
     "debug": {
+        # the deliverable is step 1's RTL (see DELIVERY_TARGETS);
+        # this says how deep the proof must go before handing it over
+        "default_evidence": "behaviour",
         "route": "plugin_loop",
         "entry_step": "4",
         "then": [],
@@ -186,51 +338,88 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
 _FLOW_YAML = Path(__file__).resolve().parents[1] / "flow" / "phase1_phase2_phase3.yaml"
 
 
-def flow_step_ids(path: Optional[Path] = None) -> set:
-    """Every `- id:` declared in the canonical flow, as strings."""
+def flow_step_ids(path: Optional[Path] = None) -> List[str]:
+    """The flow's STEP ids, in DECLARATION ORDER. The single definition.
+
+    Two properties, each of which was wrong in an earlier draft and each of
+    which a caller depends on:
+
+    ORDERED, not a set. Deciding "does this run stop after it starts" needs an
+    order, and a set has none — an ordering built from one is arbitrary, so the
+    check silently means nothing.
+
+    STEPS ONLY. The YAML declares `stages:` (8 entities) and `steps:`. A bare
+    `- id:` scan over the file returns all 76, so this validator ACCEPTED
+    `stage1` as an entry step, and `upstream_of` put the eight stages at the
+    head of every upstream list.
+
+    `run_entry_manifest` imports this rather than keeping its own copy; the two
+    had already diverged (set-of-76-with-stages vs list-of-68-without) while
+    both claiming to answer the same question.
+    """
     p = Path(path) if path else _FLOW_YAML
     try:
         text = p.read_text(errors="replace")
     except OSError:
-        return set()
-    return set(re.findall(r"^\s*-\s*id:\s*([\w.\-]+)\s*$", text, re.M))
+        return []
+    m = re.search(r"^steps:\s*$", text, re.M)
+    if not m:
+        return []
+    return re.findall(r"^\s*-\s*id:\s*([\w.\-]+)\s*$", text[m.end():], re.M)
 
 
 def validate_entries(path: Optional[Path] = None) -> List[str]:
-    """Return the problems with NATURE_ENTRY, empty when it is sound."""
-    ids = flow_step_ids(path)
+    """Problems with the routing tables; empty when they are sound.
+
+    Every step id named anywhere in this module must exist in the flow. A table
+    naming a step the flow does not declare is worse than no table: it reads as
+    executable and is not.
+    """
+    ids = set(flow_step_ids(path))
     if not ids:
         return ["flow YAML unreadable — cannot validate entry steps"]
     bad: List[str] = []
+
+    def _check(owner: str, field: str, sid: Any, required: bool = True) -> None:
+        # Name the FIELD that is wrong. An earlier version reported every
+        # missing value as "entry_step is unset" regardless of which field it
+        # came from, which sends the reader to the wrong line.
+        if sid is None:
+            if required:
+                bad.append(f"{owner}: {field} is unset")
+            return
+        if str(sid) not in ids:
+            bad.append(f"{owner}: {field}={sid!r} is not a step in the flow")
+
     for nature, e in NATURE_ENTRY.items():
-        named = ([e.get("entry_step")] + list(e.get("then") or [])
-                 + list(e.get("verify_steps") or [])
-                 + list(e.get("admission_gates") or [])
-                 + ([e["fallback_entry_step"]] if e.get("fallback_entry_step")
-                    else []))
-        for sid in named:
-            if sid is None:
-                bad.append(f"{nature}: entry_step is unset")
-            elif str(sid) not in ids:
-                bad.append(f"{nature}: {sid!r} is not a step in the flow")
-        # The Change-4 regression guard: a loop LABEL is not a step id.
+        _check(nature, "entry_step", e.get("entry_step"))
+        _check(nature, "fallback_entry_step", e.get("fallback_entry_step"),
+               required=False)
+        for i, sid in enumerate(e.get("then") or []):
+            _check(nature, f"then[{i}]", sid)
+        for i, sid in enumerate(e.get("verify_steps") or []):
+            _check(nature, f"verify_steps[{i}]", sid)
+        for i, sid in enumerate(e.get("admission_gates") or []):
+            _check(nature, f"admission_gates[{i}]", sid)
+        ev = e.get("default_evidence")
+        if ev not in EVIDENCE_EXIT:
+            bad.append(f"{nature}: default_evidence={ev!r} is not an evidence "
+                       f"class (have: {sorted(EVIDENCE_EXIT)})")
+        # A loop LABEL is not a step id — the regression this module exists to stop.
         if str(e.get("entry_step", "")).endswith("_loop"):
             bad.append(f"{nature}: entry_step is a loop label, not a step id")
+
+    for ev, d in EVIDENCE_EXIT.items():
+        _check(f"evidence {ev}", "exit_step", d.get("exit_step"))
+    for tgt, d in DELIVERY_TARGETS.items():
+        _check(f"delivery {tgt}", "answer_step", d.get("answer_step"))
+        _check(f"delivery {tgt}", "verify_through", d.get("verify_through"),
+               required=False)
     return bad
 
-
-# A transform on existing RTL whose exact nature the caller has NOT pinned and
-# whose prose gave no usable hint. It routes to the modify_loop entry (the
-# closest general loop) but reports its nature as `transform_existing_rtl` —
-# an HONEST label saying "this is a transform, which kind is unresolved". Do
-# not relabel it `functional_modification`: that claims a specificity the
-# router does not have, and the caller uses `needs_ai_parse` to resolve it.
 _UNPINNED_TRANSFORM_NATURE = "transform_existing_rtl"
 _UNPINNED_TRANSFORM_ENTRY = "functional_modification"
 
-# Prose signals, weakest evidence — used ONLY to seed `needs_ai_parse`, never
-# to override an explicitly supplied nature. Deliberately small: a real parse
-# is the AI's job, and a long keyword table would fake determinism.
 _PROSE_HINTS = (
     ("debug", re.compile(
         r"\b(bug|buggy|fix(es|ed)?\s+the\s+\w+|incorrect(ly)?|"
