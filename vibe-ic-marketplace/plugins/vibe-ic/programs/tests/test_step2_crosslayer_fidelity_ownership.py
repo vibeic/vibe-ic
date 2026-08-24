@@ -28,9 +28,45 @@ def _by_id():
     return {str(step["id"]): step for step in _steps()}
 
 
+#: THE MEMBERS, BESIDE THE COUNT, BECAUSE THE COUNT ALONE CANNOT SEE A SWAP.
+#: One step arriving and one leaving in the same batch leaves 68 at 68 and this
+#: module said nothing -- which is what
+#: `population_pin_without_its_member_set` reports against this very file
+#: ("1 pin(s): 68 via safe_load"). RE-DERIVED 2026-08-25 from the flow YAML this
+#: test already reads; not transcribed from any document that states 68.
+#:
+#: ORDER IS DELIBERATELY NOT PINNED. This is a SET comparison, which is the
+#: remedy the checker names. Asserting the sequence as well would make a
+#: legitimate reordering read as an arrival plus a departure -- a finding about
+#: something this test does not own.
+_CANONICAL_STEP_IDS = {
+    "D1", "0.5ic", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11",
+    "FS1", "DT1", "12", "13",
+    "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
+    "14", "15", "15.5ic", "16", "17", "18", "19", "20", "21", "22",
+    "DT2", "DT3",
+    "23", "24", "25", "26", "26.5ic", "27", "28", "29", "30", "31", "32", "33",
+    "34", "35", "36", "37", "37.5ip", "37.5ic", "38", "39",
+    "M1", "M2", "M3", "M4",
+    "40", "41", "42", "43", "44", "P0",
+}
+
+
 def test_canonical_flow_remains_68_steps_without_a_1_6x_step():
     ids = tuple(str(step["id"]) for step in _steps())
+    assert len(_CANONICAL_STEP_IDS) == 68, (
+        "the pinned member set is not 68 ids, so it is the pin that is wrong "
+        f"and not the flow (pinned {len(_CANONICAL_STEP_IDS)})")
     assert len(ids) == 68, f"canonical flow grew to {len(ids)} steps: {ids}"
+    assert len(set(ids)) == len(ids), (
+        "the flow declares a duplicate step id: "
+        f"{sorted(i for i in set(ids) if ids.count(i) > 1)}")
+    got = set(ids)
+    assert got == _CANONICAL_STEP_IDS, (
+        "the canonical step set moved -- arrived: "
+        f"{sorted(got - _CANONICAL_STEP_IDS)}; departed: "
+        f"{sorted(_CANONICAL_STEP_IDS - got)}. Re-derive BOTH the count and the "
+        "members from the flow YAML; do not edit one to fit the other.")
     assert "1.6x" not in ids, "rewrite fidelity is a Step-2 clause, not a step"
 
 

@@ -1377,6 +1377,9 @@ knows to look for:
 -----------------------------------------------------------------------------
 `main` moved from 81cd5321b to a4caccefe ("landing: assign v1.11.69") during
 this session, and it carries `fix/jppafind-inert-ppa-gates` -- somebody else's
+  (that branch has since been DELETED on the remote and no longer resolves;
+  its work is in main, merged at bf903796b, 7d5fcd9ca and b8b3f33e3, each of
+  which IS an ancestor of main -- so the name is gone and the work is not)
 work on inert PPA gates, squarely in this lane. That invalidates two things I
 had been saying, so both are corrected here rather than left standing:
 
@@ -1673,11 +1676,20 @@ this file's test count: a stray surviving change would have moved that number.
 13. FREEZE, FOLLOW-ON BRANCH, AND ONE INCIDENT
 -----------------------------------------------
 FROZEN. `jeco2/eco-axis-bite-audit` is frozen at 22b18cb10 by the batch-freeze
+  THE BRANCH NAME IS GONE; THE FROZEN SHA IS NOT. `git ls-remote --heads
+  origin` no longer lists `jeco2/eco-axis-bite-audit` -- it was deleted after
+  the freeze -- and that is exactly why this section cites the sha. 22b18cb10
+  still resolves and is contained by `origin/next/jharv3` and
+  `origin/next/jred-misc`, so everything below stays enumerable without it.
 instruction. That sha is what ships. 0 pushes since; clean tree; nothing held
 back. I made no claim that anything of mine MUST be in the batch, because
 nothing is outside it.
 
 FOLLOW-ON. `next/eco-axis-audit-followups` (cited by NAME, not by sha: it is a
+  THAT NAME NO LONGER RESOLVES: the branch has been DELETED on the remote
+  since this was written. Its merge commit 4c544a661 still resolves here and
+  is NOT an ancestor of main, so the follow-ons are reachable and unlanded --
+  cited by name precisely because it was moving, and now it has moved away.
 MOVING branch and a sha pinned to it decays on the next commit -- unlike the
 frozen branch above, whose sha is the point). Pushed, rides the NEXT
 batch. Comment-only. It is the result of checking my own work against the ruling
@@ -1692,6 +1704,12 @@ While creating that follow-on branch I ran `rm -rf` on
 /home/reyerchu/AI_IC_design/wt-next, which was NOT a stale directory: it was a
 live registered worktree belonging to a CONCURRENT SESSION, on branch
 `next/ppa-exemption-states-its-real-coverage` @ 4fc81d2a2.
+
+  THAT BRANCH NAME NO LONGER RESOLVES. `git ls-remote --heads origin` does
+  not list it; it was DELETED after this incident. The commit is not lost --
+  4fc81d2a2 still resolves and is contained by `origin/next/jharv3` and
+  `origin/next/jred-misc` -- and it was merged at f872a0482, which is NOT an
+  ancestor of main, so this work is reachable but has not landed.
 
   their branch ref and objects   INTACT
   their branch on the remote     NOT PUSHED -- local was the only copy

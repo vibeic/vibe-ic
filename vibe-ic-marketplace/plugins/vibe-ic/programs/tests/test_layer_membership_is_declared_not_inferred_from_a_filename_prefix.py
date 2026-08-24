@@ -143,13 +143,26 @@ def test_the_shipped_tree_is_RED_and_that_is_the_point():
     # RE-DERIVED on the composed tree: the layer took one more member into BOTH
     # the glob and the relation (20/26 -> 21/27) and the 6 outside are the same
     # 6 names, so the gap did not move — the population did.
+    # RE-DERIVED AGAIN 2026-08-25 (21/27/6 -> 21/28/7). v1.11.81 added
+    # `programs/_ppa/records_migrate.py`, which imports the layer package and so
+    # joins the RELATION, and which no prefix glob reaches and so joins the
+    # OUTSIDE set. The glob is unchanged at 21, which is the whole finding: the
+    # layer grew and the population selected by a filename prefix did not.
+    # The number was NOT edited to fit — the program was re-run on this tree and
+    # its own line read back (`layer `ppa`: glob 21, relation 28, 7 outside`),
+    # and the new outside member is named in the member list below.
     # A count pin without a member set is the defect
     # `population_pin_without_its_member_set` reports; a member set without a
     # count is the half that cannot see growth. Keep BOTH.
     # If this fails, RE-DERIVE the finding -- do not edit the number to fit.
-    # ANCHORED, not a substring: "6 outside" is contained in "16 outside".
-    assert re.search(r"glob 21, relation 27, 6 outside(?!\d)", r.stdout), (
+    # ANCHORED, not a substring: "7 outside" is contained in "17 outside".
+    assert re.search(r"glob 21, relation 28, 7 outside(?!\d)", r.stdout), (
         f"the ppa layer population moved; re-derive the finding\n{r.stdout}")
+    # THE MEMBER THE COUNT ALONE WOULD NOT HAVE SHOWN. One arrival and one
+    # departure leave 7 at 7; naming the arrival is what makes the count a
+    # statement about a set rather than about its size.
+    assert "records_migrate.py" in r.stdout, (
+        f"the layer's newest outside member is not reported\n{r.stdout}")
 
 
 def test_no_test_files_read_is_undetermined_not_a_pass():
