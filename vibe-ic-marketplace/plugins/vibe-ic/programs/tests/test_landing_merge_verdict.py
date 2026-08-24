@@ -2027,13 +2027,18 @@ def sandbox(tmp_path_factory):
                  plugin / "programs/ci_harness_timeout_ceiling_check.py")
     for name in (
         "_atomic_artefact.py",
+        "_commercial_pdk.py",
         "_crash_safe_scratch.py",
         "_owned_process_supervisor.py",
         "_semantic_child_progress.py",
+        "commit_msg_nda_check.py",
         "gate_process_attestation.py",
+        "git_prohibition_guard.py",
         "hygiene_finding_delta.py",
         "hygiene_shard_plan.py",
+        "landing_collateral_revert_check.py",
         "_corpus_location.py",
+        "nda_diff_scan_check.py",
         "_prose_polarity.py",
         "drc_vacuous_pass_check.py",
         "macro_obs_geometry_intersect_check.py",
@@ -2108,6 +2113,11 @@ def sandbox(tmp_path_factory):
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "activate routed corpus")
     _git(repo, "checkout", "-q", "main")
+    # A new-branch push is measured as `<head> --not --remotes`.  Give the
+    # fixture the same already-published main boundary a real clone has, so the
+    # push preflight does not accidentally include the synthetic repository's
+    # whole history in its question.
+    _git(repo, "update-ref", "refs/remotes/origin/main", "main")
     return repo
 
 
@@ -3245,6 +3255,125 @@ def test_reassert_refuses_a_record_that_was_not_a_pass(sandbox, tmp_path):
     bad = _reassert(sandbox, tmp_path / "v_innocuous_red.json")
     assert bad.returncode == 1, bad.stdout + bad.stderr
     assert "not LAND_OK" in bad.stderr
+
+
+def _repacked_commit(repo, source, branch, message="repack identical tree"):
+    """One new commit, parented directly on main, with SOURCE's exact tree."""
+    tree = _git(repo, "rev-parse", f"{source}^{{tree}}").stdout.strip()
+    base = _git(repo, "rev-parse", "main").stdout.strip()
+    made = subprocess.run(
+        ["git", "-C", str(repo), "commit-tree", tree, "-p", base],
+        input=message + "\n", capture_output=True, text=True, timeout=_T)
+    assert made.returncode == 0, made.stderr
+    head = made.stdout.strip()
+    assert _git(repo, "branch", "-f", branch, head).returncode == 0
+    return head, tree
+
+
+def _rebind(sandbox, old_verdict, ref, out):
+    return subprocess.run(
+        ["bash", str(_VERIFY), "--rebind", str(old_verdict),
+         "--ref", ref, "--base", "main", "--repo", str(sandbox),
+         "--no-fetch", "--json", str(out)],
+        capture_output=True, text=True, timeout=_T)
+
+
+def test_identical_tree_repack_rebinds_without_rerunning_expensive_arms(
+        sandbox, tmp_path):
+    """Commit topology is not functional identity.
+
+    A LAND_OK already measured the exact base + final tree.  Re-expressing that
+    tree as the required one-commit push shape must run only the cheap push and
+    identity/provenance checks, then emit a self-contained REBOUND_FROM record.
+    It must not launch A1/A2/B1/B2 again.
+    """
+    first, original = _verify(sandbox, "innocuous_green", tmp_path)
+    assert first.returncode == 0, first.stdout + first.stderr
+    branch = f"repacked_{tmp_path.name}"
+    new_head, tree = _repacked_commit(
+        sandbox, original["verified_sha"], branch)
+    assert tree == original["verified_tree"]
+
+    rebound_path = tmp_path / "rebound.json"
+    rebound = _rebind(
+        sandbox, tmp_path / "v_innocuous_green.json", branch, rebound_path)
+    assert rebound.returncode == 0, rebound.stdout + rebound.stderr
+    assert "arm A1/B1" not in rebound.stdout
+    record = json.loads(rebound_path.read_text())
+    assert record["verdict"] == "LAND_OK"
+    assert record["kind"] == "vibeic.landing-verdict-rebind"
+    assert record["head_sha"] == record["verified_sha"] == new_head
+    assert record["verified_tree"] == original["verified_tree"]
+    assert record["rebind"]["rebound_from_head_sha"] == original["head_sha"]
+    assert record["rebind"]["push_preflight"]["verdict"] == "PASS"
+    assert _reassert(sandbox, rebound_path).returncode == 0
+
+
+def test_rebind_refuses_when_the_final_tree_changed(sandbox, tmp_path):
+    """The shortcut is identity-only; one changed blob demands a full run."""
+    first, _ = _verify(sandbox, "innocuous_green", tmp_path)
+    assert first.returncode == 0, first.stdout + first.stderr
+    branch = f"different_tree_{tmp_path.name}"
+    _repacked_commit(sandbox, "innocuous_red", branch, "different tree")
+    out = tmp_path / "different-tree-rebind.json"
+    rebound = _rebind(
+        sandbox, tmp_path / "v_innocuous_green.json", branch, out)
+    assert rebound.returncode == 1, rebound.stdout + rebound.stderr
+    assert "candidate tree differs from the verified tree" in rebound.stderr
+
+
+def test_actual_push_shape_is_refused_before_any_expensive_arm(
+        sandbox, tmp_path):
+    """The exact ordering regression that wasted the fleet run.
+
+    The squash tree is harmless, but commit 2 retracts 3/4 substantive lines
+    commit 1 adds in the SAME unpublished push. Commit 2 also replaces its own
+    collateral checker with an always-PASS program. The immutable BASE-owned
+    checker must still answer before merge-tree/rebase or A1/A2/B1/B2 starts.
+    """
+    repo = tmp_path / "push-shape-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "bad_push_shape")
+    subject = repo / "push_shape.txt"
+    lines = [
+        "first substantive contribution line 0001",
+        "second substantive contribution line 0002",
+        "third substantive contribution line 0003",
+        "fourth substantive contribution line 0004",
+    ]
+    subject.write_text("\n".join(lines) + "\n")
+    _git(repo, "add", "push_shape.txt")
+    assert _git(repo, "commit", "-qm", "add one contribution").returncode == 0
+    subject.write_text(lines[-1] + "\n")
+    self_edited_gate = (repo / "vibe-ic-marketplace" / "plugins" /
+                        "vibe-ic" / "programs" /
+                        "landing_collateral_revert_check.py")
+    self_edited_gate.write_text(
+        "#!/usr/bin/env python3\nraise SystemExit(0)\n")
+    _git(repo, "add", "push_shape.txt", str(self_edited_gate.relative_to(repo)))
+    assert _git(repo, "commit", "-qm",
+                "retract most of it and weaken the checker").returncode == 0
+
+    out = tmp_path / "push-shape.json"
+    run = subprocess.run(
+        ["bash", str(_VERIFY), "--ref", "bad_push_shape", "--base", "main",
+         "--repo", str(repo), "--no-fetch", "--json", str(out)],
+        capture_output=True, text=True, timeout=_T,
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": ""})
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "PUSH PREFLIGHT: REFUSE" in run.stderr
+    assert "landing_collateral_revert_check.py" in run.stderr
+    assert "arm A1/B1" not in run.stdout
+    assert "tree-under-test" not in run.stdout
+    record = json.loads(out.read_text())
+    assert record["kind"] == "vibeic.landing-push-preflight-receipt"
+    assert record["verdict"] == "REFUSE"
 
 
 # ================================================ THE TWO VERIFICATION TIERS
