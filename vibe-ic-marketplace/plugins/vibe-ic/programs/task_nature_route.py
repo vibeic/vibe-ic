@@ -48,10 +48,52 @@ from typing import Any, Dict, List, Optional
 # (a different normal plugin loop owns the transform). `plugin_entry` carries
 # the concrete step list for the caller to execute: deterministic PROGRAM
 # first, AI skill as backup, then the verify gates that close the loop.
+# ── The five natures → the STEP each enters the canonical flow at ────────────
+# `entry_step` names a REAL id in flow/phase1_phase2_phase3.yaml. Not a label:
+# a label cannot be executed, and cannot be checked against the flow.
+#
+# THIS TABLE WAS WRONG IN ITS FIRST DRAFT AND THE FLOW SAID SO. The draft read
+# "completion/modify/optimize/debug all enter at P0 first, then their own step".
+# Checked against the YAML, four of five rows were wrong:
+#
+#  * P0 declares `blocks_on: [1]` and reads `from: 1`. It comes AFTER step 1,
+#    not before, and its verdict is emitted at AUDIT time by
+#    flow_compliance_check._run_structural_rtl_gates. P0 is an ADMISSION GATE,
+#    never an entry — "P0 then 1" inverts both the declared edge and the real
+#    execution order. It is recorded as `admission_gates` instead.
+#  * Step 1 declares `from: D1, outputs: all`, which fans out to all 19 of D1's
+#    required_outputs. Entering at 1 without D1 is REFUSED on 19 absent files.
+#    Worse, step 1's required_output IS the RTL glob the user supplied, so
+#    entering there targets the very file being completed — the runner WAIVEs.
+#  * Step 13 is "Equivalence check (RTL ≡ post-DFT netlist)", blocks_on [12].
+#    It proves synthesis and DFT did NOT change the semantics of one design. A
+#    functional modification deliberately DOES change semantics, so 13 cannot
+#    verify it — a category error, not merely an unsatisfiable input. The
+#    flow's artefact for "old RTL ≡ new RTL" is step 2's
+#    reports/crosslayer/rewrite_equivalence_check.json.
+#  * Step 4 reads `from: 1` (the RTL) AND two D1 artefacts —
+#    L10_TEST_CASES.json and L12_BEHAVIORAL_SEQUENCES.json. A user-supplied
+#    failing testbench has no declared input slot in step 4 at all.
+#
+# The owner's directive — "if I am debugging, I do not enter at Phase 1" — is
+# right about debug and optimization, and the flow's own declarations say the
+# other three need D1's output before their step can read anything. Where those
+# disagree, the YAML wins and the disagreement is recorded, not smoothed over.
+# `route` and `entry_step` answer DIFFERENT questions, and conflating them is how
+# the first draft lost information: `route` says which loop OWNS the transform,
+# `entry_step` says where in the flow the work STARTS. Completion and
+# functional-modification are owned by their own loops — the work is a transform,
+# not a spec-to-RTL pass — yet they must START at D1, because step 1 declares it
+# reads ALL of D1's outputs. Owned-by and starts-at are simply not the same axis.
 NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
-    # Pure text spec → brand-new RTL: the Phase-1 (spec→design-doc→RTL) domain.
+    # Pure text spec → brand-new RTL. D1 reads `from: external` (a staged
+    # prompt / input doc), so it is satisfiable from the prompt alone.
     "spec_generation": {
         "route": "phase1_entry",
+        "entry_step": "D1",
+        "then": ["1"],
+        "verify_steps": ["2", "4"],
+        "admission_gates": [],
         "plugin_entry": {
             "name": "phase1_spec_to_rtl",
             "deterministic_first": ["phase1_one_shot_runner.py",
@@ -60,9 +102,15 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
             "verify": ["rtl_hygiene_lint.py", "spec_conformance_check.py",
                        "phase2-rtl-verify"],
         }},
-    # Given a partial interface/RTL → complete the design.
+    # Given a partial interface/RTL → complete the design. Enters at D1 because
+    # step 1 declares it reads ALL of D1's outputs; the supplied RTL is a SEED
+    # for that pass, not a substitute for the spec of what to complete.
     "completion": {
         "route": "plugin_loop",
+        "entry_step": "D1",
+        "then": ["1"],
+        "verify_steps": ["2", "4"],
+        "admission_gates": ["P0"],
         "plugin_entry": {
             "name": "completion_loop",
             "deterministic_first": ["cvdp_context_interface_recover.py",
@@ -72,8 +120,13 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
                        "phase2-rtl-verify"],
         }},
     # Given RTL → change its behaviour per a spec delta (functional ECO).
+    # Verified by 2 (rewrite fidelity) / 4 (simulation) / 5 (formal), NOT by 13.
     "functional_modification": {
         "route": "plugin_loop",
+        "entry_step": "D1",
+        "then": ["1"],
+        "verify_steps": ["2", "4", "5"],
+        "admission_gates": ["P0"],
         "plugin_entry": {
             "name": "modify_loop",
             "deterministic_first": ["cvdp_context_interface_recover.py",
@@ -82,18 +135,42 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
             "verify": ["equivalence-check", "phase2-rtl-verify",
                        "rtl_hygiene_lint.py"],
         }},
-    # Reduce area / pass lint thresholds (yosys cell/wire, verilator -Wall).
+    # Reduce area / pass lint thresholds. Step 2 declares exactly ONE input —
+    # `from: 1`, the RTL glob — so it is the only stage-1 step fully satisfiable
+    # from existing RTL alone, which is exactly what an optimization supplies.
+    # Step 9 follows because area is only measurable after synthesis.
     "optimization": {
         "route": "plugin_loop",
+        "entry_step": "2",
+        "then": ["9"],
+        "verify_steps": ["2", "4"],
+        "admission_gates": ["P0"],
         "plugin_entry": {
             "name": "optimize_loop",
             "deterministic_first": ["rtl_hygiene_lint.py"],
             "ai_backup": ["rtl-review", "synth-doctor", "ppa-predict"],
             "verify": ["equivalence-check", "phase2-rtl-verify"],
         }},
-    # Given buggy RTL → fix until it matches the spec. NOT a Phase-1 task.
+    # Given buggy RTL → fix it. Entry IS step 4, per the owner's directive, but
+    # step 4 reads two D1 artefacts for its stimulus. They are named here so the
+    # requirement is visible before the run, not discovered as a refusal; when
+    # they cannot be staged, `fallback_entry_step` says where to go and why.
     "debug": {
         "route": "plugin_loop",
+        "entry_step": "4",
+        "then": [],
+        "verify_steps": ["4", "5"],
+        "admission_gates": ["P0"],
+        "entry_requires": [
+            "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v",
+            "phase1/generated_docs/L10_TEST_CASES.json",
+            "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
+        ],
+        "fallback_entry_step": "D1",
+        "fallback_reason": ("step 4 reads L10_TEST_CASES.json and "
+                            "L12_BEHAVIORAL_SEQUENCES.json, which only D1 "
+                            "produces; without them staged there is no "
+                            "declared stimulus source to simulate against"),
         "plugin_entry": {
             "name": "debug_loop",
             "deterministic_first": ["cvdp_context_interface_recover.py",
@@ -103,6 +180,44 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
                        "formal-verify", "rtl_hygiene_lint.py"],
         }},
 }
+
+# Every id above must exist in the flow. A table naming a step the flow does
+# not declare is worse than no table: it reads as executable and is not.
+_FLOW_YAML = Path(__file__).resolve().parents[1] / "flow" / "phase1_phase2_phase3.yaml"
+
+
+def flow_step_ids(path: Optional[Path] = None) -> set:
+    """Every `- id:` declared in the canonical flow, as strings."""
+    p = Path(path) if path else _FLOW_YAML
+    try:
+        text = p.read_text(errors="replace")
+    except OSError:
+        return set()
+    return set(re.findall(r"^\s*-\s*id:\s*([\w.\-]+)\s*$", text, re.M))
+
+
+def validate_entries(path: Optional[Path] = None) -> List[str]:
+    """Return the problems with NATURE_ENTRY, empty when it is sound."""
+    ids = flow_step_ids(path)
+    if not ids:
+        return ["flow YAML unreadable — cannot validate entry steps"]
+    bad: List[str] = []
+    for nature, e in NATURE_ENTRY.items():
+        named = ([e.get("entry_step")] + list(e.get("then") or [])
+                 + list(e.get("verify_steps") or [])
+                 + list(e.get("admission_gates") or [])
+                 + ([e["fallback_entry_step"]] if e.get("fallback_entry_step")
+                    else []))
+        for sid in named:
+            if sid is None:
+                bad.append(f"{nature}: entry_step is unset")
+            elif str(sid) not in ids:
+                bad.append(f"{nature}: {sid!r} is not a step in the flow")
+        # The Change-4 regression guard: a loop LABEL is not a step id.
+        if str(e.get("entry_step", "")).endswith("_loop"):
+            bad.append(f"{nature}: entry_step is a loop label, not a step id")
+    return bad
+
 
 # A transform on existing RTL whose exact nature the caller has NOT pinned and
 # whose prose gave no usable hint. It routes to the modify_loop entry (the

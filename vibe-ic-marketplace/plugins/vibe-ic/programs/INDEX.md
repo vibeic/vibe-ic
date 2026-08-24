@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1209
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1209)
+- **Total programs (excluding helpers / shims):** 1211
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1211)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1200 |
+| `any` | 1202 |
 
 ## Alphabetical listing
 
@@ -960,6 +960,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rsp_example_otp_consistency_check` | any | — | L3 response examples must match L11 OTP content. |
 | `rtl_bug_report_schema_check` | any | v0.54 | v0.54 plugin gate |
 | `rtl_hygiene_lint` | any | v0.1.10 | General-purpose RTL hygiene checker. |
+| `rtl_interface_recover` | any | — | recover a module's PORT INTERFACE from RTL text. |
 | `rtl_precheck_gate` | any | v0.66 | aggregate every RTL static auditor into a single pass/fail gate. Intended to be called BEFORE any SOF/GDS burn so a developer can't ship ... |
 | `rtl_provenance` | any | — | provenance ledger for ``phase2/stage1/rtl/``. |
 | `rtl_response_byte_oracle_check` | any | — | P0.2 deterministic gate |
@@ -971,6 +972,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtllm_iface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read. |
 | `rtllm_port_bridge` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output... |
 | `rtllm_tier_pipeline` | any | — | the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE. |
+| `run_entry_manifest` | any | — | record WHICH STEP a run entered the flow at. |
 | `run_output_completeness_check` | any | — | the EMPTY / MISSING / STUB deliverable gate. |
 | `run_status` | any | — | ORGANIC #599. Universal runner watchdog. |
 | `rx_byte_assembler_ibt_flush_recovery_check` | any | Wave 15 | When a single-bit drop occurs (RX glitch on a half-duplex single-wire |
@@ -1281,7 +1283,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1200 programs)
+### `any` (1202 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2211,6 +2213,7 @@ _(no programs in this group)_
 - `rsp_example_otp_consistency_check` — L3 response examples must match L11 OTP content.
 - `rtl_bug_report_schema_check` — v0.54 plugin gate  _[v0.54]_
 - `rtl_hygiene_lint` — General-purpose RTL hygiene checker.  _[v0.1.10]_
+- `rtl_interface_recover` — recover a module's PORT INTERFACE from RTL text.
 - `rtl_precheck_gate` — aggregate every RTL static auditor into a single pass/fail gate. Intended to be called BEFORE any SOF/GDS burn so a developer can't ship ...  _[v0.66]_
 - `rtl_provenance` — provenance ledger for ``phase2/stage1/rtl/``.
 - `rtl_response_byte_oracle_check` — P0.2 deterministic gate
@@ -2222,6 +2225,7 @@ _(no programs in this group)_
 - `rtllm_iface_recover` — a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read.
 - `rtllm_port_bridge` — a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output...
 - `rtllm_tier_pipeline` — the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE.
+- `run_entry_manifest` — record WHICH STEP a run entered the flow at.
 - `run_output_completeness_check` — the EMPTY / MISSING / STUB deliverable gate.
 - `run_status` — ORGANIC #599. Universal runner watchdog.
 - `rx_byte_assembler_ibt_flush_recovery_check` — When a single-bit drop occurs (RX glitch on a half-duplex single-wire  _[Wave 15]_
