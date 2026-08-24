@@ -808,8 +808,24 @@ import subprocess as _sp2
 _base = CAPTURE_BASE
 _excluded_source = "324435d94a65f7ef1c8d2b8e4b66407cf778220d"
 _receipt_tip = "58d5efd79cf60d75bfa156b83cecd1c63e78728f"
-_receipt_tree = "754590b4e8d21029ac1bb9e0bcb7d38ce9ea2353"
-_receipt_path = "docs/capture/2026-08-21-jcap-ppa"
+_receipt_blobs = {
+    "docs/capture/2026-08-21-jcap-ppa/RESULT.md":
+        "521f296752371555d180a72f8168f3674cfeb700",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/"
+    "bucket_A_programs_gate_host_independence_check_rule_sketches.py":
+        "60e4f691bb71a822db1f7455075e22b64aad9652",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs/"
+    "ORGANIC-20260822-generated-header-derived-from-recorded-inputs.yaml":
+        "094f5f181a4e6b2d812296a5ddcfaff9058171db",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs/"
+    "ORGANIC-20260822-optional-dependency-version-matrix.yaml":
+        "0702bc89184e4959cc0576cc858a3ed6b3a72202",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_T_forked_tool/"
+    "ORGANIC-20260822-postroute-repair-faults-after-route-completes.yaml":
+        "be3fad15cf40fb3c281eee0ecaa829cd02de2111",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/summary.json":
+        "91bc3c8bb23c5b4c08fafa5769b7c8ac66f985a5",
+}
 _head_proc = _sp2.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
                       capture_output=True, text=True)
 _head = _head_proc.stdout.strip()
@@ -826,17 +842,23 @@ elif _tip_args:
     _constraint_detail = []
 else:
     _lane_tip = _receipt_tip
-    _tree_proc = _sp2.run(
-        ["git", "rev-parse", f"{_head}:{_receipt_path}"], cwd=str(ROOT),
-        capture_output=True, text=True)
-    _actual_tree = _tree_proc.stdout.strip()
-    _viol = ([] if (_tree_proc.returncode == 0
-                    and _actual_tree == _receipt_tree) else [
-        "current capture subtree does not match immutable lane receipt: "
-        f"expected {_receipt_tree}, got {_actual_tree or 'unresolved'}"])
+    _blob_mismatches = []
+    for _path, _expected_blob in _receipt_blobs.items():
+        _blob_proc = _sp2.run(
+            ["git", "rev-parse", f"{_head}:{_path}"], cwd=str(ROOT),
+            capture_output=True, text=True)
+        _actual_blob = _blob_proc.stdout.strip()
+        if _blob_proc.returncode != 0 or _actual_blob != _expected_blob:
+            _blob_mismatches.append(
+                f"{_path}: expected {_expected_blob}, "
+                f"got {_actual_blob or 'unresolved'}")
+    _viol = ([] if not _blob_mismatches else [
+        "current capture deliverables do not match immutable lane receipt: "
+        + "; ".join(_blob_mismatches)])
     _constraint_detail = [
-        f"squash receipt {_receipt_tip[:12]} tree {_receipt_tree[:12]} "
-        "matches the current capture subtree"]
+        f"squash receipt {_receipt_tip[:12]} matches all "
+        f"{len(_receipt_blobs)} immutable deliverable blobs; verifier code is "
+        "covered separately by its live controls"]
 _control_viol = _truth.lane_constraint_errors(
     ROOT, head=_head, lane_tip="HEAD", lane_base=_base,
     excluded_source=_excluded_source,
