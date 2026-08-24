@@ -146,6 +146,19 @@ _BASIS_CORNER_RE = re.compile(
     re.MULTILINE)
 _SIGNOFF_CORNER_COUNT_RE = re.compile(
     r"^\s*#?\s*STA_SIGNOFF_CORNER_COUNT\s*:\s*(\d+)", re.MULTILINE)
+#: THE DERATING STANCE, WHICH IS A CONDITION THE NUMBER IS TRUE UNDER.
+#: The emitter has stamped `OCV_DERATE_APPLIED early=… late=… <model>` since
+#: the multi-corner dialect existed and this module's own header shows the line
+#: -- and nothing read it. A derated analysis and an underated one of ONE design
+#: report different slacks BY CONSTRUCTION (derating is what makes the derated
+#: one pessimistic), so with the stance outside `scope` the two compare as one
+#: identity and an index is obliged to call two correct numbers a conflict.
+#: MEASURED on ppa-crosslayer/b000: 1.98 ns (mcorner OCV) vs 3.58 ns (SPEF
+#: based), same stage/mode/process/voltage/temperature, refused as
+#: CONFLICTING_RECORD.
+_OCV_DERATE_RE = re.compile(
+    r"^\s*#?\s*OCV_DERATE_APPLIED\s+early=(\S+)\s+late=(\S+)(?:\s+(\S+))?",
+    re.MULTILINE)
 
 # ── the emitter's own attestations that a query RAN ────────────────────────
 # Their ABSENCE is what separates "queried and clean" from "never asked", which
@@ -256,6 +269,12 @@ class Section:
     paths: Tuple[PathObservation, ...] = ()
     worst_paths_reported: Optional[bool] = None   # None => the report is silent
     worst_paths_failure: Optional[str] = None
+    #: `early=<e>,late=<l>[,<model>]` from `OCV_DERATE_APPLIED`, or None when
+    #: the section states nothing. None is NOT "no derating was applied": it is
+    #: "this artefact did not say", which is why `_ppa.timing` OMITS the scope
+    #: key rather than writing a value that would compare equal to another
+    #: silence.
+    ocv_derate: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -495,12 +514,22 @@ def parse_report(text: Optional[str], *, path: Optional[str] = None,
         basis_corners = tuple(
             match.group(1).strip()
             for match in _BASIS_CORNER_RE.finditer(block))
+        # Whole-file as well as in-section: the unbannered dialect can only
+        # state the stance once, at the top, and a section that inherits it is
+        # still analysed under it.
+        mo = _OCV_DERATE_RE.search(block) or _OCV_DERATE_RE.search(text or "")
+        ocv = None
+        if mo:
+            ocv = "early=%s,late=%s" % (mo.group(1), mo.group(2))
+            if mo.group(3):
+                ocv += "," + mo.group(3)
         return Section(
             check=check, process=process, rc_corner=rc, spef=spef,
             basis_corners=basis_corners, liberty=lib,
             banner=banner, line=start + 1, measurements=tuple(meas),
             paths=tuple(_parse_paths(block, start + 1)),
             worst_paths_reported=wp_ok, worst_paths_failure=wp_fail,
+            ocv_derate=ocv,
         )
 
     sections: List[Section] = []

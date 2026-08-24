@@ -1300,18 +1300,17 @@
   "value": 3.95,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
@@ -1321,7 +1320,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 3,
-   "raw": "worst slack max 3.95"
+   "raw": "worst slack max 3.95",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1333,21 +1333,20 @@
   "schema": "vibeic.ppa.metric.v1",
   "metric": "timing.setup.wns_ns",
   "status": "NOT_MEASURED",
-  "reason": "not_reported: the artefact carries no wns line for this view \u2014 the tool was not asked, or the query failed",
+  "reason": "not_reported: the artefact carries no wns line for this view — the tool was not asked, or the query failed",
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
@@ -1357,7 +1356,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": null,
-   "raw": null
+   "raw": null,
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1372,18 +1372,17 @@
   "value": 0.0,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
@@ -1393,7 +1392,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 4,
-   "raw": "tns max 0.00"
+   "raw": "tns max 0.00",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1408,16 +1408,15 @@
   "value": 3.95,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
    "clock": "clk",
    "check": "setup",
    "source_path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
-   "source_line": 5
+   "source_line": 5,
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
@@ -1431,7 +1430,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 5,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -1441,16 +1441,15 @@
   "value": 4.04,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
    "clock": "clk",
    "check": "setup",
    "source_path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
-   "source_line": 39
+   "source_line": 39,
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
@@ -1464,7 +1463,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 39,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -1474,16 +1474,15 @@
   "value": 4.17,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
    "clock": "clk",
    "check": "setup",
    "source_path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
-   "source_line": 73
+   "source_line": 73,
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
@@ -1497,7 +1496,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 73,
-   "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -1507,16 +1507,15 @@
   "value": 3.95,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
    "clock": "clk",
    "check": "setup",
    "source_path": "reports/phase3/sta_mcorner_ocv.rpt",
-   "source_line": 5
+   "source_line": 5,
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
@@ -1530,7 +1529,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 5,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -1540,16 +1540,15 @@
   "value": 4.04,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
    "clock": "clk",
    "check": "setup",
    "source_path": "reports/phase3/sta_mcorner_ocv.rpt",
-   "source_line": 39
+   "source_line": 39,
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
@@ -1563,7 +1562,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 39,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -1573,16 +1573,15 @@
   "value": 4.17,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
    "clock": "clk",
    "check": "setup",
    "source_path": "reports/phase3/sta_mcorner_ocv.rpt",
-   "source_line": 73
+   "source_line": 73,
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
@@ -1596,7 +1595,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 73,
-   "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._476_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -1606,18 +1606,17 @@
   "value": 0.37,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ff",
    "voltage_v": 1.95,
    "temperature_c": -40.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "hold"
+   "check": "hold",
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
@@ -1627,7 +1626,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 116,
-   "raw": "worst slack min 0.37"
+   "raw": "worst slack min 0.37",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1639,21 +1639,20 @@
   "schema": "vibeic.ppa.metric.v1",
   "metric": "timing.hold.wns_ns",
   "status": "NOT_MEASURED",
-  "reason": "not_reported: the artefact carries no wns line for this view \u2014 the tool was not asked, or the query failed",
+  "reason": "not_reported: the artefact carries no wns line for this view — the tool was not asked, or the query failed",
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ff",
    "voltage_v": 1.95,
    "temperature_c": -40.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "hold"
+   "check": "hold",
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
@@ -1663,7 +1662,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": null,
-   "raw": null
+   "raw": null,
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1675,21 +1675,20 @@
   "schema": "vibeic.ppa.metric.v1",
   "metric": "timing.hold.tns_ns",
   "status": "NOT_MEASURED",
-  "reason": "not_reported: the artefact carries no tns line for this view \u2014 the tool was not asked, or the query failed",
+  "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ff",
    "voltage_v": 1.95,
    "temperature_c": -40.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "hold"
+   "check": "hold",
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
@@ -1699,7 +1698,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": null,
-   "raw": null
+   "raw": null,
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1714,14 +1714,13 @@
   "value": 0.37,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "ff",
    "voltage_v": 1.95,
    "temperature_c": -40.0,
-   "rc_corner": null,
    "clock": "clk",
-   "check": "hold"
+   "check": "hold",
+   "sta_analysis": "sta_mcorner_ocv"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
@@ -1735,7 +1734,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 118,
-   "raw": "Startpoint: __uuf__._453_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._453_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 6,
   "_seen_at": [
@@ -1755,12 +1755,12 @@
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_spef_based"
   },
   "scope_gaps": {
-   "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+   "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_based.rpt",
@@ -1770,7 +1770,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 37,
-   "raw": "worst slack max 4.99"
+   "raw": "worst slack max 4.99",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1790,12 +1791,12 @@
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_spef_based"
   },
   "scope_gaps": {
-   "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+   "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_based.rpt",
@@ -1805,7 +1806,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 36,
-   "raw": "wns max 0.00"
+   "raw": "wns max 0.00",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1825,12 +1827,12 @@
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_spef_based"
   },
   "scope_gaps": {
-   "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+   "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_based.rpt",
@@ -1840,7 +1842,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 35,
-   "raw": "tns max 0.00"
+   "raw": "tns max 0.00",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1860,9 +1863,9 @@
    "process": "ss",
    "voltage_v": 1.6,
    "temperature_c": 100.0,
-   "rc_corner": null,
    "clock": "clk",
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_spef_based"
   },
   "scope_gaps": {
    "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
@@ -1875,7 +1878,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 1,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1890,17 +1894,17 @@
   "value": 6.18,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
    "temperature_c": 25.0,
    "rc_corner": "max",
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
@@ -1910,7 +1914,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 9,
-   "raw": "worst slack max 6.18"
+   "raw": "worst slack max 6.18",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1922,20 +1927,20 @@
   "schema": "vibeic.ppa.metric.v1",
   "metric": "timing.setup.wns_ns",
   "status": "NOT_MEASURED",
-  "reason": "not_reported: the artefact carries no wns line for this view \u2014 the tool was not asked, or the query failed",
+  "reason": "not_reported: the artefact carries no wns line for this view — the tool was not asked, or the query failed",
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
    "temperature_c": 25.0,
    "rc_corner": "max",
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
@@ -1945,7 +1950,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": null,
-   "raw": null
+   "raw": null,
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1960,17 +1966,17 @@
   "value": 0.0,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
    "temperature_c": 25.0,
    "rc_corner": "max",
-   "clock": null,
-   "check": "setup"
+   "check": "setup",
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
@@ -1980,7 +1986,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 10,
-   "raw": "tns max 0.00"
+   "raw": "tns max 0.00",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -1995,7 +2002,6 @@
   "value": 6.18,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2004,7 +2010,8 @@
    "clock": "clk",
    "check": "setup",
    "source_path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-   "source_line": 11
+   "source_line": 11,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2017,7 +2024,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 11,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2027,7 +2035,6 @@
   "value": 6.22,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2036,7 +2043,8 @@
    "clock": "clk",
    "check": "setup",
    "source_path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-   "source_line": 45
+   "source_line": 45,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2049,7 +2057,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 45,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2059,7 +2068,6 @@
   "value": 6.28,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2068,7 +2076,8 @@
    "clock": "clk",
    "check": "setup",
    "source_path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-   "source_line": 79
+   "source_line": 79,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2081,7 +2090,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 79,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2091,7 +2101,6 @@
   "value": 6.18,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2100,7 +2109,8 @@
    "clock": "clk",
    "check": "setup",
    "source_path": "reports/phase3/sta_spef_multicorner.rpt",
-   "source_line": 11
+   "source_line": 11,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2113,7 +2123,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 11,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2123,7 +2134,6 @@
   "value": 6.22,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2132,7 +2142,8 @@
    "clock": "clk",
    "check": "setup",
    "source_path": "reports/phase3/sta_spef_multicorner.rpt",
-   "source_line": 45
+   "source_line": 45,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2145,7 +2156,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 45,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2155,7 +2167,6 @@
   "value": 6.28,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2164,7 +2175,8 @@
    "clock": "clk",
    "check": "setup",
    "source_path": "reports/phase3/sta_spef_multicorner.rpt",
-   "source_line": 79
+   "source_line": 79,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2177,7 +2189,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 79,
-   "raw": "Startpoint: test (input port clocked by clk)"
+   "raw": "Startpoint: test (input port clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2187,17 +2200,17 @@
   "value": 0.62,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
    "temperature_c": 25.0,
    "rc_corner": "min",
-   "clock": null,
-   "check": "hold"
+   "check": "hold",
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
@@ -2207,7 +2220,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 121,
-   "raw": "worst slack min 0.62"
+   "raw": "worst slack min 0.62",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -2219,20 +2233,20 @@
   "schema": "vibeic.ppa.metric.v1",
   "metric": "timing.hold.wns_ns",
   "status": "NOT_MEASURED",
-  "reason": "not_reported: the artefact carries no wns line for this view \u2014 the tool was not asked, or the query failed",
+  "reason": "not_reported: the artefact carries no wns line for this view — the tool was not asked, or the query failed",
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
    "temperature_c": 25.0,
    "rc_corner": "min",
-   "clock": null,
-   "check": "hold"
+   "check": "hold",
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
@@ -2242,7 +2256,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": null,
-   "raw": null
+   "raw": null,
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -2254,20 +2269,20 @@
   "schema": "vibeic.ppa.metric.v1",
   "metric": "timing.hold.tns_ns",
   "status": "NOT_MEASURED",
-  "reason": "not_reported: the artefact carries no tns line for this view \u2014 the tool was not asked, or the query failed",
+  "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
    "temperature_c": 25.0,
    "rc_corner": "min",
-   "clock": null,
-   "check": "hold"
+   "check": "hold",
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
-   "stage": "report carries no STA_BASIS stamp"
+   "stage": "report carries no STA_BASIS stamp",
+   "clock": "not_applicable: this row is the DESIGN-WIDE figure and is not scoped to one clock; the per-clock evidence is `timing.*.worst_path_slack_ns`, which carries the clock it names"
   },
   "source": {
    "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
@@ -2277,7 +2292,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": null,
-   "raw": null
+   "raw": null,
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   },
   "_seen_times": 2,
   "_seen_at": [
@@ -2292,7 +2308,6 @@
   "value": 0.62,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2301,7 +2316,8 @@
    "clock": "clk",
    "check": "hold",
    "source_path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-   "source_line": 123
+   "source_line": 123,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2314,7 +2330,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 123,
-   "raw": "Startpoint: __uuf__._444_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._444_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2324,7 +2341,6 @@
   "value": 0.64,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2333,7 +2349,8 @@
    "clock": "clk",
    "check": "hold",
    "source_path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-   "source_line": 151
+   "source_line": 151,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2346,7 +2363,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 151,
-   "raw": "Startpoint: __uuf__._503_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._503_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2356,7 +2374,6 @@
   "value": 0.64,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2365,7 +2382,8 @@
    "clock": "clk",
    "check": "hold",
    "source_path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-   "source_line": 179
+   "source_line": 179,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2378,7 +2396,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 179,
-   "raw": "Startpoint: __uuf__._453_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._453_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2388,7 +2407,6 @@
   "value": 0.62,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2397,7 +2415,8 @@
    "clock": "clk",
    "check": "hold",
    "source_path": "reports/phase3/sta_spef_multicorner.rpt",
-   "source_line": 123
+   "source_line": 123,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2410,7 +2429,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 123,
-   "raw": "Startpoint: __uuf__._444_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._444_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2420,7 +2440,6 @@
   "value": 0.64,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2429,7 +2448,8 @@
    "clock": "clk",
    "check": "hold",
    "source_path": "reports/phase3/sta_spef_multicorner.rpt",
-   "source_line": 151
+   "source_line": 151,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2442,7 +2462,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 151,
-   "raw": "Startpoint: __uuf__._503_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._503_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -2452,7 +2473,6 @@
   "value": 0.64,
   "unit": "ns",
   "scope": {
-   "stage": null,
    "mode": "functional",
    "process": "tt",
    "voltage_v": 1.8,
@@ -2461,7 +2481,8 @@
    "clock": "clk",
    "check": "hold",
    "source_path": "reports/phase3/sta_spef_multicorner.rpt",
-   "source_line": 179
+   "source_line": 179,
+   "sta_analysis": "sta_spef_multicorner"
   },
   "scope_gaps": {
    "stage": "report carries no STA_BASIS stamp"
@@ -2474,7 +2495,8 @@
    "parser": "_ppa/backends/opensta.py",
    "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
    "line": 179,
-   "raw": "Startpoint: __uuf__._453_ (rising edge-triggered flip-flop clocked by clk)"
+   "raw": "Startpoint: __uuf__._453_ (rising edge-triggered flip-flop clocked by clk)",
+   "sta_analysis_declared_in": "_ppa/contract.py:LEGACY_DISTINCT_STA_ANALYSES"
   }
  },
  {
@@ -3386,7 +3408,7 @@
   "metric_class": "SYNTH_PROXY",
   "eligible_for_physical_ppa": false,
   "status": "INVALID",
-  "reason": "the statistics block for 'spm' carries no `Chip area for module` line \u2014 it is a pre-techmap (generic) block, which has no area at all",
+  "reason": "the statistics block for 'spm' carries no `Chip area for module` line — it is a pre-techmap (generic) block, which has no area at all",
   "scope": {
    "stage": "synth_generic",
    "tool": "yosys",

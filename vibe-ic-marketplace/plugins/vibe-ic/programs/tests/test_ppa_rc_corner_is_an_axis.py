@@ -169,6 +169,27 @@ def test_two_reports_timed_against_different_parasitics_are_not_one_identity(
     assert sorted(r["scope"]["rc_corner"] for r in kept) == ["max", "min"]
 
 
+#: The control below must differ in ONE variable. `MCORNER_UNNAMED` stamps
+#: `OCV_DERATE_APPLIED` and `SINGLE_UNNAMED` does not, which did not matter
+#: while the derating stance was outside `scope` -- and became the whole answer
+#: the moment it went in (2026-08-25): the pair stopped conflicting for a
+#: reason that has nothing to do with parasitics, and the control silently
+#: stopped controlling. The fixture below holds the stance EQUAL so the RC
+#: corner is the only thing left unread.
+#:
+#: MEASURED, because a control that is not itself controlled is a comment.
+#: Striking `rc_corner` out of `_scope`'s output kills 4 of this file's 22
+#: tests -- `test_two_reports_timed_against_different_parasitics_are_not_one_
+#: identity` and the three establishment arms -- and this control is NOT among
+#: them, which is correct: REMOVING an axis can only make more things collide,
+#: so a test that asserts a collision cannot detect that loss. The harm test is
+#: what catches it; this one exists so the harm test's pass cannot come from a
+#: confound, and it can only do that job while the two fixtures differ in one
+#: variable.
+_SINGLE_UNNAMED_DERATED = (
+    "OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV\n" + SINGLE_UNNAMED)
+
+
 def test_the_same_two_reports_that_name_no_parasitics_still_conflict(tmp_path):
     """POSITIVE CONTROL. Strike the SPEF out of both artefacts and the conflict
     comes back — so the test above is exercising the axis, not a fixture that
@@ -177,7 +198,7 @@ def test_the_same_two_reports_that_name_no_parasitics_still_conflict(tmp_path):
     index is right to refuse it."""
     proj = _project(tmp_path, {
         "sta_mcorner_ocv.rpt": MCORNER_UNNAMED % {"lib": _LIB},
-        "sta_spef_based.rpt": SINGLE_UNNAMED % {"lib": _LIB},
+        "sta_spef_based.rpt": _SINGLE_UNNAMED_DERATED % {"lib": _LIB},
     })
     rows, _notes = timing.timing_rows(proj)
     _idx, codes = _index(rows)

@@ -89,6 +89,7 @@ __all__ = [
     "SEV_FAIL", "SEV_UNDETERMINED", "SEV_NOTE", "FINDING_CODES",
     "DEFAULT_AUTHORITY_ORDER", "POWER_BASIS_POLICIES",
     "METRIC_ARTEFACT_AUTHORITY", "METRIC_AUTHORITY_REASON",
+    "LEGACY_DISTINCT_STA_ANALYSES", "LEGACY_DISTINCT_STA_ANALYSES_REASON",
     "metric_authority_rank", "resolve_metric_conflict",
     "build", "validate", "rc_from", "contract_digest_of", "load_json",
     "format_findings", "marker_for", "denominators",
@@ -184,6 +185,40 @@ METRIC_AUTHORITY_REASON = {
         "(M in-loop). The published result is the verified one.` The log's "
         "summary is M; openroad.metrics.json carries N."),
 }
+
+
+#: THE ONE THING A MAINTAINER DECLARED THAT NO ARTEFACT CAN STILL SAY.
+#:
+#: `_ppa/backends/opensta` now reads `OCV_DERATE_APPLIED` out of a report and
+#: `_ppa.timing` carries it as the `ocv_derate` scope axis, so any run from
+#: v1.11.80 on states its own derating stance and needs nothing from here.
+#: The published `ppa-crosslayer` / `ppa-e2e` records predate that, AND their
+#: reports are gone -- 5664 candidate `sta_*.rpt` files on the build host were
+#: hashed and none matches the digests those records cite. So the stance of
+#: those three artefacts cannot be read, only DECLARED.
+#:
+#: OWNER RULING 2026-08-25: `sta_mcorner_ocv` and `sta_spef_based` are two
+#: sign-off ANALYSES of one design, not two readings of one fact. On b000 they
+#: report `timing.setup.worst_slack_ns` = 1.98 ns and 3.58 ns at the same
+#: stage, mode, process, voltage and temperature, and the derated one being the
+#: pessimistic one is what derating does. Without this the index refuses the
+#: pair as CONFLICTING_RECORD -- correctly, on the evidence it has.
+#:
+#: WHAT THIS IS AND IS NOT. It is an ALLOW-LIST of three artefact stems from
+#: two named campaigns, consumed ONLY by `_ppa/records_migrate` and never by a
+#: parser. It is deliberately not a rule of the form "a report name tells you
+#: what the report is": `test_ppa_rc_corner_is_an_axis` contains a positive
+#: control written precisely to catch such a rule, and a rule like that would
+#: also silence a REAL disagreement between two artefacts of one analysis. A
+#: stem outside this tuple gets nothing, and the conflict stands.
+LEGACY_DISTINCT_STA_ANALYSES: Tuple[str, ...] = (
+    "sta_mcorner_ocv", "sta_spef_based", "sta_spef_multicorner")
+
+LEGACY_DISTINCT_STA_ANALYSES_REASON = (
+    "owner ruling 2026-08-25: these are separate sign-off analyses of one "
+    "design, so their figures are two facts. Declared rather than read "
+    "because the reports these published records cite no longer exist; every "
+    "run since v1.11.80 stamps its own `ocv_derate` and does not use this.")
 
 
 def metric_authority_rank(metric: str, artefact_kind: Optional[str]) -> Optional[int]:

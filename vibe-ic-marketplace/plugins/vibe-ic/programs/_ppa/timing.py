@@ -170,7 +170,7 @@ _PATH_SCOPE_KEYS = ("path_startpoint", "path_endpoint", "path_ordinal")
 _PATH_METRIC_SUFFIX = ".worst_path_slack_ns"
 
 _SCOPE_KEYS = ("stage", "mode", "process", "voltage_v", "temperature_c",
-               "rc_corner", "clock", "check")
+               "rc_corner", "clock", "check", "ocv_derate")
 
 #: The extraction producer's closed RC-corner vocabulary. These are flow
 #: roles, not PDK names: every active PDK maps its own extraction models onto
@@ -460,13 +460,17 @@ _SCOPE_OMISSION_REASON = {
               "scoped to one clock; the per-clock evidence is "
               "`timing.*.worst_path_slack_ns`, which carries the clock it names"),
     "check": "this section labels neither a setup nor a hold check",
+    "ocv_derate": ("this section stamps no `OCV_DERATE_APPLIED`, so the "
+                   "derating stance it was analysed under is unread. That is "
+                   "NOT a statement that no derating was applied"),
 }
 
 
 def _scope(stage: Optional[str], mode: Optional[str], process: Optional[str],
            voltage_v: Optional[float], temperature_c: Optional[float],
            rc_corner: Optional[str], clock: Optional[str],
-           check: Optional[str]) -> Dict[str, Any]:
+           check: Optional[str], *,
+           ocv_derate: Optional[str] = None) -> Dict[str, Any]:
     """The scope keys this artefact ESTABLISHED, in the frozen order.
 
     A key the producer could not establish is ABSENT, never `null`. Until
@@ -493,7 +497,8 @@ def _scope(stage: Optional[str], mode: Optional[str], process: Optional[str],
     """
     full = {"stage": stage, "mode": mode, "process": _ident(process),
             "voltage_v": voltage_v, "temperature_c": temperature_c,
-            "rc_corner": _ident(rc_corner), "clock": clock, "check": check}
+            "rc_corner": _ident(rc_corner), "clock": clock, "check": check,
+            "ocv_derate": ocv_derate}
     # `""` as well as None: the empty string is §6.1's third sentinel and
     # `"" == ""` compares equal exactly the way `null == null` does.
     return {k: v for k, v in full.items() if v is not None and v != ""}
@@ -831,7 +836,8 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
 
         for check in checks:
             scope = _scope(stage, mode, process, pvt.voltage_v,
-                           pvt.temperature_c, rc_corner, None, check)
+                           pvt.temperature_c, rc_corner, None, check,
+                           ocv_derate=sec.ocv_derate)
             # ONE gap map per view, so every row of the view explains the same
             # absences the same way. `clock` is absent here by DESIGN, not by
             # failure -- `report_worst_slack` is a design-wide figure -- and
@@ -919,7 +925,8 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
             key = (p.clock, check)
             ordinals[key] = ordinals.get(key, 0) + 1
             scope = _scope(stage, mode, process, pvt.voltage_v,
-                           pvt.temperature_c, rc_corner, p.clock, check)
+                           pvt.temperature_c, rc_corner, p.clock, check,
+                           ocv_derate=sec.ocv_derate)
             start, end = _path_names(p)
             identifies = bool(start and end) and named_seen.get(
                 (start, end, p.clock, check), 0) == 1
