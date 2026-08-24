@@ -263,6 +263,136 @@ and is exempt):
    directory-leaf module name back to the prose typo (a re-author regressed exactly this way).
    *why_not_bucket_a*: distinguishing a typo from a genuine intended wrapper-name requires
    contextual judgment (read the prose against the file layout) — no regex separates the two.
+7. **OWNERSHIP IS READ FROM DISK, NEVER FROM THE ORCHESTRATOR'S MEMORY**
+   (2026-08-24 CVDP v1.11.72 run — FIVE assignment collisions in one run, all
+   from the same root cause). Driving ~8 concurrent authoring agents, the
+   orchestrator decided who owned what from its own dispatch history plus file
+   mtimes. Both are unreliable:
+
+   - **NEITHER liveness signal is usable — only the artefact is.** Two things
+     look like status and are not:
+
+     | signal | what it actually means |
+     |---|---|
+     | agent `idle_notification` | available to RECEIVE a message; says nothing about work state |
+     | quiet file (mtime) | could be thinking, could be stopped; no threshold separates them |
+     | **emit path's LAST artefact exists AND its size matches** | **done** |
+
+     mtime was wrong **five times out of five**: an agent declared stalled after
+     3–20 minutes of a quiet file was alive every time, including one that went
+     6/10 → 9/10 within minutes of being flagged cold. These agents take up to
+     7 minutes before their FIRST write and think for minutes between problems.
+
+     Idle notifications were equally misleading — agents emitted them **while
+     actively authoring**, one sending three in the same minute its file
+     advanced by three problems. Treating "idle" as "free" and reassigning its
+     batch is a collision every time.
+
+     **To learn whether an agent is alive, ASK IT** — "one line: still on X,
+     which item?". That is the only signal that ATTRIBUTES.
+
+     **File growth does NOT attribute.** Two time-separated samples showing a
+     file advancing prove SOMEONE is writing; they say nothing about WHO. In
+     that run the orchestrator cited a batch going 3/10 → 7/10 → 9/10 as proof
+     that its supposed owner was alive — and it was a DIFFERENT agent's writes
+     entirely. The supposed owner had never written a byte to that file; its
+     own ownership check had refused its first append. So one agent's activity
+     was used as evidence about another agent, and assignments were made on it.
+     That is the roster error one level down, and it is harder to spot because
+     the observation itself is true.
+
+     Use two-sample growth only for the claim it actually supports — **this
+     FILE is live, do not touch it** — never for "agent A is alive".
+   - **A handoff needs BOTH sides told AND the old owner's acknowledgement.**
+     Inter-agent messages are not synchronous. Twice the new owner was told
+     "batch N is yours" and the old owner "drop batch N", and the second
+     message landed after the old owner had already started. Correct order:
+     tell the OLD owner to stop → wait for its ack → only then release to the
+     new owner.
+   - **A roster held in the orchestrator's head loses entries.** An agent
+     dispatched early still held three batches; the orchestrator forgot and
+     re-assigned two of them.
+
+   **AN ID-PRESENCE CHECK IS NOT A COLLISION CHECK — this is the load-bearing
+   correction, and it took EIGHT collisions to reach.** The brief in (a) below
+   tells each agent to re-read the file and stop if it sees lines it did not
+   write. Agents implemented that as "is this id already present?", which
+   **cannot fire by construction**: two agents assigned the same batch are
+   authoring DIFFERENT ids, so each sees only its own as present and both
+   append. One agent appended into another's file, noticed, and had to revert
+   by truncating its own byte-tail.
+
+   The guard must answer **"who owns this file"**, not **"what is in it"**:
+
+   * write an **ownership stamp at claim time** — e.g. `<file>.owner` containing
+     the agent name — and require every writer to check it matches before
+     appending; or
+   * take a **per-batch lock file** for the duration of the work.
+
+   Content inspection can only detect a collision AFTER both agents have
+   written, which is exactly too late. Keep the brief in (a) as defence in
+   depth — it caught the collisions where the other agent had already
+   written — but do not rely on it as the primary mechanism, and do not
+   conclude from "no corruption yet" that it is sufficient. It was not.
+
+   **What made this survivable — brief every agent with all four:**
+   (a) RE-READ the target file before every append — **including the FIRST
+   one, which is the case that matters most** — and STOP + report if it holds
+   lines you did not write; never append, never truncate. One agent checked
+   only before each *subsequent* append and so discovered a whole foreign batch
+   at problem 11, having already thrown away two problems of authored work; the
+   window between the orchestrator's "verified empty" and that agent's first
+   write was ~14 minutes, which is enough for an entire batch to be authored
+   and gated by someone else;
+   (b) a PRIVATE scratch dir per agent (a shared scratchpad let one agent's RTL
+   be silently overwritten by another's, and the emitted record then paired one
+   agent's prose with another's code);
+   (c) never gate a file another agent may still be writing — two concurrent
+   gate runs write the same responses file;
+   (d) count and diff by ID, never by line count (rule 8).
+   Every collision in that run was caught by an agent stopping to ask. Zero
+   files were corrupted. **The brief saved the data, not the coordination.**
+
+   **Verify a completion CLAIM on disk — but check the LAST-WRITTEN artefact.**
+   The emit chain writes several files, and checking the FIRST one races the
+   agent mid-write. In that run an agent reported a batch "gated 10/10", a
+   check found nothing, and a second check two minutes later found all ten:
+   the writes had landed at 23:27:07 (drafts) and 23:27:22 (responses +
+   report), squarely between the two checks. The agent's report had been
+   accurate the whole time.
+
+   **A read-after-write race looks EXACTLY like a lost-output bug.** Both
+   present as "the agent says it finished and the file is not there". Reacting
+   to the absence produced a fabricated cause (a relative-vs-absolute path
+   theory), an instruction to a second agent to redo work that already existed,
+   and an instruction to the first agent to hunt for output that was never
+   lost — all from one snapshot taken a minute early.
+
+   The fix is a **completion MARKER, not a progress file**: `cvdp_gate.py`
+   writes `reports/cvdp_gate_<batch>.json` LAST, so its presence means the
+   whole trio is on disk. Generally: pick the artefact the emit path writes
+   last and make ITS existence the done-signal. Never infer completion from
+   the file the agent appends to incrementally — that file is non-empty
+   throughout the work and complete only at the end, so it cannot distinguish
+   "in progress" from "done".
+8. **`wc -l` UNDERCOUNTS A JSONL — count by parsing, diff by id**
+   (same run). `wc -l` counts NEWLINES. A JSONL whose last record was appended
+   without a trailing `\n` reports one fewer than it holds, and under
+   concurrent appends the total visibly oscillates.
+
+   Measured cost in that run: two batches that were COMPLETE at 10/10 read as
+   9 and 8, were diagnosed as unfinished, had agents dispatched to "finish"
+   them, and one duplicate completion was authored before the id count and the
+   line count disagreed loudly enough to notice. A separate 124→119 "drop" was
+   read as a truncation that never happened.
+
+   ```python
+   n       = sum(1 for l in open(f) if l.strip())            # count
+   missing = [i for i in want if i not in have]              # what to author
+   ```
+   Verify integrity with the id multiset (duplicates / foreign ids), not the
+   length — a file can have the right count and the wrong contents. Put this in
+   the agents' brief too; they reach for `wc -l` as readily as the orchestrator.
 
 #### Shape D — Agentic with runner (SoC / multi-task)
 **When**: agentic benchmarks where the unit-of-work is a full SoC + cocotb harness (CVDP). The
@@ -396,7 +526,329 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-### § 4.05 — Verifying a guard-RELAXING fix: the NEGATIVE no-leak proof is the load-bearing half (ORGANIC #511)
+#### § 4.029 — The CVDP response format is CONDITIONAL on the expected file COUNT
+
+`src/model_helpers.py :: determine_schema(files)` switches format on how many
+files the problem expects to change:
+
+| expected output files | format the scorer accepts |
+|---|---|
+| exactly 1 | `no_schema=True` — the completion is raw text, written into that file |
+| **more than 1** | **JSON object mapping filename → content**; plain code does not parse |
+
+Emitting plain code unconditionally therefore works for single-file problems and
+**silently produces nothing** for multi-file ones — the extra files never
+materialize and the harness dies on `No such file or directory` /
+`Unable to find the root module`.
+
+Measured on the 2026-08-24 run, excluding the separately-broken cid007:
+
+    expected >1 output file :   0/5   =  0.0%
+    expected  1 output file : 176/257 = 68.5%
+
+**0 out of 5 is not a difficulty cliff.** A whole class failing uniformly is the
+infrastructure signature of § 4.031 — read it that way and check the format
+before triaging the answers.
+
+**Gate rule:** the emit path must read the problem's expected output-file list,
+and refuse to emit a bare code blob when that list has more than one entry.
+Count the expected files BEFORE authoring, not after scoring.
+
+### § 4.030 — `cvdp_gate`'s alias wrappers are NOT harmless: they fail `verilator -Wall`
+
+`cvdp_gate.py` appends **thin pass-through alias wrappers** to every completion so
+the scorer's `iverilog -s <top>` binds whatever name the hidden harness picked.
+For record id `cvdp_copilot_<stem>` it emits a wrapper for the prefixed name, the
+bare stem, and the **word-order-REVERSED stem**. Measured over the 2026-08-24 run:
+
+| wrappers the gate ADDED | responses |
+|---|---|
+| 3 | 101 |
+| 2 | 172 |
+| 1 | 20 |
+| 0 | 9 |
+
+**31 of the added names were reversed-word forms** — `gray_to_binary` wrapping a
+binary→gray implementation, `rotate_data_adc`, `op_dsp_apb`.
+
+This is the GATE, not the authors: `binary_to_gray_0013`'s draft declares one
+module, `binary_to_gray`; its response declares `binary_to_gray`,
+`cvdp_copilot_binary_to_gray`, and `gray_to_binary`.
+
+`cvdp_harness_toplevel_alias.py`'s own comment states the premise that fails:
+
+> "unused wrappers are dead code the scorer's `-s <top>` never elaborates, so they
+> are **harmless**"
+
+**They are not harmless under `verilator --lint-only -Wall`**, which some CVDP
+problems run as a SCORED `lint` test and which exits non-zero on ANY warning:
+
+| warning | in how many of the 23 cid007 lint failures |
+|---|---|
+| **MULTITOP** — modules nothing instantiates | **22** |
+| **DECLFILENAME** — first module ≠ filename | **21** |
+
+The harness's own `lint_config.vlt` waives DECLFILENAME only for the golden's
+single module matching its file stem, confirming the expected shape is ONE top.
+
+**Verified fix, both directions tested on `binary_to_gray_0013`.** Guard the
+appended wrappers so verilator never sees them:
+
+```verilog
+`ifndef VERILATOR
+module cvdp_copilot_binary_to_gray(...); ... endmodule
+module gray_to_binary(...);            ... endmodule
+`endif
+```
+
+| tool | before | after |
+|---|---|---|
+| `verilator --lint-only -Wall` | EXIT=1 | **EXIT=0** |
+| `iverilog -g2012 -s <each of 3 names>` | binds | **still binds all three** |
+| yosys (`hierarchy -check -top X`) | unaffected | unaffected (16/16 synth passed) |
+
+**The transferable rule, beyond this gate:** *"dead code is harmless" holds only
+for the tools you tested.* A recovery mechanism invisible to one tool can be a
+hard failure in another that reads the same file. Enumerate every tool the
+artifact is fed to — simulator, linter, synthesiser — not just the one the
+mechanism was designed for.
+
+### § 4.031 — Run the preflight with ALL its arguments, or it silently checks less
+
+`cvdp_env_preflight.py --image <sim>` returns `PASS, deviations: []` — and that
+PASS covers only the SIM image. The `OSS_PNR_IMAGE` requirement (#714) is
+checked **only when `--problem-dir` is also passed.** A partial invocation does
+not warn that it checked less; it returns the same clean verdict a complete one
+does.
+
+**What that cost, measured 2026-08-24.** A 302-problem CVDP run was scored on
+that PASS. One category collapsed:
+
+| category | score |
+|---|---|
+| cid016 debug | 26/35 = 74.3% |
+| cid003 spec generation | 56/78 = 71.8% |
+| cid004 functional modification | 39/55 = 70.9% |
+| cid002 completion | 55/94 = 58.5% |
+| **cid007 optimization** | **1/40 = 2.5%** |
+
+Each cid007 problem runs TWO tests. The `sanity` (functional) test mostly
+PASSED; the `synth` (area) test failed on
+
+    ERROR: pull access denied — docker.io/nvidia/cvdp-sim:v1.0.0
+
+Area-opt harnesses need a SECOND image. **Unset, `OSS_PNR_IMAGE` defaults to the
+GATED NVIDIA image**, which nobody outside the access programme can pull. Set
+both:
+
+```bash
+OSS_SIM_IMAGE=<oss-sim> OSS_PNR_IMAGE=<oss-sim> python3 run_benchmark.py …
+```
+
+Re-running the preflight WITH `--problem-dir` says so outright — `REFUSING to
+score … oss_pnr_image_set: false, oss_pnr_image_materialized_gated: true` — so
+the guard worked; it was never given the argument that turns it on.
+
+**Two rules follow, and the second is the general one:**
+
+1. Pass every argument a preflight or validator accepts, or state explicitly
+   which checks each omitted one disables. A PASS is scoped to what was
+   supplied, and nothing in the output tells you that scope.
+2. **A single category collapsing while its siblings are normal is an
+   INFRASTRUCTURE signature, not a capability one.** 2.5% against 58-74% is not
+   a difficulty cliff — uniform failure inside one class means something
+   environmental applies to exactly that class. Diagnose the environment before
+   triaging the answers, and do not publish the number until it is resolved.
+
+### § 4.032 — "New top, dependency-only context": carry a locally-named primitive
+
+The extend-don't-replace rule (§ 2 shape-C brief, rule 2) says a completion
+whose deliverable file IS one of the given `context` files must carry BOTH the
+original module and the new top. **It does not cover the case where the
+deliverable is a NEW module and the only context file is its DEPENDENCY.**
+
+That case is genuinely ambiguous and both obvious answers can fail:
+
+* **include the dependency** in the payload → duplicate module definition if the
+  original context file also survives into the scoring tree;
+* **omit it** → nothing elaborates if the completion overwrites that path.
+
+The author cannot tell which from the prompt, because it depends on how the
+harness assembles the tree.
+
+**Recipe that is correct either way:** have the payload carry a
+**locally-named, behaviourally identical** copy of the primitive. It elaborates
+whether or not the original file survives, and it collides with nothing.
+Observed on `ping_pong_buffer_0001`, whose only context file was its
+`dual_port_memory.sv` dependency.
+
+### § 4.033 — CVDP BARE records: port widths must be SELF-CONTAINED
+
+For a **bare** record — one whose prompt carries no ```verilog skeleton and no
+`Module Name:` line — `cvdp_gate` appends its own harness-toplevel alias wrapper
+and **copies the port list VERBATIM**. So a port whose width depends on a
+MODULE-LOCAL function does not compile in the generated wrapper, and the record
+is BLOCKED as `roundtrip-reparse-failed (#535)`.
+
+Observed 2026-08-24: a `strobe_divider` port declared
+`[log2ceil(MaxRatio_g)-1:0]` — taken straight from the prompt's OWN skeleton —
+blocked exactly this way. Write the width self-contained instead
+(`[$clog2(MaxRatio_g)-1:0]`).
+
+Three things make this worth a rule rather than a footnote:
+* the failure is in **generated code the author never sees**;
+* the block message names the round-trip, not the port, so it does not point at
+  the cause;
+* **copying the prompt's own skeleton is what triggers it** — the instinct that
+  is right everywhere else is wrong here.
+
+Applies to any bare record whose ports use a module-local function.
+
+### § 4.035 — A VALUE bug and a LATENCY bug listed together are usually ONE bug
+
+When a debug/repair prompt documents both a wrong OUTPUT VALUE and a wrong
+CYCLE COUNT, check whether a single missing or mis-sized pipeline stage explains
+both before treating them as independent defects. Three cases in the 2026-08-24
+CVDP run had exactly this shape:
+
+* `modified_booth_mul_0002` — the prompt lists a wrong product AND a wrong
+  latency. One cause: non-blocking assignments inside a `for` loop, so only the
+  LAST partial product survived, and the same state needed to span `WIDTH/2`
+  cycles rather than one. Fixing the state's duration fixed the value and the
+  6/8-cycle latencies together; all 15 documented vectors then reproduced.
+* `montgomery_0002` — the prompt's "Issue 1" (wrong value) and "Issue 2"
+  (`valid_out` misaligned) were one defect: the R-mod-N constant should have
+  been R²-mod-N, which revealed a MISSING FOURTH redc stage. Adding the stage
+  fixed the value and the timing in one change, because the extra stage IS the
+  missing pipeline cycle.
+* `counter_0039` — the same family from the other direction: what looked like
+  redundant expressions was redundant STATE (§ 4.04).
+
+Why this is worth a rule: fixing them separately produces two changes that each
+half-work, and the second "fix" often re-breaks the first. **Ask what single
+structural fact — a stage that does not exist, a state that lasts one cycle
+instead of N — would produce BOTH symptoms**, and test that hypothesis before
+patching either symptom.
+
+*why_not_bucket_a*: recognising that two listed symptoms share one structural
+cause is a reading of the design's dataflow against the prompt's table; no
+deterministic check pairs them.
+
+### § 4.04 — AREA-OPTIMIZATION problems: reproduce the HARNESS's measurement (2026-08-24)
+
+A prompt that demands a measurable reduction ("wires −19%, cells −22%") is graded
+by the problem's own synth harness, and **that harness does not measure what a
+hand-rolled `yosys -p 'synth -top T; stat'` measures.** Two differences, both
+load-bearing:
+
+1. **The baseline is a hardcoded constant, not a re-synthesis of the original.**
+   `docker-compose.yml` carries `WIRES`/`CELLS`/`PERCENT_*` as environment
+   variables; `synth.py` synthesizes ONLY the candidate and compares against
+   those literals. Re-synthesizing the original yourself answers a different
+   question than the one being scored.
+2. **The flow is a specific `synth.tcl`** — `proc; opt; fsm; opt; memory; opt;
+   techmap; opt; synth -top; clean` — run inside the harness's container. On
+   `cont_adder_0045` that flow reports the original at **810** wires where a bare
+   `synth -top` reports **722**. Different flow, different denominator.
+
+Read `harness/<n>/src/synth.tcl` and the compose env, and reproduce THAT.
+
+#### ⚠️ RETRACTION — the "yosys already did it, expect 0%" claim was a measurement artifact
+
+An earlier revision of this section asserted, from a measurement on
+`cont_adder_0045`, that removing a dead 32-bit register, sharing a repeated
+adder, and folding six parameter comparators into two produced
+
+    original   wires 411  cells 591
+    "optimized" wires 411  cells 591     ← 0%
+
+and concluded that yosys already performs DCE and CSE so hand-writing them is
+worthless. **That is wrong. The official scorer PASSED that exact answer at
+−45.4 % wires / −34.3 % cells** (810→442 against the harness baseline of 820/1000,
+thresholds 19 %/22 %). Reproduced on the host afterwards: harness flow 810→442,
+bare `synth` flow 722/902→447/662 (−38 %/−27 %). The edits were never a no-op.
+
+**The signature that should have caught it, and the general rule:**
+
+> **An EXACT tie on every metric at once (411 = 411 AND 591 = 591) is the
+> signature of measuring the SAME INPUT TWICE — not of a change that did
+> nothing.** Two genuinely different sources agreeing to the unit on two
+> independent counts is a coincidence you should refuse to believe. A real no-op
+> rewrite ties because it is byte-identical after elaboration; a substantive
+> rewrite that ties means the "before" and "after" paths read the same file.
+> Before drawing ANY conclusion from a zero delta, prove the two runs consumed
+> different bytes — diff the inputs, or perturb one and watch the number move.
+
+The damage was not the wrong number, it was the **theory built on it**: a general
+claim about what synthesis tools already do, shipped into this skill and into
+memory, derived from a single unverified zero. When a measurement contradicts
+what the edit plainly should do, suspect the measurement first.
+
+**Where the wins actually are — `sorter_0059`:** loop
+variables declared `integer` (32-bit) for values 0..8, sized to the range →
+**−36.8% wires / −36.5% cells**, cycle-identical over 60 runs. The pattern is an
+**OVERSIZED DECLARED TYPE**, which no synthesis pass may narrow because the
+width is exactly what the source states. Look for `integer` indices,
+default-width literals, counters wider than their range, and accumulators sized
+above their proven bound.
+
+**A third category, and the one that needed the most attempts to find:**
+**state yosys cannot prove redundant.** On `counter_0039` an agent's first
+three attempts landed at or ABOVE baseline — again because the tool had already
+done the obvious sharing. What moved it was observing that two of the design's
+six counters are provably a COPY and a NEGATION of a third, and deleting them.
+Yosys will not do that: proving one register always equals another (or its
+complement) across reset, enable and rollover is a sequential-equivalence
+argument, not a local peephole. The measured result was −20.5% wires / −25.2%
+cells with cycle-accurate equivalence over 40k random cycles across three
+parameterisations.
+
+So the three area-opt categories, in order of what a tool can already do:
+
+| category | can yosys do it? | example |
+|---|---|---|
+| expression restructuring, dead code, CSE | **partly — measure, do NOT assume 0%** (`cont_adder_0045` scored −45%/−34% doing exactly this) | shared adder, folded comparators |
+| structural round-trip | **VERSION-DEPENDENT** | encode/decode pair, register holding 5 values in 8 bits |
+| oversized declared type | no — the width is what the source says | `integer` index carrying 0..8 |
+| redundant STATE across a sequential argument | no — needs equivalence reasoning | one counter is another's negation |
+
+**The middle row is the trap, and it is not the same as the first.** On
+`fan_controller_0008` an agent removed a genuine encode/decode round-trip and an
+8-bit register that only ever held five values: **−13.4% wires / −11.5% cells on
+yosys 0.33, and a REGRESSION on 0.68**, because 0.68 already canonicalises the
+original to the same netlist. That it is a real effect and not measurement noise
+was established by a control — three behaviour-identical no-op rewrites produced
+byte-identical counts.
+
+So the rule is narrower than "oversized types win": **oversized types win on any
+synthesis version; structural round-trips only win on synthesis old enough not
+to already perform them.** Which version the scorer runs therefore decides the
+SIGN of the result, not merely its size — and the scorer's container is not
+visible from the authoring side, so "optimise for the older one because the
+harness pairs with icarus 13" is an INFERENCE and must be disclosed as one.
+
+**The gate does not check area — do not read a gate pass as area-verified.**
+In the 2026-08-24 run, `cvdp_gate.py` was invoked without `--dataset`/`--prompts`,
+so it had no `input.context`, `baseline_rtls` was empty, and the area check was
+skipped entirely. Verified across all 250 gated records: the report schema is
+`{compile, id, kind, notes, synth, verdict}` with no area field and not one area
+or skip note. Every area-opt answer in that run cleared the gate with its
+reduction claim unchecked. A gate pass means "parses, elaborates, survives a
+yosys smoke" — nothing about the stated threshold. Disclose that limitation in
+the RESULT whenever the gate is invoked this way.
+
+**Two binding consequences:**
+
+1. **Measure before accepting.** Run
+   `yosys -p 'read_verilog -sv f.sv; synth -top T; stat'` on BOTH the original
+   and the candidate, and put the before/after in the deliverable's header. An
+   unmeasured area answer is a guess, and this class of guess measured 0%.
+2. **State which yosys.** 0.33 and 0.68 reported materially different
+   reductions for the identical change (−36% vs −26%). The official scorer uses
+   its own container's yosys, not the host's, so a margin that clears the
+   threshold locally may not clear it under scoring.
+
+## § 4.05 — Verifying a guard-RELAXING fix: the NEGATIVE no-leak proof is the load-bearing half (ORGANIC #511)
 
 When the fix you are verifying **relaxes a guard** — a new exemption, an allow-list entry, a
 waiver path, a lint severity carve-out, a coverage advisory demotion, an audit/blindness
