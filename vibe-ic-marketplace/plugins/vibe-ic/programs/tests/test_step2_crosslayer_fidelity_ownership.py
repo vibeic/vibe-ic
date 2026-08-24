@@ -54,9 +54,13 @@ _CANONICAL_STEP_IDS = {
 
 def test_canonical_flow_remains_68_steps_without_a_1_6x_step():
     ids = tuple(str(step["id"]) for step in _steps())
-    assert len(_CANONICAL_STEP_IDS) == 68, (
-        "the pinned member set is not 68 ids, so it is the pin that is wrong "
-        f"and not the flow (pinned {len(_CANONICAL_STEP_IDS)})")
+    # NO `len(_CANONICAL_STEP_IDS) == 68` HERE, and that is deliberate. I wrote
+    # one at v1.11.85 and `population_guard_asserts_equality_not_a_floor` caught
+    # it by name: a len() over an unmutated literal "passes for free, on every
+    # tree, forever" -- it checks the file against itself and can never go red.
+    # The literal is already asserted against the POPULATION it describes, as a
+    # set and in both directions, three lines down; that is the check, and one
+    # tautology standing beside it only made the file look better guarded.
     assert len(ids) == 68, f"canonical flow grew to {len(ids)} steps: {ids}"
     assert len(set(ids)) == len(ids), (
         "the flow declares a duplicate step id: "
