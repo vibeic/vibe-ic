@@ -3,7 +3,7 @@
 
 WHY (measured, 2026-08-24 cvdp-open run, 302 problems). `cvdp_gate` appends thin
 pass-through alias wrappers so the official scorer's `iverilog -s <top>` binds
-whatever name the hidden harness picked. `cvdp_harness_toplevel_alias`'s own
+whatever name the hidden harness picked. `tb_toplevel_alias`'s own
 docstring called them "dead code the scorer's `-s <top>` never elaborates, so
 they are harmless". They are not.
 
@@ -32,7 +32,7 @@ import tempfile
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
-import cvdp_harness_toplevel_alias as A  # noqa: E402
+import tb_toplevel_alias as A  # noqa: E402
 
 
 def _mods(text):

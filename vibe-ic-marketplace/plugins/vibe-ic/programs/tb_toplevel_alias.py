@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_harness_toplevel_alias.py — prompt-driven harness-TOPLEVEL alias.
+"""tb_toplevel_alias.py — prompt-driven harness-TOPLEVEL alias.
 
 CURRENT COMPLIANT DESIGN (CVDP official — arXiv:2506.14074 §2 +
 README_NON_AGENTIC): the model / emit path sees ONLY `input.prompt` +

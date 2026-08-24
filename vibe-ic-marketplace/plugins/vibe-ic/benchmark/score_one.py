@@ -37,7 +37,7 @@ DEFAULT_SIM_IMAGE = os.environ.get("OSS_SIM_IMAGE", "cvdp-sim-oss:v110")
 
 # CVDP records a test's `result` as the integer 0 OR the string "0" for PASS
 # (the official harness emits both forms). This matches the in-repo schema
-# authority `cvdp_fail_triage.py` (`result in (0, "0")` == passing); strict
+# authority `verify_fail_triage.py` (`result in (0, "0")` == passing); strict
 # `== 0` would FALSE-FAIL a genuinely-passing design recorded with string
 # results and trap the convergence loop in an endless re-author.
 _PASS_RESULTS = (0, "0")

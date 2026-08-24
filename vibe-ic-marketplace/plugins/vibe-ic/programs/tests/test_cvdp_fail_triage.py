@@ -1,4 +1,4 @@
-"""ORGANIC #534 — cvdp_fail_triage: mechanical log→mode classification with
+"""ORGANIC #534 — verify_fail_triage: mechanical log→mode classification with
 fixed blind-safe hints.
 
 Synthetic fixtures pin each mode signature (durable assertions); the real
@@ -12,7 +12,7 @@ import pytest
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "benchmark"))
-import cvdp_fail_triage as T  # noqa: E402
+import verify_fail_triage as T  # noqa: E402
 from _hostpaths import require_corpus  # noqa: E402
 
 SYNTH_LOG = """\

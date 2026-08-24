@@ -8,7 +8,7 @@ the OSS scorer's non-root / read-only env:
       `--user $UID:$GID` + PEP-668 system Python it REFUSES (externally-managed),
       the `&&` short-circuits and pytest never runs.
 Both were field-measured on fibonacci_series_0001 (DUT PASSes 2/2 once both are
-fixed). cvdp_env_preflight detects (advisory REFUSE) and fixes both idempotently
+fixed). eda_image_preflight detects (advisory REFUSE) and fixes both idempotently
 via --fix-compose-workdir.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ _BENCH = Path(__file__).resolve().parents[1].parent / "benchmark"
 if str(_BENCH) not in sys.path:
     sys.path.insert(0, str(_BENCH))
 
-import cvdp_env_preflight as P  # noqa: E402
+import eda_image_preflight as P  # noqa: E402
 
 _BAD = (  # both shapes: no working_dir AND a bare pip install
     "services:\n\n  auto:\n    image: __OSS_SIM_IMAGE__\n"

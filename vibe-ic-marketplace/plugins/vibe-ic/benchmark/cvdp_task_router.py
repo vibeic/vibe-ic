@@ -48,6 +48,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "programs"))
+import task_nature_route as _G  # noqa: E402  the GENERAL front door
+
 # CVDP category-id → task nature + the PLUGIN ENTRY (a step or loop-of-steps)
 # that nature enters. NONE of these is "out of scope": every nature maps to a
 # concrete plugin capability. Each entry names its deterministic-first program(s)
@@ -58,61 +61,31 @@ from typing import Any, Dict, List, Optional
 # `route` is coarse: `phase1_entry` (Phase-1 owns spec→RTL) vs `plugin_loop`
 # (a different plugin loop owns the transform). `plugin_entry` carries the
 # concrete step list for the caller to execute.
-_CID_TASK: Dict[str, Dict[str, Any]] = {
-    # Pure text spec → brand-new RTL: the Phase-1 (spec→design-doc→RTL) domain.
-    "cid003": {
-        "nature": "spec_generation", "route": "phase1_entry",
-        "plugin_entry": {
-            "name": "phase1_spec_to_rtl",
-            "deterministic_first": ["phase1_one_shot_runner.py",
-                                    "deterministic_rtl_dispatcher.py"],
-            "ai_backup": ["spec-to-rtl"],
-            "verify": ["rtl_hygiene_lint.py", "spec_conformance_check.py",
-                       "phase2-rtl-verify"],
-        }},
-    # Given a partial interface/RTL → complete the design.
-    "cid002": {
-        "nature": "completion", "route": "plugin_loop",
-        "plugin_entry": {
-            "name": "completion_loop",
-            "deterministic_first": ["cvdp_context_interface_recover.py",
-                                    "modify_complete_synth.py"],
-            "ai_backup": ["spec-to-rtl"],
-            "verify": ["rtl_hygiene_lint.py", "spec_conformance_check.py",
-                       "phase2-rtl-verify"],
-        }},
-    # Given RTL → change its behaviour per a spec delta (functional ECO).
-    "cid004": {
-        "nature": "functional_modification", "route": "plugin_loop",
-        "plugin_entry": {
-            "name": "modify_loop",
-            "deterministic_first": ["cvdp_context_interface_recover.py",
-                                    "modify_complete_synth.py"],
-            "ai_backup": ["rtl-repair", "eco-plan"],
-            "verify": ["equivalence-check", "phase2-rtl-verify",
-                       "rtl_hygiene_lint.py"],
-        }},
-    # Reduce area / pass lint thresholds (yosys cell/wire, verilator -Wall).
-    "cid007": {
-        "nature": "optimization", "route": "plugin_loop",
-        "plugin_entry": {
-            "name": "optimize_loop",
-            "deterministic_first": ["rtl_hygiene_lint.py"],
-            "ai_backup": ["rtl-review", "synth-doctor", "ppa-predict"],
-            "verify": ["equivalence-check", "phase2-rtl-verify"],
-        }},
-    # Given buggy RTL → fix until it matches the spec.
-    "cid016": {
-        "nature": "debug", "route": "plugin_loop",
-        "plugin_entry": {
-            "name": "debug_loop",
-            "deterministic_first": ["cvdp_context_interface_recover.py",
-                                    "debug_first_pass.py"],
-            "ai_backup": ["rtl-repair"],
-            "verify": ["phase2-rtl-verify", "equivalence-check",
-                       "formal-verify", "rtl_hygiene_lint.py"],
-        }},
+# ── THIN ADAPTER (§ 0 GENERAL-CORE / THIN-ADAPTER) ───────────────────────────
+# The ONLY CVDP-specific knowledge in this file: which `cidNNN` label means
+# which task NATURE. The natures themselves, and the normal plugin entry each
+# one takes, are GENERAL IC-design knowledge and live in
+# `programs/task_nature_route.py` — reachable from a plain user prompt with no
+# benchmark present. Do not re-add an entry table here: a benchmark adapter
+# that owns routing logic is the naming debt § 0's naming test forbids, and it
+# is why a 2026-08-24 run could enter CVDP through a hand-rolled harness while
+# the general layer had no multi-entry front door at all.
+_CID_NATURE: Dict[str, str] = {
+    "cid003": "spec_generation",           # pure spec  → brand-new RTL
+    "cid002": "completion",                # partial RTL → complete it
+    "cid004": "functional_modification",   # RTL + spec delta → ECO
+    "cid007": "optimization",              # RTL → smaller / lint-clean
+    "cid016": "debug",                     # buggy RTL → fix to spec
 }
+
+# Back-compat view for callers that read the old shape. Derived, never edited.
+_CID_TASK: Dict[str, Dict[str, Any]] = {
+    cid: {"nature": nat,
+          "route": _G.NATURE_ENTRY[nat]["route"],
+          "plugin_entry": _G.NATURE_ENTRY[nat]["plugin_entry"]}
+    for cid, nat in _CID_NATURE.items()
+}
+
 
 _CID_RE = re.compile(r"^cid0*\d+$", re.IGNORECASE)
 
@@ -132,28 +105,14 @@ def _cid_of(record: Dict[str, Any]) -> Optional[str]:
 def classify_task_nature(prompt: str,
                          has_context: bool,
                          cid: Optional[str] = None) -> Dict[str, Any]:
-    """Return {nature, route, source, needs_ai_parse} for one problem.
-
-    * A known CVDP `cid` decides deterministically (source='cid_label').
-    * Otherwise (general prompt) fall back to the structural signal — existing
-      RTL context ⇒ a transform task ⇒ ai_led; no context ⇒ phase1_entry — and
-      flag `needs_ai_parse` so the caller runs the real AI first-layer parse to
-      confirm the nature on the unlabelled prompt. Chip-AGNOSTIC."""
-    if cid and cid in _CID_TASK:
-        t = _CID_TASK[cid]
-        return {"nature": t["nature"], "route": t["route"],
-                "plugin_entry": t["plugin_entry"],
-                "source": "cid_label", "needs_ai_parse": False}
-    # Unlabelled general prompt: deterministic fallback + AI-parse flag. Existing
-    # RTL context ⇒ a transform → the modify_loop entry (the closest general
-    # plugin loop); no context ⇒ Phase-1 spec→RTL.
-    if has_context:
-        return {"nature": "transform_existing_rtl", "route": "plugin_loop",
-                "plugin_entry": _CID_TASK["cid004"]["plugin_entry"],
-                "source": "context_heuristic", "needs_ai_parse": True}
-    return {"nature": "spec_generation", "route": "phase1_entry",
-            "plugin_entry": _CID_TASK["cid003"]["plugin_entry"],
-            "source": "no_context_heuristic", "needs_ai_parse": True}
+    """Map a CVDP `cidNNN` label to a NATURE, then delegate the routing to the
+    general front door. Kept as a named function because the CVDP drivers call
+    it; it holds no routing logic of its own."""
+    verdict = _G.classify_task_nature(prompt, has_context,
+                                      _CID_NATURE.get(cid or ""))
+    if cid in _CID_NATURE:
+        verdict = dict(verdict, source="cid_label")
+    return verdict
 
 
 def route_record(record: Dict[str, Any]) -> Dict[str, Any]:

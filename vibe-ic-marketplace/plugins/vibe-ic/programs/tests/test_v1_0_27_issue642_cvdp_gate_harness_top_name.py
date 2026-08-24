@@ -46,7 +46,7 @@ def _run(tmp_path, recs, extra=None):
     b.write_text("".join(json.dumps(r) + "\n" for r in recs))
     out = tmp_path / "responses.jsonl"
     G.main(["--batch", str(b), "--out", str(out),
-            "--report", str(tmp_path / "rep.json")] + (extra or []))
+            "--report", str(tmp_path / "rep.json"), "--without-spec-guards"] + (extra or []))
     recs_out = json.loads((tmp_path / "rep.json").read_text())["records"]
     passed = ({json.loads(x)["id"]
                for x in out.read_text().splitlines() if x.strip()}
@@ -186,4 +186,4 @@ def test_required_top_from_id(rid, expected):
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))
+    raise SystemExit(pytest.main([__file__, "-q", "--without-spec-guards"]))

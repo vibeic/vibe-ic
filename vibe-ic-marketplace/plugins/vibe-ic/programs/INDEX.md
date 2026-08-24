@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1204
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1204)
+- **Total programs (excluding helpers / shims):** 1209
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1209)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1195 |
+| `any` | 1200 |
 
 ## Alphabetical listing
 
@@ -331,6 +331,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `eco_loop_audit` | any | — | Audit the post-route timing repair pass's log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
 | `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
+| `eda_image_preflight` | any | — | verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536). |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
 | `edp_protocol_synth` | any | v0.1.95 | VESA Embedded DisplayPort (eDP) protocol synth helper. |
@@ -1035,6 +1036,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `silent_decline_audit` | any | — | find remedy decisions whose REFUSAL is silent (#313 §6). |
+| `sim_hang_detect` | any | — | emit-side hang-predict heuristics (v1.2.45→v1.2.46). |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the "two parallel bus drivers" anti-pattern in half-duplex protocol ICs. |
 | `single_testpath_guard` | any | v0.2.24 | pytest.ini must declare ONE test tree. |
 | `size_policy_drift_check` | any | — | one policy about layout artefacts, stated once. |
@@ -1132,7 +1134,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tapeout_precheck` | any | — | step 37.5ic's ONE gate over TWO independent arms. |
 | `tapeout_readiness_check` | any | — | the EXTERNAL refusal interface, pointed at a shuttle that still exists. |
 | `tapeout_signoff_check` | any | — | Tapeout signoff check — wrapper for signoff_audit --mode tapeout. |
+| `task_nature_route` | any | — | WHICH ENTRY does an IC-design task come in at? |
 | `tb_timing_extremes_check` | any | — | LL-6. |
+| `tb_toplevel_alias` | any | — | prompt-driven harness-TOPLEVEL alias. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run. |
 | `tb_vcs_only_construct_remediate` | any | — | ORGANIC #717 |
 | `testbench_exists_check` | any | — | Deterministic testbench existence and coverage checker. |
@@ -1190,6 +1194,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables. |
 | `vendored_attribution_retained_check` | any | — | third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043. |
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C). |
+| `verify_fail_triage` | any | — | mechanical CVDP fail-mode classifier (ORGANIC #534). |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile. |
 | `verilog_selfcheck_lint` | any | — | PROGRAM-FIRST verilator -Wall self-lint gate. |
@@ -1276,7 +1281,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1195 programs)
+### `any` (1200 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1579,6 +1584,7 @@ _(no programs in this group)_
 - `eco_loop_audit` — Audit the post-route timing repair pass's log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
 - `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
+- `eda_image_preflight` — verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536).
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
 - `edp_protocol_synth` — VESA Embedded DisplayPort (eDP) protocol synth helper.  _[v0.1.95]_
@@ -2280,6 +2286,7 @@ _(no programs in this group)_
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `silent_decline_audit` — find remedy decisions whose REFUSAL is silent (#313 §6).
+- `sim_hang_detect` — emit-side hang-predict heuristics (v1.2.45→v1.2.46).
 - `single_bus_driver_check` — structural-RTL gate that catches the "two parallel bus drivers" anti-pattern in half-duplex protocol ICs.  _[Wave 10]_
 - `single_testpath_guard` — pytest.ini must declare ONE test tree.  _[v0.2.24]_
 - `size_policy_drift_check` — one policy about layout artefacts, stated once.
@@ -2377,7 +2384,9 @@ _(no programs in this group)_
 - `tapeout_precheck` — step 37.5ic's ONE gate over TWO independent arms.
 - `tapeout_readiness_check` — the EXTERNAL refusal interface, pointed at a shuttle that still exists.
 - `tapeout_signoff_check` — Tapeout signoff check — wrapper for signoff_audit --mode tapeout.
+- `task_nature_route` — WHICH ENTRY does an IC-design task come in at?
 - `tb_timing_extremes_check` — LL-6.
+- `tb_toplevel_alias` — prompt-driven harness-TOPLEVEL alias.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run.
 - `tb_vcs_only_construct_remediate` — ORGANIC #717
 - `testbench_exists_check` — Deterministic testbench existence and coverage checker.
@@ -2435,6 +2444,7 @@ _(no programs in this group)_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables.  _[v0.119.30]_
 - `vendored_attribution_retained_check` — third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043.
 - `verdict_token_propagation_check` — META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C).
+- `verify_fail_triage` — mechanical CVDP fail-mode classifier (ORGANIC #534).
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile.
 - `verilog_selfcheck_lint` — PROGRAM-FIRST verilator -Wall self-lint gate.

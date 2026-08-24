@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_hang_detect.py — emit-side hang-predict heuristics (v1.2.45→v1.2.46).
+"""sim_hang_detect.py — emit-side hang-predict heuristics (v1.2.45→v1.2.46).
 
 ORGANIC §4 "hang 子集" — the 6 file-named hang subjects (mem_allocator /
 manchester_enc / ir_receiver / fifo_async / attenuator / axi_alu cluster)

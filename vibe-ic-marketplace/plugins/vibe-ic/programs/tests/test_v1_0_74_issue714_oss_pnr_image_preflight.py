@@ -9,7 +9,7 @@ yosys never runs, and the synth subtest FALSE-FAILS even on correct area-reduced
 RTL. 3 cid007 problems flipped to PASS once OSS_PNR_IMAGE was set.
 
 FIX (chip-AGNOSTIC, no-cheating — FAIL CLOSED, never hardcode a magic image):
-cvdp_env_preflight scans a problem dir for `__OSS_PNR_IMAGE__`; if present and
+eda_image_preflight scans a problem dir for `__OSS_PNR_IMAGE__`; if present and
 OSS_PNR_IMAGE is unset, it REFUSES to score (verdict REFUSE) and reports
 `oss_pnr_image_required: true`.
 
@@ -24,7 +24,7 @@ import pytest
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "benchmark"))
-import cvdp_env_preflight as E  # noqa: E402
+import eda_image_preflight as E  # noqa: E402
 
 
 def _area_opt_problem(tmp_path: Path) -> Path:

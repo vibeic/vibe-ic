@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_fail_triage.py — mechanical CVDP fail-mode classifier (ORGANIC #534).
+"""verify_fail_triage.py — mechanical CVDP fail-mode classifier (ORGANIC #534).
 
 Promotes the host-side run-local triage script into the harness: reads the
 official scorer's `raw_result.json` + per-problem report logs and classifies
@@ -301,7 +301,7 @@ def main(argv=None) -> int:
         {"total_fails": len(records), "mode_summary": summary,
          "pass_demoted_truncated": pass_demoted,
          "records": records}, indent=2, ensure_ascii=False) + "\n")
-    print(f"cvdp_fail_triage: {len(records)} fail(s) classified "
+    print(f"verify_fail_triage: {len(records)} fail(s) classified "
           f"{summary}"
           + (f" (truncated→pass_demoted: {pass_demoted})"
              if pass_demoted else ""))

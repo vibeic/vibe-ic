@@ -5,7 +5,7 @@ The 6 file-named hang subjects in the CVDP run (mem_allocator /
 manchester_enc / ir_receiver / fifo_async / attenuator / axi_alu cluster)
 HANG in cocotb by watchdog time-out. Their actual root causes in v1.2.44
 are NOT combinational self-loop / forever — they are wrong-data / timing /
-w-r-ptr mismatch — and the heuristic set in cvdp_hang_detect.py only
+w-r-ptr mismatch — and the heuristic set in sim_hang_detect.py only
 trips on STRONG combinational-loop / forever-in-@* shapes. Empirically:
 
   * 0/6 of the file-named hang subjects trip the detector
@@ -41,9 +41,9 @@ PLUGIN_DIR = os.path.dirname(TESTS_DIR)
 
 def _load():
     sys.path.insert(0, PLUGIN_BENCH)
-    import cvdp_hang_detect as H   # noqa: E402
+    import sim_hang_detect as H   # noqa: E402
     import cvdp_gate as G            # noqa: E402
-    import cvdp_harness_toplevel_alias as A   # noqa: E402
+    import tb_toplevel_alias as A   # noqa: E402
     return H, G, A
 
 

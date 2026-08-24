@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_env_preflight.py — verify the CVDP scoring sim image matches the
+"""eda_image_preflight.py — verify the CVDP scoring sim image matches the
 official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536).
 
 Field evidence: a self-built image carried Yosys 0.62 while the official

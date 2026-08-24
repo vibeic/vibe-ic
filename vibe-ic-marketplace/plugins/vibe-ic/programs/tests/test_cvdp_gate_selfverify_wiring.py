@@ -227,6 +227,10 @@ def _run_main(tmp_path, batch, prompts=None, dataset=None):
         df = tmp_path / "dataset.jsonl"
         _write(df, dataset)
         argv += ["--dataset", str(df)]
+    if not any(a in argv for a in ("--prompts", "--dataset")):
+    # These fixtures deliberately run the gate with its spec guards
+    # OFF; since 2026-08-25 that must be SAID, not implied by silence.
+        argv += ["--without-spec-guards"]
     rc = G.main(argv)
     emitted = [json.loads(ln) for ln in out.read_text().splitlines() if ln.strip()]
     report = json.loads(rep.read_text())
@@ -317,7 +321,12 @@ def test_main_plain_functional_byte_identical_with_and_without_change(tmp_path):
     assert rc == 0
     em = next(r for r in emitted if r.get("id") == rid)
     # bare RTL emits the compiled payload unchanged (single-file normalize).
-    assert em["completion"].strip().endswith("endmodule")
+    # The completion must end COMPLETE, not truncated. Since 2026-08-25 the
+    # gate wraps any appended alias wrapper in `ifndef VERILATOR (it is MULTITOP
+    # under `verilator --lint-only -Wall`), so a wrapper-carrying emit ends with
+    # the guard terminator rather than `endmodule`. Both are complete; assert
+    # completeness, which is what this test is actually about.
+    assert em["completion"].strip().endswith(("endmodule", "`endif"))
 
 
 # ════════════════ HOOK 1: verilator lint-zero (cid007 lint tasks) ════════════

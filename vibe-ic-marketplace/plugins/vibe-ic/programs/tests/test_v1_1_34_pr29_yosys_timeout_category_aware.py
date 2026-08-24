@@ -5,7 +5,7 @@ PR #29 relaxed a `synth` TIMEOUT from BLOCK to tolerate-EMIT, justified by "the
 official CVDP scorer is cocotb+iverilog — it NEVER runs yosys". A Step-2.7
 multi-lens review proved that premise FALSE for the area-optimization / synth-
 quality category (cid007), whose OFFICIAL harness DOES run yosys 0.40
-(cvdp_fail_triage SYNTH_GATE/SYNTH_THRESHOLD; cvdp_env_preflight #714
+(verify_fail_triage SYNTH_GATE/SYNTH_THRESHOLD; eda_image_preflight #714
 __OSS_PNR_IMAGE__; ppa_area_threshold_check #729) — so tolerating a synth-timeout
 there EMITs a design the official synth gate may FAIL and loses the re-author the
 #531 smoke exists to trigger (a §4.05 false-SKIP). Two MEDs accompanied it: keying
