@@ -221,7 +221,33 @@ _MAX_PROGRESS_BYTES = 64 * 1024 * 1024
 _MAX_PROGRESS_EVENTS = 1_000_000
 _MAX_PROGRESS_LINE = 64 * 1024
 _MAX_DOMAIN_PROGRESS_TOTAL = 10_000
-_MAX_DOMAIN_PROGRESS_SCOPES = 64
+#: A RUNAWAY EMITTER IS ONE TEST INVENTING SCOPES, NOT A BIG HONEST SELECTION.
+#:
+#: MEASURED 2026-08-24, differential arm over 209 selected files / 5167 collected
+#: cases: the aggregate session reached 59% and then died with
+#:
+#:     PROGRESS_PROTOCOL_INCOMPLETE: domain progress scope resource limit exceeded
+#:     WATCHDOG_STALLED: ... did not advance for > 300s — killed as hung, not slow.
+#:
+#: in that order, and the order is the whole story. The protocol validator hit a
+#: FLAT cap of 64 distinct `(nodeid, scope)` keys, stopped accepting progress,
+#: and the watchdog then correctly reported that no progress was arriving. The
+#: watchdog was right; it was reporting a silence this cap created.
+#:
+#: 64 is a per-FILE number applied to a whole-SELECTION session. The key is
+#: `(nodeid, scope)`, so it is consumed per emitting TEST: one parametrised
+#: module (125 cases) can exhaust it alone. A flat cap therefore guarantees the
+#: aggregate arm can never finish, and guarantees it harder as the suite grows —
+#: which is exactly backwards, because the aggregate arm exists to answer the
+#: cross-file/order question that only a large selection can pose.
+#:
+#: So the guard is split into the two things it was conflating:
+#:   * PER NODE — how many distinct scopes ONE test may open. This is the actual
+#:     runaway shape and it stays small and flat.
+#:   * IN TOTAL — bounded by what was actually COLLECTED, so an honest selection
+#:     is never refused for being large, with a floor for tiny sessions.
+_MAX_DOMAIN_PROGRESS_SCOPES_PER_NODE = 8
+_MAX_DOMAIN_PROGRESS_SCOPES_FLOOR = 64
 #: One stream per emitting process. A parallel pytest session opens one per
 #: worker, so this is a concurrency bound, never an estimate of how many
 #: workers a healthy run may use.
@@ -681,11 +707,22 @@ class _SemanticProgressProbe:
                     or completed < 1 or completed > total):
                 self._fail("invalid/out-of-order domain_progress")
                 return
-            if (previous is None
-                    and len(self.domain_progress)
-                    >= _MAX_DOMAIN_PROGRESS_SCOPES):
-                self._fail("domain progress scope resource limit exceeded")
-                return
+            if previous is None:
+                per_node = sum(1 for k in self.domain_progress if k[0] == nodeid)
+                if per_node >= _MAX_DOMAIN_PROGRESS_SCOPES_PER_NODE:
+                    self._fail(
+                        f"one test opened more than "
+                        f"{_MAX_DOMAIN_PROGRESS_SCOPES_PER_NODE} distinct "
+                        f"domain-progress scopes ({nodeid})")
+                    return
+                # Bounded by what this session actually COLLECTED, never by a
+                # flat number: a selection is allowed to be large.
+                ceiling = max(
+                    _MAX_DOMAIN_PROGRESS_SCOPES_FLOOR,
+                    len(self.items) * _MAX_DOMAIN_PROGRESS_SCOPES_PER_NODE)
+                if len(self.domain_progress) >= ceiling:
+                    self._fail("domain progress scope resource limit exceeded")
+                    return
             if ((previous is None and completed != 1)
                     or (previous is not None
                         and (total != previous[1]
