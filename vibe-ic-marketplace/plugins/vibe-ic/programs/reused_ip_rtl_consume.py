@@ -142,6 +142,24 @@ def candidate_source_dirs(project: Path) -> List[Path]:
     if vd.is_dir():
         dirs.append(vd)
 
+    # `input/rtl/` — the OBVIOUS place to drop existing RTL (2026-08-25).
+    # Before this, a design shipping its implementation had to know to name the
+    # directory `vendor_rtl/` or to bury it at `design_src/<x>/rtl/`; a plain
+    # `input/rtl/` was silently NOT a source, and the runner reported "design
+    # ships NO build RTL under input/" while the files sat right there.
+    #
+    # Measured 2026-08-25 across the four task natures that operate ON existing
+    # RTL — completion, functional-modification, optimization, debug — the
+    # supplied RTL was ignored for every one of them, so each ran as if it had
+    # to invent the design from prose. Those natures are defined by having the
+    # RTL; losing it is not a degraded run, it is the wrong task.
+    #
+    # Still confined under `input/` (§4.05: nothing outside input/ is ever a
+    # source), and still subject to the same oracle/harness segment screen.
+    rd = input_root / "rtl"
+    if rd.is_dir() and not _is_oracle_parts(("rtl",)):
+        dirs.append(rd)
+
     ds = input_root / "design_src"
     if ds.is_dir():
         for rtl in sorted(ds.rglob("rtl")):
