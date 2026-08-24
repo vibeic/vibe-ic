@@ -15669,6 +15669,17 @@ def main() -> int:
                    help="Forward --skip-analog to final_audit so analog A1-A8 "
                         "file-existence checks don't FAIL a digital-only project. "
                         "Captured from v0.1.53 CVDP run.")
+    p.add_argument("--entry-step", default=None,
+                   help="START the flow at this canonical step id instead of "
+                        "the beginning (e.g. 4 for a debug task, 2 for an "
+                        "optimization). Only a step that HEADS a dispatch span "
+                        "is enterable — step_preflight.enterable_steps names "
+                        "them — because a span like step_pnr is one tool "
+                        "session covering canonical 15..22 and cannot be "
+                        "started in its middle. The entry's declared inputs "
+                        "are checked BEFORE anything is skipped; if they are "
+                        "absent the run REFUSES rather than proceeding into a "
+                        "step that has nothing to read.")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="vibeic-eda")
@@ -15699,11 +15710,86 @@ def main() -> int:
     # ORGANIC #588 — single-driver lock honored by the standalone phase2
     # runner; re-enters the orchestrator's lock via the env token, or
     # refuses a second concurrent standalone phase2 on a live project.
+    # Dispatch-site order for --entry-step. Taken from step_preflight's declared
+    # site order for this runner, which was itself read off a real run's
+    # phase2_one_shot.json rather than off source line numbers (main() branches,
+    # so source order is NOT dispatch order — the tb-gen calls sit ABOVE
+    # step_rtl_gen in the file yet run after it).
+    def _site_order():
+        _plan = _spf.RUNNER_PLANS.get("design_one_shot_runner")
+        return [n for n, _ in (_plan.sites if _plan else ())]
+
+    def _before_entry(site_name, entry_site):
+        """Is `site_name` dispatched BEFORE the declared entry site?"""
+        if not entry_site:
+            return False
+        order = _site_order()
+        if site_name not in order or entry_site not in order:
+            return False
+        return order.index(site_name) < order.index(entry_site)
+
+    # ── ENTRY ADMISSION (2026-08-25) ─────────────────────────────────────
+    # Asked BEFORE the lock, because a run that cannot legally start should not
+    # take a lock, and before ANY dispatch, because the point is to refuse with
+    # the absent paths named rather than to enter a step that has nothing to
+    # read. Not every task starts at the beginning — a debug task arrives with
+    # RTL already written and already wrong — but a run that skips the front of
+    # the flow and says nothing produces a report indistinguishable from a
+    # Phase 1 that ran and failed.
+    _entry_site = None
+    _entry_staged = None
+    if getattr(args, "entry_step", None):
+        # STAGE SUPPLIED INPUTS FIRST (2026-08-25). Moving the design's own RTL
+        # from input/ into phase2/stage1/rtl/ is INPUT HANDLING, not step-1
+        # work, so it must happen whatever step the run enters at. Before this,
+        # admission was evaluated ahead of every dispatch — including the
+        # staging one — so a user whose RTL sat in `input/rtl/` was refused at
+        # step 4 for an absent `phase2/stage1/rtl/*`, while the files were
+        # present the whole time one directory away and the step that would
+        # have moved them was scheduled after the check that needed them.
+        #
+        # Idempotent by the consumer's own guard: it SKIPs when
+        # phase2/stage1/rtl/ already holds RTL, so the later dispatch of the
+        # same step is a no-op rather than a second copy.
+        _entry_staged = step_reused_ip_consume(project, args.top_name)
+        _adm = _spf.entry_admission(project, "design_one_shot_runner",
+                                    str(args.entry_step))
+        if not _adm["admitted"]:
+            print(f"REFUSED: cannot enter at step {args.entry_step!r} — "
+                  f"{_adm['reason']}", file=sys.stderr)
+            for _m in _adm.get("missing") or []:
+                print(f"  absent: {_m}", file=sys.stderr)
+            return 2
+        _entry_site = _adm["site"]
+        try:
+            import datetime as _dtm             # noqa: PLC0415
+            import run_entry_manifest as _rem   # noqa: PLC0415
+            _man = _rem.build(project, str(args.entry_step),
+                              "design_one_shot_runner", _entry_site,
+                              list(sys.argv[1:]),
+                              _dtm.datetime.utcnow().isoformat() + "Z")
+            _bad = _rem.validate(_man)
+            if _bad:
+                print("REFUSED: the run-entry manifest does not validate: "
+                      + "; ".join(_bad), file=sys.stderr)
+                return 2
+            _rem.write(project, _man)
+        except ImportError as _exc:
+            print(f"REFUSED: --entry-step needs run_entry_manifest ({_exc}); "
+                  "refusing to enter mid-flow without recording that it "
+                  "happened", file=sys.stderr)
+            return 2
+
     _lock = _runner_lock.acquire_or_reenter(project, "design_one_shot_runner")
     if _lock is None:
         return 3
 
     plan: List[StepResult] = []
+    if _entry_staged is not None:
+        # Record it: an input-staging step that ran but appears nowhere would
+        # make the RTL's provenance unexplainable in the run's own report.
+        _entry_staged.name = "reused_ip_consume(pre-entry)"
+        plan.append(_entry_staged)
 
     # Step 0 — Phase 1 (doc-extraction) (v0.122: chain phase1_one_shot_runner if needed)
     plan.append(step_rig_topology_skeleton(project))
@@ -15711,7 +15797,14 @@ def main() -> int:
     # responsible for running phase1 first — chained by design_one_shot_runner).
     gd = _pl.generated_docs_dir(project)
     L_count = len(list(gd.glob("L*.json"))) if gd.is_dir() else 0
-    if L_count < 13:
+    # With an explicit entry, "13 L docs" is the WRONG precondition: it is the
+    # precondition for entering at step 1, and it is applied unconditionally
+    # here with no --skip-phase1 in this runner at all, which is why every
+    # non-D1 entry was unreachable no matter what the router decided. The entry
+    # admission above already checked the DECLARED inputs of the entry span —
+    # a narrower and more accurate question — so do not re-impose the step-1
+    # precondition on a run that is not entering at step 1.
+    if L_count < 13 and not _entry_site:
         # ORGANIC-20260606-phase1-prompt-mode-nested-generated-docs (#424):
         # name the one-level-too-deep layout explicitly when present, so a
         # caller on a pre-fix phase1 artefact sees the structural cause
@@ -15756,10 +15849,20 @@ def main() -> int:
     # is gated: the later `step_rtl_gen` calls are ECO-loop RE-runs that fire
     # after the first one has already read D1, so gating them would re-ask a
     # question whose answer this call already established.
-    plan.append(_spf.gate(
-        project, "design_one_shot_runner", "rtl_gen",
-        _preflight_refusal("rtl_gen"),
-        step_rtl_gen, project, ic_class))
+    if _before_entry("rtl_gen", _entry_site):
+        # Declared entry is downstream of this site. Skipping is the POINT of
+        # --entry-step; the status is named so the report can never read as
+        # "RTL generation was attempted and produced nothing".
+        plan.append(StepResult(
+            "rtl_gen", "SKIPPED-BY-ENTRY", 0.0,
+            f"run declared --entry-step {args.entry_step} (site "
+            f"{_entry_site!r}); this site is upstream of it and was not "
+            f"dispatched. Its artefacts were supplied, not produced here."))
+    else:
+        plan.append(_spf.gate(
+            project, "design_one_shot_runner", "rtl_gen",
+            _preflight_refusal("rtl_gen"),
+            step_rtl_gen, project, ic_class))
 
     # Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP CONSUME. When step_rtl_gen
     # WAIVED (reused-IP / catalog-glue) and left rtl/ EMPTY but the design's
@@ -15796,7 +15899,23 @@ def main() -> int:
     # only a benchmark sample. Runs over rtl/ once RTL + aliases are stable.
     # Both gates are §4.05-self-skip (fire ONLY on their exact anti-pattern),
     # so a clean / not-applicable design always passes.
-    plan.append(step_determinism_gates(project, args.top_name))
+    # SITE `rtl_validate` (flow steps 2,3) — gated at the span's FIRST dispatch,
+    # mirroring `rtl_gen` above: the pre-flight question is asked once, when the
+    # span is entered, not re-asked at each member. Declaring a site in
+    # step_preflight.RUNNER_PLANS without a literal `_spf.gate` call here is a
+    # claim with no behaviour behind it, and
+    # `test_every_declared_site_is_wired_at_a_real_call_site` fails the build
+    # for exactly that — it caught this pair the moment the sites were declared.
+    if _before_entry("rtl_validate", _entry_site):
+        plan.append(StepResult(
+            "rtl_validate", "SKIPPED-BY-ENTRY", 0.0,
+            f"run declared --entry-step {args.entry_step} (site "
+            f"{_entry_site!r}); this site is upstream of it."))
+    else:
+        plan.append(_spf.gate(
+            project, "design_one_shot_runner", "rtl_validate",
+            _preflight_refusal("rtl_validate"),
+            step_determinism_gates, project, args.top_name))
 
     # Flow Step 2, clause 1 — cross-layer rewrite fidelity. Unconditional: the
     # judge itself decides applicability and WRITES the verdict, so a design
@@ -15824,7 +15943,17 @@ def main() -> int:
     # BEFORE step_reference_tb (so the skeleton lands under
     # sim_full_stack/ before any iverilog run is invoked, satisfying
     # bit_level_full_stack_tb_check).
-    plan.append(step_full_stack_tb_gen(project, args.top_name))
+    # SITE `sim` (flow step 4) — the span's first dispatch. Step 4 declares it
+    # reads the RTL plus D1's L10_TEST_CASES.json and L12_BEHAVIORAL_SEQUENCES
+    # .json; before this gate a missing-RTL entry surfaced as
+    # step_reference_tb's SKIP whose stated reason is the ANALOG-track
+    # explanation ("an analog design has NO digital RTL track"), so an entry
+    # error was reported as a design classification. The gate refuses with the
+    # actual absent paths instead.
+    plan.append(_spf.gate(
+        project, "design_one_shot_runner", "sim",
+        _preflight_refusal("sim"),
+        step_full_stack_tb_gen, project, args.top_name))
     # ORGANIC #797 — wire the testbench_gen PRODUCER (it was never called by any
     # one-shot runner, so L10 `functional_vector` cases got NO Step-4 evidence).
     # Runs AFTER full_stack_tb_gen (RTL/L9 stable) and BEFORE reference_tb /
@@ -16294,7 +16423,12 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # payloads). It was found by the totality test scraping the runner's own
     # StepResult constructions rather than by anyone listing them here — which
     # is the point of discovering the vocabulary instead of typing it.
-    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION")
+    # SKIPPED-BY-ENTRY is a SKIP, not a silence: the step was deliberately not
+    # dispatched because --entry-step declared an entry downstream of it. Left
+    # unclassified it reaches the `unknown` branch below, which prints a loud
+    # stderr warning on every legitimate mid-flow entry — correct behaviour for
+    # a status nobody classified, and noise once it is a designed one.
+    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION", "SKIPPED-BY-ENTRY")
     _KNOWN = (set(_FAIL_STATUSES) | set(_GREEN_STATUSES)
               | set(_SKIP_STATUSES) | {"WAIVED"})
 

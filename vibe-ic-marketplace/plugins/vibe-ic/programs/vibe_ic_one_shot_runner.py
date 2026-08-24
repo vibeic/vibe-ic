@@ -593,6 +593,14 @@ def main() -> int:
                         "reports/container_image.json, just not enforced.")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
+    p.add_argument("--entry-step", default=None,
+                   help="START the flow at this canonical step id. The step "
+                        "decides WHICH runner owns the entry — D1 is Phase 1, "
+                        "2/4/1/9/11 are Phase 2, 15/31/37 Phase 3, A1..A9 "
+                        "analog — so the orchestrator routes to that runner "
+                        "and skips the phases before it. Only a step that "
+                        "HEADS a dispatch span is enterable; a mid-span step "
+                        "is refused rather than approximated.")
     p.add_argument("--skip-phase1", action="store_true")
     p.add_argument("--skip-analog", action="store_true")
     p.add_argument("--skip-phase3", action="store_true")
@@ -794,7 +802,48 @@ def main() -> int:
     advisories: List[str] = []   # v0.3.7 #505 — non-gating notes
 
     # ---------------- Phase 1 ----------------
-    run_phase1, p1_mode = _phase1_decision(project, args.skip_phase1)
+    # ── ENTRY ROUTING (2026-08-25) ───────────────────────────────────────
+    # A step id alone does not say who executes it, so resolve the OWNING runner
+    # first and route to it. Resolving here rather than inside each phase keeps
+    # one answer to "where does this task start"; the phase runners only receive
+    # the decision. Refuse an unenterable step up front — an orchestrator that
+    # silently ran the whole flow after being told to start at step 18 would be
+    # doing something other than what it was asked.
+    _entry_runner = None
+    if getattr(args, "entry_step", None):
+        try:
+            import step_preflight as _spf_o          # noqa: PLC0415
+        except ImportError as _e:
+            print(f"REFUSED: --entry-step needs step_preflight ({_e})",
+                  file=sys.stderr)
+            return 2
+        _entry_runner = _spf_o.runner_for_step(str(args.entry_step))
+        if _entry_runner is None:
+            _all = {r: list(_spf_o.enterable_steps(r))
+                    for r in _spf_o.RUNNER_PLANS}
+            print(f"REFUSED: no runner can be entered at step "
+                  f"{args.entry_step!r}. Enterable steps per runner: {_all}",
+                  file=sys.stderr)
+            return 2
+        if _entry_runner not in ("phase1_one_shot_runner",
+                                 "design_one_shot_runner"):
+            # Phase-3 and analog entries are NOT wired here yet. Say so rather
+            # than routing to the nearest phase and reporting as if it were what
+            # was asked.
+            print(f"REFUSED: step {args.entry_step!r} is owned by "
+                  f"{_entry_runner}, which this orchestrator cannot yet be "
+                  f"entered at. Run that runner directly, or enter at a Phase "
+                  f"1/2 step.", file=sys.stderr)
+            return 2
+        print(f"[entry] step {args.entry_step} -> {_entry_runner}")
+
+    # An entry owned by Phase 2 means Phase 1 is not this run's work: its
+    # artefacts were supplied, not produced here. Force the skip through the
+    # EXISTING decision function rather than adding a parallel switch, so there
+    # stays exactly one place that decides whether Phase 1 runs.
+    _force_skip_p1 = args.skip_phase1 or (
+        _entry_runner == "design_one_shot_runner")
+    run_phase1, p1_mode = _phase1_decision(project, _force_skip_p1)
     if run_phase1:
         runner = _phase_runner("phase1")
         p1_args = [str(project), "--ic-name", args.ic_name]
@@ -899,6 +948,8 @@ def main() -> int:
         # guard makes (1)+(2) idempotent (no duplicate append).
         elif not run_analog:
             p2_args.append("--skip-analog")
+        if _entry_runner == "design_one_shot_runner":
+            p2_args += ["--entry-step", str(args.entry_step)]
         rc = _run_phase("PHASE 2 (= 2a + 2b)", runner, p2_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase2_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")

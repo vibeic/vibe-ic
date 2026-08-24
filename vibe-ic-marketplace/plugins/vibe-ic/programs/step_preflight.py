@@ -197,11 +197,33 @@ RUNNER_PLANS: Dict[str, RunnerPlan] = {
         inherited_steps=("D1",),
         inherits=None,
         sites=(
-            # main():12672 — plan.append(step_rtl_gen(project, ic_class))
+            # Line numbers RE-MEASURED 2026-08-25. The previous comments said
+            # 12672 / 12951 / 13070; the real dispatches are ~3,400 lines
+            # further down, and step_rtl_gen has FOUR call sites, not one
+            # (16016, 16035, 16125, 16144 — the ECO loop re-dispatches it).
+            # A hand-authored span whose own bookkeeping has drifted that far
+            # is a claim nobody re-checked; these were read off the file.
+            #
+            # ORDER READ OFF A REAL RUN, NOT OFF LINE NUMBERS. main() has
+            # several branches, so source order is not dispatch order: the
+            # tb-gen calls sit at lines 15827/15835, ABOVE step_rtl_gen at
+            # 16016, yet a real run's own phase2_one_shot.json reports
+            #   rtl_gen -> determinism_gates -> crosslayer_rewrite_fidelity
+            #           -> full_stack_tb_gen -> l10_unit_tb_gen -> yosys_synth
+            # Ordering these by line number would have made due_steps() treat
+            # step 1 as NOT-yet-due at the sim site, which is backwards.
+            #
+            # main():16016 (+16035, 16125, 16144 — the ECO loop re-dispatches)
             ("rtl_gen", ("1",)),
-            # main():12951 — plan.append(step_yosys_synth(...))
+            # main():15799 step_determinism_gates
+            # main():15806 step_crosslayer_rewrite_fidelity
+            ("rtl_validate", ("2", "3")),
+            # main():15827 step_full_stack_tb_gen
+            # main():15835 step_l10_unit_tb_gen
+            ("sim", ("4",)),
+            # main():16067 — plan.append(step_yosys_synth(...))
             ("yosys_synth", ("9",)),
-            # main():13070 — plan.extend(step_dft_lec_chain(...))
+            # main():16198 — plan.extend(step_dft_lec_chain(...))
             ("dft_lec_chain", ("11", "12", "13")),
         ),
     ),
@@ -415,6 +437,93 @@ def _probe_waived(project: Path, dec: Decision,
                                     "input"),
                 })
     return absent
+
+
+def site_for_step(runner: str, step_id: str) -> Optional[str]:
+    """The dispatch site whose span STARTS at `step_id`, or None.
+
+    Only a span HEAD is an entry. Entering mid-span is refused rather than
+    approximated: `step_pnr` is one OpenROAD session covering canonical 15..22,
+    so "start at 18" cannot mean anything — the session either runs or it does
+    not, and pretending otherwise would report a step as entered that was never
+    separately dispatched.
+    """
+    plan = RUNNER_PLANS.get(runner)
+    if plan is None:
+        return None
+    for name, span in plan.sites:
+        if span and str(span[0]) == str(step_id):
+            return name
+    return None
+
+
+def enterable_steps(runner: str) -> Tuple[str, ...]:
+    """Every step this runner can be entered AT (the span heads, in order)."""
+    plan = RUNNER_PLANS.get(runner)
+    return tuple(str(s[0]) for _, s in (plan.sites if plan else ()) if s)
+
+
+def runner_for_step(step_id: str) -> Optional[str]:
+    """Which runner can be ENTERED at `step_id`, or None.
+
+    A step id alone does not say who executes it: D1 is a `phase1_one_shot_runner`
+    entry, 2/4/1/9/11 are `design_one_shot_runner`, 15/31/37 are phase 3, A1..A9
+    analog. Asking the wrong runner produces a correct-but-useless NOT-AN-ENTRY,
+    so the caller needs this before it asks. Search order is the declaration
+    order of RUNNER_PLANS; step 9 heads a span in BOTH phase 2 and phase 3, and
+    the phase-2 one is returned because that is where synthesis is first
+    dispatched.
+    """
+    for name in RUNNER_PLANS:
+        if site_for_step(name, step_id) is not None:
+            return name
+    return None
+
+
+def entry_admission(project: Path, runner: str, step_id: str,
+                    flow_def: Optional[Path] = None) -> Dict[str, Any]:
+    """Can this run START at `step_id`? Read-only; writes nothing.
+
+    Answers the question `--entry-step` needs answered BEFORE it skips anything:
+    are the artefacts the entry span declares it reads actually on disk right
+    now? That is exactly what `decide()` already computes for a mid-run
+    dispatch — the only difference is WHEN it is asked — so this reuses it
+    rather than growing a second, divergent notion of readiness.
+
+    Returns {admitted, site, span, state, reason, missing}. `admitted` is False
+    for a step no site starts at, so an unenterable step is named as such
+    instead of silently running the whole flow.
+    """
+    site = site_for_step(runner, step_id)
+    if site is None:
+        return {
+            "admitted": False, "site": None, "span": (), "state": "NOT-AN-ENTRY",
+            "reason": (f"no dispatch site in {runner} starts at step "
+                       f"{step_id!r}; enterable steps are "
+                       f"{list(enterable_steps(runner))}"),
+            "missing": [],
+        }
+    d = decide(Path(project), runner, site, flow_def)
+    # Read the REAL Decision fields. An earlier draft of this function guessed
+    # them (`state` / `reason` / `missing` / `span`) and every one was wrong:
+    # the dataclass declares `verdict` / `detail` / `inputs` / `flow_steps`.
+    # The visible symptom was a refusal printed with an EMPTY reason — a
+    # getattr default silently swallowing the whole explanation. `allow` is the
+    # dataclass's own admit/deny, so use it rather than re-deriving admission
+    # from a string compare that a new verdict name could quietly slip past.
+    missing = [str(i.get("path") or i.get("spec") or i)
+               for i in (d.inputs or [])
+               if str(i.get("state", "")).lower() in
+               ("absent", "missing", "refused")]
+    return {
+        "admitted": bool(d.allow),
+        "site": site,
+        "span": tuple(d.flow_steps or ()),
+        "state": d.verdict,
+        "reason": d.detail or "; ".join(d.notes or []) or
+                  f"{d.verdict} at {runner}/{site}",
+        "missing": missing,
+    }
 
 
 def decide(project: Path, runner: str, site: str,
