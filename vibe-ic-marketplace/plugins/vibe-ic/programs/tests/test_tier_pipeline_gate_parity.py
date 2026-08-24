@@ -26,7 +26,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import verilogeval_tier_pipeline as P  # noqa: E402
+import deterministic_emit_chain as C  # noqa: E402
 import spec_conformance_check as scc   # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
@@ -82,26 +82,19 @@ def test_blocking_ruleset_single_source_matches_gate():
         "is re-typed in two files is the drift this test exists to stop")
 
 
-@pytest.mark.skipif(not (_DS / "Prob082_lfsr32_prompt.txt").exists(),
-                    reason="dataset absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
-def test_gate_blocked_emit_is_not_tier1_but_clean_emit_is():
-    prob = P.Problem(_DS / "Prob082_lfsr32_prompt.txt")
-    # a PURE rotate (no tap-XOR) under the LFSR/shifter spec is exactly what the
-    # gate's shift-implemented-as-rotate rule must still block (§4.05 no-leak):
-    pure_rot = ("module TopModule(input clk, input reset, output reg [31:0] q);\n"
-                "  always @(posedge clk) if(reset) q<=1; else q <= {q[0], q[31:1]};\n"
-                "endmodule\n")
-    blocked = P.conformance_emit_blocked(prob, pure_rot)
-    assert "shift-implemented-as-rotate" in blocked, \
-        "a pure rotate under a shifter spec must be gate-blocked"
+def test_a_gate_blocked_emit_is_never_reported_as_solved():
+    """The property `tier_result` carried, restated on the surviving subject.
 
-    # the fixed galois_lfsr registry emit is conformance-clean -> NOT blocked
-    import spec_artifact_registry as reg
-    kind, lfsr = reg.generate(prob.prompt_path.read_text(), "TopModule")
-    assert lfsr, "galois_lfsr solver must emit"
-    assert P.conformance_emit_blocked(prob, lfsr) == [], \
-        "the fixed galois_lfsr emit must pass the conformance gate"
-
-    # end-to-end: Prob082 is Tier-1 (iverilog-pass AND gate-clean)
-    res = P.tier_result(prob, verify=True)
-    assert res["tier"] == P.TIER_PROGRAM and res["verified"] is True
+    A tier was that pipeline's word for it. What was actually claimed is that an
+    emit the real gate would BLOCK must not be counted as program-solved — and
+    that claim now lives where the emit is produced, so the producer and the
+    judgement of whether its output counts sit together instead of one benchmark
+    away from the other.
+    """
+    import deterministic_emit_chain as C
+    shifter = ("Build a 4-bit logical right shifter. The vacated MSB is "
+               "filled with 0 each clock.")
+    rotate = ("module TopModule(input clk, input [3:0] d, output reg [3:0] q);\n"
+              "  always @(posedge clk) q <= {q[0], q[3:1]};\nendmodule\n")
+    assert C.emit_would_be_blocked(shifter, rotate), (
+        "a rotate answering a shifter spec must be blocked, not solved")

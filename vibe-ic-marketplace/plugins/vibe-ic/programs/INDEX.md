@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1213
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1213)
+- **Total programs (excluding helpers / shims):** 1210
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1210)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1204 |
+| `any` | 1201 |
 
 ## Alphabetical listing
 
@@ -264,7 +264,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_atomic_bridge` | any | — | a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi... |
 | `cvdp_complete_extract` | any | — | a UNIFIED CVDP complete-extraction layer. |
 | `cvdp_context_interface_recover` | any | — | recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3). |
-| `cvdp_solve_pipeline` | any | — | the CVDP TIER-1→3 AUTHORING-GATE PIPELINE. |
 | `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m... |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
 | `d3_manifest_declaration_parity_check` | any | — | Every declared `required_outputs` path must be covered by the d3 manifest. |
@@ -974,7 +973,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
 | `rtl_transitive_cone` | any | — | Deterministic transitive-cone reduction for a staged RTL source tree. |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
-| `rtllm_tier_pipeline` | any | — | the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE. |
 | `run_entry_manifest` | any | — | record WHICH STEP a run entered the flow at. |
 | `run_output_completeness_check` | any | — | the EMPTY / MISSING / STUB deliverable gate. |
 | `run_status` | any | — | ORGANIC #599. Universal runner watchdog. |
@@ -1067,6 +1065,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_calibration_extract` | any | — | PROGRAM-FIRST structural extractor for the L13 LAB CALIBRATION / TRIM facet of a design doc / prompt. |
 | `spec_complete_extract` | any | — | the GENERAL (benchmark-agnostic) complete-spec extraction + completeness engine. |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
+| `spec_conformance_gate` | any | — | does this RTL conform to the spec we extracted? |
 | `spec_context_sibling_detect` | any | — | PROGRAM-FIRST context-sibling collision advisory. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
 | `spec_declaration_emit` | any | — | the designer's FREE choices, declared not inferred. |
@@ -1204,8 +1203,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile. |
 | `verilog_selfcheck_lint` | any | — | PROGRAM-FIRST verilator -Wall self-lint gate. |
 | `verilog_width_resolve` | any | — | SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de... |
-| `verilogeval_human_tier_pipeline` | any | — | the VerilogEval-HUMAN (code-complete, ICCAD-2023) TIER-1→5 CONVERGE PIPELINE. |
-| `verilogeval_tier_pipeline` | any | — | the VerilogEval-v2 (spec-to-rtl) TIER-1→5 CLASSIFY + CONVERGE pipeline. |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3). |
 | `vibe_ic_entry_guard` | any | — | enforce single entry point for benchmark + IC runs. |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
@@ -1285,7 +1282,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1204 programs)
+### `any` (1201 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1522,7 +1519,6 @@ _(no programs in this group)_
 - `cvdp_atomic_bridge` — a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi...
 - `cvdp_complete_extract` — a UNIFIED CVDP complete-extraction layer.
 - `cvdp_context_interface_recover` — recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3).
-- `cvdp_solve_pipeline` — the CVDP TIER-1→3 AUTHORING-GATE PIPELINE.
 - `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m...
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
 - `d3_manifest_declaration_parity_check` — Every declared `required_outputs` path must be covered by the d3 manifest.
@@ -2229,7 +2225,6 @@ _(no programs in this group)_
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
 - `rtl_transitive_cone` — Deterministic transitive-cone reduction for a staged RTL source tree.
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
-- `rtllm_tier_pipeline` — the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE.
 - `run_entry_manifest` — record WHICH STEP a run entered the flow at.
 - `run_output_completeness_check` — the EMPTY / MISSING / STUB deliverable gate.
 - `run_status` — ORGANIC #599. Universal runner watchdog.
@@ -2321,6 +2316,7 @@ _(no programs in this group)_
 - `spec_calibration_extract` — PROGRAM-FIRST structural extractor for the L13 LAB CALIBRATION / TRIM facet of a design doc / prompt.
 - `spec_complete_extract` — the GENERAL (benchmark-agnostic) complete-spec extraction + completeness engine.
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
+- `spec_conformance_gate` — does this RTL conform to the spec we extracted?
 - `spec_context_sibling_detect` — PROGRAM-FIRST context-sibling collision advisory.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
 - `spec_declaration_emit` — the designer's FREE choices, declared not inferred.
@@ -2458,8 +2454,6 @@ _(no programs in this group)_
 - `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile.
 - `verilog_selfcheck_lint` — PROGRAM-FIRST verilator -Wall self-lint gate.
 - `verilog_width_resolve` — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de...
-- `verilogeval_human_tier_pipeline` — the VerilogEval-HUMAN (code-complete, ICCAD-2023) TIER-1→5 CONVERGE PIPELINE.
-- `verilogeval_tier_pipeline` — the VerilogEval-v2 (spec-to-rtl) TIER-1→5 CLASSIFY + CONVERGE pipeline.
 - `version_bump_monotonic_check` — strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
 - `vibe_ic_entry_guard` — enforce single entry point for benchmark + IC runs.
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.

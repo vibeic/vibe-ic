@@ -93,6 +93,7 @@ import re
 import shutil
 import subprocess
 import sys
+import builtins
 import tempfile
 from pathlib import Path
 
@@ -118,7 +119,12 @@ _no_iverilog = pytest.mark.skipif(
 _MUST_STAY_GUARDED = (
     # fixed by THIS change
     "programs/nextstate_misc_synth.py",
-    "programs/verilogeval_human_tier_pipeline.py",
+    # `programs/verilogeval_human_tier_pipeline.py` was DELETED — its exec sites
+    # went with it, and the property it carried (a checker that never ran must
+    # not manufacture a finding) is now asserted against the module that
+    # replaced it, below. A denominator that lists a file which no longer exists
+    # fails this test rather than quietly shrinking, which is the point.
+    "programs/deterministic_emit_chain.py",
     "benchmark/gates_atomic.py",
     "benchmark/score_iverilog_tb.py",
     # fixed upstream by #1418 — carried here so its guard cannot regress unseen
@@ -163,44 +169,8 @@ def test_nextstate_host_verify_returns_TOOL_ERR_not_a_traceback():
     assert "COMMAND_NOT_FOUND" in str(detail), detail
 
 
-@_no_iverilog
-def test_verilogeval_human_run_iverilog_reports_not_run_not_a_failure():
-    """A not-run compile must be distinguishable from a FAILED compile, because
-    the Tier-5 caller turns "did not pass" into a benchmark-defect claim."""
-    import verilogeval_human_tier_pipeline as M
-
-    with tempfile.TemporaryDirectory() as td:
-        d = Path(td)
-        (d / "ref.sv").write_text(
-            "module RefModule(input a, input b, output out);\n"
-            "  assign out = a ^ b;\nendmodule\n")
-        (d / "test.sv").write_text("module tb(); endmodule\n")
-        passed, log = M._run_iverilog(None, str(d / "ref.sv"), str(d / "test.sv"))
-
-    assert passed is not True, "an absent compiler can never be a PASS"
-    assert M._tool_was_absent(log), (
-        f"the log must be recognisable as an absent tool, not as a compile "
-        f"error: {log!r}")
 
 
-@_no_iverilog
-def test_verilogeval_human_tier5_claims_no_floor_when_the_tool_is_absent():
-    """THE FABRICATED-FINDING ARM. Without the fix this path reports
-    "golden _ref.sv FAILS its own _test.sv" — a benchmark-defect claim produced
-    by a compiler that never ran."""
-    import verilogeval_human_tier_pipeline as M
-
-    with tempfile.TemporaryDirectory() as td:
-        d = Path(td)
-        ref, test = d / "ref.sv", d / "test.sv"
-        ref.write_text("module RefModule(input a, input b, output out);\n"
-                       "  assign out = a & b;\nendmodule\n")
-        test.write_text("module tb(); endmodule\n")
-        floor = M.floor_evidence({"ref_path": str(ref), "test_path": str(test),
-                                  "prompt": ""})
-
-    assert floor is None, (
-        f"a Tier-5 floor was CLAIMED with no compiler to prove it: {floor!r}")
 
 
 @_no_iverilog
@@ -270,25 +240,6 @@ def test_score_iverilog_tb_shape_b_does_not_score_a_candidate_FAIL():
 # ----------------------------------------------------------------------------
 # the arms that keep the green honest
 # ----------------------------------------------------------------------------
-def test_predicate_rejects_a_real_compile_error():
-    """THE NEGATIVE CASE, and the reason the predicate is narrow. iverilog emits
-    "No such file or directory" for a missing `include` — a REAL compile error
-    about the design. Widening the absent-tool predicate to that string would
-    silently convert genuine compile failures into "tool absent" and stop
-    reporting them."""
-    import verilogeval_human_tier_pipeline as M
-
-    real_compile_error = (
-        "iverilog compile error:\n"
-        "dut.sv:3: Include file missing_defs.vh not found\n"
-        "No such file or directory\n")
-    assert not M._tool_was_absent(real_compile_error), (
-        "a genuine compile error over a missing `include` was misread as an "
-        "absent compiler — the predicate is too wide")
-
-    # and it is not vacuously False for everything: the real marker IS matched
-    assert M._tool_was_absent(
-        "iverilog: COMMAND_NOT_FOUND: [Errno 2] No such file or directory: 'iverilog'")
 
 
 def _unguarded_iverilog_execs(path: Path):
@@ -375,3 +326,56 @@ def test_scan_is_not_vacuous():
     assert not still_unguarded, (
         "these exec sites can still let FileNotFoundError escape: "
         f"{still_unguarded}")
+
+
+# ── the same property, on the subject that replaced the deleted pipeline ─────
+def test_the_conformance_gate_claims_nothing_when_its_checker_cannot_run():
+    """THE FABRICATED-FINDING ARM, re-homed.
+
+    The deleted `verilogeval_human_tier_pipeline` could report "the golden
+    _ref.sv FAILS its own _test.sv" — a benchmark-defect claim produced by a
+    compiler that never ran. Deleting that module deleted that particular risk,
+    but not the shape of it: `deterministic_emit_chain.emit_would_be_blocked`
+    shells out to `spec_conformance_check` and must, on any tool or IO error,
+    return [] rather than manufacture a block.
+
+    The asymmetry is why it matters: a fabricated BLOCK demotes work that is
+    actually correct, and it does so with the authority of a checker that never
+    looked at anything.
+    """
+    import deterministic_emit_chain as C
+    clean = ("module TopModule(input a, input b, output out);\n"
+             "  assign out = a & b;\nendmodule\n")
+
+    # the checker cannot even be imported
+    real_import = builtins.__import__
+
+    def _no_checker(name, *a, **k):
+        if name == "spec_conformance_check":
+            raise ImportError("simulated: checker unavailable")
+        return real_import(name, *a, **k)
+
+    builtins.__import__ = _no_checker
+    try:
+        assert C.emit_would_be_blocked("Assign out to a AND b.", clean) == [], (
+            "a block was claimed by a checker that could not be loaded")
+    finally:
+        builtins.__import__ = real_import
+
+
+def test_an_absent_tool_never_turns_a_clean_emit_into_a_block():
+    """The subprocess arm: the checker imports but the tool behind it is gone."""
+    import deterministic_emit_chain as C
+    import subprocess as _sp
+    clean = ("module TopModule(input a, input b, output out);\n"
+             "  assign out = a & b;\nendmodule\n")
+    real_run = _sp.run
+
+    def _absent(*a, **k):
+        raise FileNotFoundError("simulated: the tool is not installed")
+
+    _sp.run = _absent
+    try:
+        assert C.emit_would_be_blocked("Assign out to a AND b.", clean) == []
+    finally:
+        _sp.run = real_run
