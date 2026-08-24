@@ -70,6 +70,36 @@ HERMETIC_CENSUS_FILE = "programs/tests/test_matrix_63x8_census_freshness.py"
 HERMETIC_MATRIX_FILE = "programs/tests/test_matrix_63x8_coverage.py"
 HERMETIC_ARTEFACT_FILE = "programs/tests/test_matrix_artefact_mutation_channel.py"
 HERMETIC_MUTATION_FILE = "programs/tests/test_matrix_mutation_ledger.py"
+# EVERY DOMAIN TOTAL BELOW WAS MEASURED ON 2026-08-25, and three of the nine
+# were wrong. They are the face of this table that NOTHING READS:
+# `test_nested_progress_schedule_matches_live_pytest_collection` takes `items`
+# and the nodeid at `ordinal` and DISCARDS the rest of the row (`_scope`,
+# `_total`); `validate_nested_progress_inventory` checks shape and profiles.
+# The total is spent by `progress_plan()` at LANDING time, where a short count
+# reads as a stalled arm and never as a failing assertion -- so a wrong one can
+# sit here indefinitely, and `matrix-mutation-replays` did, for five days.
+#
+# Measured by attaching the production `_pytest_progress_plugin` to each pinned
+# nodeid and tallying the `domain_progress` records it really emits:
+#
+#   census   test_the_census_block_is_fresh         collection-runs    1   ok
+#   census   test_the_census_block_is_fresh         outcome-modules    8 -> 9
+#   cover    ..._outlives_old_fixed_bound...        outcome-modules    4   ok
+#   cover    ..._cannot_outlive_the_pytest_harness  outcome-modules    8 -> 9
+#   cover    ..._waits_at_each_wave_boundary        outcome-modules    8   ok
+#   cover    ..._has_a_live_outcome_and_..._starved outcome-modules    8 -> 9
+#   cover    ..._downgrades_a_red_cell...           outcome-modules    1   ok
+#   artefact ..._reproduces_the_recorded_verdict    artefact-replays   8   ok
+#   mutation ..._reddens_its_witness[D1-BLIND...]   mutation-replays  24 -> 25
+#
+# Six of nine matched their pin EXACTLY, which is what says the instrument
+# discriminates rather than reporting drift everywhere it looks.
+#
+# THE THREE THAT MOVED ARE ONE CAUSE: those tests iterate the FULL dimension
+# population, `dimension_module_paths()` = sorted(glob("test_matrix_d[1-9]_*.py")),
+# and a NINTH dimension module (`test_matrix_d9_verdict_consumed.py`) joined it.
+# The rows pinned 4, 8 and 1 are deliberately reduced populations and are NOT
+# the dimension count; that is why they did not move with the others.
 HERMETIC_TEST_PROGRESS = {
     HERMETIC_CENSUS_FILE: {
         "items": 6,
@@ -78,7 +108,7 @@ HERMETIC_TEST_PROGRESS = {
             (2, HERMETIC_CENSUS_FILE + "::test_the_census_block_is_fresh",
              "matrix-collection-runs", 1),
             (2, HERMETIC_CENSUS_FILE + "::test_the_census_block_is_fresh",
-             "matrix-outcome-modules", 8),
+             "matrix-outcome-modules", 9),
         ),
     },
     HERMETIC_MATRIX_FILE: {
@@ -94,13 +124,13 @@ HERMETIC_TEST_PROGRESS = {
              "matrix-outcome-modules", 4),
             (25, HERMETIC_MATRIX_FILE
              + "::test_the_outcome_loop_cannot_outlive_the_pytest_harness",
-             "matrix-outcome-modules", 8),
+             "matrix-outcome-modules", 9),
             (26, HERMETIC_MATRIX_FILE
              + "::test_the_outcome_pool_waits_at_each_wave_boundary",
              "matrix-outcome-modules", 8),
             (28, HERMETIC_MATRIX_FILE
              + "::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved",
-             "matrix-outcome-modules", 8),
+             "matrix-outcome-modules", 9),
             (31, HERMETIC_MATRIX_FILE
              + "::test_the_second_axis_downgrades_a_red_cell_that_the_state_axis_counts",
              "matrix-outcome-modules", 1),
@@ -130,12 +160,15 @@ HERMETIC_TEST_PROGRESS = {
     # schedule pointing at `[D1-UNREACHABLE-CLAUSE]`, which is what position 92
     # now holds, and the domain assertion would then be checking the wrong test.
     HERMETIC_MUTATION_FILE: {
-        "items": 125,
+        # items 125 -> 126 and ordinal 91 -> 92: v1.11.80 added
+        # `test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta`, which
+        # sorts before the parametrised `test_lock2_...` family.
+        "items": 126,
         "producer_profiles": (("replay_many",),),
         "domains": (
-            (91, HERMETIC_MUTATION_FILE
+            (92, HERMETIC_MUTATION_FILE
              + "::test_lock2_the_mutation_really_reddens_its_witness[D1-BLIND-GATE-PROGRAMS]",
-             "matrix-mutation-replays", 24),
+             "matrix-mutation-replays", 25),
         ),
     },
 }

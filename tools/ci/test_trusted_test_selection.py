@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import subprocess
@@ -208,8 +209,13 @@ def test_progress_plan_interleaves_only_parent_owned_matrix_module_units():
         f"pytest:{S.HERMETIC_MATRIX_FILE}",
         "pytest:record-published",
     ]
-    assert sum(row[3] for row in spec["domains"]) == 29
-    assert len(expected) == 61
+    # 31 and 63, not 29 and 61, and they are the SEVENTH and EIGHTH faces of
+    # one pin. The coverage file's domain totals are 4 + 9 + 8 + 9 + 1; two of
+    # them moved from 8 to 9 on 2026-08-25 when a ninth dimension module joined
+    # `test_matrix_d[1-9]_*.py`, and `expected` is those 31 domain units plus
+    # one item unit per collected item (32), so it follows.
+    assert sum(row[3] for row in spec["domains"]) == 31
+    assert len(expected) == 63
     assert len(expected) == len(set(expected))
 
 
@@ -278,3 +284,118 @@ def test_domain_progress_unit_refuses_ambiguous_or_unbounded_labels():
                                "scope", 1, 10_001)
     with pytest.raises(S.Refusal, match="test-progress denominator"):
         S.test_progress_unit("programs/tests/test_a.py", 2, 1)
+
+
+# ── the face of a schedule row that nothing was reading ────────────────────
+# `test_nested_progress_schedule_matches_live_pytest_collection` reads `items`
+# and the nodeid at `ordinal` and DISCARDS the rest of the row (`_scope`,
+# `_total`); `validate_nested_progress_inventory` checks shape and profiles. So
+# a row could be right on both faces anyone looks at and wrong on the one only
+# `progress_plan()` consumes -- and three of the nine were, because the total is
+# spent at LANDING time where a short count reads as a stalled arm rather than
+# as a failing assertion. Measured 2026-08-25 with the production progress
+# plugin attached: `matrix-mutation-replays` was 24 against a live 25 (since
+# 2026-08-20, when D5-PHANTOM-FALLBACK moved the frozen plan and the ledger's
+# own test was updated and this table was not), and three `matrix-outcome-
+# modules` rows were 8 against a live 9 (since a NINTH dimension module joined
+# `test_matrix_d[1-9]_*.py`).
+
+
+def _plugin_root():
+    return HERE.parent.parent / S.PLUGIN_REL
+
+
+def _import_from(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_replay_domain_total_is_the_ledger_s_own_frozen_plan_length():
+    """The mutation row's total, recomputed from the producer, not the pin."""
+    root = _plugin_root()
+    sys.path.insert(0, str(root / "programs"))
+    try:
+        ledger = _import_from(root / "programs/matrix_mutation_ledger.py",
+                              "_tts_probe_matrix_mutation_ledger")
+    finally:
+        sys.path.pop(0)
+    live = len(ledger.replay_plan())
+    rows = [r for r in S.HERMETIC_TEST_PROGRESS[S.HERMETIC_MUTATION_FILE]["domains"]
+            if r[2] == "matrix-mutation-replays"]
+    assert rows, "the row this test exists for is gone; fix the test, not the name"
+    for _ordinal, _nodeid, _scope, total in rows:
+        assert total == live, (
+            "the schedule declares %d replays for matrix-mutation-replays; the "
+            "ledger's frozen plan has %d, so progress_plan() would emit the "
+            "wrong number of domain units at landing." % (total, live))
+
+
+#: The `matrix-outcome-modules` rows that iterate the FULL dimension population.
+#: NAMED, not inferred: three other rows carry the same scope with deliberately
+#: reduced populations (4, 8 and 1 as measured on 2026-08-25), so "every
+#: outcome-modules row equals the dimension count" would be false and would
+#: turn this guard into a generator of wrong findings.
+#: KEYED ON THE SCOPE TOO, not just (file, nodeid). One nodeid can own several
+#: domains: `test_the_census_block_is_fresh` carries BOTH `matrix-collection-runs`
+#: (1) and `matrix-outcome-modules` (9), and a key without the scope matches the
+#: wrong one as readily as the right one.
+_FULL_DIMENSION_POPULATION_DOMAINS = {
+    (S.HERMETIC_CENSUS_FILE,
+     S.HERMETIC_CENSUS_FILE + "::test_the_census_block_is_fresh",
+     "matrix-outcome-modules"),
+    (S.HERMETIC_MATRIX_FILE, S.HERMETIC_MATRIX_FILE
+     + "::test_the_outcome_loop_cannot_outlive_the_pytest_harness",
+     "matrix-outcome-modules"),
+    (S.HERMETIC_MATRIX_FILE, S.HERMETIC_MATRIX_FILE
+     + "::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved",
+     "matrix-outcome-modules"),
+}
+
+
+def test_the_full_population_outcome_domains_track_the_dimension_module_count():
+    """Three rows whose denominator IS `dimension_module_paths()`.
+
+    NOT A SWEEP OF THE TABLE, and it says so rather than reading like one: of
+    the nine domain rows this covers four (these three plus the replay row
+    above). The other five are populations built inside a fixture, with nothing
+    module-level to call; their totals are still asserted only by the owner test
+    that emits them. A check that quietly covered part of the table while
+    reading as if it covered all of it is the same defect one level up.
+    """
+    # The producer is `dimension_module_paths()` in the coverage module, which
+    # is `sorted(TESTS_DIR.glob(DIMENSION_MODULE_GLOB))`. The pattern is READ
+    # from that module rather than repeated here -- a second copy of a glob is
+    # a second thing that can drift -- and it is read by AST, because importing
+    # a test module to ask it one constant runs its imports and fixtures.
+    tests_dir = _plugin_root() / "programs/tests"
+    tree = ast.parse((tests_dir / "test_matrix_63x8_coverage.py").read_text())
+    pattern = next(
+        (n.value.value for n in tree.body
+         if isinstance(n, ast.Assign)
+         and any(getattr(tgt, "id", None) == "DIMENSION_MODULE_GLOB"
+                 for tgt in n.targets)
+         and isinstance(n.value, ast.Constant)), None)
+    assert isinstance(pattern, str) and pattern, (
+        "DIMENSION_MODULE_GLOB is no longer a module-level string literal in "
+        "test_matrix_63x8_coverage.py; this probe reads it by AST and must be "
+        "updated rather than left to silently match nothing")
+    live = len(sorted(tests_dir.glob(pattern)))
+    assert live >= 1, (
+        "the dimension glob %r matched nothing; a probe that measures an empty "
+        "population would pass this test over any pin at all" % (pattern,))
+
+    checked = 0
+    for test_file, spec in S.HERMETIC_TEST_PROGRESS.items():
+        for _ordinal, nodeid, scope, total in spec["domains"]:
+            if (test_file, nodeid, scope) not in _FULL_DIMENSION_POPULATION_DOMAINS:
+                continue
+            assert total == live, (
+                "%s declares %d outcome modules; dimension_module_paths() "
+                "returns %d." % (nodeid, total, live))
+            checked += 1
+    assert checked == len(_FULL_DIMENSION_POPULATION_DOMAINS), (
+        "a named row is no longer in the table: checked %d of %d"
+        % (checked, len(_FULL_DIMENSION_POPULATION_DOMAINS)))
