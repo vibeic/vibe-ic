@@ -184,7 +184,7 @@ RUN
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
 LIVE, not remembered: 178<!--figure:blocking_clauses--> blocking clauses over
-68<!--figure:gated_steps--> gated steps. This is the denominator a reader
+67<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
 the bindings that produced them (vibe-ic#961). Do not hand-edit them.
