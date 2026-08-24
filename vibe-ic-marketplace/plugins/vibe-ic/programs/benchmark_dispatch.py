@@ -16,6 +16,7 @@ Usage:
 """
 from __future__ import annotations
 import argparse, json, os, subprocess, sys
+import re
 from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark"
@@ -501,6 +502,219 @@ def cmd_score(bench: str, run: str, dataset: str | None,
     sys.exit(subprocess.call(cmd))
 
 
+# ── FORMAT BINDING ───────────────────────────────────────────────────────────
+# Which IO adapter reads which benchmark's files. This is the ONLY benchmark
+# knowledge the dispatcher holds, and it is a mapping, not a code path.
+_BENCH_FORMAT = {
+    "verilogeval-v2": "verilogeval",
+    "verilogeval-human": "verilogeval",
+    "rtllm": "rtllm",
+    "cvdp-open": "cvdp",
+}
+
+
+def _rtl_gen_waive(project: Path) -> dict | None:
+    """The runner's rtl_gen WAIVE record, or None.
+
+    Detected from the report the runner writes, not from stdout text: the
+    deterministic dispatch declares `extras.fallback_skill` when it hands over,
+    and that field is the handover contract.
+    """
+    rep = project / "reports" / "orchestrator" / "phase2_one_shot.json"
+    if not rep.is_file():
+        return None
+    try:
+        d = json.loads(rep.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    for st in d.get("steps") or []:
+        if st.get("name") == "rtl_gen" and st.get("status") == "WAIVED":
+            ex = st.get("extras") or {}
+            if ex.get("fallback_skill"):
+                return {"fallback_skill": ex["fallback_skill"],
+                        "detail": st.get("detail", "")}
+    return None
+
+
+def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
+    """Solve every problem through the GENERAL flow.
+
+    This verb did not exist. `--setup` scaffolded and `--score` scored, and
+    between them was a hole an agent filled by hand — which is how a 302-problem
+    CVDP run came to be authored by a prompt->drafts->gate loop that RULE 0
+    forbids, and scored 192/302 with no deterministic emit and no
+    program-extracted spec.
+
+    What happens per problem, and note that none of it is benchmark-specific:
+
+        benchmark_io_adapter.stage   record/files -> a project (INPUT only;
+                                     reading an oracle path RAISES)
+        task_nature_route            prompt + supplied RTL -> nature ->
+                                     entry_step + evidence class -> exit step
+        vibe_ic_one_shot_runner      --entry-step <entry>, the one real runner
+        benchmark_io_adapter.collect the artefact -> the scorer's shape
+
+    The adapter is the thin IO shell § 0 permits; everything between IN and OUT
+    is the flow a normal design task takes.
+    """
+    import subprocess                                    # noqa: PLC0415
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import benchmark_io_adapter as bio                    # noqa: PLC0415
+    import task_nature_route as tnr                       # noqa: PLC0415
+
+    fmt = _BENCH_FORMAT.get(bench)
+    if fmt is None:
+        print(f"ERROR: no IO adapter bound for {bench!r}. Known: "
+              f"{sorted(_BENCH_FORMAT)}", file=sys.stderr)
+        return 2
+
+    ds, run_p = Path(dataset), Path(run)
+    (run_p / "projects").mkdir(parents=True, exist_ok=True)
+    (run_p / "responses").mkdir(parents=True, exist_ok=True)
+    runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
+
+    results, backlog, n = [], [], 0
+    for prob in bio.problems(fmt, ds):
+        if limit and n >= limit:
+            break
+        n += 1
+        pid = str(prob["id"])
+        proj = run_p / "projects" / re.sub(r"[^\w.-]", "_", pid)
+        proj.mkdir(parents=True, exist_ok=True)
+        staged = bio.stage(fmt, prob, proj)
+
+        rtl_present = any((proj / "input" / "rtl").glob("*")) \
+            if (proj / "input" / "rtl").is_dir() else False
+        verdict = tnr.classify_task_nature(
+            (proj / "input" / "phase1_prompt.md").read_text(errors="replace"),
+            rtl_present, None)
+        nature = verdict["nature"]
+        entry = tnr.NATURE_ENTRY.get(nature, {}).get("entry_step")
+        ev = tnr.NATURE_ENTRY.get(nature, {}).get("default_evidence")
+        exit_step = (tnr.EVIDENCE_EXIT.get(ev) or {}).get("exit_step")
+
+        argv = [sys.executable, str(runner), str(proj),
+                "--skip-analog", "--skip-hardware"]
+        # The exit decides what must NOT run. An RTL-evidence benchmark never
+        # needs physical design: measured, no open RTL scorer reads a netlist
+        # or a GDS, so running phase 3 for one would be work nothing consumes.
+        if exit_step and exit_step in tnr.flow_step_ids():
+            order = {s: i for i, s in enumerate(tnr.flow_step_ids())}
+            if order.get(exit_step, 99) < order.get("15", 99):
+                argv.append("--skip-phase3")
+        if entry and entry != "D1":
+            argv += ["--entry-step", str(entry)]
+
+        rc = subprocess.run(argv, capture_output=True, text=True).returncode
+        got = bio.collect(fmt, pid, proj)
+        waive = _rtl_gen_waive(proj)
+        results.append({"id": pid, "nature": nature, "entry": entry,
+                        "evidence": ev, "exit": exit_step, "rc": rc,
+                        "ok": got.get("ok"), "staged": staged["prompt_chars"],
+                        "awaiting_ai": bool(waive and not got.get("ok"))})
+        state = ("rtl" if got.get("ok")
+                 else ("WAIVE->AI" if waive else "no-rtl"))
+        print(f"  {pid:44s} {nature:22s} entry={str(entry):3s} "
+              f"exit={str(exit_step):4s} rc={rc} {state}")
+        if got.get("ok"):
+            (run_p / "responses" / f"{re.sub(r'[^-\w.]', '_', pid)}.json"
+             ).write_text(json.dumps(got, indent=1))
+        elif waive:
+            backlog.append({
+                "id": pid, "project": str(proj),
+                "skill": waive.get("fallback_skill"),
+                "write_rtl_to": str(proj / "phase2" / "stage1" / "rtl"),
+                "read_docs_from": str(proj / "phase1" / "generated_docs"),
+                "runner_said": waive.get("detail", "")[:600],
+                "resume_with": (f"benchmark_dispatch.py {bench} --resume "
+                                f"--dataset {ds} --run {run_p}"),
+            })
+
+    if backlog:
+        # THE HAND-OFF. A program cannot call a language model, so the honest
+        # shape is not "the solver silently did nothing" but a WORK-LIST plus a
+        # resume command. The runner has already emitted L1-L27 for each of
+        # these and named the skill it waived to; the AI authors into the
+        # runner's OWN tree (phase2/stage1/rtl/) and `--resume` re-invokes the
+        # runner so ITS gates fire on that RTL. That is the runner's designed
+        # AI-backup, not a bypass of it: nothing here writes a scoring artefact.
+        bl = run_p / "needs_ai_backup.jsonl"
+        bl.write_text("\n".join(json.dumps(b) for b in backlog) + "\n")
+        print(f"\n{len(backlog)} problem(s) WAIVED to an AI skill -> {bl}")
+        print(f"  author RTL into each project's phase2/stage1/rtl/, then:")
+        print(f"    python3 {Path(__file__).name} {bench} --resume "
+              f"--dataset {ds} --run {run_p}")
+    (run_p / "solve_report.json").write_text(json.dumps(
+        {"bench": bench, "format": fmt, "dataset": str(ds),
+         "solved": sum(1 for r in results if r["ok"]), "total": len(results),
+         "results": results}, indent=2))
+    ok = sum(1 for r in results if r["ok"])
+    waiting = sum(1 for r in results if r.get("awaiting_ai"))
+    print(f"\n{ok}/{len(results)} produced an artefact"
+          + (f", {waiting} awaiting AI-backup" if waiting else "")
+          + f" -> {run_p}/solve_report.json")
+    if results and ok == len(results):
+        return 0
+    # 2 = handed off, not failed. A run that correctly reached the WAIVE and
+    # emitted its work-list did its half; reporting that as a failure would
+    # make the dual track look broken every time it works as designed.
+    return 2 if waiting and waiting + ok == len(results) else 1
+
+
+def cmd_resume(bench: str, dataset: str, run: str) -> int:
+    """Re-invoke the runner on every project the AI has since authored into.
+
+    The dual track is program-first THEN AI-backup THEN the runner's gates. A
+    run that stopped after the AI wrote a file has completed two of those three:
+    the RTL exists but nothing has linted it, elaborated it, or checked it
+    against the spec. `--resume` is what makes the third happen, and a project
+    whose rtl/ is still empty is reported as still-waiting rather than quietly
+    skipped.
+    """
+    import subprocess                                    # noqa: PLC0415
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import benchmark_io_adapter as bio                    # noqa: PLC0415
+
+    run_p = Path(run)
+    bl = run_p / "needs_ai_backup.jsonl"
+    if not bl.is_file():
+        print(f"ERROR: no work-list at {bl} — run --solve first", file=sys.stderr)
+        return 2
+    fmt = _BENCH_FORMAT.get(bench)
+    if fmt is None:
+        print(f"ERROR: no IO adapter bound for {bench!r}", file=sys.stderr)
+        return 2
+    runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
+
+    done = still = 0
+    for line in bl.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        item = json.loads(line)
+        proj = Path(item["project"])
+        rtl_dir = proj / "phase2" / "stage1" / "rtl"
+        authored = rtl_dir.is_dir() and (list(rtl_dir.glob("*.sv"))
+                                         + list(rtl_dir.glob("*.v")))
+        if not authored:
+            still += 1
+            print(f"  {item['id']:44s} still empty — the AI has not authored yet")
+            continue
+        rc = subprocess.run(
+            [sys.executable, str(runner), str(proj), "--skip-analog",
+             "--skip-hardware", "--skip-phase3"],
+            capture_output=True, text=True).returncode
+        got = bio.collect(fmt, item["id"], proj)
+        if got.get("ok"):
+            (run_p / "responses" / f"{re.sub(r'[^-\w.]', '_', str(item['id']))}.json"
+             ).write_text(json.dumps(got, indent=1))
+            done += 1
+        print(f"  {item['id']:44s} re-gated rc={rc} "
+              f"{'kept' if got.get('ok') else 'no rtl after gates'}")
+    print(f"\n{done} re-gated, {still} still awaiting the AI")
+    return 0 if still == 0 else 2
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("bench", nargs="?", help="benchmark name (see --list)")
@@ -518,6 +732,24 @@ def main():
                          "Still re-authors each selected problem BLIND into a "
                          "FRESH run dir (no inherited samples). Default is a "
                          "clean-room FULL re-run.")
+    ap.add_argument("--solve", action="store_true",
+                    help="SOLVE the benchmark through the general flow. This is "
+                         "the verb that was missing: between --setup and --score "
+                         "there was no program that solved, and that hole is "
+                         "where an agent hand-rolls a benchmark-only harness — "
+                         "the thing RULE 0 forbids. Each problem is staged by "
+                         "the thin IO adapter, routed by task_nature_route to an "
+                         "entry step and an evidence class, and run through "
+                         "vibe_ic_one_shot_runner. No benchmark-specific solver "
+                         "is involved.")
+    ap.add_argument("--resume", action="store_true",
+                    help="After the AI has authored RTL into the projects named "
+                         "by needs_ai_backup.jsonl, RE-INVOKE the runner on each "
+                         "so ITS gates fire on that RTL. This is the second half "
+                         "of the dual track — RTL that never went back through "
+                         "the runner has been authored, not gated.")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="with --solve: stop after N problems (0 = all)")
     ap.add_argument("--dataset", help="dataset path on disk")
     ap.add_argument("--run", help="run dir")
     ap.add_argument("--allow-ungated", action="store_true",
@@ -535,6 +767,20 @@ def main():
     if not a.bench:
         ap.print_help()
         sys.exit(2)
+    # A front door that answers "unknown benchmark: verilogeval-v1" to someone
+    # who typed a name from our own README is a front door with a lock on it.
+    _reg_keys = json.loads(REGISTRY.read_text())["benchmarks"]
+    if a.bench and a.bench not in _reg_keys:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import benchmark_io_adapter as _bio          # noqa: PLC0415
+            _resolved = _bio.resolve_name(a.bench)
+        except ImportError:
+            _resolved = None
+        if _resolved and _resolved in _reg_keys:
+            print(f"[name] {a.bench!r} -> {_resolved!r}")
+            a.bench = _resolved
+
     if a.show:
         reg = json.loads(REGISTRY.read_text())["benchmarks"]
         if a.bench not in reg:
@@ -554,6 +800,14 @@ def main():
                   allow_ungated=a.allow_ungated,
                   allow_direct_agent=a.allow_direct_agent)
         return
+    if a.resume:
+        if not (a.dataset and a.run):
+            raise SystemExit("--resume requires --dataset and --run")
+        sys.exit(cmd_resume(a.bench, a.dataset, a.run))
+    if a.solve:
+        if not (a.dataset and a.run):
+            raise SystemExit("--solve requires --dataset and --run")
+        sys.exit(cmd_solve(a.bench, a.dataset, a.run, limit=a.limit))
     if a.reattempt_floor:
         sys.exit(cmd_reattempt_floor(a.bench))
 
