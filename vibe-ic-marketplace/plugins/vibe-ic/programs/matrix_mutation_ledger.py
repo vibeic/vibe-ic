@@ -902,6 +902,21 @@ _CL_SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each step "
 _RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
             "(2026-08-11, every declared step, one pytest run per step)")
 
+#: Step 0.5ic originally had no green corpus witness, so its d3 cell was kept
+#: uncovered instead of treating an ALREADY_RED pair as mutation evidence. A
+#: tracked-only derived control was later produced by the shipped 0.5ic writer
+#: and retained as commit 9509c495cbd91742d8be2699550dffb55ce6a502. Replaying
+#: the CURRENT flow against that frozen control establishes both directions:
+#: the unmodified cell passes, and renaming its first required output reddens
+#: the same cell with the declared `step` signal. The later evidence is kept
+#: separate from the 2026-08-11 sweep so its narrower provenance stays visible.
+_D3_THEN_LIVE_ONE = (
+    _RESWEEP + "   THEN   VIBE_IC_BENCHMARK_DATA=<tracked derived control "
+    "9509c495cbd91742d8be2699550dffb55ce6a502> "
+    "matrix_mutation_ledger.py --replay {name} --step 0.5ic --jobs 1 "
+    "(2026-08-25, baseline_rc=0, mutant_rc=1, red_signal='step')"
+)
+
 MUTATIONS: Tuple[Mutation, ...] = (
     # ---------------- dimension 1 — wiring -----------------------------
     Mutation(
@@ -1054,13 +1069,13 @@ MUTATIONS: Tuple[Mutation, ...] = (
         # criterion and is recorded only so the cost of this choice is visible.
         witness="D1",
         applies_to=(
-            "D1", "1", "2", "3", "4", "5", "7", "8", "9", "10", "11", "DT1",
+            "D1", "0.5ic", "1", "2", "3", "4", "5", "7", "8", "9", "10", "11", "DT1",
             "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
             "34", "35", "36", "37", "38", "M2", "M3", "M4"),
         measured=Measurement(
-            date="2026-08-11", command=_RESWEEP, reddened=53,
+            date="2026-08-25", command=_D3_THEN_LIVE_ONE, reddened=54,
             baseline_red=("12", "15", "17", "19", "20", "21", "22", "23", "24",
                           "25", "26", "30", "32", "M2", "M3", "M4"),
             stayed_green=("6", "39", "M1"),
@@ -1095,7 +1110,17 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "would erase the historical fact that the run produced those "
                  "artefacts, and it is not this change's subject. It is left "
                  "RED and published; `test_d3_the_write_ledger_population_is_"
-                 "derived_from_the_commit` states the remedy in its own words."),
+                 "derived_from_the_commit` states the remedy in its own words. "
+                 "ONE LATER CELL WAS MEASURED 2026-08-25, NOT ASSUMED. The "
+                 "authoritative corpus was CHECKED_EMPTY and could not provide "
+                 "a green 0.5ic witness, so the shipped producer's tracked-only "
+                 "derived control at 9509c495cbd91742d8be2699550dffb55ce6a502 "
+                 "was retained and replayed against current main af0a596b349b. "
+                 "`--replay D3-UNDECLARED-ARTEFACT --step 0.5ic --jobs 1` "
+                 "produced baseline_rc=0, mutant_rc=1 and red_signal='step' "
+                 "(2.0 s). This is live mutation control evidence, not a claim "
+                 "that the authoritative corpus has a routed population. The "
+                 "measured cell takes this entry from 53 to 54 targets."),
     ),
 
     # ---------------- dimension 4 — criteria match ---------------------
@@ -1915,18 +1940,16 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: step that WRITES `input/submission_template/slots/*.yaml`, so it cannot be
 #: conditioned on its own output) and its d3 cell is ENFORCED. 40 - 4 = 36.
 #:
-#: EVERY ONE OF THE 36 WAS REPLAYED, NOT COUNTED. 35 of them are covered by a
-#: measured mutation added to `applies_to` above (`--replay <NAME> --step <id>`
-#: -> REDDENED, per-cell times in the commit message). The 36th, `0.5ic/d3`, is
-#: NOT covered and is not pretended to be: the d3 mutation replays
-#: ALREADY_RED there (`--replay D3-UNDECLARED-ARTEFACT --step 0.5ic`,
-#: baseline_rc=1), because step 0.5ic's own dimension-3 cell is red on main —
-#: no published corpus cell ran the chip/IC path, so neither declared output
-#: exists in any admissible run root. A pair that is red before the edit
-#: "proves nothing either way" in this program's own words, and recording it as
-#: covered would be exactly the forgery the ledger exists to refuse. It stays
-#: uncovered and `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
-#: stays red, naming one cell instead of thirty-six.
+#: EVERY ONE OF THE 36 WAS REPLAYED, NOT COUNTED. 35 were covered by measured
+#: mutations added on 2026-08-20 (`--replay <NAME> --step <id>` -> REDDENED,
+#: per-cell times in that commit). The 36th, `0.5ic/d3`, was deliberately kept
+#: uncovered because the authoritative corpus supplied no green chip/IC run:
+#: its d3 replay returned ALREADY_RED, and an already-red pair proves nothing.
+#: On 2026-08-25 the tracked-only derived control named in `_D3_THEN_LIVE_ONE`
+#: made the missing direction executable. Replaying current main af0a596b349b
+#: against it returned baseline_rc=0, mutant_rc=1, red_signal='step', so the
+#: cell is now covered by actual falsification evidence. This does not rename
+#: CHECKED_EMPTY as population PASS; it closes only the mutation-proof gap.
 #:
 #: MOVED (68, 8, 514) -> (69, 8, 521) at v1.11.5. The flow grew ONE step,
 #: `37.5self` ("General Precheck — the tape-out check for a design with NO
@@ -1946,10 +1969,10 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: The other 7 were NOT counted into coverage on the strength of the +7: each
 #: is covered by a mutation family whose `applies_to` already resolves an edit
 #: site on this step, which the census re-checks live per cell (LOCK 1) rather
-#: than trusting the list — `census()` reports `uncovered == ['0.5ic/d3']` and
-#: nothing else on this tree, so `37.5self` arrived fully covered on those
-#: seven dimensions. `0.5ic/d3` is unchanged by this move and stays the one
-#: uncovered cell, for the reason argued directly above.
+#: than trusting the list. At that historical point `census()` reported only
+#: `['0.5ic/d3']`, so `37.5self` arrived fully covered on those seven
+#: dimensions. The later 0.5ic replay above closes that independent finding;
+#: it does not change what this shape move measured.
 #: MOVED (69, 8, 521) -> (68, 8, 514) at smrg/retire-37p5self, and this is the
 #: FIRST TIME THIS PIN HAS EVER GONE DOWN ON A SHAPE CHANGE. The flow LOST one
 #: step: `37.5self` is retired, because the general precheck was never a third
@@ -1982,8 +2005,8 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: `test_lock3_every_entry_is_arithmetically_consistent_with_its_own_evidence`
 #: re-derives from `len(applies_to)` on every run. The replay that produced
 #: those reds really happened and is not disowned; the CELL it measured no
-#: longer exists, so the claim it supported goes with it. `0.5ic/d3` is
-#: untouched by this move and remains the one uncovered cell.
+#: longer exists, so the claim it supported goes with it. `0.5ic/d3` was
+#: untouched by this move; its later live replay is recorded separately above.
 #: 2026-08-21: (68, 8, 514) -> (69, 8, 522). +1 step and +8 ENFORCED cells, and
 #: they are the same step: 1.6x, added to the flow by `7fcbc7397` with none of
 #: these registries moved. All eight of its cells are ENFORCED — it declares a

@@ -561,6 +561,20 @@ def test_the_coverage_is_complete_and_the_count_is_stated(record_property):
     assert rep["covered"] == rep["considered"], rep
 
 
+def test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta():
+    """The retained live control closes 507 -> 508, not merely a missing name.
+
+    The actual PASS-to-FAIL replay is the evidence recorded by the D3 entry.
+    This small regression assertion makes the parent direction substantive for
+    the acceptance grader: pre-fix code observes 507 covered ENFORCED cells,
+    while this candidate must observe all 508.
+    """
+    rep = L.census(cell_states())
+    assert rep["considered"] == 508, rep
+    assert rep["covered"] == 508, rep
+    assert rep["uncovered"] == [], rep
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 2. A FLOW THAT GREW A STEP
 # ══════════════════════════════════════════════════════════════════════
@@ -620,12 +634,13 @@ def test_a_grown_flow_arrives_with_uncovered_cells(tmp_path):
     A DELTA, NOT AN ABSOLUTE, and that is the repair this test needed. It used
     to open with `assert not before["uncovered"]`, which made it report SOMEONE
     ELSE'S finding and stop measuring its own: the ledger's own comment on
-    :data:`LEDGER_AS_MEASURED` says `0.5ic/d3` is honestly uncovered and must
-    stay that way, so from the day that cell arrived this control was red for a
-    reason that has nothing to do with a flow that grew. Two tests already say
-    `0.5ic/d3` — `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
-    and the aggregate above — and a third saying it in a growth control is not
-    a third finding, it is a control that stopped controlling. What this test
+    :data:`LEDGER_AS_MEASURED` said `0.5ic/d3` was honestly uncovered until a
+    green derived control made its replay executable. During that interval this
+    control was red for a reason that had nothing to do with a flow that grew.
+    Two tests already said `0.5ic/d3` —
+    `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]` and the
+    aggregate above — and a third saying it in a growth control was not a third
+    finding; it was a control that stopped controlling. What this test
     owns is the DIFFERENCE the extra step makes, so that is what it asserts:
     exactly the canary's eight cells arrive, and no pre-existing uncovered cell
     is lost on the way (a census that dropped one would otherwise pass here).
@@ -674,10 +689,10 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
 
     BOTH DIRECTIONS, AS A DIFFERENCE OF FAILING CASES rather than as
     `clean_run.returncode == 0`. The absolute form was the right control only
-    while the live census was perfectly covered; the moment one cell became
-    honestly uncovered — `0.5ic/d3`, which the ledger argues at length must
-    STAY uncovered — the clean arm exited 1, this test went red, and the growth
-    claim it exists to certify stopped being measured at all. Worse, the red it
+    while the live census was perfectly covered; when one cell became
+    honestly uncovered — historical `0.5ic/d3` — the clean arm exited 1, this
+    test went red, and the growth claim it exists to certify stopped being
+    measured at all. Worse, the red it
     reported was a restatement of a finding two other tests already name.
 
     What the control actually needs is that the gate DISCRIMINATES: the grown
@@ -780,7 +795,7 @@ def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
             os.environ[L.FLOW_YAML_ENV] = old
     # UNCHANGED, not EMPTY. `assert not rep["uncovered"]` was a statement about
     # the live census's coverage, which is not what this test measures and not
-    # what reordering can affect: once `0.5ic/d3` became honestly uncovered it
+    # what reordering can affect: while `0.5ic/d3` was honestly uncovered it
     # made this reverse case red for a reason the reordering did not cause —
     # precisely the failure mode the docstring above warns about one paragraph
     # earlier for the ARTEFACT entries. What must hold is that the SET does not
