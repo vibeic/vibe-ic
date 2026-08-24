@@ -10,7 +10,7 @@ executes them. This program is the executor, and its first duty is to say so
 when there is nothing to execute:
 
     $ python3 programs/ppa_closure_run.py --list-edges
-    22 declared edges, 0 BOUND, 22 DECLARED_ONLY
+    21 declared edges, 0 BOUND, 21 DECLARED_ONLY
 
 A DECLARED_ONLY edge exits 2 with `[CANNOT CHECK]`. It is never 0. An edge with
 no controller has not been closed; reporting it green is the defect this whole
@@ -103,7 +103,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "Snapshot and rollback are scoped to exactly this "
                          "directory, and no declared path may escape it.")
     ap.add_argument("--edge", help="flow step id declaring the closed_loop edge "
-                                   "(RAW, as the flow writes it: 20, 1.6x, A7)")
+                                   "(RAW, as the flow writes it: 20, A7, A9)")
     ap.add_argument("--controller", help="run a controller directly, for a "
                                          "controller that is bound to no edge")
     ap.add_argument("--registry", type=Path, default=None,

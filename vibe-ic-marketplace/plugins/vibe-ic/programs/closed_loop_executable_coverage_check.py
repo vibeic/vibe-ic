@@ -40,11 +40,11 @@ this program VERIFIES each citation against the tree rather than believing it.
     ROLLBACK_PROVEN  REMEASURED, and the program can UNDO its actuation when the
                      re-measurement is worse, AND a named test proves the undo.
 
-MEASURED AT 867de4289 (v1.11.18) — the census this program printed on main:
+MEASURED AFTER FOLDING 1.6x INTO STEP 2 — the census this program prints:
 
-    22 declared edges
+    21 declared edges
      18 DECLARED_ONLY
-      1 EXECUTABLE      (1.6x -> 1, by refusal: the candidate is discarded)
+      0 EXECUTABLE
       3 REMEASURED      (4 -> 1; 23 -> 32 and 32 -> 32 share one actuator)
       0 ROLLBACK_PROVEN
 

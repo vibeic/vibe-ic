@@ -131,7 +131,7 @@ def test_vacuous_an_unreadable_registry_is_not_checked(tmp_path):
 
 
 def test_vacuous_a_registry_declaring_no_edges_is_a_refusal(tmp_path):
-    """A ZERO DENOMINATOR IS A REFUSAL. Without this, "22 declared, 0 bound"
+    """A ZERO DENOMINATOR IS A REFUSAL. Without this, "21 declared, 0 bound"
     and "nothing declared at all" would print the same reassuring number."""
     import yaml
     doc = yaml.safe_load(REGISTRY.read_text(encoding="utf-8"))
@@ -161,7 +161,7 @@ def test_list_edges_refuses_while_no_edge_has_an_executable_controller():
     p = run("--list-edges")
     assert p.returncode == RC_NOT_CHECKED, p.stdout + p.stderr
     assert "[CANNOT CHECK]" in p.stderr
-    assert "22 declared edges, 0 BOUND, 22 DECLARED_ONLY" in p.stdout
+    assert "21 declared edges, 0 BOUND, 21 DECLARED_ONLY" in p.stdout
     assert "DECLARED_ONLY" in p.stdout
 
 
