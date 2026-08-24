@@ -475,6 +475,25 @@ width is exactly what the source states. Look for `integer` indices,
 default-width literals, counters wider than their range, and accumulators sized
 above their proven bound.
 
+**A third category, and the one that needed the most attempts to find:**
+**state yosys cannot prove redundant.** On `counter_0039` an agent's first
+three attempts landed at or ABOVE baseline — again because the tool had already
+done the obvious sharing. What moved it was observing that two of the design's
+six counters are provably a COPY and a NEGATION of a third, and deleting them.
+Yosys will not do that: proving one register always equals another (or its
+complement) across reset, enable and rollover is a sequential-equivalence
+argument, not a local peephole. The measured result was −20.5% wires / −25.2%
+cells with cycle-accurate equivalence over 40k random cycles across three
+parameterisations.
+
+So the three area-opt categories, in order of what a tool can already do:
+
+| category | can yosys do it? | example |
+|---|---|---|
+| expression restructuring, dead code, CSE | **yes — expect 0%** | shared adder, folded comparators |
+| oversized declared type | no — the width is what the source says | `integer` index carrying 0..8 |
+| redundant STATE across a sequential argument | no — needs equivalence reasoning | one counter is another's negation |
+
 **Two binding consequences:**
 
 1. **Measure before accepting.** Run
