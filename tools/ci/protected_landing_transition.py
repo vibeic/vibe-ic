@@ -17,6 +17,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -25,10 +26,19 @@ SCHEMA = 1
 MANIFEST_KIND = "vibeic.protected-landing-transition"
 RECEIPT_KIND = "vibeic.protected-landing-transition-receipt"
 BOOTSTRAP_RECEIPT_KIND = "vibeic.protected-landing-bootstrap-receipt"
+PUSH_PREFLIGHT_KIND = "vibeic.landing-push-preflight-receipt"
+REBOUND_VERDICT_KIND = "vibeic.landing-verdict-rebind"
 MANIFEST_PATH = "tools/ci/protected_landing_transition.json"
 MAX_JSON_BYTES = 1024 * 1024
 ROLE_VALUES = frozenset({"authority", "runtime"})
 OPERATION_VALUES = frozenset({"STEADY", "PREPARE", "ACTIVATE"})
+PUSH_PREFLIGHT_GATES = (
+    "landing_collateral_revert_check.py",
+    "commit_msg_nda_check.py",
+    "nda_diff_scan_check.py",
+    "git_prohibition_guard.py",
+)
+PUSH_PREFLIGHT_BASE_FILES = PUSH_PREFLIGHT_GATES + ("_commercial_pdk.py",)
 ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 HEX_RE = re.compile(r"[0-9a-f]+\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -104,6 +114,10 @@ REQUIRED_AUTHORITY_PATHS = frozenset({
 
 class Refusal(RuntimeError):
     """The requested transition is not completely measured or authorised."""
+
+
+class RebindMismatch(Refusal):
+    """A measured identity mismatch: full verification is required."""
 
 
 def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -385,6 +399,62 @@ def _commit_and_tree(repo: Path, rev: str, oid_len: int,
     tree = _oid(_git(repo, ["rev-parse", f"{commit}^{{tree}}"]),
                 oid_len, f"{what} tree")
     return commit, tree
+
+
+def _tree_delta_records(repo: Path, base_tree: str, candidate_tree: str,
+                        oid_len: int) -> list[dict[str, str]]:
+    """Canonical path/mode/blob identity of one final tree delta.
+
+    Commit topology is deliberately absent.  `--no-renames` makes each record
+    one path with one old/new mode and blob, and `-z` keeps every legal path
+    unambiguous.  This is the functional identity a packaging-only rebind must
+    preserve byte-for-byte.
+    """
+    raw = _git(
+        repo,
+        ["diff-tree", "--no-commit-id", "--raw", "-r", "-z",
+         "--no-renames", base_tree, candidate_tree],
+        binary=True,
+    )
+    assert isinstance(raw, bytes)
+    fields = raw.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if len(fields) % 2:
+        raise Refusal("canonical tree delta has a malformed raw record")
+    records: list[dict[str, str]] = []
+    for index in range(0, len(fields), 2):
+        try:
+            header = fields[index].decode("ascii", errors="strict")
+            path = os.fsdecode(fields[index + 1])
+            old_mode, new_mode, old_oid, new_oid, status = header[1:].split()
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise Refusal("canonical tree delta record is malformed") from exc
+        if not header.startswith(":") or status not in {"A", "D", "M", "T"}:
+            raise Refusal("canonical tree delta uses an unsupported status")
+        _safe_path(path, "canonical tree delta path")
+        for oid, label in ((old_oid, "old blob"), (new_oid, "new blob")):
+            if oid != "0" * oid_len:
+                _oid(oid, oid_len, f"canonical tree delta {label}")
+        for mode in (old_mode, new_mode):
+            if mode not in {"000000", "100644", "100755", "120000"}:
+                raise Refusal("canonical tree delta uses an unsupported mode")
+        records.append({
+            "path": path,
+            "status": status,
+            "old_mode": old_mode,
+            "new_mode": new_mode,
+            "old_oid": old_oid,
+            "new_oid": new_oid,
+        })
+    if [row["path"] for row in records] != sorted(
+            {row["path"] for row in records}):
+        raise Refusal("canonical tree delta paths are not sorted and unique")
+    return records
+
+
+def _tree_delta_sha256(records: Sequence[Mapping[str, str]]) -> str:
+    return hashlib.sha256(canonical_bytes(list(records))).hexdigest()
 
 
 def _tree(repo: Path, commit: str, oid_len: int
@@ -1112,6 +1182,203 @@ def validate_receipt_binding(receipt: Mapping[str, Any], *, base_commit: str,
     }
 
 
+def _preflight_gate_record(name: str, proc: subprocess.CompletedProcess
+                           ) -> dict[str, Any]:
+    stdout = proc.stdout if isinstance(proc.stdout, bytes) else b""
+    stderr = proc.stderr if isinstance(proc.stderr, bytes) else b""
+    visible = stderr if proc.returncode else stdout
+    lines = [line.strip() for line in
+             visible.decode("utf-8", errors="replace").splitlines()
+             if line.strip()]
+    return {
+        "name": name,
+        "rc": proc.returncode,
+        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+        "summary": (lines[-1] if lines else "NO OUTPUT")[:1000],
+    }
+
+
+def build_push_preflight_receipt(*, object_repo: Path, base: str,
+                                 candidate: str, push_range: str
+                                 ) -> dict[str, Any]:
+    """Run the cheap BASE-owned push gates before any expensive verifier arm.
+
+    BLOCKING.  The programs are materialised from the immutable BASE commit,
+    never imported from the candidate checkout.  A gate rc=1 is a measured
+    REFUSE; rc=2/other is NORECORD.  Both stop the caller.
+    """
+    repo = object_repo.resolve(strict=True)
+    algorithm, oid_len = _object_format(repo)
+    del algorithm  # object width is the part this record needs
+    base_commit, base_tree = _commit_and_tree(repo, base, oid_len, "base")
+    candidate_commit, candidate_tree = _commit_and_tree(
+        repo, candidate, oid_len, "candidate")
+    if (not isinstance(push_range, str) or not push_range.strip()
+            or "\n" in push_range or "\r" in push_range
+            or len(push_range) > 4096):
+        raise Refusal("push range is empty or not a safe one-line rev-list expression")
+    parts = push_range.split()
+    selected_raw = _git(repo, ["rev-list", *parts])
+    assert isinstance(selected_raw, str)
+    selected = selected_raw.split()
+    if not selected or candidate_commit not in selected:
+        raise Refusal("push range is empty or does not include the candidate")
+
+    programs_rel = "vibe-ic-marketplace/plugins/vibe-ic/programs"
+    gate_records: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="landing-push-preflight.") as temp:
+        authority = Path(temp)
+        for name in PUSH_PREFLIGHT_BASE_FILES:
+            raw = _git(
+                repo, ["show", f"{base_commit}:{programs_rel}/{name}"],
+                binary=True)
+            assert isinstance(raw, bytes)
+            path = authority / name
+            path.write_bytes(raw)
+            path.chmod(0o500)
+        env = _git_env()
+        env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(authority)})
+
+        commands: list[tuple[str, list[str]]] = [
+            ("landing_collateral_revert_check.py",
+             ["--repo", str(repo), "--rev-range", push_range]),
+            ("commit_msg_nda_check.py",
+             ["--repo", str(repo), "--rev-range", push_range]),
+            ("nda_diff_scan_check.py",
+             ["--repo", str(repo), "--rev-range", push_range]),
+        ]
+        for name, argv in commands:
+            proc = subprocess.run(
+                [sys.executable, "-B", str(authority / name), *argv],
+                env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+            gate_records.append(_preflight_gate_record(name, proc))
+
+        messages = _git(
+            repo, ["log", "--format=%B", *parts], binary=True)
+        assert isinstance(messages, bytes)
+        message_file = authority / "commit-messages.txt"
+        message_file.write_bytes(messages)
+        proc = subprocess.run(
+            [sys.executable, "-B", str(authority / "git_prohibition_guard.py"),
+             str(message_file)],
+            env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+        gate_records.append(_preflight_gate_record(
+            "git_prohibition_guard.py", proc))
+
+    if any(row["rc"] not in {0, 1} for row in gate_records):
+        verdict = "NORECORD"
+    elif any(row["rc"] == 1 for row in gate_records):
+        verdict = "REFUSE"
+    else:
+        verdict = "PASS"
+    payload = {
+        "base_commit": base_commit,
+        "base_tree": base_tree,
+        "candidate_commit": candidate_commit,
+        "candidate_tree": candidate_tree,
+        "push_range": push_range,
+        "gates": gate_records,
+    }
+    return {
+        "schema": SCHEMA,
+        "kind": PUSH_PREFLIGHT_KIND,
+        "complete": verdict != "NORECORD",
+        "verdict": verdict,
+        "payload": payload,
+        "payload_sha256": hashlib.sha256(canonical_bytes(payload)).hexdigest(),
+    }
+
+
+def parse_push_preflight_receipt(value: Any, oid_len: int) -> dict[str, Any]:
+    root = _exact_keys(
+        value,
+        {"schema", "kind", "complete", "verdict", "payload",
+         "payload_sha256"},
+        "push preflight receipt")
+    if type(root["schema"]) is not int or root["schema"] != SCHEMA:
+        raise Refusal("push preflight receipt schema is not 1")
+    if root["kind"] != PUSH_PREFLIGHT_KIND:
+        raise Refusal("push preflight receipt has the wrong kind")
+    if root["verdict"] not in {"PASS", "REFUSE", "NORECORD"}:
+        raise Refusal("push preflight verdict is unknown")
+    if root["complete"] is not (root["verdict"] != "NORECORD"):
+        raise Refusal("push preflight completeness disagrees with its verdict")
+    payload = _exact_keys(
+        root["payload"],
+        {"base_commit", "base_tree", "candidate_commit", "candidate_tree",
+         "push_range", "gates"},
+        "push preflight receipt.payload")
+    for key in ("base_commit", "base_tree", "candidate_commit", "candidate_tree"):
+        _oid(payload[key], oid_len, f"push preflight {key}")
+    if (not isinstance(payload["push_range"], str)
+            or not payload["push_range"].strip()
+            or "\n" in payload["push_range"] or "\r" in payload["push_range"]):
+        raise Refusal("push preflight range is malformed")
+    gates = payload["gates"]
+    if not isinstance(gates, list) or len(gates) != len(PUSH_PREFLIGHT_GATES):
+        raise Refusal("push preflight does not exact-cover its gate set")
+    parsed_gates = []
+    for index, expected in enumerate(PUSH_PREFLIGHT_GATES):
+        row = _exact_keys(
+            gates[index],
+            {"name", "rc", "stdout_sha256", "stderr_sha256", "summary"},
+            f"push preflight gate[{index}]")
+        if row["name"] != expected or type(row["rc"]) is not int:
+            raise Refusal("push preflight gate order or rc is malformed")
+        _sha256_value(row["stdout_sha256"], "push preflight stdout digest")
+        _sha256_value(row["stderr_sha256"], "push preflight stderr digest")
+        if not isinstance(row["summary"], str) or len(row["summary"]) > 1000:
+            raise Refusal("push preflight gate summary is malformed")
+        parsed_gates.append(dict(row))
+    rcs = [row["rc"] for row in parsed_gates]
+    expected_verdict = (
+        "NORECORD" if any(rc not in {0, 1} for rc in rcs)
+        else "REFUSE" if any(rc == 1 for rc in rcs)
+        else "PASS")
+    if root["verdict"] != expected_verdict:
+        raise Refusal("push preflight verdict disagrees with its gate records")
+    digest = root["payload_sha256"]
+    _sha256_value(digest, "push preflight payload digest")
+    canonical_payload = {**dict(payload), "gates": parsed_gates}
+    if digest != hashlib.sha256(canonical_bytes(canonical_payload)).hexdigest():
+        raise Refusal("push preflight payload digest disagrees with canonical bytes")
+    return {
+        "schema": SCHEMA,
+        "kind": PUSH_PREFLIGHT_KIND,
+        "complete": root["complete"],
+        "verdict": root["verdict"],
+        "payload": canonical_payload,
+        "payload_sha256": digest,
+    }
+
+
+def validate_push_preflight_binding(receipt: Mapping[str, Any], *,
+                                    base_commit: str,
+                                    candidate_commit: str,
+                                    base_tree: str,
+                                    candidate_tree: str) -> dict[str, str]:
+    if receipt.get("verdict") != "PASS" or receipt.get("complete") is not True:
+        raise Refusal("push preflight did not record one complete PASS")
+    payload = receipt.get("payload")
+    if not isinstance(payload, dict):
+        raise Refusal("push preflight receipt has no validated payload")
+    expected = {
+        "base_commit": base_commit,
+        "candidate_commit": candidate_commit,
+        "base_tree": base_tree,
+        "candidate_tree": candidate_tree,
+    }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        raise Refusal("push preflight receipt does not bind the requested candidate")
+    return {
+        "push_range": str(payload["push_range"]),
+        "payload_sha256": str(receipt["payload_sha256"]),
+    }
+
+
 def runtime_choice(receipt: Mapping[str, Any]) -> tuple[str, str]:
     """Return the one tuple whose bytes both differential arms must execute."""
     payload = receipt.get("payload")
@@ -1151,8 +1418,8 @@ def require_semantic_runtime(receipt: Mapping[str, Any]) -> tuple[str, str]:
     return root, state_id
 
 
-def validate_verdict_record(value: Any, *, expected_base: str,
-                            expected_head: str) -> dict[str, str]:
+def _validate_original_verdict_record(value: Any, *, expected_base: str,
+                                      expected_head: str) -> dict[str, str]:
     """Recheck the embedded receipt before a recorded LAND_OK is reused."""
     if not isinstance(value, dict):
         raise Refusal("verdict record is not an object")
@@ -1186,6 +1453,261 @@ def validate_verdict_record(value: Any, *, expected_base: str,
     if value["protected_landing_transition"] != summary:
         raise Refusal("verdict protected transition summary disagrees with receipt")
     return summary
+
+
+def build_rebound_verdict(*, object_repo: Path, base: str, candidate: str,
+                          old_verdict: Path, push_preflight: Path,
+                          protected_transition: Path) -> dict[str, Any]:
+    """Rebind LAND_OK across a packaging-only one-commit rewrite.
+
+    BLOCKING and deliberately narrow.  The base commit/tree, final candidate
+    tree, canonical path/mode/blob delta, protected tuple, and cheap push gates
+    must all be identical/green.  Any mismatch is a refusal to use this
+    shortcut; the remedy is the normal full verifier.
+    """
+    repo = object_repo.resolve(strict=True)
+    _algorithm, oid_len = _object_format(repo)
+    base_commit, base_tree = _commit_and_tree(repo, base, oid_len, "base")
+    candidate_commit, candidate_tree = _commit_and_tree(
+        repo, candidate, oid_len, "candidate")
+    parents_raw = _git(repo, ["rev-list", "--parents", "-n", "1",
+                              candidate_commit])
+    assert isinstance(parents_raw, str)
+    parents = parents_raw.split()
+    if len(parents) != 2 or parents[1] != base_commit:
+        raise RebindMismatch(
+            "rebind candidate is not exactly one commit parented on the verified base")
+
+    try:
+        old_value = strict_loads(old_verdict.read_bytes(), what="old verdict")
+        preflight_value = strict_loads(
+            push_preflight.read_bytes(), what="push preflight receipt")
+        protected_value = strict_loads(
+            protected_transition.read_bytes(),
+            what="new protected transition receipt")
+    except OSError as exc:
+        raise Refusal(f"rebind evidence is unreadable: {exc}") from exc
+    if not isinstance(old_value, dict) or old_value.get("kind") == REBOUND_VERDICT_KIND:
+        raise Refusal("rebind source must be one original full-verifier verdict")
+    old_head = old_value.get("head_sha")
+    old_verified = old_value.get("verified_sha")
+    old_tree = old_value.get("verified_tree")
+    if not all(isinstance(item, str) for item in
+               (old_head, old_verified, old_tree)):
+        raise Refusal("old verdict omits commit/tree identity")
+    _validate_original_verdict_record(
+        old_value, expected_base=base_commit, expected_head=old_head)
+    _old_verdict_binding(
+        old_value,
+        base_commit=base_commit,
+        phase_commit=old_verified,
+        phase_tree=old_tree,
+        raw=canonical_bytes(old_value),
+    )
+    if old_value.get("base_tree") != base_tree:
+        raise RebindMismatch(
+            "old verdict base tree differs from the current verified base")
+    if candidate_tree != old_tree:
+        raise RebindMismatch(
+            "candidate tree differs from the verified tree; run the full verifier")
+
+    old_delta = _tree_delta_records(repo, base_tree, old_tree, oid_len)
+    new_delta = _tree_delta_records(repo, base_tree, candidate_tree, oid_len)
+    if not old_delta or old_delta != new_delta:
+        raise RebindMismatch(
+            "canonical path/mode/blob delta differs; run the full verifier")
+    delta_sha = _tree_delta_sha256(old_delta)
+
+    preflight_receipt = parse_push_preflight_receipt(
+        preflight_value, oid_len)
+    preflight_summary = validate_push_preflight_binding(
+        preflight_receipt,
+        base_commit=base_commit,
+        candidate_commit=candidate_commit,
+        base_tree=base_tree,
+        candidate_tree=candidate_tree,
+    )
+    protected_receipt = _parse_receipt(protected_value, oid_len)
+    protected_summary = validate_receipt_binding(
+        protected_receipt,
+        base_commit=base_commit,
+        candidate_commit=candidate_commit,
+        base_tree=base_tree,
+        candidate_tree=candidate_tree,
+    )
+    body = {
+        "schema": SCHEMA,
+        "kind": REBOUND_VERDICT_KIND,
+        "complete": True,
+        "verdict": "LAND_OK",
+        "unmeasurable": False,
+        "base_sha": base_commit,
+        "base_tree": base_tree,
+        "head_sha": candidate_commit,
+        "verified_sha": candidate_commit,
+        "verified_tree": candidate_tree,
+        "expected_tree": candidate_tree,
+        "replayed_tree": candidate_tree,
+        "rebase_status": "ok",
+        "reasons": [],
+        "candidate_run_truncated": False,
+        "rebind": {
+            "rebound_from_sha256": hashlib.sha256(
+                canonical_bytes(old_value)).hexdigest(),
+            "rebound_from_head_sha": old_head,
+            "rebound_from_verified_sha": old_verified,
+            "canonical_delta_sha256": delta_sha,
+            "changed_paths": len(old_delta),
+            "push_preflight": preflight_receipt,
+            "push_preflight_summary": preflight_summary,
+        },
+        "rebound_from_verdict": old_value,
+        "protected_landing_transition": protected_summary,
+        "protected_transition_receipt": protected_receipt,
+    }
+    return {
+        **body,
+        "receipt_sha256": hashlib.sha256(canonical_bytes(body)).hexdigest(),
+    }
+
+
+def _validate_rebound_verdict_record(value: Any, *, expected_base: str,
+                                     expected_head: str,
+                                     object_repo: Path | None) -> dict[str, str]:
+    root = _exact_keys(
+        value,
+        {"schema", "kind", "complete", "verdict", "unmeasurable",
+         "base_sha", "base_tree", "head_sha", "verified_sha",
+         "verified_tree", "expected_tree", "replayed_tree", "rebase_status",
+         "reasons", "candidate_run_truncated", "rebind",
+         "rebound_from_verdict", "protected_landing_transition",
+         "protected_transition_receipt", "receipt_sha256"},
+        "rebound verdict")
+    if (type(root["schema"]) is not int or root["schema"] != SCHEMA
+            or root["kind"] != REBOUND_VERDICT_KIND
+            or root["complete"] is not True
+            or root["verdict"] != "LAND_OK"
+            or root["unmeasurable"] is not False
+            or root["reasons"] != []
+            or root["candidate_run_truncated"] is not False
+            or root["rebase_status"] != "ok"):
+        raise Refusal("rebound verdict is not one complete LAND_OK record")
+    if root["base_sha"] != expected_base or root["head_sha"] != expected_head:
+        raise Refusal("rebound base/head does not match the reassert request")
+    oid_len = len(expected_base)
+    for key in ("base_sha", "base_tree", "head_sha", "verified_sha",
+                "verified_tree", "expected_tree", "replayed_tree"):
+        _oid(root[key], oid_len, f"rebound verdict {key}")
+    if (root["head_sha"] != root["verified_sha"]
+            or any(root[key] != root["verified_tree"] for key in
+                   ("expected_tree", "replayed_tree"))):
+        raise Refusal("rebound verdict does not exact-bind one final commit/tree")
+    digest = root["receipt_sha256"]
+    _sha256_value(digest, "rebound verdict digest")
+    body = {key: value for key, value in root.items()
+            if key != "receipt_sha256"}
+    if digest != hashlib.sha256(canonical_bytes(body)).hexdigest():
+        raise Refusal("rebound verdict digest disagrees with canonical bytes")
+
+    rebind = _exact_keys(
+        root["rebind"],
+        {"rebound_from_sha256", "rebound_from_head_sha",
+         "rebound_from_verified_sha", "canonical_delta_sha256",
+         "changed_paths", "push_preflight", "push_preflight_summary"},
+        "rebound verdict.rebind")
+    for key in ("rebound_from_sha256", "canonical_delta_sha256"):
+        _sha256_value(rebind[key], f"rebound {key}")
+    for key in ("rebound_from_head_sha", "rebound_from_verified_sha"):
+        _oid(rebind[key], oid_len, f"rebound {key}")
+    if type(rebind["changed_paths"]) is not int or rebind["changed_paths"] <= 0:
+        raise Refusal("rebound changed-path count is malformed")
+
+    old = root["rebound_from_verdict"]
+    if not isinstance(old, dict) or old.get("kind") == REBOUND_VERDICT_KIND:
+        raise Refusal("rebound source is not an original full-verifier verdict")
+    old_digest = hashlib.sha256(canonical_bytes(old)).hexdigest()
+    if old_digest != rebind["rebound_from_sha256"]:
+        raise Refusal("REBOUND_FROM digest disagrees with the embedded verdict")
+    if (old.get("head_sha") != rebind["rebound_from_head_sha"]
+            or old.get("verified_sha") != rebind["rebound_from_verified_sha"]
+            or old.get("base_sha") != root["base_sha"]
+            or old.get("base_tree") != root["base_tree"]
+            or old.get("verified_tree") != root["verified_tree"]):
+        raise Refusal("REBOUND_FROM identity differs from the new record")
+    _validate_original_verdict_record(
+        old, expected_base=root["base_sha"],
+        expected_head=rebind["rebound_from_head_sha"])
+    _old_verdict_binding(
+        old,
+        base_commit=root["base_sha"],
+        phase_commit=rebind["rebound_from_verified_sha"],
+        phase_tree=root["verified_tree"],
+        raw=canonical_bytes(old),
+    )
+
+    preflight = parse_push_preflight_receipt(
+        rebind["push_preflight"], oid_len)
+    preflight_summary = validate_push_preflight_binding(
+        preflight,
+        base_commit=root["base_sha"],
+        candidate_commit=root["head_sha"],
+        base_tree=root["base_tree"],
+        candidate_tree=root["verified_tree"],
+    )
+    if rebind["push_preflight_summary"] != preflight_summary:
+        raise Refusal("rebound push-preflight summary disagrees with its receipt")
+    protected_receipt = _parse_receipt(
+        root["protected_transition_receipt"], oid_len)
+    protected_summary = validate_receipt_binding(
+        protected_receipt,
+        base_commit=root["base_sha"],
+        candidate_commit=root["head_sha"],
+        base_tree=root["base_tree"],
+        candidate_tree=root["verified_tree"],
+    )
+    if root["protected_landing_transition"] != protected_summary:
+        raise Refusal("rebound protected transition summary disagrees with receipt")
+
+    if object_repo is None:
+        raise Refusal("rebound reassertion requires the object repository")
+    repo = object_repo.resolve(strict=True)
+    _algorithm, actual_oid_len = _object_format(repo)
+    if actual_oid_len != oid_len:
+        raise Refusal("rebound object format differs from the verdict")
+    base_commit, base_tree = _commit_and_tree(
+        repo, root["base_sha"], oid_len, "rebound base")
+    head_commit, head_tree = _commit_and_tree(
+        repo, root["head_sha"], oid_len, "rebound head")
+    if (base_commit != root["base_sha"] or base_tree != root["base_tree"]
+            or head_commit != root["head_sha"]
+            or head_tree != root["verified_tree"]):
+        raise Refusal("rebound object graph differs from the receipt")
+    parents_raw = _git(repo, ["rev-list", "--parents", "-n", "1", head_commit])
+    assert isinstance(parents_raw, str)
+    parents = parents_raw.split()
+    if len(parents) != 2 or parents[1] != base_commit:
+        raise Refusal("rebound head is no longer one commit on the verified base")
+    delta = _tree_delta_records(repo, base_tree, head_tree, oid_len)
+    if (len(delta) != rebind["changed_paths"]
+            or _tree_delta_sha256(delta) != rebind["canonical_delta_sha256"]):
+        raise Refusal("rebound canonical path/mode/blob delta changed")
+    return {
+        "operation": "REBOUND",
+        "receipt_sha256": digest,
+        "rebound_from_sha256": old_digest,
+    }
+
+
+def validate_verdict_record(value: Any, *, expected_base: str,
+                            expected_head: str,
+                            object_repo: Path | None = None) -> dict[str, str]:
+    """Reassert an original LAND_OK or a strict packaging-only rebound."""
+    if isinstance(value, dict) and value.get("kind") == REBOUND_VERDICT_KIND:
+        return _validate_rebound_verdict_record(
+            value, expected_base=expected_base, expected_head=expected_head,
+            object_repo=object_repo)
+    return _validate_original_verdict_record(
+        value, expected_base=expected_base, expected_head=expected_head)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -1227,6 +1749,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     reassert.add_argument("--verdict", type=Path, required=True)
     reassert.add_argument("--expected-base", required=True)
     reassert.add_argument("--expected-head", required=True)
+    reassert.add_argument("--object-repo", type=Path)
+    push_preflight = sub.add_parser("push-preflight")
+    push_preflight.add_argument("--object-repo", type=Path, required=True)
+    push_preflight.add_argument("--base", required=True)
+    push_preflight.add_argument("--candidate", required=True)
+    push_preflight.add_argument("--push-range", required=True)
+    push_preflight.add_argument("--receipt", type=Path, required=True)
+    rebind = sub.add_parser("rebind-verdict")
+    rebind.add_argument("--object-repo", type=Path, required=True)
+    rebind.add_argument("--base", required=True)
+    rebind.add_argument("--candidate", required=True)
+    rebind.add_argument("--old-verdict", type=Path, required=True)
+    rebind.add_argument("--push-preflight", type=Path, required=True)
+    rebind.add_argument("--protected-transition", type=Path, required=True)
+    rebind.add_argument("--receipt", type=Path, required=True)
     select_runtime = sub.add_parser("select-runtime")
     select_runtime.add_argument("--receipt", type=Path, required=True)
     select_runtime.add_argument("--expected-base", required=True)
@@ -1257,9 +1794,47 @@ def main(argv: Sequence[str] | None = None) -> int:
                 value,
                 expected_base=args.expected_base,
                 expected_head=args.expected_head,
+                object_repo=args.object_repo,
             )
             print("[PASS] protected landing verdict reassertion: "
                   f"{summary['operation']} {summary['receipt_sha256'][:12]}")
+            return 0
+        if args.command == "push-preflight":
+            receipt = build_push_preflight_receipt(
+                object_repo=args.object_repo,
+                base=args.base,
+                candidate=args.candidate,
+                push_range=args.push_range,
+            )
+            _atomic_write(args.receipt, canonical_bytes(receipt))
+            for gate in receipt["payload"]["gates"]:
+                word = ("PASS" if gate["rc"] == 0 else
+                        "FAIL" if gate["rc"] == 1 else "NORECORD")
+                stream = sys.stdout if gate["rc"] == 0 else sys.stderr
+                print(f"[{word}] {gate['name']}: {gate['summary']}", file=stream)
+            verdict = receipt["verdict"]
+            stream = sys.stdout if verdict == "PASS" else sys.stderr
+            print(f"PUSH PREFLIGHT: {verdict} — "
+                  f"{receipt['payload_sha256'][:12]}", file=stream)
+            return 0 if verdict == "PASS" else 1 if verdict == "REFUSE" else 2
+        if args.command == "rebind-verdict":
+            try:
+                receipt = build_rebound_verdict(
+                    object_repo=args.object_repo,
+                    base=args.base,
+                    candidate=args.candidate,
+                    old_verdict=args.old_verdict,
+                    push_preflight=args.push_preflight,
+                    protected_transition=args.protected_transition,
+                )
+            except RebindMismatch as exc:
+                print(f"REBOUND: REFUSE — {exc}", file=sys.stderr)
+                return 1
+            _atomic_write(args.receipt, canonical_bytes(receipt))
+            print("[PASS] landing verdict REBOUND_FROM "
+                  f"{receipt['rebind']['rebound_from_sha256'][:12]} -> "
+                  f"{receipt['head_sha'][:12]} tree "
+                  f"{receipt['verified_tree'][:12]}")
             return 0
         if args.command == "select-runtime":
             receipt = strict_load_receipt(

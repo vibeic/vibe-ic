@@ -41,13 +41,16 @@
 #      `landing_collateral_revert_check`, `gatekeeper_stale_branch_check`) then
 #      judge the shape that lands instead of an N-commit local branch that does
 #      not;
-#   5. run the targeted suite on the BASE (arm A) and `gatekeeper-land.sh` on the
+#   5. BEFORE starting either expensive arm, run the BASE-owned cheap gates on
+#      the exact commit population that would be pushed. A measured refusal
+#      stops here; it is never discovered after the CPU work has finished;
+#   6. run the targeted suite on the BASE (arm A) and `gatekeeper-land.sh` on the
 #      squash commit (arm B), each with its own junit report — AND hand the
 #      verdict the list arm A was ASKED to run (`--base-selection`), so a base
 #      arm that did not finish is caught instead of being subtracted as though
 #      it had (vibe-ic#1443: a partial base arm hides `silenced`, which is the
 #      permissive direction);
-#   6. hand every fact to `landing_merge_verdict.py`, which owns the refusal
+#   7. hand every fact to `landing_merge_verdict.py`, which owns the refusal
 #      decision, and exit non-zero on REFUSE.
 #
 # The verified SHA is a local stand-in: the forge will pick its own committer and
@@ -124,6 +127,14 @@
 #     gh pr merge 1021 --squash
 #     tools/gatekeeper-verify-merge.sh --reassert /tmp/v.json     # if time passed
 #
+# If ONLY the commit packaging changed after a complete verdict (same base,
+# final tree and canonical path/mode/blob delta), rebind that evidence instead
+# of re-running all expensive arms. The actual push population still has to
+# pass every cheap BASE-owned gate first:
+#
+#     tools/gatekeeper-verify-merge.sh --rebind /tmp/old.json \
+#       --ref <one-commit-ref> --json /tmp/rebound.json
+#
 # The verdict is about a BASE. If `origin/main` moves before the merge, the
 # verdict is stale — `--reassert` says so rather than letting a stale pass land.
 #
@@ -131,11 +142,16 @@
 #   gatekeeper-verify-merge.sh <pr-number> [options]
 #   gatekeeper-verify-merge.sh --ref <ref> [options]
 #   gatekeeper-verify-merge.sh --reassert <verdict.json>
+#   gatekeeper-verify-merge.sh --rebind <verdict.json> --ref <ref> --json <out>
 #
 # Options:
 #   --base <ref>        base the PR would land on          (default origin/main)
 #   --repo <path>       repository to operate on   (default: this script's repo)
 #   --json <path>       write the verdict JSON
+#   --rebind <path>     identity-only rebind of a complete prior LAND_OK;
+#                       requires an exact one-commit BASE parent, unchanged
+#                       final tree/delta, fresh protected tuple receipt, and
+#                       PASS from every cheap gate on the actual push range
 #   --no-fetch          do not touch the network (local refs must already exist)
 #   --require-version-bump
 #                       demand the version bump in the PR itself. OFF by
@@ -153,7 +169,7 @@
 #                       critical-path waits. Every bundle is terminal-validated.
 set -uo pipefail
 
-PR=""; REF=""; BASE="origin/main"; JSON_OUT=""; REASSERT=""
+PR=""; REF=""; BASE="origin/main"; JSON_OUT=""; REASSERT=""; REBIND=""
 NO_FETCH=0; KEEP=0; REQUIRE_VERSION_BUMP=0; BASE_GATE_CACHE=""
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO=""
@@ -180,6 +196,7 @@ while [ $# -gt 0 ]; do
     --repo)     REPO="${2:?}"; shift 2 ;;
     --json)     JSON_OUT="${2:?}"; shift 2 ;;
     --reassert) REASSERT="${2:?}"; shift 2 ;;
+    --rebind)   REBIND="${2:?}"; shift 2 ;;
     --no-fetch) NO_FETCH=1; shift ;;
     --keep)     KEEP=1; shift ;;
     --base-gate-cache) BASE_GATE_CACHE="${2:?}"; shift 2 ;;
@@ -205,6 +222,37 @@ SELF_REPO="$(git -C "$SELF" rev-parse --show-toplevel 2>/dev/null)"
 [ -n "$REPO" ] || die "no repository (pass --repo)"
 REPO="$(cd "$REPO" && pwd)"
 G=(git -C "$REPO")
+[ -z "$REASSERT" ] || [ -z "$REBIND" ] \
+  || die "--reassert and --rebind are mutually exclusive"
+
+derive_push_range() {
+  # Name the exact unpublished range when REF is a local branch.  If the head
+  # is already published (or REF is an object id), re-run the cheap gates over
+  # the one base->head delta; a packaging rebind is constrained to one commit
+  # on BASE, so the two populations are then identical.
+  local ref="$1" head="$2" base="$3" branch="" remote="" remote_sha=""
+  case "$ref" in
+    refs/heads/*) branch="${ref#refs/heads/}" ;;
+    *) "${G[@]}" show-ref --verify --quiet "refs/heads/$ref" && branch="$ref" ;;
+  esac
+  if [ -n "$branch" ]; then
+    remote="refs/remotes/origin/$branch"
+    remote_sha="$("${G[@]}" rev-parse --verify "$remote" 2>/dev/null || true)"
+    if [ -z "$remote_sha" ]; then
+      PUSH_RANGE="$head --not --remotes"
+      PUSH_RANGE_SOURCE="new remote branch"
+    elif [ "$remote_sha" != "$head" ]; then
+      PUSH_RANGE="$remote_sha..$head"
+      PUSH_RANGE_SOURCE="unpublished commits after $remote"
+    else
+      PUSH_RANGE="$base..$head"
+      PUSH_RANGE_SOURCE="already-published head; identity recheck"
+    fi
+  else
+    PUSH_RANGE="$base..$head"
+    PUSH_RANGE_SOURCE="object ref; base-to-head identity recheck"
+  fi
+}
 
 # ---------------------------------------------------------------- --reassert
 # A verdict is about a BASE and a HEAD. Between the verify and the merge, other
@@ -262,9 +310,92 @@ PY
   PYTHONDONTWRITEBYTECODE=1 python3 -B "$REASSERT_VALIDATOR" \
       validate-verdict --verdict "$REASSERT" \
       --expected-base "$WAS_BASE" --expected-head "$WAS_HEAD" \
+      --object-repo "$REPO" \
     || die "--reassert: protected transition receipt is missing or changed"
   echo "REASSERT: OK — $BASE is still ${WAS_BASE:0:12}, head still ${WAS_HEAD:0:12}"
   exit 0
+fi
+
+# --------------------------------------------------------------- --rebind
+# A packaging rewrite changes commit ids, not functionality.  Re-running the
+# full differential verifier is justified only if the BASE or final tree changed.
+# This path proves they did not, re-runs the cheap BASE-owned push gates over
+# the actual unpublished range, rebuilds the protected tuple receipt for the
+# new one-commit head, and emits a self-contained REBOUND_FROM verdict.
+if [ -n "$REBIND" ]; then
+  [ -z "$PR" ] || die "--rebind accepts --ref, not a PR number"
+  [ -n "$REF" ] || die "--rebind requires --ref <new-head>"
+  [ -n "$JSON_OUT" ] || die "--rebind requires --json <rebound-verdict>"
+  [ -f "$REBIND" ] || die "--rebind: no such old verdict: $REBIND"
+  [ "$NO_FETCH" = "1" ] || "${G[@]}" fetch -q origin main 2>/dev/null
+  REBIND_BASE="$("${G[@]}" rev-parse "$BASE" 2>/dev/null)" \
+    || die "--rebind: cannot resolve $BASE"
+  REBIND_HEAD="$("${G[@]}" rev-parse "$REF" 2>/dev/null)" \
+    || die "--rebind: cannot resolve $REF"
+  REBIND_VERIFIER_BLOB="$(git -C "$SELF_REPO" hash-object --no-filters \
+    "$SELF/gatekeeper-verify-merge.sh" 2>/dev/null)" \
+    || die "--rebind: cannot hash the running verifier"
+  REBIND_BASE_VERIFIER_BLOB="$("${G[@]}" rev-parse \
+    "$REBIND_BASE:tools/gatekeeper-verify-merge.sh" 2>/dev/null)" \
+    || die "--rebind: base has no merge verifier"
+  [ "$REBIND_VERIFIER_BLOB" = "$REBIND_BASE_VERIFIER_BLOB" ] \
+    || die "--rebind: running verifier is not the exact BASE authority"
+  REBIND_VALIDATOR="$SELF_REPO/tools/ci/protected_landing_transition.py"
+  REBIND_VALIDATOR_BLOB="$(git -C "$SELF_REPO" hash-object --no-filters \
+    "$REBIND_VALIDATOR" 2>/dev/null)" \
+    || die "--rebind: cannot hash the transition validator"
+  REBIND_BASE_VALIDATOR_BLOB="$("${G[@]}" rev-parse \
+    "$REBIND_BASE:tools/ci/protected_landing_transition.py" 2>/dev/null)" \
+    || die "--rebind: base has no transition validator"
+  [ "$REBIND_VALIDATOR_BLOB" = "$REBIND_BASE_VALIDATOR_BLOB" ] \
+    || die "--rebind: transition validator is not the exact BASE byte"
+
+  REBIND_RUN="$(mktemp -d -t gkrebind.XXXXXX)"
+  REBIND_GATES="$REBIND_RUN/candidate-gates"
+  REBIND_TESTS="$REBIND_RUN/candidate-tests"
+  REBIND_PREFLIGHT="$REBIND_RUN/push-preflight.json"
+  REBIND_PROTECTED="$REBIND_RUN/protected-transition.json"
+  rebind_cleanup() {
+    "${G[@]}" worktree remove --force "$REBIND_GATES" >/dev/null 2>&1 || true
+    "${G[@]}" worktree remove --force "$REBIND_TESTS" >/dev/null 2>&1 || true
+    rm -rf "$REBIND_RUN"
+  }
+  rebind_signal_exit() {
+    local rc="$1"
+    trap - INT TERM
+    exit "$rc"
+  }
+  trap rebind_cleanup EXIT
+  trap 'rebind_signal_exit 130' INT
+  trap 'rebind_signal_exit 143' TERM
+  derive_push_range "$REF" "$REBIND_HEAD" "$REBIND_BASE"
+  echo "=== landing verdict packaging rebind ==="
+  echo "--- base=${REBIND_BASE:0:12} head=${REBIND_HEAD:0:12}"
+  echo "--- push-range=$PUSH_RANGE ($PUSH_RANGE_SOURCE)"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "$REBIND_VALIDATOR" push-preflight \
+      --object-repo "$REPO" --base "$REBIND_BASE" \
+      --candidate "$REBIND_HEAD" --push-range "$PUSH_RANGE" \
+      --receipt "$REBIND_PREFLIGHT"
+  REBIND_PREFLIGHT_RC=$?
+  if [ "$REBIND_PREFLIGHT_RC" -ne 0 ]; then
+    [ ! -f "$REBIND_PREFLIGHT" ] || cp "$REBIND_PREFLIGHT" "$JSON_OUT"
+    exit "$REBIND_PREFLIGHT_RC"
+  fi
+  "${G[@]}" worktree add -q --detach "$REBIND_GATES" "$REBIND_HEAD" \
+    || die "--rebind: cannot create candidate-gates worktree"
+  "${G[@]}" worktree add -q --detach "$REBIND_TESTS" "$REBIND_HEAD" \
+    || die "--rebind: cannot create candidate-tests worktree"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "$REBIND_VALIDATOR" verify \
+      --object-repo "$REPO" --base "$REBIND_BASE" \
+      --candidate "$REBIND_HEAD" --candidate-gates "$REBIND_GATES" \
+      --candidate-tests "$REBIND_TESTS" --receipt "$REBIND_PROTECTED" \
+    || die "--rebind: protected tuple could not be re-attested"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "$REBIND_VALIDATOR" rebind-verdict \
+      --object-repo "$REPO" --base "$REBIND_BASE" \
+      --candidate "$REBIND_HEAD" --old-verdict "$REBIND" \
+      --push-preflight "$REBIND_PREFLIGHT" \
+      --protected-transition "$REBIND_PROTECTED" --receipt "$JSON_OUT"
+  exit $?
 fi
 
 [ -n "$PR" ] || [ -n "$REF" ] || die "give a PR number or --ref <ref>"
@@ -1011,7 +1142,34 @@ elif [ -n "${FORGE_TREE:-}" ]; then
 fi
 echo "--- base=${BASE_SHA:0:12}  head=${HEAD_SHA:0:12}${GITHUB_TREE:+  forge-merge-tree=${GITHUB_TREE:0:12}}"
 
-# ------------------------- 2. CAN THIS HOST COMPUTE THE MERGE TREE AT ALL?
+# ------------------------- 2. CHEAP GATES ON THE ACTUAL PUSH POPULATION
+# Run these BEFORE merge-tree synthesis, worktree construction, pytest, or the
+# landing arms.  This closes the failure mode where hours of CPU verification
+# succeeded and only the later pre-push hook revealed that the branch's actual
+# commit sequence contained a forbidden collateral revert.  A PR head is
+# already published, so BASE..HEAD is its complete PR population.  A local
+# --ref may still be unpublished; derive_push_range names exactly those commits.
+PUSH_PREFLIGHT_RECEIPT="$RUN/push-preflight.json"
+if [ -n "$PR" ]; then
+  PUSH_RANGE="$BASE_SHA..$HEAD_SHA"
+  PUSH_RANGE_SOURCE="published PR population"
+else
+  derive_push_range "$REF" "$HEAD_SHA" "$BASE_SHA"
+fi
+echo "--- push-range=$PUSH_RANGE ($PUSH_RANGE_SOURCE)"
+PUSH_PREFLIGHT_RC=0
+PYTHONDONTWRITEBYTECODE=1 python3 -B \
+    "$TRUSTED_REPO/tools/ci/protected_landing_transition.py" push-preflight \
+    --object-repo "$REPO" --base "$BASE_SHA" \
+    --candidate "$HEAD_SHA" --push-range "$PUSH_RANGE" \
+    --receipt "$PUSH_PREFLIGHT_RECEIPT" \
+  || PUSH_PREFLIGHT_RC=$?
+if [ "$PUSH_PREFLIGHT_RC" -ne 0 ]; then
+  [ -z "$JSON_OUT" ] || cp "$PUSH_PREFLIGHT_RECEIPT" "$JSON_OUT"
+  exit "$PUSH_PREFLIGHT_RC"
+fi
+
+# ------------------------- 3. CAN THIS HOST COMPUTE THE MERGE TREE AT ALL?
 # `git merge-tree --write-tree` landed in git 2.38. Measured 2026-08-12 across
 # the fleet this repo is maintained on, FOUR OF SIX HOSTS RUN 2.34.1 — including
 # the orchestrator, which is where every `gh pr merge` is actually run.
@@ -1099,7 +1257,7 @@ else
   echo "    and in the JSON record; every other refusal reason is unchanged."
 fi
 
-# ------------------------------------------- 3. rebase in a throwaway worktree
+# ------------------------------------------- 4. rebase in a throwaway worktree
 "${G[@]}" worktree add -q --detach "$WT_CAND" "$HEAD_SHA" \
   || die "cannot create the candidate worktree"
 REBASE_STATUS=ok
@@ -1146,7 +1304,7 @@ SHORT_CIRCUIT=0
 [ -n "$EXPECTED_TREE" ] && [ "$EXPECTED_TREE" != "$REBASED_TREE" ] && SHORT_CIRCUIT=1
 [ -n "$GITHUB_TREE" ] && [ -n "$EXPECTED_TREE" ] && [ "$GITHUB_TREE" != "$EXPECTED_TREE" ] && SHORT_CIRCUIT=1
 
-# ------------------------------- 4. THE SQUASH COMMIT — what actually lands
+# ------------------------------- 5. THE SQUASH COMMIT — what actually lands
 VERIFIED_SHA="$REBASED_SHA"
 VERIFIED_TREE="$REBASED_TREE"
 if [ "$SHORT_CIRCUIT" = "0" ]; then
@@ -1178,6 +1336,7 @@ fi
 
 PLUGIN_REL="vibe-ic-marketplace/plugins/vibe-ic"
 CAND_PLUGIN="$WT_CAND/$PLUGIN_REL"
+# ---------------------------------------------- 6. DIFFERENTIAL VERIFIER ARMS
 # THE JUDGE COMES FROM THE RAW-ATTESTED BASE SNAPSHOT, NOT FROM THE SUBJECT
 # (see the header).  A foreign `--repo` does not create a subject fallback.
 VERDICT_PROG="$TRUSTED_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
@@ -1419,7 +1578,7 @@ else
   echo "--- the tree under test is not the tree that would be merged; the suites were NOT run"
 fi
 
-# --------------------------------------------------------------- 6. the verdict
+# --------------------------------------------------------------- 7. the verdict
 [ -f "$VERDICT_PROG" ] || die "no verdict program at $VERDICT_PROG"
 python3 "$VERDICT_PROG" \
   --base-sha "$BASE_SHA" --base-tree "$BASE_TREE" --head-sha "$HEAD_SHA" \
