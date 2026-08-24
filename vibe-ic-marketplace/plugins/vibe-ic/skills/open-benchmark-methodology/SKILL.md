@@ -325,8 +325,14 @@ and is exempt):
    conclude from "no corruption yet" that it is sufficient. It was not.
 
    **What made this survivable — brief every agent with all four:**
-   (a) RE-READ the target file before every append and STOP + report if it
-   holds lines you did not write — never append, never truncate;
+   (a) RE-READ the target file before every append — **including the FIRST
+   one, which is the case that matters most** — and STOP + report if it holds
+   lines you did not write; never append, never truncate. One agent checked
+   only before each *subsequent* append and so discovered a whole foreign batch
+   at problem 11, having already thrown away two problems of authored work; the
+   window between the orchestrator's "verified empty" and that agent's first
+   write was ~14 minutes, which is enough for an entire batch to be authored
+   and gated by someone else;
    (b) a PRIVATE scratch dir per agent (a shared scratchpad let one agent's RTL
    be silently overwritten by another's, and the emitted record then paired one
    agent's prose with another's code);
@@ -509,7 +515,29 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-#### § 4.033 — CVDP BARE records: port widths must be SELF-CONTAINED
+#### § 4.032 — "New top, dependency-only context": carry a locally-named primitive
+
+The extend-don't-replace rule (§ 2 shape-C brief, rule 2) says a completion
+whose deliverable file IS one of the given `context` files must carry BOTH the
+original module and the new top. **It does not cover the case where the
+deliverable is a NEW module and the only context file is its DEPENDENCY.**
+
+That case is genuinely ambiguous and both obvious answers can fail:
+
+* **include the dependency** in the payload → duplicate module definition if the
+  original context file also survives into the scoring tree;
+* **omit it** → nothing elaborates if the completion overwrites that path.
+
+The author cannot tell which from the prompt, because it depends on how the
+harness assembles the tree.
+
+**Recipe that is correct either way:** have the payload carry a
+**locally-named, behaviourally identical** copy of the primitive. It elaborates
+whether or not the original file survives, and it collides with nothing.
+Observed on `ping_pong_buffer_0001`, whose only context file was its
+`dual_port_memory.sv` dependency.
+
+### § 4.033 — CVDP BARE records: port widths must be SELF-CONTAINED
 
 For a **bare** record — one whose prompt carries no ```verilog skeleton and no
 `Module Name:` line — `cvdp_gate` appends its own harness-toplevel alias wrapper
