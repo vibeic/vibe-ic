@@ -1,16 +1,17 @@
-# The PPA cluster, DISTILLED — 48 records, and the twenty-one already-program claims of which twenty hold
+# The PPA cluster, DISTILLED — 49 records, and the twenty-one already-program claims of which twenty hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
 gated by, and it is honest about the largest single finding: **eleven of the
 eighteen end-to-end findings are already enforced by a shipped program or a
 general census test, and were fixed between the run that found them and this
-tree.** Add the smaller `jsonschema` item, which is not one of the eighteen, and
-four more classes drawn from the six lane records, and the count is
-**11 + 1 + 6 = 18** claims examined — of which **seventeen hold and one, F-2, is
-disproven by execution**: its guard's predicate is satisfied by a production
-fallback and cannot fail. Those sixteen produced no record; duplicating them would be
-worse than skipping them.
+tree.** The first table also includes the smaller `jsonschema` item, which is not
+one of the eighteen; the second table adds nine classes drawn from the six lane
+records. Together those two tables are the current source of truth: **twenty-one claims
+examined — twenty hold and one, F-2, is disproven by execution** because its
+guard's predicate is satisfied by a production fallback and cannot fail. No
+duplicate record was produced for these claims; the disproven one is folded into
+the more general A-3 record.
 
 Two of the eighteen were marked *conditional* rather than clean, and one of those
 two, F-2, was later disproven outright. The brief's test
@@ -48,7 +49,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 48 records](#the-48-records)
+- [The 49 records](#the-49-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -93,7 +94,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 45 | deterministic rules — the default, and every one names its predicate |
+| **A** | 46 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -148,8 +149,10 @@ not resolve inside the installed product (**A-6**).
 
 ## The eighteen, and what is true on this tree
 
-Eleven are ALREADY-PROGRAM. For each, the program or census test that enforces
-it now — checked by reading it, not by trusting the fix note.
+Twelve are ALREADY-PROGRAM:
+eleven of the eighteen end-to-end findings plus the smaller `jsonschema` claim.
+For each, the program or census test that enforces it now was checked by reading
+it, not by trusting the fix note.
 
 | F | already enforced by | general over |
 |---|---|---|
@@ -238,7 +241,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 48 records
+## The 49 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -673,6 +676,37 @@ it holds for any document class this layer gains, and the third disclosed number
 it requires (files that would not parse) is the half neither denominator gate
 asks for.
 
+### A-12 · optional_import_is_guarded_by_capability_not_exception_type · `repo.host_independence`
+
+An import guard proves only that the package may be absent. It says nothing
+about the second state in the captured record: the package is present, the
+import succeeds, and the attribute the caller needs does not exist in that
+release. In the measured case that distinction cost **33 red test identifiers**
+and let a crash return the exit code reserved for a finding about the subject.
+
+The captured screen is deliberately an upper bound, not a defect count:
+
+    import-failure handlers binding a name          131
+      using an attribute outside the handler         79
+
+The screen cannot see whether a use is already protected by a capability flag.
+The independent DISTIL pass reproduced the population at 131 handlers and 77
+attribute uses, then found 31 handlers setting a capability marker and 100 that
+do not; it therefore left the rule unimplemented rather than turning the upper
+bound into findings. The buildable predicate stays the one in the raw record:
+for each guarded optional import, compare the attributes used after the handler
+with the capability the fallback explicitly declares, and refuse only an
+unguarded use. On the test side, route the unavailable capability through the
+not-verified tier with its remedy instead of treating importability as coverage.
+
+This is distinct from C-2 below. A-12 governs the source-level use site; C-2
+creates the older-version input that source inspection cannot synthesize. They
+share the incident and have different populations, predicates and actions.
+
+**(o)** yes — it distinguishes the present-but-too-old state that the import
+guard missed. **(d)** yes — it applies to every optional dependency by the
+capability used, without keying on a package or release name.
+
 ### C-2 · An optional dependency needs a version matrix, because present-but-too-old is the arm nothing tests · `repo.host_independence`
 
 **Demoted from Bucket A by its own sweep.**
@@ -1035,7 +1069,7 @@ because the record asserts the class is now covered.
 
 The tree already maintains the other half of the join:
 
-    gates 624   unwired 58 (baseline 59)   newly unwired 0
+    gates 629   unwired 58 (baseline 59)   newly unwired 0
     (was 61 when this branch began; main wired three, and the gate now PASSES)
 
 and one of the three newly unwired is a program of **this very layer**, so the
@@ -1043,8 +1077,8 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            45     (22 when the rule was written)
-    distinct target programs    25
+    Bucket-A records            46     (22 when the rule was written)
+    distinct target programs    26
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
@@ -2092,22 +2126,17 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **4** steps. Without them **4 of the
-48 records** here emit UNROUTED — the ones routed at those nine — and the
-emitter's own warning says to add the entry. The other 24 route against entries
-main already carries, because half of the steps this lane wrote landed with the
-earlier snapshot. *These two figures have now moved twice, each time because a
-record was added at a step main does not carry; they are derived from the two
-routing files rather than maintained by hand, and the derivation is one command.*
+`benchmark/CAPTURE_ROUTING.json` gains **0** steps. Without them **0 of the
+49 records** here emit UNROUTED: all 49 route through entries already present at
+this repair branch's frozen base. These figures are derived against the
+MERGE-BASE, not against a moving main tip, and this repair touches no routing
+file.
 
-*Three, not the eighteen this sentence said an hour ago, and the difference is not an edit here.* Fifteen of those steps **landed with the frozen bundle**, so relative to the point this branch left they are no longer additions. The figure is derived against the MERGE-BASE rather than against main's tip — comparing to the tip answers *how does my tree differ from main today*, which on the day this was written meant 503 commits of main's work and 131 plugin files this branch never touched.
-
-*This read "every record here" until the universal claims in this report were
-audited against their denominators. It was true when written — all sixteen steps
-were new then and every record did depend on them — and the merge turned it into
-a threefold overstatement, sitting in the paragraph that justifies the one plugin
-file this branch touches. A reader deciding whether to accept that file is
-exactly the reader it would have misled.*
+Historically, the capture lane added the routes listed below before they landed
+with the bundle. They remain useful as an ownership map, but they are not part of
+this branch's delta and are not counted as new here. That distinction is why the
+verifier derives the figures from both routing files instead of maintaining a
+historical number in current-tense prose.
 
     ppa.feasibility           programs/ppa_feasibility_check.py
     ppa.head_to_head          programs/ppa_head_to_head_check.py
@@ -2346,7 +2375,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          45     (26 when the rubric was applied)
+    Bucket-A records                          46     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -2427,16 +2456,21 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 48 records**:
+the patterns were unchecked by anything. Over **all 49 records**:
 
-    pairs compared                      1128
-    maximum similarity                 0.41
-    pairs above 0.40                      0
+    pairs compared                      1176
+    maximum similarity                 0.58
+    pairs above 0.40                      2
 
 **Controls, all three separating:** a record against itself **1.000**, a
 deliberately near-duplicated pattern **0.966**, an unrelated pair **0.144**. The
-0.38 maximum sits far below the near-duplicate signal, so the conclusion stands:
-no two records restate one class.
+0.58 maximum is A-12 against C-2. It was read rather than cleared by the
+threshold: A-12 governs capability checks at source use sites, while C-2 owns
+the older-version CI input that exposes the state source inspection cannot
+construct. The other pair above 0.40 is A-30 against A-35 and shares vocabulary,
+not a predicate. Both remain below the verifier's 0.60 near-duplicate threshold,
+and the manual read confirms that no two records prescribe the same action over
+the same population.
 
 **The first version of this section was wrong, and how it went wrong matters
 more than the correction.** I reported 0.07 over 325 pairs. The similarity
@@ -2458,6 +2492,13 @@ one property that makes a control real: **it must demonstrate SEPARATION.** A-27
 now says so.
 
 ## The ALREADY-PROGRAM claims — can the guards they name actually fail?
+
+<!-- already-program-history-start checkpoint=d6ea69acfdac0d1a9810a1d554ed608802011df5 claims=16 holding=15 -->
+
+> Historical checkpoint (exact):
+> `d6ea69acfdac0d1a9810a1d554ed608802011df5`. This section preserves that
+> checkpoint's 16-claim mutation campaign, where 15 claims held. Its counts are
+> historical measurements, not the current totals.
 
 Sixteen findings produced no record because a program already enforces the class.
 Each was verified by reading that program. But an ALREADY-PROGRAM entry asserts
@@ -2648,6 +2689,8 @@ this batch already records what an unnoticed tree write costs. The procedure is
 written down here so it can be repeated by hand; the three commands are in the
 list above.
 
+<!-- already-program-history-end -->
+
 ## The brief's own requirements, audited against the finished records
 
 Every method used on this deliverable so far examined it on its own terms. The
@@ -2717,7 +2760,7 @@ instead of the text.
 **This is where the ladder ends.** Figures that are projections of repository
 data can be bound, and now are. What a binding proves can be tested, and was.
 Whether a name is honest can be read, and was, for the verifier's 54 checks. The
-same question about 48 records needs 48 readings, and the honest report is the
+same question about 49 records needs 49 readings, and the honest report is the
 three that were done rather than a number that would look derived.
 
 ## Three check NAMES promised more than their predicates deliver
@@ -3898,8 +3941,8 @@ loop exists to stop producing.
 
 ## Summary
 
-**STATUS**: 48 records emitted and validated — 45 Bucket A, 2 C, 1 T, zero B,
-zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
+**STATUS**: 49 records emitted and validated — 46 Bucket A, 2 C, 1 T, zero B,
+zero D. 21 ALREADY-PROGRAM claims examined, 20 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
 re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (51 fast + 4 authoritative). No gate
@@ -3920,12 +3963,12 @@ artefacts; all 17 are present.*
 
 The skill splits Bucket A into ALREADY-PROGRAM / EXTRACT-NEW / AUGMENT-EXISTING /
 KEEP-JUDGMENT, and the implementing lane needs the split more than it needs the
-bucket. My 37 resolve as:
+bucket. The 46 Bucket-A records resolve as:
 
 | resolution | n | records |
 |---|---:|---|
-| ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
-| **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
+| ALREADY-PROGRAM | 21 claims, **20 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
+| **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-12, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
 | **EXTRACT-NEW** | 23 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43, A-44, A-45, A-46, A-47 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
@@ -3950,8 +3993,8 @@ rules against one file and was already out of date by five:
 * **A third cluster has formed at the exit contract** — A-21, A-37 and A-39 all
   constrain what a command's exit code and message mean, and the check that
   derives this table is what noticed, in the same commit that created it.
-* **The five emitter rules likewise.** A-9, A-23, A-27, A-29 and A-31 all
-  constrain one program, and three of them constrain what it WRITES — the field
+* **The six emitter rules likewise.** A-9, A-23, A-27, A-29, A-31 and A-47 all
+  constrain one program, and four of them constrain what it WRITES — the field
   shapes, the output location and the skeleton's signature. One pass over the
   emit path, not five.
 * **A-35 joins the comparison gate's three**, making four: it adds a scope key
@@ -4052,6 +4095,7 @@ gap was non-empty every single time it was measured.
 | A-7 | 560 hits | 0 | narrowed twice; **runs clean** |
 | A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
 | A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off. **Its motivating site was fixed on main mid-lane — and the record stands**: the timing selector still picks sign-off reports by filename prefix |
+| A-12 | 131 handlers | 79 attribute-use candidates | **bounded, not promoted**: the screen cannot see an existing capability flag; the source-level rule and C-2's version-matrix input remain separate actions |
 | A-14 | 11 candidates | **8 confirmed** | strengthened; 3 masked, not cleared |
 | A-3 | 161 floors | 36 | rescoped; `>= 1` is a different, valid assertion |
 | A-4 | 32 prefix globs | needs a discriminator | **most are correct**; see below |
@@ -4180,12 +4224,18 @@ route so the next reader can see it was asked rather than skipped.
 
 ## Next
 
+<!-- already-program-history-start checkpoint=4f2d47cf848bd2e69e95f82adba5d6dba5c2fbc1 claims=19 holding=18 -->
+
 **This bundle ships in two pieces, and the split is a batch decision, not a
 technical one.** The branch that carries it into the current batch was FROZEN
 while the batch was being assembled — ten of sixteen member branches had moved
 within two hours, so every re-merge invalidated the report describing it. The
 frozen branch holds 44 records and 19 already-program claims, and it verifies
 `rc 0` on its own tree; that is what lands.
+
+<!-- already-program-history-end -->
+
+<!-- already-program-history-start checkpoint=afbf611ceb1965d0ebcbeb298991f925c43a59d3 claims=20 holding=19 -->
 
 Everything measured after the freeze is on **`next/ppa-capture-followups`**,
 which branches from the frozen tip and rides the following batch. It is not
@@ -4197,6 +4247,8 @@ merged into the frozen branch:
 | new already-program claim | the twentieth — an empty value is not a value, because two empties compare equal |
 | refinements to frozen records | **two** — A-5 gains the demonstration its count was missing, A-36 gains a detector needing no second source |
 | new synthesis | the six-refusals family, and two classes checked and deliberately NOT recorded |
+
+<!-- already-program-history-end -->
 
 The three staleness guards in the verifier — the introducing-sentence count, the
 stated check count, and the per-record reading cost — are **in the frozen

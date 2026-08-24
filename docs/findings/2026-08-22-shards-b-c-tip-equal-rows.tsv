@@ -1,0 +1,12 @@
+shard	path	host	untracked	tracked_mods	head	tip_equal	recommendation
+b	/home/reyerchu/_counts2	114	1	12	c67efd454	yes	KEEP RECOVER - 12 tracked file(s) modified and uncommitted, held by no commit
+b	/home/reyerchu/_jicip/wt	114	2	0	e36d81c0a	yes	LANDED candidate - clean of tracked mods; confirm the 2 untracked file(s) are regenerable first
+b	/home/reyerchu/_jintent/wt	114	0	0	c5c2e2282	yes	LANDED candidate - 0 untracked, 0 modified
+b	/home/reyerchu/_jrec2/base	114	1	0	8a9c5ad9e	yes	LANDED candidate - clean of tracked mods; confirm the 1 untracked file(s) are regenerable first
+b	/home/reyerchu/_jrows/rows	114	0	0	dcecb1d5b	yes	LANDED candidate - 0 untracked, 0 modified
+b	/home/reyerchu/_pgv/anch_pr1123	114	0	4	3d13e2c59	yes	KEEP RECOVER - 4 tracked file(s) modified and uncommitted, held by no commit
+b	/home/reyerchu/_wt_synthfe	105	1	1	50aedbdde	yes	KEEP RECOVER - 1 tracked file(s) modified and uncommitted, held by no commit
+b	/tmp/claude-1000/-home-reyerchu-vibe-ic/c4dc4062-1bea-4944-bf44-566bb9f3e106/scratchpad/wt-jcap-ppa	105	0	0	8ead7367a6	yes	LANDED candidate - 0 untracked, 0 modified
+c	/home/reyerchu/_a1456	112	0	1	3d13e2c59	yes	KEEP RECOVER - 1 tracked file(s) modified and uncommitted, held by no commit
+c	/home/reyerchu/AI_IC_design/wt_jwire2	121	0	0	c190bf024	yes	LANDED candidate - 0 untracked, 0 modified
+c	/home/reyerchu/_v1123	108	0	384	f2bc39fd5	yes	KEEP RECOVER - 384 tracked file(s) modified and uncommitted, held by no commit

@@ -1,0 +1,4 @@
+commit	ref	files	what
+57bd8623bb2aa176c7fd4bb4262304b6b01f2547	harvest/preserved-pruned-8HD-7	595	content of pruned checkouts on 8HD-7, on no commit
+114fc14e71584d6a5ffc2aff101443c3aba7a153	harvest/preserved-pruned-8HD-9	4158	content of pruned checkouts on 8HD-9, on no commit
+bce4d5f59889228f8ff775f6aa7243ab34d10bf7	harvest/preserved-stashes-8HD-7	176	stash content from 8HD-7

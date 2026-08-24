@@ -1,0 +1,2 @@
+host	path	verdict	evidence
+112	/home/reyerchu/_a1456	RECOVER	WAS WRONGLY LANDED in verdicts_unreachable_resolved.tsv. 1 tracked file modified and uncommitted, ADDING 61 lines main a4caccef does not have; held by no commit. Shard C and verdicts_joined.tsv already say RECOVER -- the standalone file was the outlier. Re-measured 2026-08-22 on .112.

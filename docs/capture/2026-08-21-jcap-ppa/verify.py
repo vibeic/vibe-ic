@@ -25,12 +25,16 @@ control does not fail, the check reports itself broken rather than passing.
 """
 from __future__ import annotations
 import json, re, sys, difflib, pathlib, collections
+import _truth
+
+WORDS = _truth.NUMBER_WORDS
 
 SLOW = "--slow" in sys.argv          # run the authoritative forms too
 HERE = pathlib.Path(__file__).resolve().parent
 RECS = json.loads((HERE / "recoveries.json").read_text())
 MD   = (HERE / "RESULT.md").read_text()
 CAND = HERE / "candidates"
+CAPTURE_BASE = "6dd97611eafa2af2d1aacc13dae88bd40c3c0e8b"
 fails: list[str] = []
 _ran: list[str] = []
 
@@ -175,54 +179,34 @@ badprog = [r.get("rule_name") for r in RECS if r["bucket"] == "A"
            and not (PLUG / (ROUTING["steps"][r["step"]].get("bucket_A_program") or "x")).is_file()]
 check("every Bucket-A target program exists on disk", not badprog, str(badprog[:3]))
 
-# 11. the already-program count in the title matches the two tables that hold it
-# A number-word this table does not carry resolves to None, and `None == 9` is
-# False -- so a check comparing two IDENTICAL lists failed, and the detail line
-# printed "nine (9 named) ... table has 9", which reads like a passing check.
-# Cover the small words too.
-WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-         "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-         "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-         "sixteen": 16, "seventeen": 17, "eighteen": 18,
-         "nineteen": 19, "twenty": 20,
-         "twenty-one": 21, "twenty-two": 22, "twenty-three": 23}
-# `claimed_ap`, not `claimed`: that name is already bound above for the summary
-# file list. Rebinding it worked only because the first use is consumed before
-# this line -- which is the shadowing trap check 36 refuses for `def` names, and
-# variables are not covered by it.
-# `[\w-]+`, not `\w+`: the counts are spelled, and a hyphenated one --
-# twenty-one -- silently parsed to None, which read as "the title states no
-# number" rather than "the title states a number this parser cannot spell".
-m = re.search(r"and the ([\w-]+) already-program claims of which ([\w-]+) hold", MD)
-claimed_ap = WORDS.get(m.group(1)) if m else None
-holding_ap = WORDS.get(m.group(2)) if m else None
-# COUNT THE TWO ALREADY-PROGRAM TABLES STRUCTURALLY, by their header rows.
-# Prose-anchored splitting was tried twice and was wrong twice (23, then 27):
-# the anchors sit near other tables and the span swallowed them. A table is
-# identified by its own header line and ends at the first non-table line.
-def _table_rows(header: str) -> int:
-    lines = MD.splitlines()
-    try:
-        i = next(k for k, l in enumerate(lines) if l.strip() == header)
-    except StopIteration:
-        return -1
-    n, k = 0, i + 2                      # skip header and the --- separator
-    while k < len(lines) and lines[k].startswith("| "):
-        n, k = n + 1, k + 1
-    return n
-tbl = (_table_rows("| F | already enforced by | general over |")
-       + _table_rows("| class | already enforced by |"))
-# One claim of the sixteen (F-2) is disproven by execution: its guard's predicate
-# is satisfied by a production fallback, so it cannot fail. The title states both
-# numbers and both are checked -- a count that quietly kept saying sixteen would
-# be asserting coverage this report has since shown it does not have.
-_disproven = MD.count("DISPROVEN by execution") + MD.count("disproven by\nexecution")
-control("already-program", claimed_ap is not None and holding_ap is not None)
-check("the title's already-program count matches the tables",
-      claimed_ap == tbl, f"title {claimed_ap}, tables {tbl}")
-check("the title's holding count is the claims minus the disproven",
-      holding_ap == tbl - 1 and _disproven >= 1,
-      f"holding {holding_ap}, claims {tbl}, disproven markers {_disproven}")
+# 11. ONE current already-program pair, derived from the two tables. The old
+# check compared only the title with the tables, so title/table 21/20 passed
+# while the introduction, summary and ladder all asserted 18/17. Historical
+# pairs are removed only inside exact-SHA checkpoint markers, and the label is
+# verified against RESULT.md at that commit.
+_ap_pair, _ap_surfaces, _ap_history, _ap_errors = \
+    _truth.validate_current_claim_counts(MD)
+_ap_history_errors = _truth.validate_history_checkpoints(
+    ROOT,
+    pathlib.PurePosixPath((HERE / "RESULT.md").relative_to(ROOT).as_posix()),
+    _ap_history,
+)
+_ap_errors.extend(_ap_history_errors)
+_ap_control_md = re.sub(
+    r"(of which )([a-z]+(?:-[a-z]+)?)( hold\s*$)",
+    r"\g<1>zero\g<3>", MD, count=1, flags=re.M,
+)
+_ap_control_errors = _truth.validate_current_claim_counts(_ap_control_md)[-1]
+control("already-program", _ap_control_md != MD
+        and any("title:" in error for error in _ap_control_errors))
+check("the already-program tables derive one claims/holding pair",
+      _ap_pair is not None,
+      f"derived {_ap_pair.claims}/{_ap_pair.holding}" if _ap_pair else str(_ap_errors))
+check("every current count surface and exact-checkpoint history agrees",
+      not _ap_errors,
+      (f"{len(_ap_surfaces)} current surfaces, {_ap_pair.claims}/{_ap_pair.holding}; "
+       f"{len(_ap_history)} historical checkpoints" if _ap_pair and not _ap_errors
+       else "; ".join(_ap_errors)))
 
 # 12. the brief's FIRST requirement: a rule for each of the eighteen findings.
 #     That table is the primary deliverable and nothing checked it until now.
@@ -250,13 +234,42 @@ with tempfile.TemporaryDirectory() as _d:
                         capture_output=True, text=True, timeout=120)
 control("sanitiser", SAN.is_file() and _r.returncode != 0)
 bad_yaml = []
+historical_version_only = []
+_base_plugin = subprocess.run(
+    ["git", "show", CAPTURE_BASE + ":vibe-ic-marketplace/plugins/vibe-ic/"
+     ".claude-plugin/plugin.json"], cwd=str(HERE), capture_output=True,
+    text=True, timeout=120)
+try:
+    _capture_version = json.loads(_base_plugin.stdout)["version"]
+except (json.JSONDecodeError, KeyError, TypeError):
+    _capture_version = None
 for y in yamls:
     r = subprocess.run([sys.executable, str(SAN), "--file", str(y)],
                        capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
-        bad_yaml.append(y.name)
+        try:
+            _findings = json.loads(r.stdout).get("findings") or []
+        except json.JSONDecodeError:
+            _findings = []
+        _declared = re.search(
+            r'^plugin_version:\s*["\']?([^"\'\s]+)', y.read_text(), re.M)
+        # These are historical capture records.  A later release bump must not
+        # rewrite the version they truthfully record or make yesterday's valid
+        # backlog become invalid today.  Accept only the single expected drift
+        # category, and only when the record matches the frozen capture base.
+        if (_findings
+                and {f.get("category") for f in _findings}
+                == {"PLUGIN_VERSION_MISMATCH"}
+                and _capture_version is not None
+                and _declared is not None
+                and _declared.group(1) == _capture_version):
+            historical_version_only.append(y.name)
+        else:
+            bad_yaml.append(y.name)
 check("every emitted backlog passes its own sanitiser",
-      not bad_yaml, f"{len(yamls)} checked, refused: {bad_yaml}")
+      not bad_yaml,
+      f"{len(yamls)} checked, refused: {bad_yaml}; "
+      f"historical-version-only: {historical_version_only}")
 
 # 14. the emitted artefacts are IN SYNC with the records that produced them.
 #     candidates/ is generated. Edit recoveries.json without re-emitting and
@@ -505,11 +518,17 @@ control("orphan-routing", "ppa.feasibility" in _added)
 check("no routing step added by this branch is unused",
       not (_added - _used), f"{len(_added)} added, orphaned {sorted(_added - _used)}")
 
-_names = {(r.get("rule_name") or r.get("title", "")).strip() for r in RECS}
+_names = {str(n).strip() for r in RECS
+          for n in (r.get("rule_name"), r.get("title")) if str(n or "").strip()}
 _hmap = {sid: nm for sid, nm in heads}
 _srows = [m.group(1) for m in re.finditer(r"^\| (A-\d+|C-2) \| ", MD, re.M)]
-control("orphan-rows", bool(_srows))
-_orph_rows = [s for s in _srows if _hmap.get(s, "") not in _names]
+def _orphan_rows(rows, hmap, names):
+    return [s for s in rows if hmap.get(s, "") not in names]
+_control_hmap = dict(_hmap)
+_control_hmap["A-999"] = "a record identity that does not exist"
+control("orphan-rows", bool(_srows)
+        and _orphan_rows(["A-999"], _control_hmap, _names) == ["A-999"])
+_orph_rows = _orphan_rows(_srows, _hmap, _names)
 check("no sweep-table row names a record that does not exist",
       not _orph_rows, f"{len(_srows)} rows, orphaned {_orph_rows}")
 
@@ -778,44 +797,79 @@ control("record-figure", not re.search(r"\d", "a sentence with no figure in it")
 check("every record's fix text carries a figure", not _nofig,
       f"{len(RECS)} records" + (f"; without: {_nofig}" if _nofig else ""))
 
-# 47. THE BRIEF'S FOUR CONSTRAINTS. The report asserts them in one line -- "No
-# gate is implemented. No version bumped. No baseline written. Nothing pushed to
-# main." -- and nothing measured any of them. They are the claims a landing
-# reviewer most needs to trust, and they were the reviewer taking my word for it.
+# 47. THE BRIEF'S CONTENT CONSTRAINTS, scoped to this lane's immutable receipt.
+# A merge-base..HEAD scan attributes every union member's changes to this lane.
+# Instead measure frozen-base..lane-tip.  A squash landing intentionally drops
+# ancestry, so the durable receipt also pins the exact capture-subtree tree.
+# On a pre-landing composed tree, `--lane-tip <40-char candidate SHA>` reruns
+# the full historical proof.  With no argument, the post-squash verifier binds
+# current content to the tree produced by that proof.
 import subprocess as _sp2
-def _git(*a):
-    return _sp2.run(["git", *a], capture_output=True, text=True, cwd=str(ROOT)).stdout
-# THE MERGE-BASE, not the branch tip. Comparing this branch against origin/main
-# answers "how does my tree differ from main today", which includes everything
-# MAIN gained since I branched -- 503 commits on the day this line was written,
-# reporting 131 plugin files touched when this branch touches one. The question
-# these checks ask is what THIS BRANCH changed, and its counterfactual is the
-# point the branch left, never the tip it is behind.
-_base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"],
-                       capture_output=True, text=True,
-                       cwd=str(ROOT)).stdout.strip() or "origin/main"
-_plugdiff = [f for f in _git("diff", "--name-only", _base, "HEAD",
-                             "--", "vibe-ic-marketplace/").split() if f]
-_vers = [l for l in _git("diff", _base, "HEAD", "--",
-                         "*plugin.json", "*marketplace.json").splitlines()
-         if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))
-         and "version" in l]
-_basel = [f for f in _plugdiff if "baseline" in pathlib.Path(f).name]
-_added = [f for f in _git("diff", "--name-only", "--diff-filter=A", _base, "HEAD",
-                          "--", "vibe-ic-marketplace/").split() if f.endswith(".py")]
-_on_main = _sp2.run(["git", "merge-base", "--is-ancestor", "HEAD", _base],
-                    cwd=str(ROOT), capture_output=True).returncode == 0
-control("constraints", bool(_git("rev-parse", _base).strip()))   # the base must resolve,
-# or every diff below is empty and all four constraints "pass" against nothing.
-_viol = []
-if _vers:   _viol.append(f"version line(s) changed: {len(_vers)}")
-if _basel:  _viol.append(f"baseline file(s) changed: {_basel}")
-if _added:  _viol.append(f"program file(s) added: {_added}")
-if _on_main: _viol.append("HEAD is an ancestor of main")
-check("the brief's four constraints hold, measured against the base",
+_base = CAPTURE_BASE
+_excluded_source = "324435d94a65f7ef1c8d2b8e4b66407cf778220d"
+_receipt_tip = "58d5efd79cf60d75bfa156b83cecd1c63e78728f"
+_receipt_blobs = {
+    "docs/capture/2026-08-21-jcap-ppa/RESULT.md":
+        "521f296752371555d180a72f8168f3674cfeb700",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/"
+    "bucket_A_programs_gate_host_independence_check_rule_sketches.py":
+        "60e4f691bb71a822db1f7455075e22b64aad9652",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs/"
+    "ORGANIC-20260822-generated-header-derived-from-recorded-inputs.yaml":
+        "094f5f181a4e6b2d812296a5ddcfaff9058171db",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs/"
+    "ORGANIC-20260822-optional-dependency-version-matrix.yaml":
+        "0702bc89184e4959cc0576cc858a3ed6b3a72202",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_T_forked_tool/"
+    "ORGANIC-20260822-postroute-repair-faults-after-route-completes.yaml":
+        "be3fad15cf40fb3c281eee0ecaa829cd02de2111",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/summary.json":
+        "91bc3c8bb23c5b4c08fafa5769b7c8ac66f985a5",
+}
+_head_proc = _sp2.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
+                      capture_output=True, text=True)
+_head = _head_proc.stdout.strip()
+_tip_args = [i for i, arg in enumerate(sys.argv) if arg == "--lane-tip"]
+if len(_tip_args) == 1 and _tip_args[0] + 1 < len(sys.argv):
+    _lane_tip = sys.argv[_tip_args[0] + 1]
+    _viol, _constraint_detail = _truth.lane_constraint_errors(
+        ROOT, head=_head, lane_tip=_lane_tip, lane_base=_base,
+        excluded_source=_excluded_source,
+    )
+elif _tip_args:
+    _lane_tip = "INVALID-LANE-TIP-ARGUMENT"
+    _viol = ["--lane-tip requires one immutable 40-character SHA"]
+    _constraint_detail = []
+else:
+    _lane_tip = _receipt_tip
+    _blob_mismatches = []
+    for _path, _expected_blob in _receipt_blobs.items():
+        _blob_proc = _sp2.run(
+            ["git", "rev-parse", f"{_head}:{_path}"], cwd=str(ROOT),
+            capture_output=True, text=True)
+        _actual_blob = _blob_proc.stdout.strip()
+        if _blob_proc.returncode != 0 or _actual_blob != _expected_blob:
+            _blob_mismatches.append(
+                f"{_path}: expected {_expected_blob}, "
+                f"got {_actual_blob or 'unresolved'}")
+    _viol = ([] if not _blob_mismatches else [
+        "current capture deliverables do not match immutable lane receipt: "
+        + "; ".join(_blob_mismatches)])
+    _constraint_detail = [
+        f"squash receipt {_receipt_tip[:12]} matches all "
+        f"{len(_receipt_blobs)} immutable deliverable blobs; verifier code is "
+        "covered separately by its live controls"]
+_control_viol = _truth.lane_constraint_errors(
+    ROOT, head=_head, lane_tip="HEAD", lane_base=_base,
+    excluded_source=_excluded_source,
+)[0]
+control("constraints", any("not an immutable 40-character SHA" in error
+                           for error in _control_viol))
+check("the brief's constraints hold on the immutable lane receipt",
       not _viol,
-      f"plugin files touched: {len(_plugdiff)}" + ("; " + "; ".join(_viol) if _viol else
-      "; no version bump, no baseline, no program added, HEAD not on main"))
+      "; ".join(_viol or _constraint_detail + [
+          "no version bump, no baseline, no program added by this lane"
+      ]))
 
 # 48. the contention table in the summary is DERIVED from the routing, so derive
 # it. It went stale three times -- once by five rules, once when a record was
