@@ -492,7 +492,37 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-#### § 4.04 — AREA-OPTIMIZATION problems: MEASURE, and look for oversized TYPES (2026-08-24)
+#### § 4.035 — A VALUE bug and a LATENCY bug listed together are usually ONE bug
+
+When a debug/repair prompt documents both a wrong OUTPUT VALUE and a wrong
+CYCLE COUNT, check whether a single missing or mis-sized pipeline stage explains
+both before treating them as independent defects. Three cases in the 2026-08-24
+CVDP run had exactly this shape:
+
+* `modified_booth_mul_0002` — the prompt lists a wrong product AND a wrong
+  latency. One cause: non-blocking assignments inside a `for` loop, so only the
+  LAST partial product survived, and the same state needed to span `WIDTH/2`
+  cycles rather than one. Fixing the state's duration fixed the value and the
+  6/8-cycle latencies together; all 15 documented vectors then reproduced.
+* `montgomery_0002` — the prompt's "Issue 1" (wrong value) and "Issue 2"
+  (`valid_out` misaligned) were one defect: the R-mod-N constant should have
+  been R²-mod-N, which revealed a MISSING FOURTH redc stage. Adding the stage
+  fixed the value and the timing in one change, because the extra stage IS the
+  missing pipeline cycle.
+* `counter_0039` — the same family from the other direction: what looked like
+  redundant expressions was redundant STATE (§ 4.04).
+
+Why this is worth a rule: fixing them separately produces two changes that each
+half-work, and the second "fix" often re-breaks the first. **Ask what single
+structural fact — a stage that does not exist, a state that lasts one cycle
+instead of N — would produce BOTH symptoms**, and test that hypothesis before
+patching either symptom.
+
+*why_not_bucket_a*: recognising that two listed symptoms share one structural
+cause is a reading of the design's dataflow against the prompt's table; no
+deterministic check pairs them.
+
+### § 4.04 — AREA-OPTIMIZATION problems: MEASURE, and look for oversized TYPES (2026-08-24)
 
 A prompt that demands a measurable reduction ("wires −19%, cells −22%") is not
 satisfied by clean-up. **The synthesis tool has already done the clean-up.**
