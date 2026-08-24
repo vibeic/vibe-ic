@@ -263,5 +263,9 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
     # The CLAIM is unchanged and still holds — the DECLARED-dependency list in
     # `test_declared_dependency_relation_is_small` is still the same 6 pairs
     # (this edge is an ORDERING edge; it licensed no new declared read), and 6
-    # against 1496 ordering-licensed pairs is still two orders of magnitude.
-    assert total == 1496, total
+    # against 1494 ordering-licensed pairs is still two orders of magnitude.
+    # 1496 -> 1494 (2026-08-24): standalone step 1.6x was folded into
+    # Step 2. No step depended on 1.6x; removing its own two ancestors
+    # (Step 1 and transitive D1) is therefore exactly -2 and changes no
+    # remaining step's ordering ancestry.
+    assert total == 1494, total
