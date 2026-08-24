@@ -26,7 +26,7 @@ sys.path.insert(0, str(PROGRAMS))
 import general_synth as G            # noqa: E402
 import rtllm_tier_pipeline as P            # noqa: E402
 import port_parser as PP                   # noqa: E402
-import rtllm_port_bridge as BR             # noqa: E402
+import prose_port_block_read as BR             # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _RTLLM_ROOT = corpus_path("_extbench/RTLLM")

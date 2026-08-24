@@ -640,7 +640,7 @@ def synth(prompt_text: str, top: str = "TopModule"):
 def _dia_ports(prompt):
     """(ins, outs) read through the RTLLM prose bridge THEN port_parser."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import rtllm_port_bridge as _bridge
+    import prose_port_block_read as _bridge
     import port_parser
     return port_parser.parse_ports(_bridge.bridge_prompt(prompt))
 

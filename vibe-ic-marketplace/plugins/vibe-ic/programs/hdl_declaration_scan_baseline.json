@@ -122,7 +122,7 @@
     "rtl_hygiene_lint::autofix_input_reg_port::_INPUT_REG_RE(code)",
     "rtl_hygiene_lint::rule_input_port_reg::_INPUT_REG_RE(src)",
     "rtl_hygiene_lint::rule_reserved_word_identifier::decl(src)",
-    "rtllm_iface_recover::recover_ports::_PAREN_DIR_RE(ln)",
+    "prose_interface_recover::recover_ports::_PAREN_DIR_RE(ln)",
     "rx_deglitch_filter_required_check::_candidate_rx_seeds::_INOUT_RE(text)",
     "rx_deglitch_filter_required_check::_candidate_rx_seeds::_RX_PORT_RE(text)",
     "rx_deglitch_filter_required_check::_is_rx_phy_file::_INOUT_RE(text)",

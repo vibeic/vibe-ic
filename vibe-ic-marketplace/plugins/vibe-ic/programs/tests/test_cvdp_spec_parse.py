@@ -1,6 +1,6 @@
 """cvdp_spec_parse — a GENERAL CVDP-markdown port reader bridging CVDP's
 section-scoped interface form to the bullet form `port_parser.parse_ports` reads
-(the same role rtllm_port_bridge plays for RTLLM's prose form).
+(the same role prose_port_block_read plays for RTLLM's prose form).
 
 Characterized gap (Shape-D CVDP enhancement, owner directive 2026-06-23
 "program-first PARSING on CVDP"): `port_parser.parse_ports` understood the

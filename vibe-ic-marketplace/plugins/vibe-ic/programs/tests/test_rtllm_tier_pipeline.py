@@ -1,4 +1,4 @@
-"""Tests for rtllm_tier_pipeline.py + rtllm_iface_recover.py + arith_ext_synth.py
+"""Tests for rtllm_tier_pipeline.py + prose_interface_recover.py + arith_ext_synth.py
 — the RTLLM 5-tier converge pipeline (mirror of cvdp_solve_pipeline / the
 VerilogEval tier pipelines).
 
@@ -24,10 +24,10 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import rtllm_tier_pipeline as P            # noqa: E402
-import rtllm_iface_recover as R            # noqa: E402
+import prose_interface_recover as R            # noqa: E402
 import arith_ext_synth as AX         # noqa: E402
 import port_parser as PP                   # noqa: E402
-import rtllm_port_bridge as BR             # noqa: E402
+import prose_port_block_read as BR             # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _RTLLM_ROOT = corpus_path("_extbench/RTLLM")
@@ -108,7 +108,7 @@ def test_gate_no_module_header_is_reject():
 
 
 # --------------------------------------------------------------------------- #
-# rtllm_iface_recover — the header-dialect recoverer (T4->T3->T2 lever)
+# prose_interface_recover — the header-dialect recoverer (T4->T3->T2 lever)
 # --------------------------------------------------------------------------- #
 def test_recover_paren_direction_form():
     # float_multi-style: direction (+width) inside parens, not a section header.

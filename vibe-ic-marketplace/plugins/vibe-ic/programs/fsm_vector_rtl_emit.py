@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""verilogeval_human_tier1_solvers.py — supplemental DETERMINISTIC Tier-1 emitters
+"""fsm_vector_rtl_emit.py — supplemental DETERMINISTIC Tier-1 emitters
 for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline.
 
 WHY a NEW module (not an edit of spec_artifact_registry):

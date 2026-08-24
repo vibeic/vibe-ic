@@ -673,7 +673,7 @@ def main(argv=None) -> int:
         return 0
     if not a.prompt:
         ap.error("--prompt is required unless --gate is given")
-    import rtllm_iface_recover as iface  # noqa: E402
+    import prose_interface_recover as iface  # noqa: E402
     text = Path(a.prompt).read_text(errors="replace")
     ins, outs = iface.recover_ports(text)
     rtl = synth(text, ins, outs, a.top)

@@ -249,7 +249,7 @@ def _dia_lfsr(prompt_text: str, top: str = "TopModule") -> Optional[str]:
     if re.search(r"shift\w*\s+right|right[- ]shift", text, re.I):
         return None
 
-    import rtllm_port_bridge as _bridge
+    import prose_port_block_read as _bridge
     ins, outs = _pp.parse_ports(_bridge.bridge_prompt(text))
     if not ins or not outs:
         return None

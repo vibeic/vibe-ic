@@ -2,7 +2,7 @@
 """cvdp_spec_parse.py — a GENERAL prose-port-block reader for the CVDP benchmark
 family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's
 markdown interface form to the bullet form `port_parser.parse_ports` already reads
-— the same role `rtllm_port_bridge.py` plays for the RTLLM prose form.
+— the same role `prose_port_block_read.py` plays for the RTLLM prose form.
 
 WHY (owner directive 2026-06-23, "program-first PARSING on CVDP"):
 The shared `port_parser.parse_ports` understands two interface forms — the

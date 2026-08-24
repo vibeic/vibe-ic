@@ -125,7 +125,7 @@ def main(argv=None) -> int:
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import rtllm_port_bridge as bridge  # noqa: E402
+    import prose_port_block_read as bridge  # noqa: E402
     import port_parser as pp            # noqa: E402
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--prompt", required=True)

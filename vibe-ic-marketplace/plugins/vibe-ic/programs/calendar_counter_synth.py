@@ -43,7 +43,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 try:
-    import rtllm_port_bridge as _bridge  # noqa: E402  prose "Input ports:" -> bullets
+    import prose_port_block_read as _bridge  # noqa: E402  prose "Input ports:" -> bullets
     import port_parser as _pp  # noqa: E402  shared interface reader
 except Exception:  # pragma: no cover - import guard for standalone smoke
     _bridge = None

@@ -1,4 +1,4 @@
-"""verilogeval_human_tier1_solvers — supplemental deterministic Tier-1 emitters.
+"""fsm_vector_rtl_emit — supplemental deterministic Tier-1 emitters.
 
 These pin the 5 Tier2->Tier1 promotions and their §4.05 no-leak / general-not-
 keyword guards:
@@ -37,7 +37,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import verilogeval_human_tier1_solvers as S  # noqa: E402
+import fsm_vector_rtl_emit as S  # noqa: E402
 import verilogeval_human_tier_pipeline as P  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 

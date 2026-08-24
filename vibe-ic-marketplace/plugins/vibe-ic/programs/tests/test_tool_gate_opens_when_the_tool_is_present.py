@@ -420,7 +420,7 @@ WHICH_GATES = (
     ("test_v1_3_79_tbgen_dut_output_clk_reset", "_HAS_IVERILOG"),
     ("test_verilator_timing_fallback_check", "_HAVE_VERILATOR"),
     ("test_verilog_selfcheck_lint", "_HAVE_VERILATOR"),
-    ("test_verilogeval_human_tier1_solvers", "_HAVE_IVERILOG"),
+    ("test_fsm_vector_rtl_emit", "_HAVE_IVERILOG"),
     ("test_verilogeval_human_tier_pipeline", "_HAVE_IVERILOG"),
     ("test_verilogeval_tier_pipeline", "_HAVE_IVERILOG"),
     ("test_waveform_table_conformance", "_HAVE_IVERILOG"),
@@ -442,7 +442,7 @@ NOT_WHICH_GATES = (
     ("test_v1_0_85_issue769_ppa_generic_meets_target", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_1_76_encoder_decoder", "_HAVE_DS", "corpus dir"),
     ("test_v1_1_76_waveform_ext", "_HAVE_DS", "corpus dir"),
-    ("test_verilogeval_human_tier1_solvers", "_HAVE_DATASET", "corpus dir"),
+    ("test_fsm_vector_rtl_emit", "_HAVE_DATASET", "corpus dir"),
     ("test_verilogeval_human_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
     ("test_verilogeval_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
 )

@@ -513,7 +513,7 @@ def _table_interface(prompt: str) -> Tuple[List[str], List[str]]:
 def _prose_ports(prompt: str) -> Tuple[List[Port], List[Port]]:
     try:
         import port_parser as _pp
-        import rtllm_port_bridge as _bridge
+        import prose_port_block_read as _bridge
         ins, outs = _pp.parse_ports(_bridge.bridge_prompt(prompt))
         return ins, outs
     except Exception:
