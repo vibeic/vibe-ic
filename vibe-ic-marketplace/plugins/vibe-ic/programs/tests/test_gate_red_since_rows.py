@@ -883,18 +883,27 @@ def _shallow_clone_of(src, dest, depth=1):
 
 def test_a_shallow_repository_that_still_resolves_is_treated_as_normal(tmp_path):
     """MY FIRST ATTEMPT REFUSED ON SHALLOWNESS ITSELF AND WAS WRONG. This
-    repository is shallow — a `.git/shallow` written 2026-08-22 — and every
-    `since` in the shipped ledger resolves in it anyway, because `--depth`
-    truncates what a clone FETCHED, not what it later acquired. Refusing
-    pre-emptively would have blocked every landing here over a condition that
-    changes no verdict."""
-    assert G.repository_is_shallow(REPO) is not None, (
-        "this checkout is no longer shallow — the case below is still correct "
-        "but this test no longer proves the distinction on it")
-    age = G.git_age_days(REPO, "HEAD")
-    rows = G.load_ledger(LEDGER)
-    assert rows and all(age(r["since"]) is not None for r in rows), (
-        "a shipped row stopped resolving in a shallow-but-complete checkout")
+    fixture is shallow while the named `since` commit still resolves.  The
+    fixture owns that premise; requiring the ambient checkout to be shallow
+    made this test impossible to run in a full clone, while a depth-1 clone
+    made the shipped old commits unavailable to every other test in the file.
+    Refusing pre-emptively on shallowness would block a valid clock over a
+    condition that changes no verdict."""
+    repo, shas = _repo(tmp_path)
+    git_dir = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--git-dir"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    git_dir_path = Path(git_dir)
+    if not git_dir_path.is_absolute():
+        git_dir_path = repo / git_dir_path
+    # Mark the second commit as the retained shallow boundary.  Both it and
+    # HEAD exist locally, so the clock has every object it needs even though
+    # history before the boundary is intentionally unavailable.
+    (git_dir_path / "shallow").write_text(shas[1] + "\n", encoding="utf-8")
+    assert G.repository_is_shallow(repo) is not None
+    age = G.git_age_days(repo, "HEAD")
+    assert age(shas[1]) == 3.0, (
+        "the retained shallow-boundary commit stopped resolving")
 
 
 def test_a_truncated_clone_names_the_truncation_and_a_remedy(tmp_path):
