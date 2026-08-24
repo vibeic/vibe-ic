@@ -32,15 +32,19 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
-_CORPUS = Path(os.environ.get(
-    "VIBEIC_CORPUS_ROOT",
-    "/home/reyerchu/AI_IC_design/_extbench"))
-_VE = _CORPUS / "verilog-eval" / "dataset_spec-to-rtl"
+# No hard-coded home. The corpus lives outside the plugin, so its location must
+# come from the environment or not at all — a personal path baked into shipped
+# source is a test that only ever runs on one machine, and it silently SKIPs
+# everywhere else while looking like coverage.
+_CORPUS_ENV = "VIBEIC_CORPUS_ROOT"
+_CORPUS = Path(os.environ[_CORPUS_ENV]) if os.environ.get(_CORPUS_ENV) else None
+_VE = (_CORPUS / "verilog-eval" / "dataset_spec-to-rtl") if _CORPUS else None
 _LIMIT = int(os.environ.get("VIBEIC_SOLVE_TEST_LIMIT", "4"))
 
 pytestmark = pytest.mark.skipif(
-    not _VE.is_dir(),
-    reason="VerilogEval corpus absent; set $VIBEIC_CORPUS_ROOT")
+    _VE is None or not _VE.is_dir(),
+    reason=f"VerilogEval corpus absent; set ${_CORPUS_ENV} to the external "
+           f"benchmark corpus root")
 
 
 @pytest.fixture(scope="module")

@@ -467,7 +467,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     out = json.dumps(res, indent=2)
     print(out)
     if a.json:
-        Path(a.json).write_text(out + "\n")
+        import _atomic_artefact as _atomic  # noqa: PLC0415
+    _atomic.write_text(Path(a.json), out + "\n")
     return 0 if res["top_ports"] else 1
 
 

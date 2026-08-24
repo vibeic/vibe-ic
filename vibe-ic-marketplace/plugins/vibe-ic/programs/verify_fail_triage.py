@@ -297,10 +297,11 @@ def main(argv=None) -> int:
     for r in records:
         summary[r["mode"]] = summary.get(r["mode"], 0) + 1
     pass_demoted = summary.get("TRUNCATED_BUT_PASSED", 0)
-    outp.write_text(json.dumps(
-        {"total_fails": len(records), "mode_summary": summary,
-         "pass_demoted_truncated": pass_demoted,
-         "records": records}, indent=2, ensure_ascii=False) + "\n")
+    import _atomic_artefact as _atomic  # noqa: PLC0415
+    _atomic.write_json(outp, {"total_fails": len(records),
+                              "mode_summary": summary,
+                              "pass_demoted_truncated": pass_demoted,
+                              "records": records})
     print(f"verify_fail_triage: {len(records)} fail(s) classified "
           f"{summary}"
           + (f" (truncated→pass_demoted: {pass_demoted})"
