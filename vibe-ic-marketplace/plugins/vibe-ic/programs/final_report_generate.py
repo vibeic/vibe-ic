@@ -108,6 +108,7 @@ VERDICT_SYM = {
     "FAIL": "❌",
     "MISSING": "❓",
     "DEFERRED-BY-UPSTREAM": "🔗",
+    "OUT-OF-SCOPE-BY-ENTRY": "⇥",
     "SKIPPED-SETUP-REQUIRED": "🛠️",
     "AUDIT_TIMEOUT": "⏳",
     "UNKNOWN": "❔",
@@ -141,6 +142,12 @@ ROLLUP_ORDER = (
     # word it splits and before the other qualified tiers.
     "VACUOUS-PASS", "PARTIALLY-VACUOUS", "STRUCTURE-ONLY", "INCOMPLETE",
     "WAIVED", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
+    # Beside the other EXCUSED words, because it is one: a step the run declared
+    # OUT of its scope via --entry-step. Registering the status in
+    # _flow_verdict_tiers was not enough — a bucket the roll-up cannot PRINT is
+    # invisible in the summary the reader actually looks at, which is what
+    # `final_summary_rollup_consistency_check` exists to catch.
+    "OUT-OF-SCOPE-BY-ENTRY",
     "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED",
     "PASS-VOIDED-BY-DEPENDENCY", "FAIL", "MISSING",
     NO_VERDICT,
