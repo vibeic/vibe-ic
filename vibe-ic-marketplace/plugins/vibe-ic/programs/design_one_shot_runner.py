@@ -8436,8 +8436,8 @@ def _stamp_gate_report_dirs(project: Path) -> List[str]:
 
 
 def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
-    """Flow step 1.6x — a candidate RTL produced by a cross-layer PPA search
-    must still be the design the specification describes.
+    """Flow Step 2 rewrite-fidelity clause — a candidate RTL produced by a
+    cross-layer PPA search must still be the design the specification describes.
 
     Runs the JUDGE (`crosslayer_rewrite_equivalence_check`), never the tool, so
     this costs a file read on every ordinary design and nothing else. The judge
@@ -8447,7 +8447,7 @@ def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
     has to interpret.
 
     It is called UNCONDITIONALLY for the reason
-    `flow_condition_reachability_check` gave when step 1.6x was first written
+    `flow_condition_reachability_check` gave when this clause was first written
     conditional: "a check disabled by exactly the situation it was written
     for". A search that rewrote the RTL and skipped its own snapshot would have
     skipped the gate with it."""
@@ -15768,10 +15768,11 @@ def main() -> int:
     # so a clean / not-applicable design always passes.
     plan.append(step_determinism_gates(project, args.top_name))
 
-    # Flow step 1.6x — cross-layer rewrite fidelity. Unconditional:
-    # the judge itself decides applicability and WRITES the verdict,
-    # so a design that ran no cross-layer search leaves a
-    # NOT_APPLICABLE record rather than a silence.
+    # Flow Step 2, clause 1 — cross-layer rewrite fidelity. Unconditional: the
+    # judge itself decides applicability and WRITES the verdict, so a design
+    # that ran no cross-layer search leaves a NOT_APPLICABLE record rather than
+    # a silence. This runs before the remaining Step-2 checks so a refuted
+    # candidate is rejected at the first deterministic RTL-validation step.
     plan.append(step_crosslayer_rewrite_fidelity(project))
 
     # Flow step 2 — pad-budget feasibility. Placed HERE, right after the RTL is

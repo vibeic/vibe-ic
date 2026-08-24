@@ -7,7 +7,7 @@ difference between those two sentences is entirely made of the checks below, and
 each one is here because its opposite is a plausible entry somebody could add
 next week without noticing what it opened.
 
-The registry is also the only place that says which of the flow's 22 declared
+The registry is also the only place that says which of the flow's 21 declared
 `closed_loop` edges can actually be executed. `test_registry_enumerates_exactly
 _the_flow_declarations` is the drift guard for that: add a `closed_loop` block to
 the flow and this file goes red until the registry says what does or does not
@@ -85,9 +85,9 @@ def test_shipped_registry_loads_and_every_executable_claim_resolves():
 
 
 def test_registry_enumerates_exactly_the_flow_declarations():
-    """The drift guard. 22 declared, 22 listed, no more and no fewer.
+    """The drift guard. 21 declared, 21 listed, no more and no fewer.
 
-    RAW ids: the flow declares `1.6x`, `A7`, `A9` as strings and `20` as an int.
+    RAW ids: the flow declares `A7` and `A9` as strings and `20` as an int.
     Normalising them is how `blocks_on` lost edges before (D5-EDGE-UNRESOLVED),
     so the comparison is on `str(id)` and nothing else is coerced.
     """

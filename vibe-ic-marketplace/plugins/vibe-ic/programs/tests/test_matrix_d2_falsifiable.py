@@ -184,7 +184,7 @@ RUN
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
 LIVE, not remembered: 178<!--figure:blocking_clauses--> blocking clauses over
-68<!--figure:gated_steps--> gated steps. This is the denominator a reader
+67<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
 the bindings that produced them (vibe-ic#961). Do not hand-edit them.
@@ -1858,7 +1858,7 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # the step exists for, the candidate diverging from the baseline, reached
     # through the program's own status ladder rather than by malforming a file.
     # The second is kept.
-    ("1.6x", "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"): "CROSSLAYER_REFUTED",
+    ("2", "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"): "CROSSLAYER_REFUTED",
     # This change moves `reports/phase1/extraction_coverage_report.{md,json}`
     # onto D1 and wires this clause to read it. EMPTY cannot redden it, and for
     # the SAME reason `LDOC_TODO` exists at all: with no `generated_docs/` the

@@ -839,7 +839,7 @@ SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
     # out of it now (5 entries); step 37.5self JOINED at v1.11.4 with one output
     # and LEFT with the step itself when the general precheck became 37.5ic's
     # second ARM.
-    "1", "1.6x", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5",
+    "1", "8", "FS1", "DT1", "12", "A1", "A2", "A3", "A4", "A5",
     "A7", "A9", "14", "16", "17", "20", "22", "DT2", "DT3", "35", "36",
     "37", "M4", "42", "44", "P0",
 )
@@ -1430,7 +1430,7 @@ REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
     # restating: a SHRINKING set is the alarming shape (production gates losing
     # the tier at which the MISSING downgrade fires); a growing one is a new
     # step arriving, which is this.
-    "D1", "1", "1.6x", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8",
+    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8",
     "14", "28", "30", "32", "35", "38",
 )
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
@@ -1696,12 +1696,6 @@ def _content_arm_sweep() -> Dict[str, Dict[str, Any]]:
 #: owns, and duplicating it would report one defect as two.
 CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
     "D1": _CONTENT_UNMOVED, "1": _CONTENT_UNMOVED, "2": _CONTENT_UNMOVED,
-    # 1.6x JOINS the population (`7fcbc7397`). MEASURED, not assumed: UNMOVED —
-    # corrupting the content of `reports/crosslayer/rewrite_equivalence_check
-    # .json` does not move step 1.6x's verdict. That is a content channel the
-    # flow HAS and does not act on, recorded here rather than hidden, which is
-    # the whole purpose of this arm.
-    "1.6x": _CONTENT_UNMOVED,
     # 4 REJOINS the population with `_COVERAGE_BODY`. Measured, not assumed:
     # UNMOVED — corrupting the coverage artefact's content does not move step 4's
     # verdict, because the gate that reads it (`verilator_coverage_measure`) is
@@ -1813,7 +1807,7 @@ CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
 #:
 #: So the two lanes were not both right here, as they were on the entries pin.
 #: The inference was coarser and it is the one that lost, on evidence.
-CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ("1.6x",)
+CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ()
 
 #: Kinds the flow can read at all. Anything else is not a content channel, so a step
 #: that rewrites only those is NOT gradable and its UNMOVED means nothing about blindness.
@@ -1966,22 +1960,18 @@ def test_the_survival_clause_is_load_bearing_and_narrow():
                       if gradable_ignoring_survival(r)}
     removed = without_clause - with_clause
 
-    assert removed, (
-        "the survival clause removes NO step from the gradable population, so "
-        "it cannot be what keeps a gate-rewritten artefact from being charged "
-        "as blindness. Either every declared output now survives its own gate — "
-        "in which case delete the clause and say so — or the survival "
-        "measurement has stopped working")
     assert not (with_clause - without_clause), (
         f"the survival clause ADDED {sorted(with_clause - without_clause)} to "
         f"the gradable population; it may only ever remove")
-    assert removed == {"1.6x"}, (
-        f"the survival clause un-grades {sorted(removed)}, pinned {{'1.6x'}}.\n"
-        f"Newly un-graded: {sorted(removed - {'1.6x'})} — a step's declared "
+    expected_removed = set(CONTENT_ARM_UNGRADABLE_SELF_WRITTEN)
+    assert removed == expected_removed, (
+        f"the survival clause un-grades {sorted(removed)}, pinned "
+        f"{sorted(expected_removed)}.\n"
+        f"Newly un-graded: {sorted(removed - expected_removed)} — a step's declared "
         f"artefact is now being overwritten by its own gate before the verdict "
         f"is taken, which removes it from this arm's reach and must be a "
         f"decision, not a diff.\n"
-        f"No longer un-graded: {sorted({'1.6x'} - removed)} — its artefact now "
+        f"No longer un-graded: {sorted(expected_removed - removed)} — its artefact now "
         f"survives the gate, so it re-enters the population and its blindness "
         f"becomes a real finding again.")
     for key in removed:

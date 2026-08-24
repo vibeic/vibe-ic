@@ -993,7 +993,7 @@ def test_d5_covers_every_cell_exactly_once():
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
-    assert len(ids) == len(F.step_ids()) == 69, (
+    assert len(ids) == len(F.step_ids()) == 68, (
         f"parametrized {len(ids)} cells over {len(F.step_ids())} flow steps"
     )
     assert ids == [F.normalize_id(s) for s in F.step_ids()], (
@@ -1057,7 +1057,7 @@ def test_d5_state_census_is_exhaustive():
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
-    assert len(F.step_ids()) == 69, (
+    assert len(F.step_ids()) == 68, (
         f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
         f"63; the population moved and this census states a figure for a grid "
         f"it no longer describes"

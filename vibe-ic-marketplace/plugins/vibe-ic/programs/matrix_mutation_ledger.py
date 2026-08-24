@@ -922,12 +922,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D1-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (7.1s).
-            "1.6x"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=65,
             stayed_green=(),
             note="3 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
@@ -1008,13 +1005,10 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D2-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (2.0s).
-            "1.6x"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=66,
+            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=65,
             stayed_green=("35",),
             note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
                  "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
@@ -1123,12 +1117,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D4-UNGATED-DELIVERABLE --step 1.6x` -> REDDENED (2.1s).
-            "1.6x"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             baseline_red=("1",),
             note="the 2 steps not reached declare no required_outputs at all "
                  "(FS1, P0) and are carried by D4-CLI-CONTRACT and "
@@ -1156,12 +1147,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A8", "A9", "17", "19", "20", "22", "DT2", "DT3", "23",
                     "24", "25", "26", "28", "29", "30", "31", "34", "35", "36",
                     "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41", "42",
-                    "43", "44",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D4-CLI-CONTRACT --step 1.6x` -> REDDENED (2.1s).
-            "1.6x"),
+                    "43", "44"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=51,
+            date="2026-08-06", command=_SWEEP, reddened=50,
             stayed_green=("D1", "21", "33"),
             note="carries FS1, the one step with a gate and no required_outputs. "
                  "D1/21/33 stayed green because their first clause's program "
@@ -1207,13 +1195,10 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
             "M4", "40", "41", "42", "43", "44", "P0",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D5-PHANTOM-EDGE --step 1.6x` -> REDDENED (2.3s).
-            "1.6x"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=69,
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=68,
             note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
                  "sweep, each reddening that cell alone. There is no longer an "
                  "NA cell in this dimension. "
@@ -1261,14 +1246,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
         witness="24",
         applies_to=(
             "2", "3", "4", "5", "8", "9", "10", "13", "A7", "A9", "14",
-            "20", "23", "24", "25", "26", "27", "28", "31", "32", "33",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D5-PHANTOM-FALLBACK --step 1.6x` -> REDDENED (2.2s).
-            "1.6x"),
+            "20", "23", "24", "25", "26", "27", "28", "31", "32", "33"),
         measured=Measurement(
             date="2026-08-20",
             command=_CL_SWEEP.replace("{name}", "D5-PHANTOM-FALLBACK"),
-            reddened=22,
+            reddened=21,
             note="21 red = every step that declares a `closed_loop`, in one sweep, "
                  "each reddening that cell alone; UNMEASURABLE 0 of 21. Times in the "
                  "commit message. THE DENOMINATOR IS THE POINT: 21, not 63 — "
@@ -1310,14 +1292,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D6-UNCONDITIONAL-OPTIONAL --step 1.6x` -> REDDENED (5.9s).
-            "1.6x"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             stayed_green=("DT2",),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
@@ -1348,12 +1327,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT3", "23",
             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
             "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D6-ADVISORY-ONLY-GATE --step 1.6x` -> REDDENED (5.9s).
-            "1.6x"),
+            "42", "43", "44"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=60,
+            date="2026-08-06", command=_SWEEP, reddened=59,
             stayed_green=("DT2",),
             note="a second, independent lever on 59 of the same cells; kept "
                  "because it charges a different leg (L1b) than "
@@ -1406,12 +1382,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "35", "36", "37", "38", "39", "M2", "M3", "M4", "40", "41", "42",
             "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D7-GATE-PROBES-A-GHOST --step 1.6x` -> REDDENED (62.1s).
-            "1.6x"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=64,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=63,
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
                  "sweep. The 4 greens are exactly its 4 waived cells. "
@@ -1436,12 +1409,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A3", "A7", "A8", "A9", "15", "16", "17", "18", "19", "20",
                     "21", "22", "DT2", "DT3", "24", "25", "26", "27", "28",
                     "29", "30", "31", "32", "33", "34", "35", "36", "37", "38",
-                    "M2", "M3", "M4", "40", "41", "42", "43", "44",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D7-UNDECLARED-KEY --step 1.6x` -> REDDENED (65.2s).
-            "1.6x"),
+                    "M2", "M3", "M4", "40", "41", "42", "43", "44"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=49,
+            date="2026-08-06", command=_SWEEP, reddened=48,
             stayed_green=("D1", "1", "7", "12", "A1", "A2", "A4", "A5", "A6",
                           "14", "23", "39", "M1"),
             note="13 steps stayed green and the reason is measured, not "
@@ -1464,12 +1434,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
         applies_to=("1", "2", "4", "8", "10", "11", "12", "A1", "A2", "A4",
                     "A5", "A7", "15", "16", "17", "18", "19", "20", "21", "22",
                     "DT3", "26", "27", "28", "29", "30", "31", "32", "34",
-                    "35", "36", "38",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D7-RENAMED-DELIVERABLE --step 1.6x` -> REDDENED (65.0s).
-            "1.6x"),
+                    "35", "36", "38"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=33,
+            date="2026-08-06", command=_SWEEP, reddened=32,
             stayed_green=("D1", "3", "5", "6", "7", "9", "DT1", "13", "A3",
                           "A6", "A8", "A9", "14", "DT2", "23", "24", "25",
                           "33", "37", "39", "M1", "M2", "M3", "M4", "40", "41",
@@ -1497,12 +1464,9 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
-            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
-            # `--replay D8-EMPTY-PROMISE --step 1.6x` -> REDDENED (2.0s).
-            "1.6x"),
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             note="61 red = every one of dimension 8's 61 ENFORCED cells, in one "
                  "sweep. The 2 steps not reached (FS1, P0) declare no "
                  "required_outputs and are dimension 8's 2 NA cells. "
@@ -2040,7 +2004,11 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: leave the denominator this ledger is responsible for. That is the count
 #: going down for the honest reason: fewer cells assert enforcement, not fewer
 #: mutations measured.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 516)
+# 2026-08-24: standalone step 1.6x was folded into Step 2. Its eight cells
+# leave the grid; the cross-layer gate, output and fallback remain inside the
+# already-measured Step-2 cells. Each historical applies_to list above drops
+# exactly that deleted id, so its arithmetic count drops by one as well.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 508)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the

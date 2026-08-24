@@ -335,14 +335,13 @@ controllers:
 # --------------------------------------------------------------------------
 # EDGES — every `closed_loop:` the flow declares, and what executes it.
 #
-# A COMPLETE ENUMERATION. 22 declared, 22 listed, 0 bound. `fallback_to` is
+# A COMPLETE ENUMERATION. 21 declared, 21 listed, 0 bound. `fallback_to` is
 # copied from the flow so this file can be diffed against it by eye; the
 # authority for the edge remains flow/phase1_phase2_phase3.yaml, which this
-# lane does not edit. Step ids are RAW — `1.6x`, `A7`, `A9` are strings and
+# lane does not edit. Step ids are RAW — `A7` and `A9` are strings and
 # normalising them is how `blocks_on` lost edges before (D5-EDGE-UNRESOLVED).
 # --------------------------------------------------------------------------
 edges:
-  "1.6x": {controller: null, fallback_to: 1,   note: "Cross-layer rewrite discarded; the actuator is a HUMAN decision to keep step 1's RTL. Nothing to automate."}
   "2":    {controller: null, fallback_to: 1,   note: "Lint above threshold -> RTL change. No bounded RTL-repair actuator exists."}
   "3":    {controller: null, fallback_to: 1,   note: "CDC/RDC -> RTL change. Synchroniser insertion is a design decision, not a parameterised action."}
   "4":    {controller: null, fallback_to: 1,   note: "Test failure traceable to RTL. Diagnosis is not an actuator."}
