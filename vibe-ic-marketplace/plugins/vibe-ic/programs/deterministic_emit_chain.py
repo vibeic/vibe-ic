@@ -165,7 +165,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
     print(f"fired: {kind}")
     if a.out:
-        Path(a.out).write_text(rtl)
+        import _atomic_artefact as _atomic  # noqa: PLC0415
+        _atomic.write_text(Path(a.out), rtl)
         print(f"wrote {a.out}")
     else:
         print(rtl)

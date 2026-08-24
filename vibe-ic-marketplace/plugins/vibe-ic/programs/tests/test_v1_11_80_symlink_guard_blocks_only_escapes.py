@@ -53,8 +53,12 @@ def test_allows_a_descent_that_stays_inside():
 
 # ── NEGATIVE no-leak: each must STILL be refused (§ 4.05) ────────────────────
 def test_still_refuses_an_absolute_target():
-    """The original defect: absolute = a fixed path outside the isolated stage."""
-    assert escapes("steps/a/b/L2.json", "/home/someone/phase1/L2.json")
+    """The original defect: absolute = a fixed path outside the isolated stage.
+
+    The fixture path is deliberately NOT home-shaped: a `/home/<name>/` literal
+    in shipped source reads as a leaked personal path to the portability gate,
+    even inside a negative test fixture."""
+    assert escapes("steps/a/b/L2.json", "/abs/outside/phase1/L2.json")
 
 
 def test_still_refuses_a_climb_past_the_root():
