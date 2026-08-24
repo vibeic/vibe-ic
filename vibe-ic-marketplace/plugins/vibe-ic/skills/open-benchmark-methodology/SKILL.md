@@ -285,6 +285,28 @@ and is exempt):
      dispatched early still held three batches; the orchestrator forgot and
      re-assigned two of them.
 
+   **AN ID-PRESENCE CHECK IS NOT A COLLISION CHECK — this is the load-bearing
+   correction, and it took EIGHT collisions to reach.** The brief in (a) below
+   tells each agent to re-read the file and stop if it sees lines it did not
+   write. Agents implemented that as "is this id already present?", which
+   **cannot fire by construction**: two agents assigned the same batch are
+   authoring DIFFERENT ids, so each sees only its own as present and both
+   append. One agent appended into another's file, noticed, and had to revert
+   by truncating its own byte-tail.
+
+   The guard must answer **"who owns this file"**, not **"what is in it"**:
+
+   * write an **ownership stamp at claim time** — e.g. `<file>.owner` containing
+     the agent name — and require every writer to check it matches before
+     appending; or
+   * take a **per-batch lock file** for the duration of the work.
+
+   Content inspection can only detect a collision AFTER both agents have
+   written, which is exactly too late. Keep the brief in (a) as defence in
+   depth — it caught the collisions where the other agent had already
+   written — but do not rely on it as the primary mechanism, and do not
+   conclude from "no corruption yet" that it is sufficient. It was not.
+
    **What made this survivable — brief every agent with all four:**
    (a) RE-READ the target file before every append and STOP + report if it
    holds lines you did not write — never append, never truncate;
