@@ -541,7 +541,7 @@ def main(argv=None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         import _atomic_artefact as _atomic  # noqa: PLC0415
-    _atomic.write_text(Path(args.json), text + "\n")
+        _atomic.write_text(Path(args.json), text + "\n")
     print(text)
     if refuse:
         for d in deviations:
