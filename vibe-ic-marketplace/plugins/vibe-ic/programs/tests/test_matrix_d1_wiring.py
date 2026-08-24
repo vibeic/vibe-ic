@@ -1213,8 +1213,8 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("0.5ic", "submission_template_ingest"),
     ("0.5ic", "tapeout_declaration_gen"),
-    ("1.6x", "crosslayer_rewrite_equivalence"),
-    ("1.6x", "crosslayer_search_space"),
+    ("2", "crosslayer_rewrite_equivalence"),
+    ("2", "crosslayer_search_space"),
     ("6", "debug_first_pass"),
     ("6", "fpga_test_harness_gen"),
     ("9", "synth_wrapper_gen"),

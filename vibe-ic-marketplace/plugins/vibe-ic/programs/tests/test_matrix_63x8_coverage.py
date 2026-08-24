@@ -213,7 +213,9 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8, 9)
 #: from the same source the assertion reads makes the assertion tautological —
 #: see `matrix_63x8/README.md`. It is moved by hand, once, with the measurement
 #: above recorded beside it.
-GRID_AS_MEASURED: Tuple[int, int, int] = (69, 9, 621)
+# 2026-08-24: the former 1.6x contract is now a Step-2 clause, so the
+# independently reviewed flow population is again 68 x 9.
+GRID_AS_MEASURED: Tuple[int, int, int] = (68, 9, 612)
 
 #: The flow's step ids, in declaration order, as measured 2026-07-28. Pinned
 #: alongside the count so a rename or an add-plus-remove — which leaves the
@@ -238,7 +240,7 @@ GRID_AS_MEASURED: Tuple[int, int, int] = (69, 9, 621)
 #: Declared where it runs — after step 37 writes the chip GDS, beside the two
 #: routes it is mutually exclusive with.
 STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
-    'D1', '0.5ic', '1', '1.6x', '2', '3', '4', '5', '6', '7', '8', '9',
+    'D1', '0.5ic', '1', '2', '3', '4', '5', '6', '7', '8', '9',
     '10', '11', 'FS1', 'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5',
     'A6', 'A7', 'A8', 'A9', '14', '15', '15.5ic', '16', '17', '18',
     '19', '20', '21', '22', 'DT2', 'DT3', '23', '24', '25', '26',

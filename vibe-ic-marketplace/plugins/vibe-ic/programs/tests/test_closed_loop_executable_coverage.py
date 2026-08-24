@@ -202,7 +202,11 @@ def test_the_stub_root_is_a_faithful_stand_in(tmp_path):
     assert by["4"]["class"] == "REMEASURED"
     assert by["23"]["class"] == "REMEASURED"
     assert by["32"]["class"] == "REMEASURED"
-    assert by["1.6x"]["class"] == "EXECUTABLE"
+    # Rewrite fidelity is now a blocking clause of Step 2. The judge can stop
+    # the candidate, but no runner re-executes Step 1, so the Step-2 fallback
+    # edge remains honestly DECLARED_ONLY rather than inheriting the former
+    # standalone step's over-broad EXECUTABLE label.
+    assert by["2"]["class"] == "DECLARED_ONLY"
 
 
 def test_deleting_the_loop_around_the_actuator_demotes_the_edge(tmp_path):

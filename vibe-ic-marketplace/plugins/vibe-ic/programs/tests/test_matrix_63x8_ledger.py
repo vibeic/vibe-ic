@@ -129,8 +129,11 @@ from matrix_63x8 import waivers as W
 # that keeps only the later note loses the reason the earlier number moved.
 # Re-measured on the merged tree rather than multiplied out from either.
 # ──────────────────────────────────────────────────────────────────────
-EXPECTED_CELLS = 621
-EXPECTED_STEPS = 69
+# 2026-08-24: rewrite fidelity moved from standalone step 1.6x into Step 2.
+# The gate, required output and fallback survive; only the duplicate scheduling
+# unit is gone, so the reviewed population returns to 68 steps / 612 cells.
+EXPECTED_CELLS = 612
+EXPECTED_STEPS = 68
 EXPECTED_DIMS = 9
 
 # Pinned census of the yaml as measured on 2026-07-27. These are TRIPWIRES, not
@@ -142,7 +145,7 @@ EXPECTED_DIMS = 9
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_GATE_PRESENT = 68
+CENSUS_GATE_PRESENT = 67
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
 # satisfiable was `check_step` standing its early MISSING down so FS1's own
@@ -156,7 +159,7 @@ CENSUS_GATE_PRESENT = 68
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 66
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
 # P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
@@ -172,7 +175,7 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_BLOCKS_ON_PRESENT = 69
+CENSUS_BLOCKS_ON_PRESENT = 68
 # 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
 # gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
 # D1 while carrying `blocks_on: []`, so the ordering edge its own inputs
@@ -198,7 +201,7 @@ CENSUS_BLOCKS_ON_PRESENT = 69
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_BLOCKS_ON_NON_EMPTY = 67
+CENSUS_BLOCKS_ON_NON_EMPTY = 66
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -207,7 +210,7 @@ CENSUS_BLOCKS_ON_NON_EMPTY = 67
 # v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
 # for neither. Each value below was re-derived by running the accessor
 # over the live yaml, not by adding one to the old number.
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 67
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 66
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1220,7 +1223,7 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
         C.rebuild()
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
-        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 630
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 621
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.

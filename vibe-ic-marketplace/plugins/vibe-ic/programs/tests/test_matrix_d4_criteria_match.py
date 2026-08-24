@@ -805,7 +805,7 @@ def test_d4_selfcheck_waivers_are_evidence_backed():
 
 
 def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
-    """63 cells, each ENFORCED or WAIVED, none silently absent.
+    """68 cells, each ENFORCED or WAIVED, none silently absent.
 
     The parametrized test body has no unconditional ``skip`` and no early
     ``return`` that skips every assertion — each of the three branches ends in
@@ -828,7 +828,7 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
-    assert len(cells) == len(F.step_ids()) == 69, (
+    assert len(cells) == len(F.step_ids()) == 68, (
         f"the flow declares {len(F.step_ids())} steps; dimension {DIM} carries "
         f"{len(cells)} cells — the ledger and the yaml have diverged"
     )
@@ -864,7 +864,7 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
     # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
     # (v1.11.18) and this pin was moved for none of them, which is why it
     # was already red on main before the ninth dimension landed.
-    assert len(cells) - len(waived) == 69 and not waived, (
+    assert len(cells) - len(waived) == 68 and not waived, (
         f"{len(cells) - len(waived)} cells are enforced and {len(waived)} are "
         f"waived; this module was reported as enforcing all 63 with no "
         f"waiver. Update the report, or explain the change."

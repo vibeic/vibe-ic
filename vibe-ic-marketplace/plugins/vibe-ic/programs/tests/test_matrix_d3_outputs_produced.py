@@ -2363,7 +2363,7 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     # never credited, and only the removal was. Subtracting one from a base that
     # was already two behind is how a hand-moved census drifts while every
     # individual edit to it looks careful.
-    assert len(cells_for(DIM)) == len(live) == 69
+    assert len(cells_for(DIM)) == len(live) == 68
 
 
 @needs_corpus
@@ -2826,7 +2826,7 @@ def test_d3_waivers_meet_the_registry_bar():
 
 
 def test_d3_cell_states_partition_all_steps():
-    """ENFORCED + WAIVED + NA == 69, computed live, with no cell in two states."""
+    """ENFORCED + WAIVED + NA == 68, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2865,7 +2865,7 @@ def test_d3_cell_states_partition_all_steps():
     # never credited, and only the removal was. Subtracting one from a base that
     # was already two behind is how a hand-moved census drifts while every
     # individual edit to it looks careful.
-    assert len(enforced) + len(waived) + len(na) == 69, (
+    assert len(enforced) + len(waived) + len(na) == 68, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -2878,10 +2878,10 @@ def test_d3_cell_states_partition_all_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (52, 2, 15), (
+    assert (len(enforced), len(waived), len(na)) == (51, 2, 15), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(52, 2, 15) at 7fcbc7397 + 867de4289. A step moving between states "
+        f"(51, 2, 15) after folding 1.6x into Step 2. A step moving between states "
         f"is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"

@@ -258,32 +258,6 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
         },
     },
 
-    # Step 1.6x -> 1. The actuation form here is REFUSAL, not re-execution: the
-    # trigger says the candidate is DISCARDED and step 1's RTL stands, so
-    # "taking the edge" means declining to adopt the rewrite. The judge runs
-    # UNCONDITIONALLY (its own docstring explains why a conditional version was
-    # rejected) and its non-zero exit is what leaves the baseline in place.
-    "1.6x": {
-        "class": EXECUTABLE,
-        "actuation_form": "refuse_candidate",
-        "why": ("design_one_shot_runner.step_crosslayer_rewrite_fidelity runs "
-                "crosslayer_rewrite_equivalence_check and FAILs the step, which "
-                "is how the candidate is discarded and step 1's RTL stands"),
-        "evidence": {
-            "actuate": [
-                {"kind": "defines",
-                 "file": "programs/design_one_shot_runner.py",
-                 "symbol": "step_crosslayer_rewrite_fidelity"},
-                {"kind": "file_exists",
-                 "file": "programs/crosslayer_rewrite_equivalence_check.py"},
-            ],
-        },
-        "not_claimed": {
-            "remeasure": ("nothing re-measures rewrite fidelity after the "
-                          "refusal — there is nothing to re-measure, the "
-                          "candidate is simply not adopted"),
-        },
-    },
 }
 
 
