@@ -617,7 +617,8 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         print(f"  {pid:44s} {nature:22s} entry={str(entry):3s} "
               f"exit={str(exit_step):4s} rc={rc} {state}")
         if got.get("ok"):
-            (run_p / "responses" / f"{re.sub(r'[^-\w.]', '_', pid)}.json"
+            safe_pid = re.sub(r"[^-\w.]", "_", pid)
+            (run_p / "responses" / f"{safe_pid}.json"
              ).write_text(json.dumps(got, indent=1))
         elif waive:
             backlog.append({
@@ -706,7 +707,8 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             capture_output=True, text=True).returncode
         got = bio.collect(fmt, item["id"], proj)
         if got.get("ok"):
-            (run_p / "responses" / f"{re.sub(r'[^-\w.]', '_', str(item['id']))}.json"
+            safe_item_id = re.sub(r"[^-\w.]", "_", str(item["id"]))
+            (run_p / "responses" / f"{safe_item_id}.json"
              ).write_text(json.dumps(got, indent=1))
             done += 1
         print(f"  {item['id']:44s} re-gated rc={rc} "
