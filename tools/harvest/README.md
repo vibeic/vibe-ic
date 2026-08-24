@@ -13,12 +13,28 @@ The source rosters provide the host.  `verdicts_joined.tsv` is derived with
 `(host,path)` as its key because six literal paths legitimately occur more than
 once across different hosts or shards.
 
-Run the complete acceptance, including a clean bundle restore, strict fsck,
-164/164 blob comparison, and an unsafe-deletion negative control:
+Run the complete acceptance on the source branch, including a clean bundle
+restore, strict fsck, 164/164 blob comparison, all 3,572 recorded commit
+objects, and an unsafe-deletion negative control:
 
 ```bash
 python3 tools/harvest/verify_consolidation.py --full --self-test
 ```
+
+A squash landing carries the 29 canonical files but intentionally does not
+make the source branch's 11,321 commits ancestors of `main`.  After squash,
+fetch the preserved source ref and name it explicitly; testing `HEAD`
+ancestry would incorrectly report the received content as lost:
+
+```bash
+git fetch origin next/charvest:refs/remotes/origin/charvest
+python3 tools/harvest/verify_consolidation.py \
+  --object-ref refs/remotes/origin/charvest --full --self-test
+```
+
+`next/charvest` is therefore an archive ref, not a stale development branch;
+do not delete it unless the same 3,572 commit objects have first been moved to
+a verified replacement bundle and this receipt is updated.
 
 Regenerate the joined ledger after an intentional canonical shard edit:
 

@@ -267,7 +267,7 @@ def verify_preserved_files(root: Path) -> dict[str, int]:
     return {"preserved_untracked": len(rows)}
 
 
-def verify_commit_objects(root: Path) -> dict[str, int]:
+def verify_commit_objects(root: Path, object_ref: str) -> dict[str, int | str]:
     manifest_rows = read_tsv(
         root / "rescue_consolidated_manifest_jharv3.tsv",
         ["rescue_ref", "sha", "already_on_live_origin"],
@@ -288,6 +288,9 @@ def verify_commit_objects(root: Path) -> dict[str, int]:
     require(all(re.fullmatch(r"[0-9a-f]{40}", oid) for oid in object_ids), "malformed rescue commit SHA")
 
     repo = Path(run(["git", "-C", str(root), "rev-parse", "--show-toplevel"]).stdout.strip())
+    resolved_object_ref = run(
+        ["git", "rev-parse", "--verify", f"{object_ref}^{{commit}}"], cwd=repo
+    ).stdout.strip()
     checked = run(
         ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
         cwd=repo,
@@ -296,16 +299,20 @@ def verify_commit_objects(root: Path) -> dict[str, int]:
     require(len(checked) == len(object_ids), "git cat-file returned an incomplete rescue-object result")
     missing = [line for line in checked if not line.endswith(" commit")]
     require(not missing, f"rescue SHAs missing or not commits: {missing[:3]}")
-    reachable = set(run(["git", "rev-list", "HEAD"], cwd=repo).stdout.splitlines())
+    reachable = set(run(
+        ["git", "rev-list", resolved_object_ref], cwd=repo
+    ).stdout.splitlines())
     unreachable = sorted({oid for oid in object_ids if oid not in reachable})
     require(
         not unreachable,
-        f"rescue commit SHAs exist but are not reachable from HEAD: {unreachable[:3]}",
+        f"rescue commit SHAs exist but are not reachable from "
+        f"{object_ref} ({resolved_object_ref}): {unreachable[:3]}",
     )
     return {
         "rescue_manifest_rows": len(manifest_rows),
         "rescued_commits": len(rescued_commits),
         "preserved_tips": len(preserved_tips),
+        "rescue_object_ref": resolved_object_ref,
     }
 
 
@@ -366,7 +373,8 @@ def read_tsv_without_header(path: Path, fields: int) -> list[list[str]]:
     return rows
 
 
-def validate(root: Path, *, check_joined_file: bool, full_bundle: bool, check_objects: bool) -> tuple[list[list[str]], dict[str, str | int]]:
+def validate(root: Path, *, check_joined_file: bool, full_bundle: bool,
+             check_objects: bool, object_ref: str) -> tuple[list[list[str]], dict[str, str | int]]:
     sources, verdicts = read_inputs(root)
     joined = build_joined(sources, verdicts)
     verify_overlays(root, joined)
@@ -375,7 +383,7 @@ def validate(root: Path, *, check_joined_file: bool, full_bundle: bool, check_ob
         stats.update(verify_joined(root, joined))
     stats.update(verify_preserved_files(root))
     if check_objects:
-        stats.update(verify_commit_objects(root))
+        stats.update(verify_commit_objects(root, object_ref))
     stats.update(verify_bundle(root, full=full_bundle))
     return joined, stats
 
@@ -398,7 +406,8 @@ def negative_control(root: Path) -> None:
             writer.writerow(["path", "verdict", "evidence"])
             writer.writerows(rows)
         try:
-            validate(copy, check_joined_file=False, full_bundle=False, check_objects=False)
+            validate(copy, check_joined_file=False, full_bundle=False,
+                     check_objects=False, object_ref="HEAD")
         except VerificationError as error:
             require(
                 "uncommitted rescue" in str(error),
@@ -413,6 +422,10 @@ def main() -> int:
     parser.add_argument("--full", action="store_true", help="clone, restore, and fsck the rescue bundle")
     parser.add_argument("--self-test", action="store_true", help="run the safe-to-delete negative control")
     parser.add_argument("--write-joined", action="store_true", help="regenerate canonical verdicts_joined.tsv")
+    parser.add_argument(
+        "--object-ref", default="HEAD",
+        help="commit/ref that preserves the rescue histories; after a squash "
+             "landing pass the archived source ref (default: HEAD)")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
 
@@ -422,6 +435,7 @@ def main() -> int:
             check_joined_file=not args.write_joined,
             full_bundle=args.full,
             check_objects=True,
+            object_ref=args.object_ref,
         )
         if args.write_joined:
             write_joined(root / "verdicts_joined.tsv", joined)
@@ -448,7 +462,8 @@ def main() -> int:
     print(
         "rescues="
         f"manifest_rows:{stats['rescue_manifest_rows']},rescued_commits:{stats['rescued_commits']},"
-        f"preserved_tips:{stats['preserved_tips']},preserved_untracked:{stats['preserved_untracked']}"
+        f"preserved_tips:{stats['preserved_tips']},preserved_untracked:{stats['preserved_untracked']},"
+        f"object_ref:{stats['rescue_object_ref']}"
     )
     print(
         "bundle="
