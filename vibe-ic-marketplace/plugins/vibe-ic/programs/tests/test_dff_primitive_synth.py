@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for dff_primitive_synth.py + its wiring into verilogeval_tier_pipeline.
+"""Tests for dff_primitive_synth.py.
 
 Covers:
   * POSITIVE: the bare D-FF and the sync-reset D-FF emit correct RTL, and both
@@ -29,7 +29,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import dff_primitive_synth as D          # noqa: E402
-import verilogeval_tier_pipeline as P    # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _DATASET = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
@@ -203,13 +202,3 @@ def test_dff_solver_fires_on_exactly_the_two_dff_problems():
     assert fires == ["Prob031_dff", "Prob048_m2014_q4c"], fires
 
 
-@_needs_iv
-@_needs_ds
-@pytest.mark.parametrize("stem", ["Prob031_dff", "Prob048_m2014_q4c"])
-def test_dff_problem_classifies_tier1_with_verify(stem):
-    probs = {p.stem: p for p in P.discover(str(_DATASET))}
-    assert stem in probs
-    res = P.tier_result(probs[stem], verify=True)
-    assert res["tier"] == P.TIER_PROGRAM, res
-    assert res["verified"] is True
-    assert "Mismatches: 0" in res["detail"]

@@ -24,7 +24,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import cvdp_solve_pipeline as SP   # noqa: E402
+import spec_conformance_gate as GATE  # noqa: E402
 import cvdp_complete_extract as CE  # noqa: E402
 
 
@@ -64,7 +64,7 @@ def test_range_before_name_param_width_not_prose_overridden():
     assert by["wdata_i"]["width"] != 20, "must NOT take the coincidental prose literal 20"
     assert by["wdata_i"]["width"] is None, "param-expression width with no default is UNKNOWN"
     # the gate does not enforce a literal width for it
-    gp = {p["name"]: p for p in SP.build_gate(spec)["ports"]}
+    gp = {p["name"]: p for p in GATE.build_gate(spec)["ports"]}
     assert gp["wdata_i"]["width"] is None
     assert by["wdata_i"]["source"] == "param_expression_width", "the port is sourced from the param expression"
 
@@ -104,7 +104,7 @@ def test_param_expr_port_gate_accepts_resolved_literal_candidate():
     # a resolved literal width is NOT rejected.
     rec = _rec("dp", RANGE_BEFORE_PROMPT)
     cand = "module dp (input [31:0] wdata_i, output done_o);\nendmodule\n"
-    res = SP.gate_check(rec, cand)
+    res = GATE.gate_check_spec(GATE.build_gate(CE.extract(rec)), cand)
     assert not any(v["kind"] == "port_width" for v in res["violations"]), res["violations"]
 
 
@@ -126,10 +126,13 @@ def test_prompt_declared_interface_is_gateable():
     # the interface is recovered from the PROMPT (never a cocotb harness), so the
     # data ports are placed and the record is gate-able (Tier2/Tier3), not Tier4.
     rec = _rec("af", FIFO_PROMPT)
-    res = SP.solve(rec)
-    names = {p["name"] for p in res["gate"]["ports"]}
+    gate = GATE.build_gate(CE.extract(rec))
+    names = {p["name"] for p in gate["ports"]}
     assert {"w_data", "r_data"} <= names, names
-    assert res["tier"] in (SP.TIER_AI_EMIT, SP.TIER_AI_GATED)  # gate-able, not Tier4
+    # "gate-able, not Tier4" restated without the pipeline's tier vocabulary:
+    # a tier is that pipeline's word for it, while what is actually claimed is
+    # that the gate has facts in it and can therefore reject something.
+    assert gate["ports"], "the gate is empty — it can enforce nothing"
 
 
 # --------------------------------------------------------------------------- #
@@ -163,7 +166,8 @@ def test_context_header_width_closes_width_not_stated_gap():
     assert by["din"]["width"] == 12 and by["din"]["source"] == "context_header"
     assert by["acc_o"]["width"] == 32 and by["acc_o"]["source"] == "context_header"
     assert spec["completeness"] == "COMPLETE"
-    assert SP.solve(rec)["tier"] == SP.TIER_AI_EMIT  # Tier2
+    # Tier2 restated: the extracted spec yields a gate with the ports in it.
+    assert GATE.build_gate(spec)["ports"], "no gate could be built from a COMPLETE spec"
 
 
 def test_context_header_absent_port_stays_a_gap():

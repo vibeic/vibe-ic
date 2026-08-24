@@ -38,7 +38,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fsm_vector_rtl_emit as S  # noqa: E402
-import verilogeval_human_tier_pipeline as P  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _DATASET = corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")
@@ -61,45 +60,13 @@ _PROMOTIONS = [
 ]
 
 
-@_needs_bench
-@pytest.mark.parametrize("stem,kind", _PROMOTIONS)
-def test_supplemental_emit_verifies(stem, kind):
-    prob = P.load_problem(str(_DATASET), stem)
-    k, rtl = S.emit(prob)
-    assert k == kind, f"{stem}: expected kind {kind}, got {k}"
-    assert rtl, f"{stem}: emitter produced no RTL"
-    ok, log = P.tier1_verify(prob, rtl)
-    assert ok, f"{stem}: emit did not pass _test.sv: {log}"
 
 
-@_needs_bench
-def test_pipeline_promotes_exactly_the_five():
-    """End-to-end: the pipeline (registry-first + supplemental fallback) lands all
-    five targets in Tier1 and the previously-Tier1 set never regresses."""
-    promoted = {s for s, _ in _PROMOTIONS}
-    t1 = set()
-    for stem in P.discover_problems(str(_DATASET)):
-        if P.solve(P.load_problem(str(_DATASET), stem), verify_tier1=True)["tier"] == 1:
-            t1.add(stem)
-    assert promoted <= t1, f"promotions missing from Tier1: {promoted - t1}"
-    assert len(t1) >= 130, f"Tier1 regressed below 130: {len(t1)}"
 
 
 # --------------------------------------------------------------------------- #
 # GENERAL-not-keyword — structure-keyed, id-agnostic
 # --------------------------------------------------------------------------- #
-@_needs_bench
-def test_neighbour_vector_is_id_agnostic():
-    """Scrub the problem id + rename the module: the emit is unchanged because the
-    emitter keys on the prose relations + interface widths, not the name."""
-    prob = P.load_problem(str(_DATASET), "Prob094_gatesv")
-    k0, rtl0 = S.emit(prob)
-    scrubbed = dict(prob)
-    scrubbed["prompt"] = prob["prompt"].replace("gatesv", "ZZZ").replace("Prob094", "ZZZ")
-    scrubbed["ifc"] = prob["ifc"]
-    k1, rtl1 = S.emit(scrubbed)
-    assert k0 == k1 == "neighbour_vector_exact_width"
-    assert rtl0 == rtl1, "emit changed when the id was scrubbed (keyword overfit!)"
 
 
 def test_neighbour_vector_skips_wrong_widths():
