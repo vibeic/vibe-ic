@@ -2366,6 +2366,32 @@ class _Phase1TreeEntry:
     target: str = ""
 
 
+def _symlink_escapes_tree(rel: str, target: Optional[str]) -> bool:
+    """Does the symlink at `rel` point OUTSIDE the tree that contains it?
+
+    Purely LEXICAL — it reads only the manifest's own (rel, target) strings and
+    touches no filesystem, so it cannot be raced between the check and the use,
+    and it gives the same verdict in the isolated stage as in the original tree.
+
+    ESCAPES when the target is ABSOLUTE (it names a fixed path outside the
+    stage — the portal back to a mutable namespace this guard exists to stop),
+    or when resolving it against the link's own directory climbs above the root.
+
+    Everything else stays INSIDE and is safe to carry into the isolated stage.
+    Why that distinction is needed: the runner's own `steps/` mirror links each
+    step to the artifact it declared, all within the project. Measured
+    2026-08-25, a project carried 15 such links, every one of them internal,
+    and a blanket symlink refusal BLOCKED rtl_gen on all five task natures —
+    the runner's own bookkeeping stopping the runner's own RTL generation.
+    """
+    if not target:
+        return True                      # unreadable target — refuse, don't guess
+    if os.path.isabs(target):
+        return True
+    resolved = os.path.normpath(os.path.join(os.path.dirname(rel), target))
+    return resolved == os.pardir or resolved.startswith(os.pardir + os.sep)
+
+
 def _phase1_tree_manifest_fd(
         root_fd: int, project_label: Path,
         ignore_top: Optional[set] = None) -> Dict[str, _Phase1TreeEntry]:
@@ -3192,7 +3218,8 @@ def _phase1_stamp_held_session(
             baseline = _phase1_snapshot_to_stage(binding, stage_project)
             baseline_link = next(
                 (rel for rel, entry in baseline.items()
-                 if entry.kind == "symlink"), None)
+                 if entry.kind == "symlink"
+                 and _symlink_escapes_tree(rel, entry.target)), None)
             if baseline_link is not None:
                 raise _Phase1RtlOutputRefused(
                     "RTL_PROVENANCE_SYMLINK_REFUSED",
@@ -3207,7 +3234,8 @@ def _phase1_stamp_held_session(
                 stage_binding.project_fd, binding.project)
             final_link = next(
                 (rel for rel, entry in final.items()
-                 if entry.kind == "symlink"), None)
+                 if entry.kind == "symlink"
+                 and _symlink_escapes_tree(rel, entry.target)), None)
             if final_link is not None:
                 raise _Phase1RtlOutputRefused(
                     "RTL_PROVENANCE_SYMLINK_REFUSED",
@@ -5510,7 +5538,8 @@ def step_rtl_gen(project: Path, ic_class: str,
                 final_link = next(
                     (rel for rel, entry in final.items()
                      if entry.kind == "symlink"
-                     and baseline.get(rel) != entry), None)
+                     and baseline.get(rel) != entry
+                     and _symlink_escapes_tree(rel, entry.target)), None)
             if final_link is not None:
                 raise _Phase1RtlOutputRefused(
                     "RTL_TRANSACTION_OUTPUT_SYMLINK_REFUSED",
@@ -5647,7 +5676,8 @@ def _step_rtl_gen_bound(
     # this private snapshot.
     staged_link = next(
         (rel for rel, entry in snapshot_manifest.items()
-         if entry.kind == "symlink"), None)
+         if entry.kind == "symlink"
+         and _symlink_escapes_tree(rel, entry.target)), None)
     if staged_link is not None:
         raise _Phase1RtlOutputRefused(
             "PROJECT_SYMLINK_NOT_ISOLATABLE",

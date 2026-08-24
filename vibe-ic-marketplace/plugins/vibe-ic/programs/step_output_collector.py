@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -172,7 +173,29 @@ def materialize(project: Path) -> Dict[str, Any]:
             if link.exists() or link.is_symlink():   # basename collision
                 link = sdir / f"{src.parent.name}__{src.name}"
             try:
-                link.symlink_to(src)                  # absolute → mount-stable
+                # RELATIVE when the target is inside the project (2026-08-25).
+                # An ABSOLUTE link is a portal back to the original tree the
+                # moment the project is copied — and the RTL dispatch copies it
+                # into an isolated stage before generating. Its guard then sees
+                # a symlink pointing OUTSIDE the stage, at a mutable namespace,
+                # and refuses: `PROJECT_SYMLINK_NOT_ISOLATABLE ... No RTL was
+                # written`. Measured 2026-08-25: this mirror emitted 15 absolute
+                # links into `steps/`, every one of them targeting a file inside
+                # the same project, and rtl_gen was BLOCKED on all five task
+                # natures tried — the runner's own bookkeeping blocked the
+                # runner's own RTL generation. With the links relative, rtl_gen
+                # reaches its designed verdict (WAIVED -> spec-to-rtl).
+                #
+                # Relative is also STRICTLY more mount-stable than absolute for
+                # an intra-project link: it survives the whole tree being moved,
+                # copied or bind-mounted elsewhere, which absolute does not.
+                # A target genuinely outside the project stays absolute — that
+                # one SHOULD trip the isolation guard, and this keeps it doing so.
+                try:
+                    inside = src.resolve().is_relative_to(project.resolve())
+                except (OSError, ValueError):
+                    inside = False
+                link.symlink_to(os.path.relpath(src, sdir) if inside else src)
             except OSError:
                 pass
             present.append({"rel": o.get("rel"), "abs": str(src),
