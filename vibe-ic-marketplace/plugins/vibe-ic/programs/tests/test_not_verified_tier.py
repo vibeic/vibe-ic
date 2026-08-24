@@ -335,3 +335,48 @@ def test_the_declared_sites_are_not_seen_as_undeclared():
         "the converted file no longer routes through the tier; the eleven "
         "sites of vibe-ic#1128 have drifted back")
     assert not any(f == converted.name for f, _ln, _r in _undeclared_infra_skips())
+
+
+def test_the_five_main_red_misc_sites_route_through_the_not_verified_tier():
+    """The repaired sites must disclose an unanswered prerequisite and remedy.
+
+    This is deliberately source-backed: each file is the runtime producer of
+    the skip record consumed by this tier.  Removing a declaration exposes the
+    observed filename through ``_undeclared_infra_skips`` and makes this test
+    red; adding a residual-register row cannot satisfy it.
+    """
+    repaired = {
+        "test_pad_ring.py",
+        "test_the_eco_audit_report_references_resolve.py",
+        "test_upstream_mirror_klayout_sealring.py",
+        "test_upstream_mirror_magic_lef.py",
+        "test_upstream_mirror_pad_cfg.py",
+    }
+    undeclared = {f for f, _ln, _reason in _undeclared_infra_skips()}
+    lost_declarations = repaired & undeclared
+    assert lost_declarations == set(), (
+        f"repaired infrastructure skips lost their declaration: "
+        f"{sorted(lost_declarations)}")
+
+    missing_remedy = []
+    for name in sorted(repaired):
+        text = (TESTS_DIR / name).read_text(errors="replace")
+        tree = ast.parse(text)
+        declared = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            call_name = (getattr(node.func, "id", "")
+                         or getattr(node.func, "attr", ""))
+            if call_name in (*_DECLARERS, "skip_not_verified"):
+                declared.append(node)
+        actionable = any(
+            (len(node.args) >= 2 and bool(_skip_reason_text(node.args[1])))
+            or any(kw.arg == "remedy" and bool(_skip_reason_text(kw.value))
+                   for kw in node.keywords)
+            for node in declared)
+        if not declared or not actionable:
+            missing_remedy.append(name)
+    assert missing_remedy == [], (
+        "a NOT_VERIFIED declaration without an actionable remedy leaves the "
+        f"same unanswered question: {missing_remedy}")

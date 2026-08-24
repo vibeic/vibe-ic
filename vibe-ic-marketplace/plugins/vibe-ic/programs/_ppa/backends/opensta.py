@@ -45,6 +45,7 @@ C. single-corner post-route SPEF (`sta_spef_based.rpt`) — no `===` banner at
      STA_SIGNOFF_CORNER: SS
      STA_BASIS_LIBERTY: /pdk/…__ss_100C_1v60.lib
      STA_BASIS_SPEF: x.spef
+     STA_BASIS_CORNER: nom
 
 TWO NUMBER-GRAMMAR TRAPS, BOTH ALREADY PAID FOR IN THIS REPOSITORY
 ==================================================================
@@ -140,15 +141,11 @@ _BASIS_LIBERTY_RE = re.compile(
 #: an unbannered report was unreadable even when the artefact spelled it out.
 _BASIS_SPEF_RE = re.compile(
     r"^\s*#?\s*STA_BASIS_SPEF\s*:\s*(\S+)", re.MULTILINE)
+_BASIS_CORNER_RE = re.compile(
+    r"^[ \t]*#?[ \t]*STA_BASIS_CORNER[ \t]*:[ \t]*([^\r\n]*)$",
+    re.MULTILINE)
 _SIGNOFF_CORNER_COUNT_RE = re.compile(
     r"^\s*#?\s*STA_SIGNOFF_CORNER_COUNT\s*:\s*(\d+)", re.MULTILINE)
-#: The parasitics the run timed. Dialect C carries NO banner, so this whole-file
-#: stamp is the only place its RC condition can be stated -- and until the
-#: emitter was taught to write it, the deck read a SPEF on one line and
-#: disclosed four other facts about the corner on the next five. Parsed as a
-#: fact; judged nowhere in this file.
-_BASIS_SPEF_RE = re.compile(
-    r"^\s*#?\s*STA_BASIS_SPEF\s*:\s*(\S+)", re.MULTILINE)
 
 # ── the emitter's own attestations that a query RAN ────────────────────────
 # Their ABSENCE is what separates "queried and clean" from "never asked", which
@@ -249,6 +246,9 @@ class Section:
     process: Optional[str]       # dialect B: `process=SS`
     rc_corner: Optional[str]     # dialect A: `(max-RC corner…)`
     spef: Optional[str]
+    # Every explicit declaration, in source order. Multiplicity is evidence:
+    # reducing this tuple to the first value would hide a conflicting stamp.
+    basis_corners: Tuple[str, ...]
     liberty: Optional[str]
     banner: Optional[str]        # None => implicit whole-file section
     line: int
@@ -279,6 +279,9 @@ class Report:
     signoff_corner: Optional[str] = None
     basis_liberty: Optional[str] = None
     basis_spef: Optional[str] = None         # the parasitic file, as NAMED
+    # Every whole-file declaration, in source order. The timing domain owns
+    # validation and reconciliation with per-section/banner declarations.
+    basis_corners: Tuple[str, ...] = ()
     signoff_corner_count: Optional[int] = None
     check_types_reported: Optional[bool] = None
     check_types_failure: Optional[str] = None
@@ -489,8 +492,12 @@ def parse_report(text: Optional[str], *, path: Optional[str] = None,
             spef = ms.group(1).strip() if ms else None
             ml = _BANNER_LIBERTY_RE.search(banner)
             lib = ml.group(1) if ml else None
+        basis_corners = tuple(
+            match.group(1).strip()
+            for match in _BASIS_CORNER_RE.finditer(block))
         return Section(
-            check=check, process=process, rc_corner=rc, spef=spef, liberty=lib,
+            check=check, process=process, rc_corner=rc, spef=spef,
+            basis_corners=basis_corners, liberty=lib,
             banner=banner, line=start + 1, measurements=tuple(meas),
             paths=tuple(_parse_paths(block, start + 1)),
             worst_paths_reported=wp_ok, worst_paths_failure=wp_fail,
@@ -508,6 +515,9 @@ def parse_report(text: Optional[str], *, path: Optional[str] = None,
     ms = _SIGNOFF_CORNER_RE.search(body)
     ml = _BASIS_LIBERTY_RE.search(body)
     msp = _BASIS_SPEF_RE.search(body)
+    basis_corners = tuple(
+        match.group(1).strip()
+        for match in _BASIS_CORNER_RE.finditer(body))
     mc = _SIGNOFF_CORNER_COUNT_RE.search(body)
     ct_fail = _CHECK_TYPES_FAILED_RE.search(body)
     ct_ok = _CHECK_TYPES_OK_RE.search(body)
@@ -517,6 +527,7 @@ def parse_report(text: Optional[str], *, path: Optional[str] = None,
         signoff_corner=ms.group(1) if ms else None,
         basis_liberty=ml.group(1) if ml else None,
         basis_spef=msp.group(1) if msp else None,
+        basis_corners=basis_corners,
         signoff_corner_count=int(mc.group(1)) if mc else None,
         check_types_reported=(False if ct_fail else (True if ct_ok else None)),
         check_types_failure=ct_fail.group(1).strip() if ct_fail else None,

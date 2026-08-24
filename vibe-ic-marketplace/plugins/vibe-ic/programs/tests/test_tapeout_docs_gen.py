@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _hostpaths import repo_path
+
 PROG = Path(__file__).resolve().parents[1] / "tapeout_docs_gen.py"
 
 CLEAN = {
@@ -226,6 +228,73 @@ def test_the_step_declares_the_names_this_program_writes(tmp_path):
         assert any(fnmatch.fnmatch(w, pat) for w in written), (
             f"the flow declares {d!r} and this program wrote {sorted(written)} "
             f"— a declared output no producer writes can never be produced")
+
+
+def test_phase3_dispatches_the_real_37_5ic_producer_and_mutation_refuses(tmp_path):
+    """The runner must execute the producer; its gate declaration is not that.
+
+    The first assertion is intentionally VALUE-based for the frozen-producer
+    control: candidate tests restored over the old runner observe zero
+    executable references, rather than failing because a new symbol is absent.
+    The second half changes one measured property and proves the dispatched
+    producer refuses to publish release HTML for a non-releasable run.
+    """
+    runner_path = repo_path(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+        "phase3_one_shot_runner.py")
+    runner_text = runner_path.read_text(encoding="utf-8")
+    executable_refs = runner_text.count('PROGRAMS_DIR / "tapeout_docs_gen.py"')
+    assert executable_refs == 1, (
+        f"observed executable tapeout_docs_gen references={executable_refs}; "
+        "the YAML gate is an auditor channel, not the phase-3 producer dispatch")
+    dispatch_calls = runner_text.count(
+        "plan.append(step_tapeout_docs_gen(project))")
+    assert dispatch_calls == 1, (
+        f"observed main-path tapeout_docs_gen dispatches={dispatch_calls}; "
+        "a producer helper that main never calls is still an orphan")
+
+    import phase3_one_shot_runner as runner
+
+    def _project(tag, ws):
+        proj = tmp_path / tag
+        (proj / "phase3" / "final").mkdir(parents=True)
+        (proj / "input" / "submission_template").mkdir(parents=True)
+        (proj / "input" / "submission_template" / "SELF_TAPEOUT.txt").write_text(
+            "self tape-out\n", encoding="utf-8")
+        (proj / "input" / "project.json").write_text(
+            json.dumps({"design": "widget", "pdk": "openpdk"}),
+            encoding="utf-8")
+        metrics = dict(CLEAN)
+        metrics["timing__setup__ws"] = ws
+        (proj / "phase3" / "final" / "metrics.json").write_text(
+            json.dumps(metrics), encoding="utf-8")
+        return proj
+
+    clean = _project("clean-dispatch", 0.5)
+    clean_result = runner.step_tapeout_docs_gen(clean)
+    assert clean_result.status == "PASS", clean_result
+    assert sorted(Path(p).name for p in clean_result.output_files) == [
+        "BRIEF_widget_openpdk.html", "SIGNOFF_widget_openpdk.html"]
+
+    harmed = _project("one-property-harm", -1.53)
+    harmed_result = runner.step_tapeout_docs_gen(harmed)
+    assert harmed_result.status == "SKIP", harmed_result
+    assert harmed_result.extras.get("producer_rc") == 1, harmed_result
+    assert not (harmed / "reports" / "phase3" / "docs").exists(), (
+        "a negative setup slack published release documents")
+
+
+def test_phase3_does_not_dispatch_37_5ic_on_the_ip_path(tmp_path):
+    """37.5ic and 37.5ip are mutually exclusive consumer contracts."""
+    import phase3_one_shot_runner as runner
+
+    template = tmp_path / "input" / "submission_template"
+    template.mkdir(parents=True)
+    (template / "NO_TEMPLATE.txt").write_text("cell delivery\n", encoding="utf-8")
+    result = runner.step_tapeout_docs_gen(tmp_path)
+    assert result.status == "SKIP", result
+    assert result.output_files == [], result
+    assert not (tmp_path / "reports" / "phase3" / "docs").exists()
 
 
 # ---------------------------------------------------------------------------

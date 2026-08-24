@@ -3,15 +3,13 @@
 artefacts, the ring is checked for ABUTMENT, and a skip must name what it
 skipped over.
 
-ENFORCEMENT: advisory here — this gate is not in
-``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
-it inline at all. It runs when ``flow_compliance_check`` evaluates step 15.5ic's
-``program_exit_zero`` clause, so its rc IS that step's verdict — "advisory"
-names the RUNNER channel it is absent from, not a verdict this gate cannot
-reach. Declared because vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an
-enforcement decision nobody made; wiring it into the runner would change what a
-real run blocks on, which is the flow owner's call and is recorded, not taken
-here. Kept in the first 4 kB: `declared_intent` reads only `text[:4000]`.
+ENFORCEMENT: blocking — ``phase3_one_shot_runner.step_pad_ring_gen`` invokes
+this independent checker inline before routing. Any nonzero rc makes that step
+non-PASS; ``_prepare_padring_for_route`` then returns no routing consumer and
+the PnR step fails with ``PADRING_PREROUTE_BLOCKED``. Canonical step 15.5ic
+also consumes the same rc through a blocking ``program_exit_zero`` clause.
+This token names the measured runner/flow control path, not finding severity.
+Kept in the first 4 kB because ``declared_intent`` reads only ``text[:4000]``.
 
 WHAT THIS REFUSES
 =================
@@ -29,11 +27,10 @@ Three failure shapes.
   THE RING'S POWER AND GROUND ARE NOT ROUTED, they are formed by cells
   touching. A ring that places perfectly and does not abut is electrically
   nothing, and a placement check does not notice. So this gate walks each side
-  corner -> pad -> ... -> corner and refuses any gap the declared filler cells
-  cannot close exactly. That walk is what upstream's "round the spacing down
-  to the minimum site width" and its corner-spacing refusal exist to
-  guarantee; here the guarantee is checked on the artefact rather than assumed
-  from the arithmetic that produced it.
+  corner -> filler/pad -> ... -> corner and requires every adjacent extent to
+  touch with exactly zero residual gap. A declaration that a gap *could* be
+  tiled is not evidence that filler instances were placed; every filler is
+  independently re-read from the DEF and the PDK IO library.
 
   A SKIP THAT SAYS NOTHING. A report may legitimately say "the pad ring config
   was not declared, so no ring was generated" — that is the honest state of
@@ -162,6 +159,7 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
 
     pads = rep.get("pads")
     corners = rep.get("corners")
+    fillers = rep.get("fillers")
     if not isinstance(pads, list) or not pads:
         return [_finding(
             "PADRING_EMPTY",
@@ -170,6 +168,12 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
             "this gate exists to refuse")]
     if not isinstance(corners, list):
         corners = []
+    if not isinstance(fillers, list):
+        fillers = []
+        out.append(_finding(
+            "PADRING_FILLER_POPULATION_UNDECLARED",
+            "the producer report carries no filler instance population; "
+            "a list of masters or fillable-gap arithmetic is not placement"))
 
     box = ring.box
     llx, lly, urx, ury = box
@@ -219,11 +223,28 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
             f"width is what the ring's spacing arithmetic rounds to, so it is "
             f"not re-derivable and this gate does not pick one"))
 
+    declared_fillers = set(str(x) for x in
+                           (cfg.get("PAD_FILLERS") or []))
+    placed_count = rep.get("fillers_placed")
+    if not isinstance(placed_count, int) or placed_count != len(fillers):
+        out.append(_finding(
+            "PADRING_FILLER_COUNT_MISMATCH",
+            f"fillers_placed={placed_count!r}, but the report declares "
+            f"{len(fillers)} concrete filler instance record(s)"))
+    unperformed = (rep.get("unperformed")
+                   if isinstance(rep.get("unperformed"), dict) else {})
+    if unperformed.get("io_filler_placement"):
+        out.append(_finding(
+            "PADRING_FILLER_PLACEMENT_UNPERFORMED",
+            "the producer declares IO filler placement unperformed; a ring "
+            "whose supply cells do not touch is not a PASS"))
+
     # ── per-cell corroboration ─────────────────────────────────────────────
     extent: Dict[str, Tuple[int, int]] = {}
     seen: Dict[str, Dict[str, Any]] = {}
     for cell, kind in ([(p, "pad") for p in pads] +
-                       [(c, "corner") for c in corners]):
+                       [(c, "corner") for c in corners] +
+                       [(f, "filler") for f in fillers]):
         if not isinstance(cell, dict):
             out.append(_finding("PADRING_ENTRY_MALFORMED",
                                 f"a {kind} entry is not an object"))
@@ -327,7 +348,7 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
                 f"reaches no package pin"))
 
         cx, cy = comp.x + w / 2.0, comp.y + h / 2.0
-        if kind == "pad":
+        if kind in ("pad", "filler"):
             side = str(cell.get("side") or "")
             got = PR.nearest_side(cx, cy, box)
             if side not in PR.SIDES:
@@ -338,9 +359,14 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
             elif got != side:
                 out.append(_finding(
                     "PAD_SIDE_MISMATCH",
-                    f"{inst!r} is declared on side {side!r} but its centre in "
+                    f"{kind} {inst!r} is declared on side {side!r} but its centre in "
                     f"{def_rel} is nearest the {got!r} die edge"))
-        else:
+            if kind == "filler" and comp.master not in declared_fillers:
+                out.append(_finding(
+                    "PADRING_FILLER_MASTER_UNDECLARED",
+                    f"filler {inst!r} uses master {comp.master!r}, which is "
+                    f"not one of PAD_FILLERS={sorted(declared_fillers)}"))
+        elif kind == "corner":
             pos = str(cell.get("position") or "")
             if pos not in PR.CORNER_POSITIONS:
                 out.append(_finding(
@@ -369,12 +395,12 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
             f"{len(positions)} corner entr(y/ies): {sorted(set(positions))} — "
             f"a ring with an unfilled corner does not abut"))
 
-    # ── no two cells on a side may overlap, and every gap must be fillable ─
+    # ── no two cells on a side may overlap, and every actual gap is zero ───
     by_pos = {str(c.get("position")): c for c in corners
               if isinstance(c, dict)}
     filler_widths = sorted({
         PR.footprint(lib.masters[f], "N", ring.units)[0]
-        for f in (cfg.get("PAD_FILLERS") or []) if f in lib.masters})
+        for f in declared_fillers if f in lib.masters})
     if lib.resolved and not filler_widths:
         out.append(_finding(
             "PADRING_FILLER_UNRESOLVED",
@@ -412,6 +438,18 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
             lo = comp.x if axis == "x" else comp.y
             chain.append((lo, lo + (e[0] if axis == "x" else e[1]),
                           comp.instance))
+        for filler in fillers:
+            if not isinstance(filler, dict) or \
+                    str(filler.get("side")) != side:
+                continue
+            comp = ring.components.get(str(filler.get("instance") or ""))
+            if comp is None or not comp.placed or \
+                    comp.instance not in extent:
+                continue
+            e = extent[comp.instance]
+            lo = comp.x if axis == "x" else comp.y
+            chain.append((lo, lo + (e[0] if axis == "x" else e[1]),
+                          comp.instance))
         chain.sort()
         for (a0, a1, an), (b0, _b1, bn) in zip(chain, chain[1:]):
             gap = b0 - a1
@@ -421,15 +459,13 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
                     f"side {side!r}: {an!r} spans {a0}..{a1} and {bn!r} "
                     f"starts at {b0} — the two cells overlap by {-gap} DEF "
                     f"unit(s)"))
-            elif lib.resolved and filler_widths and \
-                    not PR.gap_is_fillable(gap, filler_widths):
+            elif gap > 0:
                 out.append(_finding(
                     "PADRING_DOES_NOT_ABUT",
-                    f"side {side!r}: the {gap} DEF unit gap between {an!r} "
-                    f"and {bn!r} cannot be closed by the declared filler "
-                    f"cell(s) (widths {filler_widths}) — the ring's power and "
-                    f"ground are formed by cells TOUCHING, not by routing, so "
-                    f"this ring carries no supply"))
+                    f"side {side!r}: an actual {gap} DEF unit gap remains "
+                    f"between {an!r} and {bn!r}. Declared filler widths "
+                    f"{filler_widths} do not count until instances occupy "
+                    f"the gap; ring power and ground require cells TOUCHING"))
 
     # ── the pads ARE the BTerms, and they are instances of the block ───────
     fp = project / PR.FLOORPLAN_DEF_REL
@@ -560,8 +596,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                             f"every claim in the report was re-derived from "
                             f"{producer.get('padring_def')}, from "
                             f"{PR.FLOORPLAN_DEF_REL} and from the PDK IO cell "
-                            f"library, and every gap in the ring is closable "
-                            f"by the declared filler cells")
+                            f"library; every declared filler instance exists "
+                            f"in the DEF and every adjacent ring cell "
+                            f"physically touches with zero residual gap")
                     else:
                         reason = findings[0]["message"]
 

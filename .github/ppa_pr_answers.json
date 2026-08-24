@@ -4,77 +4,54 @@
     {
       "question": 1,
       "evidence": [
-        {
-          "kind": "path",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/slot_pad_budget_check.py"
-        },
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_slot_pad_budget_check.py::test_a_design_that_fits_is_rc0_FITS"
-        }
+        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/_ppa/timing.py"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_two_reports_timed_against_different_parasitics_are_not_one_identity"}
       ]
     },
     {
       "question": 2,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_an_unbondable_interface_makes_step_2_itself_go_FAIL"
-        },
-        {
-          "kind": "path",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_section_corner_is_read_from_the_explicit_stamp_not_the_spef_name"},
+        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md"}
       ]
     },
     {
       "question": 3,
       "evidence": [
-        {
-          "kind": "artefact",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "sha256": "sha256:a378a3b91217b0fecf5d3f4636c8ca4b1cf0ad651a404c42a2160fa6f5cb7a68"
-        }
+        {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"}
       ]
     },
     {
       "question": 4,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_the_cell_path_is_a_DISCLOSED_skip_never_a_silent_pass"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_a_declared_view_with_no_report_at_all_becomes_a_not_measured_row"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_missing_corner_stamp_is_not_recovered_from_any_spef_name"}
       ]
     },
     {
       "question": 5,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_refusal_and_skip_do_not_share_a_tier"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_missing_input_is_rc2_with_a_printed_marker"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_timing.py::test_the_extractor_never_returns_one"}
       ]
     },
     {
       "question": 11,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue1347_slot_pad_budget_is_wired_into_the_flow.py::test_an_unbondable_interface_turns_the_step_RED"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"}
+      ]
+    },
+    {
+      "question": 12,
+      "evidence": [
+        {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"}
       ]
     },
     {
       "question": 19,
       "evidence": [
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_slot_pad_budget_check.py::test_a_json_destination_that_climbs_out_is_REFUSED"
-        },
-        {
-          "kind": "test",
-          "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_slot_pad_budget_check.py::test_the_refusal_is_the_USAGE_tier_not_the_vacuous_one"
-        }
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_malformed_explicit_corner_declaration_is_invalid"}
       ]
     }
   ]
