@@ -9,7 +9,9 @@ The two ACCEPT scenarios the requirement was written against are
 `test_deleting_a_can_fail_fixture_is_refused` and
 `test_a_new_gate_with_no_fixtures_is_refused`.
 """
+import collections
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -272,3 +274,58 @@ def test_every_real_fixture_declares_the_gate_it_is_named_for():
         assert fx.gate in declared, f"{fx.path.name} names {fx.gate!r}"
         assert F.slug(fx.gate) == slug_, fx.path.name
         assert fx.has_can_pass and fx.has_can_fail, fx.path.name
+
+
+# ── the debt register may not keep a frozen copy of a live number ───────────
+# Every entry used to carry `declared_at: tools/ci/repo_hygiene_gates.sh:<line>`
+# and on 2026-08-25 all 72 were wrong -- 0 of 72 pinned lines still contained
+# the gate they named, and the real declarations sat 284 to 500 lines further
+# down. Nothing read the field, so it could not go red; it simply rotted and
+# would have misdirected the next reader. It was a frozen copy of
+# `GateDecl.lineno`, which `F.declarations()` computes from the dispatcher on
+# every call, so the register held one value that is always true and one that
+# was only sometimes true. The pair below removes the second and keeps the
+# first sufficient.
+
+_LINE_POINTER = re.compile(r"[\w./-]+\.(?:sh|py|json|md):\d+")
+
+
+def test_no_debt_entry_pins_a_line_number():
+    """A file:line inside the register is a copy of something computed live.
+
+    NOT a style rule. A line pointer in a document nothing validates is wrong
+    the moment anything above it is edited, and its wrongness is invisible
+    because no consumer ever resolves it. `F.declarations()` is the live
+    source; the register carries `gate`, which is the label byte-for-byte, and
+    that is what a reader should search with.
+    """
+    debt = F.load_debt()
+    offenders = [
+        (entry.get("gate"), key, value)
+        for entry in debt.get("entries", [])
+        for key, value in entry.items()
+        if isinstance(value, str) and _LINE_POINTER.search(value)
+    ]
+    assert not offenders, (
+        "%d debt field(s) pin a file:line, which nothing resolves and which "
+        "the next edit above them makes wrong: %r" % (len(offenders), offenders[:5]))
+
+
+def test_every_debt_entry_names_a_gate_the_dispatcher_declares_exactly_once():
+    """What makes dropping `declared_at` safe, asserted rather than assumed.
+
+    The register can be navigated by `gate` alone only while that label picks
+    out ONE declaration. A gate that is renamed out of the script leaves an
+    entry excusing nothing; a label that appears twice makes "the declaration"
+    ambiguous, and either way a reader following the field back would land
+    nowhere. Measured 2026-08-25: 72 of 72 resolved to exactly one site.
+    """
+    debt = F.load_debt()
+    entries = debt.get("entries", [])
+    assert entries, "an empty register would pass this test over nothing"
+    declared = collections.Counter(d.label for d in F.declarations())
+    wrong = {e.get("gate"): declared[e.get("gate")]
+             for e in entries if declared[e.get("gate")] != 1}
+    assert not wrong, (
+        "%d debt entr(ies) do not name exactly one declared gate (label -> "
+        "declaration count): %r" % (len(wrong), wrong))
