@@ -284,6 +284,11 @@ def _run_main(tmp_path, batch, prompts=None, dataset=None, monkeypatch=None):
         dp = tmp_path / "dataset.jsonl"
         dp.write_text("\n".join(json.dumps(r) for r in dataset))
         argv += ["--dataset", str(dp)]
+    if not any(a in argv for a in ("--prompts", "--dataset")):
+        # Deliberately unguarded fixture; since 2026-08-25 that is SAID with the
+        # flag rather than implied by omitting the others — without it the gate
+        # refuses and never writes the report this helper reads.
+        argv.append("--without-spec-guards")
     with contextlib.redirect_stderr(io.StringIO()), \
             contextlib.redirect_stdout(io.StringIO()):
         G.main(argv)

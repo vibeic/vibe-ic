@@ -59,7 +59,7 @@ def test_print_scoring_env_cli_emits_exportable_lines():
     """`--print-scoring-env` prints `export K=V` lines a scoring driver can eval,
     and exits 0 WITHOUT requiring --image/--problem-dir."""
     r = subprocess.run(
-        [sys.executable, str(PLUGIN / "benchmark" / "eda_image_preflight.py"),
+        [sys.executable, str(PLUGIN / "programs" / "eda_image_preflight.py"),
          "--print-scoring-env"],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -75,7 +75,7 @@ def test_preflight_still_requires_args_without_the_flag():
     """The new flag must not relax the existing front door: with neither
     --image/--problem-dir nor --print-scoring-env, the tool still errors (rc 2)."""
     r = subprocess.run(
-        [sys.executable, str(PLUGIN / "benchmark" / "eda_image_preflight.py")],
+        [sys.executable, str(PLUGIN / "programs" / "eda_image_preflight.py")],
         capture_output=True, text=True)
     assert r.returncode == 2
 
