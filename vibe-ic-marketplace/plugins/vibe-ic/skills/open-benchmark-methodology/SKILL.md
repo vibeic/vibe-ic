@@ -526,7 +526,54 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-#### § 4.032 — "New top, dependency-only context": carry a locally-named primitive
+#### § 4.031 — Run the preflight with ALL its arguments, or it silently checks less
+
+`cvdp_env_preflight.py --image <sim>` returns `PASS, deviations: []` — and that
+PASS covers only the SIM image. The `OSS_PNR_IMAGE` requirement (#714) is
+checked **only when `--problem-dir` is also passed.** A partial invocation does
+not warn that it checked less; it returns the same clean verdict a complete one
+does.
+
+**What that cost, measured 2026-08-24.** A 302-problem CVDP run was scored on
+that PASS. One category collapsed:
+
+| category | score |
+|---|---|
+| cid016 debug | 26/35 = 74.3% |
+| cid003 spec generation | 56/78 = 71.8% |
+| cid004 functional modification | 39/55 = 70.9% |
+| cid002 completion | 55/94 = 58.5% |
+| **cid007 optimization** | **1/40 = 2.5%** |
+
+Each cid007 problem runs TWO tests. The `sanity` (functional) test mostly
+PASSED; the `synth` (area) test failed on
+
+    ERROR: pull access denied — docker.io/nvidia/cvdp-sim:v1.0.0
+
+Area-opt harnesses need a SECOND image. **Unset, `OSS_PNR_IMAGE` defaults to the
+GATED NVIDIA image**, which nobody outside the access programme can pull. Set
+both:
+
+```bash
+OSS_SIM_IMAGE=<oss-sim> OSS_PNR_IMAGE=<oss-sim> python3 run_benchmark.py …
+```
+
+Re-running the preflight WITH `--problem-dir` says so outright — `REFUSING to
+score … oss_pnr_image_set: false, oss_pnr_image_materialized_gated: true` — so
+the guard worked; it was never given the argument that turns it on.
+
+**Two rules follow, and the second is the general one:**
+
+1. Pass every argument a preflight or validator accepts, or state explicitly
+   which checks each omitted one disables. A PASS is scoped to what was
+   supplied, and nothing in the output tells you that scope.
+2. **A single category collapsing while its siblings are normal is an
+   INFRASTRUCTURE signature, not a capability one.** 2.5% against 58-74% is not
+   a difficulty cliff — uniform failure inside one class means something
+   environmental applies to exactly that class. Diagnose the environment before
+   triaging the answers, and do not publish the number until it is resolved.
+
+### § 4.032 — "New top, dependency-only context": carry a locally-named primitive
 
 The extend-don't-replace rule (§ 2 shape-C brief, rule 2) says a completion
 whose deliverable file IS one of the given `context` files must carry BOTH the
