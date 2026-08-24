@@ -554,48 +554,64 @@ before triaging the answers.
 and refuse to emit a bare code blob when that list has more than one entry.
 Count the expected files BEFORE authoring, not after scoring.
 
-### § 4.030 — NEVER hedge a module name by emitting aliases: it fails strict lint deterministically
+### § 4.030 — `cvdp_gate`'s alias wrappers are NOT harmless: they fail `verilator -Wall`
 
-Unsure which name a hidden testbench would elaborate, authoring agents emitted
-the same design under two to four names at once — the prose name, a
-`cvdp_copilot_`-prefixed variant, and a **word-reversed** variant:
+`cvdp_gate.py` appends **thin pass-through alias wrappers** to every completion so
+the scorer's `iverilog -s <top>` binds whatever name the hidden harness picked.
+For record id `cvdp_copilot_<stem>` it emits a wrapper for the prefixed name, the
+bare stem, and the **word-order-REVERSED stem**. Measured over the 2026-08-24 run:
 
-    module binary_to_gray …            module ethernet_packet_parser …
-    module cvdp_copilot_binary_to_gray …   module cvdp_copilot_ethernet_packet_parser …
-    module gray_to_binary …            module parser_packet_ethernet …
-
-**293 of 302 responses in the 2026-08-24 run did this.** Under iverilog it is
-invisible — the simulator elaborates the named top and ignores the rest, so
-sanity tests scored 38/40. Under `verilator --lint-only -Wall` (which the cid007
-`lint` service runs, and which exits non-zero on ANY warning) it is fatal:
-
-| warning | present in how many of the 23 lint failures |
+| wrappers the gate ADDED | responses |
 |---|---|
-| **MULTITOP** — several modules nothing instantiates | **22** |
+| 3 | 101 |
+| 2 | 172 |
+| 1 | 20 |
+| 0 | 9 |
+
+**31 of the added names were reversed-word forms** — `gray_to_binary` wrapping a
+binary→gray implementation, `rotate_data_adc`, `op_dsp_apb`.
+
+This is the GATE, not the authors: `binary_to_gray_0013`'s draft declares one
+module, `binary_to_gray`; its response declares `binary_to_gray`,
+`cvdp_copilot_binary_to_gray`, and `gray_to_binary`.
+
+`cvdp_harness_toplevel_alias.py`'s own comment states the premise that fails:
+
+> "unused wrappers are dead code the scorer's `-s <top>` never elaborates, so they
+> are **harmless**"
+
+**They are not harmless under `verilator --lint-only -Wall`**, which some CVDP
+problems run as a SCORED `lint` test and which exits non-zero on ANY warning:
+
+| warning | in how many of the 23 cid007 lint failures |
+|---|---|
+| **MULTITOP** — modules nothing instantiates | **22** |
 | **DECLFILENAME** — first module ≠ filename | **21** |
-| UNUSEDPARAM / UNUSEDSIGNAL | 8 |
 
-**Proven causally, not inferred.** On `binary_to_gray_0013`, deleting ONLY the
-two alias modules by `module…endmodule` boundary — no other edit — and re-running
-the harness's own lint command gives **EXIT=0, PASS**. One pattern accounts for
-**22 of the 24 remaining cid007 failures**.
+The harness's own `lint_config.vlt` waives DECLFILENAME only for the golden's
+single module matching its file stem, confirming the expected shape is ONE top.
 
-**Why the instinct is wrong:** emitting three names does not raise the chance of
-matching the one that is right. Each extra module is another uninstantiated top,
-so the hedge converts *uncertainty about a name* into a *certainty of failing any
-strict lint*. Choose one name — the expected output file's stem, resolved by the
-directory-leaf rule (§ Shape C rule 6) when prose and file layout disagree — and
-emit exactly one top.
+**Verified fix, both directions tested on `binary_to_gray_0013`.** Guard the
+appended wrappers so verilator never sees them:
 
-**Make it a gate, not advice.** Per GATE-AS-SOLE-EMIT-PATH, free-text guidance
-regresses. The emit path must REFUSE a response that:
-1. contains more than one module that nothing else in the response instantiates;
-2. has a top whose name differs from the expected output file's stem;
-3. carries a `<prefix>_<name>` / reversed-word twin of another module in the file.
+```verilog
+`ifndef VERILATOR
+module cvdp_copilot_binary_to_gray(...); ... endmodule
+module gray_to_binary(...);            ... endmodule
+`endif
+```
 
-The general form, beyond benchmarks: **when unsure between alternatives, choose
-one and state the choice — do not ship all of them.** Shipping every candidate
-looks like caution and behaves like a defect.
+| tool | before | after |
+|---|---|---|
+| `verilator --lint-only -Wall` | EXIT=1 | **EXIT=0** |
+| `iverilog -g2012 -s <each of 3 names>` | binds | **still binds all three** |
+| yosys (`hierarchy -check -top X`) | unaffected | unaffected (16/16 synth passed) |
+
+**The transferable rule, beyond this gate:** *"dead code is harmless" holds only
+for the tools you tested.* A recovery mechanism invisible to one tool can be a
+hard failure in another that reads the same file. Enumerate every tool the
+artifact is fed to — simulator, linter, synthesiser — not just the one the
+mechanism was designed for.
 
 ### § 4.031 — Run the preflight with ALL its arguments, or it silently checks less
 
