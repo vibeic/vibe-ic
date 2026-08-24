@@ -263,6 +263,61 @@ and is exempt):
    directory-leaf module name back to the prose typo (a re-author regressed exactly this way).
    *why_not_bucket_a*: distinguishing a typo from a genuine intended wrapper-name requires
    contextual judgment (read the prose against the file layout) — no regex separates the two.
+7. **OWNERSHIP IS READ FROM DISK, NEVER FROM THE ORCHESTRATOR'S MEMORY**
+   (2026-08-24 CVDP v1.11.72 run — FIVE assignment collisions in one run, all
+   from the same root cause). Driving ~8 concurrent authoring agents, the
+   orchestrator decided who owned what from its own dispatch history plus file
+   mtimes. Both are unreliable:
+
+   - **mtime is not liveness.** Three times an agent was declared dead after
+     5–20 minutes of a quiet file and its batch reassigned; all three were
+     alive. These agents take up to **7 minutes before their first write** and
+     think for minutes between problems. A quiet file means SLOW, never
+     ABANDONED. There is no mtime threshold that separates the two — do not
+     look for one.
+   - **A handoff needs BOTH sides told AND the old owner's acknowledgement.**
+     Inter-agent messages are not synchronous. Twice the new owner was told
+     "batch N is yours" and the old owner "drop batch N", and the second
+     message landed after the old owner had already started. Correct order:
+     tell the OLD owner to stop → wait for its ack → only then release to the
+     new owner.
+   - **A roster held in the orchestrator's head loses entries.** An agent
+     dispatched early still held three batches; the orchestrator forgot and
+     re-assigned two of them.
+
+   **What made this survivable — brief every agent with all four:**
+   (a) RE-READ the target file before every append and STOP + report if it
+   holds lines you did not write — never append, never truncate;
+   (b) a PRIVATE scratch dir per agent (a shared scratchpad let one agent's RTL
+   be silently overwritten by another's, and the emitted record then paired one
+   agent's prose with another's code);
+   (c) never gate a file another agent may still be writing — two concurrent
+   gate runs write the same responses file;
+   (d) count and diff by ID, never by line count (rule 8).
+   Every collision in that run was caught by an agent stopping to ask. Zero
+   files were corrupted. **The brief saved the data, not the coordination.**
+
+   **Verify a completion CLAIM on disk before recording it.** One agent
+   reported a batch "gated 10/10" that existed nowhere in the run directory.
+   An agent's report is a hypothesis; `ls` is the evidence.
+8. **`wc -l` UNDERCOUNTS A JSONL — count by parsing, diff by id**
+   (same run). `wc -l` counts NEWLINES. A JSONL whose last record was appended
+   without a trailing `\n` reports one fewer than it holds, and under
+   concurrent appends the total visibly oscillates.
+
+   Measured cost in that run: two batches that were COMPLETE at 10/10 read as
+   9 and 8, were diagnosed as unfinished, had agents dispatched to "finish"
+   them, and one duplicate completion was authored before the id count and the
+   line count disagreed loudly enough to notice. A separate 124→119 "drop" was
+   read as a truncation that never happened.
+
+   ```python
+   n       = sum(1 for l in open(f) if l.strip())            # count
+   missing = [i for i in want if i not in have]              # what to author
+   ```
+   Verify integrity with the id multiset (duplicates / foreign ids), not the
+   length — a file can have the right count and the wrong contents. Put this in
+   the agents' brief too; they reach for `wc -l` as readily as the orchestrator.
 
 #### Shape D — Agentic with runner (SoC / multi-task)
 **When**: agentic benchmarks where the unit-of-work is a full SoC + cocotb harness (CVDP). The
@@ -396,7 +451,42 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-### § 4.05 — Verifying a guard-RELAXING fix: the NEGATIVE no-leak proof is the load-bearing half (ORGANIC #511)
+#### § 4.04 — AREA-OPTIMIZATION problems: MEASURE, and look for oversized TYPES (2026-08-24)
+
+A prompt that demands a measurable reduction ("wires −19%, cells −22%") is not
+satisfied by clean-up. **The synthesis tool has already done the clean-up.**
+
+Measured on CVDP `cont_adder_0045`: removing a dead 32-bit register, sharing a
+four-times-repeated adder, and folding six parameter comparators into two
+(`(x>=T1)||(x>=T2)||(x>=T3)` ⟺ `x >= min(T1,T2,T3)`, exact for any signed
+parameters and free because the min folds at elaboration) produced:
+
+    original   wires 411  cells 591
+    "optimized" wires 411  cells 591     ← 0%
+
+Yosys already performs dead-code elimination and common-subexpression sharing.
+Hand-writing them changes nothing.
+
+**Where the wins actually are — the counter-example, `sorter_0059`:** loop
+variables declared `integer` (32-bit) for values 0..8, sized to the range →
+**−36.8% wires / −36.5% cells**, cycle-identical over 60 runs. The pattern is an
+**OVERSIZED DECLARED TYPE**, which no synthesis pass may narrow because the
+width is exactly what the source states. Look for `integer` indices,
+default-width literals, counters wider than their range, and accumulators sized
+above their proven bound.
+
+**Two binding consequences:**
+
+1. **Measure before accepting.** Run
+   `yosys -p 'read_verilog -sv f.sv; synth -top T; stat'` on BOTH the original
+   and the candidate, and put the before/after in the deliverable's header. An
+   unmeasured area answer is a guess, and this class of guess measured 0%.
+2. **State which yosys.** 0.33 and 0.68 reported materially different
+   reductions for the identical change (−36% vs −26%). The official scorer uses
+   its own container's yosys, not the host's, so a margin that clears the
+   threshold locally may not clear it under scoring.
+
+## § 4.05 — Verifying a guard-RELAXING fix: the NEGATIVE no-leak proof is the load-bearing half (ORGANIC #511)
 
 When the fix you are verifying **relaxes a guard** — a new exemption, an allow-list entry, a
 waiver path, a lint severity carve-out, a coverage advisory demotion, an audit/blindness
