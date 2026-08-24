@@ -231,16 +231,21 @@ WT_CAND_GATES="$RUN/wt_cand_gates"
 # A `git clone` from the local repository satisfies both. It is fresh, it is
 # throwaway, its `.git` is a real directory this run owns, nothing outside can
 # prune it, and the attestation preflight below still runs on it unchanged.
-# `--no-hardlinks` because a hardlinked object store is a second thing the
-# arms would share with a repository they do not control; `--no-local` is NOT
-# used, so the clone still avoids the network entirely.
+# `--no-hardlinks` because a hardlinked object store is a second thing the arms
+# would share with a repository they do not control. `--no-local` is NOT used,
+# so the clone still avoids the network entirely, and `--shared` is not passed
+# at all — it is not the default, and it would create the very
+# `objects/info/alternates` the preflight refuses.
 #
 # THE COST IS MEASURED, NOT ASSUMED: this repository is 678 MB, four arms is
 # ~2.7 GB of scratch and a few seconds per clone against arms that cost an
 # hour. `git worktree remove` no longer applies, so cleanup is `rm -rf`.
 arm_checkout() {
   local dest="$1" sha="$2" what="$3"
-  git clone --quiet --no-hardlinks --shared=false "$REPO" "$dest" \
+  # `--no-hardlinks` gives the arm its own object store. `--shared` is NOT
+  # passed at all: it is not the default, and this git spells it as a flag that
+  # takes no value, so `--shared=false` is a hard error rather than a no-op.
+  git clone --quiet --no-hardlinks "$REPO" "$dest" \
     || die "cannot clone the $what arm"
   git -C "$dest" checkout --quiet --detach "$sha" \
     || die "cannot check $sha out in the $what arm"

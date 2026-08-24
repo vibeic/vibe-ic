@@ -1,6 +1,6 @@
 {
   "name": "vibe-ic",
-  "version": "1.11.72",
+  "version": "1.11.73",
   "description": "AI-Native IC Design plugin for Claude Code \u2014 one install bundles and auto-registers the MCP-EDA server that wraps the open-source EDA toolchain and lab hardware. Two entry points into one Phase 1: (A) natural-language prompt/dialogue, or (B) existing design docs \u2192 layered design JSON (L-docs). Phase 2: RTL \u2192 lint \u2192 sim \u2192 formal \u2192 FPGA SOF + on-board test. Phase 3: synth \u2192 STA \u2192 DFT \u2192 PnR \u2192 DRC/LVS \u2192 GDS \u2192 tapeout. Analog A1-A9 (sizing \u2192 layout \u2192 hardmacro) and Mixed-signal M1-M4 (merge \u2192 AMS co-sim \u2192 PV) interleaved per phase. Strict canonical-flow compliance gate plus an anti-fabrication doctrine enforced as deterministic gates (provenance audit-chain, chip-AGNOSTIC source guard, real-artifact + SHA256 attestation, gate self-assertion, benchmark-path consistency) \u2014 no fabrication, no hallucinated PASS.",
   "author": {
     "name": "VibeIC.AI"
