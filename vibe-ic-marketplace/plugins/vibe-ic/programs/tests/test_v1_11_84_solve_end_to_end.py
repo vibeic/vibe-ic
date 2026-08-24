@@ -22,6 +22,7 @@ chain-level tests live beside them, not instead of them.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -97,11 +98,20 @@ def test_no_benchmark_specific_solver_is_on_the_path(solved):
         if not rep.is_file():
             continue
         blob = rep.read_text(errors="replace")
-        for forbidden in ("verilogeval_tier_pipeline", "rtllm_tier_pipeline",
-                          "cvdp_solve_pipeline", "gates_atomic"):
-            assert forbidden not in blob, (
-                f"{proj.name} went through {forbidden} — that is the "
-                f"benchmark-specific path this work removed")
+        # Named-file assertions DECAY. The first version of this listed four
+        # modules by name; three were then deleted, so three quarters of it
+        # became a condition that cannot be false — a check that reads as
+        # protection and stops anything. What it was actually guarding is that
+        # the solve path never reaches a BENCHMARK-SPECIFIC program, so assert
+        # the property: no prefixed module name appears in the run's own record.
+        # This keeps working when someone adds `cvdp_something_new.py` tomorrow,
+        # which a fixed list never would.
+        offenders = re.findall(
+            r"\b((?:cvdp|rtllm|verilogeval)_[a-z0-9_]+)\b", blob)
+        assert not offenders, (
+            f"{proj.name} went through benchmark-specific program(s) "
+            f"{sorted(set(offenders))} — the solve path is supposed to be the "
+            f"general one")
 
 
 def test_a_reported_artefact_is_backed_by_a_passing_step(solved):
