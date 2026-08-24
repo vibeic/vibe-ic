@@ -1555,6 +1555,64 @@ def _analog_rtl_track_absent(project: Path,
             f"its top interface is not all-analog)")
 
 
+def _try_spec_artifact_registry_rtl(
+        project: Path, t0: float,
+        phase1_plain_text: str = "") -> Optional[StepResult]:
+    """Deterministic RTL straight from the prompt text, or None to defer.
+
+    Delegates to `deterministic_emit_chain`, which owns the ORDER. That chain
+    used to be re-assembled once per benchmark — in four tier pipelines and in
+    gates_atomic — each with its own order and its own idea of what counted as
+    solved, and four of the five ran the program AFTER an AI-authored file and
+    overwrote it. One chain, callable from anywhere, is what makes program-first
+    reachable from every entry rather than from one harness.
+
+    None means no emitter recognised the prompt, which is the handover to the
+    spec-to-rtl AI backup — a real answer, not a failure.
+    """
+    text = phase1_plain_text or ""
+    if not text.strip():
+        return None
+    try:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        import deterministic_emit_chain as _chain      # noqa: PLC0415
+    except ImportError:
+        return None
+
+    top = "chip_top"
+    ifc = ""
+    try:
+        _l9 = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if _l9.is_file():
+            ifc = _l9.read_text(errors="replace")
+            top = json.loads(ifc).get("top_module") or "chip_top"
+    except (OSError, ValueError):
+        pass
+
+    try:
+        kind, rtl = _chain.try_emit(text, ifc, top)
+    except Exception as exc:                            # noqa: BLE001
+        # Record it. A swallowed exception here is indistinguishable from
+        # "the prompt was not parse-complete", and sends the reader after the
+        # wrong thing.
+        return StepResult("rtl_gen", "SKIP", time.time() - t0,
+                          f"deterministic_emit_chain raised "
+                          f"({type(exc).__name__}: {exc}); deferring to the AI backup")
+    if not rtl:
+        return None
+    out_dir = project / "phase2" / "stage1" / "rtl"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{top}.sv"
+    out.write_text(rtl)
+    return StepResult(
+        "rtl_gen", "PASS", time.time() - t0,
+        f"deterministic emit from a parse-complete prompt via "
+        f"deterministic_emit_chain[{kind}] -> {out.relative_to(project)}",
+        output_files=[str(out)],
+        extras={"deterministic_generator": kind,
+                "chain": _chain.which_emitters(), "source": "phase1_plain_text"})
+
+
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
     """since v0.1.10 — program-first RTL. If the project ships a structured RTL
     spec, route it through deterministic_rtl_dispatcher (FSM-table / truth-table /
@@ -5713,6 +5771,28 @@ def _step_rtl_gen_bound(
     project_binding.require_current()
     if _cp is not None:
         return _cp
+    # PROMPT-TEXT DETERMINISTIC EMIT — the general form of the same idea, and
+    # the one the runner was NOT using (2026-08-25).
+    #
+    # `spec_artifact_registry.generate(text, top)` turns a parse-complete prompt
+    # into exact RTL. It is general, neutrally named and already lives in
+    # programs/ — the runner just never called it on plain prompt text; only the
+    # narrow `_try_phase1_behavioral_fsm_rtl_bound` path used it.
+    #
+    # The one place that DID call it that way was `benchmark/gates_atomic.py`,
+    # and it called it in the wrong ORDER: that harness refuses to run until an
+    # LLM has already authored sample.sv ("MISSING {f} — agent must author it
+    # first", sys.exit(2)) and only THEN runs the generator, overwriting the
+    # author's work. Program-first is structurally impossible in that shape —
+    # the program can only ever run second. Calling it HERE, before the
+    # spec-to-rtl waive, is what makes program-first actually first, for every
+    # entry point rather than only inside one benchmark harness.
+    project_binding.require_current()
+    _sar = _try_spec_artifact_registry_rtl(
+        project, t0, phase1_plain_text=_phase1_plain.text)
+    project_binding.require_current()
+    if _sar is not None:
+        return _sar
     # A strictly recognized behavioral Moore FSM may live only in the original
     # Phase-1 prompt/doc (before an L-doc extractor has materialized a structured
     # rtl_spec).  Give that prose the same registry-backed deterministic path,
