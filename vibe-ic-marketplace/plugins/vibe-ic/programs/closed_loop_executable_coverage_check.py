@@ -20,6 +20,11 @@ to read the flow. It asks the repository a question it can answer today:
 and it refuses to let an edge that nothing can take be reported as a closed-loop
 success.
 
+ENFORCEMENT: BLOCKING WHEN INVOKED. A finding returns rc 1 to the caller; an
+unmeasurable input returns rc 2, never a clean rc 0. The canonical one-shot
+runner does not currently invoke this census, so this statement does not claim
+that the whole flow stops on it. Wiring that caller is a separate change.
+
 THE FOUR CLASSES ARE NESTED TIERS, NOT A PALETTE
 ================================================
 Each class subsumes the one before it. That is what makes the census cheap to
@@ -29,9 +34,9 @@ this program VERIFIES each citation against the tree rather than believing it.
     DECLARED_ONLY    the flow declares the edge and NOTHING re-enters the
                      fallback step when the trigger fires. The default, and the
                      value an edge gets by having no registry entry at all.
-    EXECUTABLE       a named program re-enters the fallback step, or refuses the
-                     candidate the fallback exists to reject, when the trigger
-                     fires.
+    EXECUTABLE       a named program re-enters the fallback step when the
+                     trigger fires. Refusing a candidate is a blocking gate,
+                     not execution of the declared fallback edge.
     REMEASURED       EXECUTABLE, and the same program re-measures the metric the
                      trigger names AFTER acting — so "it ran" and "it helped"
                      are different questions. (`eco_loop_audit` learned this the
@@ -70,7 +75,19 @@ never leave a stale promotion behind.
 Citations are STRUCTURAL, not textual. `call_in_loop` asks the AST whether the
 callee is called from inside a loop in the named caller; `calls` asks whether it
 is called at all. A substring match would survive the loop being deleted around
-it, which is the failure mode this whole file is about.
+it, which is the failure mode this whole file is about. Promotion roles reject
+mere `file_exists`/`defines` evidence, and an actuator call must match the
+canonical runner entrypoint for the YAML edge's actual `fallback_to`. It must
+also be controlled by the SOURCE step's own trigger result in the same live
+retry path; a sibling edge that happens to share the fallback target cannot
+lend its loop. Constant-false branches/loops, nested dead functions, and a
+receiver method that merely shares the callee suffix are excluded. Guarded
+actuators additionally pin the boolean trigger polarity, reject overwritten
+trigger receipts (including aliases/method mutation), and stop at unconditional
+path terminators. Loop retries pin the terminal status set. REMEASURED evidence
+must occur after the fallback on the same guarded branch, or via a reachable
+loop back-edge into the measurement. Thus a
+registry label beside an unrelated call cannot promote itself to EXECUTABLE.
 
 AN EDGE WITH NO ENTRY IS DECLARED_ONLY, DELIBERATELY
 ====================================================
@@ -100,6 +117,7 @@ Exit codes (docs/PPA_INTERFACES.md §1):
   2  the question could not be put (no/unreadable flow, zero declarations,
      unreadable claim document) — printed as [CANNOT CHECK] / [REFUSE]
   3  bad invocation
+
 """
 from __future__ import annotations
 
@@ -123,7 +141,7 @@ except Exception:  # pragma: no cover - defensive; never silently skip the write
     _atomic_write_json = None  # type: ignore
 
 TOOL = "closed_loop_executable_coverage_check"
-VERSION = "1.0.0"
+VERSION = "1.4.0"
 SCHEMA = "vibeic.ppa.closed_loop_coverage.v1"
 
 RC_OK, RC_FINDINGS, RC_NOT_MEASURED, RC_BAD_INVOCATION = 0, 1, 2, 3
@@ -156,6 +174,52 @@ TIER_EVIDENCE: Dict[str, Tuple[str, ...]] = {
 EVIDENCE_ROLES: Tuple[str, ...] = ("actuate", "remeasure", "rollback",
                                    "rollback_test")
 
+#: Evidence that promotes a tier must prove executable structure.  Mere file or
+#: symbol presence can be useful provenance, but it cannot prove that an
+#: actuator, measurement, or undo is actually invoked.
+ROLE_CITATION_KINDS: Dict[str, Tuple[str, ...]] = {
+    "actuate": ("fallback_after_trigger_in_loop",
+                "fallback_guarded_by_trigger"),
+    "remeasure": ("remeasure_after_fallback_in_loop",
+                  "remeasure_after_fallback_guarded_by_trigger"),
+    "rollback": ("calls", "call_in_loop"),
+    "rollback_test": ("calls", "call_in_loop"),
+}
+
+#: A remeasurement proof is only evidence for an edge when it extends one of
+#: that edge's accepted actuation proofs.  Matching just the measurement call is
+#: insufficient: a sibling retry path in the same caller must not lend its
+#: trigger, actuator, or polarity to this edge.
+REMEASURE_ACTUATION_KIND: Dict[str, str] = {
+    "remeasure_after_fallback_in_loop": "fallback_after_trigger_in_loop",
+    "remeasure_after_fallback_guarded_by_trigger":
+        "fallback_guarded_by_trigger",
+}
+
+# Bounded structural proof, not a symbolic executor. Refuse promotion before
+# independent branch facts can grow exponentially.
+MAX_FLOW_STATES = 256
+
+#: Canonical runner entrypoints for flow steps that a registered actuator may
+#: re-enter.  The verifier compares the actuator's AST-proven callee with the
+#: YAML edge's actual `fallback_to`; the registry cannot promote itself merely
+#: by spelling `actuation_form: re_execute` beside an unrelated call.
+STEP_EXECUTION_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
+    "1": ("step_rtl_gen",),
+    "32": ("_run_eco_repair",),
+}
+
+#: Canonical observation/decision call for the SOURCE step.  A fallback call is
+#: evidence for an edge only when the same control path first observes this
+#: step's result.  This prevents `2 -> 1` from borrowing step 4's genuine
+#: `step_reference_tb -> step_rtl_gen` retry merely because both edges target 1.
+STEP_TRIGGER_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
+    "2": ("step_crosslayer_rewrite_fidelity",),
+    "4": ("step_reference_tb",),
+    "23": ("_eco_dec.decide",),
+    "32": ("_eco_dec.decide",),
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # THE REGISTRY
@@ -177,18 +241,26 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # FAIL_ECO_INERT instead of burning the counter.
     "4": {
         "class": REMEASURED,
+        "actuation_form": "re_execute",
         "why": ("design_one_shot_runner.main re-runs step_rtl_gen (flow step 1) "
                 "on a reference-TB failure and re-runs the testbench afterwards"),
         "evidence": {
             "actuate": [
-                {"kind": "call_in_loop",
+                {"kind": "fallback_after_trigger_in_loop",
                  "file": "programs/design_one_shot_runner.py",
-                 "caller": "main", "callee": "step_rtl_gen"},
+                 "caller": "main", "trigger_callee": "step_reference_tb",
+                 "trigger_field": "status",
+                 "terminal_values": ["PASS", "SKIP", "WAIVED"],
+                 "callee": "step_rtl_gen"},
             ],
             "remeasure": [
-                {"kind": "call_in_loop",
+                {"kind": "remeasure_after_fallback_in_loop",
                  "file": "programs/design_one_shot_runner.py",
-                 "caller": "main", "callee": "step_reference_tb"},
+                 "caller": "main", "trigger_callee": "step_reference_tb",
+                 "trigger_field": "status",
+                 "terminal_values": ["PASS", "SKIP", "WAIVED"],
+                 "actuator_callee": "step_rtl_gen",
+                 "callee": "step_reference_tb"},
             ],
         },
         # The rollback tier is NOT claimed: the loop never reverts a
@@ -206,20 +278,28 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # is step 23's own measurement — and runs the repair.
     "23": {
         "class": REMEASURED,
+        "actuation_form": "re_execute",
         "why": ("phase3_one_shot_runner.step_canonicalize_artefacts fires "
                 "_run_eco_repair on a multi-corner OCV violation and re-measures "
                 "the same OCV views on the repaired netlist"),
         "evidence": {
             "actuate": [
-                {"kind": "calls",
+                {"kind": "fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
+                 "trigger_callee": "_eco_dec.decide",
+                 "trigger_field": "eco_needed",
+                 "trigger_value": True,
                  "callee": "_run_eco_repair"},
             ],
             "remeasure": [
-                {"kind": "calls",
+                {"kind": "remeasure_after_fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
+                 "trigger_callee": "_eco_dec.decide",
+                 "trigger_field": "eco_needed",
+                 "trigger_value": True,
+                 "actuator_callee": "_run_eco_repair",
                  "callee": "_measure_posteco_mcorner_ocv"},
             ],
         },
@@ -236,20 +316,28 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # about the tree, not a reason to count one edge twice or drop one.
     "32": {
         "class": REMEASURED,
+        "actuation_form": "re_execute",
         "why": ("the same auto-trigger; step 32 is where it runs, so the edge "
                 "re-enters the step that owns the actuator"),
         "shares_actuator_with": "23",
         "evidence": {
             "actuate": [
-                {"kind": "calls",
+                {"kind": "fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
+                 "trigger_callee": "_eco_dec.decide",
+                 "trigger_field": "eco_needed",
+                 "trigger_value": True,
                  "callee": "_run_eco_repair"},
             ],
             "remeasure": [
-                {"kind": "calls",
+                {"kind": "remeasure_after_fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
+                 "trigger_callee": "_eco_dec.decide",
+                 "trigger_field": "eco_needed",
+                 "trigger_value": True,
+                 "actuator_callee": "_run_eco_repair",
                  "callee": "_measure_posteco_mcorner_ocv"},
             ],
         },
@@ -308,38 +396,240 @@ def _parse(path: Path) -> Optional[ast.Module]:
 
 
 def _find_function(tree: ast.Module, name: str) -> Optional[ast.AST]:
-    """The OUTERMOST def of *name*.
+    """Return only the module-level runner entrypoint named *name*.
 
-    Outermost on purpose: a nested helper that happens to share the name of a
-    module-level function would otherwise satisfy a citation aimed at the real
-    one. Walk depth-first from the module body and take the first match at the
-    shallowest depth.
+    A class method or nested helper is not callable as the runner entrypoint
+    named by a citation.  "Outermost" was still too weak: when no module-level
+    definition existed it selected a class/nested decoy at the shallowest
+    available depth and promoted evidence that runtime could never enter.
     """
-    best: Optional[ast.AST] = None
-    best_depth = 1 << 30
+    return next((stmt for stmt in tree.body
+                 if isinstance(stmt, (ast.FunctionDef,
+                                      ast.AsyncFunctionDef))
+                 and stmt.name == name), None)
 
-    def walk(node: ast.AST, depth: int) -> None:
-        nonlocal best, best_depth
+
+def _qualified_name(node: ast.AST) -> Optional[str]:
+    """Exact call target (`name` or `receiver.method`), never suffix-only."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _qualified_name(node.value)
+        return f"{base}.{node.attr}" if base else None
+    return None
+
+
+def _static_truth(node: ast.AST) -> Optional[bool]:
+    """Truth of deliberately simple constants; `None` means runtime value."""
+    if isinstance(node, ast.Constant):
+        return bool(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _static_truth(node.operand)
+        return (not inner) if inner is not None else None
+    if isinstance(node, ast.BoolOp):
+        values = [_static_truth(value) for value in node.values]
+        if isinstance(node.op, ast.Or):
+            if any(value is True for value in values):
+                return True
+            return False if all(value is False for value in values) else None
+        if isinstance(node.op, ast.And):
+            if any(value is False for value in values):
+                return False
+            return True if all(value is True for value in values) else None
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 \
+            and len(node.comparators) == 1 \
+            and isinstance(node.left, ast.Constant) \
+            and isinstance(node.comparators[0], ast.Constant):
+        left, right = node.left.value, node.comparators[0].value
+        op = node.ops[0]
+        try:
+            if isinstance(op, (ast.Eq, ast.Is)):
+                return left == right
+            if isinstance(op, (ast.NotEq, ast.IsNot)):
+                return left != right
+            if isinstance(op, ast.Lt):
+                return left < right
+            if isinstance(op, ast.LtE):
+                return left <= right
+            if isinstance(op, ast.Gt):
+                return left > right
+            if isinstance(op, ast.GtE):
+                return left >= right
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _static_iterable_empty(node: ast.AST) -> Optional[bool]:
+    """Whether a literal iterable is certainly empty/non-empty."""
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return len(node.elts) == 0
+    if isinstance(node, ast.Dict):
+        return len(node.keys) == 0
+    if isinstance(node, (ast.Constant, ast.Str, ast.Bytes)):
+        value = getattr(node, "value", None)
+        if isinstance(value, (str, bytes, tuple)):
+            return len(value) == 0
+    return None
+
+
+def _statement_has_current_loop_break(stmt: ast.stmt) -> bool:
+    """A reachable ``break`` owned by the surrounding loop, not a nested one."""
+    if isinstance(stmt, ast.Break):
+        return True
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef,
+                         ast.ClassDef, ast.Lambda,
+                         ast.While, ast.For, ast.AsyncFor)):
+        return False
+    if isinstance(stmt, ast.If):
+        truth = _static_truth(stmt.test)
+        branches = ([stmt.body] if truth is True else [stmt.orelse]
+                    if truth is False else [stmt.body, stmt.orelse])
+        return any(_block_has_current_loop_break(list(branch))
+                   for branch in branches)
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        return _block_has_current_loop_break(list(stmt.body))
+    if isinstance(stmt, ast.Try):
+        blocks = [list(stmt.body), list(stmt.orelse), list(stmt.finalbody)]
+        blocks.extend(list(handler.body) for handler in stmt.handlers)
+        return any(_block_has_current_loop_break(block) for block in blocks)
+    if isinstance(stmt, ast.Match):
+        return any(_block_has_current_loop_break(list(case.body))
+                   for case in stmt.cases)
+    return False
+
+
+def _block_has_current_loop_break(statements: List[ast.stmt]) -> bool:
+    for stmt in statements:
+        if _statement_has_current_loop_break(stmt):
+            return True
+        if _statement_always_terminates(stmt):
+            break
+    return False
+
+
+def _statement_always_terminates(stmt: ast.stmt) -> bool:
+    if isinstance(stmt, (ast.Break, ast.Continue, ast.Return, ast.Raise)):
+        return True
+    if isinstance(stmt, ast.Assert) and _static_truth(stmt.test) is False:
+        return True
+    if isinstance(stmt, ast.If):
+        truth = _static_truth(stmt.test)
+        if truth is True:
+            return _block_always_terminates(stmt.body)
+        if truth is False:
+            return _block_always_terminates(stmt.orelse)
+        return bool(stmt.body and stmt.orelse
+                    and _block_always_terminates(stmt.body)
+                    and _block_always_terminates(stmt.orelse))
+    if isinstance(stmt, ast.While):
+        return (_static_truth(stmt.test) is True
+                and not _block_has_current_loop_break(list(stmt.body)))
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        return _block_always_terminates(list(stmt.body))
+    return False
+
+
+def _block_always_terminates(statements: List[ast.stmt]) -> bool:
+    """A bounded fall-through proof used to exclude calls after terminators."""
+    for stmt in statements:
+        if _statement_always_terminates(stmt):
+            return True
+    return False
+
+
+def _reachable_prefix(statements: List[ast.stmt]) -> List[ast.stmt]:
+    out: List[ast.stmt] = []
+    for stmt in statements:
+        out.append(stmt)
+        if _statement_always_terminates(stmt):
+            break
+    return out
+
+
+class _LiveScanner:
+    """Walk executable structure without laundering obvious dead code.
+
+    Nested function/class/lambda bodies do not execute merely because their
+    definition is inside the caller.  Constant-false branches and loops are
+    excluded.  This is intentionally a bounded structural proof, not a Python
+    interpreter; anything it cannot decide is retained and must be challenged
+    by the stronger trigger/control-path citation below.
+    """
+
+    def __init__(self) -> None:
+        self.calls: List[Tuple[str, ast.Call]] = []
+        self.loops: List[ast.AST] = []
+        self.breaks = 0
+
+    def statements(self, statements: List[ast.stmt]) -> None:
+        for stmt in statements:
+            self.node(stmt)
+            if _statement_always_terminates(stmt):
+                break
+
+    def node(self, node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.Call):
+            target = _qualified_name(node.func)
+            if target is not None:
+                self.calls.append((target, node))
+        if isinstance(node, ast.Break):
+            self.breaks += 1
+            return
+        if isinstance(node, ast.If):
+            self.node(node.test)
+            truth = _static_truth(node.test)
+            if truth is True:
+                self.statements(node.body)
+            elif truth is False:
+                self.statements(node.orelse)
+            else:
+                self.statements(node.body)
+                self.statements(node.orelse)
+            return
+        if isinstance(node, ast.While):
+            self.node(node.test)
+            truth = _static_truth(node.test)
+            if truth is not False:
+                self.loops.append(node)
+                self.statements(node.body)
+            if truth is not True:
+                self.statements(node.orelse)
+            return
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            self.node(node.target)
+            self.node(node.iter)
+            empty = _static_iterable_empty(node.iter)
+            if empty is not True:
+                self.loops.append(node)
+                self.statements(node.body)
+            if empty is not False:
+                self.statements(node.orelse)
+            return
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if child.name == name and depth < best_depth:
-                    best, best_depth = child, depth
-            walk(child, depth + 1)
+            self.node(child)
 
-    walk(tree, 0)
-    return best
+
+def _scan(node: ast.AST) -> _LiveScanner:
+    scanner = _LiveScanner()
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        scanner.statements(node.body)
+    else:
+        scanner.node(node)
+    return scanner
+
+
+def _scan_statements(statements: List[ast.stmt]) -> _LiveScanner:
+    scanner = _LiveScanner()
+    scanner.statements(statements)
+    return scanner
 
 
 def _called_names(node: ast.AST) -> List[str]:
-    out: List[str] = []
-    for n in ast.walk(node):
-        if isinstance(n, ast.Call):
-            f = n.func
-            if isinstance(f, ast.Name):
-                out.append(f.id)
-            elif isinstance(f, ast.Attribute):
-                out.append(f.attr)
-    return out
+    return [name for name, _ in _scan(node).calls]
 
 
 def _calls_inside_loop(fn: ast.AST, callee: str) -> bool:
@@ -348,12 +638,1037 @@ def _calls_inside_loop(fn: ast.AST, callee: str) -> bool:
     Scoped to the loop BODY (and its `orelse`), not the whole function, because
     the point of the citation is that the call repeats.
     """
-    for n in ast.walk(fn):
-        if isinstance(n, (ast.While, ast.For, ast.AsyncFor)):
-            for stmt in list(n.body) + list(n.orelse):
-                if callee in _called_names(stmt):
-                    return True
+    for loop in _scan(fn).loops:
+        if callee in [name for name, _ in
+                      _scan_statements(list(loop.body)).calls]:
+            return True
     return False
+
+
+def _assigned_call(stmt: ast.stmt,
+                   callee: str) -> Optional[str]:
+    """Name assigned directly from the exact call target, else `None`."""
+    value: Optional[ast.AST] = None
+    targets: List[ast.AST] = []
+    if isinstance(stmt, ast.Assign):
+        value, targets = stmt.value, list(stmt.targets)
+    elif isinstance(stmt, ast.AnnAssign):
+        value, targets = stmt.value, [stmt.target]
+    if not isinstance(value, ast.Call) or _qualified_name(value.func) != callee:
+        return None
+    return next((t.id for t in targets if isinstance(t, ast.Name)), None)
+
+
+def _test_reads_result(test: ast.AST, result: str,
+                       field: Optional[str] = None) -> bool:
+    """Whether a guard reads the trigger result (and optional exact field)."""
+    if field is None:
+        return any(isinstance(n, ast.Name) and n.id == result
+                   for n in ast.walk(test))
+    for n in ast.walk(test):
+        if isinstance(n, ast.Attribute) and n.attr == field \
+                and isinstance(n.value, ast.Name) and n.value.id == result:
+            return True
+        if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) \
+                and n.value.id == result:
+            sl = n.slice
+            if isinstance(sl, ast.Constant) and sl.value == field:
+                return True
+    return False
+
+
+def _field_ref(node: ast.AST, result: str, field: str) -> bool:
+    if isinstance(node, ast.Attribute):
+        return (node.attr == field and isinstance(node.value, ast.Name)
+                and node.value.id == result)
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
+            and node.value.id == result:
+        return isinstance(node.slice, ast.Constant) \
+            and node.slice.value == field
+    return False
+
+
+def _field_truth_for_body(test: ast.AST, result: str,
+                          field: str) -> Optional[bool]:
+    """Exact field value that selects an `if` body; complex tests refuse."""
+    if _field_ref(test, result, field):
+        return True
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _field_truth_for_body(test.operand, result, field)
+        return (not inner) if inner is not None else None
+    if isinstance(test, ast.Compare) and len(test.ops) == 1 \
+            and len(test.comparators) == 1 \
+            and _field_ref(test.left, result, field) \
+            and isinstance(test.comparators[0], ast.Constant) \
+            and isinstance(test.comparators[0].value, bool):
+        value = bool(test.comparators[0].value)
+        if isinstance(test.ops[0], (ast.Eq, ast.Is)):
+            return value
+        if isinstance(test.ops[0], (ast.NotEq, ast.IsNot)):
+            return not value
+    return None
+
+
+def _target_writes_result(target: ast.AST, result: str) -> bool:
+    if isinstance(target, ast.Name):
+        return target.id == result
+    if isinstance(target, (ast.Attribute, ast.Subscript)):
+        value = target.value
+        return isinstance(value, ast.Name) and value.id == result
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_target_writes_result(elt, result) for elt in target.elts)
+    return False
+
+
+def _statement_writes_result(stmt: ast.AST, result: str) -> bool:
+    """Reject a trigger receipt overwritten before the guard consumes it."""
+    found = False
+
+    def walk(node: ast.AST) -> None:
+        nonlocal found
+        if found or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef, ast.Lambda)):
+            return
+        targets: List[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        elif isinstance(node, ast.AugAssign):
+            targets = [node.target]
+        elif isinstance(node, ast.NamedExpr):
+            targets = [node.target]
+        elif isinstance(node, ast.Delete):
+            targets = list(node.targets)
+        if any(_target_writes_result(t, result) for t in targets):
+            found = True
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(stmt)
+    return found
+
+
+def _contains_name(node: ast.AST, name: str) -> bool:
+    return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(node))
+
+
+def _statement_taints_result(stmt: ast.AST, result: str,
+                             allowed_receivers: Tuple[str, ...] = ()) -> bool:
+    """Conservative alias/effect check between trigger receipt and guard."""
+    if _statement_writes_result(stmt, result):
+        return True
+    for node in ast.walk(stmt):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef, ast.Lambda)) and node is not stmt:
+            continue
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            targets = (list(node.targets) if isinstance(node, ast.Assign)
+                       else [node.target])
+            if value is not None and _contains_name(value, result) \
+                    and not any(_target_writes_result(t, result)
+                                for t in targets):
+                return True
+        if not isinstance(node, ast.Call):
+            continue
+        target = _qualified_name(node.func) or ""
+        if target.startswith(result + "."):
+            return True
+        if any(_contains_name(arg, result)
+               for arg in list(node.args) + [kw.value for kw in node.keywords]) \
+                and target not in allowed_receivers:
+            return True
+    return False
+
+
+def _target_writes_fact(target: ast.AST, result: str, field: str) -> bool:
+    if isinstance(target, ast.Name):
+        return target.id == result
+    if isinstance(target, ast.Attribute):
+        return (target.attr == field and isinstance(target.value, ast.Name)
+                and target.value.id == result)
+    if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) \
+            and target.value.id == result:
+        return (isinstance(target.slice, ast.Constant)
+                and target.slice.value == field)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_target_writes_fact(elt, result, field)
+                   for elt in target.elts)
+    return False
+
+
+def _contains_bare_result_reference(node: ast.AST, result: str) -> bool:
+    """The receipt object itself is carried elsewhere, not merely a field."""
+    if isinstance(node, ast.Name):
+        return node.id == result
+    if isinstance(node, (ast.Attribute, ast.Subscript)):
+        return False
+    return any(_contains_bare_result_reference(child, result)
+               for child in ast.iter_child_nodes(node))
+
+
+def _statement_taints_fact(stmt: ast.AST, result: str, field: str,
+                           allowed_receivers: Tuple[str, ...] = ()) -> bool:
+    """Invalidate one established receipt field without rejecting other fields."""
+    tainted = False
+
+    def walk(node: ast.AST) -> None:
+        nonlocal tainted
+        if tainted:
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definition_time = (list(node.decorator_list)
+                               + list(node.args.defaults)
+                               + [value for value in node.args.kw_defaults
+                                  if value is not None])
+            if node.returns is not None:
+                definition_time.append(node.returns)
+            for child in definition_time:
+                walk(child)
+            return
+        if isinstance(node, ast.ClassDef):
+            for child in (list(node.decorator_list) + list(node.bases)
+                          + [keyword.value for keyword in node.keywords]):
+                walk(child)
+            return
+        if isinstance(node, ast.Lambda):
+            for child in (list(node.args.defaults)
+                          + [value for value in node.args.kw_defaults
+                             if value is not None]):
+                walk(child)
+            return
+        targets: List[ast.AST] = []
+        value: Optional[ast.AST] = None
+        if isinstance(node, ast.Assign):
+            targets, value = list(node.targets), node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.AugAssign):
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.NamedExpr):
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.Delete):
+            targets = list(node.targets)
+        if any(_target_writes_fact(target, result, field)
+               for target in targets):
+            tainted = True
+            return
+        if value is not None and _contains_bare_result_reference(value, result):
+            tainted = True
+            return
+        if isinstance(node, ast.Call):
+            target = _qualified_name(node.func) or ""
+            if target.startswith(result + "."):
+                tainted = True
+                return
+            if (any(_contains_bare_result_reference(arg, result)
+                    for arg in list(node.args)
+                    + [kw.value for kw in node.keywords])
+                    and target not in allowed_receivers):
+                tainted = True
+                return
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(stmt)
+    return tainted
+
+
+def _literal_collection(node: ast.AST) -> Optional[Tuple[Any, ...]]:
+    if not isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return None
+    values: List[Any] = []
+    for elt in node.elts:
+        if not isinstance(elt, ast.Constant):
+            return None
+        values.append(elt.value)
+    return tuple(values)
+
+
+def _positive_membership_guard(test: ast.AST, result: str, field: str,
+                               terminal_values: Tuple[Any, ...]) -> bool:
+    """The terminal set being true must be sufficient to select the body."""
+    if isinstance(test, ast.Compare) and len(test.ops) == 1 \
+            and len(test.comparators) == 1 \
+            and isinstance(test.ops[0], ast.In) \
+            and _field_ref(test.left, result, field):
+        actual = _literal_collection(test.comparators[0])
+        return actual is not None and set(actual) == set(terminal_values)
+    if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
+        # `terminal OR retry_budget_exhausted`: terminal membership is enough
+        # to exit.  A statically-true sibling would make fallback unreachable.
+        if any(_static_truth(value) is True for value in test.values):
+            return False
+        return any(_positive_membership_guard(value, result, field,
+                                               terminal_values)
+                   for value in test.values)
+    return False
+
+
+def _known_test_truth(
+        test: ast.AST,
+        known_bool: Optional[Tuple[str, str, bool]],
+        excluded_membership: Optional[Tuple[str, str, Tuple[Any, ...]]],
+        ) -> Optional[bool]:
+    """Evaluate a guard from facts established by the owning trigger branch."""
+    truth = _static_truth(test)
+    if truth is not None:
+        return truth
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _known_test_truth(
+            test.operand, known_bool, excluded_membership)
+        return (not inner) if inner is not None else None
+    if isinstance(test, ast.BoolOp):
+        values = [_known_test_truth(
+            value, known_bool, excluded_membership)
+                  for value in test.values]
+        if isinstance(test.op, ast.Or):
+            if any(value is True for value in values):
+                return True
+            return False if all(value is False for value in values) else None
+        if isinstance(test.op, ast.And):
+            if any(value is False for value in values):
+                return False
+            return True if all(value is True for value in values) else None
+    if known_bool is not None:
+        result, field, value = known_bool
+        body_value = _field_truth_for_body(test, result, field)
+        if body_value is not None:
+            return body_value == value
+    if excluded_membership is not None \
+            and isinstance(test, ast.Compare) \
+            and len(test.ops) == 1 and len(test.comparators) == 1:
+        result, field, excluded = excluded_membership
+        if _field_ref(test.left, result, field):
+            actual = _literal_collection(test.comparators[0])
+            if actual is not None and set(actual) == set(excluded):
+                if isinstance(test.ops[0], ast.In):
+                    return False
+                if isinstance(test.ops[0], ast.NotIn):
+                    return True
+    return None
+
+
+def _expression_call_targets(node: Optional[ast.AST]) -> List[str]:
+    """Call targets in evaluation order for straight-line expressions."""
+    if node is None:
+        return []
+    if isinstance(node, (ast.Lambda, ast.BoolOp, ast.IfExp,
+                         ast.ListComp, ast.SetComp, ast.DictComp,
+                         ast.GeneratorExp)):
+        # Short-circuit/comprehension control flow needs an explicit proof;
+        # flattening it would recreate the mutually-exclusive-path bug.
+        return []
+    if isinstance(node, ast.Call):
+        out: List[str] = []
+        out.extend(_expression_call_targets(node.func))
+        for arg in node.args:
+            out.extend(_expression_call_targets(arg))
+        for kw in node.keywords:
+            out.extend(_expression_call_targets(kw.value))
+        target = _qualified_name(node.func)
+        if target is not None:
+            out.append(target)
+        return out
+    out = []
+    for child in ast.iter_child_nodes(node):
+        out.extend(_expression_call_targets(child))
+    return out
+
+
+def _straight_statement_calls(stmt: ast.stmt) -> List[str]:
+    if isinstance(stmt, ast.Assign):
+        return _expression_call_targets(stmt.value)
+    if isinstance(stmt, ast.AnnAssign):
+        return _expression_call_targets(stmt.value)
+    if isinstance(stmt, ast.AugAssign):
+        return _expression_call_targets(stmt.value)
+    if isinstance(stmt, ast.Expr):
+        return _expression_call_targets(stmt.value)
+    if isinstance(stmt, (ast.Return, ast.Raise)):
+        value = stmt.value if isinstance(stmt, ast.Return) else stmt.exc
+        return _expression_call_targets(value)
+    return []
+
+
+_EXPR_FACT_PREFIX = "@expr:"
+_ALIAS_FACT_PREFIX = "@alias:"
+_EXPR_FACT_SEPARATOR = "\0@"
+
+
+def _value_predicate_key(node: ast.AST) -> Optional[str]:
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return _qualified_name(node)
+    if isinstance(node, ast.Subscript):
+        base = _qualified_name(node.value)
+        item = node.slice
+        if (base is not None
+                and isinstance(item, ast.Constant)
+                and isinstance(item.value, (str, int))):
+            return f"{base}[{item.value!r}]"
+    return None
+
+
+def _expression_dependencies(node: ast.AST) -> List[str]:
+    """Maximal value references whose writes invalidate an expression fact."""
+    direct = _value_predicate_key(node)
+    if direct is not None:
+        return [direct]
+    return sorted({dep for child in ast.iter_child_nodes(node)
+                   for dep in _expression_dependencies(child)})
+
+
+def _expression_fact_key(node: ast.AST, body: str) -> str:
+    deps = "\0".join(_expression_dependencies(node))
+    return f"{_EXPR_FACT_PREFIX}{deps}{_EXPR_FACT_SEPARATOR}{body}"
+
+
+def _expression_fact_dependencies(key: str) -> List[str]:
+    if not key.startswith(_EXPR_FACT_PREFIX) \
+            or _EXPR_FACT_SEPARATOR not in key:
+        return []
+    encoded = key[len(_EXPR_FACT_PREFIX):].split(
+        _EXPR_FACT_SEPARATOR, 1)[0]
+    return encoded.split("\0") if encoded else []
+
+
+def _predicate_ref(node: ast.AST) -> Optional[Tuple[str, bool]]:
+    """Canonical bounded predicate identity plus its positive polarity.
+
+    Complementary comparisons share one key with opposite polarity.  Compound
+    boolean expressions also retain their whole-expression identity: a false
+    ``a and b`` cannot be decomposed into one particular false operand, but it
+    still contradicts a later true ``a and b``.
+    """
+    direct = _value_predicate_key(node)
+    if direct is not None:
+        return direct, True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        ref = _predicate_ref(node.operand)
+        return (ref[0], not ref[1]) if ref is not None else None
+    if (isinstance(node, ast.Compare)
+            and len(node.ops) == 1 and len(node.comparators) == 1):
+        pairs = {
+            ast.Eq: ("eq", True), ast.NotEq: ("eq", False),
+            ast.Is: ("is", True), ast.IsNot: ("is", False),
+            ast.Lt: ("lt", True), ast.GtE: ("lt", False),
+            ast.LtE: ("le", True), ast.Gt: ("le", False),
+            ast.In: ("in", True), ast.NotIn: ("in", False),
+        }
+        pair = next((value for cls, value in pairs.items()
+                     if isinstance(node.ops[0], cls)), None)
+        if pair is not None:
+            family, polarity = pair
+            left = ast.dump(node.left, annotate_fields=True,
+                            include_attributes=False)
+            right = ast.dump(node.comparators[0], annotate_fields=True,
+                             include_attributes=False)
+            return _expression_fact_key(
+                node, f"{family}:{left}:{right}"), polarity
+    if isinstance(node, ast.BoolOp):
+        return (_expression_fact_key(
+            node, ast.dump(node, annotate_fields=True,
+                           include_attributes=False)), True)
+    return None
+
+
+def _predicate_key(node: ast.AST) -> Optional[str]:
+    ref = _predicate_ref(node)
+    return ref[0] if ref is not None else None
+
+
+def _fact_truth(node: ast.AST,
+                facts: Dict[str, bool]) -> Optional[bool]:
+    ref = _predicate_ref(node)
+    if ref is None or ref[0] not in facts:
+        return None
+    value = facts[ref[0]]
+    return value if ref[1] else not value
+
+
+def _path_test_truth(test: ast.AST, facts: Dict[str, bool]) -> Optional[bool]:
+    """Evaluate only predicates established on this concrete proof path."""
+    truth = _static_truth(test)
+    if truth is not None:
+        return truth
+    known = _fact_truth(test, facts)
+    if known is not None:
+        return known
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _path_test_truth(test.operand, facts)
+        return (not inner) if inner is not None else None
+    if isinstance(test, ast.BoolOp):
+        values = [_path_test_truth(value, facts) for value in test.values]
+        if isinstance(test.op, ast.And):
+            if any(value is False for value in values):
+                return False
+            return True if all(value is True for value in values) else None
+        if isinstance(test.op, ast.Or):
+            if any(value is True for value in values):
+                return True
+            return False if all(value is False for value in values) else None
+    if (isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and isinstance(test.comparators[0].value, bool)):
+        key = _predicate_key(test.left)
+        known = facts.get(key) if key is not None else None
+        if known is not None:
+            expected = test.comparators[0].value
+            if isinstance(test.ops[0], (ast.Eq, ast.Is)):
+                return known is expected
+            if isinstance(test.ops[0], (ast.NotEq, ast.IsNot)):
+                return known is not expected
+    return None
+
+
+def _combined_test_truth(
+        test: ast.AST, facts: Dict[str, bool],
+        known_bool: Optional[Tuple[str, str, bool]],
+        excluded_membership: Optional[Tuple[str, str, Tuple[Any, ...]]],
+        ) -> Optional[bool]:
+    """Three-valued truth from trigger facts plus path-local predicates."""
+    known = _known_test_truth(test, known_bool, excluded_membership)
+    if known is not None:
+        return known
+    fact_truth = _fact_truth(test, facts)
+    if fact_truth is not None:
+        return fact_truth
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _combined_test_truth(
+            test.operand, facts, known_bool, excluded_membership)
+        return (not inner) if inner is not None else None
+    if isinstance(test, ast.BoolOp):
+        values = [_combined_test_truth(
+            value, facts, known_bool, excluded_membership)
+                  for value in test.values]
+        if isinstance(test.op, ast.And):
+            if any(value is False for value in values):
+                return False
+            return True if all(value is True for value in values) else None
+        if isinstance(test.op, ast.Or):
+            if any(value is True for value in values):
+                return True
+            return False if all(value is False for value in values) else None
+    return _path_test_truth(test, facts)
+
+
+def _path_facts_for_truth(test: ast.AST,
+                          truth: bool) -> Dict[str, bool]:
+    """Facts guaranteed by selecting one side of a bounded predicate."""
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _path_facts_for_truth(test.operand, not truth)
+    ref = _predicate_ref(test)
+    guaranteed: Dict[str, bool] = {}
+    if ref is not None:
+        guaranteed[ref[0]] = truth if ref[1] else not truth
+    if isinstance(test, ast.BoolOp):
+        selected = ((isinstance(test.op, ast.And) and truth)
+                    or (isinstance(test.op, ast.Or) and not truth))
+        if not selected:
+            return guaranteed
+        merged = dict(guaranteed)
+        for value in test.values:
+            for name, polarity in _path_facts_for_truth(value, truth).items():
+                if name in merged and merged[name] is not polarity:
+                    return {}
+                merged[name] = polarity
+        return merged
+    if (isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and isinstance(test.comparators[0].value, bool)):
+        key = _predicate_key(test.left)
+        if key is not None:
+            expected = test.comparators[0].value
+            equal = isinstance(test.ops[0], (ast.Eq, ast.Is))
+            unequal = isinstance(test.ops[0], (ast.NotEq, ast.IsNot))
+            if equal or unequal:
+                return {key: expected is (truth if equal else not truth)}
+    return guaranteed
+
+
+def _target_predicate_keys(target: ast.AST) -> List[str]:
+    key = _predicate_key(target)
+    if key is not None:
+        return [key]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [key for elt in target.elts
+                for key in _target_predicate_keys(elt)]
+    return []
+
+
+def _target_invalidates_fact(target_key: str, fact_key: str) -> bool:
+    if (fact_key == target_key
+            or fact_key.startswith(target_key + ".")
+            or fact_key.startswith(target_key + "[")):
+        return True
+    if fact_key.startswith(_EXPR_FACT_PREFIX):
+        return any(dep == target_key
+                   or dep.startswith(target_key + ".")
+                   or dep.startswith(target_key + "[")
+                   for dep in _expression_fact_dependencies(fact_key))
+    return False
+
+
+def _alias_fact(left: str, right: str) -> str:
+    first, second = sorted((left, right))
+    return f"{_ALIAS_FACT_PREFIX}{first}\0{second}"
+
+
+def _alias_pair(key: str) -> Optional[Tuple[str, str]]:
+    if not key.startswith(_ALIAS_FACT_PREFIX):
+        return None
+    parts = key[len(_ALIAS_FACT_PREFIX):].split("\0", 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else None
+
+
+def _close_alias_facts(facts: Dict[str, bool]) -> Optional[Dict[str, bool]]:
+    """Propagate equality/inversion aliases; reject contradictory closure."""
+    out = dict(facts)
+    changed = True
+    while changed:
+        changed = False
+        for key, same_polarity in list(out.items()):
+            pair = _alias_pair(key)
+            if pair is None:
+                continue
+            left, right = pair
+            if left in out and right in out:
+                if out[right] is not (out[left] if same_polarity
+                                      else not out[left]):
+                    return None
+            elif left in out:
+                out[right] = out[left] if same_polarity else not out[left]
+                changed = True
+            elif right in out:
+                out[left] = out[right] if same_polarity else not out[right]
+                changed = True
+    return out
+
+
+def _normalise_flow_states(states: set) -> set:
+    """Store first-seen plus simple predicate facts without merging paths."""
+    out = set()
+    for state in states:
+        if isinstance(state, bool):
+            out.add((state, frozenset()))
+        else:
+            seen, facts = state
+            out.add((bool(seen), frozenset(facts)))
+    return out
+
+
+def _states_with_facts(states: set, updates: Dict[str, bool]) -> set:
+    out = set()
+    for seen, facts in _normalise_flow_states(states):
+        merged = dict(facts)
+        if any(name in merged and merged[name] is not value
+               for name, value in updates.items()):
+            continue
+        merged.update(updates)
+        closed = _close_alias_facts(merged)
+        if closed is not None:
+            out.add((seen, frozenset(closed.items())))
+    return out
+
+
+def _update_written_predicates(states: set, stmt: ast.stmt) -> set:
+    targets: List[ast.AST] = []
+    value: Optional[ast.AST] = None
+    if isinstance(stmt, ast.Assign):
+        targets, value = list(stmt.targets), stmt.value
+    elif isinstance(stmt, ast.AnnAssign):
+        targets, value = [stmt.target], stmt.value
+    elif isinstance(stmt, ast.AugAssign):
+        targets, value = [stmt.target], stmt.value
+    elif isinstance(stmt, ast.Delete):
+        targets = list(stmt.targets)
+    target_keys = [key for target in targets
+                   for key in _target_predicate_keys(target)]
+    out = set()
+    for seen, facts in _normalise_flow_states(states):
+        old = dict(facts)
+        constrained = any(
+            any(_target_invalidates_fact(target, name)
+                for target in target_keys)
+            or any(
+                _target_invalidates_fact(target, endpoint)
+                for pair in [_alias_pair(name)] if pair is not None
+                for endpoint in pair for target in target_keys)
+            for name in old)
+        updated = {
+            name: polarity for name, polarity in facts
+            if not any(_target_invalidates_fact(target, name)
+                       for target in target_keys)
+            and not any(
+                _target_invalidates_fact(target, endpoint)
+                for pair in [_alias_pair(name)] if pair is not None
+                for endpoint in pair for target in target_keys)
+        }
+        learned = (_path_test_truth(value, old)
+                   if value is not None else None)
+        rhs_ref = (_predicate_ref(value)
+                   if value is not None
+                   and not isinstance(stmt, ast.AugAssign) else None)
+        if isinstance(stmt, ast.AugAssign) and target_keys:
+            prior = _fact_truth(stmt.target, old)
+            operand = _path_test_truth(stmt.value, old)
+            if isinstance(stmt.op, ast.BitOr) \
+                    and (prior is True or operand is True):
+                learned = True
+            elif isinstance(stmt.op, ast.BitAnd) \
+                    and (prior is False or operand is False):
+                learned = False
+            elif isinstance(stmt.op, ast.BitXor) \
+                    and prior is not None and operand is not None:
+                learned = prior is not operand
+            else:
+                learned = None
+        if learned is None and constrained and rhs_ref is None:
+            # A previously constrained predicate was rewritten in a way this
+            # bounded proof cannot evaluate.  Exploring both values would
+            # manufacture an existential path, so fail this path closed.
+            continue
+        if rhs_ref is not None:
+            for target in target_keys:
+                if target != rhs_ref[0]:
+                    updated[_alias_fact(target, rhs_ref[0])] = rhs_ref[1]
+        if learned is not None:
+            for target in target_keys:
+                updated[target] = learned
+        closed = _close_alias_facts(updated)
+        if closed is not None:
+            out.add((seen, frozenset(closed.items())))
+    return out
+
+
+def _advance_call_states(states: set, calls: List[str], first: str,
+                         second: str) -> Tuple[set, bool]:
+    current = _normalise_flow_states(states)
+    success = False
+    for target in calls:
+        if target == second and any(seen for seen, _ in current):
+            success = True
+        if target == first:
+            current = {(True, facts) for _, facts in current}
+    return current, success
+
+
+def _flow_block(
+        statements: List[ast.stmt], states: set, first: str, second: str,
+        known_bool: Optional[Tuple[str, str, bool]] = None,
+        excluded_membership: Optional[Tuple[str, str, Tuple[Any, ...]]] = None,
+        ) -> Tuple[set, bool]:
+    current = _normalise_flow_states(states)
+    success = False
+    for stmt in statements:
+        if not current:
+            break
+        current, hit = _flow_statement(
+            stmt, current, first, second, known_bool, excluded_membership)
+        if len(current) > MAX_FLOW_STATES:
+            return set(), False
+        success = success or hit
+    return current, success
+
+
+def _flow_statement(
+        stmt: ast.stmt, states: set, first: str, second: str,
+        known_bool: Optional[Tuple[str, str, bool]] = None,
+        excluded_membership: Optional[Tuple[str, str, Tuple[Any, ...]]] = None,
+        ) -> Tuple[set, bool]:
+    states = _normalise_flow_states(states)
+    fact = (known_bool if known_bool is not None
+            else excluded_membership if excluded_membership is not None
+            else None)
+    taint_node: Optional[ast.AST] = stmt
+    if isinstance(stmt, (ast.If, ast.While)):
+        taint_node = stmt.test
+    elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+        taint_node = stmt.iter
+    elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+        taint_node = None
+        for item in stmt.items:
+            if fact is not None and _statement_taints_fact(
+                    item.context_expr, fact[0], fact[1]):
+                return set(), False
+    elif isinstance(stmt, (ast.Try, ast.Match)):
+        taint_node = None
+    if fact is not None and taint_node is not None \
+            and _statement_taints_fact(
+                taint_node, fact[0], fact[1],
+                allowed_receivers=("plan.append",)):
+        # Once the receipt (or anything aliased from/passed for mutation) is
+        # changed, the established branch fact is no longer authoritative.
+        # Refuse the rest of this proof path instead of carrying stale truth.
+        return set(), False
+    if isinstance(stmt, ast.If):
+        # Evidence calls in a short-circuit predicate are deliberately not
+        # accepted.  The branch bodies retain their path identity.
+        out: set = set()
+        success = False
+        for state in states:
+            _, frozen_facts = state
+            truth = _combined_test_truth(
+                stmt.test, dict(frozen_facts),
+                known_bool, excluded_membership)
+            branches = ([(stmt.body, True)] if truth is True
+                        else [(stmt.orelse, False)] if truth is False
+                        else [(stmt.body, True), (stmt.orelse, False)])
+            for branch, test_truth in branches:
+                branch_states = _states_with_facts(
+                    {state}, _path_facts_for_truth(
+                        stmt.test, test_truth))
+                if not branch_states:
+                    continue
+                branch_out, hit = _flow_block(
+                    list(branch), branch_states, first, second,
+                    known_bool, excluded_membership)
+                out.update(branch_out)
+                if len(out) > MAX_FLOW_STATES:
+                    return set(), False
+                success = success or hit
+        return out, success
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        return _flow_block(list(stmt.body), set(states), first, second,
+                           known_bool, excluded_membership)
+    if isinstance(stmt, ast.Try):
+        # Exceptions and finally control transfer can replace a return/break.
+        # No registered shipped citation needs a try path, so refuse to use
+        # calls in or beyond it rather than guess and manufacture execution.
+        return set(), False
+    if isinstance(stmt, ast.Match):
+        # Pattern exhaustiveness/guards are likewise outside this bounded
+        # proof.  A future shipped citation can add explicit semantics first.
+        return set(), False
+    if isinstance(stmt, ast.While):
+        # Nested loop ordering/back-edges need their own citation.  Refuse to
+        # compose them into an outer straight-line proof.  A statically-false
+        # loop executes its else suite; a statically-true loop with no owned
+        # break provably cannot fall through to later evidence.
+        truth = _static_truth(stmt.test)
+        if truth is False:
+            return _flow_block(list(stmt.orelse), set(states), first, second,
+                               known_bool, excluded_membership)
+        return set(), False
+    if isinstance(stmt, (ast.For, ast.AsyncFor)):
+        # Iteration and iterator exceptions are outside this bounded proof.
+        if _static_iterable_empty(stmt.iter) is True:
+            return _flow_block(list(stmt.orelse), set(states), first, second,
+                               known_bool, excluded_membership)
+        return set(), False
+    current, success = _advance_call_states(
+        states, _straight_statement_calls(stmt), first, second)
+    current = _update_written_predicates(current, stmt)
+    if _statement_always_terminates(stmt):
+        return set(), success
+    return current, success
+
+
+def _ordered_calls_on_a_path(statements: List[ast.stmt], first: str,
+                             second: str, *, first_already: bool = False
+                             , known_bool: Optional[Tuple[str, str, bool]] = None
+                             , excluded_membership: Optional[
+                                 Tuple[str, str, Tuple[Any, ...]]] = None
+                             ) -> bool:
+    _, success = _flow_block(
+        statements, {(first_already, frozenset())}, first, second,
+        known_bool, excluded_membership)
+    return success
+
+
+def _call_executes_on_a_path(
+        statements: List[ast.stmt], callee: str,
+        known_bool: Optional[Tuple[str, str, bool]] = None,
+        excluded_membership: Optional[Tuple[str, str, Tuple[Any, ...]]] = None,
+        ) -> bool:
+    """Existential live-path call proof, using the same flow as ordering."""
+    return _ordered_calls_on_a_path(
+        statements, "<path-already-live>", callee, first_already=True,
+        known_bool=known_bool, excluded_membership=excluded_membership)
+
+
+def _call_path_falls_through(
+        stmt: ast.stmt, callee: str,
+        known_bool: Optional[Tuple[str, str, bool]] = None,
+        excluded_membership: Optional[Tuple[str, str, Tuple[Any, ...]]] = None,
+        ) -> bool:
+    states, _ = _flow_statement(
+        stmt, {False}, callee, "<never>",
+        known_bool, excluded_membership)
+    return any(seen for seen, _ in states)
+
+
+def _loop_fallback_sites(fn: ast.AST, trigger: str, callee: str,
+                         field: Optional[str],
+                         terminal_values: Tuple[Any, ...]
+                         ) -> List[Tuple[ast.AST, int, bool, str]]:
+    """Fallback sites on the live complement of an exact terminal guard.
+
+    The final flag records whether at least one path that actually executes the
+    fallback also reaches the next top-level statement.  Keeping that path bit
+    is essential: a call hidden under ``if retry: ...; break`` is an actuator,
+    but it cannot borrow the loop's later back-edge as remeasurement evidence.
+    """
+    if field is None or not terminal_values:
+        return []
+    sites: List[Tuple[ast.AST, int, bool, str]] = []
+    for loop in _scan(fn).loops:
+        body = list(loop.body)
+        for trigger_i, stmt in enumerate(body):
+            result = _assigned_call(stmt, trigger)
+            if result is None:
+                continue
+            for guard_i in range(trigger_i + 1, len(body)):
+                guard = body[guard_i]
+                if any(_statement_taints_result(
+                           mid, result, allowed_receivers=("plan.append",))
+                       for mid in body[trigger_i + 1:guard_i]):
+                    break
+                if not isinstance(guard, ast.If):
+                    continue
+                if _statement_taints_result(guard.test, result):
+                    continue
+                if not _positive_membership_guard(
+                        guard.test, result, field, terminal_values):
+                    continue
+                if not _block_always_terminates(list(guard.body)):
+                    continue
+                later = body[guard_i + 1:]
+                live_states: set = {False}
+                excluded = (result, field, terminal_values)
+                for offset, later_stmt in enumerate(later):
+                    if not live_states:
+                        break
+                    if _call_executes_on_a_path(
+                            [later_stmt], callee,
+                            excluded_membership=excluded):
+                        sites.append((
+                            loop,
+                            guard_i + 1 + offset,
+                            _call_path_falls_through(
+                                later_stmt, callee,
+                                excluded_membership=excluded),
+                            result,
+                        ))
+                    live_states, _ = _flow_statement(
+                        later_stmt, live_states,
+                        "<irrelevant-first>", "<irrelevant-second>",
+                        excluded_membership=excluded)
+    return sites
+
+
+def _fallback_after_trigger_in_loop(fn: ast.AST, trigger: str, callee: str,
+                                    field: Optional[str],
+                                    terminal_values: Tuple[Any, ...]) -> bool:
+    return bool(_loop_fallback_sites(
+        fn, trigger, callee, field, terminal_values))
+
+
+def _remeasure_after_fallback_in_loop(
+        fn: ast.AST, trigger: str, actuator: str, measurement: str,
+        field: Optional[str], terminal_values: Tuple[Any, ...]) -> bool:
+    for loop, fallback_i, fallback_falls_through, result \
+            in _loop_fallback_sites(
+            fn, trigger, actuator, field, terminal_values):
+        body = list(loop.body)
+        fallback_stmt = body[fallback_i]
+        after = body[fallback_i + 1:]
+        excluded = (result, str(field), terminal_values)
+
+        # The actuator and measurement may share a compound statement.  They
+        # count only if one concrete branch orders actuator before measurement.
+        if _ordered_calls_on_a_path(
+                [fallback_stmt], actuator, measurement,
+                excluded_membership=excluded):
+            return True
+
+        if not fallback_falls_through:
+            continue
+
+        # Or measurement may occur later, but only on a path continuing from
+        # an actuator call that fell through the fallback statement.
+        if _ordered_calls_on_a_path(
+                after, actuator, measurement, first_already=True,
+                excluded_membership=excluded):
+            return True
+
+        # Reaching the loop back-edge re-enters the trigger measurement on the
+        # next iteration.  Use the SAME trigger fact here as explicit ordering:
+        # a suffix whose known complement necessarily breaks must not be
+        # mistaken for a live back-edge by the fact-free terminator helper.
+        suffix_states, _ = _flow_block(
+            after, {True}, actuator, "<never>",
+            excluded_membership=excluded)
+        if suffix_states:
+            return True
+    return False
+
+
+def _guarded_fallback_branch(fn: ast.AST, trigger: str, callee: str,
+                             field: Optional[str],
+                             expected_value: Optional[bool]
+                             ) -> Optional[
+                                 Tuple[List[ast.stmt], str, str, bool]]:
+    """Exact live trigger-polarity branch that owns the fallback."""
+    body = _reachable_prefix(list(getattr(fn, "body", [])))
+    for trigger_i, stmt in enumerate(body):
+        result = _assigned_call(stmt, trigger)
+        if result is None:
+            continue
+        for guard_i, guard in enumerate(body[trigger_i + 1:],
+                                        start=trigger_i + 1):
+            if any(_statement_taints_result(mid, result)
+                   for mid in body[trigger_i + 1:guard_i]):
+                break
+            if not isinstance(guard, ast.If) \
+                    or not _test_reads_result(guard.test, result, field):
+                continue
+            if _statement_taints_result(guard.test, result):
+                continue
+            if field is None or expected_value is None:
+                continue
+            body_value = _field_truth_for_body(guard.test, result, field)
+            if body_value is None:
+                continue
+            selected = (list(guard.body) if body_value == expected_value
+                        else list(guard.orelse))
+            opposite = (list(guard.orelse) if body_value == expected_value
+                        else list(guard.body))
+            selected_fact = (result, field, expected_value)
+            opposite_fact = (result, field, not expected_value)
+            if (_call_executes_on_a_path(
+                    selected, callee, known_bool=selected_fact)
+                    and not _call_executes_on_a_path(
+                        opposite, callee, known_bool=opposite_fact)):
+                return selected, result, field, expected_value
+    return None
+
+
+def _fallback_guarded_by_trigger(fn: ast.AST, trigger: str, callee: str,
+                                 field: Optional[str],
+                                 expected_value: Optional[bool]) -> bool:
+    """A live branch on a trigger result contains the exact fallback call."""
+    return _guarded_fallback_branch(
+        fn, trigger, callee, field, expected_value) is not None
+
+
+def _remeasure_after_fallback_guarded_by_trigger(
+        fn: ast.AST, trigger: str, actuator: str, measurement: str,
+        field: Optional[str], expected_value: Optional[bool]) -> bool:
+    branch_info = _guarded_fallback_branch(
+        fn, trigger, actuator, field, expected_value)
+    if branch_info is None:
+        return False
+    branch, result, exact_field, exact_value = branch_info
+    return _ordered_calls_on_a_path(
+        branch, actuator, measurement,
+        known_bool=(result, exact_field, exact_value))
 
 
 def _resolve_citation(cit: Dict[str, Any], root: Path
@@ -372,7 +1687,11 @@ def _resolve_citation(cit: Dict[str, Any], root: Path
     if kind == "file_exists":
         return True, f"{rel} exists"
 
-    if kind in ("calls", "call_in_loop", "defines"):
+    if kind in ("calls", "call_in_loop", "defines",
+                "fallback_after_trigger_in_loop",
+                "fallback_guarded_by_trigger",
+                "remeasure_after_fallback_in_loop",
+                "remeasure_after_fallback_guarded_by_trigger"):
         tree = _parse(path)
         if tree is None:
             return False, f"{rel} could not be parsed"
@@ -386,6 +1705,51 @@ def _resolve_citation(cit: Dict[str, Any], root: Path
         fn = _find_function(tree, caller)
         if fn is None:
             return False, f"{rel} does not define {caller}"
+        if kind in ("fallback_after_trigger_in_loop",
+                    "fallback_guarded_by_trigger",
+                    "remeasure_after_fallback_in_loop",
+                    "remeasure_after_fallback_guarded_by_trigger"):
+            trigger = str(cit.get("trigger_callee") or "")
+            field = cit.get("trigger_field")
+            field_s = str(field) if field is not None else None
+            if kind in ("fallback_after_trigger_in_loop",
+                        "remeasure_after_fallback_in_loop"):
+                raw_terminal = cit.get("terminal_values")
+                if not isinstance(raw_terminal, (list, tuple)) \
+                        or not raw_terminal:
+                    return False, (f"{rel}:{caller} citation declares no "
+                                   "terminal_values; loop polarity is unknown")
+                terminal_values = tuple(raw_terminal)
+                if kind == "fallback_after_trigger_in_loop":
+                    ok = _fallback_after_trigger_in_loop(
+                        fn, trigger, callee, field_s, terminal_values)
+                else:
+                    actuator = str(cit.get("actuator_callee") or "")
+                    ok = _remeasure_after_fallback_in_loop(
+                        fn, trigger, actuator, callee, field_s,
+                        terminal_values)
+                return ok, (
+                    f"{rel}:{caller} proves {kind} for {trigger} -> {callee} "
+                    f"when {field_s} is outside {list(terminal_values)}" if ok
+                    else f"{rel}:{caller} has no live {kind} proof for "
+                    f"{trigger} -> {callee} with terminal {field_s} values "
+                    f"{list(terminal_values)}")
+            expected_value = cit.get("trigger_value")
+            if not isinstance(expected_value, bool):
+                return False, (f"{rel}:{caller} citation declares no boolean "
+                               "trigger_value; branch polarity is unknown")
+            if kind == "fallback_guarded_by_trigger":
+                ok = _fallback_guarded_by_trigger(
+                    fn, trigger, callee, field_s, expected_value)
+            else:
+                actuator = str(cit.get("actuator_callee") or "")
+                ok = _remeasure_after_fallback_guarded_by_trigger(
+                    fn, trigger, actuator, callee, field_s, expected_value)
+            return ok, (
+                f"{rel}:{caller} proves {kind} on {trigger}'s "
+                f"{field_s or 'result'}={expected_value} branch" if ok else
+                f"{rel}:{caller} has no live {kind} proof on {trigger}'s "
+                f"{field_s or 'result'}={expected_value} branch")
         if kind == "calls":
             ok = callee in _called_names(fn)
             return ok, (f"{rel}:{caller} calls {callee}" if ok
@@ -397,14 +1761,35 @@ def _resolve_citation(cit: Dict[str, Any], root: Path
     return False, f"unknown citation kind {kind!r} — this program cannot evaluate it"
 
 
-def classify_edge(step_id: str, root: Path) -> Dict[str, Any]:
+def _remeasure_extends_actuation(remeasure: Dict[str, Any],
+                                 actuation: Dict[str, Any]) -> bool:
+    """Whether one remeasurement citation continues one accepted actuation."""
+    expected_kind = REMEASURE_ACTUATION_KIND.get(str(remeasure.get("kind")))
+    if expected_kind is None or actuation.get("kind") != expected_kind:
+        return False
+    if any(remeasure.get(field) != actuation.get(field) for field in (
+            "file", "caller", "trigger_callee", "trigger_field")):
+        return False
+    if remeasure.get("actuator_callee") != actuation.get("callee"):
+        return False
+    if expected_kind == "fallback_after_trigger_in_loop":
+        return tuple(remeasure.get("terminal_values") or ()) == tuple(
+            actuation.get("terminal_values") or ())
+    return (isinstance(remeasure.get("trigger_value"), bool)
+            and remeasure.get("trigger_value")
+            is actuation.get("trigger_value"))
+
+
+def classify_edge(step_id: str, root: Path,
+                  fallback_to: Optional[str] = None) -> Dict[str, Any]:
     """The class an edge EARNS, plus every citation and how it resolved."""
     entry = REGISTRY.get(step_id)
     rec: Dict[str, Any] = {
         "step": step_id,
         "registered": entry is not None,
         "declared_class": (entry or {}).get("class", DECLARED_ONLY),
-        "actuation_form": (entry or {}).get("actuation_form", "re_execute"),
+        "actuation_form": (entry or {}).get("actuation_form"),
+        "fallback_to": fallback_to,
         "why": (entry or {}).get("why"),
         "not_claimed": (entry or {}).get("not_claimed") or {},
         "citations": [],
@@ -420,7 +1805,40 @@ def classify_edge(step_id: str, root: Path) -> Dict[str, Any]:
         return rec
 
     evidence = entry.get("evidence") or {}
+    actuation_form = rec["actuation_form"]
+    non_reexecution = actuation_form != "re_execute"
+    if actuation_form is None:
+        rec["problems"].append(
+            f"CLC-ACTUATION-FORM-MISSING: edge {step_id} has a registry entry "
+            "but does not explicitly declare actuation_form='re_execute'; "
+            "an omitted field cannot prove that the fallback ran")
+    elif non_reexecution:
+        rec["problems"].append(
+            f"CLC-NON-REEXECUTION-ACTUATION: edge {step_id} declares "
+            f"actuation_form={actuation_form!r}; refusing or retaining a "
+            "candidate does not re-enter the declared fallback step and "
+            "cannot earn EXECUTABLE")
+
+    expected_entrypoints = (STEP_EXECUTION_ENTRYPOINTS.get(fallback_to)
+                            if fallback_to is not None else None)
+    expected_triggers = STEP_TRIGGER_ENTRYPOINTS.get(step_id)
+    if fallback_to is None:
+        rec["problems"].append(
+            f"CLC-FALLBACK-TARGET-MISSING: edge {step_id} has registered "
+            "execution evidence but the flow declares no usable fallback_to")
+    elif expected_entrypoints is None:
+        rec["problems"].append(
+            f"CLC-FALLBACK-ENTRYPOINT-UNKNOWN: edge {step_id} falls back to "
+            f"step {fallback_to}, whose runner entrypoint is not registered; "
+            "the actuator cannot be bound to the declared edge")
+    if expected_triggers is None:
+        rec["problems"].append(
+            f"CLC-TRIGGER-ENTRYPOINT-UNKNOWN: edge {step_id} has no canonical "
+            "source-step trigger entrypoint; a fallback call from another "
+            "edge cannot be distinguished from this edge firing")
+
     satisfied: List[str] = []
+    eligible_actuations: List[Dict[str, Any]] = []
     for role in EVIDENCE_ROLES:
         cits = evidence.get(role) or []
         if not cits:
@@ -428,15 +1846,101 @@ def classify_edge(step_id: str, root: Path) -> Dict[str, Any]:
         role_ok = True
         for cit in cits:
             ok, reason = _resolve_citation(cit, root)
-            rec["citations"].append({"role": role, "citation": cit,
-                                     "resolved": ok, "reason": reason})
+            kind = cit.get("kind")
+            structural = kind in ROLE_CITATION_KINDS[role]
+            bound_to_fallback = True
+            bound_to_trigger = True
+            joined_to_actuation = True
+            if role in ("actuate", "remeasure"):
+                actuator = (cit.get("callee") if role == "actuate"
+                            else cit.get("actuator_callee"))
+                bound_to_fallback = bool(
+                    expected_entrypoints
+                    and str(actuator or "") in expected_entrypoints)
+                bound_to_trigger = bool(
+                    expected_triggers
+                    and str(cit.get("trigger_callee") or "")
+                    in expected_triggers)
+            if role == "remeasure":
+                joined_to_actuation = any(
+                    _remeasure_extends_actuation(cit, actuation)
+                    for actuation in eligible_actuations)
+            eligible = (ok and structural and bound_to_fallback
+                        and bound_to_trigger and joined_to_actuation)
+            citation_record = {
+                "role": role, "citation": cit, "resolved": ok,
+                "structural": structural,
+                "bound_to_fallback": bound_to_fallback,
+                "bound_to_trigger": bound_to_trigger,
+                "eligible": eligible, "reason": reason,
+            }
+            if role == "remeasure":
+                citation_record["joined_to_actuation"] = joined_to_actuation
+            rec["citations"].append(citation_record)
+            if role == "actuate" and eligible:
+                eligible_actuations.append(cit)
             if not ok:
                 role_ok = False
                 rec["problems"].append(
                     f"CLC-EVIDENCE-MISSING: edge {step_id} claims "
                     f"{entry.get('class')} on {role} evidence that no longer "
                     f"resolves — {reason}")
-        if role_ok:
+            if not structural:
+                role_ok = False
+                rec["problems"].append(
+                    f"CLC-NONSTRUCTURAL-EVIDENCE: edge {step_id} claims "
+                    f"{entry.get('class')} on {role} citation kind {kind!r}; "
+                    "file/symbol presence does not prove execution")
+            if role == "actuate" and not bound_to_fallback:
+                role_ok = False
+                callee = str(cit.get("callee") or "<none>")
+                expected = (", ".join(expected_entrypoints)
+                            if expected_entrypoints else "<unregistered>")
+                rec["problems"].append(
+                    f"CLC-ACTUATION-NOT-FALLBACK-REENTRY: edge {step_id} "
+                    f"falls back to step {fallback_to}, but its actuator calls "
+                    f"{callee}; expected one of [{expected}]")
+            if role == "actuate" and not bound_to_trigger:
+                role_ok = False
+                trigger = str(cit.get("trigger_callee") or "<none>")
+                expected = (", ".join(expected_triggers)
+                            if expected_triggers else "<unregistered>")
+                rec["problems"].append(
+                    f"CLC-ACTUATION-NOT-EDGE-TRIGGERED: edge {step_id} cites "
+                    f"source trigger {trigger}; expected one of [{expected}]. "
+                    "A retry belonging to another edge cannot be borrowed")
+            if role == "remeasure" and not bound_to_fallback:
+                role_ok = False
+                actuator = str(cit.get("actuator_callee") or "<none>")
+                expected = (", ".join(expected_entrypoints)
+                            if expected_entrypoints else "<unregistered>")
+                rec["problems"].append(
+                    f"CLC-REMEASURE-NOT-FALLBACK-REENTRY: edge {step_id} "
+                    f"falls back to step {fallback_to}, but its remeasurement "
+                    f"citation follows actuator {actuator}; expected one of "
+                    f"[{expected}]")
+            if role == "remeasure" and not bound_to_trigger:
+                role_ok = False
+                trigger = str(cit.get("trigger_callee") or "<none>")
+                expected = (", ".join(expected_triggers)
+                            if expected_triggers else "<unregistered>")
+                rec["problems"].append(
+                    f"CLC-REMEASURE-NOT-EDGE-TRIGGERED: edge {step_id} cites "
+                    f"source trigger {trigger}; expected one of [{expected}]. "
+                    "A sibling edge cannot lend its measurement")
+            if role == "remeasure" and not joined_to_actuation:
+                role_ok = False
+                rec["problems"].append(
+                    f"CLC-REMEASURE-NOT-ACTUATION-PATH: edge {step_id} has "
+                    "remeasurement evidence that does not extend any eligible "
+                    "actuation citation with the same file, caller, trigger, "
+                    "polarity, and fallback actuator")
+        # EXECUTABLE means the declared fallback EDGE runs.  A blocking judge
+        # can be valuable, but it cannot satisfy the actuator role merely by
+        # retaining the pre-existing candidate.  This is deliberately checked
+        # after resolving citations so the report still shows that the cited
+        # code exists while refusing the semantic overclaim.
+        if role_ok and not (role == "actuate" and non_reexecution):
             satisfied.append(role)
     rec["roles_satisfied"] = satisfied
 
@@ -561,9 +2065,11 @@ def evaluate(flow: Path, project: Optional[Path],
 
     for s in declaring:
         sid = _norm(s["id"])
-        rec = classify_edge(sid, root)
         cl = s["closed_loop"]
-        rec["fallback_to"] = cl.get("fallback_to")
+        raw_fallback = cl.get("fallback_to")
+        fallback_to = (_norm(raw_fallback)
+                       if raw_fallback is not None else None)
+        rec = classify_edge(sid, root, fallback_to)
         rec["trigger"] = cl.get("trigger")
         rep["edges"].append(rec)
         rep["census"][rec["class"]] = rep["census"].get(rec["class"], 0) + 1
@@ -708,7 +2214,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     for e in rep["edges"]:
         print(f"  {e['step']:>5} -> {str(e['fallback_to']):<5} {e['class']}"
               + (f"  ({e['actuation_form']})"
-                 if e["actuation_form"] != "re_execute" else ""))
+                 if e.get("actuation_form")
+                 and e["actuation_form"] != "re_execute" else ""))
     if rep["claim_audit"] == "NOT_CHECKED":
         print(f"  claim audit: NOT_CHECKED — {rep['claim_audit_reason']}")
     else:

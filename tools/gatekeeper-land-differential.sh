@@ -12,7 +12,7 @@
 # only `gatekeeper-land.sh` writes that stamp. Put those two together with a
 # `main` that is itself red and you get a DEADLOCK, not a gate:
 #
-#   MEASURED 2026-08-17 on 8HD-8, in a detached worktree AT origin/main
+#   MEASURED 2026-08-17 on 8HD-8, in a detached checkout AT origin/main
 #   (f6b0e77dd), running the gate on the base's OWN tip:
 #       FAIL  repo tools tests (31 file(s))     9 failed, 650 passed
 #       FAIL  repo hygiene gates                1 of 80 decided gates FAILED
@@ -156,7 +156,7 @@ set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE
 export GIT_NO_REPLACE_OBJECTS=1
 # BYTECODE WRITING IS OFF FOR EVERY CHILD THIS SCRIPT SPAWNS, and it is asserted
-# below rather than left as a habit. The four arms run in throwaway worktrees and
+# below rather than left as a habit. The four arms run in throwaway clones and
 # every gate that imports a shipped module writes `.pyc` INTO the tree it is
 # measuring. `.pyc` is gitignored, so `git status`, `git add -A` and
 # `suite_write_guard` are all silent about it, while `_run_isolation.snapshot`
@@ -208,70 +208,51 @@ WT_BASE_TESTS="$RUN/wt_base_tests"
 WT_BASE_GATES="$RUN/wt_base_gates"
 WT_CAND_TESTS="$RUN/wt_cand_tests"
 WT_CAND_GATES="$RUN/wt_cand_gates"
-
-# ARMS ARE STANDALONE CLONES, NOT LINKED WORKTREES, AND THIS IS THE WHOLE
-# REASON THE DIFFERENTIAL CAN RUN AT ALL.
-#
-# MEASURED 2026-08-24, on a clean checkout at e265f228be inside the pinned
-# image: all four arms were created with `git worktree add --detach`, and both
-# GATE arms died before running a single gate:
-#
-#   [landing_tier_checkout_preflight] REFUSED — .../wt_cand_gates is a LINKED
-#   WORKTREE: its git directory is external and prunable
-#   === REFUSED — the full tier will not start in a checkout something outside
-#       this run can remove. No arm was run and no stamp was written.
-#
-# BOTH SIDES OF THAT ARE RIGHT, WHICH IS WHY IT DEADLOCKED. The preflight is
-# correct: a linked worktree's registration is owned by the shared repository,
-# any `git worktree prune` elsewhere removes it, and a tier that lost its
-# registration mid-run once reported four gates about the accident instead of
-# about the tree. And this script was right to want a FRESH checkout per arm.
-# The two were only in conflict over HOW the checkout is made.
-#
-# A `git clone` from the local repository satisfies both. It is fresh, it is
-# throwaway, its `.git` is a real directory this run owns, nothing outside can
-# prune it, and the attestation preflight below still runs on it unchanged.
-# `--no-hardlinks` because a hardlinked object store is a second thing the arms
-# would share with a repository they do not control. `--no-local` is NOT used,
-# so the clone still avoids the network entirely, and `--shared` is not passed
-# at all — it is not the default, and it would create the very
-# `objects/info/alternates` the preflight refuses.
-#
-# THE COST IS MEASURED, NOT ASSUMED: this repository is 678 MB, four arms is
-# ~2.7 GB of scratch and a few seconds per clone against arms that cost an
-# hour. `git worktree remove` no longer applies, so cleanup is `rm -rf`.
-arm_checkout() {
-  local dest="$1" sha="$2" what="$3"
-  # `--no-hardlinks` gives the arm its own object store. `--shared` is NOT
-  # passed at all: it is not the default, and this git spells it as a flag that
-  # takes no value, so `--shared=false` is a hard error rather than a no-op.
-  git clone --quiet --no-hardlinks "$REPO" "$dest" \
-    || die "cannot clone the $what arm"
-  git -C "$dest" checkout --quiet --detach "$sha" \
-    || die "cannot check $sha out in the $what arm"
-  # The preflight the tier runs, run HERE too, so a bad arm is refused in
-  # milliseconds instead of an hour in.
-  local pf="$REPO/$PLUGIN_REL/programs/landing_tier_checkout_preflight.py"
-  if [ -f "$pf" ] && ! python3 "$pf" --root "$dest" >/dev/null 2>&1; then
-    python3 "$pf" --root "$dest" 2>&1 | tail -4 | sed 's/^/          /'
-    die "the $what arm is not a checkout the landing tier will start in"
-  fi
-}
-
+WT_CAND_ATTEST_TESTS="$RUN/wt_cand_attest_tests"
+WT_CAND_ATTEST_GATES="$RUN/wt_cand_attest_gates"
 cleanup() {
-  local w
   [ "$KEEP" = "1" ] && return 0
-  # The arms are standalone clones now, so there is no registration to remove
-  # and nothing in the shared repository to prune. `worktree prune` is kept for
-  # ONE round of compatibility: a run interrupted before this change may have
-  # left registrations behind, and pruning them is harmless when there are none.
-  for w in "$WT_BASE_TESTS" "$WT_BASE_GATES" "$WT_CAND_TESTS" "$WT_CAND_GATES"; do
-    [ -d "$w" ] && rm -rf "$w"
-  done
-  "${G[@]}" worktree prune >/dev/null 2>&1
-  rm -rf "$RUN"
+  [ ! -d "$WT_CAND_ATTEST_TESTS" ] || \
+    "${G[@]}" worktree remove --force "$WT_CAND_ATTEST_TESTS" >/dev/null 2>&1
+  [ ! -d "$WT_CAND_ATTEST_GATES" ] || \
+    "${G[@]}" worktree remove --force "$WT_CAND_ATTEST_GATES" >/dev/null 2>&1
+  case "$RUN" in
+    "${TMPDIR:-/tmp}"/gk_land_diff.*) rm -rf -- "$RUN" ;;
+    *) die "refusing to remove unexpected run directory '$RUN'" ;;
+  esac
 }
 trap cleanup EXIT
+
+# A full `gatekeeper-land.sh` tier deliberately refuses a linked worktree: its
+# registration belongs to another repository and can be pruned mid-run. The
+# differential used to create all four subjects with `git worktree add`, so its
+# two full-tier arms deterministically refused before measuring anything. A
+# plain local clone is self-contained. `--no-hardlinks` gives each arm its own
+# object store; no arm borrows through alternates or shared mutable metadata.
+clone_subject() {
+  local dest="$1" sha="$2" remote_main
+  git clone --quiet --no-checkout --no-single-branch --no-hardlinks \
+      --config core.autocrlf=false --config core.eol=lf \
+      --config core.safecrlf=false --config core.attributesFile=/dev/null \
+      "$REPO" "$dest" \
+    || die "cannot clone the subject checkout at $dest"
+
+  # A local clone maps the source's LOCAL main to origin/main. This landing
+  # checkout can be ahead of the real remote, so restore the source's actual
+  # remote-tracking main before any gate resolves it.
+  if remote_main="$("${G[@]}" rev-parse --verify \
+          refs/remotes/origin/main 2>/dev/null)"; then
+    git -C "$dest" update-ref refs/remotes/origin/main "$remote_main" \
+      || die "cannot bind origin/main in $dest"
+  fi
+  git -C "$dest" checkout --quiet --detach "$sha" \
+    || die "cannot check out $sha in $dest"
+  [ "$(git -C "$dest" rev-parse HEAD 2>/dev/null)" = "$sha" ] \
+    || die "the subject checkout at $dest is not at $sha"
+  python3 "$REPO/$PLUGIN_REL/programs/landing_tier_checkout_preflight.py" \
+      --root "$dest" \
+    || die "the subject checkout at $dest is not self-contained"
+}
 
 echo "=== gatekeeper landing gate — DIFFERENTIAL (direct-push path) ==="
 echo "--- base ${BASE_SHA:0:12}  candidate ${HEAD_SHA:0:12}  host $THIS_HOST"
@@ -424,17 +405,15 @@ RUN_BASE_ARMS=1
 # same list filtered to files that EXIST at the base — a test the change ADDS
 # cannot have an opinion there, and its absence is a real outcome the verdict
 # reads as ABSENT (`gatekeeper-verify-merge.sh:719-724`).
-arm_checkout "$WT_CAND_TESTS" "$HEAD_SHA" "candidate-test"
-arm_checkout "$WT_CAND_GATES" "$HEAD_SHA" "candidate-gate"
+clone_subject "$WT_CAND_TESTS" "$HEAD_SHA"
+clone_subject "$WT_CAND_GATES" "$HEAD_SHA"
 CAND_PLUGIN="$WT_CAND_TESTS/$PLUGIN_REL"
 # The throwaway checkout is attestable, or the arms do not start. This costs
 # milliseconds against arms that cost an hour, and it asks the two questions the
 # clean-worktree preflight above cannot: is bytecode writing off for the children
 # (the export at the top of this file, verified rather than assumed), and does
 # this tree already carry residue a previous killed run left behind? A fresh
-# A fresh `arm_checkout` clone satisfies both; a reused `$RUN` directory does
-# not. (It used to say `git worktree add --detach` here — see the block beside
-# `arm_checkout` for why that form could not start the tier at all.)
+# A fresh clone satisfies both; a reused `$RUN` directory does not.
 if ! ATT="$(python3 "$REPO/$PLUGIN_REL/programs/attestation_preflight_check.py" \
         --repo "$WT_CAND_TESTS" "$CAND_PLUGIN/programs" 2>&1)"; then
   printf '%s\n' "$ATT" | tail -8 | sed 's/^/          /'
@@ -479,8 +458,8 @@ if ! SEL_GUARD="$( cd "$CAND_PLUGIN" && python3 \
 fi
 
 if [ "$RUN_BASE_ARMS" = "1" ]; then
-  arm_checkout "$WT_BASE_TESTS" "$BASE_SHA" "base-test"
-  arm_checkout "$WT_BASE_GATES" "$BASE_SHA" "base-gate"
+  clone_subject "$WT_BASE_TESTS" "$BASE_SHA"
+  clone_subject "$WT_BASE_GATES" "$BASE_SHA"
   BASE_TEST_PLUGIN="$WT_BASE_TESTS/$PLUGIN_REL"
   while read -r f; do
     [ -n "$f" ] && [ -f "$BASE_TEST_PLUGIN/$f" ] && printf '%s\n' "$f" >> "$RUN/selection_base.txt"
@@ -723,9 +702,20 @@ fi
 PROTECTED_RECEIPT="$RUN/protected-landing-transition.json"
 PROTECTED_ARGS=()
 PROTECTED_WHY=""
+# The protected-tuple attester intentionally binds a linked checkout's `.git`
+# control file and private index to the object repository. It does not accept a
+# standalone clone's metadata directory as part of the raw source snapshot.
+# Build two short-lived snapshots only AFTER every costly arm has completed;
+# no tier runs in these worktrees, so an outside prune can at worst make this
+# millisecond receipt step refuse and can never invalidate completed evidence.
+"${G[@]}" worktree add -q --detach "$WT_CAND_ATTEST_TESTS" "$HEAD_SHA" \
+  || die "cannot create the candidate-test attestation snapshot"
+"${G[@]}" worktree add -q --detach "$WT_CAND_ATTEST_GATES" "$HEAD_SHA" \
+  || die "cannot create the candidate-gate attestation snapshot"
 if PROTECTED_WHY="$(python3 "$REPO/tools/ci/protected_landing_transition.py" verify \
      --object-repo "$REPO" --base "$BASE_SHA" --candidate "$HEAD_SHA" \
-     --candidate-gates "$WT_CAND_GATES" --candidate-tests "$WT_CAND_TESTS" \
+     --candidate-gates "$WT_CAND_ATTEST_GATES" \
+     --candidate-tests "$WT_CAND_ATTEST_TESTS" \
      --receipt "$PROTECTED_RECEIPT" 2>&1)" \
    && [ -s "$PROTECTED_RECEIPT" ]; then
   printf '%s\n' "$PROTECTED_WHY"

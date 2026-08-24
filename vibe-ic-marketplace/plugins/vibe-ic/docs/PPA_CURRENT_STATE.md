@@ -1,6 +1,6 @@
 # PPA — what is actually true today
 
-Measured on **2026-08-21** against **`867de4289`** (plugin version **1.11.18**),
+Re-measured on **2026-08-24** against **`e265f228b`** (plugin version **1.11.72**),
 on the machine that ships the plugin, with the commands quoted beside every
 number. Nothing here is quoted from a plan, a spec or an earlier document. Where
 a number contradicts a planning document, the number is what this file records
@@ -14,32 +14,42 @@ stamped above so you can tell how old it is.
 
 ---
 
-## 1. The closed-loop census — 22 declared edges, 18 of them a line of YAML
+## 1. The closed-loop census — 21 declared edges, 18 of them a line of YAML
 
 ```
 $ python3 programs/closed_loop_executable_coverage_check.py
-[PASS] closed_loop_executable_coverage_check: 22 declared closed_loop edge(s)
-       over 69 step(s); DECLARED_ONLY=18, EXECUTABLE=1, REMEASURED=3,
+[PASS] closed_loop_executable_coverage_check: 21 declared closed_loop edge(s)
+       over 68 step(s); DECLARED_ONLY=18, EXECUTABLE=0, REMEASURED=3,
        ROLLBACK_PROVEN=0
 ```
 
 The four classes are nested tiers, not a palette. Each subsumes the one before
 it, so a claim at tier N carries the evidence of every tier below it:
 
+Promotion evidence is executable AST structure, not a label or a file-presence
+claim. In particular, the actuator callee must match the canonical runner
+entrypoint for the YAML edge's actual `fallback_to`, and the source step's own
+trigger result must control that fallback on the same live path. A sibling edge
+that shares the same fallback target cannot lend its retry loop;
+the required trigger polarity is pinned, overwritten receipts and code after
+path terminators are rejected, and REMEASURED requires a post-fallback call or
+a reachable loop back-edge into the measurement. `actuation_form: re_execute`
+cannot promote an unrelated call by itself.
+
 | class | what it asserts |
 |---|---|
 | `DECLARED_ONLY` | the flow declares the edge and **nothing re-enters the fallback step** when the trigger fires |
-| `EXECUTABLE` | a named program re-enters the fallback step, or refuses the candidate the fallback exists to reject |
+| `EXECUTABLE` | a named program re-enters the fallback step when the trigger fires; refusing a candidate is blocking, not execution of the edge |
 | `REMEASURED` | EXECUTABLE, **and** the same program re-measures the metric the trigger names afterwards |
 | `ROLLBACK_PROVEN` | REMEASURED, **and** it can undo its actuation when the re-measurement is worse, **and a named test proves the undo** |
 
 | step | fallback | class | why |
 |---|---|---|---|
-| `1.6x` | 1 | EXECUTABLE | `step_crosslayer_rewrite_fidelity` runs the judge unconditionally; its non-zero exit is how the candidate is discarded. Actuation form is **refusal**, not re-execution — there is nothing to re-run, the rewrite is simply not adopted. |
 | `4` | 1 | REMEASURED | `design_one_shot_runner.main` re-runs `step_rtl_gen` on a reference-TB failure and re-runs the testbench. Bounded by `--max-eco`; stops on byte-identical RTL with `FAIL_ECO_INERT`. |
 | `23` | 32 | REMEASURED | the ECO auto-trigger in `phase3_one_shot_runner.step_canonicalize_artefacts`: `_run_eco_repair` then `_measure_posteco_mcorner_ocv`. |
 | `32` | 32 | REMEASURED | the same actuator; step 32 is where it runs. |
-| `2`, `3`, `5`, `8`, `9`, `10`, `13`, `14`, `20`, `24`, `25`, `26`, `27`, `28`, `31`, `33`, `A7`, `A9` | — | DECLARED_ONLY | no actuator found in any runner. |
+| `2` | 1 | DECLARED_ONLY | cross-layer fidelity now belongs to Step 2. Its judge rejects a bad candidate, but PRE/POST runtime spies both measured zero re-entry into `step_rtl_gen`; rejection must not be reported as an executable fallback. |
+| `3`, `5`, `8`, `9`, `10`, `13`, `14`, `20`, `24`, `25`, `26`, `27`, `28`, `31`, `33`, `A7`, `A9` | — | DECLARED_ONLY | no actuator found in any runner. |
 
 ### The zero is the load-bearing number
 

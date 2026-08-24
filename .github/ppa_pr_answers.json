@@ -36,6 +36,24 @@
       ]
     },
     {
+      "question": 8,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_closed_loop_executable_coverage.py::test_refusing_a_candidate_cannot_be_laundered_as_executable"}
+      ]
+    },
+    {
+      "question": 9,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_closed_loop_executable_coverage.py::test_loop_backedge_is_a_real_post_fallback_remeasurement"}
+      ]
+    },
+    {
+      "question": 10,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_closed_loop_executable_coverage.py::test_nothing_on_main_claims_rollback_proven"}
+      ]
+    },
+    {
       "question": 11,
       "evidence": [
         {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"}
@@ -46,6 +64,31 @@
       "evidence": [
         {"kind": "artefact", "ref": "vibe-ic-marketplace/plugins/vibe-ic/docs/PPA_INTERFACES.md", "sha256": "sha256:8db66acec0477adbcc48ac3814627c84b923fa1e8c770123a0855d4cc24fffa7"},
         {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_conflicting_explicit_corner_declarations_are_all_preserved_and_rejected"}
+      ]
+    },
+    {
+      "question": 13,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_diagnostic_router.py::test_a_case_the_program_can_decide_never_reaches_the_agent"}
+      ]
+    },
+    {
+      "question": 14,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_agent_policy.py::test_a_proposal_must_cite_the_handoff_it_answers"}
+      ]
+    },
+    {
+      "question": 15,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_agent_policy.py::test_the_default_policy_is_the_most_restrictive_one_expressible"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_agent_policy.py::test_a0_may_not_declare_a_blast_radius_it_cannot_use"}
+      ]
+    },
+    {
+      "question": 17,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_agent_policy.py::test_a_proposal_that_tries_to_act_is_refused_at_a0"}
       ]
     },
     {

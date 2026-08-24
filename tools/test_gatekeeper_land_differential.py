@@ -173,9 +173,14 @@ def _write_stub_tree(root: Path) -> None:
         "print('AGGREGATE_COMPLETE rc=0')\n")
 
     # The gate arm. It is named `gatekeeper-land.sh` because that is exactly
-    # what the differential invokes inside each worktree.
+    # what the differential invokes inside each clone. The real full tier
+    # refuses linked worktrees, so this stub asks that same preflight question:
+    # otherwise every behavioural test here can pass while the composed runtime
+    # deterministically refuses before an arm measures anything.
     (root / "tools" / "gatekeeper-land.sh").write_text(
         "#!/usr/bin/env bash\n"
+        "python3 vibe-ic-marketplace/plugins/vibe-ic/programs/"
+        "landing_tier_checkout_preflight.py --root . || exit 2\n"
         'arm="${GATEKEEPER_VERIFY_ARM:-?}"\n'
         "start=$(date +%s.%N)\n"
         'sleep "${ARM_DWELL:-0}"\n'
@@ -229,6 +234,7 @@ def _write_stub_tree(root: Path) -> None:
     for mod in ("hygiene_finding_delta.py", "_atomic_artefact.py",
                 "gate_process_attestation.py",
                 "landing_noop_verdict_check.py",
+                "landing_tier_checkout_preflight.py",
                 "attestation_preflight_check.py",
                 "generated_test_list_min_guard.py",
                 "_gate_usage_exit.py", "_vacuous_exit.py"):
@@ -739,6 +745,33 @@ def test_both_land_arms_withhold_the_stamp():
     authorise a push on half the evidence."""
     text = _driver_text()
     assert text.count("GATEKEEPER_NO_STAMP=1") == 2
+
+
+def test_all_four_arm_subjects_are_self_contained_clones():
+    """The full tier refuses linked worktrees, so the differential must never
+    manufacture one. Both positive and negative predicates are asserted: four
+    independently created subjects, and no hidden worktree fallback."""
+    code = "\n".join(line for line in _driver_text().splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert code.count("clone_subject \"$WT_") == 4
+    assert not re.search(
+        r"worktree add[^\n]*\$WT_(?:BASE|CAND)_(?:TESTS|GATES)", code)
+    assert "git clone --quiet --no-checkout --no-single-branch" in code
+
+
+def test_linked_snapshots_are_attestation_only_and_created_after_arm_waits():
+    """The legacy raw attester needs a linked checkout control file. Those
+    snapshots may exist only after all four expensive arms have been waited,
+    and only their paths may be passed to protected receipt construction."""
+    text = _driver_text()
+    wait_end = text.index("# ----------------------------------------------- --base-arm-only")
+    attest_create = text.index(
+        'worktree add -q --detach "$WT_CAND_ATTEST_TESTS"')
+    assert attest_create > wait_end
+    receipt = text[text.index("if PROTECTED_WHY="):
+                   text.index("# -------------------------------------------------------------- the verdict")]
+    assert '--candidate-gates "$WT_CAND_ATTEST_GATES"' in receipt
+    assert '--candidate-tests "$WT_CAND_ATTEST_TESTS"' in receipt
 
 
 def test_land_sh_offers_the_differential_and_says_which_question_it_asked():
