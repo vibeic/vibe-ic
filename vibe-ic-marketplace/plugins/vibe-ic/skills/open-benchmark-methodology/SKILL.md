@@ -510,8 +510,34 @@ So the three area-opt categories, in order of what a tool can already do:
 | category | can yosys do it? | example |
 |---|---|---|
 | expression restructuring, dead code, CSE | **yes — expect 0%** | shared adder, folded comparators |
+| structural round-trip | **VERSION-DEPENDENT** | encode/decode pair, register holding 5 values in 8 bits |
 | oversized declared type | no — the width is what the source says | `integer` index carrying 0..8 |
 | redundant STATE across a sequential argument | no — needs equivalence reasoning | one counter is another's negation |
+
+**The middle row is the trap, and it is not the same as the first.** On
+`fan_controller_0008` an agent removed a genuine encode/decode round-trip and an
+8-bit register that only ever held five values: **−13.4% wires / −11.5% cells on
+yosys 0.33, and a REGRESSION on 0.68**, because 0.68 already canonicalises the
+original to the same netlist. That it is a real effect and not measurement noise
+was established by a control — three behaviour-identical no-op rewrites produced
+byte-identical counts.
+
+So the rule is narrower than "oversized types win": **oversized types win on any
+synthesis version; structural round-trips only win on synthesis old enough not
+to already perform them.** Which version the scorer runs therefore decides the
+SIGN of the result, not merely its size — and the scorer's container is not
+visible from the authoring side, so "optimise for the older one because the
+harness pairs with icarus 13" is an INFERENCE and must be disclosed as one.
+
+**The gate does not check area — do not read a gate pass as area-verified.**
+In the 2026-08-24 run, `cvdp_gate.py` was invoked without `--dataset`/`--prompts`,
+so it had no `input.context`, `baseline_rtls` was empty, and the area check was
+skipped entirely. Verified across all 250 gated records: the report schema is
+`{compile, id, kind, notes, synth, verdict}` with no area field and not one area
+or skip note. Every area-opt answer in that run cleared the gate with its
+reduction claim unchecked. A gate pass means "parses, elaborates, survives a
+yosys smoke" — nothing about the stated threshold. Disclose that limitation in
+the RESULT whenever the gate is invoked this way.
 
 **Two binding consequences:**
 
