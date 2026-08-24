@@ -297,9 +297,28 @@ and is exempt):
    Every collision in that run was caught by an agent stopping to ask. Zero
    files were corrupted. **The brief saved the data, not the coordination.**
 
-   **Verify a completion CLAIM on disk before recording it.** One agent
-   reported a batch "gated 10/10" that existed nowhere in the run directory.
-   An agent's report is a hypothesis; `ls` is the evidence.
+   **Verify a completion CLAIM on disk — but check the LAST-WRITTEN artefact.**
+   The emit chain writes several files, and checking the FIRST one races the
+   agent mid-write. In that run an agent reported a batch "gated 10/10", a
+   check found nothing, and a second check two minutes later found all ten:
+   the writes had landed at 23:27:07 (drafts) and 23:27:22 (responses +
+   report), squarely between the two checks. The agent's report had been
+   accurate the whole time.
+
+   **A read-after-write race looks EXACTLY like a lost-output bug.** Both
+   present as "the agent says it finished and the file is not there". Reacting
+   to the absence produced a fabricated cause (a relative-vs-absolute path
+   theory), an instruction to a second agent to redo work that already existed,
+   and an instruction to the first agent to hunt for output that was never
+   lost — all from one snapshot taken a minute early.
+
+   The fix is a **completion MARKER, not a progress file**: `cvdp_gate.py`
+   writes `reports/cvdp_gate_<batch>.json` LAST, so its presence means the
+   whole trio is on disk. Generally: pick the artefact the emit path writes
+   last and make ITS existence the done-signal. Never infer completion from
+   the file the agent appends to incrementally — that file is non-empty
+   throughout the work and complete only at the end, so it cannot distinguish
+   "in progress" from "done".
 8. **`wc -l` UNDERCOUNTS A JSONL — count by parsing, diff by id**
    (same run). `wc -l` counts NEWLINES. A JSONL whose last record was appended
    without a trailing `\n` reports one fewer than it holds, and under
