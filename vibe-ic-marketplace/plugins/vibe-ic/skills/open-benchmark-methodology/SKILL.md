@@ -647,23 +647,57 @@ patching either symptom.
 cause is a reading of the design's dataflow against the prompt's table; no
 deterministic check pairs them.
 
-### § 4.04 — AREA-OPTIMIZATION problems: MEASURE, and look for oversized TYPES (2026-08-24)
+### § 4.04 — AREA-OPTIMIZATION problems: reproduce the HARNESS's measurement (2026-08-24)
 
-A prompt that demands a measurable reduction ("wires −19%, cells −22%") is not
-satisfied by clean-up. **The synthesis tool has already done the clean-up.**
+A prompt that demands a measurable reduction ("wires −19%, cells −22%") is graded
+by the problem's own synth harness, and **that harness does not measure what a
+hand-rolled `yosys -p 'synth -top T; stat'` measures.** Two differences, both
+load-bearing:
 
-Measured on CVDP `cont_adder_0045`: removing a dead 32-bit register, sharing a
-four-times-repeated adder, and folding six parameter comparators into two
-(`(x>=T1)||(x>=T2)||(x>=T3)` ⟺ `x >= min(T1,T2,T3)`, exact for any signed
-parameters and free because the min folds at elaboration) produced:
+1. **The baseline is a hardcoded constant, not a re-synthesis of the original.**
+   `docker-compose.yml` carries `WIRES`/`CELLS`/`PERCENT_*` as environment
+   variables; `synth.py` synthesizes ONLY the candidate and compares against
+   those literals. Re-synthesizing the original yourself answers a different
+   question than the one being scored.
+2. **The flow is a specific `synth.tcl`** — `proc; opt; fsm; opt; memory; opt;
+   techmap; opt; synth -top; clean` — run inside the harness's container. On
+   `cont_adder_0045` that flow reports the original at **810** wires where a bare
+   `synth -top` reports **722**. Different flow, different denominator.
+
+Read `harness/<n>/src/synth.tcl` and the compose env, and reproduce THAT.
+
+#### ⚠️ RETRACTION — the "yosys already did it, expect 0%" claim was a measurement artifact
+
+An earlier revision of this section asserted, from a measurement on
+`cont_adder_0045`, that removing a dead 32-bit register, sharing a repeated
+adder, and folding six parameter comparators into two produced
 
     original   wires 411  cells 591
     "optimized" wires 411  cells 591     ← 0%
 
-Yosys already performs dead-code elimination and common-subexpression sharing.
-Hand-writing them changes nothing.
+and concluded that yosys already performs DCE and CSE so hand-writing them is
+worthless. **That is wrong. The official scorer PASSED that exact answer at
+−45.4 % wires / −34.3 % cells** (810→442 against the harness baseline of 820/1000,
+thresholds 19 %/22 %). Reproduced on the host afterwards: harness flow 810→442,
+bare `synth` flow 722/902→447/662 (−38 %/−27 %). The edits were never a no-op.
 
-**Where the wins actually are — the counter-example, `sorter_0059`:** loop
+**The signature that should have caught it, and the general rule:**
+
+> **An EXACT tie on every metric at once (411 = 411 AND 591 = 591) is the
+> signature of measuring the SAME INPUT TWICE — not of a change that did
+> nothing.** Two genuinely different sources agreeing to the unit on two
+> independent counts is a coincidence you should refuse to believe. A real no-op
+> rewrite ties because it is byte-identical after elaboration; a substantive
+> rewrite that ties means the "before" and "after" paths read the same file.
+> Before drawing ANY conclusion from a zero delta, prove the two runs consumed
+> different bytes — diff the inputs, or perturb one and watch the number move.
+
+The damage was not the wrong number, it was the **theory built on it**: a general
+claim about what synthesis tools already do, shipped into this skill and into
+memory, derived from a single unverified zero. When a measurement contradicts
+what the edit plainly should do, suspect the measurement first.
+
+**Where the wins actually are — `sorter_0059`:** loop
 variables declared `integer` (32-bit) for values 0..8, sized to the range →
 **−36.8% wires / −36.5% cells**, cycle-identical over 60 runs. The pattern is an
 **OVERSIZED DECLARED TYPE**, which no synthesis pass may narrow because the
@@ -686,7 +720,7 @@ So the three area-opt categories, in order of what a tool can already do:
 
 | category | can yosys do it? | example |
 |---|---|---|
-| expression restructuring, dead code, CSE | **yes — expect 0%** | shared adder, folded comparators |
+| expression restructuring, dead code, CSE | **partly — measure, do NOT assume 0%** (`cont_adder_0045` scored −45%/−34% doing exactly this) | shared adder, folded comparators |
 | structural round-trip | **VERSION-DEPENDENT** | encode/decode pair, register holding 5 values in 8 bits |
 | oversized declared type | no — the width is what the source says | `integer` index carrying 0..8 |
 | redundant STATE across a sequential argument | no — needs equivalence reasoning | one counter is another's negation |
