@@ -414,8 +414,25 @@ _LANDING_SCRIPT_SHA256 = (
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
 # whose functional tests prove selection -> aggregate JUnit coverage.
+# RE-PINNED 2026-08-24, and it is the FOURTH digest in this file to move for one
+# edit. The other three (whole file / execution prefix / run_repo_tools_pytest)
+# were re-pinned when `gatekeeper-land.sh` changed; THIS one pins the SEMANTIC
+# DRIVER, `pytest_per_file_junit.py`, and it was missed in that same round.
+#
+# WHAT MOVED: the driver's domain-progress scope guard, which was a flat cap of
+# 64 distinct `(nodeid, scope)` keys per session and is now split into a
+# per-node rule plus a ceiling derived from what the session actually collected.
+# The guard still refuses a runaway single test; it no longer refuses a large
+# honest selection. Nothing about supervision, timeouts or the JUnit contract
+# this file checks moved with it.
+#
+# THE COST OF MISSING IT, RECORDED: the edit landed as v1.11.74 with only the
+# ten directly-related tests run, so `inner timeouts fit the harness` went red
+# on main and stayed red until someone read a hygiene report. A digest pin is
+# exactly the check that catches this, and it did — one landing later than it
+# should have.
 _SEMANTIC_DRIVER_SHA256 = (
-    "2096e844b75c0d6c98d3de2de4d6364079ae79cc9fa590479d60666d74b3c1a6"
+    "da77e90942aff5ff9f61aff7683a17eb477a5fbdf4dfcffac17f954e58c8125f"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
