@@ -269,12 +269,29 @@ and is exempt):
    orchestrator decided who owned what from its own dispatch history plus file
    mtimes. Both are unreliable:
 
-   - **mtime is not liveness.** Three times an agent was declared dead after
-     5–20 minutes of a quiet file and its batch reassigned; all three were
-     alive. These agents take up to **7 minutes before their first write** and
-     think for minutes between problems. A quiet file means SLOW, never
-     ABANDONED. There is no mtime threshold that separates the two — do not
-     look for one.
+   - **NEITHER liveness signal is usable — only the artefact is.** Two things
+     look like status and are not:
+
+     | signal | what it actually means |
+     |---|---|
+     | agent `idle_notification` | available to RECEIVE a message; says nothing about work state |
+     | quiet file (mtime) | could be thinking, could be stopped; no threshold separates them |
+     | **emit path's LAST artefact exists AND its size matches** | **done** |
+
+     mtime was wrong **five times out of five**: an agent declared stalled after
+     3–20 minutes of a quiet file was alive every time, including one that went
+     6/10 → 9/10 within minutes of being flagged cold. These agents take up to
+     7 minutes before their FIRST write and think for minutes between problems.
+
+     Idle notifications were equally misleading — agents emitted them **while
+     actively authoring**, one sending three in the same minute its file
+     advanced by three problems. Treating "idle" as "free" and reassigning its
+     batch is a collision every time.
+
+     **To learn whether an agent is alive: take two samples separated in time
+     and look for advancement, or just ASK it** ("one line: still on X, which
+     item?"). Asking is cheap and decisive; inferring is neither, and it was
+     wrong every time it was tried in that run.
    - **A handoff needs BOTH sides told AND the old owner's acknowledgement.**
      Inter-agent messages are not synchronous. Twice the new owner was told
      "batch N is yours" and the old owner "drop batch N", and the second
