@@ -144,6 +144,28 @@ def test_lane_tip_receipt_ignores_other_lane_program_but_catches_ours(tmp_path):
     )
     assert not errors
 
+    # A squash has the received blobs but not the received commit as ancestor.
+    # That is the repository's normal landing shape and must remain provable.
+    _run(repo, "checkout", "-q", "-b", "squash", base)
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "RESULT.md").write_text("candidate\n")
+    squash = _commit(repo, "squash-equivalent landing")
+    errors, detail = _truth.lane_constraint_errors(
+        repo, head=squash, lane_tip=candidate, lane_base=base,
+        excluded_source=source,
+    )
+    assert not errors, errors
+    assert any("squash-equivalent" in item for item in detail), detail
+
+    (docs / "RESULT.md").write_text("mutated after receipt\n")
+    harmed_squash = _commit(repo, "harm received content")
+    errors, _ = _truth.lane_constraint_errors(
+        repo, head=harmed_squash, lane_tip=candidate, lane_base=base,
+        excluded_source=source,
+    )
+    assert any("neither an ancestor nor squash-equivalent" in error
+               for error in errors), errors
+
     _run(repo, "checkout", "-q", "-b", "lane-bad", candidate)
     lane_program = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs" / "lane.py"
     lane_program.parent.mkdir(parents=True)

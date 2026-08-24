@@ -256,12 +256,9 @@ def lane_constraint_errors(
         errors.append(
             f"excluded source parent is {parent.stdout.strip() or 'unresolved'}, expected frozen base {lane_base}"
         )
-    for ancestor, descendant, label in (
-        (excluded_source, lane_tip, "lane tip does not descend from the excluded source"),
-        (lane_tip, head, "lane tip receipt is not contained in the measured HEAD"),
-    ):
-        if _git(repo, "merge-base", "--is-ancestor", ancestor, descendant).returncode != 0:
-            errors.append(label)
+    if _git(repo, "merge-base", "--is-ancestor",
+            excluded_source, lane_tip).returncode != 0:
+        errors.append("lane tip does not descend from the excluded source")
 
     diff = _git(repo, "diff", "--name-status", lane_base, lane_tip)
     if diff.returncode != 0:
@@ -273,6 +270,28 @@ def lane_constraint_errors(
         if len(parts) >= 2:
             changed.append((parts[0], parts[-1]))
     details.append(f"lane-owned changed paths: {len(changed)}")
+
+    # A normal squash landing deliberately does not preserve commit ancestry.
+    # In that case, prove the thing ancestry was standing in for: every path
+    # owned by the immutable lane receipt has the exact received blob at HEAD.
+    # This stays scoped to base..lane_tip, so unrelated batch members neither
+    # help nor hurt the result.
+    if _git(repo, "merge-base", "--is-ancestor",
+            lane_tip, head).returncode != 0:
+        mismatched = []
+        for _status, path in changed:
+            tip_blob = _git(repo, "rev-parse", f"{lane_tip}:{path}")
+            head_blob = _git(repo, "rev-parse", f"{head}:{path}")
+            if (tip_blob.returncode != 0 or head_blob.returncode != 0
+                    or tip_blob.stdout.strip() != head_blob.stdout.strip()):
+                mismatched.append(path)
+        if mismatched:
+            errors.append(
+                "lane tip is neither an ancestor nor squash-equivalent at "
+                f"its owned paths: {mismatched}")
+        else:
+            details.append(
+                "lane receipt is squash-equivalent at every lane-owned path")
 
     plugin = "vibe-ic-marketplace/plugins/vibe-ic/"
     program_root = plugin + "programs/"
