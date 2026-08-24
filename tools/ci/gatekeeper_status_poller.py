@@ -175,6 +175,41 @@ def classify(rc: int, out: str) -> tuple[str, str]:
     return "failure", f"gatekeeper-land FAIL (gate exit {rc})"
 
 
+
+def _refusal_without_the_repetition(text: str, checkout: str,
+                                    limit: int = 600) -> str:
+    """Bound a refusal by removing what REPEATS, never what it says.
+
+    MEASURED 2026-08-24. This site used `[:300]`, and the preflight it quotes
+    names the offending checkout FOUR times -- once as the subject, once inside
+    the alternates path, and twice more in the remedy. Under a long TMPDIR
+    those four copies alone exceed 300 characters, so the message stopped at
+    `.../objects/info` and the word `alternates` -- the CAUSE -- was cut off.
+    `test_the_prepared_checkout_is_PROVED_self_contained_not_assumed` asserts
+    that word is present, so the same code passed alone and failed in a full
+    session. That is not flakiness: it is a truncation that removes text by
+    POSITION, applied to a message whose informative half is at the end.
+
+    Two repairs were tried first and BOTH still lose the cause:
+      * a bigger limit moves the cliff to a deeper temp directory;
+      * eliding the MIDDLE keeps the rule name and the remedy and drops
+        `alternates`, which sits between two copies of the path.
+
+    So the path is written ONCE and every later copy becomes `<checkout>`. No
+    word of the reason is removed at any path length. The positional bound
+    stays as a last resort and says where it cut, so nobody reads the result as
+    the whole of the message.
+    """
+    text = " ".join(text.split())
+    if checkout and checkout in text:
+        first = text.index(checkout)
+        head = text[:first + len(checkout)]
+        text = head + text[first + len(checkout):].replace(checkout, "<checkout>")
+    if len(text) <= limit:
+        return text
+    half = (limit - 24) // 2
+    return f"{text[:half]} …[{len(text) - 2 * half} chars elided]… {text[-half:]}"
+
 def prepare_gate_checkout(repo_root: Path, sha: str, dest: Path
                           ) -> tuple[Path, str | None]:
     """`(checkout, refusal)` — a SELF-CONTAINED clone of `sha`, or why not.
@@ -237,7 +272,7 @@ def prepare_gate_checkout(repo_root: Path, sha: str, dest: Path
         if pf.returncode != 0:
             return dest, ("the checkout prepared for "
                           f"{sha[:12]} is not self-contained: "
-                          f"{(pf.stderr or pf.stdout).strip()[:300]}")
+                          f"{_refusal_without_the_repetition((pf.stderr or pf.stdout).strip(), str(dest))}")
     return dest, None
 
 
