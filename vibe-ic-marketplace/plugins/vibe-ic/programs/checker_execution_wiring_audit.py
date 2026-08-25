@@ -348,6 +348,46 @@ _BARE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 #: `tools/ci/run_plugin_self_audit.sh` alone. Requiring a literal `<stem>.py`
 #: there accuses every one of them.
 _SHELL_DISPATCH_RE = re.compile(r"\}\s*\.py\b|\$[A-Za-z_][A-Za-z0-9_]*\.py\b")
+
+#: A shell script named in a shape that EXECUTES it: `bash x.sh`, `sh x.sh`,
+#: `./x.sh`, `source x.sh`, `. x.sh`, or a subprocess list element. Naming a
+#: script in prose is not running it, and the prose-stripper has already
+#: removed comments by the time this is applied.
+_SHELL_EXEC_RE = re.compile(
+    r"(?:\b(?:bash|sh|zsh|source)\s+|\.\s+|\./|[\"\'])"
+    r"(?:[\w./$={}-]*/)?([\w.-]+\.sh)\b")
+
+
+def _executed_scripts(hay: Dict[str, Dict[str, "_Source"]]) -> Set[str]:
+    """Basenames of every `.sh` some file EXECUTES, across every haystack.
+
+    WHY A DISPATCHER MUST EARN ITS ENTRY-PATH STATUS (vibe-ic#693, one level
+    up). `_shapes` credits every name inside a `GATES=(...)` shell dispatcher as
+    invoked, because requiring a literal `<stem>.py` there would accuse every
+    gate the dispatcher runs through a variable. That reasoning is sound for a
+    dispatcher something RUNS. It was applied to every dispatcher, including
+    `tools/ci/run_plugin_self_audit.sh`, whose six gates it therefore scores as
+    wired — while `.github/workflows/` is empty and every reference to that
+    script in the tree is a comment or a docstring. The audit that answers
+    "did we forget to plug something in" was answering it wrong by six, in the
+    direction of complacency.
+
+    ONE HOP, DELIBERATELY. This asks whether ANYTHING executes the script, not
+    whether that caller is itself reached. Full transitive reachability needs a
+    declared root set, and inventing one would trade a known false-clean for an
+    unknown false-accusation. One hop is decidable from the tree alone and
+    catches the documented case: `repo_hygiene_gates.sh` is executed by
+    `gatekeeper-land.sh` and keeps its credit; `run_plugin_self_audit.sh` is
+    executed by nothing and loses it.
+    """
+    out: Set[str] = set()
+    for files in hay.values():
+        for src in files.values():
+            for m in _SHELL_EXEC_RE.finditer(src.stripped):
+                out.add(m.group(1))
+    return out
+
+
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
@@ -483,17 +523,19 @@ class _FileFacts:
     against one — so its tree is never walked. That is most of the corpus.
     """
 
-    __slots__ = ("tokens", "_kind", "_src", "_shapes")
+    __slots__ = ("tokens", "_kind", "_src", "_shapes", "_executed")
 
-    def __init__(self, kind: str, src: "_Source", tokens: Set[str]):
+    def __init__(self, kind: str, src: "_Source", tokens: Set[str],
+                 executed: Set[str] = frozenset()):
         self.tokens = tokens
         self._kind = kind
         self._src = src
         self._shapes = None
+        self._executed = executed
 
     def _resolve(self):
         if self._shapes is None:
-            self._shapes = _shapes(self._kind, self._src)
+            self._shapes = _shapes(self._kind, self._src, self._executed)
         return self._shapes
 
     @property
@@ -563,13 +605,23 @@ def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, "_Source"]]
         "SKILL": _read(list((plugin / "skills").rglob("*.md"))
                        + list((plugin / "agents").rglob("*.md"))
                        + list((plugin / "commands").rglob("*.md")), repo_root),
-        "PROG": _read([p for p in pys if not is_test(p)], repo_root),
+        # `programs/` AND `benchmark/`. The benchmark directory is not test
+        # scaffolding — it holds `cvdp_gate.py`, `score_iverilog_tb.py` and
+        # `gates_atomic.py`, which are the live emit and scoring paths. Leaving
+        # it out made this audit accuse `harness_verdict_forgery_gate` of having
+        # no runner while `benchmark/score_iverilog_tb.py:153` imports it: the
+        # same defect as the dispatcher rule above, one directory over — a
+        # confident verdict from a corpus that could not contain the evidence.
+        "PROG": _read([p for p in pys if not is_test(p)]
+                      + [p for p in (plugin / "benchmark").rglob("*.py")
+                         if not is_test(p)], repo_root),
         "TEST": _read([p for p in pys if is_test(p)]
                       + list((plugin / "tests").rglob("*.py")), repo_root),
     }
 
 
-def _shapes(kind: str, src: "_Source"):
+def _shapes(kind: str, src: "_Source",
+            executed: Set[str] = frozenset()):
     """`(invoked, undetermined)` for one file — the INVOCATION/MENTION split."""
     if src.path.suffix == ".py":
         tree = src.tree()
@@ -578,7 +630,7 @@ def _shapes(kind: str, src: "_Source"):
             # present is NOT DETERMINED rather than silently either verdict.
             return set(), set(src.tokens_of())
         return _py_evidence(tree)
-    if _SHELL_DISPATCH_RE.search(src.stripped):
+    if _SHELL_DISPATCH_RE.search(src.stripped) and src.path.name in executed:
         # A dispatcher executes the names it holds: `GATES=(...)` then
         # `python3 "$PROGRAMS/${gate}.py"`. Over-counting inside one such file
         # is the safe direction for an ACCUSATION; the alternative, measured,
@@ -598,7 +650,8 @@ def _shapes(kind: str, src: "_Source"):
 
 
 def _tokenise(hay: Dict[str, Dict[str, "_Source"]]) -> Dict[str, Dict[str, "_FileFacts"]]:
-    return {k: {p: _FileFacts(k, s, s.tokens_of()) for p, s in v.items()}
+    executed = _executed_scripts(hay)
+    return {k: {p: _FileFacts(k, s, s.tokens_of(), executed) for p, s in v.items()}
             for k, v in hay.items()}
 
 
