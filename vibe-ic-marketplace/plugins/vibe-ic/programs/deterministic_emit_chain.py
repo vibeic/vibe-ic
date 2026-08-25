@@ -322,6 +322,12 @@ def emit_would_be_blocked(prompt_text: str, rtl: str,
         spec.write_text(prompt_text)
         outj = tdp / "conf.json"
         try:
+            # ADVISORY spawn: the checker's verdict is read from `--json`, never
+            # from its exit code, and a checker that could not run must not
+            # manufacture a block — a missing tool would otherwise demote a real
+            # solve. `[]` is the honest answer to "which rules did it trip" when
+            # nothing examined the RTL, and the caller treats [] as "not refused".
+            # ADVISORY — verdict read from --json, not from the exit status.
             _sp.run([sys.executable, str(_HERE / "spec_conformance_check.py"),
                      "--rtl-dir", str(tdp), "--spec", str(spec),
                      "--top", "TopModule", "--json", str(outj)],

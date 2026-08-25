@@ -4,14 +4,6 @@
     {
       "key": "B::vibe-ic-marketplace/plugins/vibe-ic/programs/full_suite_run_check.py::full_suite_run_check.py",
       "reason": "INSTANCE 2 of the pair the 2026-08-21 capture measured. 294 lines whose subject is whether the full suite RAN, with zero occurrences of subprocess, Popen, os.system, check_output and returncode: it decides by matching a command line as text and publishes a verdict about something it never observed. Recorded, not repaired — giving it a way to observe a run is a change to what it BLOCKS on."
-    },
-    {
-      "key": "A::vibe-ic-marketplace/plugins/vibe-ic/programs/verilogeval_tier_pipeline.py::spec_conformance_check.py",
-      "reason": "A conformance spawn inside a tier pipeline whose result is unbound with check off, enclosed by a handler that swallows everything. Whether the tier should turn on this verdict is a decision for the lane that owns the pipeline; this row records that the decision is currently made by silence."
-    },
-    {
-      "key": "A::vibe-ic-marketplace/plugins/vibe-ic/programs/verilogeval_human_tier_pipeline.py::spec_conformance_check.py",
-      "reason": "The same site in the sibling pipeline, and the same disposition."
     }
   ]
 }

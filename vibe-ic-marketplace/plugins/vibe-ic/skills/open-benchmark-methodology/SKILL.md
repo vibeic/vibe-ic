@@ -1369,10 +1369,24 @@ The capture loop (`benchmark-enhancement-capture`) says *move every recovery int
 the program layer*. § 9 is the **measurement + promotion harness** that makes that
 loop legible per problem. It classifies every benchmark problem into a STABILITY
 tier and pushes each tier upward as far as is HONESTLY possible. The reference
-implementation is `programs/cvdp_solve_pipeline.py`; each suite has its own
-mirror: `programs/{verilogeval_tier_pipeline, verilogeval_human_tier_pipeline,
-rtllm_tier_pipeline}.py` (each exposes `classify` / `build_gate` / `gate_check` /
-a floor-prover / an iverilog Tier-1 verifier + a `--dist` CLI).
+implementation was four per-suite pipelines
+(`programs/{cvdp_solve, verilogeval_tier, verilogeval_human_tier, rtllm_tier}_pipeline.py`),
+each a private copy of the same tier logic. **They are deleted.** Four copies of
+one judgement is four places for it to drift, and three of them were reachable
+only by importing a benchmark's own module — so the general flow could not use
+any of it. What they held now lives where every caller can reach it:
+
+| the pipelines' capability | where it lives now |
+|---|---|
+| `classify` / tier assignment | `programs/task_nature_route.py` (nature -> entry step) |
+| `build_gate` / `gate_check` | `programs/spec_conformance_gate.py`, wired into `spec_conformance_check` |
+| the deterministic emitters | `programs/deterministic_emit_chain.py` (`try_emit` / `try_emit_ex`) |
+| the emit-blocking parity check | `deterministic_emit_chain.emit_would_be_blocked` |
+| a simulator transcript -> PASS/FAIL | `programs/testbench_verdict.py` |
+| the `--dist` CLI | `programs/benchmark_dispatch.py --solve` |
+
+The tier vocabulary below is still the right way to read a run; it is now
+measured through the shared programs rather than a per-suite copy of them.
 
 ### The tiers (highest stability first)
 

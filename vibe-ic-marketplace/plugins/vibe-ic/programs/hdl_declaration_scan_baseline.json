@@ -1,5 +1,5 @@
 {
-  "_comment": "Declaration regexes scanned over text no stripper touched (vibe-ic#731). MAY ONLY SHRINK. A comment sentence matching `module\\s+(\\w+)` mints a module that does not exist \u2014 24 of them, measured, in #729.",
+  "_comment": "Declaration regexes scanned over text no stripper touched (vibe-ic#731). MAY ONLY SHRINK. A comment sentence matching `module\\s+(\\w+)` mints a module that does not exist — 24 of them, measured, in #729.",
   "known": [
     "_dft_netlist_ports::restore_inout_ports::hdr(chained_text)",
     "_dft_netlist_ports::strip_inout_ports::hdr_re(text)",
@@ -162,10 +162,6 @@
     "tristate_self_rx_mask_check::_collect_inout_names::_INOUT_RE(t)",
     "vacuous_testbench_check::discover_testbenches::_PORTLESS_MODULE(src)",
     "vacuous_testbench_check::is_testbench::_PORTLESS_MODULE(code)",
-    "verilogeval_human_tier_pipeline::_parse_candidate_header::_PORT_RE(ports_text)",
-    "verilogeval_human_tier_pipeline::parse_interface::_PORT_RE(ports_text)",
-    "verilogeval_tier_pipeline::_named_module::_DECL_MODULE_RE(text)",
-    "verilogeval_tier_pipeline::_named_module::_NAMED_MODULE_RE(text)",
     "vibe_ic_one_shot_runner::_scan_rtl_modules::_MODULE_DECL_RE(t)",
     "waveform_truth_table_synth::_synth_sequential_1ff::_FF_OBSERVABLE(prompt)",
     "waveform_truth_table_synth::parse_ports::_PORT_BULLET(prompt)",

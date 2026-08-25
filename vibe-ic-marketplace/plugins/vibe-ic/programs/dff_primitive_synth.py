@@ -11,9 +11,12 @@ A recurring atomic spec form is the textbook D flip-flop:
 i.e. a clocked register `q <= d` (with `q <= 0` when a synchronous reset is
 asserted). This solver emits ONLY that structural primitive and SKIPs (returns
 None, §4.05) on any deviation, so it can never emit a wrong machine. The emit is
-VERIFIED against the official testbench by the caller
-(verilogeval_tier_pipeline --verify) — an emit that does not score `Mismatches:0`
-is dropped, so a convention mismatch can never be banked.
+VERIFIED against the official testbench by the caller: this module is a member
+of `deterministic_emit_chain.EMITTERS`, and `try_emit(..., verify=<oracle>)`
+DISCARDS an emit the oracle refuses and moves to the next emitter, so a
+convention mismatch can never be banked. (The named caller used to be
+`verilogeval_tier_pipeline --verify`; that pipeline is deleted and the chain is
+where the rule lives now.)
 
 WHY this is GENERAL (keyed on STRUCTURE, not on a problem id / name):
   * The trigger is the canonical PRIMITIVE NAME "D flip-flop" / "D flip flop"

@@ -185,7 +185,7 @@
         "router": "benchmark/cvdp_task_router.py --dataset <ds> --report <run>/route.json",
         "phase1_route": "benchmark/cvdp_phase1_entry.py --dataset <ds> --run <run>",
         "ai_led_route": "per-cid plugin loop, see open-benchmark-methodology § 5.1 table",
-        "tier_measure": "programs/cvdp_solve_pipeline.py --dist  (5-TIER; T1 = deterministic emit, no AI)",
+        "tier_measure": "programs/benchmark_dispatch.py --solve  (5-TIER; T1 = deterministic emit, no AI — names the emitter per problem)",
         "emit": "benchmark/cvdp_gate.py --batch <drafts> --out <responses> --prompts <prompts> --dataset <ds>",
         "note": "--prompts AND --dataset are not optional conveniences; they arm the guards. The gate refuses without them (or an explicit --without-spec-guards)."
       }

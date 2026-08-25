@@ -28,9 +28,28 @@ def _by_id():
     return {str(step["id"]): step for step in _steps()}
 
 
+#: The canonical flow's step ids, in order. Pinned as IDENTITIES and not only as
+#: a COUNT: one step arriving and another leaving in the same change leaves
+#: `len(ids) == 68` true and the flow silently different. The count is derived
+#: from this tuple at assertion time so the two can never disagree.
+CANONICAL_STEP_IDS = (
+    'D1', '0.5ic', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11',
+    'FS1', 'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7',
+    'A8', 'A9', '14', '15', '15.5ic', '16', '17', '18', '19', '20', '21',
+    '22', 'DT2', 'DT3', '23', '24', '25', '26', '26.5ic', '27', '28', '29',
+    '30', '31', '32', '33', '34', '35', '36', '37', '37.5ip', '37.5ic',
+    '38', '39', 'M1', 'M2', 'M3', 'M4', '40', '41', '42', '43', '44', 'P0',
+)
+
+
 def test_canonical_flow_remains_68_steps_without_a_1_6x_step():
     ids = tuple(str(step["id"]) for step in _steps())
-    assert len(ids) == 68, f"canonical flow grew to {len(ids)} steps: {ids}"
+    assert ids == CANONICAL_STEP_IDS, (
+        "canonical flow changed:\n"
+        f"  added   {sorted(set(ids) - set(CANONICAL_STEP_IDS))}\n"
+        f"  removed {sorted(set(CANONICAL_STEP_IDS) - set(ids))}\n"
+        f"  reordered: {ids != CANONICAL_STEP_IDS and set(ids) == set(CANONICAL_STEP_IDS)}")
+    assert len(ids) == len(CANONICAL_STEP_IDS)
     assert "1.6x" not in ids, "rewrite fidelity is a Step-2 clause, not a step"
 
 
