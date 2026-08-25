@@ -79,6 +79,7 @@ if str(_HERE) not in sys.path:
 # (bridge → registry → solver → bridge). The lazy import runs after both modules
 # are fully defined.
 import verilog_width_resolve as _W  # noqa: E402  symbolic/param-expression width reader
+import prose_interface_table_read as _tbl  # noqa: E402  markdown signal/direction table reader
 
 # The record-level operation solvers (gf / bcd / crc / hamming / encoder / …) and the
 # dispatch over them MOVED to `spec_artifact_registry.generate_from_record()` — the
@@ -578,81 +579,6 @@ def _prose_bullet_ports(prompt: str, params: Optional[Dict[str, int]] = None
     return ins, outs, widths
 
 
-def _signal_direction_table(prompt: str, params: Optional[Dict[str, int]] = None
-                            ) -> Tuple[List[str], List[str], Dict[str, int], Dict[str, str]]:
-    """(input_names, output_names, widths, symbolic) from a markdown INTERFACE table
-    whose header carries a Signal/Port/Name column AND a Direction column — the
-    common CVDP `| Signal | Direction | Bit Width | ... |` shape. A PROMPT-sourced
-    interface (legal). Names classified by the Direction cell (Input/inout ->
-    input, Output -> output); `widths` maps a name to its resolved width from the
-    `Bit Width` cell (a literal int, an `[hi:lo]` range, or a parameter name whose
-    default is in `params`); `symbolic` records `name -> "PARAM-1:0"` when the width
-    cell is a parameter, so the emit re-parameterizes the port. Absent when the
-    cell is unresolvable."""
-    params = params or {}
-
-    def _width_cell(cell: str) -> Tuple[Optional[int], Optional[str]]:
-        cell = cell.strip().strip("`")
-        m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", cell)
-        if m:
-            return abs(int(m.group(1)) - int(m.group(2))) + 1, None
-        m = re.fullmatch(r"(\d+)", cell) or re.search(r"\b(\d+)\s*-?\s*bits?\b", cell, re.I)
-        if m:
-            return int(m.group(1)), None
-        for pnm, pv in params.items():          # a parameter name (WIDTH/DATA_WIDTH)
-            if re.search(rf"\b{re.escape(pnm)}\b", cell):
-                return pv, f"{pnm}-1:0"
-        return None, None
-
-    lines = prompt.splitlines()
-    for i, ln in enumerate(lines):
-        low = ln.lower()
-        if "|" not in ln or "direction" not in low:
-            continue
-        if not any(k in low for k in ("signal", "port", "name")):
-            continue
-        if i + 1 >= len(lines) or not re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
-            continue
-        headers = [h.strip().strip("`").lower() for h in ln.strip().strip("|").split("|")]
-        nci = next((j for j, h in enumerate(headers)
-                    if h in ("signal", "port", "name", "signal name", "port name")), None)
-        dci = next((j for j, h in enumerate(headers) if "direction" in h), None)
-        wci = next((j for j, h in enumerate(headers)
-                    if "width" in h or "bit" in h), None)
-        if nci is None or dci is None:
-            continue
-        ins: List[str] = []
-        outs: List[str] = []
-        widths: Dict[str, int] = {}
-        symbolic: Dict[str, str] = {}
-        for body in lines[i + 2:]:
-            if "|" not in body or not body.strip().startswith("|"):
-                break
-            cells = [c.strip().strip("`") for c in body.strip().strip("|").split("|")]
-            if len(cells) != len(headers):
-                continue
-            nm = re.match(r"([A-Za-z_]\w*)", cells[nci].strip())
-            if not nm:
-                continue
-            name = nm.group(1)
-            d = cells[dci].lower()
-            if "out" in d:
-                outs.append(name)
-            elif "in" in d:                 # input / inout -> input
-                ins.append(name)
-            else:
-                continue
-            if wci is not None:
-                w, sym = _width_cell(cells[wci])
-                if w is not None:
-                    widths[name] = w
-                if sym is not None:
-                    symbolic[name] = sym
-        ins = list(dict.fromkeys(ins))
-        outs = list(dict.fromkeys(outs))
-        if ins and outs:
-            return ins, outs, widths, symbolic
-    return [], [], {}, {}
 
 
 # --------------------------------------------------------------------------- #
@@ -705,7 +631,8 @@ def extract_interface_ex(record: dict, top: str
         # cover. Its Bit-Width column feeds `_w` (via sig_widths) below; a
         # parameter-width cell (`WIDTH`) also records its symbolic form so the emit
         # re-parameterizes.
-        s_ins, s_outs, sig_widths, sig_symbolic = _signal_direction_table(prompt, params)
+        s_ins, s_outs, sig_widths, sig_symbolic = _tbl.read_signal_direction_table(
+            prompt, params)
         if s_ins and s_outs:
             c_ins, c_outs = s_ins, s_outs
             symbolic.update(sig_symbolic)
