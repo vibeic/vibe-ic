@@ -251,40 +251,68 @@ def test_absent_root_is_bad_invocation(tmp_path):
     assert rc == 3, out
 
 
-# KNOWN-LIVE DEFECT, PINNED RATHER THAN WAIVED.
+# THE DEFECT THIS PINNED IS FIXED, AND THE PIN NOW HOLDS IT SHUT.
 #
 # Arm A (flow `required_outputs`) is clean and stays clean. Arm B — the family
-# rule — reports three emitters in `phase3_one_shot_runner.py` that write a
-# timing/power report without STA_BASIS while the same module stamps another one
-# it emits. The capture that motivated this rule says so in as many words
-# ("Not yet fixed. The lane states the remedy as three added statements in the
-# multi-corner emitters"), so this is the rule working, not the rule misfiring.
+# rule — used to report two emitters in `phase3_one_shot_runner.py` that wrote a
+# timing/power report without STA_BASIS while the same module stamped another
+# one it emits: `_emit_power_report` (power.rpt) and `_emit_si_crosstalk_report`
+# (si_crosstalk.rpt, both the SPEF and the no-SPEF branch).
 #
-# The stamps are NOT authored here on purpose: STA_BASIS is a claim about which
-# side of place-and-route a report measures, and asserting POST_ROUTE for a
-# session whose inputs were never checked is the unearned claim this whole lane
-# exists to prevent. `_emit_power_report` already carries the `basis` argument
-# that answers it; the other two need their sessions read first.
+# The earlier note here said the stamps were NOT authored "on purpose", because
+# asserting POST_ROUTE for a session whose inputs were never checked is the
+# unearned claim this whole lane exists to prevent, and that "the other two need
+# their sessions read first". The sessions have now been read, and each stamp is
+# derived rather than chosen:
 #
-# This test pins the SET. It goes red if a new unstamped sibling appears AND if
-# one is fixed — at which point the fixer edits this test, which is the point.
-# WAS THREE. `sta_mcorner_ocv_posteco.rpt` was removed after it was checked
-# rather than assumed: `_measure_posteco_mcorner_ocv` stamps nothing itself, but
-# hands the report path to `_emit_mcorner_ocv_sta`, whose generated session writes
-# STA_BASIS / _LIBERTY / _NETLIST / _SPEF into that file. It was a FALSE POSITIVE
-# published by a scope-local reading, and the count coinciding with the capture's
-# "three added statements" was coincidence, not corroboration.
-_KNOWN_UNSTAMPED = {
-    "power.rpt",
-    "si_crosstalk.rpt",
-}
+#   * `_emit_power_report` already computed `basis_stamp` from what the session
+#     LINKED — POST_ROUTE_SPEF / POST_ROUTE_NO_SPEF when it linked the routed
+#     netlist, PRE_LAYOUT_ESTIMATE when it did not. The value was being written
+#     as `POWER_BASIS:` and as prose `basis:`, neither of which any reader
+#     parses. The stamp writes the SAME derived value in the one spelling
+#     `_sta_basis.declared_basis` reads; nothing new is asserted.
+#   * `_emit_si_crosstalk_report` is Step 27, guarded at its call site on
+#     `pnr_out/<top>.def`, and its two branches differ only in whether the
+#     extracted SPEF was available — which is exactly what the shipped
+#     `POST_ROUTE_SPEF` / `POST_ROUTE_NO_SPEF` suffixes distinguish. The
+#     no-SPEF branch's own body already said "decoupled-C wire-RC screen on
+#     routed DB" in prose; the stamp says it where it can be read.
+#
+# MEASURED, and the direction matters. Over an otherwise-unchanged tree with
+# ONLY `phase3_one_shot_runner.py` swapped, the finding set went 2 -> 0 while
+# every denominator in the summary stayed put: 4 examined emitters of 8
+# flow-declared reports, 1 inexpressible, 18 emitted-but-undeclared disclosed,
+# and the sibling arm judging 9 reports in 1 module. A finding set that empties
+# because the corpus emptied proves only the vacuity path, so the counts are
+# pinned below beside the empty set rather than left implicit.
+#
+# This test still pins the SET, in the other direction: it goes red if any
+# unstamped sibling appears — including these two coming back.
+_KNOWN_UNSTAMPED: set = set()
+
+#: BOTH DENOMINATORS, pinned because an EMPTY finding set is satisfied by a gate
+#: that judged nothing — and this file's repository anchor now expects exactly
+#: that empty set on both arms. `population`/`found` are arm A's (flow-declared
+#: timing/power reports, and the ones whose emitter was identified);
+#: `modules`/`judged` are arm B's (modules demonstrating a stamping convention,
+#: and the reports they emit). If a module stops writing its reports, is
+#: reclassified as a copier, or fails to parse, these drop — and the two empty
+#: sets stop meaning anything. The gate's own rc=2 NOT-CHECKED tier covers only
+#: the total collapse to zero; these pin the exact figures the fix was measured
+#: over, so a partial collapse cannot read as a pass either.
+_ARM_A_POPULATION = 8
+_ARM_A_FOUND = 4
+_ARM_B_MODULES = 1
+_ARM_B_JUDGED = 9
 
 
 def test_repository_arm_a_is_clean_and_arm_b_reports_the_known_set():
     rc, out = _run(_REPO)
-    assert rc == 1, out
-    assert "0 declared-and-unstamped" in out, (
-        "arm A regressed: a flow-declared report lost its stamp\n" + out)
+    assert rc == 0, out
+    # The verdict line is the one place both arms are stated together, so a
+    # rc=0 reached down some other path (there is none today) would not slip by.
+    assert "PASS — no declared timing/power report with an identified emitter " \
+           "is unstamped" in out, out
     # DISCLOSED lines also contain "emitted by" and share the stream, so the
     # filter names the finding shape rather than a substring both carry.
     seen = {ln.split(":", 1)[0] for ln in out.splitlines()
@@ -293,6 +321,24 @@ def test_repository_arm_a_is_clean_and_arm_b_reports_the_known_set():
     assert seen == _KNOWN_UNSTAMPED, (
         "arm B's finding set moved.\n  expected %s\n  got      %s\n%s"
         % (sorted(_KNOWN_UNSTAMPED), sorted(seen), out))
+    # ...over denominators that are still there. Called directly rather than
+    # regex-scraped out of the summary line, so the numbers are the gate's own.
+    unstamped, _undeclared, _inexpr, population, found, _unparsed = \
+        srsis.scan(_REPO)
+    assert [str(e) for e in unstamped] == [], (
+        "arm A regressed: a flow-declared report lost its stamp\n" + out)
+    assert (population, found) == (_ARM_A_POPULATION, _ARM_A_FOUND), (
+        "arm A's population moved, so its clean verdict is no longer evidence "
+        "of anything.\n  expected %s declared / %s with an emitter"
+        "\n  got      %s / %s\n%s"
+        % (_ARM_A_POPULATION, _ARM_A_FOUND, population, found, out))
+    findings, modules, judged = srsis.sibling_stamp_gaps(_REPO)
+    assert [str(f) for f in findings] == [], findings
+    assert (modules, judged) == (_ARM_B_MODULES, _ARM_B_JUDGED), (
+        "the sibling arm's population moved, so the empty finding set above is "
+        "no longer evidence of anything.\n  expected %s module(s) / %s report(s)"
+        "\n  got      %s / %s\n%s"
+        % (_ARM_B_MODULES, _ARM_B_JUDGED, modules, judged, out))
 
 
 # ── ARM B — the family rule ─────────────────────────────────────────────────

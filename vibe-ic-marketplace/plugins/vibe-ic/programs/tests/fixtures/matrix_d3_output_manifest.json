@@ -1175,9 +1175,6 @@
           "alternative": "reports/density.rpt",
           "path": "reports/density.rpt",
           "size_bytes": 585
-        },
-        "reports/spare_preservation.json": {
-          "status": "UNPROVEN"
         }
       }
     },

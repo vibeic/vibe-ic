@@ -686,34 +686,38 @@ steps:
             condition_files_exist:
               - "phase1/agent_docs/L*.json"
             absent_condition_reason: "Scoped to a run that staged a second, independent extraction of the same source into phase1/agent_docs/. Nothing in this flow writes that directory — it is the fresh-agent side of the parity loop and arrives by hand — so on an ordinary run there is no second opinion to diff against, and comparing the generated docs with an empty directory would report perfect parity over nothing."
-        # ORPHAN RE-HOMED (2026-08-25): `migrate_to_layout_p`, in the mode that
-        # only LOOKS. D1 is the FIRST step that writes into `phase1/`, and
-        # `phase1/` is precisely the tree this program renames `phase2a/` into.
-        # A pre-v2 project that reaches D1 ends up with TWO phase-1 trees — the
-        # new canonical one this step writes and the old one still sitting at
-        # `phase2a/` — and every later gate that globs `phase1/**` reads the
-        # new one and reports on a project whose other half it never saw. So
-        # the question "is this project on Layout P" is owned here, before the
-        # first write, and nowhere later.
+        # WITHDRAWN (2026-08-26): the pre-v2 -> Layout P migration probe was
+        # wired here as `advisory_program_exit_zero ... --dry-run` and D1
+        # cannot carry it. Its own reasoning still stands — D1 is the first
+        # step that writes into `phase1/`, so "is this project on Layout P"
+        # is a question D1 owns and nothing later does — and the reason it
+        # comes out anyway is a DIFFERENT question, measured with dimension 5.
         #
-        # THE PROGRAM HAD TO BECOME ANSWERABLE FIRST, and that is a change in
-        # this same batch: `--dry-run` printed `moves: 0` or `moves: 4` and
-        # returned 0 EITHER WAY, so no automatic caller could read it and the
-        # only wiring it could ever have had was a human reading its output.
-        # It now exits 1 on pre-v2 residue and 0 on a project already on
-        # Layout P. The APPLY contract is untouched.
+        # THE PROBE READS FIVE ARTEFACTS THE ANALOG BACKEND DECLARES. Its
+        # `_PHASE3_ANCHORS` tuple is a membership test over a block dir's file
+        # names, and those names are `layout.mag` (A5), `drc_clean.flag` and
+        # `lvs_match.flag` (A6), `pre_vs_post.json` (A7) and
+        # `hw_measurements.json` (A9) — five `required_outputs` of four analog
+        # steps. `test_matrix_d5_deps_correct` derives a dependency edge from
+        # each and reported all five as D5-MISSING-EDGE on D1.
         #
-        # --dry-run IS LOAD-BEARING AND IS THE ONLY MODE A GATE MAY RUN. Every
-        # mover is guarded by `ctx.dry_run` and the provenance rewrite is
-        # computed and discarded, so this clause writes nothing and promises
-        # `required_outputs` nothing. Without the flag the same program MOVES
-        # THE PROJECT'S DIRECTORIES AND REWRITES ITS PROVENANCE — a migration
-        # inside a compliance gate, which is not a thing a gate gets to do.
+        # NEITHER REPAIR EXISTS, AND BOTH WERE MEASURED RATHER THAN ASSUMED:
+        #   * DECLARE the edges — refused by the graph itself. A5, A6, A7 and
+        #     A9 each already have D1 in their own ancestry, so every one of
+        #     the five is CIRCULAR; d5 says so in its own finding text.
+        #   * RE-HOME the clause to a step that already has those four
+        #     upstream — no such step. Computed the blocks_on closure of all
+        #     68 steps: ZERO of them cover {A5, A6, A7, A9}, because A9 is a
+        #     LEAF that nothing blocks on at all.
         #
-        # ADVISORY, not blocking: a pre-v2 project is a project a human has to
-        # decide about (the remedy MOVES their tree), and a run that has not
-        # been migrated yet is a real state, not a refusal.
-        - advisory_program_exit_zero: "migrate_to_layout_p . --dry-run"
+        # So the clause is withdrawn rather than moved, and the program is
+        # unreachable from this flow again. That is the honest state: a
+        # whole-tree migrator that knows the analog backend's file names is
+        # not a gate the flow's first step can run, and buying the wiring
+        # would have cost a dependency edge the flow cannot declare. The
+        # `--dry-run` verdict contract it grew for this wiring is KEPT — it is
+        # a real improvement over "returns 0 either way" and its tests stand
+        # on the program, not on the clause.
     blocks_on: []
 
   - id: 0.5ic
@@ -1823,15 +1827,17 @@ steps:
         # as multi-corner.
         - program_exit_zero: "pvt_matrix_check . --json reports/phase2/gates/pvt_matrix.json"
         # ORPHANED, RE-HOMED, AND IT CLOSES A LOOP THIS FLOW LEFT OPEN. Step
-        # 33's `upf_syntax_check` clause records that "nothing in this flow
-        # emits UPF today" — THIS is the emitter, and it was reachable from
-        # nothing. Wiring the producer is what turns that consumer from a
-        # permanently-silent clause into one that can fire.
+        # 33 carries the consumer — a UPF syntax gate scoped to
+        # `phase2/stage2/constraints/*.upf` — and until this clause existed
+        # nothing in the flow wrote that file, so the consumer's condition
+        # could never be met on any project. Wiring the producer is what turns
+        # a permanently-silent clause into one that can fire.
         #
         # Step 7 owns constraints, which is what power intent is. ADVISORY, not
         # optional: measured rc=2 SKIP whenever L21 declares no power_domains,
         # and an unmet `optional` condition denies the step its PASS tier. It
-        # writes `phase2/stage2/constraints/<top>.upf`, declared above, and
+        # writes `phase2/stage2/constraints/<top>.upf` — NOT declared in this
+        # step's `required_outputs`, for the reason written out there — and
         # self-validates the file it wrote.
         - advisory_program_exit_zero: "l21_to_upf_emit . --top chip_top"
         # vibe-ic#762 — a staged hard macro's own Liberty may declare a
@@ -5324,12 +5330,22 @@ steps:
         # invent a list.
         #
         # CONDITIONED on the manifest, because L2 already covers its absence:
-        # the blocking `provenance_check` slots above require the DRC and LVS
-        # reports to name their tool, so a run with no MCP server at all is
-        # already evidenced by artefact. What is left for L3 is the case the
-        # artefact cannot see — a manifest that EXISTS and does not record
-        # these two steps, or records them stale or FAIL. No `--out-dir`, so
-        # this clause writes nothing either.
+        # the two blocking provenance slots above — the clauses that hand
+        # `--tool` a list — require the DRC and LVS reports to name their tool,
+        # so a run with no MCP server at all is already evidenced by artefact.
+        # What is left for L3 is the case the artefact cannot see — a manifest
+        # that EXISTS and does not record these two steps, or records them
+        # stale or FAIL. No `--out-dir`, so this clause writes nothing either.
+        #
+        # THE PROSE BELOW DOES NOT SPELL THOSE TWO CLAUSES' PROGRAM NAME, and
+        # that is a wiring constraint rather than a style choice. The #470
+        # dead-gate regression joins EVERY value of every clause mapping in
+        # this gate into one string and COUNTS that spelling, so it must equal
+        # the number of provenance sub-gates the gate actually carries. An
+        # `absent_condition_reason` is one of those values, so naming the
+        # program in a sentence reads to that test as a THIRD provenance
+        # sub-gate — a gate the flow does not have. The reason says which
+        # clauses it means by what they do; the count stays the truth.
         - advisory_program_exit_zero:
             command: "mcp_execution_verify --manifest latest_results.jsonl --require-steps drc,lvs"
             condition_files_exist: ["latest_results.jsonl"]
@@ -5338,8 +5354,8 @@ steps:
               written by the MCP tools themselves and by nothing in this flow,
               so a program-only run has no execution record to read and this
               gate would be reporting on an absence rather than judging one.
-              The DRC and LVS artefacts, and the blocking `provenance_check`
-              slots that require those artefacts to name the tool that made
+              The DRC and LVS artefacts, and the two blocking provenance slots
+              above that require those artefacts to name the tool that made
               them, are what evidence a tool run on that path.
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
@@ -5548,13 +5564,43 @@ steps:
         - program_exit_zero: "power_total_vs_budget_check . --json reports/phase2/gates/power_budget.json"
         # ORPHANED, RE-HOMED (2026-08-25). Step 33 owns power, and UPF is the
         # power-intent format, so this is the step that can hold a UPF file to
-        # its syntax. OPTIONAL rather than advisory, and the distinction is
-        # measured: on a real completed project it returns
-        # `UPF_FILE_EXISTS: No UPF file found (searched *.upf)` — nothing in
-        # this flow emits UPF today. Wired unconditionally it would be red on
-        # every project forever. Conditioned on a `.upf` existing, it holds the
-        # file when there is one and records why it is silent when there is not.
-        - advisory_program_exit_zero: "upf_syntax_check ."
+        # its syntax. Its producer is step 7's `l21_to_upf_emit`, which writes
+        # `phase2/stage2/constraints/<top>.upf` and declares nothing
+        # unconditionally, so this consumer is scoped to the same population.
+        #
+        # THE CONDITION IS MEASURED, not decorative: run against a directory
+        # with no `.upf` the program returns rc 1, not a skip
+        # (`return 0 if result.passed else 1`, and `UPF_FILE_EXISTS` is the
+        # failing sub-check). Wired unconditionally it is a finding on every
+        # design with no power intent — forever, on the majority of them —
+        # which is the shape that trains a reader to stop reading advisories.
+        #
+        # `--json` IS LOAD-BEARING AND ITS PATH IS NOT ONE OF THIS STEP'S
+        # DECLARED OUTPUTS. The step declares `reports/phase3/power.rpt` and
+        # `reports/phase3/power.json`, and the second holds the RUNNER's power
+        # summary; a checker pointed at it would overwrite that summary with an
+        # audit of it, which is why every arm of this gate writes into
+        # `reports/phase2/gates/` instead — the same footing as the two
+        # blocking arms above. Without a sink the program prints its report and
+        # keeps no audit trail at all, so a gate arm that ran and a gate arm
+        # that did not are indistinguishable afterwards. The report is written
+        # on both branches (the write precedes the verdict), and nothing else
+        # in the flow reads it, so it stays evidence and adds no
+        # `required_outputs` row.
+        - advisory_program_exit_zero:
+            command: "upf_syntax_check . --json reports/phase2/gates/upf_syntax.json"
+            condition_files_exist:
+              - "phase2/stage2/constraints/*.upf"
+            absent_condition_reason: >-
+              Scoped to a design that declares power intent. Step 7's UPF emit
+              SKIPs whenever L21 declares no power domains, so a design without
+              them carries no `.upf` and there is no power-intent file to hold
+              to its syntax — a state this program reports as a FAILING
+              `UPF_FILE_EXISTS` sub-check rather than as a skip. The condition
+              keeps the finding on the designs the question is about; on a
+              design that does carry power intent the clause cannot be
+              silenced, because the emit that writes the file is what turns it
+              on.
     blocks_on: [23]
 
   # ── Step 34: Metal Fill (ECO-aware density fill insertion) ───
@@ -5605,12 +5651,24 @@ steps:
       # accept either location, so both are accepted here too.
       - "reports/density.json OR reports/phase3/density.json"
       - "reports/density.rpt OR reports/phase3/density.rpt"
-      # Step 34 RUNS `spare_cell_preservation_check`, which writes this, and
-      # nothing declared it — so the flow produced an artefact no step owned.
-      # Invisible until step 37.5ic gained a gate that READS it, at which point
-      # d7 named the pair (`W2:produced_consumed_undeclared`). The gap was
-      # always here; a consumer is what made it observable.
-      - "reports/spare_preservation.json"
+      # `reports/spare_preservation.json` IS NOT DECLARED HERE, and the attempt
+      # to declare it is what this note replaces. It was added on 2026-08-25
+      # because a newly-wired consumer at step 37.5ic began READING it and d7
+      # named the pair (`W2:produced_consumed_undeclared`). The declaration
+      # cannot stand: this step's only producer of that file is the
+      # `optional_program_exit_zero` clause below, which runs only when
+      # `phase3/stage3/pnr/spare_cells.json` is present, while
+      # `required_outputs` is UNCONDITIONAL — `flow_compliance_check` returns
+      # MISSING for a declared entry that is absent, on every project, with no
+      # escape. Declaring it asserts a production the same gate denies four
+      # lines down, and reds every spare-less design over an artefact nobody
+      # owes. Step 7's `.upf` note above refuses the identical shape.
+      #
+      # The consumer went with it rather than the declaration being kept: this
+      # step's own sign-off notes name "declare an undeclared artefact and
+      # relocate the red" as a shape to refuse, and that is exactly what the
+      # pair amounted to. See the step-37.5ic note for what is required before
+      # that consumer can be wired again.
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/filled.def", "phase3/stage3/pnr/metal_fill.done"]
@@ -6318,34 +6376,53 @@ steps:
         # only one arm can report a disagreement between them.
         - program_exit_zero: "tapeout_precheck . --json reports/phase3/tapeout_precheck.json"
         - program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
-        # ORPHANED, RE-HOMED. 37.5ic is the FIRST point where every axis this
-        # reads coexists — drc_signoff.json, lvs_verdict.json, antenna, IR and
-        # spare_cells.json — which is why it belongs here and nowhere earlier.
-        # ADVISORY, no `--json`: measured rc=2 `[CANNOT CHECK] 13 record(s),
-        # 0 MEASURED`, which is the honest verdict for a tree whose producers
-        # have not run, and is exactly the state its sibling
-        # `gate_proof_vocabulary_has_a_producer` reports rc=1 about today.
-        - advisory_program_exit_zero: "ppa_signoff_records ."
+        # `ppa_signoff_records` IS NOT WIRED HERE, AND THE ATTEMPT IS WHY THIS
+        # NOTE EXISTS. It was added on 2026-08-25 with the reasoning that
+        # 37.5ic is the first point where every axis it reads coexists —
+        # drc_signoff.json, lvs_verdict.json, antenna, IR and spare_cells.json.
+        # That part still holds. What did not is the consequence: one of the
+        # files its source names, `reports/spare_preservation.json`, is written
+        # by `spare_cell_preservation_check` under a CONDITIONAL clause at step
+        # 34 and is declared in no step's `required_outputs`. Putting the
+        # program in any gate therefore makes that path produced-consumed-
+        # undeclared (d7 `W2`), and the repair reached for was a
+        # `required_outputs` row at step 34 — an UNCONDITIONAL claim over a
+        # conditionally-produced artefact, which is the "declare an undeclared
+        # artefact and relocate the red" shape this step's own notes refuse
+        # eight lines below. The red moved; nothing got measured.
+        #
+        # WHAT WOULD MAKE IT WIREABLE: a step that produces
+        # `reports/spare_preservation.json` UNCONDITIONALLY and declares it. As
+        # long as step 34's producer is conditional, no honest declaration
+        # exists and no gate may read the path.
+        #
+        # NOTHING BELOW DEPENDS ON IT. `every_required_metric_key_has_a_
+        # producer` was wired "immediately after its producer", but the argv
+        # this clause carried had no `--json`, and `ppa_signoff_records` writes
+        # its bundle ONLY when handed one (`if args.json: write_json(...)`) —
+        # so it never wrote records for a sibling clause to read. The next
+        # clause sweeps the run's already-emitted records and stands alone.
         # ORPHANED, RE-HOMED (2026-08-25). `every_required_metric_key_has_a_
         # producer` was authored, tested and merged and then invoked by nothing
-        # but its own test. It reads the SAME sign-off axis table
+        # but its own test. It reads the sign-off axis table
         # (`_ppa/feasibility.DEFAULT_AXES` — setup, hold, drv, drc, lvs,
-        # antenna, ir, em, equivalence, eco_readiness) that the clause ABOVE
-        # emits canonical `vibeic.ppa.metric` records for, and asks the one
+        # antenna, ir, em, equivalence, eco_readiness) and asks the one
         # question that table cannot answer about itself: is every axis
         # actually PROVABLE from what this run emitted, or does an axis prove
         # from a metric name no producer here ever MEASURED?
         #
-        # WIRED HERE, IMMEDIATELY AFTER ITS PRODUCER, AND NOWHERE EARLIER.
-        # `all_of` evaluates its sub-gates in order, so `ppa_signoff_records`
-        # has already written this run's records by the time this clause reads
-        # them. 37.5ic is also the step whose own comment above records that it
-        # is "the FIRST point where every axis this reads coexists — drc_
-        # signoff.json, lvs_verdict.json, antenna, IR and spare_cells.json".
-        # At step 36 the records do not exist yet (37.5ic blocks_on 37, which
-        # blocks_on 36), so the same clause there would be rc 2 on every run
-        # forever — a clause that never ran, which is the shape #1121 and the
-        # `tapeout_docs_gen` v1.11.3 defect above both name.
+        # WIRED HERE AND NOWHERE EARLIER, AND NOT ON A SIBLING CLAUSE'S OUTPUT.
+        # It is EMPIRICAL — it sweeps the `"metric":` names in the records a
+        # run has already emitted, because a static scan of the producers'
+        # source declared a whole working axis unprovable (the producers build
+        # names by format, not by literal). So what it needs is a run whose
+        # records exist, which is what makes 37.5ic the earliest honest home:
+        # every axis it reads — drc_signoff.json, lvs_verdict.json, antenna,
+        # IR — first coexists here. At step 36 the records do not exist yet
+        # (37.5ic blocks_on 37, which blocks_on 36), so the same clause there
+        # would be rc 2 on every run forever — a clause that never ran, which
+        # is the shape #1121 and the `tapeout_docs_gen` v1.11.3 defect above
+        # both name.
         #
         # ADVISORY, and the measurement is why. Driven over this repository's
         # own record trees it is rc 1: the `em` and `equivalence` axes have

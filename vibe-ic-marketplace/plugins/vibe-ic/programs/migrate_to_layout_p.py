@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """migrate_to_layout_p.py — pre-v2 → Layout P project migration.
 
-ENFORCEMENT: advisory
+NO ENFORCEMENT DECLARATION, AND THAT IS THE HONEST RECORD (2026-08-26). This
+program carried `ENFORCEMENT: advisory` while a step-D1 clause ran it. The
+clause is withdrawn — `_PHASE3_ANCHORS` below names five artefacts steps A5,
+A6, A7 and A9 declare as `required_outputs`, so running this at D1 derived five
+dimension-5 dependency edges that CANNOT be declared (all four analog steps
+already have D1 in their ancestry, so every edge is circular) and cannot be
+re-homed either (no step's blocks_on closure covers A9, which is a leaf). A
+declaration nothing is wired for is what `flow_gate_enforcement_audit` reports
+as ORPHANED, so the declaration goes with the clause rather than outliving it.
+The `--dry-run` verdict contract stays: 1 on pre-v2 residue, 0 on Layout P.
 
-The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
-audit.declared_intent` reads. This program is wired into the flow as an
-`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
-step, its findings are printed, and its exit code cannot deny the step its PASS
-tier. That is deliberate — it was wired to make a real check reachable, not to
-block a landing on debt it did not create — and the declaration says so where
-the audit looks. Without it, "wired where it cannot block" and "nobody decided"
-are the same record, and the reliable way to stay clean is to say nothing.
 Migrates an IC project directory from the pre-v2 layout (phase2a/,
 phase2b/, top-level analog/ + manufacturing/) to the v2 Layout P
 (phase1/, phase2/, phase3/ with analog distributed and manufacturing

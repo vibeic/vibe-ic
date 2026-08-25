@@ -516,10 +516,18 @@ def _prose_ports(prompt: str) -> Tuple[List[Port], List[Port]]:
     # so it read the indented `Input ports:` form and nothing else — a spec
     # stating its ports as a markdown signal/direction table (the commonest
     # datasheet form there is) parsed to ([], []) here even though a reader for
-    # it exists. `prose_interface_bridge` tries every reader in order, each is a
-    # no-op on text it does not recognise, and it refuses to touch text that
-    # already yields a both-sided parse — measured over 302 CVDP prompts,
-    # 17 gained and 0 lost.
+    # it exists. `prose_interface_bridge` tries every reader in order; each is a
+    # no-op on text it does not recognise, and a reader that WOULD recognise the
+    # text is skipped when its reading would cost a port the prose already
+    # yields (`prose_interface_bridge._claim`).
+    #
+    # That last clause was claimed here before it was implemented, and the gap
+    # was not cosmetic: a reader can recognise a text PARTIALLY, `parse_ports`
+    # documents "bullet form wins", so a partial reading REPLACED a complete one
+    # rather than adding to it. Six CVDP records were classified COMPLETE on an
+    # interface the bridge had deleted most of — `thermostat_0001` came through
+    # carrying a single output. MEASURED over the 302-record corpus, this call
+    # site: 226 COMPLETE before the chain, 233 after, 0 records lost.
     try:
         import port_parser as _pp
         import prose_interface_bridge as _bridge

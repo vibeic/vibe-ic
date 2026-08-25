@@ -79,10 +79,17 @@ def _delimited_names(text: str) -> frozenset:
 
     So the two disagree in BOTH directions, and a cost check that defended every
     name the raw parse produced would defend the fabrications too — refusing a
-    reader whose only "loss" was declining to invent a port. MEASURED over the
-    302-record CVDP corpus: defending everything refuses 8 readers, 2 of which
-    dropped nothing but fabricated names. Defending only what the prose delimits
-    separates the two cases without either reader having to be trusted wholesale.
+    reader whose only "loss" was declining to invent a port.
+
+    MEASURED over the 302-record CVDP corpus, refusals by what the check
+    defends: every (name, width) the raw parse produced -> 8 readers refused,
+    and 2 of those 8 had dropped nothing but fabrications
+    (`vga_controller_0001` dropped `Initializes`/`Resets`/`Sets`;
+    `ethernet_packet_parser_0001` dropped an "output" `data` read out of the
+    sentence `data[31:16]`). Defending only DELIMITED names recovers the first.
+    Comparing names rather than widths, across both directions, recovers the
+    second (see `_reads`). What is left is 6 refusals, every one a reader that
+    really did delete ports the prose delimits.
     """
     names = set()
     for span in _BACKTICK_SPAN_RE.findall(text):
@@ -148,10 +155,17 @@ def _claim(text: str):
     prose states only in a group header — but the CHAIN is wrong to prefer a
     partial reading over a complete one that already existed.
 
-    So a reader claims a text only if everything the parser already read
-    survives. It may ADD ports and it may not SUBTRACT any; a reader that would
-    subtract is skipped and the next one tried, exactly as if it had not
-    recognised the text at all.
+    So a reader claims a text only if every DELIMITED name the parser already
+    read survives it (`_delimited_names` says which those are, and `_reads` says
+    what survival is measured on). It may ADD ports and it may not SUBTRACT any;
+    a reader that would subtract is skipped and the next one tried, exactly as
+    if it had not recognised the text at all.
+
+    MEASURED over the 302-record CVDP corpus at this seam's one caller,
+    `cvdp_atomic_bridge._prose_ports`: 226 records COMPLETE before the chain was
+    wired, 239 after, 233 with this check — and the 6 records this check costs
+    were COMPLETE only because a partial reading had deleted most of the
+    interface they were judged on. `thermostat_0001` was COMPLETE on one output.
     """
     defend = _delimited_names(text)
     before = _reads(text, defend)
@@ -165,7 +179,7 @@ def _claim(text: str):
         if before is not None:                # empty <= anything, so a text the
             after = _reads(out, defend)       # parser reads nothing from is free
             if after is None or not before <= after:
-                continue                     # lossy: keep the better parse we have
+                continue                    # lossy: keep the better parse we have
         return name, out
     return None, text
 

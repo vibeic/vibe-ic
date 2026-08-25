@@ -253,9 +253,38 @@ def test_no_ppa_exemption_still_claims_that_no_record_has_been_filed():
 
 
 #: A wired `ppa_*` gate this family deliberately does not cover, with the reason.
-#: Empty, and it must stay a DECLARATION rather than a silence: the test below
-#: forces a new wired ppa gate to be either covered or named here.
-NOT_A_RECORD_GATE: dict = {}
+#: It must stay a DECLARATION rather than a silence: the test below forces a new
+#: wired ppa gate to be either covered or named here.
+#:
+#: THE BAR FOR A ROW HERE, and it is not "this gate has no corpus". It is that
+#: the defect this file was written about — a gate whose subject moved away,
+#: reporting NOT_CHECKED forever while nothing noticed — is STRUCTURALLY
+#: unreachable for it. The six covered gates are all wired
+#: `run_tolerating_uncheckable`, which renders rc 2 as a non-fatal NOT_CHECKED;
+#: that tolerance is what let them sit dead for two months, and it is what makes
+#: the population count the only signal they still have a subject. A gate wired
+#: with a plain `run` has rc 2 BLOCKING (`_gate_dispatch.sh`: `run` is
+#: `_dispatch 0 0`), so the day its input goes missing it goes red and stops the
+#: suite. It cannot go quiet, so a population counter would be measuring a
+#: failure mode it does not have.
+NOT_A_RECORD_GATE: dict = {
+    "ppa_page_claim_check.py":
+        "Its subject is a PUBLISHED DOCUMENT — `ppa-e2e/report/winner/report.md` "
+        "and the `claims.json` emitted beside it — not a corpus of filed PPA "
+        "records, so there is no record population to count. Wired with a plain "
+        "`run`, so rc 2 (page or claims unreadable) BLOCKS rather than becoming a "
+        "quiet NOT_CHECKED. MEASURED: 35 sentence(s), 139 claim(s), 9 banned "
+        "form(s) enforced, rc 0.",
+    "ppa_closure_run.py":
+        "Wired in `--verify-registry` mode, where the subject is the actuator "
+        "REGISTRY — a permission table at `$PLUGIN/config/ppa_actuator_registry."
+        "yaml` — not records any run filed. Two reasons it cannot be covered "
+        "here: the population is authorisations rather than documents, and "
+        "`_resolve` substitutes `$ROOT` only, so a `$PLUGIN`-rooted input is not "
+        "addressable by this family's resolver at all. Wired with a plain `run`, "
+        "so rc 2 BLOCKS. MEASURED: 6 actuators (1 EXECUTABLE), 9 domains "
+        "(2 EXECUTABLE), 1 controller, every EXECUTABLE claim resolves, rc 0.",
+}
 
 
 def test_the_family_list_covers_every_wired_ppa_gate():
