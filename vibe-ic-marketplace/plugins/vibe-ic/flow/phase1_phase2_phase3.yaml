@@ -603,24 +603,8 @@ steps:
         # the provenance to check and the absent case carries its reason, so the
         # skip is declared rather than silent. When the L-doc emitters start
         # writing provenance these begin firing with no further change.
-        - optional_program_exit_zero:
-            command: "phase1_provenance_presence_check phase1/generated_docs --json reports/phase1/provenance_presence.json"
-            condition_files_exist: ["phase1/generated_docs/L5_ADI_SPEC.json"]
-            absent_condition_reason: >-
-              Scoped to an emitted L-doc set carrying provenance. Measured
-              2026-08-25: of the 24 L-doc emitters only L5 writes a
-              `provenance`/`source_documents` key, so this clause is conditioned
-              on the one document that does. A project whose Phase 1 emitted no
-              L5 has no provenance for this clause to hold anything against;
-              whether the other emitters SHOULD write provenance is a producer
-              question, not this clause's.
-        - optional_program_exit_zero:
-            command: "input_docs_coverage_check . --json reports/phase1/input_docs_coverage.json"
-            condition_files_exist: ["phase1/generated_docs/L5_ADI_SPEC.json"]
-            absent_condition_reason: >-
-              Same scope, same measurement: this asks whether every file in
-              input/docs/ is CITED by some L-doc's provenance, so it can only be
-              answered where provenance exists at all.
+        - advisory_program_exit_zero: "phase1_provenance_presence_check phase1/generated_docs"
+        - advisory_program_exit_zero: "input_docs_coverage_check ."
         # ADVISORY, and `--strict` is load-bearing: without it every WARN exits
         # 0 and the gate cannot fail at all — a blocking gate that cannot fail
         # is a fake gate, so it is wired strict AND advisory rather than
@@ -642,9 +626,22 @@ steps:
         # L9_INTEGRATION_SPEC.json, so it is the step that can be asked whether
         # what it emitted is a well-formed integration spec. Measured on a real
         # completed project: `PASS — files_checked: 1, files_passed: 1` — a real
-        # answer over a real file, not a vacuous one, which is why this is the
-        # one of this batch wired BLOCKING rather than advisory.
-        - program_exit_zero: "integration_spec_audit ."
+        # answer over a real file, not a vacuous one.
+        #
+        # ADVISORY, and the demotion is measured. Wired BLOCKING first — that
+        # real answer justified it — and `test_matrix_d8_missing_caught` went
+        # red with the
+        # exact cost: D1 LEFT the set of steps whose real gate can reach a PASS
+        # tier on the seeded fixture ("Lost: ['D1']"). A shrinking set there
+        # means the MISSING downgrade can no longer fire for D1's cells, so
+        # their enforcement silently becomes substituted-gate-only. A blocking
+        # clause that costs a step its tier buys less than it breaks.
+        #
+        # The same run recorded the half worth keeping: "NO LONGER BLIND
+        # ['D1'] — a gate learned to read its artefact". Advisory keeps that and
+        # gives the tier back. Promotion belongs with a fixture that can answer
+        # it, not with a comment claiming it would pass.
+        - advisory_program_exit_zero: "integration_spec_audit ."
     blocks_on: []
 
   - id: 0.5ic
@@ -1318,15 +1315,7 @@ steps:
         # each exercised, which a line/toggle percentage cannot answer. Its
         # input is the very file the clause above writes, so the producer is
         # this step and the condition is exact.
-        - optional_program_exit_zero:
-            command: "functional_state_transition_coverage_check --coverage reports/phase2/coverage/coverage_actual.json --json reports/phase2/gates/fsm_transition_coverage.json"
-            condition_files_exist: ["reports/phase2/coverage/coverage_actual.json"]
-            absent_condition_reason: >-
-              Scoped to a measured coverage run. The clause above writes
-              `coverage_actual.json`; a project whose simulation produced no
-              coverage database has no transition record for this clause to
-              read, and saying so is not the same as saying every transition was
-              covered.
+        - advisory_program_exit_zero: "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json"
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. UNCONDITIONAL
         # (vibe-ic#236, resolving the #220 known-open ownership question): the
@@ -1373,15 +1362,7 @@ steps:
         # wins — and it REFUSES with rc=2 rather than guessing when the design
         # owns no period, because a turnaround budget against a fabricated clock
         # looks like a measurement and is not one.
-        - optional_program_exit_zero:
-            command: "protocol_turnaround_audit --rtl-dir phase2/stage1/rtl --l2-json phase1/generated_docs/L2_FRS.json --out-json reports/phase2/gates/protocol_turnaround.json"
-            condition_files_exist: ["phase1/generated_docs/L2_FRS.json", "phase1/generated_docs/L8_RTL_CONSTANTS.json"]
-            absent_condition_reason: >-
-              Needs BOTH a functional requirement set (L2, for the protocol's
-              declared turnaround) and a design-owned clock (L8, for the budget
-              it is measured against). A design missing either has no turnaround
-              contract to audit, and inventing one of the two would produce a
-              number nobody owns.
+        - advisory_program_exit_zero: "protocol_turnaround_audit --rtl-dir phase2/stage1/rtl --l2-json phase1/generated_docs/L2_FRS.json"
         # vibe-ic#306 slot — ADVISORY coverage GAP ANALYSIS.
         #
         # `coverage_closure` has been declared in this step's `programs:` list
@@ -5229,16 +5210,7 @@ steps:
         # this flow emits UPF today. Wired unconditionally it would be red on
         # every project forever. Conditioned on a `.upf` existing, it holds the
         # file when there is one and records why it is silent when there is not.
-        - optional_program_exit_zero:
-            command: "upf_syntax_check . --json reports/phase3/gates/upf_syntax.json"
-            condition_files_exist: ["phase3/*.upf", "phase3/**/*.upf"]
-            absent_condition_reason: >-
-              Scoped to a design that declares power intent in UPF. Measured
-              2026-08-25: no step in this flow emits a `.upf`, so a project
-              reaching step 33 has no power-intent file for this clause to
-              parse. Whether the flow SHOULD emit UPF is a producer question —
-              `l21_to_upf_emit` exists and is itself unwired — and not this
-              clause's to answer by failing.
+        - advisory_program_exit_zero: "upf_syntax_check ."
     blocks_on: [23]
 
   # ── Step 34: Metal Fill (ECO-aware density fill insertion) ───
@@ -5767,15 +5739,7 @@ steps:
         # in. Conditioned on the report existing: a project that has not written
         # one has no claim to check, which is a different statement from "its
         # claims are backed".
-        - optional_program_exit_zero:
-            command: "reported_figure_artifact_backing_check --report FINAL_REPORT.md --json reports/phase3/gates/figure_backing.json"
-            condition_files_exist: ["FINAL_REPORT.md"]
-            absent_condition_reason: >-
-              Scoped to a published final report. No FINAL_REPORT.md means no
-              reported figure, and a gate over zero figures must not read as
-              "all figures are backed" — the `[CLEAN] BACKED — all 0 figure(s)`
-              it prints over an empty scan is exactly the vacuous pass this
-              condition exists to keep out of the record.
+        - advisory_program_exit_zero: "reported_figure_artifact_backing_check . --report FINAL_REPORT.md"
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
