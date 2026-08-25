@@ -292,16 +292,47 @@ _KNOWN_UNSTAMPED: set = set()
 
 #: BOTH DENOMINATORS, pinned because an EMPTY finding set is satisfied by a gate
 #: that judged nothing — and this file's repository anchor now expects exactly
-#: that empty set on both arms. `population`/`found` are arm A's (flow-declared
-#: timing/power reports, and the ones whose emitter was identified);
-#: `modules`/`judged` are arm B's (modules demonstrating a stamping convention,
-#: and the reports they emit). If a module stops writing its reports, is
-#: reclassified as a copier, or fails to parse, these drop — and the two empty
-#: sets stop meaning anything. The gate's own rc=2 NOT-CHECKED tier covers only
-#: the total collapse to zero; these pin the exact figures the fix was measured
-#: over, so a partial collapse cannot read as a pass either.
-_ARM_A_POPULATION = 8
+#: that empty set on both arms. The gate's own rc=2 NOT-CHECKED tier covers only
+#: the TOTAL collapse (`population == 0`, `found == 0`); these cover the partial
+#: one, where the corpus shrinks enough to make the empty sets meaningless while
+#: the gate still reports a pass.
+#:
+#: ARM A IS PINNED AS A SET OF PATHS, NOT A COUNT, and the difference is what a
+#: red says. This population is DECLARED IN THE FLOW and it moves whenever a
+#: step declares a new `.rpt` — it moved twice in the batch this test was
+#: written in. A bare `8 != 9` sends the next reader to go find which one; the
+#: set names it on the failure line, and the remedy (add it here once its
+#: emitter stamps, or fix the emitter) reads off the diff. Same reason
+#: `_KNOWN_UNSTAMPED` above is a set.
+#:
+#: WHAT IS AND IS NOT IN IT, because two near-misses have already been raised:
+#: `is_timing_or_power` requires a `.rpt` basename, so neither
+#: `phase2/stage2/constraints/*.upf` (a power-INTENT document — the gate's own
+#: docstring names it as the measured false positive that motivated the `.rpt`
+#: requirement, population 2 -> 78 and six wrong findings) nor
+#: `reports/spare_preservation.json` can enter this population, whether or not
+#: the flow declares them. Withdrawing or re-adding either moves nothing here.
+_ARM_A_DECLARED = {
+    "phase2/stage1/fpga/output_files/*.map.rpt",     # step 6
+    "phase2/stage2/dft/atpg_coverage.rpt",           # step 11
+    "phase2/stage2/synth/area.rpt",                  # step 9
+    "phase3/stage3/cts/clock_tree.rpt",              # step 19 — the 1 inexpressible
+    "phase3/stage3/sta/post_route_timing.rpt",       # step 23
+    "phase3/stage3/sta/pre_pnr_timing.rpt",          # step 10
+    "reports/phase3/power.rpt",                      # step 33
+    "reports/phase3/si_crosstalk.rpt",               # step 27
+}
+
+#: Of the 8 above, the count whose EMITTER the arm-A scan could identify. Left a
+#: count because there is no set to read at this API — `scan` returns the
+#: findings, not the found. It is the number that makes "0 unstamped" mean
+#: something: at 0 the gate refuses (rc=2), and between 0 and 4 it would be
+#: passing over a shrinking read.
 _ARM_A_FOUND = 4
+
+#: Arm B: modules that demonstrate a stamping convention, and the reports they
+#: emit. If a module stops writing its reports, is reclassified as a COPIER, or
+#: fails to parse, these drop and the empty finding set stops meaning anything.
 _ARM_B_MODULES = 1
 _ARM_B_JUDGED = 9
 
@@ -327,11 +358,21 @@ def test_repository_arm_a_is_clean_and_arm_b_reports_the_known_set():
         srsis.scan(_REPO)
     assert [str(e) for e in unstamped] == [], (
         "arm A regressed: a flow-declared report lost its stamp\n" + out)
-    assert (population, found) == (_ARM_A_POPULATION, _ARM_A_FOUND), (
-        "arm A's population moved, so its clean verdict is no longer evidence "
-        "of anything.\n  expected %s declared / %s with an emitter"
-        "\n  got      %s / %s\n%s"
-        % (_ARM_A_POPULATION, _ARM_A_FOUND, population, found, out))
+    # The set, re-derived from the CURRENT flow through the gate's own two
+    # functions — never scraped from the summary line, and never carried
+    # forward from the last time someone looked.
+    declared = {path for path in srsis.declared_outputs(_REPO / srsis.FLOW_REL)
+                if srsis.is_timing_or_power(path)}
+    assert declared == _ARM_A_DECLARED, (
+        "arm A's declared population moved.\n  appeared: %s\n  vanished: %s\n"
+        "A report that APPEARED joins this set once its emitter stamps; one "
+        "that VANISHED means the clean verdict now covers less than it did.\n%s"
+        % (sorted(declared - _ARM_A_DECLARED),
+           sorted(_ARM_A_DECLARED - declared), out))
+    assert (population, found) == (len(_ARM_A_DECLARED), _ARM_A_FOUND), (
+        "arm A's scan disagrees with the flow it read.\n  expected %s declared "
+        "/ %s with an emitter\n  got      %s / %s\n%s"
+        % (len(_ARM_A_DECLARED), _ARM_A_FOUND, population, found, out))
     findings, modules, judged = srsis.sibling_stamp_gaps(_REPO)
     assert [str(f) for f in findings] == [], findings
     assert (modules, judged) == (_ARM_B_MODULES, _ARM_B_JUDGED), (
