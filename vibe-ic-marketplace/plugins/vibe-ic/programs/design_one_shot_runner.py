@@ -11899,8 +11899,38 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # flatten+ABC legitimately exceed 5 minutes — a machine/scale property,
     # chip-AGNOSTIC, byte-identical when the env var is unset.
     _synth_to = _phase2_synth_timeout_s()
-    rc, out, err = _run(["yosys", "-p", script], cwd=synth_dir,
+    # PROVENANCE — the flow BLOCKS on this record six times and nothing on this
+    # path was writing it (2026-08-25).
+    #
+    # `program_exit_zero: "provenance_check . --output phase2/stage2/synth/
+    # netlist.v --tool yosys,yosys-abc"` is a BLOCKING clause, and five more like
+    # it stand in phase 3. The only program that writes `provenance.jsonl` is
+    # `provenance_logger.py`, and it had ZERO callers — its name appeared in this
+    # file only inside a COMMENT prescribing the very invocation now used below.
+    # Phase 3 survives because `phase3_one_shot_runner` writes the sink itself;
+    # the design / phase2 / phase1 / vibe_ic runners wrote it zero times, so the
+    # phase-2 clause was enforcing a record nothing produced.
+    #
+    # THE WRAPPER FORM IS SAFE HERE, AND THAT WAS MEASURED, NOT ASSUMED. This
+    # call site owns a delicate `rc == 127` docker fallback keyed on yosys being
+    # command-not-found, so the question is whether the wrapper still yields 127.
+    # It does: `provenance_logger --project . -- definitely_not_a_binary` returns
+    # 127. The one rc the wrapper INTRODUCES is 2 — "the tool succeeded but a
+    # declared output is missing" — which this call site has never had to mean
+    # anything, so it is mapped straight back to the tool's own status. Recording
+    # a fact must not change a verdict.
+    _prov = [sys.executable,
+             str(Path(__file__).resolve().parent / "provenance_logger.py"),
+             "--project", str(project), "--tool", "yosys",
+             "--version-cmd", "yosys -V",
+             "--output", "phase2/stage2/synth/netlist.v",
+             "--step", "phase2_synth", "--"]
+    rc, out, err = _run(_prov + ["yosys", "-p", script], cwd=synth_dir,
                         timeout=_synth_to)
+    if rc == 2:
+        # The logger's own "declared output missing" status. yosys itself exited
+        # 0; the netlist's absence is judged downstream exactly as before.
+        rc = 0
     if rc == 127:
         # #118 — the docker fallback must not assume the host synth_dir is
         # bind-mounted inside the container at the same path. Mounted ->
@@ -11971,6 +12001,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                           f"rm -rf {cont_wd}"], timeout=30)
     log = synth_dir / "yosys.log"
     log.write_text(out + "\n" + err)
+
 
     # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — SystemVerilog
     # frontend fallback, mirroring phase3_one_shot_runner.step_synth's

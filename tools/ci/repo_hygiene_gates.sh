@@ -1457,6 +1457,78 @@ run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
 run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_artifact_hygiene_check.py
 
+# SIXTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER ACCEPTED.
+# Named after the rule each enforces, authored with committed baselines during a
+# capture campaign, and then reachable from nothing. A regression guard nobody
+# runs guards nothing — and these are the easiest in the tree to have missed,
+# because each one PASSES. A failing gate gets noticed; a green gate nobody runs
+# looks exactly like a green gate that ran.
+#
+# EACH CARRIES `tools/ci/gate_fixtures/<slug>.py` with can_pass AND can_fail, and
+# each pair was driven through `test_gate_fixtures_discriminate` — a fixture that
+# cannot make its gate go red proves nothing, which is what that bar is for.
+#
+# FOUR TAKE THE ROOT POSITIONALLY AND MUST NOT BE NORMALISED to `--root`: for
+# `local clone`, `measurement only artefact`, `provenance value` and `prepared
+# checkout` that flag is `unrecognized arguments` -> rc 3, a bad invocation on
+# every arm. `only the declaring step` carries `--self-test` because that
+# program's own header calls its negative control "part of the gate".
+#
+# THREE SIBLINGS ARE ABSENT ON THEIR OWN WRITTEN INSTRUCTION.
+# `checker_population_is_structural_not_filename_shaped_census` and
+# `content_pinned_authority_verified_only_at_merge` reach a failing status only
+# under `--strict`, and their docstrings say "THIS IS A CENSUS, NOT A GATE. IT
+# MUST NOT BE WIRED AS A BLOCKING CHECK" and "VERDICT CLASS: ADVISORY ... it must
+# stay advisory". Measured: `--strict` reddens this lane over 47 and 13
+# PRE-EXISTING findings. `local_clone_..._census` is the same shape and its
+# refusing sibling is wired above. Wiring a census over its author's objection to
+# reach a number is the ritual this batch is against.
+run "declaration searched only inside a truncated" "$ROOT" python3 "$PG/declaration_searched_only_inside_a_truncated_window.py" --root "$ROOT"
+run "declared invocation accepted by its own pars" "$ROOT" python3 "$PG/declared_invocation_accepted_by_its_own_parser.py" --root "$ROOT"
+run "denial that constitutes the value it appears" "$ROOT" python3 "$PG/denial_that_constitutes_the_value_it_appears_to_negate.py" --root "$ROOT"
+run "invocation proved by parse not by text" "$ROOT" python3 "$PG/invocation_proved_by_parse_not_by_text.py" --root "$ROOT"
+run "local clone does not borrow objects" "$ROOT" python3 "$PG/local_clone_does_not_borrow_objects.py" "$ROOT"
+run "measurement only artefact is not a verdict s" "$ROOT" python3 "$PG/measurement_only_artefact_is_not_a_verdict_source.py" "$ROOT"
+run "only the declaring step writes its output ce" "$ROOT" python3 "$PG/only_the_declaring_step_writes_its_output_census.py" --root "$ROOT" --self-test
+run "population guard asserts equality not a floo" "$ROOT" python3 "$PG/population_guard_asserts_equality_not_a_floor.py" --root "$ROOT"
+run "population pin without its member set" "$ROOT" python3 "$PG/population_pin_without_its_member_set.py" --root "$ROOT"
+run "prepared checkout states the revision it hol" "$ROOT" python3 "$PG/prepared_checkout_states_the_revision_it_holds.py" "$ROOT"
+run "provenance value is resolved not constant" "$ROOT" python3 "$PG/provenance_value_is_resolved_not_constant.py" "$ROOT"
+run "published absence claim is rechecked against" "$ROOT" python3 "$PG/published_absence_claim_is_rechecked_against_the_tree.py" --root "$ROOT"
+run "reference control resolved through a mutable" "$ROOT" python3 "$PG/reference_control_resolved_through_a_mutable_ref.py" --root "$ROOT"
+run "registry is the iteration domain" "$ROOT" python3 "$PG/registry_is_the_iteration_domain.py" --root "$ROOT"
+run "spawned gate whose status is discarded" "$ROOT" python3 "$PG/spawned_gate_whose_status_is_discarded.py" --root "$ROOT"
+run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_input_selectors_given_together_must_refuse.py" --root "$ROOT"
+
+# SIXTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER ACCEPTED.
+# Named after the rule each enforces, authored with committed baselines during a
+# capture campaign, and then reachable from nothing. A regression guard nobody
+# runs guards nothing — and these are the easiest in the tree to have missed,
+# because each one PASSES. A failing gate gets noticed; a green gate nobody runs
+# looks exactly like a green gate that ran.
+#
+# EACH CARRIES `tools/ci/gate_fixtures/<slug>.py` with can_pass AND can_fail, and
+# each pair was driven through `test_gate_fixtures_discriminate` — a fixture that
+# cannot make its gate go red proves nothing, and the bar is there to refuse it.
+#
+# FOUR ARE NOT THE `--root "$ROOT"` TEMPLATE AND MUST NOT BE NORMALISED: `local
+# clone`, `measurement only artefact`, `provenance value` and `prepared checkout`
+# take the root POSITIONALLY, and `--root` there is `unrecognized arguments` ->
+# rc 3, a bad invocation on every arm. `only the declaring step` carries
+# `--self-test` because that program's own header calls its negative control
+# "part of the gate".
+#
+# THREE SIBLINGS ARE DELIBERATELY ABSENT, ON THEIR OWN WRITTEN INSTRUCTION.
+# `checker_population_is_structural_not_filename_shaped_census` and
+# `content_pinned_authority_verified_only_at_merge` only reach a failing status
+# under `--strict`, and their docstrings say "THIS IS A CENSUS, NOT A GATE. IT
+# MUST NOT BE WIRED AS A BLOCKING CHECK" and "VERDICT CLASS: ADVISORY ... it must
+# stay advisory". Measured: `--strict` turns this lane red over 47 and 13
+# PRE-EXISTING findings respectively. `local_clone_..._census` is the same shape,
+# and its refusing sibling is already wired above. A census is not a gate, and
+# wiring one over its author's objection to reach a number is the ritual this
+# whole batch is against.
+
 # The six anti-fabrication gates in `tools/ci/run_plugin_self_audit.sh`, re-homed.
 # They were wired to `.github/workflows/`, both of which are now `.disabled`, and
 # nothing re-homed them — every remaining reference to that script in the tree is
