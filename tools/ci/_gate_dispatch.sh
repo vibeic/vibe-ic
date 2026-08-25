@@ -668,6 +668,12 @@ exemption describes a state this gate cannot reach"
     _gate_wiring_error "\"$label\" is a dispatcher-owned population refusal \
 and cannot consume an uncheckable exemption — an unknown denominator must \
 remain blocking"
+    # vibe-ic#1770 — and it does not KEEP the date it just refused. The append
+    # below is unconditional, so a date recorded here would reach the record as
+    # `exempt_until` on a row the console prints as "no exemption", drop the row
+    # out of `not_checked_unexempted` (the FAIL-SAFE derivation) and buy exactly
+    # the silence this branch exists to deny.
+    ex_until=""; ex_why=""
   fi
   GATE_EX_UNTIL+=("$ex_until"); GATE_EX_WHY+=("$ex_why")
   GATE_LABELS+=("$label")
