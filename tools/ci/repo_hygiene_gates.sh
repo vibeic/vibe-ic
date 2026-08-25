@@ -1499,6 +1499,27 @@ run "flow step-executor coverage"       "$PLUGIN" python3 programs/flow_step_exe
 run "lessons corpus consistency"        "$PLUGIN" python3 programs/lessons_corpus_consistency_check.py
 run "ip-catalog upstream (local arm)"   "$PLUGIN" python3 programs/ip_catalog_upstream_audit.py --no-network
 
+# ORPHANED, RE-HOMED. `skill_doc_section_present_check` exists so a durably
+# captured lesson cannot be silently dropped by a later edit: give it a document
+# and the marker substrings that must survive, and a deletion becomes a red line
+# instead of a thing nobody notices for a year. It had no caller, which means
+# every doctrine section it was written to protect was unprotected.
+#
+# WHICH SECTIONS, AND WHY THESE. Each is a rule this repo learned by paying for
+# it, and each is prose — the exact shape that goes missing:
+#   RULE 0                       a benchmark enters through the general flow,
+#                                never a benchmark-only harness
+#   GENERAL-CORE / THIN-ADAPTER  a benchmark-named file may hold the IO shell
+#                                and nothing else
+#   IC-EXPERT OPERATING MAP      the phase -> program -> gate -> skill table the
+#                                agent routes from
+# Measured before wiring: all three present, `"missing": []`, rc=0.
+run "benchmark doctrine sections kept" "$PLUGIN" python3 programs/skill_doc_section_present_check.py \
+    --doc skills/open-benchmark-methodology/SKILL.md \
+    --marker "RULE 0" --marker "GENERAL-CORE / THIN-ADAPTER"
+run "ic-expert operating map kept"     "$PLUGIN" python3 programs/skill_doc_section_present_check.py \
+    --doc agents/ic-expert-agent.md --marker "IC-EXPERT OPERATING MAP"
+
 # ORGANIC #720 / #693 — the ONE gate in the repo-process family that really was
 # wired to nothing. It was invisible to `checker_execution_wiring_audit` (wired
 # at line 247) purely by FILENAME: that gate's population was `*_check.py` +

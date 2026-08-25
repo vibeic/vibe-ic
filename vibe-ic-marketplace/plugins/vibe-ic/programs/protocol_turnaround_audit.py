@@ -447,12 +447,51 @@ def _cli() -> int:
                     "(deterministic; retired skills/protocol-turnaround-audit).")
     p.add_argument("--rtl-dir", type=Path, required=True)
     p.add_argument("--l2-json", type=Path, required=True)
-    p.add_argument("--clock-period-ns", type=float, required=True)
+    # OPTIONAL, and that is what makes this program reachable from the flow.
+    # It was `required=True`, so the only way to call it was from something that
+    # had already computed a period — and nothing had. A declarative flow clause
+    # can test whether a file exists; it cannot open one and do arithmetic on a
+    # frequency. So the gate reads its own input from where the design owns it.
+    #
+    # L8 IS THE DESIGN-OWNED SOURCE, and this is not a new claim:
+    # `l8_sta_clock_period_design_owned_check` states that L8 is "the ONLY
+    # design-owned source of the STA clock period" and `sdc_gen` resolves it the
+    # same way. Deriving it anywhere else would put a second period in the tree.
+    p.add_argument("--clock-period-ns", type=float, default=None,
+                   help="fabric clock period in ns; derived from L8 when omitted")
+    p.add_argument("--l8-json", type=Path, default=None,
+                   help="L8_RTL_CONSTANTS.json to derive the period from "
+                        "(default: phase1/generated_docs/L8_RTL_CONSTANTS.json)")
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
     p.add_argument("--strict", action="store_true",
                    help="Exit non-zero if any ERROR")
     args = p.parse_args()
+
+    # Resolve the period BEFORE anything uses it, and REFUSE rather than guess.
+    # rc=2 is this repo's "could not run", which is the honest answer when the
+    # design owns no period: a turnaround budget measured against a fabricated
+    # clock is worse than no measurement, because it looks like one.
+    if args.clock_period_ns is None:
+        _l8p = args.l8_json or Path("phase1/generated_docs/L8_RTL_CONSTANTS.json")
+        _mhz = None
+        if _l8p.is_file():
+            try:
+                import json as _j
+                _l8 = _j.loads(_l8p.read_text(errors="replace"))
+                _mhz = _l8.get("clock_mhz")
+                if not _mhz:
+                    import sdc_gen as _sdc
+                    _mhz = _sdc._clock_mhz_from_l8_domains(_l8)
+            except Exception:
+                _mhz = None
+        if not _mhz:
+            print(f"[REFUSE] protocol_turnaround_audit: no clock period. "
+                  f"Give --clock-period-ns, or provide {_l8p} with a "
+                  f"design-owned clock_mhz / clock_domains[] — L8 is the only "
+                  f"design-owned source of it.", file=sys.stderr)
+            return 2
+        args.clock_period_ns = 1000.0 / float(_mhz)
 
     if not args.rtl_dir.exists():
         print(f"rtl-dir does not exist: {args.rtl_dir}", file=sys.stderr)

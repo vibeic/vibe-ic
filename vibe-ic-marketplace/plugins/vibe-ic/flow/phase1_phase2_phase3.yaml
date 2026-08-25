@@ -1360,6 +1360,28 @@ steps:
         # against a design that does declare one.
         - advisory_program_exit_zero: "behavioral_evidence_per_spec_item_check ."
         - advisory_program_exit_zero: "dispatcher_awake_gate_check ."
+        # ORPHANED, AND UNREACHABLE BY CONSTRUCTION until this change (2026-08-25).
+        # `--clock-period-ns` was `required=True`, so the only caller that could
+        # exist was one that had already computed a period — and none did. A
+        # declarative clause can test whether a file exists; it cannot open one
+        # and divide. The program now derives the period from L8 when the flag is
+        # omitted, which is not a new source of truth:
+        # `l8_sta_clock_period_design_owned_check` states L8 is "the ONLY
+        # design-owned source of the STA clock period" and `sdc_gen` resolves it
+        # the same way. Verified numerically both ways — clock_mhz 50 -> 20.0 ns,
+        # clock_domains[] freq_mhz 125 -> 8.0 ns, explicit --clock-period-ns still
+        # wins — and it REFUSES with rc=2 rather than guessing when the design
+        # owns no period, because a turnaround budget against a fabricated clock
+        # looks like a measurement and is not one.
+        - optional_program_exit_zero:
+            command: "protocol_turnaround_audit --rtl-dir phase2/stage1/rtl --l2-json phase1/generated_docs/L2_FRS.json --out-json reports/phase2/gates/protocol_turnaround.json"
+            condition_files_exist: ["phase1/generated_docs/L2_FRS.json", "phase1/generated_docs/L8_RTL_CONSTANTS.json"]
+            absent_condition_reason: >-
+              Needs BOTH a functional requirement set (L2, for the protocol's
+              declared turnaround) and a design-owned clock (L8, for the budget
+              it is measured against). A design missing either has no turnaround
+              contract to audit, and inventing one of the two would produce a
+              number nobody owns.
         # vibe-ic#306 slot — ADVISORY coverage GAP ANALYSIS.
         #
         # `coverage_closure` has been declared in this step's `programs:` list
