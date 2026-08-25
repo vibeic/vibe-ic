@@ -79,6 +79,53 @@ leave the row out.
 7. **Hand off.** Name the program that will read these records and state that the
    verdict is its output, not this document's.
 
+## Where the records come from
+
+Everything below consumes `vibeic.ppa.metric.v1` records, and until this section
+existed nothing here said who WRITES them. Two producers do, and both need
+`--json` — each writes its bundle only when handed one, so an invocation without
+it runs and emits nothing:
+
+```bash
+# sign-off evidence: the physical, reliability and equivalence axes, read from
+# a completed run's own artefacts (drc_signoff.json, lvs_verdict.json, antenna,
+# IR, EM, equivalence) and emitted as canonical metric names
+python3 plugins/vibe-ic/programs/ppa_signoff_records.py <project> \
+    --json reports/ppa/records/signoff.json
+
+# the design-for-ECO spare population, which the eco_readiness axis refuses from.
+# It takes the two spare artefacts BY PATH, not a project root, and --preservation
+# is optional precisely because step 34 writes it conditionally.
+python3 plugins/vibe-ic/programs/ppa_eco_spare_records.py \
+    --spare-plan phase3/stage3/pnr/spare_cells.json \
+    --preservation reports/spare_preservation.json \
+    --stage stage4 --json reports/ppa/records/eco_spares.json
+```
+
+`ppa_signoff_records` is the missing half of `ppa_feasibility_check`: that gate
+proves its axes from canonical metric names, and before this producer existed
+seven of those names were written by nothing in this tree — so a run that
+measured DRC, LVS, antenna, IR, EM and equivalence still had no record saying
+so. `ppa_eco_spare_records` exists because a place-and-route search once deleted
+a design's entire spare-cell population and scored BETTER for it — smaller area,
+lower power, and no axis anywhere saying the layout could no longer be repaired
+by a metal-only ECO. The axis is the refusal; this program is the evidence it
+refuses from.
+
+THEY ARE RUN HERE AND NOT BY A FLOW CLAUSE, and the reason is recorded in the
+flow yaml at step 37.5ic rather than guessed at. 37.5ic is the first step where
+every axis they read coexists, which is why wiring them there was tried on
+2026-08-25 — but one of the files they read, `reports/spare_preservation.json`,
+is written by a CONDITIONAL clause at step 34 and is declared in no step's
+`required_outputs`. A gate reading it therefore makes that path
+produced-consumed-undeclared (d7 `W2`), and the repair reached for was an
+UNCONDITIONAL `required_outputs` row over a conditionally-produced artefact —
+which reds every spare-less design over a file nobody owes. What would make them
+wireable is stated there too: a step that produces
+`reports/spare_preservation.json` unconditionally and declares it. Until then
+the honest runner is this line, and an operator who has a completed run in hand
+has exactly the inputs the clause could not guarantee.
+
 ## The report is generated, and then it is checked
 
 ```bash

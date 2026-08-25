@@ -796,4 +796,23 @@ every finding it names:
   be killed as hung. A census of the repo belongs where an agent reads it, not
   on a step that runs once per chip.
 
+- A project still on the pre-v2 directory layout:
+  `programs/migrate_to_layout_p.py <project> --dry-run`
+
+  Reports what a migration to the v2 Layout P tree would move — `phase2a/`,
+  `phase2b/`, top-level `analog/` and `manufacturing/` — and exits 1 on pre-v2
+  residue, 0 on a tree already migrated. Drop `--dry-run` to perform it.
+
+  IT IS HERE AND NOT A FLOW CLAUSE, measured on 2026-08-26 after being wired to
+  step D1 and withdrawn the same day. It is a ONE-TIME migration an operator
+  runs on an old project, not a question to re-ask on every chip, and the flow
+  cannot hold it even if you wanted it to: its `_PHASE3_ANCHORS` name
+  `layout.mag`, `drc_clean.flag`, `lvs_match.flag`, `pre_vs_post.json` and
+  `hw_measurements.json`, which are required_outputs of A5/A6/A7/A9, so
+  dimension 5 derives five dependency edges the step does not declare.
+  Declaring them is refused by the graph — all four analog steps already have D1
+  in their ancestry, so every edge is circular — and re-homing is refused too:
+  the `blocks_on` closure of all 68 steps covers NONE of {A5, A6, A7, A9},
+  because A9 is a leaf nothing blocks on.
+
 - Field-agent counterpart: `vibe-ic:field-agent-loop`

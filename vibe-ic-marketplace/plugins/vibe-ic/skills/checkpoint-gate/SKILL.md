@@ -52,6 +52,68 @@ description: "Verify that all required artifacts exist and pass quality checks b
 >
 > Use the per-step gates below the fold for the phase-transition question.
 
+### Recording a provenance entry BY HAND — `provenance_logger`
+
+`provenance_check` (CP2 above) asks "was this file produced by a real tool
+run?", and it answers from `provenance.jsonl`. Inside the runners that record
+is written IN-PROCESS — `design_one_shot_runner.step_yosys_synth` has done so
+since v1.6.196 (#83) and `phase3_one_shot_runner._log_invocation` does the same
+— so the flow needs no wrapper and does not declare one.
+
+`programs/provenance_logger.py` is the same record written from OUTSIDE, for a
+tool you ran yourself:
+
+    programs/provenance_logger.py --project <dir> --tool <name> \
+        --version-cmd "<name> -V" --output <declared artefact> \
+        --step <step-id> -- <the real command>
+
+It SHA-256s the declared inputs, runs the command, SHA-256s the declared
+outputs, and appends the entry `provenance_check` reads.
+
+IT IS HERE AND NOT IN THE FLOW, and the reason is measured rather than
+stylistic. Wrapping a runner's own tool call with it was tried on 2026-08-26 and
+withdrawn the same day: `provenance_logger.run` does
+`subprocess.Popen(cmd, cwd=str(project))`, which DISCARDS the working directory
+the call site passes. Measured with `pwd` as the tool — wrapped, yosys saw the
+project root; direct, it saw `phase2/stage2/synth`, where the `$readmemh` hex
+stubs are staged. The wrapper also declared `netlist.v` as its output at an
+instant when yosys had written `netlist_yosys.v`, so every record it appended
+called its own declared output missing. A wrapper whose findings must be mapped
+back to zero to be tolerable is not reporting; it is being ignored.
+
+So: use it for a tool YOU ran, from a directory that is already the one the tool
+needs. Do not put it in front of a runner's own invocation — the runner already
+writes the record, and the wrapper would move the tool's feet.
+
+### Bringing a pre-v2 project onto Layout P BY HAND — `migrate_to_layout_p`
+
+The box at the top of this page describes a checkpoint program that reds out a
+healthy design because it addresses a directory layout the flow abandoned. The
+mirror image of that failure is a PROJECT still on the old layout: a tree with
+`phase2a/`, `phase2b/`, a top-level `analog/` and a top-level `manufacturing/`
+answers "no" to every required-file check below, and the reason is its shape,
+not a missing artefact. Ask the shape question first:
+
+    programs/migrate_to_layout_p.py <project> --dry-run   # 1 = pre-v2 residue, 0 = on Layout P
+    programs/migrate_to_layout_p.py <project>             # perform the migration (git mv)
+
+`--dry-run` writes nothing: every mover is guarded and the provenance rewrite is
+computed and discarded. Without the flag the same program MOVES the project's
+directories and REWRITES `provenance.jsonl`, so run it deliberately, on a tree
+you can restore.
+
+WHY IT IS HERE AND NOT A FLOW CLAUSE, in one sentence: it was wired as an
+advisory clause on flow step D1 on 2026-08-25 and withdrawn on 2026-08-26,
+because its `_PHASE3_ANCHORS` tuple names five artefacts — `layout.mag`,
+`drc_clean.flag`, `lvs_match.flag`, `pre_vs_post.json`, `hw_measurements.json` —
+that steps A5, A6, A7 and A9 declare as `required_outputs`, so a step running it
+reads what four ANALOG BACKEND steps produce. The flow cannot declare that
+dependency (all four already have D1 in their ancestry, so every edge is
+circular) and cannot re-home the clause either (the `blocks_on` closure of all
+68 steps was computed; none covers A9, which is a leaf nothing blocks on). A
+one-time migration an operator runs on an old tree was never a per-project gate
+in the first place — which is exactly why it knows the whole tree's file names.
+
 Verify all required deliverables exist and meet quality standards before allowing the design to proceed to the next phase.
 
 ## Deterministic gate (run this FIRST — single command per checkpoint)

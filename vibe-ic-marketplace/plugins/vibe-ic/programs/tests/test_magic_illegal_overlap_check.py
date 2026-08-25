@@ -460,8 +460,19 @@ def test_a_dirty_extraction_never_reaches_the_lvs_clause(tmp_path):
     doc = yaml.safe_load(FLOW.read_text())
     step = next(s for s in doc["steps"] if s["id"] == 31)
     clauses = step["gate"]["all_of"]
-    names = [c.get("program_exit_zero", "").split()[0] if
-             isinstance(c, dict) else "" for c in clauses]
+    # A clause that is not a `program_exit_zero` one contributes NO name and is
+    # skipped, rather than being asked for the first token of an empty string.
+    # The previous form was `c.get("program_exit_zero", "").split()[0]`, and
+    # `"".split()` is `[]`, so it raised IndexError on the first advisory /
+    # optional / files_exist clause step 31 ever grew. That crash was LATENT,
+    # not new: step 31 was 9-for-9 `program_exit_zero` on origin/main, so the
+    # expression had never met a clause of any other kind. This is the same
+    # lookup the sibling test above already does. The placement claim is
+    # unchanged — the two clauses are still located BY NAME in the shipped
+    # order, so a reorder still breaks this test.
+    names = [c["program_exit_zero"].split()[0]
+             if isinstance(c, dict) and "program_exit_zero" in c else ""
+             for c in clauses]
     pair = {"all_of": [clauses[names.index("magic_illegal_overlap_check")],
                        clauses[names.index("lvs_report_check")]]}
 
