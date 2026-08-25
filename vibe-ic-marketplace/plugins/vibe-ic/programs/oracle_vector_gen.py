@@ -2,6 +2,16 @@
 """
 oracle_vector_gen.py — v0.114 (BACKLOG-v6 C1 closure).
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This program is wired into the flow as an
+`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
+step, its findings are printed, and its exit code cannot deny the step its PASS
+tier. That is deliberate — it was wired to make a real check reachable, not to
+block a landing on debt it did not create — and the declaration says so where
+the audit looks. Without it, "wired where it cannot block" and "nobody decided"
+are the same record, and the reliable way to stay clean is to say nothing.
 Auto-generate L10 oracle byte-stream vectors from L9 supported_opcodes
 + L11 OTP content + L8 CRC params. Closes the v0.108 round-1 gap where
 `rtl_response_byte_oracle_check.py` (v0.106 P0.2) existed but had no

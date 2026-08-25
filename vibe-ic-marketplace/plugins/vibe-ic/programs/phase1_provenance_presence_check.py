@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """phase1_provenance_presence_check.py — Phase 1 D6-traceability gate.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This program is wired into the flow as an
+`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
+step, its findings are printed, and its exit code cannot deny the step its PASS
+tier. That is deliberate — it was wired to make a real check reachable, not to
+block a landing on debt it did not create — and the declaration says so where
+the audit looks. Without it, "wired where it cannot block" and "nobody decided"
+are the same record, and the reliable way to stay clean is to say nothing.
 Verifies that every Phase-1 layer document (L1..L13) carries provenance
 information at its top level. Specifically each L*.json must have AT
 LEAST ONE of:

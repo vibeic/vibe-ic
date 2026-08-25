@@ -4,6 +4,16 @@ analog_hil_convergence_log_check.py — verify that at least one analog
 block ships a hardware-in-the-loop tuning-loop log demonstrating real
 SPICE→hardware→corner→post-layout convergence.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This program is wired into the flow as an
+`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
+step, its findings are printed, and its exit code cannot deny the step its PASS
+tier. That is deliberate — it was wired to make a real check reachable, not to
+block a landing on debt it did not create — and the declaration says so where
+the audit looks. Without it, "wired where it cannot block" and "nobody decided"
+are the same record, and the reliable way to stay clean is to say nothing.
 Real-world inspiration: phase2+3_v10619-vendor/analog/A8_hardmacro/
 ldo_default/hil_log/convergence_log.json carried 7 iterations spanning
 stages SPICE_TT → SPICE_TT_after_resize → HW_TT_27C →

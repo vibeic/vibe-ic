@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """reported_figure_artifact_backing_check.py — the ARTIFACT-BACKING gate.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This program is wired into the flow as an
+`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
+step, its findings are printed, and its exit code cannot deny the step its PASS
+tier. That is deliberate — it was wired to make a real check reachable, not to
+block a landing on debt it did not create — and the declaration says so where
+the audit looks. Without it, "wired where it cannot block" and "nobody decided"
+are the same record, and the reliable way to stay clean is to say nothing.
 WHY THIS EXISTS (measured defect, 2026-07-21 campaign)
 ======================================================
 A campaign ledger published the GDS size ``91,520,898 B`` for a design. That

@@ -2,6 +2,16 @@
 """perc_corpus_sweep.py — run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS
 of already-routed designs, deterministically, with NO container needed.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This program is wired into the flow as an
+`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
+step, its findings are printed, and its exit code cannot deny the step its PASS
+tier. That is deliberate — it was wired to make a real check reachable, not to
+block a landing on debt it did not create — and the declaration says so where
+the audit looks. Without it, "wired where it cannot block" and "nobody decided"
+are the same record, and the reliable way to stay clean is to say nothing.
 Captured v0.2.12 from the 2026-06-01 Shape-A 21-IC benchmark_ic sweep
 (benchmark_ic/RESULT_PERC_CORPUS_v0211.md): that sweep was driven by an ad-hoc /tmp script.
 This promotes it to a first-class, tested plugin capability so any corpus PERC sweep is one

@@ -1947,9 +1947,12 @@ run "plugin self-audit"                 "$ROOT" bash "$ROOT/tools/ci/run_plugin_
 # with `wrappers_checked: 0`. A gate that passes because it found nothing to look
 # at is a green light for an empty scan, which is the defect this whole family of
 # audits exists to catch. It needs a corpus before it needs a caller.
-run "flow step-executor coverage"       "$PLUGIN" python3 programs/flow_step_executor_coverage_check.py
-run "lessons corpus consistency"        "$PLUGIN" python3 programs/lessons_corpus_consistency_check.py
-run "ip-catalog upstream (local arm)"   "$PLUGIN" python3 programs/ip_catalog_upstream_audit.py --no-network
+# THE THREE `run` LINES THAT WERE HERE ARE GONE, and by the same rule that put
+# `lessons corpus consistency` back below. They were declared without either
+# fixture arm; the bar is that a gate lands with both directions or it does not
+# land, and it does not bend for a gate that would pass today. Of the three,
+# `lessons_corpus_consistency_check` earned a fixture and is re-declared below;
+# the other two have not, so they stay out until they do.
 
 # BACK, WITH THE FIXTURE THE BAR NOW ASKS FOR. `lessons_corpus_consistency_check`
 # is named in the block above and its `run` line was taken out by "let the

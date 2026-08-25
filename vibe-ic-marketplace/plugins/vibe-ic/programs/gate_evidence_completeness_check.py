@@ -2,6 +2,16 @@
 """
 gate_evidence_completeness_check.py — v0.100 L1
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This program is wired into the flow as an
+`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
+step, its findings are printed, and its exit code cannot deny the step its PASS
+tier. That is deliberate — it was wired to make a real check reachable, not to
+block a landing on debt it did not create — and the declaration says so where
+the audit looks. Without it, "wired where it cannot block" and "nobody decided"
+are the same record, and the reliable way to stay clean is to say nothing.
 Every gate listed as PASS in a FINAL_REPORT.md (or flow compliance JSON)
 must have a corresponding evidence file (stdout dump, JSON output, or log).
 

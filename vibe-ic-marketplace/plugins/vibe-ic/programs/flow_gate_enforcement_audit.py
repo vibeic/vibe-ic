@@ -354,6 +354,46 @@ def repo_gate_source(programs: Path) -> str:
     return ""
 
 
+def skill_doc_source(programs: Path) -> str:
+    """The plugin's skill documents, if the tree under audit carries any.
+
+    THE FIFTH PLACE A DECLARATION CAN BE WIRED (2026-08-25). A skill line is the
+    WEAKEST runner in this repo — an agent reads it and types the command — but
+    it is a runner, and for one class of program it is the only correct one.
+
+    The class: a census whose subject is this repo's own source, which answers
+    rc 0 with findings BY CONSTRUCTION ("THIS RECORDS DEBT AND NEVER REFUSES").
+    Wired into `tools/ci/*.sh` such a program is a gate that CANNOT FAIL;
+    declared as a flow clause it bills a per-project run for measuring the
+    plugin. `skills/core-agent-loop/SKILL.md` already homes four of them for
+    exactly that reason, and `checker_execution_wiring_audit` models the same
+    thing as its disclosed "skill-only" class.
+
+    Until this venue existed, those four stayed clean only because none of them
+    DECLARES an intent. That is the wrong incentive and this audit's own
+    docstring says why: "until a gate states its intent in the one place the
+    audit reads, 'wired where it cannot block' and 'nobody decided' are the same
+    record." A program that declares `ENFORCEMENT: advisory` and is honestly
+    homed in a skill was being told the declaration is what got it accused —
+    so the reliable way to stay clean was to say nothing. Measured: 2 gates.
+
+    Read for the same reason and with the same limits as `repo_gate_source` —
+    from the tree UNDER AUDIT, so a synthetic tree with no `skills/` gets the
+    empty string and is judged on what it actually contains.
+
+    Markdown has no comment syntax to strip, and the risk `repo_gate_source`
+    strips comments for does not arise the same way here: a skill that MENTIONS
+    a program without a `programs/<name>.py` path does not match, because
+    `_invoked_by_suite` requires the `.py`.
+    """
+    for base in (programs, *programs.parents[:4]):
+        skills = base / "skills"
+        if skills.is_dir():
+            return "\n".join(f.read_text(errors="replace")
+                              for f in sorted(skills.rglob("*.md")))
+    return ""
+
+
 def _invoked_by_suite(ci_src: str, gate: str) -> bool:
     """The shell suite invokes a program by PATH, quoted or not (`python3
     "$PG/x.py"` and `python3 programs/x.py` both occur). `ci_src` has already
@@ -1727,6 +1767,7 @@ def audit(flow: Path, programs: Path) -> dict:
     # where it looked cannot be checked by the person it accuses.
     src_ci = repo_gate_source(programs)
     src_gate_runner = repo_gate_runner_source(programs)
+    src_skill = skill_doc_source(programs)
     # The fourth venue. Seeded by the flow definition ONLY, so the closure
     # cannot be bootstrapped by a cluster of programs nothing else names.
     dispatched = dispatched_by_reachable_gates(
@@ -1739,6 +1780,12 @@ def audit(flow: Path, programs: Path) -> dict:
         if stem in dispatched:
             continue
         if _invoked_by_suite(src_ci, stem):
+            continue
+        # The fifth venue — see `skill_doc_source`. Matched with the SAME
+        # predicate as the shell suite, so "a skill names it" means a skill
+        # gave a runnable `programs/<name>.py` path, not that the name appears
+        # somewhere in prose.
+        if _invoked_by_suite(src_skill, stem):
             continue
         # A venue does not get to exempt ITSELF. #886 measured this exact
         # hazard from the other direction: widening the population made the
@@ -1770,6 +1817,8 @@ def audit(flow: Path, programs: Path) -> dict:
         # a bare False would read as both.
         {"venue": "dispatched by a gate the flow names (transitive)",
          "present": bool(dispatched), "reached": sorted(dispatched)},
+        {"venue": "skills/**/*.md (an agent runs it by hand)",
+         "present": bool(src_skill.strip())},
     ]
     # See the note beside `declared_weaker_than_wired` in the report below.
     # Computed from the SAME rows the rest of this report is built from, so it
