@@ -487,10 +487,24 @@ steps:
         - advisory_program_exit_zero: "l7_debug_access_grounding_check ."
         # every clock period an L8 consumer resolves is unique and actionable
         - advisory_program_exit_zero: "l8_clock_period_actionability_check ."
+        # ORPHANED, RE-HOMED. D1 EMITS L8_RTL_CONSTANTS.json (it is in this
+        # step's own required_outputs and `rtl-constants-gen` is in its skills),
+        # so D1 is the step that can be asked whether what it emitted holds
+        # together. `discover_constants_files` rglobs on "constants" in the
+        # filename, so no new argument. ADVISORY: `NO_CONSTANTS_FILE` is rc=1,
+        # and a design whose Phase 1 emitted no constants file has nothing here
+        # to contradict. Measured on a real L8: rc=0, 2 constants, 0 duplicates;
+        # a duplicate name injected -> rc=1 naming it.
+        - advisory_program_exit_zero: "constants_validation phase1/generated_docs"
         # the floorplan phase 3 pins verbatim is unambiguous and agrees across layers
         - advisory_program_exit_zero: "l9_floorplan_contract_check ."
         # every executable L10 case carries an oracle anchor
         - advisory_program_exit_zero: "l10_test_case_oracle_anchor_check ."
+        # ORPHANED, RE-HOMED. Derives L10 oracle vectors from the L9 opcode
+        # table D1 itself emits. No `--json` sink: it writes only when L9 yields
+        # opcodes, so declaring the artefact unconditionally would redden every
+        # opcode-less design. Measured on a fixture with L9 present: rc=0.
+        - advisory_program_exit_zero: "oracle_vector_gen ."
         # L11 OTP content resolves for the consumer that reads it
         - advisory_program_exit_zero: "l11_otp_content_consumer_contract_check ."
         # L12 sequences are visible in the layer their consumer actually reads
@@ -1629,6 +1643,7 @@ steps:
     required_outputs:
       - "phase2/stage2/constraints/*.sdc"
       - "phase2/stage2/constraints/pvt_matrix.json"
+      - "phase2/stage2/constraints/*.upf"
     gate:
       all_of:
         - files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
@@ -1637,6 +1652,18 @@ steps:
         # a PVT matrix; single-corner must be disclosed, never presented
         # as multi-corner.
         - program_exit_zero: "pvt_matrix_check . --json reports/phase2/gates/pvt_matrix.json"
+        # ORPHANED, RE-HOMED, AND IT CLOSES A LOOP THIS FLOW LEFT OPEN. Step
+        # 33's `upf_syntax_check` clause records that "nothing in this flow
+        # emits UPF today" — THIS is the emitter, and it was reachable from
+        # nothing. Wiring the producer is what turns that consumer from a
+        # permanently-silent clause into one that can fire.
+        #
+        # Step 7 owns constraints, which is what power intent is. ADVISORY, not
+        # optional: measured rc=2 SKIP whenever L21 declares no power_domains,
+        # and an unmet `optional` condition denies the step its PASS tier. It
+        # writes `phase2/stage2/constraints/<top>.upf`, declared above, and
+        # self-validates the file it wrote.
+        - advisory_program_exit_zero: "l21_to_upf_emit . --top chip_top"
         # vibe-ic#762 — a staged hard macro's own Liberty may declare a
         # NON-SEQUENTIAL stability window (`timing_type : non_seq_hold_*`)
         # between two SIGNAL pins. Measured: a 9.00 ns address-around-strobe
@@ -4997,6 +5024,13 @@ steps:
         # should not be a landing's first run of it.
         - advisory_program_exit_zero: "pnr_via_stack_completeness_check ."
         - advisory_program_exit_zero: "waiver_growth_check ."
+        # ORPHANED, RE-HOMED. Step 31 already declares `skills: [drc-fix,
+        # lvs-triage, perc-check]` — the PERC skill was named with NO PERC
+        # program behind it. Its input `phase3/stage3/pnr/routed.def` is Step
+        # 21's output and matches this program's own `phase3/**/*.def` glob.
+        # ADVISORY, no `--report`: it writes nothing, and an empty dir is rc=2
+        # (vacuous), never a fail.
+        - advisory_program_exit_zero: "perc_corpus_sweep ."
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
   # ── Step 32: Post-route timing repair pass ───────────────────
@@ -5261,6 +5295,12 @@ steps:
       # accept either location, so both are accepted here too.
       - "reports/density.json OR reports/phase3/density.json"
       - "reports/density.rpt OR reports/phase3/density.rpt"
+      # Step 34 RUNS `spare_cell_preservation_check`, which writes this, and
+      # nothing declared it — so the flow produced an artefact no step owned.
+      # Invisible until step 37.5ic gained a gate that READS it, at which point
+      # d7 named the pair (`W2:produced_consumed_undeclared`). The gap was
+      # always here; a consumer is what made it observable.
+      - "reports/spare_preservation.json"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/filled.def", "phase3/stage3/pnr/metal_fill.done"]
@@ -5778,6 +5818,13 @@ steps:
         # rather than passing when there is none.
         - advisory_program_exit_zero: "flow_stage_check ."
         - advisory_program_exit_zero: "gate_evidence_completeness_check ."
+        # ORPHANED, RE-HOMED. Step 37 is where the GDS is published, so it is
+        # where "which of these polygons came from someone else's IP" can be
+        # asked. `build-text` prints and writes nothing, so no required_outputs
+        # change. Measured: rc=2 with no `plugin_output/declaration.json` (a
+        # project reusing no catalogue IP — correctly vacuous), rc=0 on a
+        # complete blob, rc=3 when the blob carries a REFUSED line.
+        - advisory_program_exit_zero: "gds_ip_attribution build-text ."
     blocks_on: [34, 36]
 
   # ── cell/IP path — TERMINAL ──────────────────────────────────────────
@@ -5939,6 +5986,14 @@ steps:
         # only one arm can report a disagreement between them.
         - program_exit_zero: "tapeout_precheck . --json reports/phase3/tapeout_precheck.json"
         - program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
+        # ORPHANED, RE-HOMED. 37.5ic is the FIRST point where every axis this
+        # reads coexists — drc_signoff.json, lvs_verdict.json, antenna, IR and
+        # spare_cells.json — which is why it belongs here and nowhere earlier.
+        # ADVISORY, no `--json`: measured rc=2 `[CANNOT CHECK] 13 record(s),
+        # 0 MEASURED`, which is the honest verdict for a tree whose producers
+        # have not run, and is exactly the state its sibling
+        # `gate_proof_vocabulary_has_a_producer` reports rc=1 about today.
+        - advisory_program_exit_zero: "ppa_signoff_records ."
     # 0.5ic writes the router files this step's condition reads, the template
     # the operator's arm is run against, and the declaration our arm compares
     # the layout to.
