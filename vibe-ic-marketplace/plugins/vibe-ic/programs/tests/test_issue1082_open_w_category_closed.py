@@ -109,7 +109,11 @@ def test_the_recorded_baseline_followed_the_tree_down():
     converted tree passes either way; leaving the old number would leave a
     ten-slot hole through which all ten could return still green."""
     recorded = set(json.loads(BASELINE.read_text())["offenders"])
-    assert len(recorded) == 515, len(recorded)
+    # 515 -> 514: `verilogeval_tier_pipeline.py` was a recorded offender and the
+    # file is DELETED, so the row named a program that does not exist. A ratchet
+    # entry keyed on a vanished file is not debt — it is a slot nothing can ever
+    # pay off, and it inflates the number the ratchet reports as owed.
+    assert len(recorded) == 514, len(recorded)
     for s in CONVERTED:
         assert f"{s}.py" not in recorded, f"{s} converted but still recorded residual"
 
