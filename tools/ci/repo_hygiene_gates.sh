@@ -668,7 +668,8 @@ run "closed-loop executable census" "$ROOT" python3 "$PG/closed_loop_executable_
 # set and broken is still UNDETERMINED, a corpus that IS supplied is still fully
 # adjudicated, and a corpus present but holding no L-doc is UNDETERMINED rather
 # than a comparison against zero.
-run "L-doc field producer"              "$ROOT" python3 "$PG/l_doc_field_producer_check.py" --corpus-may-be-absent
+uncheckable_until 2027-02-28 "SUBJECT ABSENT BY OWNER INSTRUCTION, not pointer broken. This reads an L-doc carrying a populated `fields` object, which exists only inside a published converged cell; benchmark-data has held ZERO since bcf2f94 (2026-08-20 -- none of the four withdrawn cells was a pass). rc 2 is a MEASURED zero over a corpus that WAS read, and it is NOT a claim the rule holds. The INSTRUMENT is proven separately and continuously by tools/ci/gate_fixtures/l_doc_field_producer.py, which drives it over a known-good L-doc and over one reader-without-producer. Closes on the first converged cell benchmark_evidence_publish stages; NOTHING IN THIS REPOSITORY CAN CLOSE IT, which is why it is here and not in a code change. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate looking and finding a defect still refuses the landing."
+run_tolerating_uncheckable "L-doc field producer" "$ROOT" python3 "$PG/l_doc_field_producer_check.py" --corpus-may-be-absent
 
 # vibe-ic#371 — a tracked symlink recorded with an ABSOLUTE target resolves
 # only on the machine that wrote it. 159 of 172 were in that state and it made
@@ -781,7 +782,8 @@ run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_r
 # this repo (a record that comes home is still judged), a pointer set and broken
 # or aimed at a non-checkout stays UNDETERMINED, and a supplied corpus carrying a
 # false RESOLVES row still FAILs.
-run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT" --corpus-may-be-absent
+uncheckable_until 2027-02-28 "SUBJECT ABSENT BY OWNER INSTRUCTION. CITATION_ROUTING.txt is emitted by exactly one program (benchmark_evidence_publish), only for a converged (IC x PDK) cell, and that program REFUSES a non-converged run; the corpus tracks zero of them, and zero GDS_MANIFEST.txt and zero LAYOUT_ROUTING.txt with it, so no tree anywhere was staged by that publisher. This gate is NOT path-wired to ic/ -- it reads the whole index -- so there is no pointer to repair. Closes on the first converged cell benchmark_evidence_publish stages; NOTHING IN THIS REPOSITORY CAN CLOSE IT, which is why it is here and not in a code change. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate looking and finding a defect still refuses the landing. NO SAMPLE PAIRS THIS ONE and that is deliberate: unlike its three neighbours it asks whether a SHIPPED FILE tells the truth about the tree it ships in, which is a question about published evidence and not about this plugin."
+run_tolerating_uncheckable "citation routing is true" "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT" --corpus-may-be-absent
 
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
@@ -1107,7 +1109,8 @@ run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_clos
 # and FAILs (rc 1) if its `seal` does not match the counts beside it. That is
 # what keeps the withdrawn `gate_scope` above from being reintroduced as an
 # rc 0 that never read the file.
-run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
+uncheckable_until 2027-02-28 "SUBJECT ABSENT BY OWNER INSTRUCTION. This sweeps producer records carrying a declared reference inside a published cell; the corpus holds zero such cells since bcf2f94. MEASURED, so the alternatives are closed rather than untried: repointing --corpus at protocol_parity gives 87 cells and 0 producer records and refuses as LOST REACH (examined 9 -> 0); widening to the corpus root gives the same line. Re-sealing the register would need --write-baseline, which this repo forbids. The INSTRUMENT is proven by tools/ci/gate_fixtures/cross_layer_reference_regression.py at the recorded denominator of 9. Closes on the first converged cell benchmark_evidence_publish stages; NOTHING IN THIS REPOSITORY CAN CLOSE IT, which is why it is here and not in a code change. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate looking and finding a defect still refuses the landing."
+run_tolerating_uncheckable "cross-layer reference regression" "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
 
 # vibe-ic#693 — `flow_compliance_check` classifies a project from each step's
 # `pass.flag` and never walks the per-step report JSON, so a step can ship
@@ -1170,7 +1173,8 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # `runs_swept` or `runs_with_reports` without `--shrink-reason '<why>'`.
 # Nothing on the line below writes anything, so this gate is read-only as
 # before.
-run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
+uncheckable_until 2027-02-28 "SUBJECT ABSENT BY OWNER INSTRUCTION. This sweeps published run trees for a reports/ directory carrying step verdicts; the corpus holds zero published run trees since bcf2f94, so the sweep examines nothing and says VACUOUS_PASS rather than passing. The INSTRUMENT is proven by tools/ci/gate_fixtures/step_fail_bubbles_up.py over two run trees with four readable verdicts, two of them FAIL. Closes on the first converged cell benchmark_evidence_publish stages; NOTHING IN THIS REPOSITORY CAN CLOSE IT, which is why it is here and not in a code change. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate looking and finding a defect still refuses the landing. The per-cell invocation earlier in this file is unaffected and still blocks."
+run_tolerating_uncheckable "step FAIL bubbles up" "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
 # on that list's contract — complete over the non-PASS steps, inventing none,
