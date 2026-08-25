@@ -357,7 +357,14 @@ def test_the_matrix_does_not_hold_the_step31_json_entry():
     this test goes red and the comment above stops being true quietly."""
     import matrix_d7_artifact_graph as G  # noqa: WPS433
     consumers = G.literal_index().get(_STEP31_DRC_SIGNOFF_JSON, frozenset())
-    assert set(consumers) <= {"drc_report_check"}, (
+    # `task_nature_route` NAMES this artefact and neither reads nor writes it:
+    # it is the `artefact` field of the exit-evidence row that says which file
+    # proves a manufacturability exit. A routing table has to spell the path to
+    # be a routing table, and `literal_index` is keyed on the path literal, so
+    # it cannot tell a declaration from a read. That is the analyser limit this
+    # negative control exists to state — widened here with the distinction
+    # written down rather than left for the next reader to rediscover.
+    assert set(consumers) <= {"drc_report_check", "task_nature_route"}, (
         f"the d7 literal index now sees {sorted(consumers)} for "
         f"{_STEP31_DRC_SIGNOFF_JSON}. If those are real READERS the matrix can "
         f"hold this entry itself; if any of them WRITES the path, that is the "

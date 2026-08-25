@@ -5799,16 +5799,21 @@ def _step_rtl_gen_bound(
     # the program can only ever run second. Calling it HERE, before the
     # spec-to-rtl waive, is what makes program-first actually first, for every
     # entry point rather than only inside one benchmark harness.
-    project_binding.require_current()
-    _sar = _try_spec_artifact_registry_rtl(
-        project, t0, phase1_plain_text=_phase1_plain.text)
-    project_binding.require_current()
-    if _sar is not None:
-        return _sar
-    # A strictly recognized behavioral Moore FSM may live only in the original
-    # Phase-1 prompt/doc (before an L-doc extractor has materialized a structured
-    # rtl_spec).  Give that prose the same registry-backed deterministic path,
-    # while accepting only the behavioral_fsm family and otherwise DEFERring.
+    # NARROWEST FIRST. A strictly recognized behavioral Moore FSM may live only
+    # in the original Phase-1 prompt/doc (before an L-doc extractor has
+    # materialized a structured rtl_spec). This path gives that prose the same
+    # registry-backed deterministic emit, accepts ONLY the behavioral_fsm family
+    # and otherwise DEFERs — so putting it first cannot take work away from the
+    # general chain below, and leaving it second DID take work away from it.
+    #
+    # Both paths reach `spec_artifact_registry` and get the same RTL. What
+    # differs is what they say about it: this one records `artifact_type`,
+    # `module`, `spec_source` and `spec_sources` and writes `<top>.v` named from
+    # the spec, where the general chain records the emitter name and writes
+    # `chip_top.sv`. Ordered general-first, the chain answered every behavioral
+    # FSM before this path was reached, and six tests that assert the richer
+    # record went red saying `KeyError: 'artifact_type'`. A more specific
+    # producer that DEFERS when it does not apply belongs ahead of a general one.
     _behavior_force = (_FORCE_RTL_REGEN
                        if force_regen is None else force_regen)
     _bf = _try_phase1_behavioral_fsm_rtl(
@@ -5817,6 +5822,12 @@ def _step_rtl_gen_bound(
     project_binding.require_current()
     if _bf is not None:
         return _bf
+    project_binding.require_current()
+    _sar = _try_spec_artifact_registry_rtl(
+        project, t0, phase1_plain_text=_phase1_plain.text)
+    project_binding.require_current()
+    if _sar is not None:
+        return _sar
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
