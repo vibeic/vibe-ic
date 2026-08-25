@@ -1590,7 +1590,7 @@ def _try_spec_artifact_registry_rtl(
         pass
 
     try:
-        kind, rtl = _chain.try_emit(text, ifc, top)
+        kind, rtl, rejected = _chain.try_emit_ex(text, ifc, top)
     except Exception as exc:                            # noqa: BLE001
         # Record it. A swallowed exception here is indistinguishable from
         # "the prompt was not parse-complete", and sends the reader after the
@@ -1599,6 +1599,18 @@ def _try_spec_artifact_registry_rtl(
                           f"deterministic_emit_chain raised "
                           f"({type(exc).__name__}: {exc}); deferring to the AI backup")
     if not rtl:
+        if rejected:
+            # An emitter FIRED and the emit-blocking conformance rules refused
+            # what it wrote. That is a different event from "no program
+            # recognised this prompt", and reporting both as a bare handover
+            # hides the one that says a deterministic emitter is wrong.
+            why = "; ".join(f"{n}: {', '.join(rules)}" for n, rules in rejected)
+            return StepResult(
+                "rtl_gen", "SKIP", time.time() - t0,
+                f"deterministic emit REFUSED by the emit-blocking conformance "
+                f"rules ({why}); deferring to the AI backup",
+                extras={"rejected_emitters": [n for n, _ in rejected],
+                        "rejected_rules": sorted({r for _, rs in rejected for r in rs})})
         return None
     out_dir = project / "phase2" / "stage1" / "rtl"
     out_dir.mkdir(parents=True, exist_ok=True)

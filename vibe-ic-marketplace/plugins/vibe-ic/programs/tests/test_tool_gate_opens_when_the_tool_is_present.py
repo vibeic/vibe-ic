@@ -357,7 +357,6 @@ WHICH_GATES = (
     ("test_round17_latency_inclusive_origin", "_HAVE_IVERILOG"),
     ("test_rtl_transitive_cone", "_HAS_IVERILOG"),
     ("test_rtl_transitive_cone", "_HAS_VVP"),
-    ("test_rtllm_tier_pipeline", "_HAVE_IV"),
     ("test_serial_parallel_mul_synth", "_HAVE_IVERILOG"),
     ("test_shapec_emit_blocking_rules", "_HAS_IVERILOG"),
     ("test_table_lut_synth", "_HAVE_SIM"),
@@ -421,8 +420,6 @@ WHICH_GATES = (
     ("test_verilator_timing_fallback_check", "_HAVE_VERILATOR"),
     ("test_verilog_selfcheck_lint", "_HAVE_VERILATOR"),
     ("test_fsm_vector_rtl_emit", "_HAVE_IVERILOG"),
-    ("test_verilogeval_human_tier_pipeline", "_HAVE_IVERILOG"),
-    ("test_verilogeval_tier_pipeline", "_HAVE_IVERILOG"),
     ("test_waveform_table_conformance", "_HAVE_IVERILOG"),
     ("test_worked_example_sequence_oracle_check", "_HAS_IVERILOG"),
 )
@@ -434,7 +431,6 @@ NOT_WHICH_GATES = (
     ("test_dff_primitive_synth", "_HAVE_DATASET", "corpus dir"),
     ("test_general_synth", "_HAVE_DS", "corpus dir"),
     ("test_l4_systemrdl_export", "_HAVE_RDL", "package import"),
-    ("test_rtllm_tier_pipeline", "_HAVE_DS", "corpus dir"),
     ("test_v1_0_78_issue729_ppa_area_threshold", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_80_issue739_ppa_unreachable_target_escape", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_83_issue756_ppa_disjunctive_clauses", "_HAVE_CONTAINER", "docker probe"),
@@ -443,8 +439,6 @@ NOT_WHICH_GATES = (
     ("test_v1_1_76_encoder_decoder", "_HAVE_DS", "corpus dir"),
     ("test_v1_1_76_waveform_ext", "_HAVE_DS", "corpus dir"),
     ("test_fsm_vector_rtl_emit", "_HAVE_DATASET", "corpus dir"),
-    ("test_verilogeval_human_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
-    ("test_verilogeval_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
 )
 
 _NOT_WHICH_PAIRS = tuple((m, c) for m, c, _ in NOT_WHICH_GATES)

@@ -178,6 +178,20 @@ _TB_FAIL_UPPER_RE = re.compile(r"\bERRORS?\b", re.MULTILINE)
 _TB_MISMATCH_RE = re.compile(r"Mismatches?\s*:\s*(\d+)\s+in\s+(\d+)",
                              re.IGNORECASE)
 
+#: cocotb's own end-of-run summary. Without it a cocotb harness — the shape the
+#: whole `eda_cocotb` path produces — reached `_tb_verdict` and came back
+#: INCONCLUSIVE in every direction: a clean `FAIL=0` run could not be counted as
+#: a pass, and a `FAIL=2` run did not BLOCK, because "no recognised verdict
+#: line" is not a failure. A gate blind to the runner it is most often aimed at.
+_TB_COCOTB_RE = re.compile(
+    r"\*{2,}\s*TESTS\s*=\s*(\d+)\s+PASS\s*=\s*(\d+)\s+FAIL\s*=\s*(\d+)",
+    re.IGNORECASE)
+#: UVM's report summary. ERROR and FATAL are counted on separate lines and both
+#: are failures; the summary states no denominator, so a clean pair is a PASS on
+#: the report's own terms and nothing further is inferred from it.
+_TB_UVM_RE = re.compile(r"^\s*UVM_(?:ERROR|FATAL)\s*[:=]\s*(\d+)\s*$",
+                        re.IGNORECASE | re.MULTILINE)
+
 
 def _detection_text(code: str) -> str:
     """Comment- and string-stripped VIEW for module-name detection only (the
@@ -497,6 +511,25 @@ def _tb_verdict(sim_out: str) -> Tuple[Optional[bool], str]:
         if tot > 0 and mism == 0:
             return True, f"functional TB: 0 mismatches in {tot}"
         return False, f"functional TB: {mism} mismatches in {tot}"
+    # cocotb's summary, read with the SAME rule as the counts above: a nonzero
+    # failure count fails, and a zero count over zero tests compared nothing, so
+    # it is inconclusive rather than a pass.
+    m = _TB_COCOTB_RE.search(sim_out)
+    if m:
+        tests, _passed, failed = (int(m.group(k)) for k in (1, 2, 3))
+        if failed:
+            return False, f"cocotb: {failed} of {tests} test(s) FAILed"
+        if tests > 0:
+            return True, f"cocotb: {tests}/{tests} test(s) passed"
+        return None, "cocotb ran 0 tests — nothing was compared"
+    # UVM's report summary. No denominator is stated, so a clean pair says only
+    # that the report recorded no error and no fatal.
+    uvm = _TB_UVM_RE.findall(sim_out)
+    if uvm:
+        bad = sum(int(n) for n in uvm)
+        if bad:
+            return False, f"UVM report: {bad} UVM_ERROR/UVM_FATAL"
+        return True, "UVM report: 0 UVM_ERROR, 0 UVM_FATAL"
     # ORGANIC #796 — a STRUCTURAL / NONZERO fail token wins outright. Then a
     # clear PASS banner wins over a bare uppercase `ERROR` mention (an
     # `error-flag asserted ... TEST PASSED` line is a PASS); only with NO PASS
