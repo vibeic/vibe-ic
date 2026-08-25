@@ -75,6 +75,16 @@ import calendar_counter_synth as _cal             # noqa: E402  cascaded modulo 
 import memory_array_synth as _mem                 # noqa: E402  RAM / ROM / LIFO / instruction register -> RTL
 import serdes_width_synth as _serdes              # noqa: E402  parallel<->serial / width converter -> RTL
 import signal_gen_synth as _siggen                # noqa: E402  signal/square/triangle generator + CDC synchronizer -> RTL
+# --- PROSE-PARAMETRIC recognizers (no RTL generator: these lift the DEFINING
+#     PARAMETERS a spec states in words). `detect()` is the IC-Expert-Agent's
+#     "what structured information is in this spec" primitive, and it could not
+#     report a CRC polynomial, an SDC constraint set, a PDK target, a number
+#     format or a boolean equation at all -- the five element types below have no
+#     table/waveform parser to route through. `spec_artifact_catalog` already
+#     names `parametric_spec_extractor.<fn>` as each one's program extractor;
+#     this is that declaration made executable from the registry every caller
+#     actually reaches (design_one_shot_runner -> spec_artifact_registry).
+import parametric_spec_extractor as _param       # noqa: E402  prose parametric params -> structured
 
 
 # --------------------------------------------------------------------------- #
@@ -256,6 +266,27 @@ def _rec_signal_gen(text: str):
     return {"present": True} if _siggen.synth(text, "TopModule") else None
 
 
+# --- prose-parametric: recognize == lift the defining parameters, or SKIP.
+def _rec_boolean_expression(text: str):
+    return _param.extract_boolean_expression(text)
+
+
+def _rec_number_format(text: str):
+    return _param.extract_number_format(text)
+
+
+def _rec_pdk_target(text: str):
+    return _param.extract_pdk_target(text)
+
+
+def _rec_timing_constraints(text: str):
+    return _param.extract_timing_constraints(text)
+
+
+def _rec_crc_checksum(text: str):
+    return _param.extract_crc(text)
+
+
 # --------------------------------------------------------------------------- #
 # The catalog
 # --------------------------------------------------------------------------- #
@@ -430,6 +461,30 @@ REGISTRY: Tuple[ArtifactType, ...] = (
                  "Periodic signal/square/triangle generator (stated period/bound) + a "
                  "multi-FF CDC synchronizer (structural detect). SKIPs an unstated "
                  "bound/period."),
+    # --- prose-parametric element types (generate=None BY CONSTRUCTION: these lift
+    #     PARAMETERS, they do not synthesise a module, so `generate()`'s first-fire
+    #     order over every entry above is untouched). Appended last for the same
+    #     reason every wave above was.
+    ArtifactType("boolean_expression", "Boolean Expression", ("L6", "L15"),
+                 _rec_boolean_expression, None,
+                 "Named boolean equation stated in prose (out = a & b | ~c). SKIPs "
+                 "text carrying no assignment."),
+    ArtifactType("number_format", "Number Format", ("L8C",),
+                 _rec_number_format, None,
+                 "Fixed-point Q-format / IEEE float / BCD numeric encoding. SKIPs an "
+                 "unstated format."),
+    ArtifactType("pdk_target", "PDK / Technology Target", ("L19",),
+                 _rec_pdk_target, None,
+                 "Named process/PDK target plus any stated metal stack. SKIPs text "
+                 "naming no process."),
+    ArtifactType("timing_constraints", "Timing Constraints (SDC)", ("L19",),
+                 _rec_timing_constraints, None,
+                 "Clock period/frequency and IO delay stated in prose. SKIPs text "
+                 "stating neither."),
+    ArtifactType("crc_checksum_spec", "CRC / Checksum Spec", ("L8C",),
+                 _rec_crc_checksum, None,
+                 "CRC width/polynomial/init/reflect/xorout. SKIPs a CRC named without "
+                 "its polynomial."),
 )
 
 _BY_KEY: Dict[str, ArtifactType] = {a.key: a for a in REGISTRY}

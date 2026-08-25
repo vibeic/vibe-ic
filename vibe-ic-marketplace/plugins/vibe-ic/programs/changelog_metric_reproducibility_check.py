@@ -68,6 +68,16 @@ _METRIC_RE = re.compile(
 )
 
 
+#: THE DENOMINATOR THIS GATE'S PASS STANDS ON.
+#: `gate_discloses_denominator_check` measured this program answering PASS
+#: over an EMPTY tree while saying only "PASS: every ... is reproducible" —
+#: an output indistinguishable from a real clean run. A pass that does not
+#: say what it looked at is the same shape as a scan that looked at nothing.
+#: Recorded by `audit()` and printed by `main()`; nothing else reads it, and
+#: no signature changed, so every existing caller and test is untouched.
+_SCANNED = {"files": 0, "items": 0}
+
+
 @dataclass
 class MetricFinding:
     file: str
@@ -214,13 +224,17 @@ def audit(plugin_root: Path,
     if not audit_files:
         return "VACUOUS_PASS", []
 
+    _SCANNED["files"] = len(audit_files)
+    _SCANNED["items"] = 0
     for f in audit_files:
         try:
             text = f.read_text(encoding="utf-8")
         except OSError:
             continue
         lines = text.splitlines()
-        for ln_no, metric in _extract_metrics(text):
+        _m = _extract_metrics(text)
+        _SCANNED["items"] += len(_m)
+        for ln_no, metric in _m:
             num, unit = metric.split()[0], metric.split()[1]
             line = lines[ln_no - 1] if 0 < ln_no <= len(lines) else ""
             if unit == "%" and _derivable_from_a_fraction_on_the_line(num, line):
@@ -289,8 +303,9 @@ def main(argv: Optional[List[str]] = None) -> int:
               "marketplace.json found")
         return 0
     if verdict == "PASS":
-        print("PASS: every CHANGELOG metric is reproducible from "
-              "plugin source")
+        print(f"PASS: {_SCANNED['items']} metric(s) across "
+              f"{_SCANNED['files']} audited file(s) — every one is "
+              f"reproducible from plugin source")
         return 0
     print(f"FAIL: {len(findings)} unreproducible CHANGELOG metric(s):",
           file=sys.stderr)

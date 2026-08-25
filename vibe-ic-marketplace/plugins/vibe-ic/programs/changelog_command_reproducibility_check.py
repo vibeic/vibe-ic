@@ -65,6 +65,16 @@ _AUDITED_VERBS: Tuple[str, ...] = ("bash", "sh", "python3", "python",
                                    "pytest", "make")
 
 
+#: THE DENOMINATOR THIS GATE'S PASS STANDS ON.
+#: `gate_discloses_denominator_check` measured this program answering PASS
+#: over an EMPTY tree while saying only "PASS: every ... is reproducible" —
+#: an output indistinguishable from a real clean run. A pass that does not
+#: say what it looked at is the same shape as a scan that looked at nothing.
+#: Recorded by `audit()` and printed by `main()`; nothing else reads it, and
+#: no signature changed, so every existing caller and test is untouched.
+_SCANNED = {"files": 0, "items": 0}
+
+
 @dataclass
 class CommandFinding:
     file: str
@@ -191,6 +201,8 @@ def audit(plugin_root: Path) -> Tuple[str, List[CommandFinding]]:
     if not plugin_root.is_dir():
         return "VACUOUS_PASS", []
     files = _audit_files(plugin_root)
+    _SCANNED["files"] = len(files)
+    _SCANNED["items"] = 0
     if not files:
         return "VACUOUS_PASS", []
 
@@ -201,6 +213,8 @@ def audit(plugin_root: Path) -> Tuple[str, List[CommandFinding]]:
             continue
         for ln_no, line in enumerate(text.splitlines(), start=1):
             m = _PROMPT_RE.match(line)
+            if m:
+                _SCANNED["items"] += 1
             if not m:
                 continue
             cmd = m.group("cmd")
@@ -252,8 +266,9 @@ def main(argv: Optional[List[str]] = None) -> int:
               "marketplace.json found")
         return 0
     if verdict == "PASS":
-        print("PASS: every quoted shell command references a real "
-              "target")
+        print(f"PASS: {_SCANNED['items']} quoted command(s) across "
+              f"{_SCANNED['files']} audited file(s) — every one "
+              f"references a real target")
         return 0
     print(f"FAIL: {len(findings)} unreproducible quoted command(s):",
           file=sys.stderr)

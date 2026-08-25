@@ -94,6 +94,16 @@ _JUSTIFY_RE = re.compile(
 )
 
 
+#: THE DENOMINATOR THIS GATE'S PASS STANDS ON.
+#: `gate_discloses_denominator_check` measured this program answering PASS
+#: over an EMPTY tree while saying only "PASS: every ... is reproducible" —
+#: an output indistinguishable from a real clean run. A pass that does not
+#: say what it looked at is the same shape as a scan that looked at nothing.
+#: Recorded by `audit()` and printed by `main()`; nothing else reads it, and
+#: no signature changed, so every existing caller and test is untouched.
+_SCANNED = {"files": 0, "items": 0}
+
+
 @dataclass
 class LiteralFinding:
     file: str
@@ -157,7 +167,9 @@ def audit(plugin_root: Path
     if not programs.is_dir():
         return "VACUOUS_PASS", []
 
-    for py in sorted(programs.glob("*.py")):
+    _pys = sorted(programs.glob("*.py"))
+    _SCANNED["files"] = len(_pys)
+    for py in _pys:
         try:
             text = py.read_text(encoding="utf-8")
         except OSError:
@@ -228,8 +240,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("VACUOUS_PASS: no programs/ dir")
         return 0
     if verdict == "PASS":
-        print("PASS: no literal sign-off numerics without source "
-              "justification in emit_* functions")
+        print(f"PASS: {_SCANNED['files']} source file(s) scanned — no "
+              f"literal sign-off numeric without source justification "
+              f"in an emit_* function")
         return 0
     print(f"FAIL: {len(findings)} literal-without-source assignment(s):",
           file=sys.stderr)
