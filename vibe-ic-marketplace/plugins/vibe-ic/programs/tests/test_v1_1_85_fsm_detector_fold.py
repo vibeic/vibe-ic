@@ -2,7 +2,7 @@
 
 mealy_sequence_synth.synth and behavioral_fsm_synth.synth now try their NATIVE
 VE-phrasing forms FIRST (byte-identical) and only fall through to a GATED RTLLM-prose
-dialect that reads ports through rtllm_port_bridge and recognizes:
+dialect that reads ports through prose_port_block_read and recognizes:
 
   * mealy_sequence_synth: the RTLLM `fsm` Mealy detector of a STATED bit sequence
     ("When the input is 10011, output MATCH is 1") -> KMP/overlap Mealy automaton,

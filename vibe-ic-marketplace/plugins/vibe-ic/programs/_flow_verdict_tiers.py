@@ -89,6 +89,11 @@ PRODUCER_STATUSES: Set[str] = {
     # ever replaces `VACUOUS-PASS`, which is in neither set either — so no
     # run's greenness moves.
     "PARTIALLY-VACUOUS",
+    # 2026-08-25 — a step the run declared OUT OF ITS SCOPE via --entry-step.
+    # Registered here as well as in EXCUSED because this module adjudicates a
+    # word by SUBTRACTION: a status in neither negative set silently becomes a
+    # DONE-CLAIM, which for "we never ran this" would be the exact inversion.
+    "OUT-OF-SCOPE-BY-ENTRY",
 }
 
 #: The step is NOT claimed as done and is not held against the run — the
@@ -97,6 +102,13 @@ PRODUCER_STATUSES: Set[str] = {
 EXCUSED: Set[str] = {
     "WAIVED", "DEFERRED-BY-UPSTREAM", "SKIPPED-CONDITION",
     "SKIPPED", "WAIVED-DEFERRED", "DEFERRED",
+    # Subtracted from total_required: the run DECLARED, before dispatching
+    # anything, that it entered the flow downstream of this step. It is excused
+    # only under flow_compliance_check's two conditions — upstream of the
+    # declared entry AND every output an in-scope step reads is present on disk
+    # — so this is never "we skipped it and the artefacts are gone", it is
+    # "these artefacts were supplied rather than produced here".
+    "OUT-OF-SCOPE-BY-ENTRY",
 }
 
 #: The step is a defect or an absence — the producer's `failing` / `missing` /

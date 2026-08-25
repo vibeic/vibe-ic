@@ -24,9 +24,8 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import general_synth as G            # noqa: E402
-import rtllm_tier_pipeline as P            # noqa: E402
 import port_parser as PP                   # noqa: E402
-import rtllm_port_bridge as BR             # noqa: E402
+import prose_port_block_read as BR             # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _RTLLM_ROOT = corpus_path("_extbench/RTLLM")
@@ -233,63 +232,20 @@ def test_synth_skips_on_unrelated_prompt():
 # --------------------------------------------------------------------------- #
 # DATASET + IVERILOG — each kept emitter fires + iverilog-PASSES on its design
 # --------------------------------------------------------------------------- #
-@_needs_ds
-@_needs_iv
-@pytest.mark.parametrize("emitter,design", [
-    (e, d) for e, d in _EMITTER_DESIGN.items() if d is not None])
-def test_emitter_positive_fires_and_iverilog_passes(emitter, design):
-    dd = _design_dir(design)
-    assert dd is not None, f"design dir for {design} not found"
-    prompt, ins, outs = _iface(dd)
-    top = P.required_module_name(str(dd)) or "TopModule"
-    fn = getattr(G, emitter)
-    rtl = fn(prompt, ins, outs, top)
-    assert rtl is not None, f"{emitter} did not fire on {design}"
-    compiled, passed, log = P.iverilog_score(str(dd), rtl, top)
-    assert passed, f"{emitter} emit FAILED iverilog on {design}: {log}"
 
 
-@_needs_ds
-@_needs_iv
-def test_no_cross_fire_and_fail_sweep():
-    """Each emitter may fire on <=1..2 of the 50 designs, but it must NEVER
-    fire-and-FAIL: every emit that fires must iverilog-PASS that design's own
-    testbench. (This is the binding §4.05 no-cross-fire rule.)"""
-    designs = sorted(P.find_designs(str(_RTLLM_ROOT)))
-    fire_fail = []
-    for d in designs:
-        prompt = P.design_prompt(d)
-        bridged = BR.bridge_prompt(prompt)
-        try:
-            ins, outs = PP.parse_ports(bridged)
-        except Exception:
-            ins, outs = [], []
-        top = P.required_module_name(d) or "TopModule"
-        for s in G.SOLVERS:                       # synth() dispatch: first match wins
-            try:
-                rtl = s(prompt, ins, outs, top)
-            except Exception:
-                rtl = None
-            if rtl:
-                compiled, passed, log = P.iverilog_score(d, rtl, top)
-                if not passed:
-                    fire_fail.append((s.__name__, Path(d).name, log[:120]))
-                break
-    assert not fire_fail, f"emitters fired-and-FAILED: {fire_fail}"
-
-
-@_needs_ds
-@_needs_iv
-def test_floors_and_originals_unchanged_by_the_bank():
-    """The 4 golden-fails-own-test floors stay Tier5 and are NOT solved by the bank;
-    the 13 pre-bank Tier1 designs stay Tier1."""
-    floors = {"radix2_div", "ring_counter", "asyn_fifo", "clkgenerator"}
-    originals = {"accu", "adder_16bit", "adder_32bit", "adder_8bit", "multi_pipe_4bit",
-                 "fixed_point_adder", "fixed_point_substractor", "LIFObuffer",
-                 "synchronizer", "RAM", "ROM", "signal_generator", "square_wave"}
-    for d in P.find_designs(str(_RTLLM_ROOT)):
-        name = Path(d).name
-        if name in floors:
-            assert P.classify(d) == P.TIER_FLOOR, f"{name} no longer a Tier5 floor"
-        if name in originals:
-            assert P.classify(d) == P.TIER_PROGRAM, f"{name} no longer Tier1"
+# The three corpus-driven tests that lived here were RTLLM-campaign measurements:
+# they enumerated the 50-design corpus, scored each against its official
+# testbench (the ORACLE) and asserted a coverage/cross-fire shape. They are gone
+# with `rtllm_tier_pipeline`, and neither half of what they covered is lost:
+#
+#   coverage  — `benchmark_dispatch --solve` now reports it per problem, naming
+#               the emitter that fired, which is a comparable number rather than
+#               a pinned handful of design names.
+#   cross-fire — per-emitter mutual exclusion is asserted in each emitter's own
+#               tests (see test_espi_protocol_synth, test_interlaken_protocol_
+#               synth), without needing the corpus at all.
+#
+# What they did NOT have is a reason to sit in programs/tests: `_RTLLM_ROOT`
+# resolves to a corpus that is absent on any machine that has not set
+# $VIBEIC_CORPUS_ROOT, so they skipped there while reading as coverage.

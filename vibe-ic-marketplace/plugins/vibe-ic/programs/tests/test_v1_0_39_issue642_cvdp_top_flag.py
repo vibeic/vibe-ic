@@ -74,8 +74,13 @@ def _run(tmp_path, recs, extra=None):
     b = tmp_path / "drafts.jsonl"
     b.write_text("".join(json.dumps(r) + "\n" for r in recs))
     out = tmp_path / "responses.jsonl"
+    _extra = list(extra or [])
+    if not any(a in _extra for a in ("--prompts", "--dataset")):
+    # These fixtures deliberately run the gate with its spec guards
+    # OFF; since 2026-08-25 that must be SAID, not implied by silence.
+        _extra.append("--without-spec-guards")
     G.main(["--batch", str(b), "--out", str(out),
-            "--report", str(tmp_path / "rep.json")] + (extra or []))
+            "--report", str(tmp_path / "rep.json")] + _extra)
     recs_out = json.loads((tmp_path / "rep.json").read_text())["records"]
     passed = ({json.loads(x)["id"]
                for x in out.read_text().splitlines() if x.strip()}

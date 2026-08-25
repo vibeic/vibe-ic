@@ -89,6 +89,7 @@ if str(_HERE) not in sys.path:
 
 # Reused (NOT modified) — interface + module-name + cue helpers.
 import cvdp_atomic_bridge as _bridge  # noqa: E402
+import prose_interface_table_read as _tbl  # noqa: E402  markdown signal/direction table
 # Symbolic / parameter-expression width reader (param-expr / range-before-name /
 # param-override). A width stated as a parameter expression with a derivable
 # default is an EXTRACTABLE fact, not a gap.
@@ -161,7 +162,7 @@ _AMBA_RST_RE = re.compile(r"(?i)^[abph]reset_?n$")
 # justify; a data port with no stated width stays a gap, not a forced 1).
 _CTRL_WORD = (
     r"valid|ready|ack|req|start|stop|done|busy|enable|"
-    r"overflow|underflow|ovf|borrow|parity|found|hit|miss|sel|"
+    r"overflow|underflow|ovf|borrow|parity|found|hit|miss|"
     r"carry|cin|cout|flag|trigger|strobe|clk_?en|clken|wr_?en|rd_?en|"
     r"interrupt|irq|empty|full|almost_?full|almost_?empty|"
     # AMBA protocol 1-bit control/handshake words — each is single-bit by the
@@ -171,19 +172,44 @@ _CTRL_WORD = (
     r"pwrite|psel[x0-9]?|penable|pready|pslverr|pprot|"
     r"awvalid|wvalid|bvalid|arvalid|rvalid|awready|wready|bready|arready|rready|"
     r"wlast|rlast|awlock|arlock|"
-    # additional semantic control/status tokens that are structurally 1-bit in
-    # this benchmark's cocotb harnesses (not generic suffix rules — each token is
-    # a control/state flag, never a data bus).
-    r"pulse|gate_en|condition|priority|sensor|status|detected|warning|corrected|"
-    r"request|go|cancel|button|flush|pause|fail|int|inc|"
-    r"cyc|stb|we|serial|item|dispense|return|change|money|"
-    r"mode|crc|shift|interval|match|reload"
+    # Wishbone B4 bus-cycle control: CYC_O / STB_O / WE_O are single-bit in the
+    # published spec — the same kind of interface fact as the AMBA line above.
+    r"cyc|stb|we|"
+    # Words whose OWN meaning is an ACTION, an EVENT or a FLAG — never a value.
+    #
+    # THE RULE, and why the list shrank. This block used to read "structurally
+    # 1-bit in this benchmark's cocotb harnesses" and carried `money change item
+    # crc mode shift interval status priority sensor reload return int inc
+    # condition corrected match`. Every one of those names a VALUE — a level, a
+    # count, an amount, an id, a register, a selector — and a value has no
+    # width until the spec states one.
+    #
+    # The damage was not a wrong guess, it was a SUPPRESSED REPORT. An unstated
+    # width normally becomes `INCOMPLETE_SPEC_ABSENT / width_not_stated` with an
+    # evidence line, which `phase1_sufficiency_check` turns into an advisory the
+    # author sees. A token here converts that into a silent `1` with source
+    # `one_bit_convention` and no gap recorded — so it guesses wrong AND turns
+    # off the check that would have caught it. It reaches plain Phase-1 through
+    # `spec_complete_extract`, which imports this module for its width logic.
+    #
+    # MEASURED on the 302-record corpus these were fitted to: 22 of the 33
+    # tokens explain ZERO ports, and 13 match no port at all. Of the 64
+    # `one_bit_convention` ports, 53 are matched by the vocabulary above anyway.
+    # There are 31 (token, port) pairs where a removed token names a port whose
+    # width the prompt DOES state as >1 — harmless only because it is stated.
+    # Removing them costs 2 records of `COMPLETE` (228 -> 226): one genuine
+    # 1-bit port that now reports a gap, and one record that was scoring
+    # complete on phantom ports parsed out of a results-table header.
+    r"pulse|gate_en|detected|warning|request|go|cancel|button|flush|pause|fail|"
+    r"serial|dispense"
 )
 _ONE_BIT_RE = re.compile(
     r"(?i)^("
     r"c_?in|cin|carry_?in|c_?out|cout|carry_?out|b_?out|borrow|"
     r"start|stop|done|busy|error|err|enable|en|load|"
-    r"ack|req|sel|mode|flag|overflow|ovf|underflow|parity|found|hit|miss|"
+    # `sel` and `mode` removed from this older base list for the same reason: a
+    # mux select and a mode select are the commonest multi-bit ports there are.
+    r"ack|req|flag|overflow|ovf|underflow|parity|found|hit|miss|"
     rf"(?:\w+_)?(?:{_CTRL_WORD})(?:_\w+)?"
     r")$")
 
@@ -755,7 +781,7 @@ def _recover_cvdp_interface(record: dict, top: str):
     # INCOMPLETE_SPEC_ABSENT. Bind them here from the INPUT table, never the harness.
     try:
         sd_ins, sd_outs, sd_widths, _sd_sym = \
-            _bridge._signal_direction_table(prompt, param_defaults)
+            _tbl.read_signal_direction_table(prompt, param_defaults)
     except Exception:
         sd_ins, sd_outs, sd_widths = [], [], {}
     for nm in sd_ins:

@@ -540,21 +540,50 @@ def test_import_module_over_a_TABLE_of_names_is_a_dispatcher(tmp_path):
     assert _run(tmp_path)["test_only"] == []
 
 
-def test_a_SHELL_dispatcher_runs_the_names_it_holds(tmp_path):
+_DISPATCHER = (
+    'GATES=(\n'
+    '    "sample_check"\n'
+    ')\n'
+    'for gate in "${GATES[@]}"; do\n'
+    '    python3 "$PROGRAMS/${gate}.py" "$PLUGIN_ROOT"\n'
+    'done\n')
+
+
+def test_a_SHELL_dispatcher_THAT_RUNS_runs_the_names_it_holds(tmp_path):
     """The same trap one language over. `tools/ci/run_plugin_self_audit.sh`
     holds six gates in a `GATES=(...)` array and runs
     `python3 "$PROGRAMS/${gate}.py"`. Requiring a literal `<stem>.py` there
-    accuses every one of them — measured, before this test existed."""
+    accuses every one of them — measured, before this test existed.
+
+    THE FIXTURE NOW STATES THE PREMISE IT ALWAYS RELIED ON. As written, this
+    test built a dispatcher and nothing that runs it, and asserted the gates
+    were wired — so it passed for a tree in which they were not. The claim is
+    "a dispatcher runs the names it holds", and a dispatcher only runs the
+    names it holds if something runs the dispatcher. See the paired test below.
+    """
     plugin = _tree(tmp_path, test="import sample_check\n")
-    (tmp_path / "tools" / "self_audit.sh").write_text(
-        'GATES=(\n'
-        '    "sample_check"\n'
-        ')\n'
-        'for gate in "${GATES[@]}"; do\n'
-        '    python3 "$PROGRAMS/${gate}.py" "$PLUGIN_ROOT"\n'
-        'done\n')
+    (tmp_path / "tools" / "self_audit.sh").write_text(_DISPATCHER)
+    (tmp_path / "tools" / "land.sh").write_text("bash tools/self_audit.sh\n")
     assert _run(tmp_path)["test_only"] == []
     assert plugin.is_dir()
+
+
+def test_a_SHELL_dispatcher_NOTHING_RUNS_is_not_an_entry_path(tmp_path):
+    """The regression case for the real instance (vibe-ic#693, one level up).
+
+    `tools/ci/run_plugin_self_audit.sh` holds six anti-fabrication gates and
+    `.github/workflows/` is empty; every reference to the script in the tree is
+    a comment or a docstring, both of which the prose-stripper removes. Crediting
+    its array anyway made this audit report those six as wired — the audit that
+    answers "did we forget to plug something in", answering it wrong in the
+    direction of complacency.
+    """
+    _tree(tmp_path, test="import sample_check\n")
+    (tmp_path / "tools" / "self_audit.sh").write_text(_DISPATCHER)
+    # named, but only in prose — the shape that fooled it.
+    (tmp_path / "tools" / "land.sh").write_text(
+        "# see tools/self_audit.sh for the gate list\n")
+    assert _run(tmp_path)["test_only"] == ["sample_check.py"]
 
 
 def test_a_shell_that_only_NAMES_a_gate_is_not_a_dispatcher(tmp_path):

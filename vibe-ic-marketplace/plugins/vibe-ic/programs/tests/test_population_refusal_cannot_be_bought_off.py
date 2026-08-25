@@ -39,10 +39,12 @@ it with a reverse edit (`sha256 e4088103...` identical before and after):
 So, honestly:
 
 * ARM A2 is new subject matter. It states the record/console contradiction as a
-  DEFECT to be repaired rather than as behaviour to be characterised, and is
-  filed as vibe-ic#1770. The base test asserts the SAME hazard as today's
-  behaviour, from the opposite direction, so the two move together: the repair
-  reddens the base test and XPASSes this one.
+  DEFECT to be repaired rather than as behaviour to be characterised, and was
+  filed as vibe-ic#1770. REPAIRED in the `issue1770-refused-exemption-v1`
+  protected transition: `_dispatch` now clears the exemption it refuses, so
+  this arm asserts it directly and its strict-xfail marker is gone. The last
+  assertions of the base test, which pinned the same hazard as CURRENT
+  behaviour, are inverted with it -- the two still move together.
 * ARM C is new subject matter and is NOT about this arm -- it survives the
   mutation, as the third row says. It pins the #584 no-leak property on the
   mode-2 path specifically.
@@ -172,29 +174,6 @@ def test_an_exemption_cannot_buy_off_an_empty_population_refusal(tmp_path):
         f"so a record-reading consumer cannot see it: {json.dumps(doc)[:400]}")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "MEASURED DEFECT 2026-08-22, filed as vibe-ic#1770, not fixed. "
-    "`_dispatch` raises the "
-    "wiring error for a mode-2 population refusal and then appends the date "
-    "to GATE_EX_UNTIL anyway, so the record states the refused exemption as a "
-    "GRANTED one: exempt_until=2999-01-01, exemption_expired=false, and "
-    "not_checked_unexempted=[] for the very row the dispatcher had just "
-    "declared unexemptable. The printed line for the same row says "
-    "'BLOCKING; no exemption' — the console and the record give opposite "
-    "answers about the same gate. Nothing is unsafe TODAY only because every "
-    "consumer independently refuses on `wiring_errors`; the field NAMED for "
-    "this question is wrong, and gatekeeper_review's own comment documents "
-    "not_checked_unexempted as the FAIL-SAFE derivation. The fix is one line "
-    "in _dispatch (append \"\" instead of $ex_until on the refused branch) "
-    "and is strictly tightening, but tools/ci/_gate_dispatch.sh is inside "
-    "REQUIRED_AUTHORITY_PATHS in protected_landing_transition.py, so it can "
-    "only move through a base-authorised PREPARE/ACTIVATE transition and not "
-    "through this candidate. STRICT: when it is fixed this XPASSes and this "
-    "marker must be deleted -- AND SO MUST THE LAST TWO ASSERTIONS OF "
-    "test_a_population_refusal_cannot_buy_an_uncheckable_exemption, which "
-    "pins the same hazard as CURRENT behaviour and reddens on the repair. "
-    "See vibe-ic#1770 and "
-    "docs/findings/2026-08-22-routed-def-corpus-adjudication.md."))
 def test_the_record_does_not_state_a_refused_exemption_as_a_granted_one(tmp_path):
     """ARM A2 — the record must agree with the sentence the dispatcher printed.
 
@@ -202,7 +181,8 @@ def test_the_record_does_not_state_a_refused_exemption_as_a_granted_one(tmp_path
     what the wiring site DECLARED, and that the adjudication of it lives in
     `wiring_errors`. It does not hold: `not_checked_unexempted` is not a
     declaration record, it is the derived verdict every landing consumer reads
-    to answer exactly this question, and it currently answers "bought".
+    to answer exactly this question, and before vibe-ic#1770 was repaired it
+    answered "bought" for a date the dispatcher had refused in the same breath.
     """
     _, doc = _run(tmp_path, _ARMED_EMPTY_LOOP)
     row = _row(doc)

@@ -5,7 +5,7 @@ PR #29 relaxed a `synth` TIMEOUT from BLOCK to tolerate-EMIT, justified by "the
 official CVDP scorer is cocotb+iverilog — it NEVER runs yosys". A Step-2.7
 multi-lens review proved that premise FALSE for the area-optimization / synth-
 quality category (cid007), whose OFFICIAL harness DOES run yosys 0.40
-(cvdp_fail_triage SYNTH_GATE/SYNTH_THRESHOLD; cvdp_env_preflight #714
+(verify_fail_triage SYNTH_GATE/SYNTH_THRESHOLD; eda_image_preflight #714
 __OSS_PNR_IMAGE__; ppa_area_threshold_check #729) — so tolerating a synth-timeout
 there EMITs a design the official synth gate may FAIL and loses the re-author the
 #531 smoke exists to trigger (a §4.05 false-SKIP). Two MEDs accompanied it: keying
@@ -284,6 +284,11 @@ def _run_main(tmp_path, batch, prompts=None, dataset=None, monkeypatch=None):
         dp = tmp_path / "dataset.jsonl"
         dp.write_text("\n".join(json.dumps(r) for r in dataset))
         argv += ["--dataset", str(dp)]
+    if not any(a in argv for a in ("--prompts", "--dataset")):
+        # Deliberately unguarded fixture; since 2026-08-25 that is SAID with the
+        # flag rather than implied by omitting the others — without it the gate
+        # refuses and never writes the report this helper reads.
+        argv.append("--without-spec-guards")
     with contextlib.redirect_stderr(io.StringIO()), \
             contextlib.redirect_stdout(io.StringIO()):
         G.main(argv)

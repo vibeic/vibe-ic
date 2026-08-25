@@ -47,7 +47,7 @@ PLUGIN_DIR = os.path.dirname(TESTS_DIR)
 
 def _load():
     sys.path.insert(0, PLUGIN_BENCH)
-    import cvdp_hang_detect as H   # noqa: E402
+    import sim_hang_detect as H   # noqa: E402
     import cvdp_gate as G          # noqa: E402
     return H, G
 

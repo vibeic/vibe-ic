@@ -42,7 +42,7 @@ def test_parse_result_no_tests_is_no_result(tmp_path):
 
 def test_parse_result_string_zero_is_pass(tmp_path):
     # Step-2.7: the CVDP harness can record `result` as the string "0" (the
-    # in-repo schema authority cvdp_fail_triage.py treats it as passing). Strict
+    # in-repo schema authority verify_fail_triage.py treats it as passing). Strict
     # `== 0` would FALSE-FAIL a genuinely-passing design and loop the re-author.
     r = _raw(tmp_path, {"d": {"tests": [{"result": "0"}, {"result": "0"}]}})
     assert S.parse_result(r, "d") == ("PASS", [])

@@ -1,4 +1,4 @@
-"""rtllm_port_bridge — a GENERAL prose-port reader bridging RTLLM's "Input ports:/
+"""prose_port_block_read — a GENERAL prose-port reader bridging RTLLM's "Input ports:/
 Output ports:" prose form to the bullet form `port_parser.parse_ports` already reads.
 
 Characterized gap (Shape-B RTLLM enhancement): `port_parser.parse_ports` understood
@@ -22,7 +22,7 @@ from pathlib import Path
 PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
-import rtllm_port_bridge as BR          # noqa: E402
+import prose_port_block_read as BR          # noqa: E402
 import port_parser as PP                # noqa: E402
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_harness_toplevel_alias.py — prompt-driven harness-TOPLEVEL alias.
+"""tb_toplevel_alias.py — prompt-driven harness-TOPLEVEL alias.
 
 CURRENT COMPLIANT DESIGN (CVDP official — arXiv:2506.14074 §2 +
 README_NON_AGENTIC): the model / emit path sees ONLY `input.prompt` +
@@ -25,7 +25,10 @@ The LIVE emit path (`cvdp_gate.main`) wires only:
 
   * `alias_wrapper(top_needed, author_top, ports, ansi_decls, param_block)` —
      synthesize the thin pass-through wrapper `module <top_needed>(<ports>);
-     <author_top> <inst>(.name(name)…); endmodule`.
+     <author_top> <inst>(.name(name)…); endmodule`, emitted inside an
+     `ifndef VERILATOR guard: an uninstantiated wrapper is MULTITOP under
+     `verilator --lint-only -Wall` and would fail a scored `lint` service on
+     its own, while verilator is never the SIMULATOR in this track.
   * `maybe_alias_completion(completion, harness_top, mod_names_fn)` — when
      `harness_top` (the PROMPT-skeleton top) is set AND absent from the
      completion's declared modules AND the completion has a single unambiguous
@@ -224,13 +227,33 @@ def alias_wrapper(top_needed: str, author_top: str, ports: List[str],
     else:
         param_segment = ""
     header_open = f"module {top_needed} {param_segment}(".replace("  (", " (")
+    # ── `ifndef VERILATOR guard (2026-08-25) ─────────────────────────────
+    # An alias wrapper is instantiated by NOTHING, so `verilator --lint-only
+    # -Wall` reports MULTITOP ("Multiple top level modules") for it and, when
+    # the wrapper is the first module in the file, DECLFILENAME as well.
+    # Verilator exits non-zero on ANY warning under -Wall, so a scored `lint`
+    # service fails on the wrapper alone, regardless of the author's RTL.
+    #
+    # Measured on the 2026-08-24 cvdp-open run: MULTITOP in 22 of the 23 cid007
+    # lint failures, DECLFILENAME in 21. Deleting only the wrappers from
+    # binary_to_gray_0013 turned the harness's own lint command to EXIT=0.
+    #
+    # The guard is safe because verilator is only ever the LINTER here, never
+    # the simulator: every `.env` in the v1.1.0 non-agentic track sets
+    # `SIM = icarus` (606/606 checked). iverilog and yosys do not define
+    # VERILATOR, so both still see the wrapper — `iverilog -g2012 -s <alias>`
+    # binds and `hierarchy -check -top` is unaffected.
     return (
         f"\n\n// --- harness-toplevel alias (auto-added by cvdp_gate; the official\n"
         f"// harness compiles `-s {top_needed}`; the author declared `{author_top}`\n"
         f"// with the same interface) ---\n"
+        f"// Hidden from Verilator: an uninstantiated wrapper is MULTITOP under\n"
+        f"// `--lint-only -Wall`, and verilator is never the simulator here.\n"
+        f"`ifndef VERILATOR\n"
         f"{header_open}\n    {port_decl}\n);\n"
         f"    {author_top} u_{author_top} ({conns});\n"
-        f"endmodule\n")
+        f"endmodule\n"
+        f"`endif\n")
 
 
 # ── 3. JSON-completion unwrap (v1.2.48) ──────────────────────────────────────

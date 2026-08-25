@@ -1555,6 +1555,76 @@ def _analog_rtl_track_absent(project: Path,
             f"its top interface is not all-analog)")
 
 
+def _try_spec_artifact_registry_rtl(
+        project: Path, t0: float,
+        phase1_plain_text: str = "") -> Optional[StepResult]:
+    """Deterministic RTL straight from the prompt text, or None to defer.
+
+    Delegates to `deterministic_emit_chain`, which owns the ORDER. That chain
+    used to be re-assembled once per benchmark — in four tier pipelines and in
+    gates_atomic — each with its own order and its own idea of what counted as
+    solved, and four of the five ran the program AFTER an AI-authored file and
+    overwrote it. One chain, callable from anywhere, is what makes program-first
+    reachable from every entry rather than from one harness.
+
+    None means no emitter recognised the prompt, which is the handover to the
+    spec-to-rtl AI backup — a real answer, not a failure.
+    """
+    text = phase1_plain_text or ""
+    if not text.strip():
+        return None
+    try:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        import deterministic_emit_chain as _chain      # noqa: PLC0415
+    except ImportError:
+        return None
+
+    top = "chip_top"
+    ifc = ""
+    try:
+        _l9 = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if _l9.is_file():
+            ifc = _l9.read_text(errors="replace")
+            top = json.loads(ifc).get("top_module") or "chip_top"
+    except (OSError, ValueError):
+        pass
+
+    try:
+        kind, rtl, rejected = _chain.try_emit_ex(text, ifc, top)
+    except Exception as exc:                            # noqa: BLE001
+        # Record it. A swallowed exception here is indistinguishable from
+        # "the prompt was not parse-complete", and sends the reader after the
+        # wrong thing.
+        return StepResult("rtl_gen", "SKIP", time.time() - t0,
+                          f"deterministic_emit_chain raised "
+                          f"({type(exc).__name__}: {exc}); deferring to the AI backup")
+    if not rtl:
+        if rejected:
+            # An emitter FIRED and the emit-blocking conformance rules refused
+            # what it wrote. That is a different event from "no program
+            # recognised this prompt", and reporting both as a bare handover
+            # hides the one that says a deterministic emitter is wrong.
+            why = "; ".join(f"{n}: {', '.join(rules)}" for n, rules in rejected)
+            return StepResult(
+                "rtl_gen", "SKIP", time.time() - t0,
+                f"deterministic emit REFUSED by the emit-blocking conformance "
+                f"rules ({why}); deferring to the AI backup",
+                extras={"rejected_emitters": [n for n, _ in rejected],
+                        "rejected_rules": sorted({r for _, rs in rejected for r in rs})})
+        return None
+    out_dir = project / "phase2" / "stage1" / "rtl"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{top}.sv"
+    out.write_text(rtl)
+    return StepResult(
+        "rtl_gen", "PASS", time.time() - t0,
+        f"deterministic emit from a parse-complete prompt via "
+        f"deterministic_emit_chain[{kind}] -> {out.relative_to(project)}",
+        output_files=[str(out)],
+        extras={"deterministic_generator": kind,
+                "chain": _chain.which_emitters(), "source": "phase1_plain_text"})
+
+
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
     """since v0.1.10 — program-first RTL. If the project ships a structured RTL
     spec, route it through deterministic_rtl_dispatcher (FSM-table / truth-table /
@@ -2364,6 +2434,32 @@ class _Phase1TreeEntry:
     mode: int
     digest: str = ""
     target: str = ""
+
+
+def _symlink_escapes_tree(rel: str, target: Optional[str]) -> bool:
+    """Does the symlink at `rel` point OUTSIDE the tree that contains it?
+
+    Purely LEXICAL — it reads only the manifest's own (rel, target) strings and
+    touches no filesystem, so it cannot be raced between the check and the use,
+    and it gives the same verdict in the isolated stage as in the original tree.
+
+    ESCAPES when the target is ABSOLUTE (it names a fixed path outside the
+    stage — the portal back to a mutable namespace this guard exists to stop),
+    or when resolving it against the link's own directory climbs above the root.
+
+    Everything else stays INSIDE and is safe to carry into the isolated stage.
+    Why that distinction is needed: the runner's own `steps/` mirror links each
+    step to the artifact it declared, all within the project. Measured
+    2026-08-25, a project carried 15 such links, every one of them internal,
+    and a blanket symlink refusal BLOCKED rtl_gen on all five task natures —
+    the runner's own bookkeeping stopping the runner's own RTL generation.
+    """
+    if not target:
+        return True                      # unreadable target — refuse, don't guess
+    if os.path.isabs(target):
+        return True
+    resolved = os.path.normpath(os.path.join(os.path.dirname(rel), target))
+    return resolved == os.pardir or resolved.startswith(os.pardir + os.sep)
 
 
 def _phase1_tree_manifest_fd(
@@ -3192,7 +3288,8 @@ def _phase1_stamp_held_session(
             baseline = _phase1_snapshot_to_stage(binding, stage_project)
             baseline_link = next(
                 (rel for rel, entry in baseline.items()
-                 if entry.kind == "symlink"), None)
+                 if entry.kind == "symlink"
+                 and _symlink_escapes_tree(rel, entry.target)), None)
             if baseline_link is not None:
                 raise _Phase1RtlOutputRefused(
                     "RTL_PROVENANCE_SYMLINK_REFUSED",
@@ -3207,7 +3304,8 @@ def _phase1_stamp_held_session(
                 stage_binding.project_fd, binding.project)
             final_link = next(
                 (rel for rel, entry in final.items()
-                 if entry.kind == "symlink"), None)
+                 if entry.kind == "symlink"
+                 and _symlink_escapes_tree(rel, entry.target)), None)
             if final_link is not None:
                 raise _Phase1RtlOutputRefused(
                     "RTL_PROVENANCE_SYMLINK_REFUSED",
@@ -5510,7 +5608,8 @@ def step_rtl_gen(project: Path, ic_class: str,
                 final_link = next(
                     (rel for rel, entry in final.items()
                      if entry.kind == "symlink"
-                     and baseline.get(rel) != entry), None)
+                     and baseline.get(rel) != entry
+                     and _symlink_escapes_tree(rel, entry.target)), None)
             if final_link is not None:
                 raise _Phase1RtlOutputRefused(
                     "RTL_TRANSACTION_OUTPUT_SYMLINK_REFUSED",
@@ -5647,7 +5746,8 @@ def _step_rtl_gen_bound(
     # this private snapshot.
     staged_link = next(
         (rel for rel, entry in snapshot_manifest.items()
-         if entry.kind == "symlink"), None)
+         if entry.kind == "symlink"
+         and _symlink_escapes_tree(rel, entry.target)), None)
     if staged_link is not None:
         raise _Phase1RtlOutputRefused(
             "PROJECT_SYMLINK_NOT_ISOLATABLE",
@@ -5683,10 +5783,37 @@ def _step_rtl_gen_bound(
     project_binding.require_current()
     if _cp is not None:
         return _cp
-    # A strictly recognized behavioral Moore FSM may live only in the original
-    # Phase-1 prompt/doc (before an L-doc extractor has materialized a structured
-    # rtl_spec).  Give that prose the same registry-backed deterministic path,
-    # while accepting only the behavioral_fsm family and otherwise DEFERring.
+    # PROMPT-TEXT DETERMINISTIC EMIT — the general form of the same idea, and
+    # the one the runner was NOT using (2026-08-25).
+    #
+    # `spec_artifact_registry.generate(text, top)` turns a parse-complete prompt
+    # into exact RTL. It is general, neutrally named and already lives in
+    # programs/ — the runner just never called it on plain prompt text; only the
+    # narrow `_try_phase1_behavioral_fsm_rtl_bound` path used it.
+    #
+    # The one place that DID call it that way was `benchmark/gates_atomic.py`,
+    # and it called it in the wrong ORDER: that harness refuses to run until an
+    # LLM has already authored sample.sv ("MISSING {f} — agent must author it
+    # first", sys.exit(2)) and only THEN runs the generator, overwriting the
+    # author's work. Program-first is structurally impossible in that shape —
+    # the program can only ever run second. Calling it HERE, before the
+    # spec-to-rtl waive, is what makes program-first actually first, for every
+    # entry point rather than only inside one benchmark harness.
+    # NARROWEST FIRST. A strictly recognized behavioral Moore FSM may live only
+    # in the original Phase-1 prompt/doc (before an L-doc extractor has
+    # materialized a structured rtl_spec). This path gives that prose the same
+    # registry-backed deterministic emit, accepts ONLY the behavioral_fsm family
+    # and otherwise DEFERs — so putting it first cannot take work away from the
+    # general chain below, and leaving it second DID take work away from it.
+    #
+    # Both paths reach `spec_artifact_registry` and get the same RTL. What
+    # differs is what they say about it: this one records `artifact_type`,
+    # `module`, `spec_source` and `spec_sources` and writes `<top>.v` named from
+    # the spec, where the general chain records the emitter name and writes
+    # `chip_top.sv`. Ordered general-first, the chain answered every behavioral
+    # FSM before this path was reached, and six tests that assert the richer
+    # record went red saying `KeyError: 'artifact_type'`. A more specific
+    # producer that DEFERS when it does not apply belongs ahead of a general one.
     _behavior_force = (_FORCE_RTL_REGEN
                        if force_regen is None else force_regen)
     _bf = _try_phase1_behavioral_fsm_rtl(
@@ -5695,6 +5822,12 @@ def _step_rtl_gen_bound(
     project_binding.require_current()
     if _bf is not None:
         return _bf
+    project_binding.require_current()
+    _sar = _try_spec_artifact_registry_rtl(
+        project, t0, phase1_plain_text=_phase1_plain.text)
+    project_binding.require_current()
+    if _sar is not None:
+        return _sar
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
@@ -15639,6 +15772,17 @@ def main() -> int:
                    help="Forward --skip-analog to final_audit so analog A1-A8 "
                         "file-existence checks don't FAIL a digital-only project. "
                         "Captured from v0.1.53 CVDP run.")
+    p.add_argument("--entry-step", default=None,
+                   help="START the flow at this canonical step id instead of "
+                        "the beginning (e.g. 4 for a debug task, 2 for an "
+                        "optimization). Only a step that HEADS a dispatch span "
+                        "is enterable — step_preflight.enterable_steps names "
+                        "them — because a span like step_pnr is one tool "
+                        "session covering canonical 15..22 and cannot be "
+                        "started in its middle. The entry's declared inputs "
+                        "are checked BEFORE anything is skipped; if they are "
+                        "absent the run REFUSES rather than proceeding into a "
+                        "step that has nothing to read.")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="vibeic-eda")
@@ -15669,11 +15813,86 @@ def main() -> int:
     # ORGANIC #588 — single-driver lock honored by the standalone phase2
     # runner; re-enters the orchestrator's lock via the env token, or
     # refuses a second concurrent standalone phase2 on a live project.
+    # Dispatch-site order for --entry-step. Taken from step_preflight's declared
+    # site order for this runner, which was itself read off a real run's
+    # phase2_one_shot.json rather than off source line numbers (main() branches,
+    # so source order is NOT dispatch order — the tb-gen calls sit ABOVE
+    # step_rtl_gen in the file yet run after it).
+    def _site_order():
+        _plan = _spf.RUNNER_PLANS.get("design_one_shot_runner")
+        return [n for n, _ in (_plan.sites if _plan else ())]
+
+    def _before_entry(site_name, entry_site):
+        """Is `site_name` dispatched BEFORE the declared entry site?"""
+        if not entry_site:
+            return False
+        order = _site_order()
+        if site_name not in order or entry_site not in order:
+            return False
+        return order.index(site_name) < order.index(entry_site)
+
+    # ── ENTRY ADMISSION (2026-08-25) ─────────────────────────────────────
+    # Asked BEFORE the lock, because a run that cannot legally start should not
+    # take a lock, and before ANY dispatch, because the point is to refuse with
+    # the absent paths named rather than to enter a step that has nothing to
+    # read. Not every task starts at the beginning — a debug task arrives with
+    # RTL already written and already wrong — but a run that skips the front of
+    # the flow and says nothing produces a report indistinguishable from a
+    # Phase 1 that ran and failed.
+    _entry_site = None
+    _entry_staged = None
+    if getattr(args, "entry_step", None):
+        # STAGE SUPPLIED INPUTS FIRST (2026-08-25). Moving the design's own RTL
+        # from input/ into phase2/stage1/rtl/ is INPUT HANDLING, not step-1
+        # work, so it must happen whatever step the run enters at. Before this,
+        # admission was evaluated ahead of every dispatch — including the
+        # staging one — so a user whose RTL sat in `input/rtl/` was refused at
+        # step 4 for an absent `phase2/stage1/rtl/*`, while the files were
+        # present the whole time one directory away and the step that would
+        # have moved them was scheduled after the check that needed them.
+        #
+        # Idempotent by the consumer's own guard: it SKIPs when
+        # phase2/stage1/rtl/ already holds RTL, so the later dispatch of the
+        # same step is a no-op rather than a second copy.
+        _entry_staged = step_reused_ip_consume(project, args.top_name)
+        _adm = _spf.entry_admission(project, "design_one_shot_runner",
+                                    str(args.entry_step))
+        if not _adm["admitted"]:
+            print(f"REFUSED: cannot enter at step {args.entry_step!r} — "
+                  f"{_adm['reason']}", file=sys.stderr)
+            for _m in _adm.get("missing") or []:
+                print(f"  absent: {_m}", file=sys.stderr)
+            return 2
+        _entry_site = _adm["site"]
+        try:
+            import datetime as _dtm             # noqa: PLC0415
+            import run_entry_manifest as _rem   # noqa: PLC0415
+            _man = _rem.build(project, str(args.entry_step),
+                              "design_one_shot_runner", _entry_site,
+                              list(sys.argv[1:]),
+                              _dtm.datetime.utcnow().isoformat() + "Z")
+            _bad = _rem.validate(_man)
+            if _bad:
+                print("REFUSED: the run-entry manifest does not validate: "
+                      + "; ".join(_bad), file=sys.stderr)
+                return 2
+            _rem.write(project, _man)
+        except ImportError as _exc:
+            print(f"REFUSED: --entry-step needs run_entry_manifest ({_exc}); "
+                  "refusing to enter mid-flow without recording that it "
+                  "happened", file=sys.stderr)
+            return 2
+
     _lock = _runner_lock.acquire_or_reenter(project, "design_one_shot_runner")
     if _lock is None:
         return 3
 
     plan: List[StepResult] = []
+    if _entry_staged is not None:
+        # Record it: an input-staging step that ran but appears nowhere would
+        # make the RTL's provenance unexplainable in the run's own report.
+        _entry_staged.name = "reused_ip_consume(pre-entry)"
+        plan.append(_entry_staged)
 
     # Step 0 — Phase 1 (doc-extraction) (v0.122: chain phase1_one_shot_runner if needed)
     plan.append(step_rig_topology_skeleton(project))
@@ -15681,7 +15900,14 @@ def main() -> int:
     # responsible for running phase1 first — chained by design_one_shot_runner).
     gd = _pl.generated_docs_dir(project)
     L_count = len(list(gd.glob("L*.json"))) if gd.is_dir() else 0
-    if L_count < 13:
+    # With an explicit entry, "13 L docs" is the WRONG precondition: it is the
+    # precondition for entering at step 1, and it is applied unconditionally
+    # here with no --skip-phase1 in this runner at all, which is why every
+    # non-D1 entry was unreachable no matter what the router decided. The entry
+    # admission above already checked the DECLARED inputs of the entry span —
+    # a narrower and more accurate question — so do not re-impose the step-1
+    # precondition on a run that is not entering at step 1.
+    if L_count < 13 and not _entry_site:
         # ORGANIC-20260606-phase1-prompt-mode-nested-generated-docs (#424):
         # name the one-level-too-deep layout explicitly when present, so a
         # caller on a pre-fix phase1 artefact sees the structural cause
@@ -15726,10 +15952,20 @@ def main() -> int:
     # is gated: the later `step_rtl_gen` calls are ECO-loop RE-runs that fire
     # after the first one has already read D1, so gating them would re-ask a
     # question whose answer this call already established.
-    plan.append(_spf.gate(
-        project, "design_one_shot_runner", "rtl_gen",
-        _preflight_refusal("rtl_gen"),
-        step_rtl_gen, project, ic_class))
+    if _before_entry("rtl_gen", _entry_site):
+        # Declared entry is downstream of this site. Skipping is the POINT of
+        # --entry-step; the status is named so the report can never read as
+        # "RTL generation was attempted and produced nothing".
+        plan.append(StepResult(
+            "rtl_gen", "SKIPPED-BY-ENTRY", 0.0,
+            f"run declared --entry-step {args.entry_step} (site "
+            f"{_entry_site!r}); this site is upstream of it and was not "
+            f"dispatched. Its artefacts were supplied, not produced here."))
+    else:
+        plan.append(_spf.gate(
+            project, "design_one_shot_runner", "rtl_gen",
+            _preflight_refusal("rtl_gen"),
+            step_rtl_gen, project, ic_class))
 
     # Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP CONSUME. When step_rtl_gen
     # WAIVED (reused-IP / catalog-glue) and left rtl/ EMPTY but the design's
@@ -15766,7 +16002,23 @@ def main() -> int:
     # only a benchmark sample. Runs over rtl/ once RTL + aliases are stable.
     # Both gates are §4.05-self-skip (fire ONLY on their exact anti-pattern),
     # so a clean / not-applicable design always passes.
-    plan.append(step_determinism_gates(project, args.top_name))
+    # SITE `rtl_validate` (flow steps 2,3) — gated at the span's FIRST dispatch,
+    # mirroring `rtl_gen` above: the pre-flight question is asked once, when the
+    # span is entered, not re-asked at each member. Declaring a site in
+    # step_preflight.RUNNER_PLANS without a literal `_spf.gate` call here is a
+    # claim with no behaviour behind it, and
+    # `test_every_declared_site_is_wired_at_a_real_call_site` fails the build
+    # for exactly that — it caught this pair the moment the sites were declared.
+    if _before_entry("rtl_validate", _entry_site):
+        plan.append(StepResult(
+            "rtl_validate", "SKIPPED-BY-ENTRY", 0.0,
+            f"run declared --entry-step {args.entry_step} (site "
+            f"{_entry_site!r}); this site is upstream of it."))
+    else:
+        plan.append(_spf.gate(
+            project, "design_one_shot_runner", "rtl_validate",
+            _preflight_refusal("rtl_validate"),
+            step_determinism_gates, project, args.top_name))
 
     # Flow Step 2, clause 1 — cross-layer rewrite fidelity. Unconditional: the
     # judge itself decides applicability and WRITES the verdict, so a design
@@ -15794,7 +16046,17 @@ def main() -> int:
     # BEFORE step_reference_tb (so the skeleton lands under
     # sim_full_stack/ before any iverilog run is invoked, satisfying
     # bit_level_full_stack_tb_check).
-    plan.append(step_full_stack_tb_gen(project, args.top_name))
+    # SITE `sim` (flow step 4) — the span's first dispatch. Step 4 declares it
+    # reads the RTL plus D1's L10_TEST_CASES.json and L12_BEHAVIORAL_SEQUENCES
+    # .json; before this gate a missing-RTL entry surfaced as
+    # step_reference_tb's SKIP whose stated reason is the ANALOG-track
+    # explanation ("an analog design has NO digital RTL track"), so an entry
+    # error was reported as a design classification. The gate refuses with the
+    # actual absent paths instead.
+    plan.append(_spf.gate(
+        project, "design_one_shot_runner", "sim",
+        _preflight_refusal("sim"),
+        step_full_stack_tb_gen, project, args.top_name))
     # ORGANIC #797 — wire the testbench_gen PRODUCER (it was never called by any
     # one-shot runner, so L10 `functional_vector` cases got NO Step-4 evidence).
     # Runs AFTER full_stack_tb_gen (RTL/L9 stable) and BEFORE reference_tb /
@@ -16264,7 +16526,12 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # payloads). It was found by the totality test scraping the runner's own
     # StepResult constructions rather than by anyone listing them here — which
     # is the point of discovering the vocabulary instead of typing it.
-    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION")
+    # SKIPPED-BY-ENTRY is a SKIP, not a silence: the step was deliberately not
+    # dispatched because --entry-step declared an entry downstream of it. Left
+    # unclassified it reaches the `unknown` branch below, which prints a loud
+    # stderr warning on every legitimate mid-flow entry — correct behaviour for
+    # a status nobody classified, and noise once it is a designed one.
+    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION", "SKIPPED-BY-ENTRY")
     _KNOWN = (set(_FAIL_STATUSES) | set(_GREEN_STATUSES)
               | set(_SKIP_STATUSES) | {"WAIVED"})
 

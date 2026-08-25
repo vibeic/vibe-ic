@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for cvdp_harness_toplevel_alias — the prompt-driven alias wrapper.
+"""Tests for tb_toplevel_alias — the prompt-driven alias wrapper.
 
 Run:  python3 -m pytest test_v1_2_harness_toplevel_alias.py -q
 (or)  python3 test_v1_2_harness_toplevel_alias.py   # plain asserts
@@ -36,7 +36,7 @@ import tempfile
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
-import cvdp_harness_toplevel_alias as A  # noqa: E402
+import tb_toplevel_alias as A  # noqa: E402
 import cvdp_gate as G  # noqa: E402
 
 

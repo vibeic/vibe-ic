@@ -707,8 +707,8 @@ def _problem_is_synth_scored(prompt_text: Optional[str] = None,
                              rec: Optional[Dict] = None) -> bool:
     """True iff this CVDP problem's OFFICIAL harness runs yosys `synth` on the
     completion — the area-optimization / synth-quality category (cid007), whose
-    scorer IS yosys 0.40, NOT cocotb/iverilog (cvdp_fail_triage SYNTH_GATE /
-    SYNTH_THRESHOLD official fail modes; cvdp_env_preflight #714 __OSS_PNR_IMAGE__
+    scorer IS yosys 0.40, NOT cocotb/iverilog (verify_fail_triage SYNTH_GATE /
+    SYNTH_THRESHOLD official fail modes; eda_image_preflight #714 __OSS_PNR_IMAGE__
     synth Dockerfile; ppa_area_threshold_check #729 "reduce the area of this RTL").
 
     This gates the synth-TIMEOUT tolerance in `yosys_smoke`: for a synth-scored
@@ -1036,7 +1036,7 @@ def yosys_smoke(code: str, workdir: Path,
             # A genuine synth-timeout is INCONCLUSIVE about synthesizability. Whether
             # tolerating it is §4.05-SAFE depends on the problem CATEGORY:
             #  * SYNTH-SCORED (area-opt / cid007) — the OFFICIAL harness runs yosys
-            #    0.40 on the completion (cvdp_fail_triage SYNTH_GATE/SYNTH_THRESHOLD;
+            #    0.40 on the completion (verify_fail_triage SYNTH_GATE/SYNTH_THRESHOLD;
             #    #714 __OSS_PNR_IMAGE__; #729 area-threshold). Tolerating would EMIT a
             #    design the official synth gate may FAIL and lose the re-author the
             #    #531 smoke exists to trigger — a §4.05 false-SKIP. So it BLOCKS
@@ -1650,11 +1650,11 @@ def gate_record(rec: Dict, workdir: Path,
     #   (b) joined to a verdict-flipping clause in this same module
     # Any future layer that wants to use the tag MUST come back with a tighter
     # chip-AGNOSTIC detector and PROVE no-leak on the real benchmark.
-    # See cvdp_hang_detect.py for the heuristic set (STRONG:
+    # See sim_hang_detect.py for the heuristic set (STRONG:
     # combinational-loop, forever-in-@*; WEAK: dead-signal + 3 v1.2.46
     # extensions).
     try:
-        from cvdp_hang_detect import predict_hang
+        from sim_hang_detect import predict_hang
         _ph, _reason, _sigs = predict_hang(combined)
         if _ph:
             entry["hang_predicted"] = True
@@ -1928,9 +1928,14 @@ def candidate_tops_from_id(rid):
       3. the reversed multi-token stem — the copilot naming often flips the
          qualifier/head order (stem `64b66b_encoder` → real top `encoder_64b66b`).
     A thin pass-through alias wrapper is emitted for EACH candidate not already
-    declared; unused wrappers are dead code the scorer's `-s <top>` never
-    elaborates, so they are harmless — the ONE wrapper matching the hidden top
-    gives the scorer its root. Empty list for a non-`cvdp_copilot_` id.
+    declared; the ONE wrapper matching the hidden top gives the scorer its root.
+    The unused ones are dead code under `iverilog -s <top>` and yosys
+    `hierarchy -check -top`, but they are NOT unconditionally harmless: a wrapper
+    nothing instantiates is MULTITOP under `verilator --lint-only -Wall`, which
+    exits non-zero on any warning, so a scored `lint` service would fail on the
+    wrapper alone (measured 2026-08-24: MULTITOP in 22 of 23 cid007 lint fails).
+    `alias_wrapper` therefore emits each wrapper inside an `ifndef VERILATOR
+    guard — see its comment for why that is sound here. Empty list for a non-`cvdp_copilot_` id.
     Blindness-clean + chip-AGNOSTIC: pure id-string structure, no chip / vendor /
     SKU literal, no oracle read."""
     prefixed = required_top_from_id(rid)          # cvdp_copilot_<stem> | None
@@ -2860,7 +2865,7 @@ def maybe_align_tb_ports(completion, harness_top, tb_names):
     if kind == "doc_only" or not code:
         return completion, {}
     try:
-        from cvdp_harness_toplevel_alias import author_top_and_ports
+        from tb_toplevel_alias import author_top_and_ports
     except Exception:                    # pragma: no cover - defensive
         return completion, {}
     # locate the harness-top module block in the (post-rename) completion; on a
@@ -3042,9 +3047,47 @@ def main(argv=None) -> int:
                          "record is emitted. The canonical latency literal is "
                          "NOT derivable from a CVDP record's prose, so the gate "
                          "only enforces ids the curator supplies here.")
+    ap.add_argument("--without-spec-guards", action="store_true",
+                    help="DELIBERATELY run without --prompts/--dataset, "
+                         "accepting that the module-name-conformance (#559) "
+                         "and multi-file/context-module (#715/#734) guards "
+                         "are INACTIVE. Requires an explicit choice: without "
+                         "it the gate REFUSES rather than degrading silently. "
+                         "The refusal exists because a 302-problem run gated "
+                         "without them scored 0/5 on multi-file problems and "
+                         "shipped 4 module-name mismatches the #559 guard "
+                         "would have BLOCKED (2026-08-24).")
     args = ap.parse_args(argv)
     if not args.batch and not args.batch_dir:
         print("ERROR: one of --batch / --batch-dir is required",
+              file=sys.stderr)
+        return 2
+
+    # 2026-08-25 — SILENT DEGRADATION IS A DEFECT, mirroring the #604 yosys
+    # guard directly below. `--prompts` (#559 module-name conformance) and
+    # `--dataset` (#715/#734 context-module + multi-file hard-BLOCK) are
+    # PROTECTIONS, and omitting them does not disable the gate — it quietly
+    # downgrades those blocks to advisory WARNs while the report still reads
+    # `blocked: 0`. An operator reading that report cannot tell the guards
+    # never ran.
+    #
+    # Measured cost of exactly that: a 302-problem cvdp-open run gated with
+    # neither flag scored 0/5 on the problems expecting more than one output
+    # file (the multi-file hard-BLOCK had been downgraded to a WARN), and
+    # shipped 4 completions whose module name did not match the filename the
+    # prompt asked for — every one of which the #559 guard BLOCKS when
+    # `--prompts` is supplied.
+    #
+    # So: refuse. Running without the guards stays possible, but only as a
+    # DELIBERATE, disclosed choice via --without-spec-guards.
+    if not args.without_spec_guards and not (args.prompts or args.dataset):
+        print("ERROR: neither --prompts nor --dataset given — the #559 "
+              "module-name-conformance guard and the #715/#734 context-module "
+              "+ multi-file hard-BLOCK would be silently INACTIVE while the "
+              "gate report still read `blocked: 0`. Refusing to emit responses "
+              "whose guards never ran.\n"
+              "  fix:  --prompts <prompts.jsonl> --dataset <dataset.jsonl>\n"
+              "  or:   --without-spec-guards   (deliberate, disclosed)",
               file=sys.stderr)
         return 2
 
@@ -3170,7 +3213,7 @@ def main(argv=None) -> int:
     # repaired at emit time recovers that interface-naming fail. EMPTY (so the
     # call below is byte-for-byte a NO-OP) when --dataset carries no harness.files
     # — e.g. the documented local_export prompts JSONL, which strips them.
-    from cvdp_harness_toplevel_alias import (
+    from tb_toplevel_alias import (
         maybe_alias_completion, maybe_alias_completion_multi)
     # OFFICIAL-COMPLIANCE (CVDP README_NON_AGENTIC: "The harness — docker-compose,
     # test files, `.env` — is NOT provided to the model"; paper §2: models "never

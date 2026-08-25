@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_hang_detect.py — emit-side hang-predict heuristics (v1.2.45→v1.2.46).
+"""sim_hang_detect.py — emit-side hang-predict heuristics (v1.2.45→v1.2.46).
 
 ORGANIC §4 "hang 子集" — the 6 file-named hang subjects (mem_allocator /
 manchester_enc / ir_receiver / fifo_async / attenuator / axi_alu cluster)
@@ -247,6 +247,18 @@ _MODULE_DECL_RE = re.compile(r"\bmodule\s+(\w+)\s*\(([^;]+)\)",
 _SYSTEMVR_WORD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def _strip_hdl_comments(text: str) -> str:
+    """Blank out `/* ... */` and `// ...` so a declaration written inside a
+    comment cannot be read as a declaration.
+
+    `// module round_ctr (a, b)` matches `_MODULE_DECL_RE` and mints a module
+    with ports nobody wrote (vibe-ic#729 measured 24 such phantoms). Block
+    comments collapse to a space; line comments keep their newline so line
+    numbering downstream of a strip is unchanged."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
 def _compute_line_starts(code: str) -> List[int]:
     """Return a list of offset indices where each new line starts in
     `code` (newline character itself). Offset 0 anchors line 1."""
@@ -344,8 +356,14 @@ def _module_ports_from_z(code: str, top_name: Optional[str] = None) -> List[str]
     """
     if not code:
         return []
+    # The scan reads de-commented text. The per-token `startswith("//")` guard
+    # below is kept, but it never could have covered this: it filters tokens
+    # taken from INSIDE a port list the regex has already accepted, so a whole
+    # `module ... ( ... )` written inside a comment mints a phantom module with
+    # phantom ports before any token is looked at.
+    decommented = _strip_hdl_comments(code)
     # Find first `module <name> (` decl.
-    for m in _MODULE_DECL_RE.finditer(code):
+    for m in _MODULE_DECL_RE.finditer(decommented):
         return [
             t.strip().rstrip(",").rstrip(";")
             for t in re.findall(

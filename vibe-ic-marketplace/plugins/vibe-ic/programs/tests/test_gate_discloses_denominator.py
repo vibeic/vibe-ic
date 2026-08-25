@@ -32,70 +32,71 @@ _REPO = _PROGRAMS.parents[3]   # plugins/vibe-ic/programs -> repo root
 
 
 def _fake_repo(tmp_path: Path, gate_bodies: dict) -> Path:
-    """A repo whose CI script names throwaway gates written into programs/."""
+    """A repo whose CI script names throwaway gates written into ITS OWN tree.
+
+    THE PROBE GATES LIVE IN THE FIXTURE REPO, NEVER IN THE CHECKOUT.
+
+    They used to be written into `_PROGRAMS` and named through the plugin
+    programs token, which `_expand` resolves to the checkout this suite is
+    running FROM — so every one of these tests created a real untracked file
+    inside the tree under test and deleted it again on the way out. Run alone
+    that is invisible. Under the landing harness, where several pytest
+    sessions share one checkout, `suite_write_guard` snapshots
+    `git status --porcelain` around each session and a path that merely EXISTS
+    inside somebody else's window is reported against THEM: measured at
+    a00192752, `programs/_probe_honest.py` was blamed on
+    `programs/tests/test_fsm_vector_rtl_emit.py`, a file that never heard of
+    it, turning a fully green suite red.
+
+    `$ROOT` resolves to the fixture repo (`_expand`: `"$ROOT/` -> repo_root),
+    so the gate is dispatched exactly as before while the bytes land under
+    `tmp_path`. Nothing about what is asserted changes; the fixture simply
+    stops writing into a tree it does not own.
+    """
     r = tmp_path / "repo"
     (r / "tools" / "ci").mkdir(parents=True)
     lines = []
     for name, body in gate_bodies.items():
-        (_PROGRAMS / f"_probe_{name}.py").write_text(body)
-        lines.append(f'run "{name}" "$ROOT" python3 "$PG/_probe_{name}.py"')
+        (r / f"_probe_{name}.py").write_text(body)
+        lines.append(f'run "{name}" "$ROOT" python3 "$ROOT/_probe_{name}.py"')
     (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
         "\n".join(lines) + "\n")
     return r
 
 
-def _cleanup(names):
-    for n in names:
-        p = _PROGRAMS / f"_probe_{n}.py"
-        if p.exists():
-            p.unlink()
-
-
 def test_a_silent_pass_over_an_empty_tree_is_caught(tmp_path):
     """THE LOAD-BEARING CASE."""
-    try:
-        r = _fake_repo(tmp_path, {"silent": 'print("PASS: everything is fine")\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "FAIL", findings
-        assert findings[0]["kind"] == "PASS_WITHOUT_DENOMINATOR"
-        assert findings[0]["gate"] == "silent"
-    finally:
-        _cleanup(["silent"])
+    r = _fake_repo(tmp_path, {"silent": 'print("PASS: everything is fine")\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "FAIL", findings
+    assert findings[0]["kind"] == "PASS_WITHOUT_DENOMINATOR"
+    assert findings[0]["gate"] == "silent"
 
 
 def test_a_pass_that_states_a_count_is_accepted(tmp_path):
     """The paired half. A gate that says how many is honest even at zero."""
-    try:
-        r = _fake_repo(tmp_path, {
-            "honest": 'print("PASS (0 item(s) examined): nothing to check")\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "PASS", findings
-    finally:
-        _cleanup(["honest"])
+    r = _fake_repo(tmp_path, {
+        "honest": 'print("PASS (0 item(s) examined): nothing to check")\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "PASS", findings
 
 
 def test_an_explicit_nothing_to_check_is_accepted_without_a_number(tmp_path):
     """`artefact_defect_close_check` says "[SKIPPED] no issue corpus" and that
     IS the disclosure — a count is one way to be honest, not the only way."""
-    try:
-        r = _fake_repo(tmp_path, {
-            "skipper": 'print("[SKIPPED] no issue corpus present")\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "PASS", findings
-    finally:
-        _cleanup(["skipper"])
+    r = _fake_repo(tmp_path, {
+        "skipper": 'print("[SKIPPED] no issue corpus present")\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "PASS", findings
 
 
 def test_a_gate_that_FAILS_on_empty_is_not_flagged(tmp_path):
     """Only a PASS makes a claim. A non-zero exit is not a false certificate,
     whatever it prints."""
-    try:
-        r = _fake_repo(tmp_path, {
-            "failer": 'import sys\nprint("nope")\nsys.exit(1)\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "PASS", findings
-    finally:
-        _cleanup(["failer"])
+    r = _fake_repo(tmp_path, {
+        "failer": 'import sys\nprint("nope")\nsys.exit(1)\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "PASS", findings
 
 
 def test_an_empty_gate_list_is_NOT_a_pass(tmp_path):

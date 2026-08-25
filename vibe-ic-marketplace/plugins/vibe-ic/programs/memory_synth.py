@@ -5,7 +5,7 @@ dual-port RAM, ROM (stated contents), and the register file.
 
 WHY a dedicated CVDP memory solver (and not memory_array_synth):
   * programs/memory_array_synth.py is the RTLLM/VerilogEval-phrased memory solver:
-    it reads ports through `rtllm_port_bridge.bridge_prompt -> port_parser`, keys on
+    it reads ports through `prose_port_block_read.bridge_prompt -> port_parser`, keys on
     RTLLM phrasings ("register array", "locations 0 through K", "up to N entries",
     "instruction register"), and notably has NO synchronous-FIFO shape at all.
   * A CVDP "code generation" memory prompt instead states its interface as a clean

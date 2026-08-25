@@ -4,7 +4,7 @@
 Run:  python3 -m pytest test_v1_2_47_alias_param_forward.py -q
 (or)  python3 test_v1_2_47_alias_param_forward.py
 
-Why — cvdp_harness_toplevel_alias (v1.2.40) emitted `module <top>(...)`
+Why — tb_toplevel_alias (v1.2.40) emitted `module <top>(...)`
 WITHOUT parameter port list. A parameter author's port widths reference
 parameter names (e.g. `[InWidth_g-1:0]`), so iverilog ELABs the wrapper with
 the parameter names unbound (`Unable to bind parameter 'InWidth_g'`), which
@@ -40,7 +40,7 @@ import tempfile
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
-import cvdp_harness_toplevel_alias as A  # noqa: E402
+import tb_toplevel_alias as A  # noqa: E402
 
 
 def _mods(src):

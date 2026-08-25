@@ -1062,7 +1062,7 @@ This rule overrides any "skip, it's a known FLOOR" or "just re-run the fails" in
 | VerilogEval-Human (156) | **C** | `gates.py` + LLM | host iverilog + `<Prob>_test.sv` | Done 153/156 = 98.08% | Floor: 062/093/149 |
 | RTLLM v2 (50) | **B** (CORRECT) — was done **C** in 2026-05-28 by mistake, target a re-run | `vibe_ic_one_shot_runner.py --skip-phase3 --skip-analog --skip-hardware` | host iverilog + `testbench.v` (cwd=design) | 37/50 = 74% under wrong-shape; target re-run to measure runner | Iverilog-tool-gap floor: `ring_counter`, `asyn_fifo` (VCS-only TB constructs) |
 | CVDP (N=1 example) | **D** (CORRECT) — was done as direct-agent in 2026-05-28, target re-run | `vibe_ic_one_shot_runner.py` | MCP `eda_cocotb` against hidden harness | SUPERSEDED by cvdp-open | spec/harness reset-polarity inconsistency → async-reset resolution |
-| **cvdp-open (749, HF v1.1.0)** | **C/D** | nonagentic: local_export → blind author → `cvdp_gate.py` (sole emit); agentic: official docker agent. ⚠️ **This is DIRECT-AI-AUTHOR gated by `cvdp_gate.py`, NOT the Phase-1 runner chain — see § 5.1.** | official `run_benchmark.py` + OSS sim image (run `cvdp_env_preflight.py` FIRST, #536) | RUNNABLE — 302-problem no_commercial track scored 210/302 = 69.5% single-shot **(blind-author number; a Phase-1-entry number is NOT yet established — TARGET RE-RUN, see § 5.1)** | HF v1.1.0 dataset `nvidia/cvdp-benchmark-dataset`; sim image fully OSS (icarus 13 / yosys 0.40 / cocotb 2.0.1) — NO tool substitution; triage via `cvdp_fail_triage.py` (#534) |
+| **cvdp-open (749, HF v1.1.0)** | **C/D** | nonagentic: local_export → blind author → `cvdp_gate.py` (sole emit); agentic: official docker agent. ⚠️ **This is DIRECT-AI-AUTHOR gated by `cvdp_gate.py`, NOT the Phase-1 runner chain — see § 5.1.** | official `run_benchmark.py` + OSS sim image (run `eda_image_preflight.py` FIRST, #536) | RUNNABLE — 302-problem no_commercial track scored 210/302 = 69.5% single-shot **(blind-author number; a Phase-1-entry number is NOT yet established — TARGET RE-RUN, see § 5.1)** | HF v1.1.0 dataset `nvidia/cvdp-benchmark-dataset`; sim image fully OSS (icarus 13 / yosys 0.40 / cocotb 2.0.1) — NO tool substitution; triage via `verify_fail_triage.py` (#534) |
 | PyHDL-Eval (168 Verilog track) | **E** (BLOCKED) | n/a | n/a | Documented blocked — 168 RefModule golden removed from public repo | Self-built-oracle subset is possible but not official pass@1 |
 | RTL-Repo (~4000) | **E** (OUT OF SCOPE) | n/a | n/a | Documented out-of-scope — Edit-Similarity / Exact-Match string metric, not functional generation | |
 | CVDP full (1500+) | **D** if access granted | runner | cocotb | SUPERSEDED by cvdp-open (749 open via HF v1.1.0); remainder stays gated | |
@@ -1369,10 +1369,24 @@ The capture loop (`benchmark-enhancement-capture`) says *move every recovery int
 the program layer*. § 9 is the **measurement + promotion harness** that makes that
 loop legible per problem. It classifies every benchmark problem into a STABILITY
 tier and pushes each tier upward as far as is HONESTLY possible. The reference
-implementation is `programs/cvdp_solve_pipeline.py`; each suite has its own
-mirror: `programs/{verilogeval_tier_pipeline, verilogeval_human_tier_pipeline,
-rtllm_tier_pipeline}.py` (each exposes `classify` / `build_gate` / `gate_check` /
-a floor-prover / an iverilog Tier-1 verifier + a `--dist` CLI).
+implementation was four per-suite pipelines
+(`programs/{cvdp_solve, verilogeval_tier, verilogeval_human_tier, rtllm_tier}_pipeline.py`),
+each a private copy of the same tier logic. **They are deleted.** Four copies of
+one judgement is four places for it to drift, and three of them were reachable
+only by importing a benchmark's own module — so the general flow could not use
+any of it. What they held now lives where every caller can reach it:
+
+| the pipelines' capability | where it lives now |
+|---|---|
+| `classify` / tier assignment | `programs/task_nature_route.py` (nature -> entry step) |
+| `build_gate` / `gate_check` | `programs/spec_conformance_gate.py`, wired into `spec_conformance_check` |
+| the deterministic emitters | `programs/deterministic_emit_chain.py` (`try_emit` / `try_emit_ex`) |
+| the emit-blocking parity check | `deterministic_emit_chain.emit_would_be_blocked` |
+| a simulator transcript -> PASS/FAIL | `programs/testbench_verdict.py` |
+| the `--dist` CLI | `programs/benchmark_dispatch.py --solve` |
+
+The tier vocabulary below is still the right way to read a run; it is now
+measured through the shared programs rather than a per-suite copy of them.
 
 ### The tiers (highest stability first)
 

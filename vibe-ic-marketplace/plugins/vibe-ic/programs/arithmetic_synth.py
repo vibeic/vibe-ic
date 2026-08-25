@@ -74,7 +74,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import port_parser as _pp  # noqa: E402  reuse the SHARED interface reader
-import rtllm_port_bridge as _bridge  # noqa: E402  prose "Input ports:" -> bullet form
+import prose_port_block_read as _bridge  # noqa: E402  prose "Input ports:" -> bullet form
 
 Port = Tuple[str, int]
 

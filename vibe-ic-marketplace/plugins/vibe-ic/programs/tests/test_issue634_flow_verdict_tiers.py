@@ -169,7 +169,29 @@ def test_the_excused_set_still_holds_exactly_what_it_held_before():
     carried before the move."""
     assert T.EXCUSED == {"SKIPPED-CONDITION", "SKIPPED", "WAIVED",
                          "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
-                         "DEFERRED"}
+                         "DEFERRED",
+                         # 2026-08-25. Adding a word HERE adds an EXCUSE — it is
+                         # subtracted from total_required — so this pin is meant
+                         # to make that an explicit, reviewed edit and not a
+                         # quiet one. Recording why this one is legitimate:
+                         #
+                         # A run may declare, via --entry-step and BEFORE it
+                         # dispatches anything, that it enters the flow partway
+                         # through: a debug task arrives with RTL already
+                         # written and already wrong, and re-deriving documents
+                         # it was never given is ceremony, not verification.
+                         # Without a word for that, the upstream steps report
+                         # MISSING and the report is indistinguishable from a
+                         # Phase 1 that ran and broke.
+                         #
+                         # It is NOT a blanket skip. flow_compliance_check
+                         # grants it only when the step is upstream of the
+                         # DECLARED entry AND every one of its outputs that an
+                         # in-scope step actually reads is present on disk, and
+                         # never for a hard sign-off artefact. So it means "these
+                         # were supplied rather than produced here", never "we
+                         # skipped it and the artefacts are gone".
+                         "OUT-OF-SCOPE-BY-ENTRY"}
 
 
 def test_the_done_claim_set_of_a_report_is_derived():

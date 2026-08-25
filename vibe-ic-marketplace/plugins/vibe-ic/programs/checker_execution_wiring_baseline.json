@@ -22,7 +22,6 @@
     "ip_catalog_upstream_audit.py",
     "lesson_consumption_check.py",
     "lessons_corpus_consistency_check.py",
-    "level_hysteresis_flag_oracle_check.py",
     "pdk_consistency_check.py",
     "phase1_parity_source_tier_check.py",
     "phase1_provenance_presence_check.py",

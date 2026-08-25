@@ -1,4 +1,4 @@
-"""ORGANIC #536 — cvdp_env_preflight: the scoring sim image must match the
+"""ORGANIC #536 — eda_image_preflight: the scoring sim image must match the
 official Dockerfile.sim tool spec (iverilog 13 / yosys 0.40 / cocotb 2.0.1 /
 verilator 5.038) or scoring is REFUSED.
 
@@ -15,7 +15,7 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "benchmark"))
-import cvdp_env_preflight as E  # noqa: E402
+import eda_image_preflight as E  # noqa: E402
 
 OFFICIAL = """Icarus Verilog version 13.0 (devel) (s20221226-568-g62b00ee6d)
 ---

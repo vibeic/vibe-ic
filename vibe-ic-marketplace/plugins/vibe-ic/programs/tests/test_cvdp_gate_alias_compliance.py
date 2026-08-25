@@ -45,7 +45,7 @@ import subprocess
 import sys
 import tempfile
 
-# cvdp_gate.py + cvdp_harness_toplevel_alias.py live in the plugin's benchmark/
+# cvdp_gate.py + tb_toplevel_alias.py live in the plugin's benchmark/
 # dir (../../benchmark relative to programs/tests/) — mirror the existing
 # cvdp_gate-test import convention.
 BENCH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -54,7 +54,7 @@ if BENCH not in sys.path:
     sys.path.insert(0, BENCH)
 
 import cvdp_gate as G                      # noqa: E402
-import cvdp_harness_toplevel_alias as A    # noqa: E402
+import tb_toplevel_alias as A    # noqa: E402
 
 
 # --------------------------------------------------------------------------- #

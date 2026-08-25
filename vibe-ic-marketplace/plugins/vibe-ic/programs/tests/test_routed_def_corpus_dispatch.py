@@ -748,13 +748,17 @@ def test_a_population_refusal_cannot_buy_an_uncheckable_exemption(tmp_path):
     # THE OUTCOME, not only the sentence: a sweep whose only unchecked row is
     # the empty corpus must still refuse. Accepting the exemption makes this 0.
     assert proc.returncode == 2, text
-    # AND THE HAZARD ITSELF, asserted so it cannot quietly change shape: the
-    # date IS recorded on the row and the row DOES leave `not_checked_unexempted`.
-    # `_dispatch` appends the pending exemption before it judges it, so nothing
-    # downstream can tell this row from one that legitimately bought tolerance.
-    # The wiring error is the whole defence, which is why it is worth a test.
-    assert states[_EMPTY_LABEL]["exempt_until"] == "2099-01-01", doc
-    assert doc["not_checked_unexempted"] == [], doc
+    # THE HAZARD, REPAIRED (vibe-ic#1770) AND PINNED FROM THE OTHER SIDE.
+    # These two lines pinned the defect as current behaviour: the refused date
+    # WAS recorded on the row and the row DID leave `not_checked_unexempted`,
+    # leaving the wiring error as the whole defence. `_dispatch` now clears the
+    # exemption it refuses, so the same two facts are asserted in the direction
+    # the dispatcher's own message claims -- nothing downstream may read this
+    # row as one that legitimately bought tolerance.
+    assert states[_EMPTY_LABEL]["exempt_until"] is None, doc
+    assert states[_EMPTY_LABEL]["exempt_reason"] is None, doc
+    assert states[_EMPTY_LABEL]["exemption_expired"] is False, doc
+    assert doc["not_checked_unexempted"] == [_EMPTY_LABEL], doc
 
 
 def test_the_shipped_producer_over_an_empty_corpus_blocks_and_never_passes(

@@ -1817,6 +1817,50 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                                      _hf.detail))
         except Exception:  # nosec — structural check is best-effort
             pass
+
+    # ---- spec STRUCTURE representation (advisory) --------------------------
+    # The rules above are the INTERFACE half of spec conformance: ports,
+    # directions, widths, resets. The other half — is every register, enumerated
+    # mode and FSM state the spec names actually REPRESENTED in the RTL — lives
+    # in `spec_conformance_gate` and was enforced NOWHERE: that module's only
+    # consumer was its own unit test. It is not a vacuous gate; measured over the
+    # 302 CVDP code-generation records it distils 54 register names, 112 FSM
+    # states, 153 transitions and 310 worked examples out of the prompts.
+    #
+    # ADVISORY (INFO), never ERROR, and the asymmetry is deliberate. The spec
+    # here is recovered from PROSE, and `_token_represented` is satisfied by the
+    # token appearing as a Verilog identifier anywhere — a design that spells a
+    # state `ST_IDLE` where the prose wrote `IDLE` is CORRECT and would be
+    # flagged. §4.05 forbids a false block on a fuzzy extraction, so this
+    # reports and never refuses. `build_gate` omits any field the extractor did
+    # not recover, so a prose spec with no structures produces no findings at
+    # all rather than a vacuous pass.
+    if rtl_body and spec_text:
+        try:
+            import sys as _sys
+            _here = str(Path(__file__).resolve().parent)
+            if _here not in _sys.path:
+                _sys.path.insert(0, _here)
+            import spec_complete_extract as _sce           # noqa: PLC0415
+            import spec_conformance_gate as _scg           # noqa: PLC0415
+            _ins = [p.name for p in rtl_ports if p.direction == 'input']
+            _outs = [p.name for p in rtl_ports
+                     if p.direction in ('output', 'inout')]
+            _gate = _scg.build_gate(_sce.assess_spec(spec_text, _ins, _outs))
+            for _v in _scg.gate_check_spec(_gate, rtl_body).get('violations', []):
+                _kind = _v.get('kind', '')
+                # ONLY the structure half. The interface half is enforced above,
+                # by rules that have the RTL parse to reason from; re-reporting
+                # it here would double-count and disagree at the edges.
+                if _kind.startswith('missing_') and _kind != 'missing_port':
+                    # symbol = the MISSING TOKEN, not the module. Three absent
+                    # registers otherwise render as three identical lines naming
+                    # the module, which says a count and not a fact.
+                    f.append(Finding(path, 'INFO', _kind.replace('_', '-'),
+                                     _v.get('token') or rtl_name or '<module>',
+                                     _v.get('detail', '')))
+        except Exception:  # nosec — advisory pass is best-effort
+            pass
     return f
 
 

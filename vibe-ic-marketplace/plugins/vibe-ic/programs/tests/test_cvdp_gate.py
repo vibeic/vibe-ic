@@ -143,7 +143,7 @@ def test_559_matching_module_passes_and_no_prompts_unchanged(tmp_path):
     batch2 = _write_batch(tmp_path, [
         {"id": "p2", "completion": "```verilog\nmodule bar(input a, "
                                    "output b);\nassign b=a;\nendmodule\n```\n"}])
-    assert G.main(["--batch", str(batch2), "--out", str(out2)]) == 0
+    assert G.main(["--batch", str(batch2), "--out", str(out2), "--without-spec-guards"]) == 0
     assert len(_read_jsonl(out2)) == 1
 
 
@@ -166,7 +166,7 @@ def test_buggy_completions_blocked_good_gated_in(tmp_path):
     ])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 1                       # ≥1 blocked
     ids = [r["id"] for r in _read_jsonl(out)]
     assert "p_good" in ids
@@ -184,7 +184,7 @@ def test_negative_context_module_instantiation_not_blocked(tmp_path):
     # context files is a LEGAL copilot shape — must gate in.
     batch = _write_batch(tmp_path, [{"id": "p_ctx", "completion": CONTEXT_INST}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 0
     assert [r["id"] for r in _read_jsonl(out)] == ["p_ctx"]
 
@@ -194,7 +194,7 @@ def test_doc_only_completion_tolerated(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_doc", "completion": DOC_ONLY}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     assert [r["id"] for r in _read_jsonl(out)] == ["p_doc"]
     rep = json.loads((tmp_path / "rep.json").read_text())
@@ -214,7 +214,7 @@ def test_hygiene_fix_is_enforced_in_gate(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_pup", "completion": rtl}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     recs = _read_jsonl(out)
     assert recs and recs[0]["id"] == "p_pup"
@@ -229,7 +229,7 @@ def test_gate_refuses_without_iverilog(tmp_path, monkeypatch):
     monkeypatch.setattr(G.shutil, "which", lambda *_: None)
     batch = _write_batch(tmp_path, [{"id": "x", "completion": GOOD}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 2
     assert not out.is_file()
 
@@ -237,7 +237,7 @@ def test_gate_refuses_without_iverilog(tmp_path, monkeypatch):
 def test_bad_jsonl_is_input_error(tmp_path):
     b = tmp_path / "bad.jsonl"
     b.write_text("{not json}\n")
-    rc = G.main(["--batch", str(b), "--out", str(tmp_path / "o.jsonl")])
+    rc = G.main(["--batch", str(b), "--out", str(tmp_path / "o.jsonl"), "--without-spec-guards"])
     assert rc == 2
 
 
@@ -299,7 +299,7 @@ def test_review_text_fence_before_broken_verilog_blocks(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "p_evade", "completion": TEXT_THEN_BROKEN}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []
 
@@ -312,7 +312,7 @@ def test_review_text_fence_before_good_verilog_gates_in(tmp_path):
         {"id": "p_good2", "completion": TEXT_THEN_GOOD}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     assert [r["id"] for r in _read_jsonl(out)] == ["p_good2"]
     rep = json.loads((tmp_path / "rep.json").read_text())
@@ -328,7 +328,7 @@ def test_review_two_fence_writeback_not_duplicated(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "p_two", "completion": TWO_VERILOG_FENCES}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 0
     recs = _read_jsonl(out)
     body = recs[0]["completion"]
@@ -350,7 +350,7 @@ def test_review_unknown_module_does_not_mask_genuine_error(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "p_masked", "completion": UNKNOWN_PLUS_GENUINE}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []
 
@@ -360,7 +360,7 @@ def test_review_report_discloses_iverilog_version(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_doc2", "completion": DOC_ONLY}])
     out = tmp_path / "responses.jsonl"
     G.main(["--batch", str(batch), "--out", str(out),
-            "--report", str(tmp_path / "rep.json")])
+            "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     rep = json.loads((tmp_path / "rep.json").read_text())
     assert "iverilog" in rep.get("iverilog_version", "").lower() or \
         "icarus" in rep.get("iverilog_version", "").lower()
@@ -397,7 +397,7 @@ def test_531_zero_module_blocked_by_yosys_smoke(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_zs", "completion": bad}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []
     rep = json.loads((tmp_path / "rep.json").read_text())
@@ -412,7 +412,7 @@ def test_531_negative_trivial_passthrough_not_blocked(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_thin", "completion": PASSTHRU}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     assert [r["id"] for r in _read_jsonl(out)] == ["p_thin"]
     rep = json.loads((tmp_path / "rep.json").read_text())
@@ -426,7 +426,7 @@ def test_531_negative_context_instantiation_still_gates_in(tmp_path):
     # the yosys smoke via the same synthesized stubs.
     batch = _write_batch(tmp_path, [{"id": "p_ctx2", "completion": CONTEXT_INST}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 0
     assert [r["id"] for r in _read_jsonl(out)] == ["p_ctx2"]
 
@@ -447,7 +447,7 @@ def test_535_batch_dir_intake_gate_does_own_json(tmp_path):
     (bdir / "p_rt.md").write_text(tricky)
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch-dir", str(bdir), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     recs = _read_jsonl(out)
     assert [r["id"] for r in recs] == ["p_rt"]
@@ -479,7 +479,7 @@ def test_535_roundtrip_corruption_blocked(tmp_path, monkeypatch):
             return real_write(self, corrupted, *a, **k)
         return real_write(self, text, *a, **k)
     monkeypatch.setattr(Path, "write_text", corrupting_write)
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []          # corrupted record purged
 
@@ -501,7 +501,7 @@ def test_review2_sibling_broken_module_not_evaded(tmp_path):
            "```\n")
     batch = _write_batch(tmp_path, [{"id": "p_sib", "completion": bad}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []
 
@@ -521,7 +521,7 @@ def test_review2_frontend_gap_tolerated_not_blocked(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_pt", "completion": sv}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     rep = json.loads((tmp_path / "rep.json").read_text())
     # depending on host yosys generation this is either a clean synth or a
     # tolerated frontend gap — NEVER a block.
@@ -536,13 +536,13 @@ def test_review2_duplicate_ids_refused(tmp_path):
     batch = _write_batch(tmp_path, [
         {"id": "dup", "completion": GOOD},
         {"id": "dup", "completion": PASSTHRU}])
-    rc = G.main(["--batch", str(batch), "--out", str(tmp_path / "o.jsonl")])
+    rc = G.main(["--batch", str(batch), "--out", str(tmp_path / "o.jsonl"), "--without-spec-guards"])
     assert rc == 2
 
 
 def test_review2_missing_id_refused(tmp_path):
     batch = _write_batch(tmp_path, [{"completion": GOOD}])
-    rc = G.main(["--batch", str(batch), "--out", str(tmp_path / "o.jsonl")])
+    rc = G.main(["--batch", str(batch), "--out", str(tmp_path / "o.jsonl"), "--without-spec-guards"])
     assert rc == 2
 
 
@@ -551,7 +551,7 @@ def test_review2_batch_dir_stem_collision_refused(tmp_path):
     bdir.mkdir()
     (bdir / "p1.sv").write_text("module a(input x, output y); assign y=x; endmodule\n")
     (bdir / "p1.md").write_text("doc twin")
-    rc = G.main(["--batch-dir", str(bdir), "--out", str(tmp_path / "o.jsonl")])
+    rc = G.main(["--batch-dir", str(bdir), "--out", str(tmp_path / "o.jsonl"), "--without-spec-guards"])
     assert rc == 2
 
 
@@ -592,7 +592,7 @@ def test_round2_json_dict_good_gates_in_broken_blocked(tmp_path):
     ])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 1                                  # p_jbad blocked
     ids = [r["id"] for r in _read_jsonl(out)]
     assert "p_jgood" in ids and "p_jschema" in ids
@@ -616,7 +616,7 @@ def test_round2_531_json_dict_reaches_yosys_smoke(tmp_path):
     ])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 1
     rep = _json.loads((tmp_path / "rep.json").read_text())
     verd = {e["id"]: e for e in rep["records"]}
@@ -636,7 +636,7 @@ def test_round2_535_empty_completion_blocked_not_doc_only(tmp_path):
     ])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 1
     ids = [r["id"] for r in _read_jsonl(out)]
     assert ids == ["p_doc"]
@@ -692,7 +692,7 @@ def test_round3_comment_prose_is_not_a_phantom_module(tmp_path):
         {"id": "p_phantom", "completion": COMMENT_PHANTOM_JSON}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     rep = _json.loads((tmp_path / "rep.json").read_text())
     e = rep["records"][0]
@@ -876,7 +876,7 @@ def test_round4_context_module_at_synth_hierarchy_tolerated(tmp_path):
         {"id": "p_ctxsynth", "completion": CTX_AT_SYNTH_JSON}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     rep = _json.loads((tmp_path / "rep.json").read_text())
     e = rep["records"][0]
@@ -898,7 +898,7 @@ def test_round4_latch_strictness_is_advisory_not_block(tmp_path):
         {"id": "p_latch", "completion": LATCH_COMB_JSON}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 0
     rep = _json.loads((tmp_path / "rep.json").read_text())
     e = rep["records"][0]
@@ -923,7 +923,7 @@ def test_round4_negative_async_edge_still_blocked(tmp_path):
            "endmodule\n```\n")
     batch = _write_batch(tmp_path, [{"id": "p_neg4", "completion": bad}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []
 
@@ -949,7 +949,7 @@ def test_round5_latch_info_line_must_not_mask_fatal_error(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_mask1", "completion": mask}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []
     rep = _json.loads((tmp_path / "rep.json").read_text())
@@ -996,7 +996,7 @@ def test_round5_review_latch_error_abort_must_not_mask_later_fatal(tmp_path):
     batch = _write_batch(tmp_path, [{"id": "p_lmask", "completion": mask}])
     out = tmp_path / "responses.jsonl"
     rc = G.main(["--batch", str(batch), "--out", str(out),
-                 "--report", str(tmp_path / "rep.json")])
+                 "--report", str(tmp_path / "rep.json"), "--without-spec-guards"])
     assert rc == 1
     assert _read_jsonl(out) == []
     rep = _json.loads((tmp_path / "rep.json").read_text())
@@ -1050,7 +1050,7 @@ def test_synth_stage_block_stderr_names_the_synth_reason(tmp_path, capsys):
            "endmodule\n```\n")
     batch = _write_batch(tmp_path, [{"id": "p_stderr", "completion": bad}])
     out = tmp_path / "responses.jsonl"
-    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    rc = G.main(["--batch", str(batch), "--out", str(out), "--without-spec-guards"])
     assert rc == 1
     err = capsys.readouterr().err
     blocked_line = next(ln for ln in err.splitlines()

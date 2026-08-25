@@ -10,7 +10,7 @@ benchmark differs ONLY in how it states its interface (the THIN-ADAPTER layer):
   * CVDP        — cocotb `dut.<sig>` harness + `.env` TOPLEVEL + skeleton header
                   (handled by `cvdp_complete_extract.extract(record)`).
   * RTLLM       — a Verilog-style port header in the design_description prose
-                  (recovered by `rtllm_iface_recover.recover_ports`).
+                  (recovered by `prose_interface_recover.recover_ports`).
   * VerilogEval — a `- input/output NAME (N bits)` prose list with the
                   "one bit unless otherwise specified" convention.
   * Phase-1 doc — an L-doc / prose port list (call assess_spec directly).
@@ -48,7 +48,7 @@ import spec_complete_extract as _eng  # noqa: E402
 def assess_rtllm(prompt: str, module_name: str = "") -> dict:
     """Assess an RTLLM design_description: recover the port list via the shipped
     RTLLM header reader, then delegate to the general engine."""
-    import rtllm_iface_recover as _rt
+    import prose_interface_recover as _rt
     ins, outs = _rt.recover_ports(prompt)
     return _eng.assess_spec(prompt, [p[0] for p in ins], [p[0] for p in outs],
                             module_name=module_name)

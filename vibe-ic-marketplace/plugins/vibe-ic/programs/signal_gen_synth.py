@@ -13,7 +13,7 @@ of this module's shapes, so it SKIPs (falls through to None) rather than being
 fabricated.
 
 This is a clean prose-parsed canonical solver: it reads the interface through the
-SHARED reader chain `rtllm_port_bridge.bridge_prompt -> port_parser.parse_ports`
+SHARED reader chain `prose_port_block_read.bridge_prompt -> port_parser.parse_ports`
 (a no-op on VerilogEval bullet/header prompts), so the port names/widths come from
 the prompt's "Input ports:/Output ports:" prose, never from a hard-coded table.
 
@@ -53,7 +53,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 try:
-    import rtllm_port_bridge as _bridge  # noqa: E402
+    import prose_port_block_read as _bridge  # noqa: E402
     import port_parser as _pp  # noqa: E402
 except Exception:  # pragma: no cover - import guard for standalone smoke
     _bridge = None

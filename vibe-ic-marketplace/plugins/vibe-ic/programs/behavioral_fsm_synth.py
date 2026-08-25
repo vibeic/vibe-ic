@@ -933,7 +933,7 @@ def _dia_parse_ports(text):
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
         sys.path.insert(0, here)
-    import rtllm_port_bridge as _bridge
+    import prose_port_block_read as _bridge
     import port_parser
     return port_parser.parse_ports(_bridge.bridge_prompt(text))
 

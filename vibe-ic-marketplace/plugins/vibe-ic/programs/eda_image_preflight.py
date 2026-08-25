@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_env_preflight.py — verify the CVDP scoring sim image matches the
+"""eda_image_preflight.py — verify the CVDP scoring sim image matches the
 official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536).
 
 Field evidence: a self-built image carried Yosys 0.62 while the official
@@ -100,8 +100,13 @@ def probe_image(image: str, runner=None) -> Tuple[int, str]:
             cp = subprocess.run(cmd, capture_output=True, text=True,
                                 timeout=300)
             return cp.returncode, (cp.stdout or "") + (cp.stderr or "")
-    return runner(["docker", "run", "--rm", "--entrypoint", "sh",
-                   image, "-c", _PROBE_CMD])
+    # A probe container is still a container: one unbounded `docker run` is all
+    # it takes for a tool inside to eat the host. (This gate was added earlier
+    # today and this call tripped it the moment the file was renamed — the
+    # ratchet keyed the exemption to the old filename.)
+    import _docker_memory as _dmem  # noqa: PLC0415
+    return runner(["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+                   "--entrypoint", "sh", image, "-c", _PROBE_CMD])
 
 
 def check_versions(probe_output: str) -> Tuple[List[Dict], List[str]]:
@@ -535,7 +540,8 @@ def main(argv=None) -> int:
     text = json.dumps(verdict, indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(text + "\n")
+        import _atomic_artefact as _atomic  # noqa: PLC0415
+        _atomic.write_text(Path(args.json), text + "\n")
     print(text)
     if refuse:
         for d in deviations:

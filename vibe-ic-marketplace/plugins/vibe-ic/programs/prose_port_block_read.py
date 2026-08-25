@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rtllm_port_bridge.py — a GENERAL prose-port-block reader for the RTLLM benchmark
+"""prose_port_block_read.py — a GENERAL prose-port-block reader for the RTLLM benchmark
 family (and any spec that states its interface in the same "Input ports:/Output
 ports:" prose form), bridging it to the bullet form `port_parser.parse_ports`
 already reads.

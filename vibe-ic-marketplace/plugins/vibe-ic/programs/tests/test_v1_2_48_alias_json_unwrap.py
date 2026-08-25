@@ -4,7 +4,7 @@
 Run:  python3 -m pytest test_v1_2_48_alias_json_unwrap.py -q
 (or)  python3 test_v1_2_48_alias_json_unwrap.py
 
-Why — cvdp_harness_toplevel_alias (v1.2.40/v1.2.47) emitted nothing when the
+Why — tb_toplevel_alias (v1.2.40/v1.2.47) emitted nothing when the
 author's completion was the JSON envelope `{"code":[{path:content}, ...]}` or
 the flat `{path: content, ...}` shape: `author_top_and_ports` did its bare
 `module <name>(…);` regex scan on the raw envelope string, found no
@@ -53,7 +53,7 @@ import tempfile
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
-import cvdp_harness_toplevel_alias as A
+import tb_toplevel_alias as A
 
 
 class _FakeModuleNames:

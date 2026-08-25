@@ -17,7 +17,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import verilogeval_human_tier_pipeline as H  # noqa: E402
+import deterministic_emit_chain as C  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
 _DSH = corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")
@@ -31,21 +31,27 @@ def test_pure_rotate_emit_is_gate_blocked():
     pure_rot = ("module TopModule(input clk, input [3:0] d, output reg [3:0] q);\n"
                 "  always @(posedge clk) q <= {q[0], q[3:1]};\n"
                 "endmodule\n")
-    assert "shift-implemented-as-rotate" in H.conformance_emit_blocked(prob, pure_rot)
+    assert "shift-implemented-as-rotate" in C.emit_would_be_blocked(prob["prompt"], pure_rot)
 
 
 def test_clean_emit_not_blocked():
     prob = {"prompt": "Assign out to a AND b.", "stem": "synthetic"}
     clean = ("module TopModule(input a, input b, output out);\n"
              "  assign out = a & b;\nendmodule\n")
-    assert H.conformance_emit_blocked(prob, clean) == []
+    assert C.emit_would_be_blocked(prob["prompt"], clean) == []
 
 
 @pytest.mark.skipif(not (_DSH / "Prob092_gatesv100_ifc.txt").exists(),
                     reason="VE-Human dataset absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
-def test_gatesv_stays_tier1_after_fix():
-    # after #4 the comb_advanced emit is conformance-clean -> gate parity keeps it Tier-1
+def test_gatesv_emit_is_conformance_clean():
+    """The property, restated without the pipeline: for these two problems the
+    deterministic chain fires AND its emit is gate-clean. Previously this asked
+    the pipeline for a tier; a tier is that pipeline's vocabulary, while
+    "fired and would not be blocked" is the thing actually being claimed."""
     for stem in ("Prob092_gatesv100", "Prob094_gatesv"):
-        prob = H.load_problem(str(_DSH), stem)
-        res = H.solve(prob, verify_tier1=True)
-        assert res["tier"] == H.TIER_PROGRAM, f"{stem}: {res.get('verify_log')}"
+        prompt = (_DSH / f"{stem}_prompt.txt").read_text(errors="replace")
+        ifc = (_DSH / f"{stem}_ifc.txt").read_text(errors="replace")
+        kind, rtl = C.try_emit(prompt, ifc, "TopModule")
+        assert rtl, f"{stem}: no deterministic emitter fired"
+        blocked = C.emit_would_be_blocked(prompt, rtl)
+        assert blocked == [], f"{stem}: emit fires but the gate blocks it: {blocked}"

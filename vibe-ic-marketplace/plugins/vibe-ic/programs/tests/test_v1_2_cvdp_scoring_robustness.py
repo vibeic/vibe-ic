@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression for the two run_v1239_converge scoring-robustness absorptions.
 
-② cocotb sim-hang watchdog (cvdp_env_preflight.recommended_scoring_env +
+② cocotb sim-hang watchdog (eda_image_preflight.recommended_scoring_env +
    `--print-scoring-env`): a deterministic DOCKER_TIMEOUT/TASK_TIMEOUT env so a
    hung cocotb sim becomes an UNATTENDED timeout-FAIL instead of a manual
    `docker kill` stall. This is a ROBUSTNESS fix, NOT a score lever — the values
@@ -23,7 +23,7 @@ import pytest
 
 PLUGIN = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN / "benchmark"))
-import cvdp_env_preflight as E  # noqa: E402
+import eda_image_preflight as E  # noqa: E402
 
 BLIND_CVDP = PLUGIN / "benchmark" / "blind_instructions_shape_cvdp.md"
 
@@ -59,7 +59,7 @@ def test_print_scoring_env_cli_emits_exportable_lines():
     """`--print-scoring-env` prints `export K=V` lines a scoring driver can eval,
     and exits 0 WITHOUT requiring --image/--problem-dir."""
     r = subprocess.run(
-        [sys.executable, str(PLUGIN / "benchmark" / "cvdp_env_preflight.py"),
+        [sys.executable, str(PLUGIN / "programs" / "eda_image_preflight.py"),
          "--print-scoring-env"],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -75,7 +75,7 @@ def test_preflight_still_requires_args_without_the_flag():
     """The new flag must not relax the existing front door: with neither
     --image/--problem-dir nor --print-scoring-env, the tool still errors (rc 2)."""
     r = subprocess.run(
-        [sys.executable, str(PLUGIN / "benchmark" / "cvdp_env_preflight.py")],
+        [sys.executable, str(PLUGIN / "programs" / "eda_image_preflight.py")],
         capture_output=True, text=True)
     assert r.returncode == 2
 

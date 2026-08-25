@@ -28,7 +28,7 @@ PROGRAMS = os.path.dirname(THIS_DIR)
 BENCH = os.path.join(os.path.dirname(PROGRAMS), "benchmark")
 sys.path.insert(0, BENCH)
 
-import cvdp_harness_toplevel_alias as A  # noqa: E402
+import tb_toplevel_alias as A  # noqa: E402
 import cvdp_gate as G  # noqa: E402
 
 

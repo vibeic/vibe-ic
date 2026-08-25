@@ -65,18 +65,55 @@ STUB_PARTIAL_FAIL_SRC = (
 CLASS_NAME = "example_guard_class"
 
 
+#: Where the stub generator is written for the test in flight. Set by the
+#: autouse fixture below, which hands out a fresh directory OUTSIDE the
+#: checkout.
+_STUB_DIR = None
+
+
+@pytest.fixture(autouse=True)
+def _stub_dir(tmp_path_factory):
+    """The stub generator lives in a scratch directory, never in `programs/`.
+
+    IT USED TO BE WRITTEN INTO THE CHECKOUT and unlinked at teardown. Run
+    alone that is invisible. Under the landing harness, where several pytest
+    sessions share one checkout, `suite_write_guard` snapshots
+    `git status --porcelain` around each session and a path that merely EXISTS
+    inside somebody else's window is reported against THEM: measured at
+    a00192752, `programs/_zz_test_authored_guard_stub_gen.py` was blamed on
+    `programs/tests/test_rtl_interface_recover.py`, which does not know this
+    file exists, turning a fully green suite red.
+
+    The dispatch is unchanged. `step_rtl_gen` resolves the generator by
+    joining the plugin programs directory with the registered name, and
+    `Path.__truediv__` with an ABSOLUTE right-hand side yields that absolute
+    path — so registering the stub by its full path runs exactly the same
+    bytes through exactly the same door, with nothing landing in a tree these
+    tests do not own.
+    """
+    global _STUB_DIR
+    _STUB_DIR = tmp_path_factory.mktemp("authored_rtl_guard_stub")
+    yield _STUB_DIR
+    _STUB_DIR = None
+
+
+def _stub_path() -> Path:
+    assert _STUB_DIR is not None, "the stub fixture did not run"
+    return _STUB_DIR / STUB_NAME
+
+
 def _install_class(monkeypatch, gen_src: str = STUB_SRC,
-                   rtl_gen: str = STUB_NAME,
+                   rtl_gen: str = None,
                    fallback_skill: str = "spec-to-rtl") -> None:
     """Register a synthetic class whose generator is a stub we control.
 
     Chip-AGNOSTIC by construction: no real IC class, no real generator,
     no ic_class.json involvement.
     """
-    stub = PROGRAMS_DIR / STUB_NAME
+    stub = _stub_path()
     stub.write_text(gen_src)
 
-    config = {"name": CLASS_NAME, "rtl_gen": rtl_gen,
+    config = {"name": CLASS_NAME, "rtl_gen": rtl_gen or str(stub),
               "fallback_skill": fallback_skill}
     monkeypatch.setattr(R, "_lookup_class", lambda c: dict(config))
     # The program-first structured-RTL dispatcher runs before the registry
@@ -86,12 +123,6 @@ def _install_class(monkeypatch, gen_src: str = STUB_SRC,
     monkeypatch.setattr(R, "_FORCE_RTL_REGEN", False, raising=False)
     monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False, raising=False)
     monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None, raising=False)
-
-
-@pytest.fixture(autouse=True)
-def _cleanup_stub():
-    yield
-    (PROGRAMS_DIR / STUB_NAME).unlink(missing_ok=True)
 
 
 def _rtl(project: Path) -> Path:
@@ -469,7 +500,7 @@ def test_guard_ignores_ic_class_identity(tmp_path, monkeypatch):
         _install_class(monkeypatch)
         monkeypatch.setattr(
             R, "_lookup_class",
-            lambda c: {"name": c, "rtl_gen": STUB_NAME,
+            lambda c: {"name": c, "rtl_gen": str(_stub_path()),
                        "fallback_skill": "spec-to-rtl"})
         project = _new_project(tmp_path / class_name)
         R.step_rtl_gen(project, class_name)

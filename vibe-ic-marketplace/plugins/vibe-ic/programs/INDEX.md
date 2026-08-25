@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1204
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1204)
+- **Total programs (excluding helpers / shims):** 1213
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1213)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1195 |
+| `any` | 1204 |
 
 ## Alphabetical listing
 
@@ -135,6 +135,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `benchmark_evidence_publish` | any | — | stage a CONVERGED (IC × PDK) run's evidence into the canonical benchmark-data layout (the PUBLISH half of the program-first publish contr... |
 | `benchmark_evidence_structure_check` | any | — | CI gate for published benchmark evidence folders (the STRUCTURE half of the program-first publish contract). |
 | `benchmark_golden_capture` | any | — | record a HOST-VERIFIED, vibe-ic-AUTHORED solution as OUR OWN golden, kept SEPARATE from the downloaded `reference_solution`, and tagged w... |
+| `benchmark_io_adapter` | any | v0.1.25 | the ONLY place a benchmark's file format may appear. |
 | `benchmark_result_md_lint` | any | — | presence-check linter for the mandatory § 6 RESULT.md section checklist. |
 | `benchmark_run_manifest` | any | — | a scored benchmark run must leave behind the NAME SET, not only the count. vibe-ic#635. |
 | `benchmark_score_cwd_guard` | any | — | assert the host scorer is invoked FROM the design directory before it runs. |
@@ -263,8 +264,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_atomic_bridge` | any | — | a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi... |
 | `cvdp_complete_extract` | any | — | a UNIFIED CVDP complete-extraction layer. |
 | `cvdp_context_interface_recover` | any | — | recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3). |
-| `cvdp_solve_pipeline` | any | — | the CVDP TIER-1→3 AUTHORING-GATE PIPELINE. |
-| `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m... |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
 | `d3_manifest_declaration_parity_check` | any | — | Every declared `required_outputs` path must be covered by the d3 manifest. |
 | `dali_protocol_synth` | any | v0.1.84 | DALI-class protocol synth helper. |
@@ -292,6 +291,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation. |
 | `design_input_digest` | any | — | a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed". |
 | `design_one_shot_runner` | any | Wave 45 | the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>). |
+| `deterministic_emit_chain` | any | — | try every deterministic RTL emitter, in order. |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
 | `device_response_no_br_check` | any | — | deterministic compliance check derived from <chip-class> v042 fresh-agent debug. |
 | `dff_edge_synth` | any | — | deterministic SOLVER for the D-flip-flop / edge-detect / edge-capture family. |
@@ -331,6 +331,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `eco_loop_audit` | any | — | Audit the post-route timing repair pass's log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
 | `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
+| `eda_image_preflight` | any | — | verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536). |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
 | `edp_protocol_synth` | any | v0.1.95 | VESA Embedded DisplayPort (eDP) protocol synth helper. |
@@ -436,6 +437,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fsm_state_coverage_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `fsm_table_rtl_gen` | any | v0.1.6 | deterministic FSM-table → synthesizable RTL generator. |
 | `fsm_transition_completeness_check` | any | v0.3.21 | v0.3.21 (ORGANIC #522). |
+| `fsm_vector_rtl_emit` | any | — | supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline. |
 | `full_moore_fsm_synth` | any | — | deterministic SOLVER for a full Moore FSM. |
 | `full_suite_run_check` | any | — | full-suite (not subset) pytest gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3). |
 | `function_void_with_output_check` | any | Wave 29 | Wave 29 (v0.119.61) gate. |
@@ -886,8 +888,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
 | `prompt_example_selftest` | any | — | RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL. |
+| `prose_interface_bridge` | any | — | try every prose-interface reader, in order. |
+| `prose_interface_bridge_md` | any | — | read a MARKDOWN-table interface block. |
+| `prose_interface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base prose_port_block_read does not yet read. |
+| `prose_interface_table_read` | any | — | read an interface stated as a MARKDOWN TABLE. |
 | `prose_polarity_census` | any | — | how many prose extractors do NOT consult polarity, counted with a predicate sharper than the gate's, and never blocking on it. |
 | `prose_polarity_consulted_check` | any | — | A prose extractor that never asks whether the sentence DENIES the value. |
+| `prose_port_block_read` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output... |
 | `protocol_delimiter_consistency_check` | any | v0.99 | Verify the RTL FSM that validates end-of-frame fires on the spec's canonical trailing delimiter, not a proxy signal (idle_long, timeout, ... |
 | `protocol_detector_lib` | any | v0.1.95 | Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95). |
 | `protocol_detector_no_misfire_matrix` | any | v0.2.13 | Bidirectional protocol-detector no-misfire + gold cross-contamination matrix. |
@@ -959,6 +966,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rsp_example_otp_consistency_check` | any | — | L3 response examples must match L11 OTP content. |
 | `rtl_bug_report_schema_check` | any | v0.54 | v0.54 plugin gate |
 | `rtl_hygiene_lint` | any | v0.1.10 | General-purpose RTL hygiene checker. |
+| `rtl_interface_recover` | any | — | recover a module's PORT INTERFACE from RTL text. |
 | `rtl_precheck_gate` | any | v0.66 | aggregate every RTL static auditor into a single pass/fail gate. Intended to be called BEFORE any SOF/GDS burn so a developer can't ship ... |
 | `rtl_provenance` | any | — | provenance ledger for ``phase2/stage1/rtl/``. |
 | `rtl_response_byte_oracle_check` | any | — | P0.2 deterministic gate |
@@ -967,9 +975,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
 | `rtl_transitive_cone` | any | — | Deterministic transitive-cone reduction for a staged RTL source tree. |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
-| `rtllm_iface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read. |
-| `rtllm_port_bridge` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output... |
-| `rtllm_tier_pipeline` | any | — | the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE. |
+| `run_entry_manifest` | any | — | record WHICH STEP a run entered the flow at. |
 | `run_output_completeness_check` | any | — | the EMPTY / MISSING / STUB deliverable gate. |
 | `run_status` | any | — | ORGANIC #599. Universal runner watchdog. |
 | `rx_byte_assembler_ibt_flush_recovery_check` | any | Wave 15 | When a single-bit drop occurs (RX glitch on a half-duplex single-wire |
@@ -1035,6 +1041,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `silent_decline_audit` | any | — | find remedy decisions whose REFUSAL is silent (#313 §6). |
+| `sim_hang_detect` | any | — | emit-side hang-predict heuristics (v1.2.45→v1.2.46). |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the "two parallel bus drivers" anti-pattern in half-duplex protocol ICs. |
 | `single_testpath_guard` | any | v0.2.24 | pytest.ini must declare ONE test tree. |
 | `size_policy_drift_check` | any | — | one policy about layout artefacts, stated once. |
@@ -1060,6 +1067,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_calibration_extract` | any | — | PROGRAM-FIRST structural extractor for the L13 LAB CALIBRATION / TRIM facet of a design doc / prompt. |
 | `spec_complete_extract` | any | — | the GENERAL (benchmark-agnostic) complete-spec extraction + completeness engine. |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
+| `spec_conformance_gate` | any | — | does this RTL conform to the spec we extracted? |
 | `spec_context_sibling_detect` | any | — | PROGRAM-FIRST context-sibling collision advisory. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
 | `spec_declaration_emit` | any | — | the designer's FREE choices, declared not inferred. |
@@ -1132,11 +1140,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tapeout_precheck` | any | — | step 37.5ic's ONE gate over TWO independent arms. |
 | `tapeout_readiness_check` | any | — | the EXTERNAL refusal interface, pointed at a shuttle that still exists. |
 | `tapeout_signoff_check` | any | — | Tapeout signoff check — wrapper for signoff_audit --mode tapeout. |
+| `task_nature_route` | any | — | WHICH ENTRY does an IC-design task come in at? |
 | `tb_timing_extremes_check` | any | — | LL-6. |
+| `tb_toplevel_alias` | any | — | prompt-driven harness-TOPLEVEL alias. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run. |
 | `tb_vcs_only_construct_remediate` | any | — | ORGANIC #717 |
 | `testbench_exists_check` | any | — | Deterministic testbench existence and coverage checker. |
 | `testbench_gen` | any | — | emit unit testbenches from L10 test_cases. |
+| `testbench_verdict` | any | — | read a simulator run and say what it MEANT. |
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
 | `tester_verdict_frame_decode` | any | — | Chip-agnostic, tester-agnostic post-processor that decodes raw tester |
 | `thermal_screen_check` | any | — | power-density / junction-temperature screen. |
@@ -1190,13 +1201,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables. |
 | `vendored_attribution_retained_check` | any | — | third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043. |
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C). |
+| `verify_fail_triage` | any | — | mechanical CVDP fail-mode classifier (ORGANIC #534). |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile. |
 | `verilog_selfcheck_lint` | any | — | PROGRAM-FIRST verilator -Wall self-lint gate. |
 | `verilog_width_resolve` | any | — | SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de... |
-| `verilogeval_human_tier1_solvers` | any | — | supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline. |
-| `verilogeval_human_tier_pipeline` | any | — | the VerilogEval-HUMAN (code-complete, ICCAD-2023) TIER-1→5 CONVERGE PIPELINE. |
-| `verilogeval_tier_pipeline` | any | — | the VerilogEval-v2 (spec-to-rtl) TIER-1→5 CLASSIFY + CONVERGE pipeline. |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3). |
 | `vibe_ic_entry_guard` | any | — | enforce single entry point for benchmark + IC runs. |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
@@ -1276,7 +1285,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1195 programs)
+### `any` (1204 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1387,6 +1396,7 @@ _(no programs in this group)_
 - `benchmark_evidence_publish` — stage a CONVERGED (IC × PDK) run's evidence into the canonical benchmark-data layout (the PUBLISH half of the program-first publish contr...
 - `benchmark_evidence_structure_check` — CI gate for published benchmark evidence folders (the STRUCTURE half of the program-first publish contract).
 - `benchmark_golden_capture` — record a HOST-VERIFIED, vibe-ic-AUTHORED solution as OUR OWN golden, kept SEPARATE from the downloaded `reference_solution`, and tagged w...
+- `benchmark_io_adapter` — the ONLY place a benchmark's file format may appear.  _[v0.1.25]_
 - `benchmark_result_md_lint` — presence-check linter for the mandatory § 6 RESULT.md section checklist.
 - `benchmark_run_manifest` — a scored benchmark run must leave behind the NAME SET, not only the count. vibe-ic#635.
 - `benchmark_score_cwd_guard` — assert the host scorer is invoked FROM the design directory before it runs.
@@ -1512,8 +1522,6 @@ _(no programs in this group)_
 - `cvdp_atomic_bridge` — a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi...
 - `cvdp_complete_extract` — a UNIFIED CVDP complete-extraction layer.
 - `cvdp_context_interface_recover` — recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3).
-- `cvdp_solve_pipeline` — the CVDP TIER-1→3 AUTHORING-GATE PIPELINE.
-- `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m...
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
 - `d3_manifest_declaration_parity_check` — Every declared `required_outputs` path must be covered by the d3 manifest.
 - `dali_protocol_synth` — DALI-class protocol synth helper.  _[v0.1.84]_
@@ -1541,6 +1549,7 @@ _(no programs in this group)_
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation.
 - `design_input_digest` — a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed".
 - `design_one_shot_runner` — the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
+- `deterministic_emit_chain` — try every deterministic RTL emitter, in order.
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_
 - `device_response_no_br_check` — deterministic compliance check derived from <chip-class> v042 fresh-agent debug.
 - `dff_edge_synth` — deterministic SOLVER for the D-flip-flop / edge-detect / edge-capture family.
@@ -1579,6 +1588,7 @@ _(no programs in this group)_
 - `eco_loop_audit` — Audit the post-route timing repair pass's log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
 - `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
+- `eda_image_preflight` — verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536).
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
 - `edp_protocol_synth` — VESA Embedded DisplayPort (eDP) protocol synth helper.  _[v0.1.95]_
@@ -1684,6 +1694,7 @@ _(no programs in this group)_
 - `fsm_state_coverage_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `fsm_table_rtl_gen` — deterministic FSM-table → synthesizable RTL generator.  _[v0.1.6]_
 - `fsm_transition_completeness_check` — v0.3.21 (ORGANIC #522).  _[v0.3.21]_
+- `fsm_vector_rtl_emit` — supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline.
 - `full_moore_fsm_synth` — deterministic SOLVER for a full Moore FSM.
 - `full_suite_run_check` — full-suite (not subset) pytest gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
 - `function_void_with_output_check` — Wave 29 (v0.119.61) gate.  _[Wave 29]_
@@ -2133,8 +2144,13 @@ _(no programs in this group)_
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
 - `prompt_example_selftest` — RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL.
+- `prose_interface_bridge` — try every prose-interface reader, in order.
+- `prose_interface_bridge_md` — read a MARKDOWN-table interface block.
+- `prose_interface_recover` — a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base prose_port_block_read does not yet read.
+- `prose_interface_table_read` — read an interface stated as a MARKDOWN TABLE.
 - `prose_polarity_census` — how many prose extractors do NOT consult polarity, counted with a predicate sharper than the gate's, and never blocking on it.
 - `prose_polarity_consulted_check` — A prose extractor that never asks whether the sentence DENIES the value.
+- `prose_port_block_read` — a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output...
 - `protocol_delimiter_consistency_check` — Verify the RTL FSM that validates end-of-frame fires on the spec's canonical trailing delimiter, not a proxy signal (idle_long, timeout, ...  _[v0.99]_
 - `protocol_detector_lib` — Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95).  _[v0.1.95]_
 - `protocol_detector_no_misfire_matrix` — Bidirectional protocol-detector no-misfire + gold cross-contamination matrix.  _[v0.2.13]_
@@ -2205,6 +2221,7 @@ _(no programs in this group)_
 - `rsp_example_otp_consistency_check` — L3 response examples must match L11 OTP content.
 - `rtl_bug_report_schema_check` — v0.54 plugin gate  _[v0.54]_
 - `rtl_hygiene_lint` — General-purpose RTL hygiene checker.  _[v0.1.10]_
+- `rtl_interface_recover` — recover a module's PORT INTERFACE from RTL text.
 - `rtl_precheck_gate` — aggregate every RTL static auditor into a single pass/fail gate. Intended to be called BEFORE any SOF/GDS burn so a developer can't ship ...  _[v0.66]_
 - `rtl_provenance` — provenance ledger for ``phase2/stage1/rtl/``.
 - `rtl_response_byte_oracle_check` — P0.2 deterministic gate
@@ -2213,9 +2230,7 @@ _(no programs in this group)_
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
 - `rtl_transitive_cone` — Deterministic transitive-cone reduction for a staged RTL source tree.
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
-- `rtllm_iface_recover` — a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read.
-- `rtllm_port_bridge` — a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output...
-- `rtllm_tier_pipeline` — the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE.
+- `run_entry_manifest` — record WHICH STEP a run entered the flow at.
 - `run_output_completeness_check` — the EMPTY / MISSING / STUB deliverable gate.
 - `run_status` — ORGANIC #599. Universal runner watchdog.
 - `rx_byte_assembler_ibt_flush_recovery_check` — When a single-bit drop occurs (RX glitch on a half-duplex single-wire  _[Wave 15]_
@@ -2280,6 +2295,7 @@ _(no programs in this group)_
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `silent_decline_audit` — find remedy decisions whose REFUSAL is silent (#313 §6).
+- `sim_hang_detect` — emit-side hang-predict heuristics (v1.2.45→v1.2.46).
 - `single_bus_driver_check` — structural-RTL gate that catches the "two parallel bus drivers" anti-pattern in half-duplex protocol ICs.  _[Wave 10]_
 - `single_testpath_guard` — pytest.ini must declare ONE test tree.  _[v0.2.24]_
 - `size_policy_drift_check` — one policy about layout artefacts, stated once.
@@ -2305,6 +2321,7 @@ _(no programs in this group)_
 - `spec_calibration_extract` — PROGRAM-FIRST structural extractor for the L13 LAB CALIBRATION / TRIM facet of a design doc / prompt.
 - `spec_complete_extract` — the GENERAL (benchmark-agnostic) complete-spec extraction + completeness engine.
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
+- `spec_conformance_gate` — does this RTL conform to the spec we extracted?
 - `spec_context_sibling_detect` — PROGRAM-FIRST context-sibling collision advisory.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
 - `spec_declaration_emit` — the designer's FREE choices, declared not inferred.
@@ -2377,11 +2394,14 @@ _(no programs in this group)_
 - `tapeout_precheck` — step 37.5ic's ONE gate over TWO independent arms.
 - `tapeout_readiness_check` — the EXTERNAL refusal interface, pointed at a shuttle that still exists.
 - `tapeout_signoff_check` — Tapeout signoff check — wrapper for signoff_audit --mode tapeout.
+- `task_nature_route` — WHICH ENTRY does an IC-design task come in at?
 - `tb_timing_extremes_check` — LL-6.
+- `tb_toplevel_alias` — prompt-driven harness-TOPLEVEL alias.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run.
 - `tb_vcs_only_construct_remediate` — ORGANIC #717
 - `testbench_exists_check` — Deterministic testbench existence and coverage checker.
 - `testbench_gen` — emit unit testbenches from L10 test_cases.
+- `testbench_verdict` — read a simulator run and say what it MEANT.
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
 - `tester_verdict_frame_decode` — Chip-agnostic, tester-agnostic post-processor that decodes raw tester
 - `thermal_screen_check` — power-density / junction-temperature screen.
@@ -2435,13 +2455,11 @@ _(no programs in this group)_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables.  _[v0.119.30]_
 - `vendored_attribution_retained_check` — third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043.
 - `verdict_token_propagation_check` — META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C).
+- `verify_fail_triage` — mechanical CVDP fail-mode classifier (ORGANIC #534).
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile.
 - `verilog_selfcheck_lint` — PROGRAM-FIRST verilator -Wall self-lint gate.
 - `verilog_width_resolve` — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de...
-- `verilogeval_human_tier1_solvers` — supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline.
-- `verilogeval_human_tier_pipeline` — the VerilogEval-HUMAN (code-complete, ICCAD-2023) TIER-1→5 CONVERGE PIPELINE.
-- `verilogeval_tier_pipeline` — the VerilogEval-v2 (spec-to-rtl) TIER-1→5 CLASSIFY + CONVERGE pipeline.
 - `version_bump_monotonic_check` — strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
 - `vibe_ic_entry_guard` — enforce single entry point for benchmark + IC runs.
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.

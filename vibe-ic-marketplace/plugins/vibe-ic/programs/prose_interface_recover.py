@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""rtllm_iface_recover.py — a GENERAL interface recoverer for the RTLLM prose
-header DIALECTS that the base rtllm_port_bridge does not yet read.
+"""prose_interface_recover.py — a GENERAL interface recoverer for the RTLLM prose
+header DIALECTS that the base prose_port_block_read does not yet read.
 
-rtllm_port_bridge.parse_rtllm_ports reads the canonical RTLLM form:
+prose_port_block_read.parse_rtllm_ports reads the canonical RTLLM form:
 
     Input ports:
         a [7:0]: 8-bit ...        <- integer-literal range OR a "N-bit" desc token
@@ -99,7 +99,7 @@ def _width_from_range(rng: Optional[str], desc: str):
             # declaration's own width. A width token in the trailing description
             # ("16-bit output ... of two 8-bit inputs") is PROSE that may mention
             # OTHER widths (the operands), so it is NOT a contradiction that drops
-            # the port. We trust the range. (The base rtllm_port_bridge is stricter
+            # the port. We trust the range. (The base prose_port_block_read is stricter
             # and drops on range-vs-desc disagreement; this recoverer is the
             # CONVERGE path that recovers the port the range unambiguously gives.)
             return abs(int(mi.group(1)) - int(mi.group(2))) + 1

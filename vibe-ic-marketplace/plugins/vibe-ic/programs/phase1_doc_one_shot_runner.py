@@ -58407,6 +58407,171 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
     if changed:
         _ensure_bool_flags(l1)
         _stamp.dump(_pl.generated_docs_dir(project) / 'L1_DATASHEET.json', l1)
+    # (2.5) SHIPPED-RTL header → L9 ports (2026-08-25). When the design ships
+    # its own RTL under input/, the port header IS the interface — a far
+    # higher-confidence source than prose bullets, and it needs no prose at all.
+    # Four of the five task natures (completion, functional-modification,
+    # optimization, debug) are DEFINED by operating on existing RTL, and before
+    # this hook every one of them reached L9 with `top_ports=[]` because the
+    # prose→L1.pin_table→L9 chain starts empty for a prompt that describes a
+    # CHANGE rather than a pinout. Empty top_ports then SKIPs every testbench
+    # generator downstream (full_stack_tb_gen / l10_unit_tb_gen /
+    # professional_tb_gen), so the run produces no way to verify anything.
+    #
+    # Header-only, per the interface-is-spec boundary: direction / width / name,
+    # never the body. Zero-regression: fires ONLY when L9 has no ports already.
+    # Fires whether or not L9 already carries ports. When it does, this ENRICHES
+    # them rather than standing aside: prose bullets name ports but routinely
+    # carry no width and sometimes no direction, while the shipped header
+    # carries both exactly. Measured 2026-08-25 on a functional-modification
+    # design — prose found all 5 port NAMES and left every width None with one
+    # direction 'unknown', the shipped RTL declared [63:0]/[7:0]/[65:0] and
+    # every direction, and `l1_pin_bus_width_actionable_check` then FAILED the
+    # whole of Phase 1 with "3/3 bus-confirmed pin(s) carry no width a
+    # conforming phase 2 could emit a port declaration from". Deferring to
+    # whoever wrote first is wrong when one source is strictly better evidence.
+    if isinstance(l9, dict):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import rtl_interface_recover as _rir
+            _in = project / "input"
+            _roots = [_in / "rtl", _in / "vendor_rtl"]
+            _ds = _in / "design_src"
+            if _ds.is_dir():
+                _roots.extend(d for d in sorted(_ds.rglob("rtl")) if d.is_dir())
+            _files = [f for r in _roots if r.is_dir()
+                      for f in sorted(r.rglob("*"))
+                      if f.is_file() and f.suffix in (".v", ".sv")]
+            if _files:
+                _tgt = (l9.get("top_module") or l1.get("ic_name") or None)
+                _rec = _rir.recover_from_files(_files, _tgt)
+                _ports = _rec.get("top_ports") or []
+                # The SHIPPED RTL is ground truth for which modules exist. A
+                # declared target that is absent from it is a placeholder, not
+                # a veto: prose extraction defaults `top_module` to `chip_top`
+                # when it finds no name, and asking the recoverer for
+                # `chip_top` in an RTL that declares `encoder_64b66b` returns
+                # nothing at all (measured 2026-08-25: ports stayed 0 for a
+                # design whose header was right there). Retry unpinned so the
+                # first module actually declared is used, and record that the
+                # name came from the RTL rather than from the prose.
+                if not _ports and _tgt:
+                    _rec = _rir.recover_from_files(_files, None)
+                    _ports = _rec.get("top_ports") or []
+                    if _ports and _rec.get("top_module"):
+                        l9["top_module"] = _rec["top_module"]
+                        l9.setdefault("top_module_source", "shipped_rtl_header")
+                if _ports:
+                    _rows = [{"name": q.get("name"), "mode": q.get("dir"),
+                              "direction": q.get("dir"), "width": q.get("width"),
+                              "io": "see design", "io_standard": None,
+                              "evidence": "shipped RTL port header",
+                              "extraction_strategy": "shipped_rtl_header"}
+                             for q in _ports if q.get("name")]
+                    _existing = (l9.get("top_ports") or l9.get("ports")
+                                 or l9.get("top_module_pins") or [])
+                    if _existing:
+                        # ENRICH: keep what prose found, fill only what it left
+                        # blank, and append a port prose missed entirely — the
+                        # header is the interface, so a port only IT declares is
+                        # real. A value prose actually supplied is never
+                        # overwritten; this adds evidence, it does not arbitrate.
+                        _by = {str(q.get("name")): q for q in _rows}
+                        _seen = set()
+                        for e in _existing:
+                            if not isinstance(e, dict):
+                                continue
+                            _n = str(e.get("name") or "")
+                            _seen.add(_n)
+                            _src = _by.get(_n)
+                            if not _src:
+                                continue
+                            _filled = []
+                            if e.get("width") in (None, "") and \
+                                    _src.get("width") is not None:
+                                e["width"] = _src["width"]; _filled.append("width")
+                            _blank = ("", "none", "unknown")
+                            for _k in ("mode", "direction"):
+                                if (str(e.get(_k) or "").lower() in _blank
+                                        and _src.get(_k)):
+                                    e[_k] = _src[_k]
+                                    _filled.append(_k)
+                            if _filled:
+                                e["evidence"] = (str(e.get("evidence") or "")
+                                                 + " | filled from shipped RTL "
+                                                 + "header: " + ",".join(_filled))
+                        _existing = list(_existing) + [
+                            r for r in _rows if str(r.get("name")) not in _seen]
+                        _rows = _existing
+                    l9["top_ports"] = _rows
+                    l9["ports"] = _rows
+                    l9["top_module_pins"] = _rows
+                    if not l9.get("top_module") and _rec.get("top_module"):
+                        l9["top_module"] = _rec["top_module"]
+                    if "no_integration_in_input" in l9:
+                        l9["no_integration_in_input"] = False
+                    _es = l9.setdefault("extraction_strategy", {})
+                    if isinstance(_es, dict):
+                        _es["top_ports"] = "shipped_rtl_header_2026_08_25"
+                    # L1.pin_table gets the SAME enrichment, not the same
+                    # defer-to-whoever-wrote-first. `l1_pin_bus_width_actionable
+                    # _check` reads L1, so populating only L9 leaves the gate
+                    # failing on "N bus-confirmed pin(s) carry no width" while
+                    # the widths sit resolved one document away. L1 spells modes
+                    # short (`in`/`out`), so the direction is mapped, not copied.
+                    _M = {"input": "in", "output": "out", "inout": "inout"}
+                    _pt = l1.get("pin_table") or []
+                    if not _pt:
+                        l1["pin_table"] = [
+                            dict(r, mode=_M.get(str(r.get("mode")), r.get("mode")))
+                            for r in _rows]
+                    else:
+                        _by = {str(r.get("name")): r for r in _rows}
+                        _seen = set()
+                        for _e in _pt:
+                            if not isinstance(_e, dict):
+                                continue
+                            _n = str(_e.get("name") or "")
+                            _seen.add(_n)
+                            _src = _by.get(_n)
+                            if not _src:
+                                continue
+                            if _e.get("width") in (None, "") and \
+                                    _src.get("width") is not None:
+                                _e["width"] = _src["width"]
+                            _m = str(_e.get("mode") or "").lower()
+                            if _m in ("", "none", "unknown") and _src.get("mode"):
+                                _e["mode"] = _M.get(str(_src["mode"]),
+                                                    _src["mode"])
+                        l1["pin_table"] = list(_pt) + [
+                            dict(r, mode=_M.get(str(r.get("mode")), r.get("mode")))
+                            for r in _rows if str(r.get("name")) not in _seen]
+                    l1["no_pin_table_in_input"] = False
+                    _ensure_bool_flags(l1)
+                    _stamp.dump(_pl.generated_docs_dir(project)
+                                / 'L1_DATASHEET.json', l1)
+                    _stamp.dump(_pl.generated_docs_dir(project)
+                                / 'L9_INTEGRATION_SPEC.json', l9)
+                else:
+                    # RTL was present and still yielded no ports — say so.
+                    # Silence here is indistinguishable from "no RTL shipped".
+                    _es = l9.setdefault("extraction_strategy", {})
+                    if isinstance(_es, dict):
+                        _es["top_ports_rtl_recovery"] = (
+                            f"no ports recovered from {len(_files)} shipped "
+                            f"RTL file(s); target={_tgt!r} "
+                            f"source={_rec.get('source')!r}")
+        except Exception as _exc:
+            # Never let interface recovery break doc emission — the prose path
+            # below still runs. But RECORD the failure: a swallowed exception
+            # here looks identical to "the design shipped no RTL", and an
+            # operator reading empty top_ports would blame the wrong thing.
+            if isinstance(l9, dict):
+                _es = l9.setdefault("extraction_strategy", {})
+                if isinstance(_es, dict):
+                    _es["top_ports_rtl_recovery_error"] = (
+                        f"{type(_exc).__name__}: {_exc}"[:300])
+
     # (3) REVERSE mirror L1 → L9 (ORGANIC-20260705). When L9's port slots are
     # ALL empty but L1 now carries real ports, promote them into L9 so the
     # prompt-only design's L9.top_ports is no longer empty. Zero-regression: it

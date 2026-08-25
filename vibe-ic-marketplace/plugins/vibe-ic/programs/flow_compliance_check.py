@@ -9556,6 +9556,48 @@ def _gate_json_targets(step: Dict[str, Any]) -> Set[str]:
     return targets
 
 
+def _outputs_read_by_in_scope_steps(sid, my_outputs, manifest):
+    """Which of `my_outputs` does an IN-SCOPE step declare it READS?
+
+    In-scope = not itself declared upstream of the run's entry. Those are the
+    only consumers whose starvation this run could actually cause, and they are
+    the ones the anti-laundering rule protects: an output nobody in scope reads
+    cannot starve anything, an output someone in scope reads must be present.
+
+    Loads the flow itself — `check_step` receives one step, not the flow — and
+    fails CLOSED: if the flow cannot be read, every output is treated as
+    consumed, so an unreadable flow refuses to excuse rather than excusing
+    everything.
+    """
+    try:
+        import yaml as _y                          # noqa: PLC0415
+        flow = _y.safe_load(DEFAULT_FLOW_DEF.read_text(errors="replace"))
+        steps = (flow or {}).get("steps") or []
+        if not steps:
+            return list(my_outputs)
+    except Exception:
+        return list(my_outputs)
+    upstream = {str(u.get("id")) for u in (manifest.get("upstream_steps") or [])
+                if isinstance(u, dict)}
+    wanted = set()
+    for st in steps:
+        if not isinstance(st, dict):
+            continue
+        if str(st.get("id")) in upstream:
+            continue                       # also out of scope — not a consumer
+        for ri in (st.get("required_inputs") or []):
+            if not isinstance(ri, dict):
+                continue
+            if str(ri.get("from")) != str(sid):
+                continue
+            pth = ri.get("path")
+            if pth:
+                wanted.add(str(pth))
+            elif str(ri.get("outputs")) == "all":
+                wanted.update(str(o) for o in my_outputs)
+    return [o for o in my_outputs if o in wanted]
+
+
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False,
                strict_audit_evidence: bool = False) -> StepResult:
@@ -10425,6 +10467,49 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # already fallen a tier behind: `INCOMPLETE` (#599) is a done-claim by the
     # same arithmetic and was not demoted, so a step that declared an output,
     # did not produce it, and reported INCOMPLETE kept its tier.
+    # ── OUT-OF-SCOPE-BY-ENTRY (2026-08-25) ────────────────────────────────
+    # Placed HERE — after the waiver branch, immediately before the all-absent
+    # MISSING demotion — so it can excuse an un-run upstream step and can never
+    # override a real FAIL, which is decided above and never reaches this line.
+    #
+    # A run may declare via --entry-step, BEFORE dispatching anything, that it
+    # entered the flow partway through. Without a word for that, the upstream
+    # steps report MISSING and the report reads exactly like a Phase 1 that ran
+    # and broke — measured on a tree holding only phase2/stage1/sim/:
+    #   D1 -> MISSING   (expected 19 files)
+    #   1  -> MISSING   (expected phase2/stage1/rtl/*)
+    #
+    # THE LAUNDERING RISK IS THE WHOLE DESIGN PROBLEM. The manifest is written
+    # by the run being judged, so unconstrained this flag turns MISSING into
+    # PASS on demand — the run grading its own scope. `run_entry_manifest
+    # .excusable` grants it only when ALL of:
+    #   1. the step is upstream of the DECLARED entry,
+    #   2. every output of it that an IN-SCOPE step declares it reads is
+    #      PRESENT on disk (the anti-laundering rule: the artefacts must still
+    #      BE there; the claim is only that this run did not produce them), and
+    #   3. it declares no hard sign-off output — DRC/LVS/ERC/STA can never be
+    #      excused by "we started late".
+    if _T.is_done_claim(result.status) and missing_entries:
+        try:
+            import run_entry_manifest as _rem      # noqa: PLC0415
+            _man = _rem.read(project)
+        except ImportError:
+            _man = None
+        if _man is not None:
+            _my_outputs = [str(o) for o in (step.get("required_outputs") or [])
+                           if isinstance(o, (str, bytes))]
+            _consumed = _outputs_read_by_in_scope_steps(sid, _my_outputs, _man)
+            _verdict = _rem.excusable(_man, sid, _my_outputs,
+                                      _consumed, project)
+            if _verdict.get("excusable"):
+                result.status = "OUT-OF-SCOPE-BY-ENTRY"
+                result.reasons.append(
+                    f"out of scope by declared entry: {_verdict['reason']}")
+                return result
+            result.reasons.append(
+                "entry manifest present but does NOT excuse this step: "
+                + str(_verdict.get("reason")))
+
     if _T.is_done_claim(result.status) and missing_entries:
         result.status = "MISSING"
         _by_record = [p for p in missing_entries

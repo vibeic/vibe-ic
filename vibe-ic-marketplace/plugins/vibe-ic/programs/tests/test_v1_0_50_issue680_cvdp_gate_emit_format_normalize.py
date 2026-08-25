@@ -119,6 +119,10 @@ def _run_main(tmp_path, recs, prompts=None):
             json.dumps({"id": k, "prompt": v}) + "\n"
             for k, v in prompts.items()))
         argv += ["--prompts", str(p)]
+    if not any(a in argv for a in ("--prompts", "--dataset")):
+        # Deliberately unguarded fixture; since 2026-08-25 that is
+        # SAID with the flag, not implied by omitting the others.
+        argv += ["--without-spec-guards"]
     G.main(argv)
     emitted = {}
     if out.is_file():
@@ -249,4 +253,4 @@ def test_NOLEAK_json_dict_is_multifile_signal():
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))
+    raise SystemExit(pytest.main([__file__, "-q", "--without-spec-guards"]))

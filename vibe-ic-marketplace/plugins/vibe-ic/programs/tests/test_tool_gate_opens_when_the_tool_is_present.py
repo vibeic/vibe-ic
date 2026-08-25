@@ -323,6 +323,7 @@ def _probe(modname: str, const: str, fake, *, pin_stage2: bool = False):
 #: Gates whose discriminator IS `shutil.which`. Each must be shut when `which`
 #: finds nothing and open when it reports a path. Measured, not hand-listed.
 WHICH_GATES = (
+    ("test_arith_ext_synth", "_HAVE_TOOLS"),
     ("test_bcd_synth", "_HAVE_SIM"),
     ("test_cvdp_gate", "_HAS_IVERILOG"),
     ("test_cvdp_gate", "_HAS_YOSYS"),
@@ -342,6 +343,7 @@ WHICH_GATES = (
     ("test_issue716_intended_transparent_latch_emit", "_HAS_VERILATOR"),
     ("test_kmap_truth_table_oracle_check", "_HAS_EDA"),
     ("test_mbist_wrapper_gen", "_HAS_IVERILOG"),
+    ("test_moore_arrow_fsm_synth", "_HAVE_TOOLS"),
     ("test_mux_compare_synth", "_HAS_IVERILOG"),
     ("test_organic_20260722_chip_top_power_pin_connect_guard", "_HAS_IVERILOG"),
     # The one gate the population scan found DEFINED and this register did not
@@ -357,7 +359,6 @@ WHICH_GATES = (
     ("test_round17_latency_inclusive_origin", "_HAVE_IVERILOG"),
     ("test_rtl_transitive_cone", "_HAS_IVERILOG"),
     ("test_rtl_transitive_cone", "_HAS_VVP"),
-    ("test_rtllm_tier_pipeline", "_HAVE_IV"),
     ("test_serial_parallel_mul_synth", "_HAVE_IVERILOG"),
     ("test_shapec_emit_blocking_rules", "_HAS_IVERILOG"),
     ("test_table_lut_synth", "_HAVE_SIM"),
@@ -420,9 +421,7 @@ WHICH_GATES = (
     ("test_v1_3_79_tbgen_dut_output_clk_reset", "_HAS_IVERILOG"),
     ("test_verilator_timing_fallback_check", "_HAVE_VERILATOR"),
     ("test_verilog_selfcheck_lint", "_HAVE_VERILATOR"),
-    ("test_verilogeval_human_tier1_solvers", "_HAVE_IVERILOG"),
-    ("test_verilogeval_human_tier_pipeline", "_HAVE_IVERILOG"),
-    ("test_verilogeval_tier_pipeline", "_HAVE_IVERILOG"),
+    ("test_fsm_vector_rtl_emit", "_HAVE_IVERILOG"),
     ("test_waveform_table_conformance", "_HAVE_IVERILOG"),
     ("test_worked_example_sequence_oracle_check", "_HAS_IVERILOG"),
 )
@@ -434,7 +433,6 @@ NOT_WHICH_GATES = (
     ("test_dff_primitive_synth", "_HAVE_DATASET", "corpus dir"),
     ("test_general_synth", "_HAVE_DS", "corpus dir"),
     ("test_l4_systemrdl_export", "_HAVE_RDL", "package import"),
-    ("test_rtllm_tier_pipeline", "_HAVE_DS", "corpus dir"),
     ("test_v1_0_78_issue729_ppa_area_threshold", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_80_issue739_ppa_unreachable_target_escape", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_83_issue756_ppa_disjunctive_clauses", "_HAVE_CONTAINER", "docker probe"),
@@ -442,9 +440,7 @@ NOT_WHICH_GATES = (
     ("test_v1_0_85_issue769_ppa_generic_meets_target", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_1_76_encoder_decoder", "_HAVE_DS", "corpus dir"),
     ("test_v1_1_76_waveform_ext", "_HAVE_DS", "corpus dir"),
-    ("test_verilogeval_human_tier1_solvers", "_HAVE_DATASET", "corpus dir"),
-    ("test_verilogeval_human_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
-    ("test_verilogeval_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
+    ("test_fsm_vector_rtl_emit", "_HAVE_DATASET", "corpus dir"),
 )
 
 _NOT_WHICH_PAIRS = tuple((m, c) for m, c, _ in NOT_WHICH_GATES)
