@@ -112,19 +112,33 @@ def _check_command(cmd: str, plugin_root: Path
     if verb not in _AUDITED_VERBS:
         return None
 
-    # Plugin documents two CWDs in practice: examples invoked from
-    # the plugin tree (relative to plugin_root) and examples invoked
-    # from the marketplace repo root (relative to plugin_root.parent
-    # .parent.parent — `marketplace/plugins/<plugin>`-> repo root).
-    # The canonical batch runner lives at repo-root `tools/ci/`, so
-    # accept either location.
+    # Plugin documents several CWDs in practice: examples invoked from
+    # the plugin tree (relative to plugin_root), from the marketplace repo
+    # root (`marketplace/plugins/<plugin>` -> repo root; the canonical batch
+    # runner lives at repo-root `tools/ci/`), and — the commonest of all —
+    # from INSIDE a tool directory, because that is where a person stands
+    # when running one tool after another:
+    #
+    #     $ python3 ppa_head_to_head_check.py REC.json
+    #     $ python3 _ppa/backends/openroad.py --log … --json …
+    #
+    # Both of those are honest transcripts of a command that ran; resolving
+    # them only against the two roots reported them MISSING_SCRIPT and asked
+    # an author to rewrite a line to something they did not type. A capture
+    # document quoting what it actually ran is the behaviour this gate exists
+    # to encourage, so the resolver — not the document — is what was wrong.
     repo_root = plugin_root.parent.parent.parent
+
+    #: Directories a documented command is plausibly run FROM. Order is
+    #: irrelevant: this is existence, not precedence.
+    _CWDS = (plugin_root, repo_root,
+             plugin_root / "programs", plugin_root / "benchmark",
+             repo_root / "tools", repo_root / "tools" / "ci")
 
     def _exists_at_either(target: str) -> bool:
         if target.startswith("./"):
             target = target[2:]
-        return ((plugin_root / target).is_file()
-                or (repo_root / target).is_file())
+        return any((base / target).is_file() for base in _CWDS)
 
     if verb in ("bash", "sh"):
         if len(toks) < 2:

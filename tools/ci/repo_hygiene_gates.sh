@@ -1453,6 +1453,25 @@ run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
 run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_artifact_hygiene_check.py
 
+# The six anti-fabrication gates in `tools/ci/run_plugin_self_audit.sh`, re-homed.
+# They were wired to `.github/workflows/`, both of which are now `.disabled`, and
+# nothing re-homed them — every remaining reference to that script in the tree is
+# a comment or a docstring. `checker_execution_wiring_audit` scored all six as
+# WIRED anyway, because it credited the script's `GATES=(...)` array as an entry
+# path without asking whether anything runs the script; its own comment recorded
+# that decision. So the audit that answers "did we forget to plug something in"
+# was answering it wrong by six, in the direction of complacency. Both halves are
+# fixed together: that audit now requires a dispatcher to be executed by
+# something, and this line is what executes this one.
+#
+# BLOCKING, and green on this tree: all 6 gates PASS as of this change. Two did
+# not before it — `changelog_metric_reproducibility_check` FAILed six README
+# percentages that each sit beside the fraction they are computed from, and
+# `changelog_command_reproducibility_check` FAILed four capture-document commands
+# quoted exactly as they were run, from inside `programs/`. Both were defects in
+# the CHECKERS, repaired in the same change; no published number was edited.
+run "plugin self-audit"                 "$ROOT" bash "$ROOT/tools/ci/run_plugin_self_audit.sh" "$PLUGIN"
+
 # ORGANIC #720 / #693 — the ONE gate in the repo-process family that really was
 # wired to nothing. It was invisible to `checker_execution_wiring_audit` (wired
 # at line 247) purely by FILENAME: that gate's population was `*_check.py` +

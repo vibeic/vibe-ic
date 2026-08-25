@@ -121,6 +121,46 @@ def _git_diff_corpus(plugin_root: Path, ref: str) -> str:
         return ""
 
 
+#: An `N/M` fraction, as a percentage table states its own denominator:
+#: `47/50 = 94.0%`, `153/156 = 98.08%`.
+_FRACTION_RE = re.compile(r"(?<![\d.])(\d{1,7})\s*/\s*(\d{1,7})(?![\d.])")
+
+
+def _derivable_from_a_fraction_on_the_line(num_str: str, line: str) -> bool:
+    """Is this percentage the ARITHMETIC of a fraction stated on the same line?
+
+    `47/50 = 94.0%` is the strongest provenance a published metric can have —
+    stronger than the literal-in-source rule below, which credits a digit
+    sequence that merely happens to occur somewhere in `programs/`. The reader
+    can check it with a calculator and no access to the tree at all.
+
+    WHY THIS RULE EXISTS. Without it the gate FAILed six README figures that
+    each sit in a table cell beside the fraction they are computed from
+    (`47/50 = 94.0 %`, `153/156 = 98.08 %`, `154/156 = 98.72 %`), while PASSing
+    `96.0 %` and `98.0 %` on the neighbouring rows purely because those digit
+    sequences occur in unrelated program source. An anti-fabrication gate whose
+    verdict turns on digit coincidence is not measuring fabrication.
+
+    The check is exact to the STATED precision: a percentage rounded to the
+    digits the author wrote must equal the fraction rounded the same way, so
+    `47/50` supports `94.0` and `94.00` and refuses `94.5`. A fabricated
+    percentage beside an honest fraction still FAILs, which is the property
+    that must not be lost.
+    """
+    try:
+        stated = float(num_str)
+    except ValueError:
+        return False
+    places = len(num_str.split(".", 1)[1]) if "." in num_str else 0
+    for m in _FRACTION_RE.finditer(line):
+        num, den = int(m.group(1)), int(m.group(2))
+        if den == 0 or num > den:
+            continue
+        if round(100.0 * num / den, places) == round(stated, places):
+            return True
+    return False
+
+
 def _number_present(num_str: str, corpus: str) -> bool:
     """Check whether the literal number appears in the corpus.
 
@@ -179,8 +219,12 @@ def audit(plugin_root: Path,
             text = f.read_text(encoding="utf-8")
         except OSError:
             continue
+        lines = text.splitlines()
         for ln_no, metric in _extract_metrics(text):
-            num = metric.split()[0]
+            num, unit = metric.split()[0], metric.split()[1]
+            line = lines[ln_no - 1] if 0 < ln_no <= len(lines) else ""
+            if unit == "%" and _derivable_from_a_fraction_on_the_line(num, line):
+                continue
             if not _number_present(num, corpus):
                 rel = f.relative_to(plugin_root.parent) \
                     if f.is_relative_to(plugin_root.parent) else f
