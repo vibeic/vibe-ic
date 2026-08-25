@@ -86,6 +86,16 @@
       ]
     },
     {
+      "question": 16,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_11_84_solve_end_to_end.py::test_the_front_door_has_a_verb_that_solves"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_human_tier_gate_parity.py::test_clean_emit_not_blocked"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_dff_primitive_synth.py::test_dff_skips_outside_envelope"},
+        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/deterministic_emit_chain.py"},
+        {"kind": "prose", "text": "try_emit takes no model, key or network: with verify=None it runs six emitters, applies the emit-blocking conformance rules in-process and returns RTL or (None, None). The AI is the BACKUP arm and its absence degrades the ANSWER, never the mechanism -- an unrecognised prompt reports WAIVED naming the fallback skill, a stated handover rather than a silent pass. The refusal half is pinned too: a solver outside its envelope returns None rather than guessing, so an unavailable AI cannot be papered over by a program emitting something wrong."}
+      ]
+    },
+    {
       "question": 17,
       "evidence": [
         {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_agent_policy.py::test_a_proposal_that_tries_to_act_is_refused_at_a0"}
@@ -95,6 +105,16 @@
       "question": 19,
       "evidence": [
         {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_ppa_rc_corner_is_an_axis.py::test_a_malformed_explicit_corner_declaration_is_invalid"}
+      ]
+    },
+    {
+      "question": 20,
+      "evidence": [
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_dff_primitive_synth.py::test_bare_dff_emits_register"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_general_synth.py::test_bank_is_exactly_the_kept_set"},
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_human_tier_gate_parity.py::test_pure_rotate_emit_is_gate_blocked"},
+        {"kind": "path", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/deterministic_emit_chain.py"},
+        {"kind": "prose", "text": "Nothing here is AI-attributed. The measured gain -- VerilogEval-v2 official PASS 130 -> 132 over 156 problems, zero regressions -- comes from four DETERMINISTIC emitters that already existed on disk and that nothing imported; no model runs on that path and the two recovered problems are named (Prob031_dff, Prob136_m2014_q6). Not more trials either: one emit per problem, single-shot, scored by each problem's own official _ref.sv + _test.sv under iverilog, controlled against the same harness with EMITTERS truncated to the shipped two. The one change that could be mistaken for an accuracy gain is stated as buying nothing: the conformance gate refuses 0 of 262 live emits. The third test is that gate's negative control -- it proves the measurement can still go red."}
       ]
     }
   ]
