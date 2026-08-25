@@ -184,6 +184,16 @@ _BASELINE_NAME = "gate_is_wired_baseline.json"
 _EXECUTABLE_GLOBS = (
     "flow/*.yaml", "flow/*.yml",
     "benchmark/*.json",
+    # `benchmark/*.py` as well as its json. That directory is not data and it is
+    # not test scaffolding — `cvdp_gate.py`, `score_iverilog_tb.py` and
+    # `gates_atomic.py` are the live scoring and emit paths, and they import
+    # gates. Reading only the json made this gate report
+    # `harness_verdict_forgery_gate` as reachable by nothing while
+    # `benchmark/score_iverilog_tb.py:153` imports it — a confident accusation
+    # from a corpus that could not contain the evidence. The sibling audit
+    # `checker_execution_wiring_audit` had the identical hole in its own
+    # haystack and is fixed in the same change.
+    "benchmark/*.py",
     "hooks/*",
     "programs/*.py",
     "mcp-eda/*.py",
