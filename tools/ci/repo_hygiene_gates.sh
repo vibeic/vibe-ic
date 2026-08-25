@@ -1456,6 +1456,21 @@ run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_
 run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token_propagation_check.py
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
 run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_artifact_hygiene_check.py
+# TWO OF THE SIX ANTI-FABRICATION GATES, DECLARED INDIVIDUALLY. They were
+# reachable only through `tools/ci/run_plugin_self_audit.sh`, which
+# `.github/workflows/` used to run and nothing does since both workflows became
+# `.disabled` — so every one of them read as wired and none of them ran.
+#
+# ONE `run` LINE EACH RATHER THAN ONE FOR THE SCRIPT, and that is what made them
+# fixturable at all. Wiring the script means the fixture subject must carry the
+# runner AND every gate AND enough of the plugin's import surface for six
+# programs to load; three attempts failed exactly there. Declared individually,
+# `$PG` keeps pointing at the real gate and the subject only has to be its
+# INPUT — a CHANGELOG and one program. That is the same shape as the sixteen
+# above, and it works for the same reason.
+run "changelog metric reproducibility"  "$ROOT" python3 "$PG/changelog_metric_reproducibility_check.py" "$PLUGIN"
+run "changelog command reproducibility" "$ROOT" python3 "$PG/changelog_command_reproducibility_check.py" "$PLUGIN"
+run "literal verdict keyword"           "$ROOT" python3 "$PG/literal_verdict_keyword_check.py" "$PLUGIN"
 
 # SIXTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER ACCEPTED.
 # Named after the rule each enforces, authored with committed baselines during a
