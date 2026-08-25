@@ -167,6 +167,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -234,8 +235,9 @@ class CliProbe:
 def probe_cli(command: str) -> CliProbe:
     """Run *command* (a flow-yaml gate command) in a fresh empty project.
 
-    Cached per command string: the 137 clauses of the flow resolve to 137
-    subprocess runs for the whole module, ~5 s total.
+    Cached per command string, so a command declared by two steps costs one
+    run. Each call is a fresh subprocess in its own scratch directory, and
+    `cli_violations` fans them out across threads — see the note there.
 
     The scratch project is empty on purpose. Whether the parser accepts the
     invocation is a property of the program, not of the project, and an empty
@@ -279,16 +281,38 @@ def probe_cli(command: str) -> CliProbe:
     )
 
 
+#: How many probes to have in flight at once.
+#:
+#: WHY THIS IS NOT SERIAL. Each probe is one python interpreter start, ~1 s of
+#: import that no amount of tuning removes, and a step declares as many probes
+#: as it has executable clauses. Serially that is (clauses x 1 s) inside ONE
+#: pytest test case, and a single case that runs for half a minute emits no
+#: lifecycle transition while it does — which is exactly what the census
+#: driver's forward-progress watchdog kills as hung. The probes are independent
+#: by construction (each is a separate process in its own scratch directory,
+#: reading nothing the others write), so the fan-out changes the wall clock and
+#: nothing else. Order is restored below, so the failure message is stable.
+_PROBE_FANOUT = 8
+
+
 def cli_violations(step_id) -> Tuple[CliProbe, ...]:
-    """Every exec clause of *step_id* whose declared invocation is REJECTED."""
-    out: List[CliProbe] = []
-    for clause in F.gate_clauses(step_id):
-        if clause.command is None or F.program_path(clause.program or "") is None:
-            continue
-        probe = probe_cli(clause.command)
-        if probe.rejected or probe.timed_out:
-            out.append(probe)
-    return tuple(out)
+    """Every exec clause of *step_id* whose declared invocation is REJECTED.
+
+    Returned in the yaml's clause order regardless of which probe finished
+    first: the order a reader sees must be the order the flow declares, not a
+    race outcome.
+    """
+    commands = [
+        clause.command
+        for clause in F.gate_clauses(step_id)
+        if clause.command is not None
+        and F.program_path(clause.program or "") is not None
+    ]
+    if not commands:
+        return ()
+    with ThreadPoolExecutor(max_workers=min(_PROBE_FANOUT, len(commands))) as pool:
+        probes = list(pool.map(probe_cli, commands))
+    return tuple(p for p in probes if p.rejected or p.timed_out)
 
 
 # ──────────────────────────────────────────────────────────────────────

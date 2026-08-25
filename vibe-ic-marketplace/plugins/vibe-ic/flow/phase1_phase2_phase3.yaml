@@ -686,34 +686,6 @@ steps:
             condition_files_exist:
               - "phase1/agent_docs/L*.json"
             absent_condition_reason: "Scoped to a run that staged a second, independent extraction of the same source into phase1/agent_docs/. Nothing in this flow writes that directory — it is the fresh-agent side of the parity loop and arrives by hand — so on an ordinary run there is no second opinion to diff against, and comparing the generated docs with an empty directory would report perfect parity over nothing."
-        # ORPHANED, RE-HOMED (2026-08-25). D1 is the step where PROSE becomes a
-        # DECLARED VALUE, so it is the step that can be asked how much of the
-        # machinery doing that conversion never checks whether the sentence it
-        # matched was a DENIAL. `prose_polarity_census` counts exactly that over
-        # `programs/`, with a predicate SHARPER than the blocking gate
-        # `prose_polarity_consulted_check` (wired in tools/ci/repo_hygiene_gates.sh):
-        # it also sees a match bound by a `for` TARGET and a
-        # `setdefault(...).add(...)` write, neither of which the gate's
-        # `ast.Assign` walk can reach. MEASURED on this tree: 254 polarity-blind
-        # extractors under the sharper predicate against 212 under the gate's
-        # own, so 42 the gate cannot see.
-        #
-        # ADVISORY, AND IT MAY NEVER BE ANYTHING ELSE. Its own docstring: "NOT
-        # WIRED, DELIBERATELY ... a census wired as blocking would become the
-        # thing it was built to avoid", and
-        # `tests/test_prose_polarity_census.py::test_it_is_not_wired_as_a_blocking_gate`
-        # goes red if it ever reaches a plain `run ` in the landing lane.
-        # Sharpening the REFUSING gate instead would fail CI on 42 extractors
-        # that predate the change, and its debt register may only shrink, so
-        # they could not be recorded either. The advisory slot is the one wiring
-        # that RUNS it and PUBLISHES the number on every real run without
-        # letting the number refuse — which is the coverage its unit test could
-        # never give it.
-        #
-        # NO ARGV: `--programs` defaults to the shipped programs directory, which
-        # is the population. NO `--json` sink, so this clause promises
-        # `required_outputs` nothing.
-        - advisory_program_exit_zero: "prose_polarity_census"
         # ORPHAN RE-HOMED (2026-08-25): `migrate_to_layout_p`, in the mode that
         # only LOOKS. D1 is the FIRST step that writes into `phase1/`, and
         # `phase1/` is precisely the tree this program renames `phase2a/` into.
@@ -5743,39 +5715,6 @@ steps:
       all_of:
         - program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
         - advisory_program_exit_zero: "report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json"
-        # ORPHANED, RE-HOMED (2026-08-25). The sibling question to the clause
-        # directly above, asked of the EMITTERS rather than of the emitted
-        # files. `report_belongs_to_project_check` asks whether a published
-        # report is ABOUT this project;
-        # `provenance_value_is_resolved_not_constant_census` asks whether the
-        # field that states where a report's numbers CAME FROM holds a value the
-        # emitter RESOLVED, or a path typed into its own source. A constant
-        # publishes the path the author intended to read, so it stays
-        # correct-looking when the read failed, when the layout moved, and when
-        # the artefact is about another design entirely — measured as a 487-byte
-        # antenna report, byte-identical across two designs on two open process
-        # kits, citing a source path the cell does not contain. Step 36 is the
-        # step at which every such report is believed at once, so it is the step
-        # that owns the count.
-        #
-        # ADVISORY, ON THE PROGRAM'S OWN WRITTEN INSTRUCTION: "THIS IS A CENSUS,
-        # NOT A GATE. IT MUST NOT BE WIRED AS A BLOCKING CHECK." The REFUSING
-        # half of this rule is a DIFFERENT program,
-        # `provenance_value_is_resolved_not_constant`, already wired blocking in
-        # tools/ci/repo_hygiene_gates.sh over a NARROW population with no
-        # inventory. This one reports the WIDE population, the classification
-        # and the debt recorded against it, and returns 0 whatever it finds
-        # unless `--strict` is passed — which nothing here does, and nothing in
-        # this flow should. MEASURED on this tree: 1327 modules parsed, 502
-        # source-naming field writes, 12 filled from a path constant, 10
-        # recorded as known debt, 0 unrecorded.
-        #
-        # NO ARGV. With no `--root` it resolves the repository root from its own
-        # `__file__`, which is what aims it at the EMITTERS; `--root .` would aim
-        # it at the design tree, which carries no `programs/`, and every run
-        # would bank a vacuous rc 2 instead. No `--json` sink, so nothing is
-        # promised in `required_outputs`.
-        - advisory_program_exit_zero: "provenance_value_is_resolved_not_constant_census"
         # D9 Phase 1 — doctrine rule #4 at the step that signs off. A
         # step-internal `verdict: FAIL` must be ACKNOWLEDGED (waivered, or the
         # parent step's pass.flag dropped); silently keeping pass.flag while a

@@ -114,7 +114,14 @@ import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 #: The gate side. A name declared here is a REQUIREMENT, never a production.
-_CONSUMERS = frozenset({"feasibility.py", "search_feasibility.py", "pareto.py"})
+#: THIS FILE IS ON THE LIST. It reads `DEFAULT_AXES`, so it is a consumer of the
+#: axis table by role, and with the walk widened to the repository it began
+#: reading ITSELF as a producing module — a registry that is its own population,
+#: which is the disease this gate is named after, applied to the gate. It
+#: declared no axis name, so the verdict never moved; the denominator did, and a
+#: denominator that includes the judge is not a denominator.
+_CONSUMERS = frozenset({"feasibility.py", "search_feasibility.py", "pareto.py",
+                        "gate_proof_vocabulary_has_a_producer.py"})
 
 #: A canonical metric name: dotted, lower-case, at least two segments.
 _METRIC_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){1,4}$")
@@ -122,8 +129,18 @@ _METRIC_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){1,4}$")
 #: Directories that are not source of this repository. `benchmark-data` holds
 #: RUN TREES — published records, not producers — and walking it would make the
 #: population depend on which runs happen to be checked out.
+#:
+#: `gate_fixtures` is pruned for the SAME reason `tests` is, and it was measured
+#: rather than assumed: those modules are synthetic SUBJECTS built to be fed to
+#: a gate, and six of them satisfy the emits-predicate. One
+#: (`ppa_frontier_recomputes`) declares fifteen metric-shaped names, and
+#: `timing.setup.violations` had NO producer in this repository except a
+#: fixture. The setup axis survives on `timing.setup.wns_ns` either way, so no
+#: verdict moved — but an axis whose only producer is a test double is exactly
+#: the unanswerable axis this gate exists to refuse, dressed as an answer.
 _PRUNE = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules",
-                    ".venv", "venv", "benchmark-data", ".mypy_cache"})
+                    ".venv", "venv", "benchmark-data", ".mypy_cache",
+                    "gate_fixtures"})
 
 #: The status vocabulary a metric record carries. A module that never names one
 #: of these is not writing metric records whatever else it writes.

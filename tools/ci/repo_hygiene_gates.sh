@@ -1695,11 +1695,21 @@ run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_inpu
 # never the third, so the exclusion that makes this gate discriminate at all is
 # preserved and was checked directly.
 #
-# MEASURED after the repair, at this tip: 10 axes, 40 -> 53 emitting modules,
-# 146 -> 192 declared names, 1 -> 0 unprovable axes, rc 1 -> 0. Its own suite
+# MEASURED after the repair, at this tip: 10 axes, 40 -> 46 emitting modules,
+# 146 -> 181 declared names, 1 -> 0 unprovable axes, rc 1 -> 0. Its own suite
 # is 8/8 — THREE of those tests encoded the false verdict and were re-derived,
 # one of which (`the consumer is excluded ...`) asserted the unprovable list was
 # non-empty and so could not pass on ANY tree where the gate passes.
+#
+# THE WIDENED WALK PRUNES `tools/ci/gate_fixtures` FOR THE SAME REASON IT PRUNES
+# `tests`, and that was measured rather than assumed: six fixture modules
+# satisfy the emits-predicate, one declares fifteen metric-shaped names, and
+# `timing.setup.violations` had no producer in this repository except a fixture.
+# No verdict moved (the setup axis proves from `timing.setup.wns_ns` either
+# way), but an axis whose only producer is a test double is the unanswerable
+# axis this gate refuses, wearing an answer. The gate's own file is on the
+# consumer list for the same class of reason — with the walk widened it began
+# reading itself.
 run "gate proof vocabulary has a producer" "$ROOT" python3 "$PG/gate_proof_vocabulary_has_a_producer.py" --root "$ROOT"
 
 # The SEVENTEENTH of that family, wired separately because it did not land with

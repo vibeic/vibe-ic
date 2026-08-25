@@ -745,8 +745,9 @@ programmable; only Step 2 fix-authoring is genuine LLM judgment):
 
 ### The ADVISORY censuses — run them, do not gate on them
 
-Four programs answer a repo-wide question and REFUSE to be gates, in their own
-words: `explicit_argument_outranks_the_environment_pointer_census` and
+Six programs answer a repo-wide question and REFUSE to be gates, in their own
+words: `explicit_argument_outranks_the_environment_pointer_census`,
+`provenance_value_is_resolved_not_constant_census` and
 `local_clone_does_not_borrow_objects_census` both say "THIS IS A CENSUS, NOT A
 GATE", `wall_clock_bound_standing_in_for_a_verdict` declares "VERDICT CLASS:
 ADVISORY (rc 0 with findings) unless `--strict`", and
@@ -781,4 +782,18 @@ every finding it names:
   wiring a gate that is red by construction stops every landing on a finding
   that predates it. Run it, read what it names, and fix the axis — do not
   silence it by declaring it somewhere that turns it green.
+- Prose extractors that do not consult polarity, as a population:
+  `programs/prose_polarity_census.py`
+- Source-naming fields filled from a path typed into the emitter:
+  `programs/provenance_value_is_resolved_not_constant_census.py --root .`
+
+  These last two were briefly declared as advisory clauses on flow steps D1 and
+  36, and the placement was wrong on both counts. Their SUBJECT is this repo's
+  own source, so on a per-project run they measure nothing about the project,
+  and they charge it anyway: `prose_polarity_census` alone measured **25.7 s of
+  the 27.3 s** that step D1's whole 33-clause probe set cost, enough to push a
+  single census test case past the driver's 60 s forward-progress watchdog and
+  be killed as hung. A census of the repo belongs where an agent reads it, not
+  on a step that runs once per chip.
+
 - Field-agent counterpart: `vibe-ic:field-agent-loop`
