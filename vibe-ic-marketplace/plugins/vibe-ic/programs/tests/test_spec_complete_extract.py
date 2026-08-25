@@ -119,7 +119,18 @@ def test_cvdp_adapter_complete_count_is_prompt_context_only():
     # input.prompt (verified: neutralizing recover_interface_from_prompt drops the
     # count back to exactly 226), a strict superset (no COMPLETE lost) and ZERO
     # harness/golden reads. This is the §4.05-compliant clean-room baseline.
-    assert comp == 228, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
+    # 228 -> 226 (2026-08-25). `_CTRL_WORD` carried a block of tokens whose own
+    # comment said they were "structurally 1-bit in this benchmark's cocotb
+    # harnesses" — `money change item crc mode shift interval status priority
+    # sensor reload` and the rest. Each names a VALUE, and a value has no width
+    # until the spec states one, so an unstated width became a silent 1 with NO
+    # gap recorded instead of a reported `width_not_stated`. Two records were
+    # scoring COMPLETE on that: `apb_gpio_0001` (one genuinely 1-bit port that
+    # now honestly reports a gap) and `modified_booth_mul_0002` (phantom ports
+    # parsed out of a results-table header, given a fake width so the record
+    # could score complete). 226 is the honest count. Kept EXACT, not relaxed to
+    # `>=`, so the next drift is caught the same way this one was.
+    assert comp == 226, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
     # §4.05: the cocotb harness signal-set block is NO LONGER re-attached; the
     # supplied (prompt+context) interface is echoed in `interface_source` instead.
     s = C.extract(recs[0])
