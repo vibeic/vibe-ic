@@ -633,18 +633,24 @@ def test_a_program_that_finishes_INSIDE_the_bound_still_returns_its_own_rc(
 # zero over a population nobody opened.
 # ---------------------------------------------------------------------------
 def _pinned_manifest(root: Path, entries: dict) -> None:
-    """Write a transition manifest of {relpath: (current_hash, next_hash)}."""
+    """Write a two-state transition manifest pinning `entries` {relpath: body}.
+
+    The schema is the shipped one — two named states, each with a `files` list
+    of {path, sha256} — so the denominator this exercises is the same
+    denominator the real manifest produces.
+    """
     import hashlib
     (root / "tools" / "ci").mkdir(parents=True, exist_ok=True)
-    paths = {}
+    files = []
     for rel, body in entries.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body)
-        h = hashlib.sha256(body.encode()).hexdigest()
-        paths[rel] = {"current": h, "next": h}
+        files.append({"path": rel,
+                      "sha256": hashlib.sha256(body.encode()).hexdigest()})
     (root / "tools" / "ci" / "protected_landing_transition.json").write_text(
-        json.dumps({"identifier": "test-transition", "paths": paths}))
+        json.dumps({"current": {"id": "before", "files": files},
+                    "next": {"id": "after", "files": files}}))
 
 
 def test_pinned_authority_advisory_reports_a_drifted_pin_without_blocking(
@@ -655,11 +661,13 @@ def test_pinned_authority_advisory_reports_a_drifted_pin_without_blocking(
                             "tools/ci/b.py": "print(2)\n"})
     clean = gk.pinned_authority_gate(root)
     assert clean.green and clean.rc == 0, clean
+    # The population is real in BOTH arms: two pinned paths, examined.
+    assert "hashing to neither:  0" in clean.summary, clean.summary
     (root / "tools" / "ci" / "a.py").write_text("print(1)  # edited\n")
     drifted = gk.pinned_authority_gate(root)
     # It NOTICES ...
     assert drifted.summary != clean.summary, (clean.summary, drifted.summary)
-    assert "a.py" in drifted.summary or "1 pinned" in drifted.summary, drifted
+    assert "1 pinned authority path(s)" in drifted.summary, drifted.summary
     # ... and it still does NOT block. A mismatch on a branch that legitimately
     # edits a pinned path is the EXPECTED state; blocking would refuse the very
     # change the manifest exists to record.
@@ -672,6 +680,24 @@ def test_pinned_authority_discloses_an_absent_manifest_instead_of_passing(
     assert g.rc == -1, g            # NOT_APPLICABLE, not a pass
     assert "CANNOT DETERMINE" in g.summary, g.summary
     assert g.green                  # and still never blocking
+
+
+def test_pinned_authority_does_not_launder_an_unexpected_rc_into_a_report(
+        tmp_path, monkeypatch):
+    """A timeout's 124 must NOT arrive as "ADVISORY — ...".
+
+    Without `--strict` the program can only reach 0 or 2, so anything else is
+    the CALLER's defect, and printing an advisory line over a run that produced
+    no verdict is the empty-result-reads-as-clean shape.
+    """
+    root = tmp_path / "repo"
+    _pinned_manifest(root, {"tools/ci/a.py": "print(1)\n"})
+    monkeypatch.setattr(gk, "_run_program",
+                        lambda prog, args, **kw: (124, "", "UNDETERMINED"))
+    g = gk.pinned_authority_gate(root)
+    assert g.rc == -1, g
+    assert "unexpected rc 124" in g.summary, g.summary
+    assert "ADVISORY" not in g.summary, g.summary
 
 
 def test_corpus_pin_scan_advisory_counts_census_pins_without_blocking(

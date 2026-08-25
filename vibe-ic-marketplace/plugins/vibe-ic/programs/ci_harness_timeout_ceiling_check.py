@@ -190,6 +190,7 @@ import ast
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -1860,6 +1861,77 @@ def _scan_roots(repo_root: Optional[Path], explicit: Optional[str]
     return roots
 
 
+# ---------------------------------------------------------------------------
+# THE INSIDE OF THE SAME CLAIM (the chain edge)
+# ---------------------------------------------------------------------------
+# This gate's own concluding sentence is "elapsed time is not a test verdict",
+# and it earns that about the OUTER harness: the landing lane supervises its
+# pytest populations by semantic progress and sets no total runtime ceiling.
+#
+# It says nothing about the INSIDE. A test that kills its own subject on a
+# 0.45 s forward-progress deadline and reports the kill as a finding is elapsed
+# time used as a verdict, one level down, and this gate walks straight past it.
+# MEASURED (vibe-ic#1327's neighbourhood): one identifier appeared as a NEW red
+# on a candidate arm and was not one — re-run serially on an idle host it
+# measured 8 of 8 failing on BOTH trees, so the family run's green on the base
+# was a FALSE GREEN, and a single sample each side would have filed it as damage
+# the change had done.
+#
+# `wall_clock_bound_standing_in_for_a_verdict` is the sweep that finds those,
+# and it was reachable from nothing: no runner, no flow clause, no hygiene line,
+# no skill, nothing importing it outside its own test. It is imported here, over
+# the SAME repository root this gate already resolved.
+#
+# ADVISORY, AND THAT IS ITS OWN INSTRUCTION, NOT A CONVENIENCE. Its header reads
+# "VERDICT CLASS: **ADVISORY** (rc 0 with findings)", and its floor is a
+# parameter rather than a truth — 0.45 s against a two-way concurrent driver is
+# indefensible and against a pure function is nobody's business. So the census
+# is PRINTED and RECORDED on every run of this gate and CANNOT change its exit
+# code. That is the same disposition `container exec deadlines` carries one
+# gate over, and for the same stated reason: the count is published every run
+# and cannot drift unseen.
+def elapsed_verdict_advisory(repo_root: Optional[Path]) -> Dict[str, object]:
+    """Run the inner-bound sweep. Never raises, never decides."""
+    out: Dict[str, object] = {"available": False, "findings": [],
+                              "denominators": {}}
+    if repo_root is None:
+        out["why"] = "no repository root resolved"
+        return out
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import wall_clock_bound_standing_in_for_a_verdict as _wc
+        findings, denom = _wc.scan(Path(repo_root), _wc._DEFAULT_FLOOR)
+        out.update({"available": True, "findings": findings,
+                    "denominators": denom, "floor_s": _wc._DEFAULT_FLOOR})
+    except Exception as exc:                      # pragma: no cover - env
+        out["why"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
+def print_elapsed_verdict_advisory(adv: Dict[str, object]) -> None:
+    """Print the census with its denominator. ADVISORY — decides nothing."""
+    if not adv.get("available"):
+        print("  inner wall-clock bounds asserted as findings: NOT MEASURED "
+              f"({adv.get('why', 'unknown')}) — this is a disclosure, not a "
+              "clean census")
+        return
+    denom = adv.get("denominators") or {}
+    findings = adv.get("findings") or []
+    print(f"  inner wall-clock bounds below {adv.get('floor_s')}s that decide a "
+          f"finding without stating the load: {len(findings)} "
+          f"(of {denom.get('modules_that_spawn', 0)} process-spawning module(s) "
+          f"in {denom.get('modules_parsed', 0)} parsed)")
+    for f in findings[:20]:
+        print(f"     advisory  {f['file']}:{f['line']}  {f['bound_s']}s -> "
+              f"{f['reports']}")
+    if len(findings) > 20:
+        print(f"     ... and {len(findings) - 20} more (this line is the "
+              f"disclosure, not a silent truncation)")
+    if findings:
+        print("     ADVISORY — this census does not change this gate's exit "
+              "code; carry the load average beside the bound to clear a row.")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("root", nargs="?", default=None,
@@ -1927,10 +1999,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for lane in semantic["lanes"]:
             print(f"   gatekeeper-land.sh:{lane['line']}  "
                   "aggregate lifecycle-supervised lane")
+        adv = elapsed_verdict_advisory(repo_root)
+        print_elapsed_verdict_advisory(adv)
         if args.json_out:
             Path(args.json_out).write_text(json.dumps({
                 "program": "ci_harness_timeout_ceiling_check",
                 "mode": "semantic_progress",
+                "inner_elapsed_verdict_advisory": adv,
                 "harness_seconds": None,
                 "ceiling_seconds": None,
                 "ceiling_divisor": None,
@@ -2033,10 +2108,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for n in sorted(hist):
             print(f"     {n} site(s): {hist[n]} test function(s)")
 
+    adv = elapsed_verdict_advisory(repo_root)
+    print_elapsed_verdict_advisory(adv)
     if args.json_out:
         Path(args.json_out).write_text(json.dumps({
             "program": "ci_harness_timeout_ceiling_check",
             "mode": "fixed_timeout_legacy",
+            "inner_elapsed_verdict_advisory": adv,
             "harness_seconds": harness,
             "ceiling_seconds": ceiling,
             "ceiling_divisor": CEILING_DIVISOR,

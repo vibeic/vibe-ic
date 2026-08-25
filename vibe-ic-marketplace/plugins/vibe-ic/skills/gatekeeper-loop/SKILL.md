@@ -585,3 +585,16 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
 - Issue-fix counterpart (the other half of the contribution model):
   `vibe-ic:core-agent-loop`
 - Adversarial-review skill used at Step 2.7: `vibe-ic:codex-adversarial-review`
+
+### Which PR owns a non-atomic write
+
+`atomic_artifact_write_check` answers "does THIS TREE contain a new offender".
+It cannot answer "WHOSE PR put it there", and a batch of open PRs needs the
+second question — each site has to be converted on the branch that carries it,
+because none is on main yet.
+
+    programs/atomic_write_pr_attribution.py --owner-repo <org/repo> --pr <n> [--pr <n> ...]
+
+Not a gate and it cannot become one: `--pr` names live GitHub state, so no flow
+clause and no `run` line can supply it. It is a triage tool for the person
+holding the batch, which is this loop.

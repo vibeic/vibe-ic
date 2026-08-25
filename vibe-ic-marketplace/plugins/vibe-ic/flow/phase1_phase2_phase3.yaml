@@ -859,14 +859,21 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Step 1 STAGES the captured-lesson digest for its RTL author
-      # (`design_one_shot_runner._stage_author_knowledge_digests` ->
-      # `_lesson_digest`), and nothing declared it — so the flow produced an
-      # artefact no step owned. Invisible until step 2 gained a clause that
-      # READS it, at which point d7 named the pair
-      # (`W2:produced_consumed_undeclared`). The gap was always here; a consumer
-      # is what made it observable, which is the second time in this batch.
-      - "phase2/stage1/lessons.md"
+      # `phase2/stage1/lessons.md` IS NOT DECLARED HERE, and the reason is the
+      # measurement that took it back out. It was added on 2026-08-25 because a
+      # step-2 gate clause had begun READING it and d7 named the pair
+      # (`W2:produced_consumed_undeclared`). That clause was withdrawn, and the
+      # declaration cannot stand without it: `required_outputs` is
+      # UNCONDITIONAL — `flow_compliance_check` downgrades the step when a
+      # declared entry is absent, on every project, with no escape — while the
+      # digest is staged ONLY at an authoring WAIVE
+      # (`design_one_shot_runner._stage_author_knowledge_digests`). A design
+      # whose RTL comes from a deterministic generator never stages one, so
+      # declaring it here reds Step 1 on every such project over an artefact
+      # nobody owes. The consumer that made the gap observable now lives at the
+      # staging site itself (`lesson_consumption_check` imported by the runner),
+      # where both halves — the digest and the spec — are in hand and no
+      # unconditional declaration is required.
       # MOVED TO D1 (63x9 d4/step1, issue #1219). The Phase-1
       # extraction-coverage report was declared HERE and read by no clause of
       # this step's own gate. It is a Phase-1 artefact in every respect: it

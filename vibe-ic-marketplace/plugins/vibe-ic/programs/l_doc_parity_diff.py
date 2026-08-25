@@ -32,6 +32,13 @@ requires that the program's offered value DOES NOT APPEAR in the
 source corpus when the corpus is available (--source flag). This
 prevents the comparator itself from preferring the agent over a
 fully-correct program.
+
+ENFORCEMENT: advisory — one of its two inputs is a HUMAN-staged second
+extraction, so its verdict is about the parity loop and not about the design.
+Step D1 measured what a blocking clause costs there and wrote it down: D1 LEFT
+the set of steps whose gate can reach a PASS tier ("Lost: ['D1']"), which
+silently turns every D1 cell into substituted-gate-only enforcement. Wired at
+D1 as `advisory_program_exit_zero`, conditional on `phase1/agent_docs/`.
 """
 from __future__ import annotations
 

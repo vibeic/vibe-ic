@@ -682,6 +682,14 @@ def pinned_authority_gate(repo: Path) -> GateResult:
     if rc == 2:
         return GateResult(name, -1,
                           (body[0] if body else "cannot determine")[:240])
+    if rc != 0:
+        # Only 0 and 2 are verdicts this program can reach without `--strict`,
+        # which is not passed. Anything else (a timeout's 124, an argparse 3)
+        # is the CALLER's defect, and laundering it into an ADVISORY line would
+        # print a report over a run that never produced one.
+        return GateResult(name, -1,
+                          f"skipped — unexpected rc {rc}: "
+                          f"{(body[0] if body else '(no output)')[:200]}")
     warn = [ln for ln in body if ln.startswith("[WARN]")]
     neither = [ln for ln in body if ln.lower().startswith("hashing to neither")]
     if warn:

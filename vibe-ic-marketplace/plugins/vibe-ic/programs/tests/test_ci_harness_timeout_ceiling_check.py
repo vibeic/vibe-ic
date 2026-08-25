@@ -1461,3 +1461,99 @@ def test_the_pass_sentence_does_not_outrun_what_was_checked(tmp_path):
         "the PASS sentence claims a bound this very run printed a "
         "counterexample to\n" + proc.stdout)
     assert "300s driver stall window" in proc.stdout, proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# THE INSIDE OF THE SAME CLAIM — `wall_clock_bound_standing_in_for_a_verdict`
+#
+# This gate concludes "elapsed time is not a test verdict" about the OUTER
+# harness. The sweep that asks it of the INSIDE — a short forward-progress
+# deadline killing a spawned subject and reporting the kill as a finding, with
+# no record of the load — was reachable from nothing but its own unit test.
+# It is imported here and its census is PRINTED and RECORDED every run.
+#
+# ADVISORY BY ITS OWN HEADER ("VERDICT CLASS: **ADVISORY**"), so the pair of
+# tests below assert BOTH halves: the census sees the offender, and the gate's
+# exit code does not move because of it.
+# ---------------------------------------------------------------------------
+
+#: A module the sweep's predicate fires on: it spawns, it compares an elapsed
+#: wall-clock reading against a bound under the 2.0 s floor, the branch that
+#: comparison controls reports a substantive finding, and nothing in it says
+#: what the load was.
+_OFFENDER = '''\
+import subprocess
+import time
+
+
+def test_child_advances():
+    proc = subprocess.Popen(["true"])
+    started = time.monotonic()
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.45, "did not advance — killed as hung, not slow"
+'''
+
+#: THE SAME MODULE WITH THE REMEDY THE SWEEP ASKS FOR, and nothing else: the
+#: bound, the spawn and the assertion all stay. Only the message gains the load.
+_REMEDIED = _OFFENDER.replace(
+    'assert elapsed < 0.45, "did not advance — killed as hung, not slow"',
+    'assert elapsed < 0.45, ("did not advance at load %r — killed as hung, "\n'
+    '                        "not slow" % (os.getloadavg(),))').replace(
+    "import subprocess", "import os\nimport subprocess")
+assert _REMEDIED != _OFFENDER
+
+
+def _semantic_with(tmp_path: Path, module_text: str | None) -> Path:
+    root = _semantic_checkout(tmp_path)
+    if module_text is not None:
+        tests = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+                 "programs" / "tests")
+        (tests / "test_inner_bound.py").write_text(module_text,
+                                                   encoding="utf-8")
+    return root
+
+
+def _advisory(tmp_path: Path, module_text: str | None):
+    root = _semantic_with(tmp_path, module_text)
+    out = tmp_path / "adv.json"
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(root), "--json", str(out)],
+        capture_output=True, text=True, timeout=_T)
+    return proc, json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_the_inner_sweep_runs_and_names_the_offender(tmp_path):
+    proc, doc = _advisory(tmp_path, _OFFENDER)
+    adv = doc["inner_elapsed_verdict_advisory"]
+    assert adv["available"] is True, adv
+    assert [f["file"] for f in adv["findings"]] == [
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_inner_bound.py"]
+    assert "test_inner_bound.py" in proc.stdout
+    # ADVISORY: the census cannot move the gate's verdict.
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "elapsed time is not a test verdict" in proc.stdout
+
+
+def test_the_remedy_clears_the_row_on_the_same_denominator(tmp_path):
+    """Same tree, same module count, same spawning-module count — what moves is
+    only whether the bound says what the load was. A census that went quiet by
+    losing its corpus would prove nothing."""
+    bad_proc, bad = _advisory(tmp_path / "bad", _OFFENDER)
+    good_proc, good = _advisory(tmp_path / "good", _REMEDIED)
+    b, g = (bad["inner_elapsed_verdict_advisory"],
+            good["inner_elapsed_verdict_advisory"])
+    assert b["denominators"]["modules_parsed"] == \
+        g["denominators"]["modules_parsed"]
+    assert b["denominators"]["modules_that_spawn"] == \
+        g["denominators"]["modules_that_spawn"]
+    assert len(b["findings"]) == 1 and len(g["findings"]) == 0
+    assert bad_proc.returncode == good_proc.returncode == 0
+
+
+def test_a_tree_with_no_offender_reports_a_real_denominator(tmp_path):
+    """Zero findings over a non-empty population, printed with the population
+    — never a bare green over nothing examined."""
+    _proc, doc = _advisory(tmp_path, None)
+    adv = doc["inner_elapsed_verdict_advisory"]
+    assert adv["findings"] == []
+    assert adv["denominators"]["modules_parsed"] > 0

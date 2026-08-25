@@ -171,6 +171,22 @@ programs (run them first). The AI's residual job — the part that stays
 
 Standard pre-tapeout flows at commercial foundries (TSMC, Samsung, GF) require this category of checklist. Open reference: Efabless tapeout docs for shuttle runs (https://efabless.com/).
 
+### The open-MPW precheck driver, and why it is documented rather than wired
+
+    programs/mpw_precheck_driver.py --input-directory <gds-dir> --pdk-root <pdk>
+
+**READ THE PROGRAM'S OWN HEADER BEFORE TRUSTING A VERDICT FROM IT.** The
+counterparty it addresses — the Efabless/chipIgnite open-MPW shuttle — CEASED
+OPERATING IN 2025. It no longer accepts submissions and it no longer refuses
+them. Nothing in the driver is broken; it is pointed at a party that stopped
+answering, so a PASS from it means the local checks ran, never that a shuttle
+accepted the design.
+
+It is kept and named here rather than deleted or wired. Deleted, the next person
+targeting a shuttle rebuilds it; wired into the flow, it would report a
+submission verdict no counterparty stands behind. Documented, it is available to
+whoever points it at a shuttle that is still answering.
+
 ## Handoff
 
 - Any red item routes back to its owning skill (`/sta-review`, `/drc-fix`, etc.)

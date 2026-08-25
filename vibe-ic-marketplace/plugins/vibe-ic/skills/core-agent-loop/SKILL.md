@@ -742,4 +742,43 @@ programmable; only Step 2 fix-authoring is genuine LLM judgment):
 - Version assignment (next monotonic version → plugin.json + marketplace.json;
   the pusher runs `--write` pre-push): `programs/gatekeeper_assign_version.py`
 - Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
+
+### The ADVISORY censuses — run them, do not gate on them
+
+Four programs answer a repo-wide question and REFUSE to be gates, in their own
+words: `explicit_argument_outranks_the_environment_pointer_census` and
+`local_clone_does_not_borrow_objects_census` both say "THIS IS A CENSUS, NOT A
+GATE", `wall_clock_bound_standing_in_for_a_verdict` declares "VERDICT CLASS:
+ADVISORY (rc 0 with findings) unless `--strict`", and
+`layer_membership_is_declared_not_inferred_from_a_filename_prefix` carries a
+test literally named `test_the_shipped_tree_is_RED_and_that_is_the_point`.
+
+They belong here rather than in `tools/ci/repo_hygiene_gates.sh` and the reason
+is structural, not preference. That dispatcher has exactly two forms — `run`,
+which BLOCKS, and `run_tolerating_uncheckable`, which tolerates rc 2 and not a
+finding. Declared bare, each would exit 0 while naming real findings, which is a
+gate that CANNOT FAIL; declared `--strict`, each reddens the landing lane over
+findings that predate any change in flight. Neither is what their authors asked
+for. A skill line is the weakest runner there is and it is the honest one: an
+agent reads it and runs the census when investigating. `checker_execution_
+wiring_audit` models exactly this as its disclosed "skill-only" class.
+
+Run each with `--root <repo>`; add `--strict` only when you intend to act on
+every finding it names:
+
+- Environment pointer vs explicit argument, as a population:
+  `programs/explicit_argument_outranks_the_environment_pointer_census.py --root .`
+- Clone sites that borrow objects, as a population:
+  `programs/local_clone_does_not_borrow_objects_census.py --root .`
+- Short wall-clock deadlines standing in for a verdict:
+  `programs/wall_clock_bound_standing_in_for_a_verdict.py --root .`
+- Layer membership inferred from a filename prefix rather than declared:
+  `programs/layer_membership_is_declared_not_inferred_from_a_filename_prefix.py --root .`
+- An axis that takes ONE value across arms that provably differ:
+  `programs/metric_constant_across_differing_arms_is_not_measured.py --root .`
+  **This one BLOCKS (rc=1) and its own docstring says it is RED ON THE TREE IT
+  SHIPPED WITH.** It is here rather than in the landing lane for that reason:
+  wiring a gate that is red by construction stops every landing on a finding
+  that predates it. Run it, read what it names, and fix the axis — do not
+  silence it by declaring it somewhere that turns it green.
 - Field-agent counterpart: `vibe-ic:field-agent-loop`

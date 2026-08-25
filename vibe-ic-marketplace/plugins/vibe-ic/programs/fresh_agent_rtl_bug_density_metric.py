@@ -31,6 +31,17 @@ Outputs:
 This is an ADVISORY tool — it does NOT participate in flow_compliance
 verdicts. Its only side effects are observability files.
 
+ENFORCEMENT: advisory
+
+Wired at flow step 2 (RTL validation), which already owns this repository's
+RTL-bug accounting through `rtl_bug_report_schema_check` and
+`reports/phase2/rtl_bugs.json` — that gate grades the SHAPE of a claimed bug,
+and this one counts how many the candidate RTL actually needed. It is wired in
+the `advisory_program_exit_zero` slot, with `--no-learning-log`: without that
+flag the run appends a row to `docs/design/BENCHMARK_PLUGIN_LEARNING.md` in the
+REPOSITORY root, i.e. a flow run would mutate a tracked document outside the
+project it is grading.
+
 False-alert guards
 ==================
 

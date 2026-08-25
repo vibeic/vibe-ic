@@ -1,17 +1,12 @@
 {
   "_comment": "Checkers that NOTHING but their own unit test ever runs (vibe-ic#381). MAY ONLY SHRINK — each entry is a checker with zero coverage of real inputs. `triage` records why an entry is still here; the wrong repair is to delete the test so the entry disappears.",
-  "previous_size": 31,
+  "previous_size": 8,
   "scope_expanded": "vibe-ic#1347: the audit now reads the SHAPE of each reference (invocation vs mention) on the raw source, not merely whether the name is one of the file's tokens; three checkers held up only by another program's message text are now visible as test-only.",
   "known": [
     "agent_report_presence_check.py",
     "eda_log_check.py",
-    "hw_vs_rtl_verdict_check.py",
-    "ip_catalog_upstream_audit.py",
-    "lesson_consumption_check.py",
-    "lessons_corpus_consistency_check.py",
     "phase23_completion_self_audit_check.py",
     "rtl_signal_name_semantic_check.py",
-    "skill_doc_section_present_check.py",
     "sv_compat_check.py"
   ],
   "triage": {
@@ -27,12 +22,8 @@
     "flow_step_executor_coverage_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "functional_state_transition_coverage_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only tb, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "gate_evidence_completeness_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
-    "hw_vs_rtl_verdict_check.py": "rc=2 SKIPs / refuses without its input — [--min-variants MIN_VARIANTS]",
     "input_docs_coverage_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "integration_spec_audit.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
-    "ip_catalog_upstream_audit.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
-    "lesson_consumption_check.py": "rc=2 SKIPs / refuses without its input — [--ack ACK] [--strict]",
-    "lessons_corpus_consistency_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "level_hysteresis_flag_oracle_check.py": "rc=2 SKIPs / refuses without its input — [--top TOP] [--json JSON]",
     "phase1_provenance_presence_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only target, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "phase23_completion_self_audit_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",

@@ -36,9 +36,11 @@ refuse (a detector that fires nowhere is a different finding this gate does not
 make).
 
 BOTH BLOBS COME FROM THE REPOSITORY'S OWN COMMITTED FIXTURE MODULE
-`programs/tests/fixtures/synthetic_protocol_blobs.py`, so the two arms cannot
-drift from the corpus the gate really reads, and no protocol vocabulary is
-re-typed here. Those blobs are hand-written public structural specs.
+`programs/tests/fixtures/synthetic_protocol_blobs.py` — a TRACKED source file,
+unlike the benchmark tree it can materialize, which `.gitignore` excludes. No
+protocol vocabulary is re-typed here, so the two arms cannot drift from the
+blobs the paired pytest guards use. Those blobs are hand-written public
+structural specs.
 
 chip-AGNOSTIC: names no IC, vendor, SKU or process — two open protocol
 specifications quoted from a fixture this repository already ships.
@@ -49,8 +51,12 @@ from pathlib import Path
 
 GATE = "protocol detector no-misfire matrix"
 
-#: The corpus path the gate's declared argv names, relative to `$PLUGIN`.
-_REL = "programs/tests/fixtures/synthetic_benchmark_phase1"
+#: The corpus path the gate's declared argv names, relative to the subject
+#: root. The gate is wired at the PUBLISHED corpus, which lives in its own
+#: repository since v1.10.56 and is absent on an ordinary checkout — which is
+#: why the declaration tolerates rc 2. The fixture supplies one, so both arms
+#: here run the matrix for real instead of exercising that tolerance.
+_REL = "benchmark-data/evaluation/phase1_parity"
 
 #: Where the committed blobs live, relative to the repository root.
 _BLOBS = ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures")

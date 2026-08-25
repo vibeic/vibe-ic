@@ -849,7 +849,7 @@ run_tolerating_uncheckable "citation routing is true" "$ROOT" python3 "$PG/citat
 # with. That is what makes the CAN-FAIL direction reachable: the engine redirects
 # $ROOT and nothing else, so a root spelled from the program's own location could
 # never be handed a mutant record.
-uncheckable_until 2027-02-28 "SUBJECT ABSENT: `protocol_parity/` is a PUBLISHED SWEEP TREE and left this repository with the rest of the corpus in v1.10.56. rc 2 here is the program's own `not a directory` refusal, which NAMES the path it looked for -- it is not a claim that any record is honest. The INSTRUMENT is proved continuously by tools/ci/gate_fixtures/phase1_parity_source_tier_record.py, which drives it over a two-protocol record whose RESULT markdown agrees with its data and over the same record with ONE published count moved. Closes the day a parity sweep is published in-tree. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate reading a record and finding it dishonest still refuses the landing."
+uncheckable_until 2027-02-28 "SUBJECT ABSENT: protocol_parity/ is a PUBLISHED SWEEP TREE and left this repository with the rest of the corpus in v1.10.56. rc 2 here is the program's own not-a-directory refusal, which NAMES the path it looked for -- it is not a claim that any record is honest. The INSTRUMENT is proved continuously by tools/ci/gate_fixtures/phase1_parity_source_tier_record.py, which drives it over a two-protocol record whose RESULT markdown agrees with its data and over the same record with ONE published count moved. Closes the day a parity sweep is published in-tree. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate reading a record and finding it dishonest still refuses the landing."
 run_tolerating_uncheckable "phase1 parity source-tier record" "$ROOT" python3 "$PG/phase1_parity_source_tier_check.py" protocol_parity
 
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
@@ -1595,9 +1595,32 @@ run "literal verdict keyword"           "$ROOT" python3 "$PG/literal_verdict_key
 # under `--strict`, and their docstrings say "THIS IS A CENSUS, NOT A GATE. IT
 # MUST NOT BE WIRED AS A BLOCKING CHECK" and "VERDICT CLASS: ADVISORY ... it must
 # stay advisory". Measured: `--strict` reddens this lane over 47 and 13
-# PRE-EXISTING findings. `local_clone_..._census` is the same shape and its
-# refusing sibling is wired above. Wiring a census over its author's objection to
-# reach a number is the ritual this batch is against.
+# PRE-EXISTING findings. Wiring a census over its author's objection to reach a
+# number is the ritual this batch is against.
+#
+# `local_clone_does_not_borrow_objects_census` IS ALSO ABSENT, and its reason is
+# NOT the same one — saying it is invites the next reader to wire it on the
+# strength of a measurement nobody took. MEASURED on this tree: `--strict` is
+# rc 0 (0 borrowing clones and 0 inventory rows over 1454 modules and 24 shell
+# scripts), so it would not redden this lane at all.
+#
+# It stays out for two reasons that do not depend on today's count. Its header
+# carries the same instruction — "THIS IS A CENSUS, NOT A GATE. IT MUST NOT BE
+# WIRED AS A BLOCKING CHECK" — and the fixture bar cannot be met either way:
+# declared non-strict, the only non-zero status it can reach is the rc-2
+# empty-corpus path, which `gate_mutation_fixtures` refuses by name ("a can_fail
+# that is red because the corpus went to zero proves the vacuity path and
+# nothing about the predicate"); declared `--strict`, it is a blocking gate over
+# its author's objection.
+#
+# AND IT IS NOT COVERAGE THIS LANE LOSES. Its refusing sibling
+# `local_clone_does_not_borrow_objects` is wired above, on the same predicate,
+# over a population that CONTAINS this one's. Driven on a tree seeded with two
+# borrowing clones, one under `programs/` and one under `benchmark/`: the gate
+# named BOTH and failed; the census named only the `programs/` one, because it
+# walks `programs/` + `tools/` and the gate walks the repo. The census's one
+# unique feature is `--inventory` grandfathering, and the gate's docstring says
+# having no inventory is the point — it refuses where the census would record.
 #
 # `explicit_argument_outranks_the_environment_pointer_census` is the FOURTH, and
 # it is recorded here (2026-08-25) so that its absence is a DECISION and not an
@@ -1777,35 +1800,47 @@ run "generated values state read or defaulted" "$ROOT" python3 "$PG/generated_va
 
 # THE PROTOCOL-DETECTOR CROSS-FIRE MATRIX, RE-HOMED (2026-08-25). Every
 # module-level `is_<stem>` exported by a `<stem>_protocol_synth.py` is run
-# against EVERY benchmark's blob and must fire on its OWN and on no other.
-# Both directions fall out of the same matrix — a NEW detector firing on an
-# existing benchmark, and an existing detector firing on a NEW one — which is
-# why it is one program and not a per-protocol test. Promoted to a first-class
-# program at v0.2.13 and then reachable from nothing but pytest imports of its
-# helpers; `main()` had no caller at all.
+# against EVERY benchmark's content blob and must fire on its OWN and on no
+# other, modulo the documented derived-sibling allowlist. Both directions fall
+# out of the same matrix — a NEW detector firing on an existing benchmark, and
+# an existing detector firing on a NEW one — which is why it is one program and
+# not a per-protocol test. Promoted to a first-class program at v0.2.13 and then
+# reachable from nothing: two pytest files import its HELPERS, and `main()` had
+# no caller at all.
 #
-# THE SUBJECT IS THE CORPUS THIS REPO SHIPS, not the private one. `benchmark-
-# data/` moved to its own repository at v1.10.56, so a line aimed there would
-# be permanently rc 2 and would never once compare a detector against a
-# document. `programs/tests/fixtures/synthetic_benchmark_phase1/` is tracked
-# here and is exactly what the paired pytest guards fall back to — eight
-# hand-written structural specs, each carrying ONLY its own protocol's public
-# signature. MEASURED before wiring: `detectors=86  benchmarks=8`, ALL_PASS,
-# rc 0, in 0.15 s. A real population and a real green.
+# `--blob superset` is the strictest of its four: the source spec plus ALL
+# generated L-docs, which is the blob the paired pytest guard pins.
 #
-# `--blob superset` is the strictest of the four: input_doc plus ALL generated
-# L-docs, which is the blob the pytest guard pins.
+# `run_tolerating_uncheckable`, and the corpus is why. `benchmark-data/` moved
+# to its own repository at v1.10.56, so `$ROOT/benchmark-data/...` is absent on
+# an ordinary checkout and rc 2 — "I could not look" — must never share an exit
+# code with "I looked and it was clean". The tree-local
+# `programs/tests/fixtures/synthetic_benchmark_phase1/` was measured as an
+# alternative and REJECTED: `.gitignore:127` ignores it and `git ls-files`
+# returns 0 of the 56 files, so it is rebuilt by the test suite and absent from
+# any fresh clone. Aiming a landing gate at it would make the verdict depend on
+# whether the reader had run pytest — the exact host-dependence
+# `gate_host_independence_check` exists to refuse.
 #
-# `run`, NOT `run_tolerating_uncheckable`. rc 2 now means the corpus went
-# missing or an axis of the matrix is EMPTY — a refusal this change added,
-# because until today `--benchmark-dir <EMPTY DIR>` printed `benchmarks=0` and
-# then `ALL_PASS` at rc 0 (docs/findings/2026-08-22-a-zero-denominator-green-
-# outside-the-gate-that-forbids-it.md). Tolerating rc 2 here would re-admit the
-# vacuous pass that refusal was written to block.
+# WHAT rc 2 CANNOT BE BOUGHT WITH, and this is the half that had to be built:
+# until today `--benchmark-dir <EMPTY DIR>` printed `benchmarks=0` and then
+# `ALL_PASS` at rc 0 (docs/findings/2026-08-22-a-zero-denominator-green-outside-
+# the-gate-that-forbids-it.md — `gate_zero_denominator_refuses_check` forbids
+# that shape and could not see this program, whose filename does not end in
+# `_check.py`). Both arms of the matrix now return the NOT-CHECKED tier when
+# either axis is empty, so the tolerated rc 2 cannot be reached by a corpus that
+# exists and contains nothing.
+#
+# ITS FIXTURE RUNS IT FOR REAL. `tools/ci/gate_fixtures/` builds one benchmark
+# under the subject's own `benchmark-data/evaluation/phase1_parity`, so both
+# arms present 86 real detectors with one benchmark and differ only in whether
+# that benchmark's documents carry a second protocol's signature: rc 0 / rc 1,
+# same denominators.
 #
 # ONE LINE, no `\` continuation: the denominator probe and the host-independence
 # probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
-run "protocol detector no-misfire matrix" "$ROOT" python3 "$PG/protocol_detector_no_misfire_matrix.py" --blob superset --benchmark-dir "$PLUGIN/programs/tests/fixtures/synthetic_benchmark_phase1"
+uncheckable_until 2027-02-28 "needs a clone of the published benchmark-data corpus: benchmark-data/ moved to its own repository at v1.10.56, so <root>/benchmark-data/evaluation/phase1_parity is absent on an ordinary checkout and rc 2 means no benchmark could be read at all -- a detector that genuinely fires outside its own benchmark is rc 1, and an EMPTY corpus is rc 2 as well rather than a green"
+run_tolerating_uncheckable "protocol detector no-misfire matrix" "$ROOT" python3 "$PG/protocol_detector_no_misfire_matrix.py" --blob superset --benchmark-dir "$ROOT/benchmark-data/evaluation/phase1_parity"
 
 # SEVENTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER
 # ACCEPTED.
@@ -1832,10 +1867,33 @@ run "protocol detector no-misfire matrix" "$ROOT" python3 "$PG/protocol_detector
 # under `--strict`, and their docstrings say "THIS IS A CENSUS, NOT A GATE. IT
 # MUST NOT BE WIRED AS A BLOCKING CHECK" and "VERDICT CLASS: ADVISORY ... it must
 # stay advisory". Measured: `--strict` turns this lane red over 47 and 13
-# PRE-EXISTING findings respectively. `local_clone_..._census` is the same shape,
-# and its refusing sibling is already wired above. A census is not a gate, and
-# wiring one over its author's objection to reach a number is the ritual this
-# whole batch is against.
+# PRE-EXISTING findings respectively. A census is not a gate, and wiring one over
+# its author's objection to reach a number is the ritual this whole batch is
+# against.
+#
+# `local_clone_does_not_borrow_objects_census` IS ALSO ABSENT, and its reason is
+# NOT the same one — saying it is invites the next reader to wire it on the
+# strength of a measurement nobody took. MEASURED on this tree: `--strict` is
+# rc 0 (0 borrowing clones and 0 inventory rows over 1454 modules and 24 shell
+# scripts), so it would not redden this lane at all.
+#
+# It stays out for two reasons that do not depend on today's count. Its header
+# carries the same instruction — "THIS IS A CENSUS, NOT A GATE. IT MUST NOT BE
+# WIRED AS A BLOCKING CHECK" — and the fixture bar cannot be met either way:
+# declared non-strict, the only non-zero status it can reach is the rc-2
+# empty-corpus path, which `gate_mutation_fixtures` refuses by name ("a can_fail
+# that is red because the corpus went to zero proves the vacuity path and
+# nothing about the predicate"); declared `--strict`, it is a blocking gate over
+# its author's objection.
+#
+# AND IT IS NOT COVERAGE THIS LANE LOSES. Its refusing sibling
+# `local_clone_does_not_borrow_objects` is wired above, on the same predicate,
+# over a population that CONTAINS this one's. Driven on a tree seeded with two
+# borrowing clones, one under `programs/` and one under `benchmark/`: the gate
+# named BOTH and failed; the census named only the `programs/` one, because it
+# walks `programs/` + `tools/` and the gate walks the repo. The census's one
+# unique feature is `--inventory` grandfathering, and the gate's docstring says
+# having no inventory is the point — it refuses where the census would record.
 # `explicit_argument_outranks_the_environment_pointer_census` joined them on
 # 2026-08-25 — the full reasoning, including the measurement that says wiring it
 # would cost this lane nothing and why that is NOT the reason it stays out, is

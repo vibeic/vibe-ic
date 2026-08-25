@@ -49,6 +49,12 @@ Exit codes
     0 = hardware-blocked confirmed (all variants byte-identical FAIL)
     1 = RTL-blocked, not hardware (variants differ) OR insufficient variants
     2 = config / IO / parse error
+
+ENFORCEMENT: advisory — it judges the REASONING about an on-board failure, not
+the failure. Step 39's own `json_field_true` + `fpga_on_board_attestation_check`
+clauses already decide whether the board passed; a second blocking verdict there
+would refuse a sign-off over a blame campaign's bookkeeping. Wired at step 39 as
+`advisory_program_exit_zero`, conditional on the campaign's own records.
 """
 from __future__ import annotations
 
