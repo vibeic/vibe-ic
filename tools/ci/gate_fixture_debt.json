@@ -80,11 +80,6 @@
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/stage_membership_declared_once.py."
     },
     {
-      "gate": "L-doc field producer",
-      "slug": "l_doc_field_producer",
-      "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/l_doc_field_producer.py."
-    },
-    {
       "gate": "tracked-symlink portability",
       "slug": "tracked_symlink_portability",
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/tracked_symlink_portability.py."
@@ -198,16 +193,6 @@
       "gate": "artefact-defect close discipline",
       "slug": "artefact_defect_close_discipline",
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/artefact_defect_close_discipline.py."
-    },
-    {
-      "gate": "cross-layer reference regression",
-      "slug": "cross_layer_reference_regression",
-      "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/cross_layer_reference_regression.py."
-    },
-    {
-      "gate": "step FAIL bubbles up",
-      "slug": "step_fail_bubbles_up",
-      "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/step_fail_bubbles_up.py."
     },
     {
       "gate": "blocker list contract on committed reports",
