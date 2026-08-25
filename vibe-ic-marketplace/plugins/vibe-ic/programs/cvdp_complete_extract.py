@@ -89,6 +89,7 @@ if str(_HERE) not in sys.path:
 
 # Reused (NOT modified) — interface + module-name + cue helpers.
 import cvdp_atomic_bridge as _bridge  # noqa: E402
+import prose_interface_table_read as _tbl  # noqa: E402  markdown signal/direction table
 # Symbolic / parameter-expression width reader (param-expr / range-before-name /
 # param-override). A width stated as a parameter expression with a derivable
 # default is an EXTRACTABLE fact, not a gap.
@@ -755,7 +756,7 @@ def _recover_cvdp_interface(record: dict, top: str):
     # INCOMPLETE_SPEC_ABSENT. Bind them here from the INPUT table, never the harness.
     try:
         sd_ins, sd_outs, sd_widths, _sd_sym = \
-            _bridge._signal_direction_table(prompt, param_defaults)
+            _tbl.read_signal_direction_table(prompt, param_defaults)
     except Exception:
         sd_ins, sd_outs, sd_widths = [], [], {}
     for nm in sd_ins:

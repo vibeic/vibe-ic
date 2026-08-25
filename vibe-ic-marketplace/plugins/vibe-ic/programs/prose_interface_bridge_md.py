@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""cvdp_spec_parse.py — a GENERAL prose-port-block reader for the CVDP benchmark
-family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's
-markdown interface form to the bullet form `port_parser.parse_ports` already reads
-— the same role `prose_port_block_read.py` plays for the RTLLM prose form.
+"""prose_interface_bridge_md.py — read a MARKDOWN-table interface block.
+
+A GENERAL prose-port-block reader, sibling to `prose_port_block_read` (which
+reads the indented-bullet form). `port_parser.parse_ports` already understands
+two interface shapes; a spec that states its ports as a markdown table is a
+third, and this bridges it to a form the shared parser reads.
+
+WHY THE NAME CHANGED. This shipped as `prose_interface_bridge_md` because a CVDP capture
+campaign is where the markdown-table form was first hit. Its own first line
+called it "a GENERAL prose-port-block reader" — and it is: `bridge_prompt(text)
+-> str` takes prose and returns prose, with no record field anywhere. Under the
+benchmark prefix, nothing outside that benchmark could find it: it had ZERO
+importers, which is not evidence it is useless but evidence it was never wired.
+The sibling with the same signature has 13.
 
 WHY (owner directive 2026-06-23, "program-first PARSING on CVDP"):
 The shared `port_parser.parse_ports` understands two interface forms — the
@@ -169,7 +179,7 @@ def _port_width(bullet: str):
     return w if w >= 1 else _AMBIGUOUS
 
 
-def parse_cvdp_ports(text: str) -> Tuple[List[Tuple[str, int]], List[Tuple[str, int]]]:
+def parse_md_table_ports(text: str) -> Tuple[List[Tuple[str, int]], List[Tuple[str, int]]]:
     """(ins, outs) as [(name, width)] read from the CVDP section-scoped markdown
     interface. A bullet whose width cannot be reduced to a single positive integer
     is DROPPED (downstream solver SKIPs rather than guessing). Returns ([],[]) when
@@ -225,7 +235,7 @@ def bridge_prompt(text: str) -> str:
     If no CVDP interface section with parseable bullets is found, returns `text`
     unchanged (a no-op bridge — the consumer chain then behaves exactly as before,
     e.g. falls back to a Verilog header it may already contain)."""
-    ins, outs = parse_cvdp_ports(text)
+    ins, outs = parse_md_table_ports(text)
     if not ins and not outs:
         return text
     return _emit_bullets(ins, outs) + "\n\n" + text
@@ -234,7 +244,7 @@ def bridge_prompt(text: str) -> str:
 def interface_json(text: str) -> dict:
     """Structured interface JSON for the dual_pass extraction tier:
     {inputs:[{name,width}], outputs:[...]}. Empty lists when nothing parses."""
-    ins, outs = parse_cvdp_ports(text)
+    ins, outs = parse_md_table_ports(text)
     return {"inputs": [{"name": n, "width": w} for n, w in ins],
             "outputs": [{"name": n, "width": w} for n, w in outs]}
 
@@ -294,7 +304,7 @@ def _measure(jsonl_path: str) -> int:
         c = cat(r)
         tot[c] += 1
         text = r.get("user", "")
-        ins, outs = parse_cvdp_ports(text)
+        ins, outs = parse_md_table_ports(text)
         if ins and outs:
             both[c] += 1
         if REG is not None:

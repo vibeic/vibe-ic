@@ -22,6 +22,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import cvdp_atomic_bridge as B  # noqa: E402
+import prose_interface_table_read as T  # noqa: E402
 
 
 def test_prose_bullet_ports_annotated_and_clock_reset():
@@ -70,7 +71,7 @@ def test_signal_direction_table_binds_comparator_shape():
         "| `i_enable` | Input | 1 | enable |\n"
         "| `o_equal` | Output | 1 | result |\n"
     )
-    ins, outs, widths, _sym = B._signal_direction_table(prompt, {"WIDTH": 5})
+    ins, outs, widths, _sym = T.read_signal_direction_table(prompt, {"WIDTH": 5})
     assert set(ins) == {"i_A", "i_B", "i_enable"}
     assert outs == ["o_equal"]
     assert widths["i_A"] == 5 and widths["o_equal"] == 1
