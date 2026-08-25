@@ -221,6 +221,10 @@ def gate_check_spec(gate: dict, candidate_rtl: str) -> dict:
             if not _token_represented(body, tok):
                 violations.append({
                     "kind": f"missing_{kind}",
+                    # The token as its own field, not only inside the sentence.
+                    # A consumer that wants to say WHICH state is missing should
+                    # not have to parse it back out of English prose.
+                    "token": tok,
                     "detail": f"{kind} `{tok}` from the spec is not represented in the candidate"})
 
     return {"pass": not violations, "violations": violations}

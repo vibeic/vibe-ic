@@ -1853,8 +1853,12 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                 # by rules that have the RTL parse to reason from; re-reporting
                 # it here would double-count and disagree at the edges.
                 if _kind.startswith('missing_') and _kind != 'missing_port':
+                    # symbol = the MISSING TOKEN, not the module. Three absent
+                    # registers otherwise render as three identical lines naming
+                    # the module, which says a count and not a fact.
                     f.append(Finding(path, 'INFO', _kind.replace('_', '-'),
-                                     rtl_name or '<module>', _v.get('detail', '')))
+                                     _v.get('token') or rtl_name or '<module>',
+                                     _v.get('detail', '')))
         except Exception:  # nosec — advisory pass is best-effort
             pass
     return f
