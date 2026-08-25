@@ -388,6 +388,49 @@ run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "
     python3 "$PG/ppa_problem_integrity_check.py" \
     --corpus "$ROOT/ppa-e2e"
 
+# THE PUBLISHED SENTENCE, not the record behind it. Every gate above this line
+# asks whether an artefact is internally honest; none of them asks what the
+# repository SAYS about it in a document a reader will quote. That gap is the
+# measurement `ppa_page_claim_check` was written from: on 2026-08-21 three
+# present-tense sentences on the published PPA page were true when written and
+# false one landing later, and nothing could go red because they named no
+# revision. This row runs the check over the report the end-to-end campaign
+# publishes AS its result, together with the `claims.json` that report emits
+# beside itself — the only page/claims pair in this tree where every row is
+# cited by construction, which is what `--cite-numbers` requires.
+#
+# WHY THIS PAGE AND NOT `report/default-run/`. Both are the same generated
+# document; `winner` is the arm the campaign publishes and `default-run` is the
+# untuned arm kept beside it for comparison. Aiming at the published one is the
+# claim a reader actually meets. MEASURED today: 35 sentence(s), 139 claim(s),
+# 9 banned form(s) enforced, rc 0 — a real population, not an empty corpus.
+#
+# A plain `run`: rc 2 here is `[CANNOT CHECK]` (the page or the claims file
+# could not be read), which is a missing prerequisite and must stay blocking
+# rather than buy an exemption. rc 1 is a finding about a sentence.
+run "PPA published page claims" "$ROOT" \
+    python3 "$PG/ppa_page_claim_check.py" "$ROOT/ppa-e2e/report/winner/report.md" \
+    --claims "$ROOT/ppa-e2e/report/winner/claims.json" --cite-numbers
+
+# THE AUTHORISATION, checked against the tree it authorises. The actuator
+# registry is what decides which programs a closure controller MAY run; an entry
+# that claims `binding: EXECUTABLE` and names a program that is not in
+# `programs/` is a permission granted over nothing, and it fails at the moment
+# something finally tries to close a loop rather than at the moment it is
+# written. `--verify-registry` resolves every EXECUTABLE claim and prints the
+# population it resolved (actuators / domains / controllers) so the count is
+# visible beside the verdict.
+#
+# NOT `--list-edges`, deliberately. That mode is the closed-loop CENSUS and it
+# exits 2 by design while every declared edge is DECLARED_ONLY — which is the
+# true state today and is `closed_loop_edge_check`'s question, already wired.
+# Wiring the census here would be a permanently-red row reporting a fact another
+# gate owns. MEASURED today: 6 actuators (1 EXECUTABLE), 9 domains
+# (2 EXECUTABLE), 1 controller, every EXECUTABLE claim resolves, rc 0.
+run "PPA actuator registry bindings" "$ROOT" \
+    python3 "$PG/ppa_closure_run.py" --verify-registry \
+    --registry "$PLUGIN/config/ppa_actuator_registry.yaml"
+
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # Its BLIND SPOT, and they are not the same question. The gate above asks whether
 # a stated version AGREES with the shipped one; a claim inserted in the WRONG
@@ -784,6 +827,30 @@ run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_r
 # false RESOLVES row still FAILs.
 uncheckable_until 2027-02-28 "SUBJECT ABSENT BY OWNER INSTRUCTION. CITATION_ROUTING.txt is emitted by exactly one program (benchmark_evidence_publish), only for a converged (IC x PDK) cell, and that program REFUSES a non-converged run; the corpus tracks zero of them, and zero GDS_MANIFEST.txt and zero LAYOUT_ROUTING.txt with it, so no tree anywhere was staged by that publisher. This gate is NOT path-wired to ic/ -- it reads the whole index -- so there is no pointer to repair. Closes on the first converged cell benchmark_evidence_publish stages; NOTHING IN THIS REPOSITORY CAN CLOSE IT, which is why it is here and not in a code change. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate looking and finding a defect still refuses the landing. NO SAMPLE PAIRS THIS ONE and that is deliberate: unlike its three neighbours it asks whether a SHIPPED FILE tells the truth about the tree it ships in, which is a question about published evidence and not about this plugin."
 run_tolerating_uncheckable "citation routing is true" "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT" --corpus-may-be-absent
+
+# The THIRD record in this family, and the one nothing was reading. A Phase-1
+# protocol-parity sweep publishes ONE parity number over N protocols whose input
+# documents are NOT of one kind -- some are the issuing body's specification,
+# some an encyclopedia article, some a vendor app note. The tier is recorded as
+# data in `protocol_parity/source_tier.json`, the sweep's RESULT markdown
+# PUBLISHES the per-tier counts, and until this line nothing checked that the
+# published counts were the counts in the data. A number that drifts from its own
+# record still reads as a measurement.
+#
+# It asks three things of the record, and the second is the one only a gate can
+# hold: (1) every protocol directory is tiered and the tier file's own `counts`
+# block agrees with its `protocols` block; (2) every RESULT markdown carrying the
+# `<!-- source-tier-counts -->` marker publishes counts that MATCH; (3) every
+# `input/docs/<doc>` an L-doc cites either resolves in the tree or is accounted
+# for by the tier record -- the same citation-followability question its two
+# neighbours above ask of the published cells, asked of the parity sweep instead.
+#
+# THE PARITY ROOT IS RELATIVE, resolved against the cwd this gate is dispatched
+# with. That is what makes the CAN-FAIL direction reachable: the engine redirects
+# $ROOT and nothing else, so a root spelled from the program's own location could
+# never be handed a mutant record.
+uncheckable_until 2027-02-28 "SUBJECT ABSENT: `protocol_parity/` is a PUBLISHED SWEEP TREE and left this repository with the rest of the corpus in v1.10.56. rc 2 here is the program's own `not a directory` refusal, which NAMES the path it looked for -- it is not a claim that any record is honest. The INSTRUMENT is proved continuously by tools/ci/gate_fixtures/phase1_parity_source_tier_record.py, which drives it over a two-protocol record whose RESULT markdown agrees with its data and over the same record with ONE published count moved. Closes the day a parity sweep is published in-tree. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate reading a record and finding it dishonest still refuses the landing."
+run_tolerating_uncheckable "phase1 parity source-tier record" "$ROOT" python3 "$PG/phase1_parity_source_tier_check.py" protocol_parity
 
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
@@ -1261,6 +1328,19 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # never missing, only unwired. One `git ls-files` + one walk; measured
 # discriminating: injecting a throwaway program makes it rc 1, removing it rc 0.
 run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_programs_index.py" --check
+# THE OTHER DERIVED INVENTORY, and it had no landing check at all.
+# `SKILL_INVENTORY.json` is the AUTHORITATIVE skill count — its own `_comment`
+# says the website must read `total` from it — and it is generated from the
+# `skills/*/SKILL.md` folders. Its generator shipped with `--check` and the
+# instruction "wire into CI", and nothing wired it: the only thing running it
+# was `tests/test_skill_inventory_no_drift.py`, so the freshness of a published
+# number depended on that one test file continuing to exist. The hand-maintained
+# figure this replaced had already drifted (the site said 55 with 57 on disk),
+# which is the drift the artefact exists to make impossible.
+#
+# SAME SHAPE AS `programs index fresh` ABOVE: a committed derived file, a
+# generator that regenerates it, and `--check` as the landing question.
+run "skill inventory fresh"              "$ROOT" python3 "$PG/gen_skill_inventory.py" --check --plugin "$PLUGIN"
 
 # vibe-ic#1120 — the four PUBLISHED dimensions (Engineering Velocity,
 # Autonomous Improvement, Adversarial Verification, Silicon Proof). Same shape
@@ -1450,6 +1530,25 @@ run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLO
 # this cause. BLOCKING: `run` fails the suite on any non-zero rc, and the gate
 # returns 2 rather than 0 when it could not read a file or examined none.
 run "no retired pytest plugin request" "$ROOT" python3 "$PG/retired_pytest_plugin_request_check.py" "$ROOT"
+# The other half of the same measurement. `retired_pytest_plugin_request_check`
+# above refuses a SOURCE file that asks for a plugin the runtime may not carry;
+# this one refuses a RESULT that does not say which runtime produced it. Both
+# come out of the 28-of-127 set difference recorded in the paragraph above: those
+# 28 failures were charged to the revision under test, and 26 of them vanished on
+# a second runtime, because nothing on the aggregate named the runtime and so two
+# aggregates from different runtimes subtracted cleanly and silently. Neither
+# `retired_pytest_plugin_request_check` nor `landing_pytest_runtime_preflight`
+# writes anything onto the RESULT, which is the gap this closes.
+#
+# The gate DECIDES per aggregate: an aggregate that carries {image, interpreter,
+# unimportable_plugins} is rc 0, one that omits any of them -- or fills it with a
+# placeholder like "unknown"/"n/a", which is how the first version of this rule
+# passed an aggregate naming no runtime -- is rc 1 and FAILS this suite. Its
+# `--diff A B` arm additionally REFUSES to subtract two aggregates whose runtime
+# stamps disagree.
+uncheckable_until 2027-02-28 "rc 2 here is NO TEST AGGREGATE IN THIS TREE, never a verdict about one, and it is this repository's normal state today -- MEASURED at the wiring commit: 'examined 0 test aggregate(s)', over a walk of every tracked .json. That is not an accident of a checkout: the rule's subject is the per-case record a TEST ARM writes, and this repository's only run summary is written by tools/ci/_gate_dispatch.sh into a temporary directory and let go -- and that document is a GATE PROFILE (it names benchmark_data_sha and corpus_inputs, i.e. the CORPUS) and not a test aggregate, so it is out of scope by the gate's own narrowing even if it were kept. The gate's discrimination is therefore proved by fixture rather than by this tree: tools/ci/gate_fixtures/a_test_aggregate_names_its_runtime.py drives both directions over the SAME one-aggregate corpus and the can-fail arm goes rc 1 on the placeholder-identity seam. WHAT THE REVIEW DATE IS FOR: the day any arm starts KEEPING its per-case aggregate in the tree, this row starts deciding and this exemption must go -- that is the state to look for, not the date. An aggregate that IS read and does not name its runtime is rc 1 and still fails this row."
+run_tolerating_uncheckable "a test aggregate names its runtime" "$ROOT" \
+    python3 "$PG/pytest_aggregate_carries_its_runtime_identity.py" "$ROOT"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py
@@ -1472,7 +1571,8 @@ run "changelog metric reproducibility"  "$ROOT" python3 "$PG/changelog_metric_re
 run "changelog command reproducibility" "$ROOT" python3 "$PG/changelog_command_reproducibility_check.py" "$PLUGIN"
 run "literal verdict keyword"           "$ROOT" python3 "$PG/literal_verdict_keyword_check.py" "$PLUGIN"
 
-# SIXTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER ACCEPTED.
+# SEVENTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER
+# ACCEPTED.
 # Named after the rule each enforces, authored with committed baselines during a
 # capture campaign, and then reachable from nothing. A regression guard nobody
 # runs guards nothing — and these are the easiest in the tree to have missed,
@@ -1483,13 +1583,13 @@ run "literal verdict keyword"           "$ROOT" python3 "$PG/literal_verdict_key
 # each pair was driven through `test_gate_fixtures_discriminate` — a fixture that
 # cannot make its gate go red proves nothing, which is what that bar is for.
 #
-# FOUR TAKE THE ROOT POSITIONALLY AND MUST NOT BE NORMALISED to `--root`: for
-# `local clone`, `measurement only artefact`, `provenance value` and `prepared
-# checkout` that flag is `unrecognized arguments` -> rc 3, a bad invocation on
-# every arm. `only the declaring step` carries `--self-test` because that
+# FIVE TAKE THE ROOT POSITIONALLY AND MUST NOT BE NORMALISED to `--root`: for
+# `local clone`, `measurement only artefact`, `provenance value`, `prepared
+# checkout` and `printed remedy` that flag is `unrecognized arguments` -> rc 3,
+# a bad invocation on every arm. `only the declaring step` carries `--self-test` because that
 # program's own header calls its negative control "part of the gate".
 #
-# THREE SIBLINGS ARE ABSENT ON THEIR OWN WRITTEN INSTRUCTION.
+# FOUR SIBLINGS ARE ABSENT ON THEIR OWN WRITTEN INSTRUCTION.
 # `checker_population_is_structural_not_filename_shaped_census` and
 # `content_pinned_authority_verified_only_at_merge` reach a failing status only
 # under `--strict`, and their docstrings say "THIS IS A CENSUS, NOT A GATE. IT
@@ -1498,6 +1598,42 @@ run "literal verdict keyword"           "$ROOT" python3 "$PG/literal_verdict_key
 # PRE-EXISTING findings. `local_clone_..._census` is the same shape and its
 # refusing sibling is wired above. Wiring a census over its author's objection to
 # reach a number is the ritual this batch is against.
+#
+# `explicit_argument_outranks_the_environment_pointer_census` is the FOURTH, and
+# it is recorded here (2026-08-25) so that its absence is a DECISION and not an
+# omission the next orphan sweep re-litigates. It carries the same sentence
+# verbatim — "THIS IS A CENSUS, NOT A GATE. IT MUST NOT BE WIRED AS A BLOCKING
+# CHECK" — and adds "nothing in the flow should pass [--strict]".
+# THE MEASUREMENT IS THE OPPOSITE OF THE OTHER THREE and is stated because it
+# would otherwise look like the reason: `--strict` on this tree is rc 0 over a
+# real population (1 site classified, 1 inventoried, 0 unrecorded, 0 stale), so
+# wiring it would cost a landing NOTHING today. It stays out on the instruction,
+# not on the cost. Without `--strict` its findings path returns 0 by design, so a
+# `run` line would be a permanently green declaration whose only red is the
+# rc-2 empty-population refusal — and `gate_mutation_fixtures` refuses a can_fail
+# that reaches its refusal by emptying the corpus, so the pair could not be
+# built honestly either.
+# ITS RULE IS NOT UNGUARDED, BUT IT IS NOT FULLY GUARDED EITHER.
+# `explicit_argument_outranks_the_environment_pointer` is wired below and
+# refuses the half of the contract that is uncontested (a reader that can
+# redirect its subject must SAY so). The census's half — the guard POLARITY,
+# `if _env and args.tree: args.tree = _env` versus the absent form — is enforced
+# by nothing, which is a debt this note records rather than hides.
+#
+# THE SEVENTEENTH, `printed remedy`, ARRIVED ON 2026-08-25 out of the same
+# capture and was reachable from nothing but its own unit test. It asks whether
+# a refusal that prints "run this to fix it" printed a line that RUNS: the
+# composed EDA image parses the arguments after the image reference, so a
+# printed `docker run ... <image> <command>` hands the command to the entry
+# point, which answers `[ERROR] Unexpected option` and never runs it. Recorded
+# verbatim in `container_image_provenance.py`, and the exit is NON-zero, so the
+# reader's honest conclusion is that the refusal is broken rather than that its
+# message is stale.
+#
+# RUN BEFORE WIRING, on this tree: `examined 100 printed string(s) naming docker`,
+# rc 0 — a real population, not an empty scan, and rc 2 NOT CHECKED is what it
+# returns when that population is empty. Its fixture moves TOKEN ORDER inside a
+# single printed remedy, so both arms examine exactly one.
 run "declaration searched only inside a truncated" "$ROOT" python3 "$PG/declaration_searched_only_inside_a_truncated_window.py" --root "$ROOT"
 run "declared invocation accepted by its own pars" "$ROOT" python3 "$PG/declared_invocation_accepted_by_its_own_parser.py" --root "$ROOT"
 run "denial that constitutes the value it appears" "$ROOT" python3 "$PG/denial_that_constitutes_the_value_it_appears_to_negate.py" --root "$ROOT"
@@ -1508,6 +1644,7 @@ run "only the declaring step writes its output ce" "$ROOT" python3 "$PG/only_the
 run "population guard asserts equality not a floo" "$ROOT" python3 "$PG/population_guard_asserts_equality_not_a_floor.py" --root "$ROOT"
 run "population pin without its member set" "$ROOT" python3 "$PG/population_pin_without_its_member_set.py" --root "$ROOT"
 run "prepared checkout states the revision it hol" "$ROOT" python3 "$PG/prepared_checkout_states_the_revision_it_holds.py" "$ROOT"
+run "printed remedy runs as printed" "$ROOT" python3 "$PG/printed_remedy_runs_as_printed.py" "$ROOT"
 run "provenance value is resolved not constant" "$ROOT" python3 "$PG/provenance_value_is_resolved_not_constant.py" "$ROOT"
 run "published absence claim is rechecked against" "$ROOT" python3 "$PG/published_absence_claim_is_rechecked_against_the_tree.py" --root "$ROOT"
 run "reference control resolved through a mutable" "$ROOT" python3 "$PG/reference_control_resolved_through_a_mutable_ref.py" --root "$ROOT"
@@ -1515,7 +1652,163 @@ run "registry is the iteration domain" "$ROOT" python3 "$PG/registry_is_the_iter
 run "spawned gate whose status is discarded" "$ROOT" python3 "$PG/spawned_gate_whose_status_is_discarded.py" --root "$ROOT"
 run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_input_selectors_given_together_must_refuse.py" --root "$ROOT"
 
-# SIXTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER ACCEPTED.
+# THE FIFTH SIBLING, ADMITTED 2026-08-25 AFTER ITS VERDICT WAS REPAIRED. This
+# gate was on the excluded list below — "exit 1 on a GENUINE finding" — and the
+# finding was NOT genuine. It reported the `drv` feasibility axis structurally
+# unprovable, on a claim about the repository drawn from a directory: its scan
+# root was `programs/`, and both producers that declare the four `timing.drv.*`
+# keys as plain literals live outside it (`ppa-crosslayer/tools/drv_records.py`,
+# `ppa-e2e/tools/signoff_records.py`). The same verdict was measured false from
+# the other side by `every_required_metric_key_has_a_producer` — "That verdict
+# was FALSE, and false in the blocking direction" — and recorded as F15 in
+# docs/findings/2026-08-22-two-capture-distillation-branches-verified.md.
+#
+# THE REPAIR IS THE TWO-PART ONE F15 MEASURED, because widening alone leaves
+# `timing.drv.violations` unresolved: the population was the relation "in the
+# `_ppa` package or IMPORTS it", and one real producer names `_ppa` only in its
+# prose. So the walk is now the whole repository and the producing side is also
+# admitted by what a module EMITS — constructs a `"metric"` record, statuses it
+# MEASURED / NOT_MEASURED, and WRITES it. The consumer does the first two and
+# never the third, so the exclusion that makes this gate discriminate at all is
+# preserved and was checked directly.
+#
+# MEASURED after the repair, at this tip: 10 axes, 40 -> 53 emitting modules,
+# 146 -> 192 declared names, 1 -> 0 unprovable axes, rc 1 -> 0. Its own suite
+# is 8/8 — THREE of those tests encoded the false verdict and were re-derived,
+# one of which (`the consumer is excluded ...`) asserted the unprovable list was
+# non-empty and so could not pass on ANY tree where the gate passes.
+run "gate proof vocabulary has a producer" "$ROOT" python3 "$PG/gate_proof_vocabulary_has_a_producer.py" --root "$ROOT"
+
+# The SEVENTEENTH of that family, wired separately because it did not land with
+# the sixteen: when they were measured it exited 1 on a GENUINE finding and
+# would have blocked a landing on debt that change did not own.
+#
+# THE DEBT IS PAID IN THIS CHANGE, so the exclusion no longer applies. Both
+# findings were `phase3_one_shot_runner` reports that carried their basis in
+# prose and never in the one spelling `_sta_basis.declared_basis` reads:
+# `power.rpt` wrote `basis:` / `POWER_BASIS:` beside a `basis_stamp` it had
+# already computed, and `si_crosstalk.rpt` (Step 27, on the routed design)
+# wrote none at all. Both now stamp `STA_BASIS:`, so both rejoin the sign-off
+# evidence set instead of being dropped as undeclared.
+#
+# RUN BEFORE WIRING, on this tree: rc 0, over 4 emitter(s) of 8 flow-declared
+# timing/power reports plus 9 sibling reports in 1 module judged by the
+# convention arm — not an empty scan, and rc 2 (no flow, no declaration, no
+# identifiable emitter) is a REFUSAL here rather than a pass, so a subject that
+# lost its corpus cannot read as green.
+run "signoff report states its stage" "$ROOT" python3 "$PG/signoff_report_states_its_stage.py" "$ROOT"
+
+# THREE MORE FROM THE SAME CAPTURE CAMPAIGN, AND THE SAME REASON THEY WERE
+# MISSED: authored, tested, merged, and then invoked by nothing but their own
+# test. Each PASSES on this tree today over a LIVE, NON-EMPTY denominator, which
+# is exactly why nobody noticed — a failing gate gets noticed, a green gate
+# nobody runs looks identical to a green gate that ran.
+#
+# EACH CARRIES `tools/ci/gate_fixtures/<slug>.py` with can_pass AND can_fail,
+# driven through `test_gate_fixtures_discriminate`, and in every pair the
+# mutation is the defect the gate's OWN docstring was written for, with the
+# denominator held equal across the two arms.
+#
+# ALL THREE TAKE THE ROOT POSITIONALLY AND MUST NOT BE NORMALISED to `--root`:
+# each parser declares `root` as `nargs="?"` (and `cross_design_identity_check`
+# declares `projects` as `nargs="+"`), so `--root` is `unrecognized arguments`
+# -> a bad invocation on every arm. Read from `--help`, not assumed.
+#
+# WHAT EACH ONE MEASURES HERE TODAY:
+#
+#   `declared_basis_matches_the_session_inputs` — 22 (session, report) pairs,
+#   all 22 declaring a stage, 0 findings. Every one of the 22 is a POWER
+#   analysis deck beside its own report (`ppa-crosslayer/records/trials/*/diag/
+#   power_postroute.{tcl,rpt}` and two in `ppa-e2e/diag/`), which is precisely
+#   the population the rule was measured on: a report headed post-layout whose
+#   session loaded no extracted parasitics, publishing 0.306 mW against the
+#   post-route session's 0.573 mW and a whole clock group at 0.000 mW.
+#   NOT WIRED INTO FLOW STEP 33 (power analysis), and that was checked rather
+#   than assumed: `phase3_one_shot_runner` writes the deck as
+#   `power_<top>.tcl` beside `power.rpt`, and `_pairs()` matches on a SHARED
+#   STEM, so a design run yields ZERO pairs and the clause would be rc 2 on
+#   every run forever. The live corpus is here, so the gate is here.
+#
+#   `explicit_argument_outranks_the_environment_pointer` — 7 in-scope
+#   corpus-pointer readers, 0 findings, plus 2 readers outside the scope
+#   DISCLOSED by path on every run. It refuses only the half of the pointer
+#   contract that is UNCONTESTED (a reader that can redirect its subject must
+#   say so); the live split over whether the pointer may WIN is argued in the
+#   program's own docstring and is deliberately not arbitrated here.
+#
+#   `cross_design_identity_check` — 2 project dirs, 7 report-class artefacts,
+#   0 byte-identical pairs. It is the "exists, UNWIRED" row of the capture's
+#   own already-program table, listed in `checker_execution_wiring_baseline
+#   .json` with the note "unwired for lack of a CALLER, not for lack of an
+#   input". THE SUBJECT IS SPELLED OUT rather than globbed because the fixture
+#   engine substitutes `$ROOT` token-wise and can drive no shell expansion:
+#   these two directories are this repository's ONLY tracked pair of DIFFERENT
+#   designs each carrying its own `reports/` tree, which is the exact
+#   population the rule needs (>= 2 designs, report-class artefacts). It runs
+#   with the parser's default `--allow`, so `ir_drop.json` / `power.json`
+#   wrappers keep their CONDITIONAL exemption; `--allow-honest-na` is NOT
+#   passed, so no verdict-only shape is exempted here.
+run "report basis matches its session inputs" "$ROOT" python3 "$PG/declared_basis_matches_the_session_inputs.py" "$ROOT"
+run "explicit argument outranks the env pointer" "$ROOT" python3 "$PG/explicit_argument_outranks_the_environment_pointer.py" "$ROOT"
+run "cross-design report identity" "$ROOT" python3 "$PG/cross_design_identity_check.py" \
+  "$ROOT/docs/research/fleet_run_folder_triage_evidence/112/_gk198_gk/ibex" \
+  "$ROOT/docs/research/fleet_run_folder_triage_evidence/112/_gk198_gk/opentitan_aes"
+
+# THE TWELFTH CHIP-PATH RULE, RE-HOMED. `generated_values_state_whether_they_
+# were_read_or_defaulted` is the last member of the family `test_chip_path_
+# rules_rc_contract` pins as one rc contract; five of its siblings are declared
+# above and this one was reachable from nothing but that contract test.
+#
+# WHAT IT IS ABOUT: a value that could have come from the design's own documents
+# or from a generator's fallback is not self-describing. The measured instance
+# signed a run off at a last-resort clock period of 20 where the documents
+# declared 24 — a 20 % over-constraint nobody requested — and the artefact was
+# byte-identical either way. `declared_clock_period` already returns the
+# DISCLOSURE beside the value; what this rule adds is that a CALLER may not take
+# the value and drop the disclosure, which re-creates the defect one layer up.
+#
+# IT TAKES THE ROOT POSITIONALLY, like the five named above: `--root` there is
+# `unrecognized arguments` -> rc 3, a bad invocation on every arm.
+#
+# RUN BEFORE WIRING, on this tree: `examined 3 call site(s) of 2 read-or-default
+# helper(s)`, rc 0. A real population, not an empty scan, and the rc-2 NOT
+# CHECKED tier is what it returns when that population is empty.
+run "generated values state read or defaulted" "$ROOT" python3 "$PG/generated_values_state_whether_they_were_read_or_defaulted.py" "$ROOT"
+
+# THE PROTOCOL-DETECTOR CROSS-FIRE MATRIX, RE-HOMED (2026-08-25). Every
+# module-level `is_<stem>` exported by a `<stem>_protocol_synth.py` is run
+# against EVERY benchmark's blob and must fire on its OWN and on no other.
+# Both directions fall out of the same matrix — a NEW detector firing on an
+# existing benchmark, and an existing detector firing on a NEW one — which is
+# why it is one program and not a per-protocol test. Promoted to a first-class
+# program at v0.2.13 and then reachable from nothing but pytest imports of its
+# helpers; `main()` had no caller at all.
+#
+# THE SUBJECT IS THE CORPUS THIS REPO SHIPS, not the private one. `benchmark-
+# data/` moved to its own repository at v1.10.56, so a line aimed there would
+# be permanently rc 2 and would never once compare a detector against a
+# document. `programs/tests/fixtures/synthetic_benchmark_phase1/` is tracked
+# here and is exactly what the paired pytest guards fall back to — eight
+# hand-written structural specs, each carrying ONLY its own protocol's public
+# signature. MEASURED before wiring: `detectors=86  benchmarks=8`, ALL_PASS,
+# rc 0, in 0.15 s. A real population and a real green.
+#
+# `--blob superset` is the strictest of the four: input_doc plus ALL generated
+# L-docs, which is the blob the pytest guard pins.
+#
+# `run`, NOT `run_tolerating_uncheckable`. rc 2 now means the corpus went
+# missing or an axis of the matrix is EMPTY — a refusal this change added,
+# because until today `--benchmark-dir <EMPTY DIR>` printed `benchmarks=0` and
+# then `ALL_PASS` at rc 0 (docs/findings/2026-08-22-a-zero-denominator-green-
+# outside-the-gate-that-forbids-it.md). Tolerating rc 2 here would re-admit the
+# vacuous pass that refusal was written to block.
+#
+# ONE LINE, no `\` continuation: the denominator probe and the host-independence
+# probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
+run "protocol detector no-misfire matrix" "$ROOT" python3 "$PG/protocol_detector_no_misfire_matrix.py" --blob superset --benchmark-dir "$PLUGIN/programs/tests/fixtures/synthetic_benchmark_phase1"
+
+# SEVENTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER
+# ACCEPTED.
 # Named after the rule each enforces, authored with committed baselines during a
 # capture campaign, and then reachable from nothing. A regression guard nobody
 # runs guards nothing — and these are the easiest in the tree to have missed,
@@ -1526,14 +1819,14 @@ run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_inpu
 # each pair was driven through `test_gate_fixtures_discriminate` — a fixture that
 # cannot make its gate go red proves nothing, and the bar is there to refuse it.
 #
-# FOUR ARE NOT THE `--root "$ROOT"` TEMPLATE AND MUST NOT BE NORMALISED: `local
-# clone`, `measurement only artefact`, `provenance value` and `prepared checkout`
-# take the root POSITIONALLY, and `--root` there is `unrecognized arguments` ->
-# rc 3, a bad invocation on every arm. `only the declaring step` carries
+# FIVE ARE NOT THE `--root "$ROOT"` TEMPLATE AND MUST NOT BE NORMALISED: `local
+# clone`, `measurement only artefact`, `provenance value`, `prepared checkout`
+# and `printed remedy` take the root POSITIONALLY, and `--root` there is
+# `unrecognized arguments` -> rc 3, a bad invocation on every arm. `only the declaring step` carries
 # `--self-test` because that program's own header calls its negative control
 # "part of the gate".
 #
-# THREE SIBLINGS ARE DELIBERATELY ABSENT, ON THEIR OWN WRITTEN INSTRUCTION.
+# FOUR SIBLINGS ARE DELIBERATELY ABSENT, ON THEIR OWN WRITTEN INSTRUCTION.
 # `checker_population_is_structural_not_filename_shaped_census` and
 # `content_pinned_authority_verified_only_at_merge` only reach a failing status
 # under `--strict`, and their docstrings say "THIS IS A CENSUS, NOT A GATE. IT
@@ -1543,6 +1836,10 @@ run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_inpu
 # and its refusing sibling is already wired above. A census is not a gate, and
 # wiring one over its author's objection to reach a number is the ritual this
 # whole batch is against.
+# `explicit_argument_outranks_the_environment_pointer_census` joined them on
+# 2026-08-25 — the full reasoning, including the measurement that says wiring it
+# would cost this lane nothing and why that is NOT the reason it stays out, is
+# written once at the sibling block above.
 
 # The six anti-fabrication gates in `tools/ci/run_plugin_self_audit.sh`, re-homed.
 # They were wired to `.github/workflows/`, both of which are now `.disabled`, and
@@ -1586,6 +1883,57 @@ run "flow step-executor coverage"       "$PLUGIN" python3 programs/flow_step_exe
 run "lessons corpus consistency"        "$PLUGIN" python3 programs/lessons_corpus_consistency_check.py
 run "ip-catalog upstream (local arm)"   "$PLUGIN" python3 programs/ip_catalog_upstream_audit.py --no-network
 
+# BACK, WITH THE FIXTURE THE BAR NOW ASKS FOR. `lessons_corpus_consistency_check`
+# is named in the block above and its `run` line was taken out by "let the
+# fixture bar decide what lands" — correctly, because it carried no fixture. It
+# carries one now, `tools/ci/gate_fixtures/lessons_corpus_consistency.py`, and
+# the pair was driven through `test_gate_fixtures_discriminate`: the can-fail arm
+# strips the spec-deference clause off ONE directive sentence and the gate goes
+# red naming `axis=read-timing genre=fifo`, over a corpus holding the same two
+# sections as the green arm. The mutation moves the ANSWER, not the denominator.
+#
+# THE CORPUS PATH IS NAMED HERE, NOT DEFAULTED, and that is load-bearing.
+# `_default_corpus()` resolves beside the program's own source file — under `$PG`
+# that is the SHIPPED corpus whatever subject the gate is aimed at, so a fixture
+# could never move its answer and the pair would certify nothing. Passing the
+# path relative to the cwd this line names points it at the subject instead.
+#
+# WHAT IT PROTECTS: the digest a blind author is required to read. A `### Skill:`
+# section that hard-codes one pole of a decision the SPEC owns steers a faithful
+# author to the failing choice, and it reads like advice on the way past.
+#
+# RUN BEFORE WIRING, on this tree: 207 `### Skill:` sections parsed — 15 fifo and
+# 7 shifter, the two genres the axes are bound to — 0 contradictions, rc 0.
+run "lessons corpus consistency" "$PLUGIN" python3 "$PG/lessons_corpus_consistency_check.py" agents/ic-expert-agent.md
+
+# CORRECTION, MEASURED 2026-08-25 — `ip_catalog_upstream_audit` DOES NOT BELONG
+# ON THIS LANE, and the 18/18 above is why it looked as though it did. That run
+# passed because this developer's HOME DIRECTORY holds the mirrors:
+#     ip_catalog_pull.find_local_mirror('lfsr')
+#         -> /home/reyerchu/ic_documents/open_ic/alexforencich-lfsr
+#     IP_MIRROR_ROOT -> None      (`git ls-files | grep -c '^IP/'` -> 0)
+# The subject it audits — the vendored tree the manifests describe — is not in
+# this repository, so on any other checkout every IP returns
+# `no local mirror found` and the lane would be red for a fact about the HOST.
+# `gates are host-independent` exists to refuse exactly that. It is wired at its
+# real caller instead: `ip_catalog_pull.pull_catalog_ip`, the one place that has
+# a mirror in hand, checks the manifest's claim against it before the RTL enters
+# a design.
+#
+# ITS SIBLING IS THE ONE THAT BELONGS HERE. `ip_catalog_validate` reads the
+# MANIFESTS, which ARE tracked in this repository (18 of them), and nothing
+# else: schema shape, a non-empty `matches_when`, an HTTP(S) canonical_url,
+# port dicts that carry a name and a legal direction, and the license against
+# the permissive whitelist. Its own header says "Run from CI / pre-commit hook
+# to catch broken manifests early" and nothing ever did — the ip-catalog README
+# names it as step 4 of adding an IP, which is a procedure and not a caller.
+#
+# MEASURED BEFORE WIRING: `PASS: 18  FAIL: 0` -> rc 0 over the shipped catalog.
+# A zero-manifest catalog now exits 2 rather than printing `PASS: 0  FAIL: 0`
+# and returning 0, so a catalog that MOVES cannot leave this row green over a
+# directory nobody opened.
+run "ip-catalog manifests validate" "$ROOT" python3 "$PG/ip_catalog_validate.py" --catalog-dir "$PLUGIN/ip-catalog"
+
 # ORPHANED, RE-HOMED. `skill_doc_section_present_check` exists so a durably
 # captured lesson cannot be silently dropped by a later edit: give it a document
 # and the marker substrings that must survive, and a deletion becomes a red line
@@ -1601,11 +1949,42 @@ run "ip-catalog upstream (local arm)"   "$PLUGIN" python3 programs/ip_catalog_up
 #   IC-EXPERT OPERATING MAP      the phase -> program -> gate -> skill table the
 #                                agent routes from
 # Measured before wiring: all three present, `"missing": []`, rc=0.
-run "benchmark doctrine sections kept" "$PLUGIN" python3 programs/skill_doc_section_present_check.py \
+#
+# WHY `$PG/...` AND NOT `programs/...` (2026-08-25). These two lines run with
+# cwd `$PLUGIN`, and the fixture engine substitutes `$PLUGIN` with the SUBJECT
+# tree while leaving `$PG` pointing at the real programs directory. Spelled
+# `programs/skill_doc_section_present_check.py`, the gate would resolve to a
+# COPY of itself inside the fixture subject and measure that copy — the subject
+# is the gate's INPUT, never its code.
+run "benchmark doctrine sections kept" "$PLUGIN" python3 "$PG/skill_doc_section_present_check.py" \
     --doc skills/open-benchmark-methodology/SKILL.md \
     --marker "RULE 0" --marker "GENERAL-CORE / THIN-ADAPTER"
-run "ic-expert operating map kept"     "$PLUGIN" python3 programs/skill_doc_section_present_check.py \
+run "ic-expert operating map kept"     "$PLUGIN" python3 "$PG/skill_doc_section_present_check.py" \
     --doc agents/ic-expert-agent.md --marker "IC-EXPERT OPERATING MAP"
+
+# THE DOCTRINE-RATCHET GATES, RE-HOMED (2026-08-25). Twenty-two AST gates named
+# after the rule each enforces — "only the declaring step writes its output",
+# "a population guard asserts equality not a floor" — authored with committed
+# baselines during a capture campaign and then reachable from NOTHING. No flow
+# clause, no runner, no tools/ci line. A regression guard nobody runs guards
+# nothing; these are the cheapest wiring in the tree and the easiest to have
+# missed, because each one passes and so nobody notices it never ran.
+#
+# ALL TWENTY-TWO WERE RUN FIRST and all exit 0 over REAL corpora — 1478, 1327,
+# 4360, 2842 modules parsed, not an empty scan between them. They are green
+# regression guards with no cadence: wiring them costs a landing nothing today
+# and catches the NEXT instance, which is the only thing a ratchet is for.
+#
+# The eleven siblings NOT here are excluded on measurement, not oversight.
+# Three exit 1 on a GENUINE finding and would block a landing on debt this
+# change does not own:
+#     every_required_metric_key_has_a_producer
+#     layer_membership_is_declared_not_inferred_from_a_filename_prefix
+#     metric_constant_across_differing_arms_is_not_measured
+# `gate_proof_vocabulary_has_a_producer` was the fourth. Its red was measured
+# FALSE (F15) and is repaired; it is DECLARED above, green, with a fixture.
+# Seven exit 2 NOT CHECKED because they need an argument no "run" line can
+# supply; those need a caller with project knowledge, not a cadence.
 
 # ORGANIC #720 / #693 — the ONE gate in the repo-process family that really was
 # wired to nothing. It was invisible to `checker_execution_wiring_audit` (wired
@@ -1659,6 +2038,37 @@ run "bundled work is named in NOTICE"   "$ROOT" python3 "$PG/bundled_attribution
 # them, and makes a SIXTEENTH red. `--strict` becomes correct once they are
 # triaged.
 run "silent remedy decline"             "$PLUGIN" python3 programs/silent_decline_audit.py programs --ratchet
+# ITS RUNTIME TWIN. `silent_decline_audit` reads SOURCE for a remedy that
+# declines without saying so; `sweep_reach_survey` RUNS every sweep-shaped
+# program in the tree against a POPULATED corpus none of their rules applies to,
+# and asks whether the exit code and stdout can tell "I looked and found
+# nothing" from "I never reached the check". Same disease, opposite instrument,
+# and the survey was reachable from nothing but its own unit test — so the ratio
+# it publishes was quoted in a change body and re-derivable by nobody.
+#
+# THE CORPUS IS POPULATED, NOT EMPTY, and that is the measurement. Three valid
+# trivial Verilog modules every sweep can READ and essentially no sweep's rule
+# JUDGES. An empty corpus would test "I was given nothing", which the shipped
+# `_gate_denominator` work already made visible everywhere; this tests the
+# quieter shape — a sweep that read 756 pairs in full, decided about none, and
+# exited 0 clean.
+#
+# `--max-silent 27`, NOT a bare run and NOT `--strict`. MEASURED at this commit:
+# 64 sweep-shaped programs discovered, 35 driven to a zero-reach run, 8 of the
+# 35 DISCLOSE and 27 are SILENT (29 the generic probe corpus cannot drive are
+# published as NOT_DRIVABLE rather than dropped, which is the survey refusing
+# its own version of the defect). A bare run returns 0 unconditionally — a gate
+# that cannot fail; failing on the whole 27 would wire a permanently red one.
+# The ratchet holds today's 27 visible, blesses none of them, and makes a
+# TWENTY-EIGHTH red. It is a number that may only shrink.
+#
+# `--programs-dir "$PLUGIN/programs"`, spelled out rather than left to the
+# program's default (which is the directory the SURVEY lives in): the fixture
+# engine substitutes the subject token-wise, and a gate that resolved its own
+# corpus from `__file__` would read the real tree no matter what subject it was
+# handed — an input no fixture can move is an input no fixture can prove
+# anything about.
+run "a sweep can say it judged nothing" "$ROOT" python3 "$PG/sweep_reach_survey.py" --programs-dir "$PLUGIN/programs" --max-silent 27
 
 # vibe-ic#428 — final_summary.md printed TWO verdict roll-ups over the same 63
 # steps and they disagreed on the BLOCKING-FAILURE count, with nothing marking

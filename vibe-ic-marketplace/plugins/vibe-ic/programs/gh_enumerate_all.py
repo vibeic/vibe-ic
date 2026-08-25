@@ -63,7 +63,16 @@ COLLECTIONS: Dict[str, Tuple[str, str]] = {
     "issues": ("issues", "number state title body createdAt url"),
     "pullRequests": ("pullRequests", "number state title body createdAt url"),
     "refs/tags": ("refs(refPrefix:\"refs/tags/\")", "name"),
-    "refs/heads": ("refs(refPrefix:\"refs/heads/\")", "name"),
+    # `target{oid}` rides along because a branch listing is used to decide
+    # whether two repositories hold the same work, and a name-only listing
+    # cannot answer that. `org_duplicate_fork_check._branch_fingerprint` is the
+    # caller: it compares `name@sha` across a fork and its upstream, and a fork
+    # whose branches all match is the one it recommends DELETING. That listing
+    # used to be `repos/<full>/branches?per_page=100`, which is failure three in
+    # the table above — at 100 branches the prefix reads as the collection, two
+    # forks agree on their first hundred, and the recommendation is to drop a
+    # fork whose difference sits past the cap.
+    "refs/heads": ("refs(refPrefix:\"refs/heads/\")", "name target{oid}"),
 }
 
 

@@ -183,3 +183,100 @@ def test_main_missing_project_dir_returns_2(tmp_path, monkeypatch):
     target = tmp_path / "does_not_exist"
     monkeypatch.setattr(sys, "argv", ["migrate_to_layout_p.py", str(target)])
     assert mod.main() == 2
+
+
+# ----------------------------------------------------------------------
+# --dry-run IS THE DETECTOR, AND IT HAS A VERDICT (2026-08-25).
+#
+# Wired as `advisory_program_exit_zero: "migrate_to_layout_p . --dry-run"` on
+# flow step D1 — the first step that writes into `phase1/`, which is the tree
+# this program renames `phase2a/` into. Before this contract existed, --dry-run
+# returned 0 on BOTH a canonical project and a pre-v2 one: the answer was only
+# in the prose, so no automatic caller could read it and the clause would have
+# been a permanently green gate that never ran.
+#
+# BOTH ARMS HAVE THE SAME DENOMINATOR — a real project tree either way. The
+# difference between them is the ANSWER, not the corpus.
+# ----------------------------------------------------------------------
+def _dry_run_main(proj: Path, monkeypatch) -> int:
+    import sys
+    monkeypatch.setattr(
+        sys, "argv", ["migrate_to_layout_p.py", str(proj), "--dry-run"])
+    return mod.main()
+
+
+def test_dry_run_exits_1_on_a_prev2_project(tmp_path, monkeypatch):
+    proj = _build_prev2(tmp_path)
+    assert _dry_run_main(proj, monkeypatch) == 1
+    # and it is still a DRY run: nothing moved.
+    assert (proj / "phase2a").is_dir()
+    assert not (proj / "phase1").exists()
+
+
+def test_dry_run_exits_0_on_a_layout_p_project(tmp_path, monkeypatch):
+    """SAME denominator: a populated project, already on Layout P."""
+    proj = tmp_path / "canon"
+    for d in ("phase1/generated_docs", "phase2/stage1/rtl",
+              "phase3/stage3", "reports", "input"):
+        (proj / d).mkdir(parents=True)
+    (proj / "phase1/generated_docs/L1.json").write_text("{}")
+    (proj / "provenance.jsonl").write_text(
+        json.dumps({"step": "d1", "outputs": ["phase1/generated_docs/L1.json"]})
+        + "\n")
+    assert _dry_run_main(proj, monkeypatch) == 0
+
+
+def test_dry_run_exits_1_on_provenance_residue_alone(tmp_path, monkeypatch):
+    """The directories were moved by hand; the audit trail still says phase2a."""
+    proj = tmp_path / "half"
+    (proj / "phase1").mkdir(parents=True)
+    (proj / "phase2").mkdir()
+    (proj / "provenance.jsonl").write_text(
+        json.dumps({"step": "d1", "outputs": ["phase2a/extracted_docs/a.md"]})
+        + "\n")
+    assert _dry_run_main(proj, monkeypatch) == 1
+    # DRY: the audit trail is untouched, so the residue is still there to find.
+    assert "phase2a/" in (proj / "provenance.jsonl").read_text()
+
+
+def test_apply_contract_is_unchanged_and_still_idempotent(tmp_path, monkeypatch):
+    """A migration that ran and left nothing behind is a SUCCESS, not a 1."""
+    import sys
+    proj = _build_prev2(tmp_path)
+    monkeypatch.setattr(
+        sys, "argv", ["migrate_to_layout_p.py", str(proj), "--no-git"])
+    assert mod.main() == 0
+    assert mod.main() == 0          # idempotent: second run is still 0
+    # ...and now the detector agrees the project is on Layout P.
+    assert _dry_run_main(proj, monkeypatch) == 0
+
+
+def test_provenance_rewrite_is_idempotent(tmp_path):
+    """THE DOCSTRING'S OWN PROMISE, over the arm that was breaking it.
+
+    Three of the six `_PATH_MAPS` replacements CONTAIN their own pattern, so a
+    plain `str.replace` re-fired on its own output: `manufacturing/yield.json`
+    became `phase3/stage5_manufacturing/yield.json` and then
+    `phase3/stage5_phase3/stage5_manufacturing/yield.json`. `ctx.moves` stayed
+    empty throughout, so the run reported itself a no-op while corrupting the
+    audit trail one level per re-run.
+    """
+    for src in ("manufacturing/yield.json",
+                "analog/hardmacro/x.lef",
+                "analog/analog_block_list.json",
+                "phase2a/extracted_docs/spec.md",
+                "phase2b/rtl.v",
+                "/abs/proj/phase2b/rtl.v"):
+        once = mod._rewrite_str(src)
+        assert mod._rewrite_str(once) == once, src
+        assert mod._rewrite_str(once * 1) == once, src
+
+
+def test_reapply_does_not_corrupt_provenance(tmp_path):
+    """End-to-end: migrate, migrate again, the audit trail is unchanged."""
+    proj = _build_prev2(tmp_path)
+    _run_all_steps(proj)
+    after_first = (proj / "provenance.jsonl").read_text()
+    _run_all_steps(proj)
+    assert (proj / "provenance.jsonl").read_text() == after_first
+    assert "stage5_phase3" not in after_first

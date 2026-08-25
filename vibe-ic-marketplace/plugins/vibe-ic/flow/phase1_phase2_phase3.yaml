@@ -656,6 +656,92 @@ steps:
         # gives the tier back. Promotion belongs with a fixture that can answer
         # it, not with a comment claiming it would pass.
         - advisory_program_exit_zero: "integration_spec_audit ."
+        # THE EXTRACTOR CHECKED AGAINST A SECOND EXTRACTOR OF THE SAME INPUT.
+        # `l_doc_parity_diff` is the deterministic comparator the 2026-05-29
+        # parity doctrine asks for: every fact the PROGRAM put in an L doc that
+        # a fresh-agent extraction of the same source did not, and — the half
+        # that matters — every fact the program emitted whose own quote cannot
+        # be found in the source corpus. That second class is HALLUCINATED, and
+        # it is the one downstream gates trust without a way to notice.
+        #
+        # It was authored, tested and merged and then reachable from nothing,
+        # because its second input does not exist on an ordinary run: the
+        # fresh-agent extraction is staged by hand into `phase1/agent_docs/`,
+        # beside the generated docs this step writes. So the clause is
+        # CONDITIONAL on that directory — the shape step 6's
+        # `fpga_led_probe_lint` already uses for a bench-produced input — and a
+        # run that staged no second extraction says so by name rather than
+        # comparing `phase1/generated_docs` against an empty directory and
+        # reporting parity.
+        #
+        # `--strict` is load-bearing: without it the program returns 0 whatever
+        # it finds, so an advisory slot would record "ok" over any number of
+        # hallucinations. With it, a hallucination is a recorded FINDING.
+        # ADVISORY, on this step's own measured ruling four clauses above: a
+        # blocking clause here costs D1 its PASS tier. No `--out-md` / `--out-json`
+        # sink, so nothing is promised in `required_outputs` on runs that never
+        # stage the comparison.
+        - advisory_program_exit_zero:
+            command: "l_doc_parity_diff --program-dir phase1/generated_docs --agent-dir phase1/agent_docs --strict"
+            condition_files_exist:
+              - "phase1/agent_docs/L*.json"
+            absent_condition_reason: "Scoped to a run that staged a second, independent extraction of the same source into phase1/agent_docs/. Nothing in this flow writes that directory — it is the fresh-agent side of the parity loop and arrives by hand — so on an ordinary run there is no second opinion to diff against, and comparing the generated docs with an empty directory would report perfect parity over nothing."
+        # ORPHANED, RE-HOMED (2026-08-25). D1 is the step where PROSE becomes a
+        # DECLARED VALUE, so it is the step that can be asked how much of the
+        # machinery doing that conversion never checks whether the sentence it
+        # matched was a DENIAL. `prose_polarity_census` counts exactly that over
+        # `programs/`, with a predicate SHARPER than the blocking gate
+        # `prose_polarity_consulted_check` (wired in tools/ci/repo_hygiene_gates.sh):
+        # it also sees a match bound by a `for` TARGET and a
+        # `setdefault(...).add(...)` write, neither of which the gate's
+        # `ast.Assign` walk can reach. MEASURED on this tree: 254 polarity-blind
+        # extractors under the sharper predicate against 212 under the gate's
+        # own, so 42 the gate cannot see.
+        #
+        # ADVISORY, AND IT MAY NEVER BE ANYTHING ELSE. Its own docstring: "NOT
+        # WIRED, DELIBERATELY ... a census wired as blocking would become the
+        # thing it was built to avoid", and
+        # `tests/test_prose_polarity_census.py::test_it_is_not_wired_as_a_blocking_gate`
+        # goes red if it ever reaches a plain `run ` in the landing lane.
+        # Sharpening the REFUSING gate instead would fail CI on 42 extractors
+        # that predate the change, and its debt register may only shrink, so
+        # they could not be recorded either. The advisory slot is the one wiring
+        # that RUNS it and PUBLISHES the number on every real run without
+        # letting the number refuse — which is the coverage its unit test could
+        # never give it.
+        #
+        # NO ARGV: `--programs` defaults to the shipped programs directory, which
+        # is the population. NO `--json` sink, so this clause promises
+        # `required_outputs` nothing.
+        - advisory_program_exit_zero: "prose_polarity_census"
+        # ORPHAN RE-HOMED (2026-08-25): `migrate_to_layout_p`, in the mode that
+        # only LOOKS. D1 is the FIRST step that writes into `phase1/`, and
+        # `phase1/` is precisely the tree this program renames `phase2a/` into.
+        # A pre-v2 project that reaches D1 ends up with TWO phase-1 trees — the
+        # new canonical one this step writes and the old one still sitting at
+        # `phase2a/` — and every later gate that globs `phase1/**` reads the
+        # new one and reports on a project whose other half it never saw. So
+        # the question "is this project on Layout P" is owned here, before the
+        # first write, and nowhere later.
+        #
+        # THE PROGRAM HAD TO BECOME ANSWERABLE FIRST, and that is a change in
+        # this same batch: `--dry-run` printed `moves: 0` or `moves: 4` and
+        # returned 0 EITHER WAY, so no automatic caller could read it and the
+        # only wiring it could ever have had was a human reading its output.
+        # It now exits 1 on pre-v2 residue and 0 on a project already on
+        # Layout P. The APPLY contract is untouched.
+        #
+        # --dry-run IS LOAD-BEARING AND IS THE ONLY MODE A GATE MAY RUN. Every
+        # mover is guarded by `ctx.dry_run` and the provenance rewrite is
+        # computed and discarded, so this clause writes nothing and promises
+        # `required_outputs` nothing. Without the flag the same program MOVES
+        # THE PROJECT'S DIRECTORIES AND REWRITES ITS PROVENANCE — a migration
+        # inside a compliance gate, which is not a thing a gate gets to do.
+        #
+        # ADVISORY, not blocking: a pre-v2 project is a project a human has to
+        # decide about (the remedy MOVES their tree), and a run that has not
+        # been migrated yet is a real state, not a refusal.
+        - advisory_program_exit_zero: "migrate_to_layout_p . --dry-run"
     blocks_on: []
 
   - id: 0.5ic
@@ -773,6 +859,14 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      # Step 1 STAGES the captured-lesson digest for its RTL author
+      # (`design_one_shot_runner._stage_author_knowledge_digests` ->
+      # `_lesson_digest`), and nothing declared it — so the flow produced an
+      # artefact no step owned. Invisible until step 2 gained a clause that
+      # READS it, at which point d7 named the pair
+      # (`W2:produced_consumed_undeclared`). The gap was always here; a consumer
+      # is what made it observable, which is the second time in this batch.
+      - "phase2/stage1/lessons.md"
       # MOVED TO D1 (63x9 d4/step1, issue #1219). The Phase-1
       # extraction-coverage report was declared HERE and read by no clause of
       # this step's own gate. It is a Phase-1 artefact in every respect: it
@@ -863,6 +957,10 @@ steps:
                                             # ripple add/compare chain is a
                                             # slow-corner (SS) closure risk.
                                             # Reports, never blocks.
+      - fresh_agent_rtl_bug_density_metric  # ADVISORY: counts fix:/bug:/hotfix:
+                                            # commits over this project's RTL
+                                            # paths. Observability, not a
+                                            # verdict. Reports, never blocks.
     required_outputs:
       - "reports/phase2/lint/rtl_hygiene.json"
       - "reports/phase2/lint/rom_init_lint.json"
@@ -1014,6 +1112,24 @@ steps:
         # not author), then a re-measure, then a per-step promotion with the
         # new number stated.
         - advisory_program_exit_zero: "arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json"
+        # RTL BUG DENSITY — the count half of this step's RTL-bug accounting.
+        # `rtl_bug_report_schema_check` above grades the SHAPE of each claimed
+        # RTL bug; nothing counted how many the candidate RTL actually needed.
+        # The metric walks git log over this project's own RTL paths and counts
+        # commits whose subject begins `fix:` / `bug:` / `hotfix:`, so the trend
+        # across releases says whether spec-to-rtl is stabilising.
+        #
+        # ADVISORY, on the program's own written instruction: "This is an
+        # ADVISORY tool -- it does NOT participate in flow_compliance verdicts."
+        # A count is not a verdict and there is no threshold to block on.
+        # rc 2 (project not in a git repo / no RTL) is the disclosed-skip tier
+        # and records `n/a (input not present)`, never a clean result.
+        #
+        # `--no-learning-log` is load-bearing: without it the program appends a
+        # row to `docs/design/BENCHMARK_PLUGIN_LEARNING.md` in the REPOSITORY
+        # root, so a flow run would mutate a tracked doc outside the project it
+        # is grading. No `--json` sink, so the clause declares no artefact.
+        - advisory_program_exit_zero: "fresh_agent_rtl_bug_density_metric . --no-learning-log"
         # D9 Phase 1 — every submodule L9 DECLARES exists as a `module` in the
         # RTL this flow generated, and is instantiated by something.
         #
@@ -1535,6 +1651,13 @@ steps:
       # four LED-probe anti-patterns of skills/fpga-led-probe-allocation. See
       # the gate leg for why it is advisory and what would make it blocking.
       - fpga_led_probe_lint
+      # ORPHANED, RE-HOMED HERE, AND IT IS THE PRODUCER SIDE OF THE CLAUSE
+      # ABOVE. `fpga_led_probe_lint` JUDGES an LED allocation that already
+      # exists; `auto_diagnostic_led_synth` PROPOSES one for a wrapper whose
+      # FSM has no LED at all — the case the lint is silent about, because a
+      # state register nothing drives an LED from breaks none of the four
+      # anti-patterns. Wired below as `advisory_program_exit_zero`.
+      - auto_diagnostic_led_synth
     required_outputs:
       - "phase2/stage1/fpga/output_files/*.sof"
       - "phase2/stage1/fpga/output_files/*.map.rpt"
@@ -1629,6 +1752,49 @@ steps:
               than nothing at all. The clause RECORDS; it never blocks, so a
               design with a board is judged on the finding and one without is
               judged on nothing and says so.
+        # ── `auto_diagnostic_led_synth`, wired for the first time ────────────
+        #
+        # THE QUESTION THIS STEP OWNS, AND THE HALF OF IT NOTHING ASKED. Step 6
+        # is board bring-up: a .sof is programmed and the only visibility a
+        # DE10-Lite-class board gives back is eight LEDs. `fpga_led_probe_lint`
+        # (the clause above) judges an allocation that EXISTS against the four
+        # anti-patterns of skills/fpga-led-probe-allocation. It has nothing to
+        # say about a wrapper whose FSM drives NO LED — no instantaneous-on-
+        # pulse, no sticky-without-clear, no mode mix, no shared pin. A stuck
+        # FSM with every LED spare is clean by that lint and invisible on the
+        # bench, which is the exact failure the LED probes exist to catch.
+        #
+        # This program scans the wrapper for FSM state registers and for LED
+        # indices nothing already drives, and EMITS A PROPOSAL — a .patch plus
+        # the rationale behind it. It never edits RTL.
+        #
+        # WHY `advisory_`, AND WHY IT COULD NOT BE ANYTHING ELSE. It is a
+        # CODE-GEN HELPER, not a gate: its own contract is "exit 0 always
+        # (advisory tool, never fails CI)", including the three no-proposal
+        # outcomes (no wrapper found / no FSM state regs / no spare LED), each
+        # of which prints its reason. A program that cannot reach a
+        # content-earned failure must never occupy a blocking slot —
+        # `program_exit_zero` and `optional_program_exit_zero` are both
+        # BLOCKING (`_evaluate_gate` returns the latter's `passed` verbatim
+        # into `all_of`), so wiring it there would install a permanently green
+        # leg that reads like a check. `advisory_` is the slot that EXECUTES an
+        # emitter and records what it produced without pretending to judge.
+        #
+        # THE OUTPUT IS NOT IN `required_outputs`, DELIBERATELY. Same footing
+        # as the lint's `--json` above: the proposal is written only when there
+        # is something to propose, nothing else in the flow reads it, and
+        # `required_outputs` is UNCONDITIONAL — declaring a conditional emit
+        # there would assert a production this clause's own condition denies.
+        - advisory_program_exit_zero:
+            command: "auto_diagnostic_led_synth . --out-dir reports/phase2/fpga/led_synth"
+            condition_files_exist: ["phase2/stage1/fpga/*.qsf"]
+            absent_condition_reason: >-
+              Scoped to the same population as the LED-probe lint beside it: a
+              run Quartus actually built. With no .qsf there is no FPGA top,
+              no board, and no LED budget to allocate, so a proposal would be
+              advice about hardware this run does not have. The clause EMITS;
+              it never blocks, so a run with a board gets the proposal and one
+              without gets a NAMED not-applicable rather than silence.
     blocks_on: [2, 4, 5]
 
   - id: 7
@@ -1691,6 +1857,30 @@ steps:
         # design-staged macro Liberties exist in benchmark-data and none
         # declares a non_seq_* arc, so every published cell SKIPs.
         - advisory_program_exit_zero: "macro_non_seq_arc_contract_check . --json reports/phase2/gates/macro_non_seq_arcs.json"
+        # ── `stage1_compliance`, wired for the first time ────────────────────
+        #
+        # THE STAGE-1 EXIT QUESTION, ASKED AT THE STAGE BOUNDARY. Step 7 is the
+        # FIRST stage-2 step, so its gate is the moment "Stage 1 is closed"
+        # stops being someone's assumption and becomes a recorded answer. That
+        # is the question this program was written for and it says so in its
+        # own usage line: "run this after completing Steps 01-06 and before
+        # starting Stage 2 synthesis". It had no caller, so the boundary it
+        # names was never checked by anything.
+        #
+        # WHY NOT STEP 6, the last stage-1 step, which is the other candidate
+        # for owning a stage-1 exit gate: `stage1_compliance` IS
+        # `flow_compliance_check --stage 1 --strict`, and `--stage 1` evaluates
+        # every stage-1 step's gate. Wired into a stage-1 step it would
+        # re-enter itself without bound. Wired here it cannot: this step is
+        # stage2, so the nested `--stage 1` pass filters it out and terminates.
+        #
+        # WHY `advisory_`, NOT `optional_`. `optional_program_exit_zero` is
+        # BLOCKING — a finding there denies step 7 the pass tier, which would
+        # make an incomplete Stage 1 fail the CONSTRAINTS step and send the
+        # reader after the wrong artefact. The verdict belongs on the record,
+        # not in step 7's tier. It writes no artefact, so nothing is added to
+        # `required_outputs`.
+        - advisory_program_exit_zero: "stage1_compliance ."
     blocks_on: [1]
 
   - id: 8
@@ -1936,6 +2126,38 @@ steps:
         # deliberately). "I could not read it" and "I read it and it was fine"
         # must not produce the same artefact.
         - program_exit_zero: "area_total_vs_budget_check . --json reports/phase2/gates/area_budget.json"
+        # EVERY CELL THE MAPPED NETLIST INSTANTIATES MUST EXIST IN THE STAGED
+        # PDK'S LIBERTY. This is step 9's own question and no other step's: the
+        # netlist is step 9's required output, and it is the last point before
+        # PnR at which a cell from the wrong library can still be traced to the
+        # synthesis that emitted it.
+        #
+        # IT IS NOT THE QUESTION `declared_pdk_is_the_pdk_used_check` (step 36)
+        # ASKS, and the two are not substitutes. That gate compares the process
+        # the design DECLARED against the libraries the tool LOGS name; this one
+        # compares the cells the netlist actually CONTAINS against the cells the
+        # staged liberty actually DEFINES. A log naming the right library while
+        # the netlist carries a cell from somewhere else — a hand-edited netlist,
+        # a merged macro, a library swapped between runs — is invisible to the
+        # first and is exactly what the second reads.
+        #
+        # ADVISORY, and the reason is the program's argv rather than a
+        # preference: `--pdk-lib` is REQUIRED and unmatched paths are WARNED and
+        # skipped, so a run whose liberty is staged somewhere this pattern does
+        # not reach would compare its cells against an EMPTY cell set and report
+        # every one of them missing. `condition_files_exist` keeps it from
+        # running on that zero denominator at all, and the advisory tier keeps
+        # the remaining unknown — whether this pattern finds a project's whole
+        # library — from deciding a landing until it has been measured across
+        # the corpus.
+        #
+        # No `--json`: an advisory that writes an artefact would have to be
+        # declared in `required_outputs`, and its finding would then cascade
+        # into the report-reading gates as though it had been wired blocking.
+        - advisory_program_exit_zero:
+            command: "pdk_consistency_check --netlist phase2/stage2/synth/netlist.v --project-json input/project.json --pdk-lib input/pdk/liberty/*.lib"
+            condition_files_exist: ["input/pdk/liberty/*.lib"]
+            absent_condition_reason: "No liberty is staged under input/pdk/liberty/, so there is no cell set to compare the netlist against. Whether a run may reach synthesis with no staged PDK at all is `declared_pdk_is_the_pdk_used_check`'s question at step 36, and it is BLOCKING there; this clause would only be able to report every cell missing against an empty library, which is a zero-denominator FAIL this repo refuses."
     blocks_on: [2, 3, 8]
 
   - id: 10
@@ -3040,6 +3262,30 @@ steps:
         # the flow's honest encoding of "could not measure", and a step whose
         # evidence is partly vacuous SHOULD read that way.
         - program_exit_zero: "macro_obs_load_parity_check . --json reports/phase3/pnr/macro_obs_load_parity.json"
+        # THE STAGE-2 BOUNDARY, ASKED BY THE STEP THAT CROSSES IT.
+        # `stage2_compliance` is the end-of-stage gate the README and
+        # AGENT_USAGE_GUIDE both name for stage2, and its own docstring says
+        # exactly where it belongs: "Run this after completing Steps 07-13 and
+        # before starting Stage 3 floorplan/placement." This IS that step —
+        # 15 is stage3's first step and already declares `blocks_on: [13, 14,
+        # A8]`, i.e. it is the place the flow already admits stage2 must be
+        # finished. Until now nothing invoked the wrapper, so the boundary was
+        # asserted in prose and measured nowhere.
+        #
+        # ADVISORY, not blocking, for two reasons. (a) A blocking clause here
+        # would re-litigate every stage2 step's own verdict from inside a
+        # stage3 step, so one stage2 finding would refuse the PASS tier twice.
+        # (b) The wrapper hardcodes `--strict`, which is a stricter reading
+        # than the run's own invocation may have chosen; a stricter opinion is
+        # a finding worth printing, not a second veto.
+        #
+        # NO RECURSION: the wrapper runs `flow_compliance_check --stage 2`,
+        # which evaluates stage2 steps ONLY. This clause lives on a stage3
+        # step, so it is outside that filter and cannot re-enter itself. The
+        # same reasoning is why stage3's wrapper is wired on a stage4 step and
+        # stage4's on a stage5 step, and why none of the three may ever be
+        # wired inside its own stage.
+        - advisory_program_exit_zero: "stage2_compliance ."
     blocks_on: [13, 14, A8]
 
   # ── chip/IC path only ────────────────────────────────────────────────
@@ -5031,6 +5277,54 @@ steps:
         # ADVISORY, no `--report`: it writes nothing, and an empty dir is rc=2
         # (vacuous), never a fail.
         - advisory_program_exit_zero: "perc_corpus_sweep ."
+        # TWO MORE ORPHANS RE-HOMED HERE (2026-08-25), both on Step 31's own
+        # question and neither of them a second opinion on a blocking slot.
+        #
+        # `lvs_triage_classify` is the program half of the `lvs-triage` skill
+        # this step already declares: the skill enumerated a 4-category triage
+        # plus a top-3 root-cause heuristic, all deterministic, and the program
+        # was written from it and then called by nothing. The blocking slots
+        # above decide WHETHER the LVS matched; none of them says WHAT KIND of
+        # mismatch it was, which is the first thing a reader needs and the only
+        # thing this program claims. ADVISORY because a categorised mismatch is
+        # a description, not a verdict — `lvs_report_check` and
+        # `lvs_signoff_guard` own the verdict, and a triage that could refuse
+        # the step would be a third authority over one report. It writes
+        # nothing: `--out-md` / `--out-json` are deliberately omitted, so this
+        # clause adds no `required_outputs` row.
+        - advisory_program_exit_zero: "lvs_triage_classify --report reports/phase3/lvs.rpt"
+        # `mcp_execution_verify` is the L3 layer README.md advertises — "MCP
+        # tool execution proof via manifest", against an agent that reports a
+        # tool run it never made. It was declared by SIX skills as the
+        # `X_mcp_execution_verify` cross-check id, and NOTHING dispatches a
+        # `cross_checks:` row outside the ppa-* skills' own tests, so the
+        # advertised layer had no executor anywhere in the tree.
+        #
+        # THIS STEP IS WHERE IT BELONGS, not a whole-run slot: Step 31 is the
+        # one that names `mcp_tools: [eda_drc_klayout, eda_lvs]`, and `drc` /
+        # `lvs` are the exact `step` tokens those two tools write into the
+        # manifest (mcp-eda/src/index.js). Asking the question here asks it of
+        # the tools the step declares; asking it once at the end would have to
+        # invent a list.
+        #
+        # CONDITIONED on the manifest, because L2 already covers its absence:
+        # the blocking `provenance_check` slots above require the DRC and LVS
+        # reports to name their tool, so a run with no MCP server at all is
+        # already evidenced by artefact. What is left for L3 is the case the
+        # artefact cannot see — a manifest that EXISTS and does not record
+        # these two steps, or records them stale or FAIL. No `--out-dir`, so
+        # this clause writes nothing either.
+        - advisory_program_exit_zero:
+            command: "mcp_execution_verify --manifest latest_results.jsonl --require-steps drc,lvs"
+            condition_files_exist: ["latest_results.jsonl"]
+            absent_condition_reason: >-
+              Scoped to a run that drove the MCP-EDA server: the manifest is
+              written by the MCP tools themselves and by nothing in this flow,
+              so a program-only run has no execution record to read and this
+              gate would be reporting on an absence rather than judging one.
+              The DRC and LVS artefacts, and the blocking `provenance_check`
+              slots that require those artefacts to name the tool that made
+              them, are what evidence a tool run on that path.
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
   # ── Step 32: Post-route timing repair pass ───────────────────
@@ -5442,6 +5736,39 @@ steps:
       all_of:
         - program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
         - advisory_program_exit_zero: "report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json"
+        # ORPHANED, RE-HOMED (2026-08-25). The sibling question to the clause
+        # directly above, asked of the EMITTERS rather than of the emitted
+        # files. `report_belongs_to_project_check` asks whether a published
+        # report is ABOUT this project;
+        # `provenance_value_is_resolved_not_constant_census` asks whether the
+        # field that states where a report's numbers CAME FROM holds a value the
+        # emitter RESOLVED, or a path typed into its own source. A constant
+        # publishes the path the author intended to read, so it stays
+        # correct-looking when the read failed, when the layout moved, and when
+        # the artefact is about another design entirely — measured as a 487-byte
+        # antenna report, byte-identical across two designs on two open process
+        # kits, citing a source path the cell does not contain. Step 36 is the
+        # step at which every such report is believed at once, so it is the step
+        # that owns the count.
+        #
+        # ADVISORY, ON THE PROGRAM'S OWN WRITTEN INSTRUCTION: "THIS IS A CENSUS,
+        # NOT A GATE. IT MUST NOT BE WIRED AS A BLOCKING CHECK." The REFUSING
+        # half of this rule is a DIFFERENT program,
+        # `provenance_value_is_resolved_not_constant`, already wired blocking in
+        # tools/ci/repo_hygiene_gates.sh over a NARROW population with no
+        # inventory. This one reports the WIDE population, the classification
+        # and the debt recorded against it, and returns 0 whatever it finds
+        # unless `--strict` is passed — which nothing here does, and nothing in
+        # this flow should. MEASURED on this tree: 1327 modules parsed, 502
+        # source-naming field writes, 12 filled from a path constant, 10
+        # recorded as known debt, 0 unrecorded.
+        #
+        # NO ARGV. With no `--root` it resolves the repository root from its own
+        # `__file__`, which is what aims it at the EMITTERS; `--root .` would aim
+        # it at the design tree, which carries no `programs/`, and every run
+        # would bank a vacuous rc 2 instead. No `--json` sink, so nothing is
+        # promised in `required_outputs`.
+        - advisory_program_exit_zero: "provenance_value_is_resolved_not_constant_census"
         # D9 Phase 1 — doctrine rule #4 at the step that signs off. A
         # step-internal `verdict: FAIL` must be ACKNOWLEDGED (waivered, or the
         # parent step's pass.flag dropped); silently keeping pass.flag while a
@@ -5825,6 +6152,28 @@ steps:
         # project reusing no catalogue IP — correctly vacuous), rc=0 on a
         # complete blob, rc=3 when the blob carries a REFUSED line.
         - advisory_program_exit_zero: "gds_ip_attribution build-text ."
+        # THE STAGE-3 BOUNDARY, ASKED BY THE STEP ITS OWN DOCSTRING NAMES.
+        # `stage3_compliance` is the end-of-stage gate the README names for
+        # stage3, and it does not merely say "run me after stage 3" — it names
+        # its consumer: "GDS ... is in Stage 4 and is gated on Stage 3 being
+        # fully clean — do NOT produce GDS if this gate fails." This is the
+        # GDSII output step. No other step in this flow owns that sentence, and
+        # until now nothing invoked the wrapper at all, so the prohibition was
+        # published and never measured.
+        #
+        # ADVISORY. Step 37 already carries FOUR blocking clauses of its own on
+        # the artefact it produces (size, substance, port labels, provenance);
+        # the stage-3 verdict is a second opinion about upstream steps that
+        # each have their own gate, and re-blocking here would refuse this
+        # step's tier for a finding that already refused another step's. The
+        # wrapper also hardcodes `--strict`, a stricter reading than the run's
+        # own invocation may have chosen.
+        #
+        # NO RECURSION: `flow_compliance_check --stage 3` evaluates stage3
+        # steps only, and step 37 is stage4 — outside the filter, so this
+        # clause cannot re-enter itself. It would recurse without bound if
+        # wired onto any stage3 step, which is why it is not.
+        - advisory_program_exit_zero: "stage3_compliance ."
     blocks_on: [34, 36]
 
   # ── cell/IP path — TERMINAL ──────────────────────────────────────────
@@ -5994,6 +6343,44 @@ steps:
         # have not run, and is exactly the state its sibling
         # `gate_proof_vocabulary_has_a_producer` reports rc=1 about today.
         - advisory_program_exit_zero: "ppa_signoff_records ."
+        # ORPHANED, RE-HOMED (2026-08-25). `every_required_metric_key_has_a_
+        # producer` was authored, tested and merged and then invoked by nothing
+        # but its own test. It reads the SAME sign-off axis table
+        # (`_ppa/feasibility.DEFAULT_AXES` — setup, hold, drv, drc, lvs,
+        # antenna, ir, em, equivalence, eco_readiness) that the clause ABOVE
+        # emits canonical `vibeic.ppa.metric` records for, and asks the one
+        # question that table cannot answer about itself: is every axis
+        # actually PROVABLE from what this run emitted, or does an axis prove
+        # from a metric name no producer here ever MEASURED?
+        #
+        # WIRED HERE, IMMEDIATELY AFTER ITS PRODUCER, AND NOWHERE EARLIER.
+        # `all_of` evaluates its sub-gates in order, so `ppa_signoff_records`
+        # has already written this run's records by the time this clause reads
+        # them. 37.5ic is also the step whose own comment above records that it
+        # is "the FIRST point where every axis this reads coexists — drc_
+        # signoff.json, lvs_verdict.json, antenna, IR and spare_cells.json".
+        # At step 36 the records do not exist yet (37.5ic blocks_on 37, which
+        # blocks_on 36), so the same clause there would be rc 2 on every run
+        # forever — a clause that never ran, which is the shape #1121 and the
+        # `tapeout_docs_gen` v1.11.3 defect above both name.
+        #
+        # ADVISORY, and the measurement is why. Driven over this repository's
+        # own record trees it is rc 1: the `em` and `equivalence` axes have
+        # 0 MEASURED against 370 NOT_MEASURED apiece, and `ppa-e2e` adds
+        # `eco_readiness`. Those are REAL — a producer declares the name and no
+        # run has ever measured it — but they are a producer-side gap that
+        # predates this wiring, and blocking a tape-out precheck on it would be
+        # the "declare an undeclared artefact and relocate the red" shape this
+        # step's own notes refuse. The advisory slot RUNS it and RECORDS the
+        # verdict on every real run, which is what its unit test could never do.
+        #
+        # NO `--json`: the gate writes nothing unless handed one, so it cannot
+        # cascade into `step_internal_fail_bubble_up_check` at step 36 through a
+        # verdict-bearing report, and this step's `required_outputs` needs no
+        # new entry. Bare invocation, positional root — its parser takes
+        # `root` positionally (`nargs="?"`), so `--root` would be
+        # `unrecognized arguments` -> rc 3 on every arm.
+        - advisory_program_exit_zero: "every_required_metric_key_has_a_producer ."
     # 0.5ic writes the router files this step's condition reads, the template
     # the operator's arm is run against, and the declaration our arm compares
     # the layout to.
@@ -6128,6 +6515,46 @@ steps:
       all_of:
         - json_field_true: {file: "reports/phase2/fpga/on_board_pass.json", field: "all_scenarios_passed", expect: true}
         - program_exit_zero: "fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1"
+        # WHO IS BLOCKED, THE BOARD OR THE RTL — asked at the step that owns the
+        # on-board verdict. `hw_vs_rtl_verdict_check` was authored in the v0.45
+        # cycle from a measured mistake: "hardware blocked" was declared after
+        # two RTL spins whose tester responses DIFFERED byte-for-byte, which is
+        # proof the bug was still in the RTL. It was then reachable from
+        # nothing — `flow_compliance_check`'s own exclusion list carries the
+        # line `"hw_vs_rtl_verdict_check" — needs hardware verdict file`, which
+        # named the reason it could not be auto-run and left it unwired.
+        #
+        # CONDITIONAL, on the same shape step 6's `fpga_led_probe_lint` uses:
+        # the responses directory is written by whatever bench harness drove
+        # the variants, so on a headless doc-to-GDS run there is nothing to
+        # look at and the clause says so by name instead of running over an
+        # empty dir. When a blame campaign HAS been recorded, the gate reads
+        # every variant and refuses the hardware verdict unless at least three
+        # of them returned a byte-identical FAIL.
+        #
+        # ADVISORY, not blocking: the step's own two clauses already decide
+        # whether the board passed. This one judges the REASONING about a
+        # failure, which is a finding to record, never a second pass/fail.
+        # No `--json` sink, so it declares no artefact `required_outputs`
+        # would then have to promise on every run.
+        #
+        # AND WHEN THE VARIANTS DIFFER, IN WHICH FIELD. `--layout` names the
+        # project's OWN `frame_layout.json` -- the tester is the user's choice,
+        # so the field table is a per-project fact this flow never synthesises.
+        # With one present the differing frames are decoded field-by-field
+        # through `tester_verdict_frame_decode` (header / opcode / payload / CRC
+        # / verdict, plus the `frame_offset_shift` / `payload_truncated` /
+        # `crc_mismatch` hints); without one the finding is exactly the bare
+        # byte indices it was before, and the gate says which of the two
+        # happened rather than decoding nothing quietly. The path is a SIBLING
+        # of `hw_blame/`, never inside it: every `*.json` under the responses
+        # dir is loaded as a variant, so a layout stored there would be read as
+        # a malformed tester response (MEASURED: one INVALID_VARIANT finding).
+        - advisory_program_exit_zero:
+            command: "hw_vs_rtl_verdict_check --responses-dir reports/phase2/fpga/hw_blame --layout reports/phase2/fpga/frame_layout.json"
+            condition_files_exist:
+              - "reports/phase2/fpga/hw_blame/*.json"
+            absent_condition_reason: "Scoped to a run that actually ran a hardware-vs-RTL blame campaign. The per-variant tester responses are produced by the bench harness, never by this flow, so a run with no board and no variant sweep has nothing to compare; the gate would be reading an empty directory rather than judging a verdict. The step's own on-board attestation clauses still decide whether the board passed."
     # Step 6 is the ONLY step in this flow that compiles/burns an FPGA image
     # and the sole producer of any .sof (grep the file: 6 and 39 are the only
     # steps that name a .sof path, and 39's own programs — bringup_plan_gen,
@@ -6351,7 +6778,29 @@ steps:
       - "phase3/stage5_manufacturing/mask_set_received.json"
       - "phase3/stage5_manufacturing/wafer_lot_received.json"
     gate:
-      program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
+      all_of:
+        - program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
+        # THE STAGE-4 BOUNDARY, ASKED BY THE STEP THAT SPENDS THE MASK SET.
+        # `stage4_compliance` is the end-of-stage gate the README names for
+        # stage4 (power analysis, metal fill, DFM, tapeout checklist, GDSII,
+        # foundry handoff, FPGA sign-off). Stage 4 is the last stage a design
+        # can still be fixed in; step 40 is the first step after it and this
+        # step's own notes say "Not waivable for production tape-out". Masks
+        # are cut here, so this is the last moment at which "was stage 4
+        # actually finished" is a question anyone can act on. Nothing invoked
+        # the wrapper before, so the boundary was documented and unmeasured.
+        #
+        # ADVISORY. Step 40 records what the FOUNDRY shipped back; a stage-4
+        # finding is upstream of that intake and each stage-4 step already
+        # carries its own blocking gate. Re-blocking here would refuse the
+        # intake record for a defect the intake did not cause. The wrapper also
+        # hardcodes `--strict`.
+        #
+        # NO RECURSION: `flow_compliance_check --stage 4` evaluates stage4
+        # steps only, and step 40 is stage5_manufacturing — outside the filter.
+        # Wired onto any stage4 step (37.5ic, 38, 39 are the tempting ones) it
+        # would re-enter itself without bound, which is why it is not.
+        - advisory_program_exit_zero: "stage4_compliance ."
     blocks_on: [38]
     notes: |
       External step. Plugin records lot id, mask set version, and

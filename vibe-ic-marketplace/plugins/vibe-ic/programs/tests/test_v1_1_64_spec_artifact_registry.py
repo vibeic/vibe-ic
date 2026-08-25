@@ -58,10 +58,27 @@ def test_generate_routes_to_correct_generator():
 
 
 def test_prose_yields_no_structural_artifact():
-    # a plain prose counter has no table/k-map/FSM-table artifact -> detect empty,
-    # generate None (honest: this is the AI's job, not a deterministic solve)
-    assert R.detect(PROSE) == []
+    # A plain prose counter has no table/k-map/FSM-table artifact, so nothing here
+    # can be deterministically SOLVED and `generate` is None (honest: this is the
+    # AI's job).
+    #
+    # THIS USED TO ASSERT `R.detect(PROSE) == []` AND THAT SAID TWO THINGS AT
+    # ONCE. The claim the test is named for is the first one; the empty list also
+    # asserted that the registry recognises NOTHING in this prompt, which was only
+    # true while the registry could not read an interface. The prompt states three
+    # ports, `pinout_table` is a live catalog element type, and reporting an
+    # interface is not a solve -- a row that can synthesise RTL carries
+    # `generate`, and the assertion below names exactly those and requires none of
+    # them to fire. The bare `== []` could not distinguish "solved nothing" from
+    # "recognised nothing", so it is split into the two claims it was standing in
+    # for.
+    detected = R.detect(PROSE)
     assert R.generate(PROSE) == (None, None)
+    solvable = {a.key for a in R.REGISTRY if a.generate}
+    assert [d["type"] for d in detected if d["type"] in solvable] == []
+    pinout = next((d for d in detected if d["type"] == "pinout_table"), None)
+    assert pinout is not None, "the prompt declares clk, reset and q"
+    assert pinout["structured"]["pin_count"] == 3
 
 
 def test_registry_catalog_is_nonempty_and_typed():

@@ -2,6 +2,14 @@
 """prose_polarity_census.py — how many prose extractors do NOT consult polarity,
 counted with a predicate sharper than the gate's, and never blocking on it.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads, and it says the same thing NOT WIRED, DELIBERATELY
+says below in prose. It is here because prose is not a decision: until a gate
+states its intent in the one place the audit reads, "wired where it cannot
+block" and "nobody decided" are the same record.
+
 WHY THIS EXISTS SEPARATELY FROM THE GATE
 ========================================
 `prose_polarity_consulted_check` refuses: a new polarity-blind extractor fails

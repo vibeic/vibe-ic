@@ -94,6 +94,9 @@ from typing import Dict, List, Optional
 
 from _gate_denominator import DENOMINATOR_KEY, Denominator, line_of  # noqa: E402
 from _gh_cli import gh as _gh  # noqa: E402
+# The branch listing is an ENUMERATION, and this program's verdict is only as
+# good as its completeness — see `_branch_fingerprint`.
+from gh_enumerate_all import enumerate_all as _enumerate_all  # noqa: E402
 
 RC_CLEAN, RC_DUPLICATES, RC_CANNOT_CHECK = 0, 1, 2
 
@@ -117,13 +120,35 @@ def _branch_fingerprint(full: str) -> Optional[str]:
 
     None is a THIRD state and never collapses into "matches" or "differs". A
     fork we could not read is the one we must not recommend deleting.
+
+    EVERY branch, and that word is load-bearing. This read used to be
+    `gh api repos/<full>/branches?per_page=100`, a SINGLE REST page: at exactly
+    100 branches the answer is a prefix that is byte-indistinguishable from a
+    complete listing, and the consequence here is the one the module notes
+    forbid. Two repositories whose first hundred branches agree produce the same
+    fingerprint, the fork is scored `empty`, and this program recommends
+    DELETING a fork whose own work sits past the cap. `gh_enumerate_all`
+    paginates the `refs/heads` connection to exhaustion and asserts the node
+    count against the connection's declared `totalCount`, so a short read is an
+    error rather than a smaller answer — and an error lands in the `None` state,
+    which is exactly where an unreadable fork belongs.
     """
-    rc, out, _ = _gh(["api", f"repos/{full}/branches?per_page=100",
-                      "--jq", '[.[]|"\\(.name)@\\(.commit.sha)"]|sort|join(" ")'],
-                     timeout=60)
-    if rc != 0:
+    owner, _, name = full.partition("/")
+    if not name:
         return None
-    fp = (out or "").strip()
+    res = _enumerate_all(owner, name, "refs/heads")
+    if "error" in res:
+        return None
+    pairs = []
+    for node in res.get("nodes") or []:
+        branch = node.get("name")
+        sha = (node.get("target") or {}).get("oid")
+        if not branch or not sha:
+            # A ref we cannot pin to a commit makes the whole fingerprint
+            # unusable: comparing it would compare two incomplete things.
+            return None
+        pairs.append(f"{branch}@{sha}")
+    fp = " ".join(sorted(pairs))
     return fp or None
 
 

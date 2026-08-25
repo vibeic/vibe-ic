@@ -164,6 +164,7 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import shutil
@@ -239,6 +240,26 @@ class Shuttle:
     pdk: str = ""
     note: str = ""
     retired_reason: str = ""
+    #: THE IN-TREE PROGRAMS THAT PREPARE A SUBMISSION FOR THIS SHUTTLE, as
+    #: MODULE NAMES that get IMPORTED — not as a sentence.
+    #:
+    #: This started as prose. `_EFABLESS_OPEN_MPW.retired_reason` said the path
+    #: is kept "so the three programs still pointed at it read as RETIRED
+    #: rather than orphaned", and then named them in running text. A name in a
+    #: sentence survives the deletion or rename of the thing it names: the
+    #: claim keeps reading true while the programs it is about are gone. That
+    #: is the same defect as a re-typed suffix tuple, one register over.
+    #:
+    #: `resolve_submission_prep` imports every entry, so the claim is
+    #: RECOMPUTED on the run instead of remembered — exactly what
+    #: `resolve_in_tree_coverage` already does for `LadderStep.covered_by`, and
+    #: for the same reason.
+    #:
+    #: PREPARATION, NOT REFUSAL. These BUILD the submission; they are not a
+    #: second authority on it and nothing here reads an exit code. A shuttle
+    #: this tree cannot yet prepare a submission for carries an empty tuple,
+    #: which is a different fact from a shuttle whose prep programs are gone.
+    submission_prep: Tuple[str, ...] = ()
 
 
 # The live path. Ladder order is `PrecheckFlow.Steps` from the upstream tool,
@@ -368,9 +389,34 @@ _EFABLESS_OPEN_MPW = Shuttle(
         "the shuttle operator ceased operating in 2025. The counterparty no "
         "longer accepts or refuses submissions, so no run of this ladder can "
         "produce an external verdict. The path is kept — not deleted — so the "
-        "three programs still pointed at it (mpw_precheck_driver, "
-        "mpw_precheck_result_gate, caravel_integration_runner.step_c1_run_"
-        "precheck) read as RETIRED rather than orphaned."),
+        "programs still pointed at it read as RETIRED rather than orphaned; "
+        "which ones those are is `submission_prep` below, resolved by import "
+        "on every run rather than restated in this sentence."),
+    # The Caravel harness chain from the spm pilot, in the order it runs:
+    # the orchestrator, the wrapper/user_defines emitter it calls at A3/A4,
+    # and the driver it delegates the B-phase harden / merge / XOR to. Listed
+    # here because THIS is the shuttle they build for — a user_project_wrapper
+    # and a GPIO-defines file are Caravel artefacts and mean nothing to any
+    # other counterparty in this registry.
+    submission_prep=("caravel_integration_runner",
+                     "caravel_wrapper_emit",
+                     "caravel_wrapper_harden_driver",
+                     # C2, and last in run order — the fixer for the five
+                     # MECHANICAL FAILs of the ladder above, which the spm
+                     # pilot did by hand in ~30 minutes to take mpw_precheck
+                     # from 5/7 to 2/7. Three of those five are rungs listed
+                     # in `ladder` by name (`default`, `documentation`,
+                     # `gpio_defines`), which is what makes it prep for THIS
+                     # counterparty and no other. `caravel_integration_runner`
+                     # imports it, but from inside `step_c2_cleanup` under a
+                     # try/except — a function-local import that a top-level
+                     # import scan does not see, so the only place it was
+                     # named was a body its own orchestrator's caller never
+                     # reached. It is not a gate and must never be wired as
+                     # one: it exits 0 unconditionally, its `--dry-run` reports
+                     # "dry-run" for all five fixes without looking at
+                     # anything, and its live mode WRITES INTO THE PROJECT.
+                     "mpw_precheck_cleanup"),
     note="Efabless / chipIgnite open-MPW. RETIRED — see retired_reason.",
 )
 
@@ -514,6 +560,11 @@ class ReadinessReport:
     command: List[str] = field(default_factory=list)
     stdout_tail: str = ""
     stderr_tail: str = ""
+    #: `resolve_submission_prep` output for this shuttle — which of the in-tree
+    #: programs that build a submission for it still import. On every path,
+    #: including the RETIRED early return, because "the chain is still here" is
+    #: precisely the claim a retired path is kept to keep true.
+    submission_prep: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -637,6 +688,37 @@ def resolve_in_tree_coverage(step: LadderStep,
         if (pdir / f"{cand}.py").is_file():
             return cand
     return None
+
+
+def resolve_submission_prep(shuttle: Shuttle,
+                            programs_dir: Optional[Path] = None
+                            ) -> Dict[str, Any]:
+    """IMPORT every program `shuttle.submission_prep` names, and report which.
+
+    An import, not a file-existence probe. `resolve_in_tree_coverage` above can
+    stop at `is_file()` because it only has to NAME a counterpart; this list is
+    the chain a submission is actually built by, and a module that is present
+    but no longer importable is broken in the way that matters. Importing is
+    the only check that can tell the difference.
+
+    NEVER RAISES AND NEVER REFUSES. A failure here is recorded under
+    `unresolved` and reported; it is not a verdict about the layout, and this
+    gate's rc is the counterparty's, not this tree's.
+    """
+    pdir = programs_dir or _HERE
+    if str(pdir) not in sys.path:
+        sys.path.insert(0, str(pdir))
+    resolved: List[str] = []
+    unresolved: Dict[str, str] = {}
+    for name in shuttle.submission_prep:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:                                   # noqa: BLE001
+            unresolved[name] = f"{type(exc).__name__}: {exc}"
+        else:
+            resolved.append(name)
+    return {"declared": list(shuttle.submission_prep),
+            "resolved": resolved, "unresolved": unresolved}
 
 
 # --------------------------------------------------------------------------- #
@@ -825,6 +907,10 @@ def evaluate(
     ladder = tuple(s for s in shuttle.ladder if cob or not s.cob_only)
     steps = _blank_steps(ladder, programs_dir)
     uncovered = [s.step_id for s in steps if not s.covered]
+    # BEFORE the RETIRED branch, so it is resolved on EVERY path this function
+    # can leave by. The retired path is the one that most needs it: it is the
+    # only branch whose reason is "these programs are still pointed here".
+    prep = resolve_submission_prep(shuttle, programs_dir)
 
     def _report(verdict: str, reason: str, **kw: Any) -> ReadinessReport:
         rep = ReadinessReport(
@@ -832,7 +918,7 @@ def evaluate(
             shuttle_status=shuttle.status, tool=shuttle.tool,
             upstream=shuttle.upstream, verdict=verdict, reason=reason,
             required_steps=len(ladder), steps=steps,
-            uncovered_in_tree=uncovered, **kw)
+            uncovered_in_tree=uncovered, submission_prep=prep, **kw)
         return rep
 
     # (1) A RETIRED shuttle can never produce an external verdict. Not a PASS,
@@ -847,10 +933,23 @@ def evaluate(
         # which shuttle it belongs to, so the prose channel alone could not
         # tell one retired counterparty from another. Composed from the
         # registry entry, so it names any future retired shuttle too.
+        # AND NAME THE CHAIN, resolved. The registry sentence says the kept
+        # path is what stops those programs reading as orphans; saying so
+        # without checking would make this the sentence that outlives them.
+        if prep["unresolved"]:
+            _chain = ("its submission-prep chain NO LONGER RESOLVES: "
+                      + "; ".join(f"{k} ({v})"
+                                  for k, v in sorted(prep["unresolved"].items())))
+        elif prep["resolved"]:
+            _chain = ("its submission-prep chain still imports: "
+                      + ", ".join(prep["resolved"]))
+        else:
+            _chain = "no submission-prep chain is registered for it"
         rep = _report(
             NOT_DETERMINED,
             f"the '{shuttle.shuttle_id}' shuttle is RETIRED, so its precheck "
-            f"tool '{shuttle.tool}' was never run: {shuttle.retired_reason}",
+            f"tool '{shuttle.tool}' was never run: {shuttle.retired_reason} "
+            f"On this checkout, {_chain}.",
             layouts_found=0)
         rep.undetermined_steps = [s.step_id for s in steps]
         return rep

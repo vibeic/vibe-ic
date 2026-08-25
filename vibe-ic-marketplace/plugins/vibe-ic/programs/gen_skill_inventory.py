@@ -13,20 +13,26 @@ Authoritative definition of a skill: a directory under
 `.deprecated_skills/`, and any dir without SKILL.md are NOT skills.)
 
 Writes SKILL_INVENTORY.json and prints total + per-tier breakdown. `--check`
-exits 1 if the committed inventory is stale vs the folders (wire into CI).
+exits 1 if the committed inventory is stale vs the folders, and that is the form
+`tools/ci/repo_hygiene_gates.sh` runs at every landing.
+
+`--plugin` names the tree to read and is what makes the check a GATE rather than
+a self-report: without it the subject was derived from this file's own location,
+so the checker and the thing it checks could never be pointed apart, and a
+fixture proving it discriminates could not be written at all. The default is
+still this file's own plugin, so every existing invocation is unchanged.
 
 Usage:
   python3 programs/gen_skill_inventory.py            # regenerate + print
   python3 programs/gen_skill_inventory.py --check    # verify committed == folders
+  python3 programs/gen_skill_inventory.py --check --plugin <plugin-dir>
 """
 from __future__ import annotations
 import argparse, json, re, sys
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent        # plugins/vibe-ic/
-SKILLS = PLUGIN / "skills"
-CLASS_JSON = SKILLS / "_classification.json"
-OUT = PLUGIN / "SKILL_INVENTORY.json"
+INVENTORY_NAME = "SKILL_INVENTORY.json"
 
 
 def _frontmatter_name(skill_md: Path) -> str:
@@ -35,19 +41,21 @@ def _frontmatter_name(skill_md: Path) -> str:
     return m.group(1) if m else skill_md.parent.name
 
 
-def discover() -> dict:
+def discover(plugin: Path = PLUGIN) -> dict:
+    skills_dir = plugin / "skills"
+    class_json = skills_dir / "_classification.json"
     # tier lookup from _classification.json
     tier_of: dict[str, str] = {}
     deprecated: set[str] = set()
-    if CLASS_JSON.exists():
-        cj = json.loads(CLASS_JSON.read_text())
+    if class_json.exists():
+        cj = json.loads(class_json.read_text())
         for tier, info in cj.get("tiers", {}).items():
             for s in info.get("skills", []):
                 tier_of[s] = tier
         deprecated = set(cj.get("deprecated_skills", []))
 
     skills = []
-    for d in sorted(SKILLS.iterdir()):
+    for d in (sorted(skills_dir.iterdir()) if skills_dir.is_dir() else []):
         if not d.is_dir() or not (d / "SKILL.md").is_file():
             continue
         if d.name in deprecated:
@@ -75,12 +83,22 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if committed SKILL_INVENTORY.json != folders")
+    ap.add_argument("--plugin", default=str(PLUGIN),
+                    help="plugin directory to read (default: this file's own)")
     a = ap.parse_args()
-    inv = discover()
+    plugin = Path(a.plugin).resolve()
+    out = plugin / INVENTORY_NAME
+    if not (plugin / "skills").is_dir():
+        # NOT a clean tree with no skills: a directory with no `skills/` is a
+        # tree this program was never pointed at. Saying so keeps a mistyped
+        # path from reporting an inventory of nothing as agreement.
+        print(f"FAIL: {plugin} has no skills/ directory, so no skill folder was "
+              f"read and nothing was compared"); sys.exit(1)
+    inv = discover(plugin)
     if a.check:
-        if not OUT.exists():
-            print(f"FAIL: {OUT.name} missing — run without --check to generate"); sys.exit(1)
-        committed = json.loads(OUT.read_text())
+        if not out.exists():
+            print(f"FAIL: {out.name} missing — run without --check to generate"); sys.exit(1)
+        committed = json.loads(out.read_text())
         if committed.get("skills") != inv["skills"]:
             cset, iset = set(committed.get("skills", [])), set(inv["skills"])
             print(f"FAIL: skill inventory drift. committed total={committed.get('total')} "
@@ -90,8 +108,8 @@ def main() -> None:
             sys.exit(1)
         print(f"OK: skill inventory matches folders — {inv['total']} skills "
               f"({inv['by_tier']})"); sys.exit(0)
-    OUT.write_text(json.dumps(inv, indent=2) + "\n")
-    print(f"wrote {OUT}")
+    out.write_text(json.dumps(inv, indent=2) + "\n")
+    print(f"wrote {out}")
     print(f"TOTAL AI SKILLS = {inv['total']}")
     print("by_tier:", inv["by_tier"])
 

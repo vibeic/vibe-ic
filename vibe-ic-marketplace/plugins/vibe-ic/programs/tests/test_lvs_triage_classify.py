@@ -75,3 +75,42 @@ class TestMarkdownEmit:
         md = mod.report_to_markdown(rep)
         assert "## Top-3 root-cause hints" in md
         assert "**unmatched_net**" in md
+
+
+class TestAbsentReportIsDisclosedNotACrash:
+    """WIRED ADVISORY ON FLOW STEP 31 (2026-08-25).
+
+    `reports/phase3/lvs.rpt` is Step 31's OWN required_output, and whether it
+    exists is already decided there by the blocking `lvs_report_check` and
+    `lvs_signoff_guard` slots. A triage classifier that answers "the report you
+    asked me to categorise is not there" with a `FileNotFoundError` traceback
+    spends a second gate's FINDING channel on the first gate's question. rc 2
+    is the disclosed-skip tier both consumer channels read.
+    """
+
+    def _main(self, argv, monkeypatch):
+        import sys
+        monkeypatch.setattr(sys, "argv", ["lvs_triage_classify.py"] + argv)
+        return mod._cli()
+
+    def test_absent_report_is_rc2_and_says_so(self, tmp_path, monkeypatch,
+                                              capsys):
+        missing = tmp_path / "lvs.rpt"
+        assert self._main(["--report", str(missing)], monkeypatch) == 2
+        cap = capsys.readouterr()
+        # `_vacuous_exit.announce_vacuous` writes the machine sentinel to
+        # stderr and `verdict_line` the human verdict to stdout — both
+        # channels, which is the #528 repair this reuses rather than re-does.
+        assert "VACUOUS_PASS" in cap.err      # the machine sentinel
+        assert "[VACUOUS]" in cap.out         # the verdict line
+        assert "NOT a pass over the design" in cap.out
+
+    def test_present_report_is_rc0_and_classifies(self, tmp_path, monkeypatch,
+                                                  capsys):
+        """SAME denominator — a report either way; only the ANSWER differs."""
+        rpt = tmp_path / "lvs.rpt"
+        rpt.write_text("Net vdd unmatched\nCircuits match uniquely.\n")
+        assert self._main(["--report", str(rpt)], monkeypatch) == 0
+        out = capsys.readouterr().out
+        assert "# LVS triage" in out
+        assert "| unmatched_net | 1 |" in out

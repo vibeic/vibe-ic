@@ -177,6 +177,20 @@ def test_every_triage_entry_belongs_to_a_named_family():
         + "\n".join(f"    {k}: {d['triage'][k][:80]}" for k in unknown))
 
 
+#: The population as measured when #659 was answered. It is a CEILING, not a
+#: target: the register these are drawn from may only shrink, so the live set is
+#: a subset of this and gets smaller every time one of them is wired.
+_SEVEN_AS_FIRST_MEASURED = frozenset({
+    "hw_vs_rtl_verdict_check.py",
+    "lesson_consumption_check.py",
+    "level_hysteresis_flag_oracle_check.py",
+    "pdk_consistency_check.py",
+    "protocol_turnaround_audit.py",
+    "skill_doc_section_present_check.py",
+    "verilator_timing_fallback_check.py",
+})
+
+
 def test_the_seven_that_the_question_actually_applies_to():
     """Recorded so the population is a fact, not a recollection: these are the
     entries whose input a real run can genuinely lack, and #659's question is
@@ -184,5 +198,16 @@ def test_the_seven_that_the_question_actually_applies_to():
     d = json.loads(_BASELINE.read_text())
     left = sorted(k for k, v in d["triage"].items()
                   if _family(v) == _FAMILY_INPUT_ABSENT)
-    assert "pdk_consistency_check.py" in left
-    assert len(left) == 7, left
+    # THE SEVEN AS FIRST MEASURED. The register they live in "MAY ONLY SHRINK"
+    # by its own rule, so an entry LEAVING is the register working: each of
+    # these is deleted the moment its checker gains a real runner
+    # (`verilator_timing_fallback_check` left when `tb_vcs_only_construct_detect`
+    # began importing its `adjudicate` to RUN the § 4.1 floor-proof its report
+    # had only asked for). A `len(...) == 7` here therefore pinned a number the
+    # repository is under instruction to reduce, and it went red for a repair.
+    #
+    # What must not happen is the family GROWING — a new "refuses without its
+    # input" note joining the register — and that is what is asserted, against
+    # the recorded seven rather than against today's count.
+    assert set(left) <= _SEVEN_AS_FIRST_MEASURED, sorted(
+        set(left) - _SEVEN_AS_FIRST_MEASURED)

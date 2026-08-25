@@ -61,6 +61,28 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+# ── the HOST reference oracle, and the ONE definition of what it and this file
+#    both parse ────────────────────────────────────────────────────────────────
+# `signoff_cell_aware_feol_attribution` is the host-side reference oracle for the
+# SAME attribution the engine's `--cell-aware-feol` performs: given the placed DEF
+# and the qualified-master set, which firing FEOL over-fires lie inside a
+# qualified footprint. This file is the ENGINE half and that one is the ORACLE
+# half, and until now they shared their inputs' grammar by having TWO COPIES of it
+# and no import between them -- the oracle was reached by nothing but its own unit
+# test, so the copies could only be kept equal by remembering to.
+#
+# THEY ALREADY CAME APART ONCE, and the comment on `_COMP_RE` below is the record
+# of it: the placement regex was fixed HERE for the `+ SOURCE DIST` filler/decap
+# undercount and had to be fixed AGAIN, separately, over there. Two definitions of
+# one grammar have one true value and one that is only sometimes true, so the
+# grammar now has a single home and this file imports it. Nothing about the
+# engine-side behaviour changes: `parse_layerlist` and the imported `_COMP_RE`
+# are byte-for-byte what this file defined, and the COMPONENTS-block scoping in
+# `parse_placed_masters` stays here, where it belongs.
+#
+# The oracle's own `attribute()` defers its `pya` import to call time, so this
+# import costs nothing on a host without KLayout.
+import signoff_cell_aware_feol_attribution as _oracle
 # ── DEF COMPONENTS parse ─────────────────────────────────────────────────────
 # `- <inst> <master> [+ EEQMASTER ..] [+ SOURCE {DIST|NETLIST|USER|TIMING}] +
 #  (PLACED|FIXED|COVER) ( x y ) <orient> ... ;`  — the placement status may be
@@ -68,9 +90,10 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 # non-greedily up to the placement WITHOUT crossing the record `;` terminator.
 # (The stock attributor regex required PLACED to immediately follow the master and
 # silently dropped every `+ SOURCE DIST` filler/decap component -> undercount.)
-_COMP_RE = re.compile(
-    r"-\s+(\S+)\s+(\S+)\b[^;]*?\+\s+(?:PLACED|FIXED|COVER)\s*"
-    r"\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*(\w+)")
+#: THE one placement grammar, owned by the oracle module (see the import note
+#: above). Bound here under the name this file already used, so every reader and
+#: every caller below is unchanged.
+_COMP_RE = _oracle._COMP_RE
 
 
 def parse_placed_masters(def_text: str) -> Dict[str, int]:
@@ -147,16 +170,13 @@ def standalone_qualified(report_text: str) -> bool:
 def parse_feol_gds(specs: Sequence[str]) -> List[Tuple[int, int]]:
     """['2/0','3/0','4'] -> [(2,0),(3,0),(4,0)]; datatype defaults to 0. Accepts a
     comma-joined single string too."""
-    flat: List[str] = []
-    for s in specs or []:
-        flat.extend(str(s).split(","))
+    # One layer-list grammar, owned by the oracle module: `parse_layerlist`
+    # takes ONE comma-joined string and applies exactly this partition-on-"/",
+    # datatype-defaults-to-0, skip-empty rule. Mapping it over the sequence is
+    # what this function did by hand.
     out: List[Tuple[int, int]] = []
-    for tok in flat:
-        tok = tok.strip()
-        if not tok:
-            continue
-        l, _, d = tok.partition("/")
-        out.append((int(l), int(d or "0")))
+    for spec in specs or []:
+        out.extend(_oracle.parse_layerlist(str(spec)))
     return out
 
 

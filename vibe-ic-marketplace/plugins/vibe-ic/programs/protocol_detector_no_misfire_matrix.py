@@ -27,7 +27,10 @@ is run against every benchmark: FORWARD (new detector on an existing benchmark)
 and REVERSE (existing detector on a new benchmark) are the same matrix.
 
 Exit 0 = clean (only own-fires + allowlisted derived siblings); exit 1 = at
-least one un-allowlisted foreign fire (a misfire / contamination).
+least one un-allowlisted foreign fire (a misfire / contamination); exit 2 = NOT
+CHECKED — the benchmark directory is absent, or either axis of the matrix
+(detectors, benchmarks) is EMPTY. A zero population is not observed and never
+reports ALL_PASS.
 """
 from __future__ import annotations
 
@@ -50,10 +53,23 @@ except IndexError:
     REPO_ROOT = PROGRAMS_DIR.parent  # plugin root (cache tree)
 DEFAULT_BP = REPO_ROOT / "benchmark-data" / "evaluation" / "phase1_parity"
 
+# THE ALLOWLIST IS LOAD-BEARING, SO ITS ABSENCE MUST NOT BE SILENT.
+# `protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES` is the ONE canonical
+# record of the (base, derived) pairs where the base detector firing on the
+# derived benchmark is CORRECT base-class detection rather than a misfire — the
+# module's own header calls itself that single source and forbids duplicating
+# it. Substituting an empty mapping when the import fails does not disable a
+# convenience: it silently deletes every documented exemption, so the matrix
+# reports allowlisted pairs as findings and a corpus that exercises none of them
+# (the eight shipped synthetic benchmarks exercise none) cannot tell the two
+# states apart. `main` refuses with the NOT-CHECKED tier instead — see the guard
+# beside the zero-denominator refusal.
+_ALLOWLIST_IMPORT_ERROR = ""
 try:
     from protocol_detector_lib import DERIVED_SIBLING_CROSS_FIRES
-except Exception:  # pragma: no cover
+except Exception as _exc:  # pragma: no cover - exercised by the CLI guard
     DERIVED_SIBLING_CROSS_FIRES = {}
+    _ALLOWLIST_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 # Gold-blob ONLY: (sub_clause_detector, parent_benchmark) pairs where the
 # parent benchmark's spec is a LARGER STANDARD that genuinely CONTAINS the
@@ -345,6 +361,14 @@ def main(argv=None) -> int:
         print(f"ERROR: benchmark dir not found: {args.benchmark_dir}",
               file=sys.stderr)
         return 2
+    if _ALLOWLIST_IMPORT_ERROR:
+        print(f"NOT CHECKED: the canonical derived-sibling allowlist "
+              f"`protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES` could not "
+              f"be imported ({_ALLOWLIST_IMPORT_ERROR}). Running without it "
+              f"would report every documented base-on-derived pair as a "
+              f"misfire, and a corpus exercising none of them would look "
+              f"identical to one that had the allowlist.", file=sys.stderr)
+        return 2
     sys.path.insert(0, str(PROGRAMS_DIR))
 
     if args.bracket_leads:
@@ -352,6 +376,12 @@ def main(argv=None) -> int:
             args.benchmark_dir, args.blob)
         print(f"[lead-bracket] blob={args.blob}  benchmarks={len(benches)}  "
               f"order-sensitive detectors={len(positional)}")
+        if not benches:
+            print(f"NOT CHECKED: no benchmark under {args.benchmark_dir} — a "
+                  f"population of zero is NOT OBSERVED, and a verdict over it "
+                  f"is indistinguishable from one earned against a real corpus.",
+                  file=sys.stderr)
+            return 2
         for stem, why in sorted(positional.items()):
             print(f"    is_{stem}: {why}")
         for (stem, b), leads in sorted(reachable.items()):
@@ -374,6 +404,22 @@ def main(argv=None) -> int:
     label = ("CROSS-CONTAMINATION" if args.blob == "gold" else "no-misfire")
     print(f"[{label}] blob={args.blob}  detectors={len(detectors)}  "
           f"benchmarks={len(benches)}")
+    # A ZERO POPULATION IS NOT A RESULT (docs/findings/2026-08-22-a-zero-
+    # denominator-green-outside-the-gate-that-forbids-it.md). Measured before
+    # this refusal existed: `--benchmark-dir <EMPTY DIR>` printed
+    # `benchmarks=0` and then `ALL_PASS` at rc 0 — the zero WAS disclosed, and
+    # the verdict word still said 86 detectors had been checked against real
+    # benchmarks and passed. `gate_zero_denominator_refuses_check` already
+    # forbids this shape and could not see this program, whose filename does
+    # not end in `_check.py`. Both halves of the matrix refuse it now: rc 2 is
+    # the same NOT-CHECKED tier a missing `--benchmark-dir` already returns.
+    if not benches or not detectors:
+        print(f"NOT CHECKED: {len(detectors)} detector(s) and {len(benches)} "
+              f"benchmark(s) under {args.benchmark_dir} — a population of zero "
+              f"on either axis is NOT OBSERVED, and ALL_PASS over it is "
+              f"indistinguishable from a verdict earned against a real corpus.",
+              file=sys.stderr)
+        return 2
     for r in rows:
         if r["foreign_fires"]:
             print(f"  [FAIL] is_{r['detector']}: foreign_fires={r['foreign_fires']}")

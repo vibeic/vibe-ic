@@ -19,8 +19,29 @@
 # INDEX.md and nothing else** (vibe-ic#1431, vibe-ic#1363).
 #
 # Resolving that is the same three commands every time, because a generated file
-# has no side worth keeping. This script is those three commands, with the checks
-# that make it safe to run without reading the diff.
+# has no side worth keeping. This script is the entry point for those commands,
+# with the checks that make it safe to run without reading the diff.
+#
+# WHERE THE RULE LIVES — one implementation, not two
+# --------------------------------------------------
+# The decision, the registry of derived artefacts, the regeneration, the
+# freshness re-check and the staging all live in
+# `plugins/vibe-ic/programs/generated_artifact_conflict_resolve.py`. This script
+# is its command-line name and nothing else.
+#
+# It was not always. This file first carried its own copy of the rule with a
+# ONE-ENTRY registry — `programs/INDEX.md` and nothing more — and that is not a
+# smaller version of the same answer, it is a different one. `PROGRAM_INVENTORY
+# .json` is the SECOND file every program-adding branch rewrites, and it
+# conflicted alongside INDEX.md on a real merge into main (a4caccefe). Against a
+# one-entry registry it is a FOREIGN path, so the whole resolution is refused —
+# including the half that was resolvable — and the merge gets finished by hand.
+# Two implementations of one rule give two answers to that merge, and the weaker
+# one was the one with a caller. The program also carries what a shell version
+# cannot: a 60 s inner bound per generator (the landing harness runs at
+# `--timeout=180`, so a larger bound loses the whole session rather than one
+# step), a conflict-marker re-check after regeneration, and a machine-readable
+# verdict record.
 #
 # WHY NOT A GIT MERGE DRIVER — measured, not assumed
 # --------------------------------------------------
@@ -38,6 +59,16 @@
 # non-conflicted path, so `step_repro_bundle.py` is on disk and INDEX.md is the
 # sole unmerged entry. That is why this runs here and not there.
 #
+# EXIT CODES
+# ----------
+#     0  nothing was unmerged, or every conflicted path was regenerated,
+#        verified fresh and staged
+#     1  at least one conflicted path is not a registered derived artefact —
+#        REFUSED, and the path is named. Nothing was staged.
+#     2  the question could not be put (no resolver, generator absent, generator
+#        failed or timed out, markers survived, `--check` still red, or a path
+#        still unmerged afterwards). An unmeasured tree is not a clean one.
+#
 # Usage — after `git merge`/`git rebase` stops with a conflict:
 #     tools/resolve_generated_conflicts.sh          # regenerate + stage
 #     tools/resolve_generated_conflicts.sh --check  # say what it WOULD do
@@ -51,56 +82,27 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "not inside a git repository" >&2; exit 2; }
 cd "$REPO_ROOT" || exit 2
 
-# path -> generator command. A file is resolvable ONLY if it is listed here.
-GENERATED_PATH="vibe-ic-marketplace/plugins/vibe-ic/programs/INDEX.md"
-GENERATOR="tools/gen_programs_index.py"
+RESOLVER="vibe-ic-marketplace/plugins/vibe-ic/programs/generated_artifact_conflict_resolve.py"
 
+# THE NO-OP IS ANSWERED HERE, and only this one. Invoked outside a conflicted
+# merge there is nothing to resolve and nothing to refuse, and this script's
+# contract has always been that saying so is a success. The resolver treats the
+# same state as UNMEASURABLE, which is the right answer to the question IT is
+# asked ("was this resolution performed?") and the wrong answer to the question
+# an operator asks this script ("is there anything left to do?").
 mapfile -t UNMERGED < <(git diff --name-only --diff-filter=U)
-
 if [ "${#UNMERGED[@]}" -eq 0 ]; then
   echo "no unmerged paths — nothing to resolve."
   exit 0
 fi
 
-# Refuse on anything not generated. Regenerating a file with authored content
-# would discard someone's work; this script exists to be safe to run blind, and
-# that property is only worth having if it is enforced rather than documented.
-foreign=()
-for p in "${UNMERGED[@]}"; do
-  [ "$p" = "$GENERATED_PATH" ] || foreign+=("$p")
-done
+[ -f "$RESOLVER" ] || {
+  echo "resolver not found at $RESOLVER — the conflict is left in place." >&2
+  exit 2; }
 
-if [ "${#foreign[@]}" -ne 0 ]; then
-  echo "REFUSING: ${#foreign[@]} conflicted path(s) are NOT generated files:" >&2
-  printf '    %s\n' "${foreign[@]}" >&2
-  echo "Resolve those by hand. Nothing was staged." >&2
-  exit 1
-fi
-
-echo "all ${#UNMERGED[@]} conflicted path(s) are generated; regenerating from the merged tree."
+echo "${#UNMERGED[@]} conflicted path(s); handing them to $RESOLVER."
 
 if [ "$DRY" -eq 1 ]; then
-  echo "--check: would run '$GENERATOR' and stage $GENERATED_PATH"
-  exit 0
+  exec python3 "$RESOLVER" --repo "$REPO_ROOT" --dry-run
 fi
-
-[ -f "$GENERATOR" ] || { echo "generator not found at $GENERATOR" >&2; exit 2; }
-
-python3 "$GENERATOR" >/dev/null 2>&1 || {
-  echo "generator exited non-zero — conflict left in place." >&2; exit 2; }
-
-# Never trust our own output: verify with the generator's OWN freshness check,
-# the same one CI runs, before staging anything.
-if ! python3 "$GENERATOR" --check >/dev/null 2>&1; then
-  echo "regenerated $GENERATED_PATH still fails --check — conflict left in place." >&2
-  exit 2
-fi
-
-if grep -q '^<<<<<<< \|^>>>>>>> ' "$GENERATED_PATH"; then
-  echo "regenerated $GENERATED_PATH still contains conflict markers — not staging." >&2
-  exit 2
-fi
-
-git add -- "$GENERATED_PATH"
-echo "staged $GENERATED_PATH (verified by '$GENERATOR --check')."
-echo "now run: git rebase --continue   (or: git commit)"
+exec python3 "$RESOLVER" --repo "$REPO_ROOT"

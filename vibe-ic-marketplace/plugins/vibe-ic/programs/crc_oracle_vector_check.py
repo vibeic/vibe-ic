@@ -60,6 +60,38 @@ from pathlib import Path
 from gate_utils import find_rtl_files as _rtl_files
 from gate_utils import read_text as _read
 
+# ---------------------------------------------------------------------------
+# The two CRC programs this gate COMPOSES rather than re-implements.
+#
+# `crc_vector_gen` owns the ONE parametric byte-mode CRC reference in the tree
+# (widths 4..32, refin/refout/xorout). This file used to carry a second,
+# CRC-8-reflected-only copy of that arithmetic, and a second copy of a CRC is
+# precisely the defect `crc_vector_gen`'s own header records: the hand-written
+# CRC8 that silently implemented the bit-reversed polynomial form while the
+# reference did not. `_crc8_reflected` below now DELEGATES; its signature and
+# its results are unchanged (proved by equality over the reflected identity
+# poly_msb = reflect8(poly_reflected), init_msb = reflect8(init)).
+#
+# `cmd_protocol_crc_verify` owns the INVERSE question. When the oracle
+# disagrees with a declared parameter set this gate could only ever say "these
+# parameters are inconsistent" — it named the defect and not the repair, and
+# the 2026-04-22 audit that motivated that program recorded exactly this gap:
+# sixteen golden command/payload/CRC triples sat in the spec and nothing ever
+# asked which parameters actually reproduce them. On a mismatch this gate now
+# asks, and puts the answer in the finding.
+#
+# Both are imported DEFENSIVELY: a packaging that ships this checker without
+# its neighbours degrades to the previous behaviour instead of crashing a gate
+# the P0 umbrella runs.
+try:
+    import crc_vector_gen as _crcgen            # type: ignore
+except Exception:                               # pragma: no cover - defensive
+    _crcgen = None
+try:
+    import cmd_protocol_crc_verify as _crcderive  # type: ignore
+except Exception:                               # pragma: no cover - defensive
+    _crcderive = None
+
 
 @dataclass
 class Finding:
@@ -166,7 +198,27 @@ def _to_int(v):
 # Software CRC8 oracle (reflected, LSB-first)
 # ---------------------------------------------------------------------------
 
+def _reflect8(v: int) -> int:
+    return int("{:08b}".format(v & 0xFF)[::-1], 2)
+
+
 def _crc8_reflected(data_bytes: list[int], poly_reflected: int, init: int) -> int:
+    """LSB-first (reflected) CRC-8 over `data_bytes`.
+
+    DELEGATES to `crc_vector_gen.crc_byte_mode`, the tree's single parametric
+    CRC reference. The reflected engine `(crc>>1) ^ poly_reflected` is exactly
+    the MSB-first engine driven with the reflected polynomial and the reflected
+    register seed, with refin/refout set and no final XOR — so the spec below
+    is a restatement of this function's contract, not a new convention.
+
+    The literal fallback is kept for a checkout that ships this gate without
+    `crc_vector_gen`; it is the previous body, byte for byte.
+    """
+    if _crcgen is not None:
+        spec = _crcgen.CrcSpec(
+            width=8, poly=_reflect8(poly_reflected), init=_reflect8(init),
+            refin=True, refout=True, xorout=0, name="l3_declared_crc8")
+        return _crcgen.crc_byte_mode(bytes(b & 0xFF for b in data_bytes), spec)
     crc = init & 0xFF
     for byte in data_bytes:
         crc ^= byte & 0xFF
@@ -176,6 +228,39 @@ def _crc8_reflected(data_bytes: list[int], poly_reflected: int, init: int) -> in
             else:
                 crc >>= 1
     return crc & 0xFF
+
+
+def _params_the_vectors_imply(pairs: list) -> str:
+    """Name the CRC-8 parameter set that reproduces EVERY supplied vector.
+
+    `pairs` is [(data_bytes, expected_int), ...]. Returns a sentence to append
+    to a mismatch finding, or "" when nothing can be said. Never raises: a
+    diagnostic that can fail the gate it is explaining is worse than no
+    diagnostic.
+    """
+    if _crcderive is None or not pairs:
+        return ""
+    try:
+        vectors = [{"data_hex": " ".join(f"{b & 0xFF:02X}" for b in data),
+                    "crc_hex": f"{exp & 0xFF:02X}"} for data, exp in pairs]
+        res = _crcderive.verify(vectors, 8)
+        if not isinstance(res, dict) or res.get("error"):
+            return ""
+        best = res.get("best_match")
+        if best:
+            return (" cmd_protocol_crc_verify: these {n} vector(s) ARE "
+                    "reproduced by poly={p} init={i} refin={ri} refout={ro} "
+                    "xorout={x} ({name}) — declare that instead."
+                    .format(n=res.get("vectors_total"), p=best.get("poly"),
+                            i=best.get("init"), ri=best.get("refin"),
+                            ro=best.get("refout"), x=best.get("xorout"),
+                            name=best.get("preset")))
+        return (" cmd_protocol_crc_verify: NO CRC-8 parameter set reproduces "
+                "all {n} declared vector(s) — the vectors themselves, not only "
+                "the parameters, need review.".format(
+                    n=res.get("vectors_total")))
+    except Exception:                           # pragma: no cover - defensive
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +353,12 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
 
     # Software oracle vector check
     vectors = spec.get("vectors") or []
+    # Every well-formed (bytes -> expected) pair, kept whether it matched or
+    # not. The derivation below has to see the SAME population the oracle
+    # judged: handing it only the failing rows would ask "what reproduces the
+    # mismatches", which has an answer that reproduces nothing else.
+    parsed_pairs: list = []
+    mismatched: list = []
     if vectors and poly_refl is not None and init is not None:
         for v in vectors:
             if not isinstance(v, dict):
@@ -281,21 +372,30 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
             exp = _to_int(expected) if isinstance(expected, str) else int(expected)
             calc = _crc8_reflected(ints, poly_refl, init)
             summary["vectors_run"] += 1
+            parsed_pairs.append((ints, exp))
             if calc == exp:
                 summary["vectors_pass"] += 1
             else:
-                findings.append(Finding(
-                    severity="ERROR",
-                    rule="CRC_ORACLE_VECTOR_MISMATCH",
-                    message=(
-                        f"CRC software oracle (poly_reflected="
-                        f"0x{poly_refl:02X}, init=0x{init:02X}) on "
-                        f"input bytes {inputs} produces 0x{calc:02X}, "
-                        f"but L3/L8 declares expected=0x{exp:02X}. "
-                        f"Spec parameters are inconsistent — fix the "
-                        f"declaration before generating RTL."
-                    ),
-                ))
+                mismatched.append((inputs, calc, exp))
+        # ONE derivation for the whole vector set, not one per failing row: the
+        # answer is a property of the set, and asking 16 times would print the
+        # same sentence 16 times.
+        derived = _params_the_vectors_imply(parsed_pairs) if mismatched else ""
+        if derived:
+            summary["derived_parameters"] = derived.strip()
+        for inputs, calc, exp in mismatched:
+            findings.append(Finding(
+                severity="ERROR",
+                rule="CRC_ORACLE_VECTOR_MISMATCH",
+                message=(
+                    f"CRC software oracle (poly_reflected="
+                    f"0x{poly_refl:02X}, init=0x{init:02X}) on "
+                    f"input bytes {inputs} produces 0x{calc:02X}, "
+                    f"but L3/L8 declares expected=0x{exp:02X}. "
+                    f"Spec parameters are inconsistent — fix the "
+                    f"declaration before generating RTL." + derived
+                ),
+            ))
     return findings, summary
 
 

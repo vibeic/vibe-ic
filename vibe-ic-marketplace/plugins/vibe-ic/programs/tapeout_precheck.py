@@ -237,7 +237,10 @@ class MergedReport:
     findings: List[Finding] = field(default_factory=list)
     disagreements: List[Dict[str, Any]] = field(default_factory=list)
     shared_ladder_steps: List[str] = field(default_factory=list)
-    retired_shuttles_for_this_pdk: List[Dict[str, str]] = field(
+    #: Values are strings EXCEPT `submission_prep`, which is the resolver's
+    #: own dict — see below for why the report carries the resolution and not
+    #: a sentence about it.
+    retired_shuttles_for_this_pdk: List[Dict[str, Any]] = field(
         default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -472,9 +475,17 @@ def evaluate(project: Path,
 
     rep = MergedReport(project=str(project), verdict=NOT_DETERMINED, reason="",
                        pdk=resolved_pdk, pdk_source=pdk_source)
+    # A RETIRED counterparty still has an in-tree submission-prep chain, and
+    # "that chain is still here" is the entire reason the retired path is kept
+    # rather than deleted. `resolve_submission_prep` IMPORTS it, so this arm
+    # reports whether the claim is true on THIS checkout instead of repeating
+    # a registry sentence that would keep reading true after the programs it
+    # names were gone. This runs on every design whose PDK has a retired
+    # shuttle, whether or not a live operator arm also applies.
     rep.retired_shuttles_for_this_pdk = [
         {"shuttle_id": sh.shuttle_id, "tool": sh.tool,
-         "retired_reason": sh.retired_reason}
+         "retired_reason": sh.retired_reason,
+         "submission_prep": _theirs.resolve_submission_prep(sh, pdir)}
         for sh in (_theirs.retired_shuttles_for_pdk(resolved_pdk)
                    if resolved_pdk else ())]
 

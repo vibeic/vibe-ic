@@ -192,6 +192,9 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _corpus_denominator as _corpus_den  # noqa: E402
+
 # --------------------------------------------------------------------------
 # Contract constants (structure, not chips).
 # --------------------------------------------------------------------------
@@ -1228,6 +1231,54 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"{passed}/{len(examined)} conformant, {failed} nonconformant"
           f"{tail}{population}")
 
+    # ── THE CORPUS'S OWN ANSWERABILITY, WITH ITS DENOMINATOR (vibe-ic#1200) ──
+    # Everything above is a statement about published CELLS. A separate class
+    # of question is asked of the same tree — "how many published runs recorded
+    # X for step N" — and it is unanswerable for every X and every N on a run
+    # tree that carries no `steps/STEP_INDEX.json`. Measured on a38902d1: 73 of
+    # 75 could not answer. The answer that comes back is not an error; it is a
+    # small number with a silently small denominator.
+    #
+    # `_corpus_denominator` is the type that makes the omission unavailable —
+    # it has no `__int__`, no `__float__` and no `percent`, so a caller cannot
+    # quote 2 without quoting 75 — and until now nothing imported it. This
+    # gate is the corpus-wide reader that already walks the same trees, so it
+    # is where the disclosure belongs.
+    #
+    # IT REFUSES ONLY IN THE RATCHET'S ONE DIRECTION. The uncountable set may
+    # SHRINK and may not GROW: a newly published run tree that omits the record
+    # makes the corpus less answerable than it was, which is a regression a
+    # publication should not be able to make quietly. Old trees are
+    # grandfathered by NUMBER, never by a name-list. Backfilling the 73 is NOT
+    # the repair and is not attempted here — regenerating a months-old run's
+    # verdicts produces a record of what today's code would say wearing the
+    # name of that run, which is worse than the gap.
+    #
+    # NOTHING IS SAID OVER AN EMPTY POPULATION. With no corpus discoverable
+    # (this repository stopped carrying one at v1.10.56) `n_total` is 0 and
+    # this block is silent — a "0 uncountable, down from 73" printed over a
+    # tree nobody found would be the vacuous claim the rest of this file exists
+    # to remove.
+    answerability = None
+    if args.tree:
+        _root = Path(args.tree)
+        _ic_root = _root / "ic" if (_root / "ic").is_dir() else _root
+        den = _corpus_den.step_verdict_denominator(_ic_root)
+        if den.n_total:
+            ok, sentence = _corpus_den.ratchet_verdict(den)
+            answerability = {**den.as_dict(), "ratchet_ok": ok,
+                             "ratchet": sentence,
+                             "ceiling": _corpus_den.UNCOUNTABLE_CEILING}
+            print(f"  per-step-verdict answerability: {den.render()}")
+            print(f"  ratchet: {sentence}")
+            if den.is_vacuous:
+                print(f"  NOTE: not one run tree carries "
+                      f"{_corpus_den.STEP_INDEX_REL}, so every per-step "
+                      f"statistic over this corpus is vacuous — which reads "
+                      f"far more like a real result than it is.")
+            if not ok:
+                failed += 1
+
     if args.json:
         Path(args.json).write_text(
             json.dumps(
@@ -1236,6 +1287,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "nonconformant": failed,
                  "skipped_examined_nothing": len(skipped),
                  "discovered": len(results),
+                 # None when no corpus-wide walk happened; a dict carrying BOTH
+                 # halves of the fraction when one did.
+                 "per_step_verdict_answerability": answerability,
                  "folders": [asdict(r) for r in results]},
                 indent=2),
             encoding="utf-8")

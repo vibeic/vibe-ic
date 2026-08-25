@@ -34,7 +34,7 @@ from __future__ import annotations
 import argparse, json, re, shutil, subprocess, sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -180,16 +180,73 @@ def extract_office_libreoffice(p: Path, out_dir: Path, fmt: str) -> ExtractResul
     return ExtractResult(str(p), fmt, "", None, 0, "FAIL", "; ".join(errs))
 
 
-def extract_xlsx(p: Path, out_dir: Path) -> ExtractResult:
+def _xlsx_stdlib_tier2(p: Path) -> Optional[Dict[str, List[List[str]]]]:
+    """TIER 2 for .xlsx: `xlsx_extract`'s zipfile+ElementTree reader.
+
+    WHY THIS DELEGATES RATHER THAN RE-IMPLEMENTS (the chain edge)
+    ------------------------------------------------------------
+    Tier 1 below is openpyxl, and a host without openpyxl used to end the story:
+    this function returned `FAIL  openpyxl not installed`, and a vendor
+    spreadsheet in `input/docs/` was simply never read — the exact
+    "plugin ignores the xlsx" gap the extractor exists to close, arriving
+    through the dependency rather than through the file type.
+
+    `programs/xlsx_extract.py` already carries a pure-stdlib .xlsx reader
+    (shared strings, inline strings, sparse `r=` cell refs, row padding) and it
+    had NO caller: nothing but its own unit test ever ran it, so a capability
+    this repository owns was unreachable from the extractor that needed it. The
+    fallback is IMPORTED, never copied — a second stdlib parser here would drift
+    from the one the tests cover.
+
+    Returns doc_extract's own `{sheet: [[cell, ...], ...]}` shape (header row
+    restored to position 0, because callers of this function read rows, not a
+    header/body split), or None when nothing could be read.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
-        import openpyxl  # noqa
+        import xlsx_extract as _xl
     except Exception:
-        return ExtractResult(str(p), "xlsx", "", None, 0, "FAIL", "openpyxl not installed (pip install openpyxl)")
+        return None
+    try:
+        got = _xl.extract_xlsx(p)
+    except Exception:
+        return None
+    sheets = got.get("sheets") or {}
+    if not sheets:
+        return None
+    struct: Dict[str, List[List[str]]] = {}
+    for sn, sheet in sheets.items():
+        rows = [list(sheet.get("header") or [])] + [list(r) for r in sheet.get("rows") or []]
+        struct[sn] = [r for r in rows if any(str(c).strip() for c in r)]
+    return struct
+
+
+def _xlsx_write(p: Path, out_dir: Path, struct: Dict[str, List[List[str]]],
+                tier: str) -> ExtractResult:
+    flat_lines: List[str] = []
+    for sn, rows in struct.items():
+        for row in rows:
+            flat_lines.append(f"[{sn}] " + "\t".join(str(c) for c in row))
+    out_txt = out_dir / (p.stem + ".txt")
+    out_json = out_dir / (p.stem + ".json")
+    flat = "\n".join(flat_lines)
+    out_txt.write_text(flat, encoding="utf-8")
+    out_json.write_text(json.dumps(struct, ensure_ascii=False, indent=2))
+    r = ExtractResult(str(p), "xlsx", str(out_txt), str(out_json), len(flat),
+                      "PASS")
+    # The TIER is a warning, never an `error`: the extraction SUCCEEDED, and a
+    # consumer that reads `error` as "this failed" must not be handed a note.
+    if tier != "openpyxl":
+        r.extractor_warnings.append(f"xlsx read by tier2: {tier}")
+    return r
+
+
+def extract_xlsx(p: Path, out_dir: Path) -> ExtractResult:
+    errs: List[str] = []
     try:
         from openpyxl import load_workbook
         wb = load_workbook(p, data_only=True, read_only=True)
         struct = {}
-        flat_lines: List[str] = []
         for sn in wb.sheetnames:
             ws = wb[sn]
             rows = []
@@ -197,15 +254,22 @@ def extract_xlsx(p: Path, out_dir: Path) -> ExtractResult:
                 row_clean = ["" if v is None else str(v) for v in row]
                 if any(c.strip() for c in row_clean):
                     rows.append(row_clean)
-                    flat_lines.append(f"[{sn}] " + "\t".join(row_clean))
             struct[sn] = rows
-        out_txt = out_dir / (p.stem + ".txt")
-        out_json = out_dir / (p.stem + ".json")
-        out_txt.write_text("\n".join(flat_lines), encoding="utf-8")
-        out_json.write_text(json.dumps(struct, ensure_ascii=False, indent=2))
-        return ExtractResult(str(p), "xlsx", str(out_txt), str(out_json), len("\n".join(flat_lines)), "PASS")
+        return _xlsx_write(p, out_dir, struct, "openpyxl")
+    except ImportError as e:
+        errs.append(f"tier1: openpyxl not installed ({e})")
     except Exception as e:
-        return ExtractResult(str(p), "xlsx", "", None, 0, "FAIL", str(e))
+        errs.append(f"tier1: {e.__class__.__name__}: {e}")
+
+    # TIER 2 — the stdlib reader in `xlsx_extract`. Reached on a host with no
+    # openpyxl, and on a workbook openpyxl refuses; either way the FAIL below
+    # is now what it always claimed to be, "nothing could read this file",
+    # rather than "this host lacks one library".
+    struct = _xlsx_stdlib_tier2(p)
+    if struct:
+        return _xlsx_write(p, out_dir, struct, "xlsx_extract stdlib reader")
+    errs.append("tier2: xlsx_extract stdlib reader produced no sheet")
+    return ExtractResult(str(p), "xlsx", "", None, 0, "FAIL", "; ".join(errs))
 
 
 def extract_text(p: Path, out_txt: Path) -> ExtractResult:

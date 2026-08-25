@@ -206,7 +206,15 @@ def main():
         print(f"[OK] auto_diagnostic_led_synth — {rationale}")
         return 0
 
-    out_dir = Path(args.out_dir) if args.out_dir else (_pl.analog_dir(project) / "diagnostic")
+    # RESOLVED AGAINST THE PROJECT, not against the cwd. `project` is
+    # `.resolve()`d above and the two `relative_to(project)` calls below raise
+    # ValueError on a relative path — so a caller who passed `--out-dir
+    # reports/...` (the shape a flow clause has to use: the gate runs with cwd
+    # = the project and cannot spell an absolute path) crashed instead of
+    # emitting. `project / abs` yields `abs`, so an absolute --out-dir is
+    # unchanged.
+    out_dir = (project / args.out_dir).resolve() if args.out_dir \
+        else (_pl.analog_dir(project) / "diagnostic")
     out_dir.mkdir(parents=True, exist_ok=True)
     patch_path = out_dir / "led_synth_proposal.patch"
     md_path = out_dir / "led_synth_proposal.md"

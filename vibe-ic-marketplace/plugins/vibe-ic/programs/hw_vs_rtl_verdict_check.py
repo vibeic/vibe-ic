@@ -35,6 +35,14 @@ Usage
     hw_vs_rtl_verdict_check.py --responses-dir runs/
     hw_vs_rtl_verdict_check.py --responses-dir runs/ --min-variants 4
     hw_vs_rtl_verdict_check.py --responses-dir runs/ --field byte6
+    hw_vs_rtl_verdict_check.py --responses-dir runs/ --layout frame_layout.json
+
+``--layout`` is a PROJECT-SUPPLIED ``frame_layout.json`` (the tester is the
+user's choice, so the field table is a per-project fact). When given, differing
+responses are decoded field-by-field through ``tester_verdict_frame_decode``
+and carry diagnosis hints (``frame_offset_shift`` / ``payload_truncated`` /
+``crc_mismatch``) instead of being reported as bare byte indices. Absent, the
+report is byte-for-byte what it was.
 
 Exit codes
 ----------
@@ -175,8 +183,85 @@ def _compare(variants: List[dict], byte_index: Optional[int]
     return (len(differing) == 0), differing
 
 
+# THE "DIFFER HOW?" HALF, AND THE EDGE THAT REACHES IT.
+#
+# Everything above decides WHETHER the variants' tester frames are byte-
+# identical. When they are not, this program's whole message is "the bug is
+# still in RTL — keep iterating", and the next thing anybody asks is WHICH FIELD
+# moved: a header that shifted, a payload that came back short, a CRC that no
+# longer closes are three different bugs and the byte indices alone cannot tell
+# them apart. `tester_verdict_frame_decode` was written to answer exactly that —
+# per-byte annotation against a PROJECT-SUPPLIED `frame_layout.json`, plus the
+# diagnosis hints `frame_offset_shift` / `payload_truncated` / `crc_mismatch` —
+# and it was reachable from nothing but its own unit test, so every differing
+# fingerprint this gate has ever reported was reported as bare byte indices.
+#
+# THE LAYOUT IS THE PROJECT'S, NEVER OURS. The tester is the user's choice, so
+# the field table is a per-project fact; this file embeds no offset, no field
+# name and no expected byte. Absent `--layout`, the report is byte-for-byte what
+# it was before.
+#
+# AND AN ABSENT LAYOUT IS SAID OUT LOUD. A `--layout` naming a file that is not
+# there records an INFO finding rather than decoding nothing quietly: "I could
+# not look" must not reach a reader as "I looked and there was nothing to say".
+# INFO, not ERROR — the decode is a diagnostic on top of the verdict, and a
+# missing diagnostic must not manufacture a verdict this gate did not reach.
+def _load_layout(layout_path: Optional[str]) -> Tuple[Optional[dict], List[Finding]]:
+    """(layout, findings). None layout ⇒ decode is off or could not be read."""
+    if not layout_path:
+        return None, []
+    p = Path(layout_path)
+    if not p.is_file():
+        return None, [Finding(
+            severity="INFO",
+            category="FRAME_LAYOUT_ABSENT",
+            message=("--layout was given but no frame layout is there, so the "
+                     "differing bytes are reported un-decoded"),
+            details=str(p),
+        )]
+    try:
+        layout = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return None, [Finding(
+            severity="INFO",
+            category="FRAME_LAYOUT_UNREADABLE",
+            message="--layout could not be parsed; bytes reported un-decoded",
+            details=f"{p}: {e}",
+        )]
+    if not isinstance(layout, dict) or not layout.get("fields"):
+        return None, [Finding(
+            severity="INFO",
+            category="FRAME_LAYOUT_EMPTY",
+            message=("--layout declares no `fields`, so it can decode nothing; "
+                     "bytes reported un-decoded"),
+            details=str(p),
+        )]
+    return layout, []
+
+
+def _decode_variants(variants: List[dict], layout: dict) -> List[dict]:
+    """Per-variant field decode + diagnosis hints, via the shared decoder.
+
+    The decoder is IMPORTED, not re-implemented: a second copy of the offset /
+    expected-byte / hint rules here would drift from the one the CLI publishes.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import tester_verdict_frame_decode as _tvfd
+
+    out: List[dict] = []
+    for v in variants:
+        try:
+            decoded = _tvfd.decode_frame(list(v["_bytes"]), layout)
+        except Exception as e:                      # a malformed layout field
+            decoded = {"error": f"{type(e).__name__}: {e}"}
+        out.append({"rtl_id": v.get("rtl_id", v.get("_source", "?")),
+                    "decode": decoded})
+    return out
+
+
 def render_verdict(variants: List[dict], min_variants: int,
-                   byte_index: Optional[int]) -> List[Finding]:
+                   byte_index: Optional[int],
+                   layout: Optional[dict] = None) -> List[Finding]:
     findings: List[Finding] = []
     if len(variants) < min_variants:
         findings.append(Finding(
@@ -224,15 +309,20 @@ def render_verdict(variants: List[dict], min_variants: int,
                         for x in vals]
             diff_summary.append(f"byte[{idx}]: {hex_vals}")
     more = "" if len(differing) <= 8 else f" (+{len(differing) - 8} more)"
+    extras = {"differing_bytes": [
+        {"index": idx, "values": vals} for idx, vals in differing
+    ]}
+    # The decode rides ON the finding it explains, so a reader who sees
+    # "byte[3] differs" sees which FIELD byte 3 is in the same object.
+    if layout is not None:
+        extras["frame_decode"] = _decode_variants(variants, layout)
     findings.append(Finding(
         severity="ERROR",
         category="DIFFERING_RESPONSES",
         message=("RTL-blocked, not hardware: variants produced different "
                  "responses — keep iterating RTL"),
         details="; ".join(diff_summary) + more,
-        extras={"differing_bytes": [
-            {"index": idx, "values": vals} for idx, vals in differing
-        ]},
+        extras=extras,
     ))
     return findings
 
@@ -267,6 +357,12 @@ def main(argv: list = None) -> int:
     parser.add_argument("--field", default="full",
                         help=("Which bytes to compare: 'full' (default) or "
                               "'byte<N>' to select a single byte (e.g. byte6)."))
+    parser.add_argument("--layout", default=None,
+                        help=("Optional project-supplied frame_layout.json. "
+                              "When given, differing tester frames are DECODED "
+                              "field-by-field (offset / expected / value map) "
+                              "with diagnosis hints, instead of being reported "
+                              "as bare byte indices."))
     parser.add_argument("--json", default=None,
                         help="Optional path to write JSON report")
     args = parser.parse_args(argv)
@@ -277,16 +373,18 @@ def main(argv: list = None) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
+    layout, layout_findings = _load_layout(args.layout)
+
     dir_path = Path(args.responses_dir)
     variants, load_findings = _load_variants(dir_path)
-    findings = list(load_findings)
+    findings = list(load_findings) + layout_findings
 
     has_io_error = any(f.category == "MISSING_DIR" for f in findings)
     has_invalid = any(f.category == "INVALID_VARIANT" for f in findings)
 
     if not has_io_error:
         verdict_findings = render_verdict(variants, args.min_variants,
-                                          byte_index)
+                                          byte_index, layout)
         findings.extend(verdict_findings)
 
     passed = (not has_io_error and not has_invalid

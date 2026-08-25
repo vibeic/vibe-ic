@@ -100,6 +100,19 @@ import _path_layout as _pl
 import _rtl_include_hub as _hub  # shared include-hub aggregator predicate
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
+# STAGED IS NOT CONSUMED (ORGANIC #733). `_lesson_digest` hands the author a
+# digest; NOTHING asked whether a section that matches this design was USED.
+# Measured in that program's header: a blind author was handed a section
+# quoting its design's trap sentence and its exact fail signature, did not
+# consume it, and reproduced the signature at 57% mismatch, while three
+# authors that DID consume the same staged section passed. The repair for
+# that was a stronger MANDATORY paragraph — prose, which regresses. This is
+# the deterministic half: the SAME staging site that renders the digest now
+# scores it against this design's own spec and NAMES the strongly-matched
+# sections in the handoff, so 'staged' becomes 'named to you, acknowledge or
+# reject each one'. Library use only (parse_digest / match_sections); no
+# verdict is taken here and no WAIVE is ever blocked.
+import lesson_consumption_check as _lesson_consumed
 import spec_declaration_emit as _decl  # the spec's FREE-CHOICE declaration contract
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import rtl_provenance as _rtl_prov  # authored-RTL guard for phase2/stage1/rtl/
@@ -5517,6 +5530,43 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
             n_decl_required = sum(1 for f in _names.values() if f["required"])
     except Exception:
         pass
+    # STAGED IS NOT CONSUMED (ORGANIC #733) — the deterministic half.
+    #
+    # WHY HERE AND NOWHERE ELSE. This is the only site that holds BOTH halves of
+    # the question at the same moment: the digest it has just rendered, and the
+    # spec the author is about to write from. A flow clause cannot own it — the
+    # digest is produced ONLY at an authoring WAIVE, so any gate clause that read
+    # it would make a conditionally-produced artefact load-bearing with no step
+    # able to declare it unconditionally (measured: matrix d7 W2, step 2).
+    #
+    # Scoring is the program's GENERAL CORE — plain strings in, ranked matches
+    # and the terms that drove each one out. No verdict is taken here and no
+    # WAIVE is blocked; best-effort exactly like the digests above.
+    strong_titles: List[str] = []
+    try:
+        ack_path = str(_pl.phase2_stage1_dir(project) / "lessons_ack.json")
+    except Exception:
+        ack_path = ""
+    if digest_path:
+        try:
+            _sections = _lesson_consumed.parse_digest(
+                Path(digest_path).read_text(errors="ignore"))
+            _matches = _lesson_consumed.match_sections(
+                _gather_spec_text(project), _sections)
+            strong_titles = [m["section"] for m in _matches if m["strong"]]
+        except Exception as _lc_err:
+            # BEST-EFFORT, BUT NEVER SILENT. This block degrading to "off" is
+            # indistinguishable, in the handoff text, from a design with no
+            # strongly-matched section — and a guard that reports success while
+            # off is worse than no guard. It cost one debug cycle already: the
+            # match record's key is `section`, not `title`, and the bare
+            # `except` swallowed the KeyError and produced an empty list that
+            # read as a clean answer. Say so instead.
+            strong_titles = []
+            print(f"      lesson-consumption scoring did not run "
+                  f"({type(_lc_err).__name__}: {_lc_err}); the handoff names no "
+                  f"strongly-matched section — that is NOT the same as none "
+                  f"matching", file=sys.stderr)
     lessons_hint = (
         f"\nMANDATORY before authoring: open `{digest_path}` ({n_lessons} "
         f"chip-AGNOSTIC genre-convention lessons) and APPLY every section "
@@ -5545,8 +5595,30 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         f"re-derived from an RTL header comment later: a free choice recorded "
         f"only in prose is a free choice a downstream tool has to guess."
         if decl_contract_path else "")
+    # The prose above says "APPLY every section whose '**When to apply**'
+    # matches this design's genre" and leaves the author to decide which those
+    # are. This names them, and asks for an answer per section — `applied:
+    # false` is a legitimate answer (the digest's own rule is "apply UNLESS the
+    # spec states otherwise"); SILENCE is what the gate exists to end.
+    consumed_hint = (
+        (f"\nSTAGED IS NOT CONSUMED — {len(strong_titles)} of those section(s) "
+         f"score as a STRONG match for THIS design's spec:\n"
+         + "".join(f"    - {t}\n" for t in strong_titles)
+         + f"Record, per section, `applied` true/false plus a one-line note in "
+           f"`{ack_path}`:\n"
+           f'    {{"lessons_applied": [{{"section": "<title>", '
+           f'"applied": true, "note": "<how it changed the RTL, or why it '
+           f'does not apply>"}}]}}\n'
+           f"Then VERIFY, rather than asserting it:\n"
+           f"    python3 plugins/vibe-ic/programs/lesson_consumption_check.py "
+           f"--prompt <spec-file> --digest {digest_path} --ack {ack_path} "
+           f"--strict")
+        if strong_titles and ack_path else "")
     extras: Dict[str, Any] = {"lessons_digest": digest_path,
                               "lessons_count": n_lessons}
+    if strong_titles:
+        extras["lessons_strong_matches"] = strong_titles
+        extras["lessons_ack_path"] = ack_path
     if db_digest_path:
         extras["ic_expert_db_digest"] = db_digest_path
         extras["ic_expert_db_count"] = n_db
@@ -5554,7 +5626,7 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         extras["declaration_contract"] = decl_contract_path
         extras["declaration_field_count"] = n_decl_fields
         extras["declaration_required_count"] = n_decl_required
-    return lessons_hint + db_hint + decl_hint, extras
+    return lessons_hint + consumed_hint + db_hint + decl_hint, extras
 
 
 def step_rtl_gen(project: Path, ic_class: str,

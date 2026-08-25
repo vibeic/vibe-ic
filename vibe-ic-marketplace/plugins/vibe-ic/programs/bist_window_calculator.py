@@ -28,6 +28,16 @@ Usage:
                                      --ibt-us 14 --clk-mhz 2.5
 
 Exit code: always 0 (this is a calculator, not a lint).
+
+IN-PROCESS CALLER
+=================
+`size_window()` is the whole computation, callable without argparse, and
+`half_duplex_response_window_check` calls it: that gate already parses the
+TX-PHY bit-cell constants, the L2 inter-byte gap and the checker clock this
+needs, and the capture window is the MASTER-SIDE half of the question it asks
+about the chip side. The window is DISCLOSED there, never refused on — an
+undersized window is a property of the bench harness, not of the RTL under
+test, so it is not a defect that gate is entitled to fail the design for.
 """
 
 from __future__ import annotations
@@ -35,6 +45,39 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from typing import Dict
+
+
+def size_window(max_bytes: int, bit_period_us: float, clk_mhz: float,
+                ibt_us: float = 14.0, br_us: float = 14.0,
+                margin: float = 1.5) -> Dict[str, float]:
+    """The sizing, with no argparse and no printing.
+
+    Every figure the CLI prints is a key here, so an in-process caller and the
+    command line cannot disagree about what the window is.
+    """
+    per_byte_us = 8 * bit_period_us + ibt_us
+    payload_us = max_bytes * per_byte_us
+    raw_us = br_us + payload_us
+    window_us = raw_us * margin
+    cycles = int(math.ceil(window_us * clk_mhz))
+    seq_rx_cycles = int(math.ceil(cycles * 1.15))  # sequencer waits longer
+    bits_needed = max(1, math.ceil(math.log2(seq_rx_cycles + 1)))
+    return {
+        "max_bytes": max_bytes,
+        "bit_period_us": bit_period_us,
+        "ibt_us": ibt_us,
+        "br_us": br_us,
+        "margin": margin,
+        "clk_mhz": clk_mhz,
+        "per_byte_us": per_byte_us,
+        "raw_us": raw_us,
+        "window_us": window_us,
+        "window_ms": window_us / 1000.0,
+        "win_cycles": cycles,
+        "seq_rx_cycles": seq_rx_cycles,
+        "win_cnt_bits": bits_needed,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,15 +97,14 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     # Core formula: window ≥ BR + N × (8 × bit + IBT)
-    per_byte_us = 8 * args.bit_period_us + args.ibt_us
-    payload_us = args.max_bytes * per_byte_us
-    raw_us = args.br_us + payload_us
-    window_us = raw_us * args.margin
-
-    # Convert to checker cycles
-    cycles = int(math.ceil(window_us * args.clk_mhz))
-    seq_rx_cycles = int(math.ceil(cycles * 1.15))  # sequencer should wait longer
-    bits_needed = max(1, math.ceil(math.log2(seq_rx_cycles + 1)))
+    w = size_window(args.max_bytes, args.bit_period_us, args.clk_mhz,
+                    ibt_us=args.ibt_us, br_us=args.br_us, margin=args.margin)
+    per_byte_us = w["per_byte_us"]
+    raw_us = w["raw_us"]
+    window_us = w["window_us"]
+    cycles = w["win_cycles"]
+    seq_rx_cycles = w["seq_rx_cycles"]
+    bits_needed = w["win_cnt_bits"]
 
     print("=== BIST sample window sizing ===")
     print(f"  max response bytes        : {args.max_bytes}")

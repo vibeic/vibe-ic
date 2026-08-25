@@ -119,6 +119,20 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     programs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
     if not programs.is_dir():
         raise FileNotFoundError(f"no programs/ under {root}")
+    return scan_programs(programs)
+
+
+def scan_programs(programs: Path) -> Tuple[List[dict], Dict[str, int]]:
+    """The census over an ALREADY-RESOLVED programs/ directory.
+
+    Separate from `scan` because the in-process caller
+    (`checker_execution_wiring_audit.CORPUS_FIGURES`) is handed the PLUGIN
+    root and already knows where programs/ is; making it re-derive a checkout
+    root so this function could re-derive programs/ from it would be a second
+    copy of a path this repo has exactly one of.
+    """
+    if not programs.is_dir():
+        raise FileNotFoundError(f"no such programs dir: {programs}")
     pats = _suffixes(programs)
     if pats is None:
         raise RuntimeError(f"could not read _CHECKER_SUFFIXES from {_AUDIT}")

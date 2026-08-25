@@ -619,3 +619,111 @@ def test_a_program_that_finishes_INSIDE_the_bound_still_returns_its_own_rc(
     bad.write_text("import sys\nsys.exit(3)\n")
     rc2, _o, _e = gk._run_program(bad, [], timeout=60.0)
     assert rc2 == 3, rc2
+
+
+# ---------------------------------------------------------------------------
+# The two ADVISORY disclosures wired in because nothing else ran them.
+#
+# `content_pinned_authority_verified_only_at_merge` and
+# `corpus_cardinality_pin_scan` were authored, tested and merged, and then
+# reachable from no runner, no flow clause, no CI line and no skill. They are
+# composed here — the gate a maintainer runs BEFORE every push — because that
+# is where an author-facing report is still cheap to act on. Neither may ever
+# block, and each must DISCLOSE an absent subject rather than report a clean
+# zero over a population nobody opened.
+# ---------------------------------------------------------------------------
+def _pinned_manifest(root: Path, entries: dict) -> None:
+    """Write a transition manifest of {relpath: (current_hash, next_hash)}."""
+    import hashlib
+    (root / "tools" / "ci").mkdir(parents=True, exist_ok=True)
+    paths = {}
+    for rel, body in entries.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+        h = hashlib.sha256(body.encode()).hexdigest()
+        paths[rel] = {"current": h, "next": h}
+    (root / "tools" / "ci" / "protected_landing_transition.json").write_text(
+        json.dumps({"identifier": "test-transition", "paths": paths}))
+
+
+def test_pinned_authority_advisory_reports_a_drifted_pin_without_blocking(
+        tmp_path):
+    """Same manifest, same denominator: one pinned file's CONTENT moves."""
+    root = tmp_path / "repo"
+    _pinned_manifest(root, {"tools/ci/a.py": "print(1)\n",
+                            "tools/ci/b.py": "print(2)\n"})
+    clean = gk.pinned_authority_gate(root)
+    assert clean.green and clean.rc == 0, clean
+    (root / "tools" / "ci" / "a.py").write_text("print(1)  # edited\n")
+    drifted = gk.pinned_authority_gate(root)
+    # It NOTICES ...
+    assert drifted.summary != clean.summary, (clean.summary, drifted.summary)
+    assert "a.py" in drifted.summary or "1 pinned" in drifted.summary, drifted
+    # ... and it still does NOT block. A mismatch on a branch that legitimately
+    # edits a pinned path is the EXPECTED state; blocking would refuse the very
+    # change the manifest exists to record.
+    assert drifted.rc == 0 and drifted.green, drifted
+
+
+def test_pinned_authority_discloses_an_absent_manifest_instead_of_passing(
+        tmp_path):
+    g = gk.pinned_authority_gate(tmp_path)
+    assert g.rc == -1, g            # NOT_APPLICABLE, not a pass
+    assert "CANNOT DETERMINE" in g.summary, g.summary
+    assert g.green                  # and still never blocking
+
+
+def test_corpus_pin_scan_advisory_counts_census_pins_without_blocking(
+        tmp_path):
+    """Same tests tree, one added assertion that pins the corpus CENSUS."""
+    tests = tmp_path / "programs" / "tests"
+    tests.mkdir(parents=True)
+    (tests / "test_clean.py").write_text(
+        "def test_x():\n"
+        "    rows = ['a']\n"
+        "    assert rows[0] == 'a'\n")
+    clean = gk.corpus_pin_scan_gate(tmp_path)
+    assert clean.rc == 0 and clean.green, clean
+    assert "TOTAL 0 pin(s)" in clean.summary, clean.summary
+
+    (tests / "test_pinned.py").write_text(
+        "from pathlib import Path\n"
+        "CORPUS = Path('benchmark-data')\n"
+        "def test_y():\n"
+        "    rows = list(CORPUS.rglob('*.json'))\n"
+        "    assert len(rows) == 23\n")
+    pinned = gk.corpus_pin_scan_gate(tmp_path)
+    assert "TOTAL 1 pin(s)" in pinned.summary, pinned.summary
+    # A REPORTER, on its own written instruction: plenty of hits are
+    # load-bearing, so the judgement is the reader's and this never blocks.
+    assert pinned.rc == 0 and pinned.green, pinned
+
+
+def test_corpus_pin_scan_discloses_an_absent_tests_tree(tmp_path):
+    """`0 pins` from a directory nobody opened is the empty-population claim
+    this repo keeps paying for. It must be a named skip instead."""
+    g = gk.corpus_pin_scan_gate(tmp_path)
+    assert g.rc == -1, g
+    assert "nothing was opened" in g.summary, g.summary
+    assert g.green
+
+
+def test_both_advisories_are_in_the_verdict_and_neither_blocks(tmp_path):
+    """The wiring, not just the drivers: a full review() must LIST them."""
+    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
+    v = gk.review(
+        "BASE", "HEAD",
+        repo=repo, plugin_root=plugin,
+        role="core-agent",
+        pytest_cmd="python3 -m pytest -q programs/tests",
+        commit_cmds=["git commit -m 'fix'", "git push origin main"],
+        override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
+        override_cur="1.0.96", override_prev="1.0.95",
+    )
+    by_name = {g.name: g for g in v.gates}
+    for name in ("content_pinned_authority_verified_only_at_merge",
+                 "corpus_cardinality_pin_scan"):
+        assert name in by_name, sorted(by_name)
+        assert by_name[name].green, by_name[name]
+    assert v.verdict == "MERGE_OK", v.blocking

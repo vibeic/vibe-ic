@@ -37749,6 +37749,15 @@ exit
             f"# phase3_one_shot_runner v1.6.36 (canonicalize_artefacts step).\n"
             f"# Tool: openroad / sta (OpenSTA Power Report).\n"
             f"#\n"
+            # THE STAMP, in the ONE spelling `_sta_basis.declared_basis` reads.
+            # `basis:` below is prose inside a provenance block and no reader
+            # parses it; without this line the report declared no side of
+            # place-and-route and was dropped from the sign-off evidence set as
+            # out of scope, which reads as an incomplete view rather than as a
+            # producer that never said. The value is the same one the header
+            # and the linked netlist already name — nothing new is asserted.
+            f"# STA_BASIS: {basis_stamp}\n"
+            f"#\n"
             f"# Inputs (provenance):\n"
             f"#   netlist: {netlist.relative_to(project)}\n"
             f"#   spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
@@ -37801,6 +37810,10 @@ exit
             f"\n"
             f"# === OpenSTA report_power invocation context ===\n"
             f"openroad / sta engine: live invocation, rc={rc}\n"
+            # Same stamp on the fallback: which side of PnR the numbers WOULD
+            # have described is a fact about the linked netlist, and it is
+            # exactly as true when the values are not_computed.
+            f"STA_BASIS: {basis_stamp}\n"
             f"POWER_BASIS: {basis_stamp}\n"
             f"netlist: {netlist.relative_to(project)}\n"
             f"spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
@@ -39139,7 +39152,13 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
             si_rpt.write_text(
                 "# Signal-integrity / crosstalk — REAL SPEF coupling-cap screen\n"
                 "# phase3_one_shot_runner (Step 27). Source: OpenRCX SPEF coupling caps.\n"
-                f"# SPEF: {spef}\n#\n"
+                f"# SPEF: {spef}\n"
+                # The stamp `_sta_basis.declared_basis` reads. Step 27 runs on
+                # the ROUTED design and this branch is made OF the extracted
+                # SPEF, so the side of place-and-route is not a judgement call
+                # here — it is what the input file is. Unstamped, this report
+                # declared no basis and left the sign-off evidence set.
+                "# STA_BASIS: POST_ROUTE_SPEF\n#\n"
                 f"nets_analyzed: {m['nets']}\n"
                 f"max_coupling_ratio: {m['max_coupling_ratio']}\n"
                 f"mean_coupling_ratio: {m['mean_coupling_ratio']}\n"
@@ -39186,6 +39205,11 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
         "# Signal-integrity / crosstalk screen — emitted by\n"
         "# phase3_one_shot_runner (ORGANIC-20260531 sign-off-chain step).\n"
         "# Tool: openroad wire-RC model (decoupled-C screen).\n"
+        # Same Step 27, same routed DB; only the SPEF is missing, and the
+        # missing SPEF is what the `NO_SPEF` suffix says. A screen that
+        # declines to name its side of PnR is dropped from the evidence set,
+        # which is a weaker statement than the honest one it can make.
+        "# STA_BASIS: POST_ROUTE_NO_SPEF\n"
         "#\n"
         "# A full crosstalk/noise sign-off needs SPEF coupling capacitances.\n"
         "# No SPEF coupling caps were available for this run (the v0.2.5 OpenRCX\n"
@@ -42377,6 +42401,29 @@ def main() -> int:
         _wm.materialize(project)
     except Exception as _wm_exc:  # best-effort; never crash finalize
         print(f"[WARN] waivers_materialize non-fatal: {_wm_exc}", file=sys.stderr)
+
+    # `signoff_waiver_md_emit` — the SUBMITTER-FACING half of the waiver pair,
+    # reachable for the first time. `signoff_waiver_emit` writes the
+    # machine-readable JSON an automation pipeline consumes; the Markdown a
+    # shuttle reviewer actually reads was emitted by a sister program that
+    # nothing called, so every run that produced a waiver package produced only
+    # its machine half. This is the same best-effort shape as the two edges
+    # above and runs in the same place, BEFORE the final summary.
+    #
+    # IT WRITES NOTHING IT WAS NOT GIVEN. `emit_for_project` returns None
+    # unless the project already holds BOTH the JSON waivers and the one
+    # human-supplied `signoff/waivers/project_meta.json` (shuttle, submitter,
+    # root cause, recommendation) — the fields no run can derive. A project
+    # with no waiver package is left alone rather than handed a template.
+    try:
+        import signoff_waiver_md_emit as _swm
+        _swm_out = _swm.emit_for_project(project)
+        if _swm_out is not None:
+            print(f"[signoff] submitter-facing waiver document: "
+                  f"{_swm_out.relative_to(project)}")
+    except Exception as _swm_exc:  # best-effort; never crash finalize
+        print(f"[WARN] signoff_waiver_md_emit non-fatal: {_swm_exc}",
+              file=sys.stderr)
 
     # #146 blocker-3 — COLLECT external-storage outputs into the project tree
     # before the audit: any LIVE artifact a canonical report cites at a volatile

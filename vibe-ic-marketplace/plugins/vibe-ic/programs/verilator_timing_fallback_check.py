@@ -30,6 +30,13 @@ This is general (any benchmark TB), no-cheat (the golden-self-test never fakes a
 pass — a genuinely-unsatisfiable TB still floors), and §4.05-tight (a TB Verilator
 runs unfaithfully is NOT waved through).
 
+WHO CALLS IT
+-----------
+`tb_vcs_only_construct_detect.py` — the detector whose FLOOR-D verdict this
+adjudicates. Given `--golden --tb-top --dut-name` it imports :func:`adjudicate`
+and records the result as its report's `floor_proof`, in place of the
+`floor_proof_required` string that used to ask a reader to run this by hand.
+
 CLI
 ---
   verilator_timing_fallback_check.py --tb <tb.v> --golden <golden.v>

@@ -27,6 +27,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import org_duplicate_fork_check as D  # noqa: E402
+import gh_enumerate_all as G  # noqa: E402
 
 
 _UP_FP = "master@3dddccd47861 dev@aaaa1111"
@@ -48,6 +49,35 @@ def _fake_gh(repos, fps, list_rc=0):
             return 0, fps[full], ""
         raise AssertionError(f"unexpected gh call: {args}")
     return gh
+
+
+#: `_branch_fingerprint` now enumerates `refs/heads` through `gh_enumerate_all`
+#: instead of reading one capped REST page, so the branch read no longer arrives
+#: through `_gh`. This double serves that enumeration from the SAME `fps` table
+#: every test below already installs on `_gh`: the tests keep one source of
+#: truth, and none of them reaches GitHub. The enumerator's own completeness
+#: contract — pagination to exhaustion, node count asserted against the
+#: connection's declared totalCount — is pinned in `test_gh_enumerate_all.py`;
+#: what is pinned HERE is what this program does with the result.
+def _enumerate_from_the_installed_fake(owner, name, collection, *a, **kw):
+    assert collection == "refs/heads", collection
+    rc, out, _ = D._gh(["api", f"repos/{owner}/{name}/branches?per_page=100",
+                        "--jq", "fingerprint"], timeout=60)
+    if rc != 0:
+        return {"error": f"{owner}/{name}: listing failed"}
+    nodes = []
+    for token in (out or "").split():
+        branch, _, sha = token.partition("@")
+        nodes.append({"name": branch, "target": {"oid": sha}})
+    return {"owner": owner, "repo": name, "collection": collection,
+            "count": len(nodes), "declared_total": len(nodes), "nodes": nodes}
+
+
+@pytest.fixture(autouse=True)
+def _no_test_here_reaches_github(monkeypatch):
+    """`D._gh` is resolved at CALL time, so this fixture does not care whether
+    the test installs its fake before or after."""
+    monkeypatch.setattr(D, "_enumerate_all", _enumerate_from_the_installed_fake)
 
 
 def _fork(name, upstream="povik/sv-elab"):
@@ -272,3 +302,65 @@ def test_the_guard_is_what_produces_the_refusal(monkeypatch, capsys):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# the branch listing is an ENUMERATION
+# ---------------------------------------------------------------------------
+def _refs_pages(sha_past_the_cap, total=150):
+    """A 150-branch repository served two pages deep, the way GitHub serves it.
+
+    The first 100 are identical across both repositories; the difference lives
+    past branch 100, which is precisely where a single `per_page=100` page
+    stops looking.
+    """
+    def fake(query, timeout=120):
+        first_page = "after:null" in query
+        lo, hi = (0, 100) if first_page else (100, total)
+        nodes = [{"name": f"b{i:03d}",
+                  "target": {"oid": sha_past_the_cap if i >= 100
+                             else f"sha{i:03d}"}}
+                 for i in range(lo, hi)]
+        return {"data": {"repository": {"refs": {
+            "totalCount": total,
+            "pageInfo": {"hasNextPage": first_page, "endCursor": "c0"},
+            "nodes": nodes}}}}, ""
+    return fake
+
+
+def test_a_difference_past_the_hundredth_branch_is_seen(monkeypatch):
+    """THE defect this read used to carry. One REST page of 100 made two forks
+    that differ at branch 101 fingerprint IDENTICALLY, and an identical
+    fingerprint is what this program calls `empty` — safe to delete.
+    """
+    monkeypatch.setattr(D, "_enumerate_all", G.enumerate_all)
+
+    monkeypatch.setattr(G, "_gh_graphql", _refs_pages("aaaaaaa"))
+    upstream = D._branch_fingerprint("povik/sv-elab")
+    monkeypatch.setattr(G, "_gh_graphql", _refs_pages("bbbbbbb"))
+    fork = D._branch_fingerprint("vibeic/sv-elab-1")
+
+    assert len(upstream.split()) == 150, "the collection was not enumerated"
+    assert upstream.split()[:100] == fork.split()[:100], (
+        "the fixture must be indistinguishable inside the old cap, or this "
+        "test is not about the cap")
+    assert upstream != fork, (
+        "a fork carrying work past branch 100 read as byte-identical to its "
+        "upstream, which is the recommendation to delete real work")
+
+
+def test_a_short_read_is_UNREADABLE_and_never_a_smaller_repository(monkeypatch):
+    """`None` is the third state. A listing whose node count disagrees with the
+    connection's declared total is an error, and an error must not arrive here
+    as a fork with fewer branches — that fork would compare unequal and be
+    reported as carrying work, or, worse, equal to another short read."""
+    monkeypatch.setattr(D, "_enumerate_all", G.enumerate_all)
+
+    def truncated(query, timeout=120):
+        return {"data": {"repository": {"refs": {
+            "totalCount": 150,
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": [{"name": "b000", "target": {"oid": "sha000"}}]}}}}, ""
+
+    monkeypatch.setattr(G, "_gh_graphql", truncated)
+    assert D._branch_fingerprint("vibeic/sv-elab-1") is None

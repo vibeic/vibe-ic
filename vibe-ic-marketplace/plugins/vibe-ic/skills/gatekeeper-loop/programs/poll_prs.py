@@ -297,6 +297,147 @@ def poll(repo: str = _DEFAULT_REPO,
     }
 
 
+# --------------------------------------------------------------------------
+# ROUND CONTEXT: which PR owns each non-atomic declared-report write
+# --------------------------------------------------------------------------
+# `atomic_write_pr_attribution` (vibe-ic#1468) answers the question the landing
+# gate cannot: `atomic_artifact_write_check` says "does THIS TREE contain a new
+# offender", and the round needs "WHOSE PR put it there", because a site has to
+# be converted on the branch that carries it. It had no caller. The map #1468
+# built by hand instead — one shared tree, every PR's file dropped in, the gate
+# run ONCE — under-reported in four of four measurable cases, because two PRs
+# adding the same filename overwrote each other and only the survivor was
+# scanned. Five PRs were told they had nothing to fix.
+#
+# THE POLL IS WHERE THE ROUND STARTS, so it is where the map belongs: this is
+# the one place that already knows the actionable PR numbers, so the tool is
+# handed them directly and never re-lists open PRs behind the poll's back.
+#
+# IT IS ADVISORY AND IT NEVER MOVES THE EXIT CODE. Same rule the module
+# docstring states for `mergeable` / `mergeStateStatus`: the poll ENUMERATES
+# candidates and does not decide mergeability. A PR carrying a site still needs
+# the gatekeeper; silently dropping it would wedge it.
+#
+# A COUNT NOBODY COULD MEASURE IS NOT A ZERO. The tool's rc 2 (a PR whose file
+# list or head blob could not be read, or the gate/residual absent) is recorded
+# as `checked: false` with the reason, NEVER folded into "no PR owns a site".
+_ATTRIB_REL = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
+               "atomic_write_pr_attribution.py")
+
+
+def _default_checkout() -> Optional[Path]:
+    """The git checkout this skill ships inside, or None.
+
+    `parents[6]` is the repo root: programs/gatekeeper-loop/skills/vibe-ic/
+    plugins/vibe-ic-marketplace/<root>. Verified by the tool's presence, not by
+    counting alone — a moved file must not silently point at a parent directory.
+    """
+    here = Path(__file__).resolve()
+    for cand in here.parents:
+        if (cand / _ATTRIB_REL).is_file() and (cand / ".git").exists():
+            return cand
+    return None
+
+
+def _prune_stale_cache(cache: Path, entries: List[Dict[str, Any]]) -> None:
+    """Drop cached file lists for PRs that have been pushed to since.
+
+    The cache is what makes this affordable on a cron tick, and a cache keyed
+    only by PR number is a cache that answers about the wrong commit. The
+    sidecar records each PR's `updatedAt`; a change to it removes that PR's
+    entry so the tool re-reads it.
+    """
+    side = cache / "updated_at.json"
+    try:
+        prev = json.loads(side.read_text()) if side.is_file() else {}
+    except (OSError, ValueError):
+        prev = {}
+    now = {str(e["number"]): e.get("updated_at") or "" for e in entries
+           if e.get("number")}
+    for num, stamp in now.items():
+        if prev.get(num) != stamp:
+            try:
+                (cache / f"{num}.tsv").unlink()
+            except OSError:
+                pass
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        side.write_text(json.dumps({**prev, **now}, indent=1))
+    except OSError:
+        pass
+
+
+def attribute_atomic_writes(report: Dict[str, Any],
+                            checkout: Optional[Path] = None,
+                            cache_dir: Optional[Path] = None,
+                            timeout: int = 300) -> Dict[str, Any]:
+    """Run `atomic_write_pr_attribution` over the PRs this poll just found."""
+    numbers = [e["number"] for e in report.get("actionable", []) if e.get("number")]
+    if not numbers:
+        return {"checked": True, "prs": 0, "sites": 0, "by_pr": {},
+                "why": "no actionable PR to attribute"}
+    root = Path(checkout) if checkout else _default_checkout()
+    if root is None:
+        return {"checked": False, "prs": len(numbers), "by_pr": {},
+                "why": ("no git checkout carrying "
+                        f"{_ATTRIB_REL} was found above this file, so no PR "
+                        "head could be read — this is NOT a clean result")}
+    tool = root / _ATTRIB_REL
+    cache = Path(cache_dir) if cache_dir else (root / ".git" / "vibeic-attribution-cache")
+    _prune_stale_cache(cache, report.get("actionable", []))
+
+    argv = [sys.executable, str(tool), "--repo", str(root),
+            "--owner-repo", report.get("repo", _DEFAULT_REPO),
+            "--cache-dir", str(cache)]
+    for n in numbers:
+        argv += ["--pr", str(n)]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"checked": False, "prs": len(numbers), "by_pr": {},
+                "why": f"{type(exc).__name__}: {exc}"}
+
+    by_pr: Dict[str, List[str]] = {}
+    for line in proc.stdout.splitlines():
+        # `<file>:<line>   #<pr>` — the tool's own rendering, read for the two
+        # tokens the round works from and nothing else.
+        if "#" not in line:
+            continue
+        head, _, tail = line.rpartition("#")
+        pr = tail.strip().split()[0] if tail.strip() else ""
+        site = head.strip()
+        if pr.isdigit() and site:
+            by_pr.setdefault(pr, []).append(site)
+
+    if proc.returncode == 2:
+        return {"checked": False, "prs": len(numbers), "by_pr": by_pr,
+                "sites_floor": sum(len(v) for v in by_pr.values()),
+                "why": (proc.stderr.strip().splitlines() or
+                        ["the tool reported NOT CHECKED"])[-1]}
+    return {"checked": True, "prs": len(numbers), "by_pr": by_pr,
+            "sites": sum(len(v) for v in by_pr.values()),
+            "rc": proc.returncode,
+            "why": "" if proc.returncode in (0, 1) else proc.stderr.strip()[:300]}
+
+
+def _print_attribution(att: Dict[str, Any]) -> None:
+    if not att.get("checked"):
+        print(f"\n# atomic-write attribution: NOT CHECKED over "
+              f"{att.get('prs', 0)} PR(s) — {att.get('why')}")
+        if att.get("by_pr"):
+            print(f"#   sites found anyway are a FLOOR, not a count: {att['by_pr']}")
+        return
+    if not att.get("by_pr"):
+        print(f"\n# atomic-write attribution: 0 site(s) over "
+              f"{att.get('prs', 0)} PR(s) examined")
+        return
+    print(f"\n# atomic-write attribution: {att['sites']} site(s) over "
+          f"{att['prs']} PR(s) — each must be converted on the branch that "
+          f"carries it")
+    for pr, sites in sorted(att["by_pr"].items(), key=lambda kv: -int(kv[0])):
+        print(f"  #{pr}\t{', '.join(sites)}")
+
+
 def _print_text(report: Dict[str, Any]) -> None:
     print(f"# gatekeeper PR poll @ {report['repo']} (base={report['base']})")
     print(f"# total open PRs: {report['total_open']}")
@@ -329,6 +470,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="emit JSON report (machine-readable)")
     ap.add_argument("--no-gh", action="store_true",
                     help="force the REST/PAT path (skip the gh CLI)")
+    ap.add_argument("--no-atomic-attribution", action="store_true",
+                    help="skip the atomic-write attribution map (round "
+                         "context; never affects the exit code)")
+    ap.add_argument("--attribution-checkout", default=None,
+                    help="git checkout the PR heads are read from "
+                         "(default: the checkout this skill ships inside)")
+    ap.add_argument("--attribution-cache", default=None,
+                    help="per-PR changed-file cache dir "
+                         "(default: <checkout>/.git/vibeic-attribution-cache)")
     args = ap.parse_args(argv)
 
     try:
@@ -337,11 +487,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    if not args.no_atomic_attribution:
+        report["atomic_write_attribution"] = attribute_atomic_writes(
+            report,
+            checkout=args.attribution_checkout,
+            cache_dir=args.attribution_cache)
+
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         _print_text(report)
+        if "atomic_write_attribution" in report:
+            _print_attribution(report["atomic_write_attribution"])
 
+    # THE ATTRIBUTION NEVER MOVES THIS. The poll's contract is "how many PRs
+    # need gatekeeping", and a site attributed to a PR is context for the
+    # gatekeeper, not a fourth exit state.
     return 1 if report["actionable_count"] else 0
 
 

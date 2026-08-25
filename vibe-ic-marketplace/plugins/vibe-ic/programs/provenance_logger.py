@@ -74,6 +74,9 @@ import time
 from pathlib import Path
 from typing import Dict, List
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import artefact_digest_ledger as _ledger  # noqa: E402
+
 
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -145,6 +148,12 @@ def run(argv: List[str]) -> int:
                    help="Optional flow-step id (e.g. 'step-19-routing')")
     p.add_argument("--note", default="",
                    help="Optional free-form note recorded in the log")
+    p.add_argument("--anchor-dir", default="",
+                   help="Directory holding the artefact-digest chain anchor "
+                        "(default: the project's PARENT). This is the trust "
+                        "boundary of vibe-ic#1116: a directory the producing "
+                        "step cannot write. Pointing it inside the project is "
+                        "allowed and is reported, never silently accepted.")
     p.add_argument("cmd", nargs=argparse.REMAINDER,
                    help="-- tool-cmd arg1 arg2 ... (the command to run)")
     args = p.parse_args(argv)
@@ -251,6 +260,53 @@ def run(argv: List[str]) -> int:
         print(f"provenance_logger: cannot write {log_path}: {exc}",
               file=sys.stderr)
         return 2
+
+    # ── THE HASH-CHAINED HALF (vibe-ic#1116) ────────────────────────────────
+    # Everything above is a record the PRODUCING STEP WRITES, inside the run
+    # directory the producing step writes. Measured against our own machinery:
+    #
+    #     honest artefact                  -> audit PASS
+    #     edit the ARTEFACT only           -> audit FAIL   (caught)
+    #     edit the artefact AND the record -> audit PASS   (NOT caught)
+    #
+    # The docstring above argues the second case needs a hash collision. It
+    # does not: an adversary who writes the artefact FIRST and then records its
+    # hash controls both sides, and both sides are in `project/`.
+    #
+    # `artefact_digest_ledger` is the repair, and until now nothing called it.
+    # Each declared output that EXISTS extends a chain whose head is a function
+    # of every entry ever appended, and the head is re-anchored in a single
+    # small file that DEFAULTS OUTSIDE the run directory (`project.parent`).
+    # The anchor is the trust boundary and it is stated rather than hidden: put
+    # it inside the run dir and `artefact_digest_ledger verify` says so out loud
+    # instead of reporting a guarantee it has not earned.
+    #
+    # It runs on the outputs that were PRODUCED, so `--anchor-dir` never turns a
+    # missing declared output into a ledger failure — that is the `missing`
+    # check below, unchanged, and it still owns that verdict. An OSError here is
+    # treated exactly like one writing provenance.jsonl above (rc 2), because a
+    # record the wrapper could not write is not a record.
+    produced = [rel for rel, dig in outputs.items() if dig != "missing"]
+    if produced:
+        anchor_dir = Path(args.anchor_dir).resolve() if args.anchor_dir \
+            else project.parent
+        anchor = anchor_dir / _ledger.ANCHOR_NAME
+        try:
+            res = _ledger.append(project, anchor, args.step or args.tool, produced)
+        except OSError as exc:
+            print(f"provenance_logger: cannot extend the artefact digest "
+                  f"ledger at {project / _ledger.LEDGER_NAME}: {exc}",
+                  file=sys.stderr)
+            return 2
+        if anchor_dir == project or project in anchor_dir.parents:
+            print(f"provenance_logger: NOTE — the digest anchor {anchor} is "
+                  f"INSIDE the run directory this step writes, so the chain "
+                  f"degrades to the pre-#1116 guarantee (a producer that "
+                  f"rewrites both is undetectable). Pass --anchor-dir outside "
+                  f"the project to restore it.", file=sys.stderr)
+        print(f"provenance_logger: digest ledger +{res['added']} entr"
+              f"{'y' if res['added'] == 1 else 'ies'}, chain head "
+              f"{res['head'][:16]}... anchored at {anchor}", file=sys.stderr)
 
     # If any declared output is missing, the wrapper fails with 2 regardless of
     # the tool's own exit code — the step didn't produce what it promised.

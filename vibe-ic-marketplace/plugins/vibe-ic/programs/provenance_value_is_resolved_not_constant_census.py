@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """A source-naming field filled from a path typed into the emitter.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. The sentence below says the same thing, and prose
+is not a decision: until the intent is stated where that audit looks, "wired
+where it cannot block" and "nobody decided" are one record.
+
 THIS IS A CENSUS, NOT A GATE. IT MUST NOT BE WIRED AS A BLOCKING CHECK.
 =======================================================================
 The gate for this rule is

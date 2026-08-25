@@ -124,8 +124,8 @@ legacy structural EMPTY row described below: it was synthesized by the old
 dispatcher without launching a process, and is never generalized by state or
 label prefix.
 
-SAME HOST, SAME DAY
-===================
+SAME HOST, SAME DAY, SAME TOOLCHAIN
+===================================
 Findings are host-dependent — `gate_host_independence_check` is itself one of
 the gates, and it is exactly the kind that answers differently on two machines.
 The host of each arm is therefore REQUIRED and never inferred: a baseline that
@@ -135,6 +135,15 @@ The DAY matters for the same reason, one dimension over: `EXEMPTION_EXPIRED` is
 computed against the dispatcher's `today`. Two arms measured on different days
 can differ by a promise coming due rather than by anything this branch did, so
 a `today` mismatch is a refusal rather than an attribution.
+
+And the TOOLCHAIN is the axis the host check does not cover. Measured on one
+host at one commit, the bare machine and the full container disagreed by 25
+failures over the identical tree (vibe-ic#1327). Each arm's profile is written
+beside its record by `gatekeeper_review` and adjudicated by `toolchain_profile`,
+whose SAME / DIFFERENT / UNREADABLE vocabulary is used verbatim. Two recorded
+profiles that disagree REFUSE; an absent one is disclosed, because a run from
+before this axis existed is not evidence that the toolchains matched, and is not
+grounds to ban a landing either.
 
 chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU or process.
 
@@ -1055,6 +1064,60 @@ def delta(base: dict, cand: dict,
     return result
 
 
+# --------------------------------------------------------------------------
+# SAME HOST IS NOT THE SAME TOOLCHAIN (vibe-ic#1327)
+# --------------------------------------------------------------------------
+# The host check above exists because a finding is host-dependent. The measured
+# reason it is not sufficient: on ONE host at ONE commit, the bare machine and
+# the full container disagreed by 25 failures, and over the `test_cvdp_gate*`
+# family alone 29 reds became 0 with tools added and 48 skips became real runs.
+# Two arms differenced across that are not being compared; the delta is the
+# tool set, and every one of it is attributed to the branch in flight.
+#
+# `toolchain_profile` is the module that decides comparability, and it is the
+# module that was reachable from nothing — authored, tested, and then called by
+# no runner, gate or flow clause. Its verdict vocabulary is used verbatim here:
+# SAME is comparable, DIFFERENT and UNREADABLE both REFUSE, and UNREADABLE is
+# never collapsed into DIFFERENT because "the profile could not be read" and
+# "the profiles differ" call for different remedies.
+#
+# ASYMMETRY, and it is the same one this file already applies to a missing base
+# record: a run whose sidecar was never written is a record from before this
+# axis existed, or one whose writer could not resolve a profile. That is NOT
+# evidence the toolchains matched, and it is not grounds to ban a landing
+# either — it is DISCLOSED and the comparison proceeds on the axes that were
+# measured. Only two profiles that both exist and disagree refuse.
+def toolchain_sidecar(record: Path) -> Path:
+    """The profile written beside a hygiene record. One spelling; see
+    `gatekeeper_review.toolchain_sidecar`, which writes what this reads."""
+    return Path(str(record) + ".toolchain.json")
+
+
+def _refuse_on_toolchain_drift(base_path: Path, cand_path: Path) -> None:
+    b, c = toolchain_sidecar(base_path), toolchain_sidecar(cand_path)
+    if not (b.is_file() and c.is_file()):
+        return                       # not recorded — disclosed, never a refusal
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import toolchain_profile as _tc
+    except Exception as exc:         # pragma: no cover - env
+        raise Refusal(
+            f"two toolchain profiles were recorded beside these records and the "
+            f"module that adjudicates them could not be loaded ({exc}); the "
+            f"comparison cannot be shown to be between like and like")
+    def _read(path: Path):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return doc if isinstance(doc, dict) else None
+    verdict, sentence = _tc.compare(_read(b), _read(c))
+    if _tc.verdict_code(verdict) != 0:
+        raise Refusal(
+            f"the two arms were not measured under the same toolchain "
+            f"({verdict}): {sentence}")
+
+
 def compare(base_path: Path, cand_path: Path, base_host: str,
             cand_host: str,
             trusted_transition_evidence_path: Optional[Path] = None) -> dict:
@@ -1077,6 +1140,7 @@ def compare(base_path: Path, cand_path: Path, base_host: str,
                 f"`gate_host_independence_check` is itself one of these gates — "
                 f"so differencing across hosts subtracts measurements that were "
                 f"never the same one")
+        _refuse_on_toolchain_drift(base_path, cand_path)
         evidence = None
         if trusted_transition_evidence_path is not None:
             try:

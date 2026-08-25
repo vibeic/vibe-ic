@@ -161,6 +161,42 @@ MIN_REASON_LEN = 20
 
 
 # ----------------------------------------------------------------------
+# THE EMITTER'S OWN PLACEHOLDERS, IMPORTED RATHER THAN RESTATED
+# ----------------------------------------------------------------------
+# `waiver_template_gen.py` writes `waivers.json.template` and states, in its own
+# header, that the values it fills the slots with are ones "waivers_schema_check.py
+# is GUARANTEED to reject" — so that an unfilled template renamed to
+# `waivers.json` cannot ship as a green sign-off.
+#
+# THAT GUARANTEE WAS A COINCIDENCE OF TWO LISTS. It held only while the emitter's
+# `PLACEHOLDER_APPROVER` / `PLACEHOLDER_REASON` happened to be spelled the way
+# the sets above spell them, and nothing anywhere compared the two files. Change
+# the emitter's approver to a word this file does not carry and the guarantee is
+# gone, silently, in the direction of a green verdict — which is the failure this
+# whole program exists to prevent. The emitter, meanwhile, was reachable from
+# nothing: no runner, no flow clause, no gate, no skill.
+#
+# So the emitter's values are now READ. Widening these sets can only ever REJECT
+# more, never fewer, and the ordering in `validate` is unchanged: today's
+# `PLACEHOLDER_APPROVER = "agent"` still reaches `approver-self` first, so no
+# existing verdict or message moves.
+#
+# WHETHER IT WAS READ OR DEFAULTED IS RECORDED, never inferred: a vendored copy
+# of this file without its sibling degrades to the sets above, and a reader
+# (and `test_waivers_schema_check`) can tell that apart from a successful read.
+TEMPLATE_PLACEHOLDER_SOURCE = "unavailable"
+try:                                                    # pragma: no cover - env
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import waiver_template_gen as _wtg
+
+    PLACEHOLDER_APPROVERS |= {_wtg.PLACEHOLDER_APPROVER.strip().lower()}
+    PLACEHOLDER_REASONS |= {_wtg.PLACEHOLDER_REASON.strip().lower()}
+    TEMPLATE_PLACEHOLDER_SOURCE = "waiver_template_gen"
+except Exception as _exc:                               # pragma: no cover - env
+    TEMPLATE_PLACEHOLDER_SOURCE = f"unavailable: {_exc.__class__.__name__}"
+
+
+# ----------------------------------------------------------------------
 # #526 — the step-id vocabulary, DERIVED from the flow definition
 # ----------------------------------------------------------------------
 #: The flow definition whose `steps:` list IS the step set. Named once; the

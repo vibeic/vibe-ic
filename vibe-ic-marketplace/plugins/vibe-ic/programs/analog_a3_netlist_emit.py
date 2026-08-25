@@ -126,6 +126,13 @@ import _analog_producer_common as _pc  # noqa: E402
 # whitelist the gate uses and then the run report and the gate disagree about
 # a netlist neither of them has to re-read.
 import _analog_a_check_common as _acc  # noqa: E402
+# The per-PDK CURATED generic-role -> foundry-model table lives in
+# `pdk_registry.json#device_map` and is read through its own reader/validator
+# rather than off `family_entry` here, so the map and its legal-token set stay
+# checked in ONE place (`pdk_device_map.validate`). Imported unconditionally:
+# a broken reader must break this producer loudly, not silently drop back to
+# the substring heuristic and bind a role by name order.
+import pdk_device_map as _pdm  # noqa: E402
 
 PRODUCER = "analog_a3_netlist_emit"
 PROVENANCE_SCHEMA = 1
@@ -377,11 +384,19 @@ def _registry_entry(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
 # inferred from which branch happened to fire.
 BOUND_BY_DECK_CONTEXT = "deck_context"
 BOUND_BY_REGISTRY = "registry"
+# The third: the PDK's own CURATED generic->foundry table. It is not a third
+# guess at the same question — it is the only source that can answer a role
+# `_ROLE_TOKENS` does not spell (npn, diode, varactor, the hv MOS pair, the
+# three distinct poly/silicided/high resistors). MEASURED on the one populated
+# family before this edge existed: 4 of 13 requested roles resolved and 9 came
+# back unresolved, which A3 surfaces as IR_NOT_RENDERABLE.
+BOUND_BY_DEVICE_MAP = "curated_device_map"
 
 
 def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
                         ctx_device_map: Dict[str, str],
                         domain: Optional[Any] = None,
+                        family: Optional[str] = None,
                         ) -> Tuple[Dict[str, str], List[str], Dict[str, str]]:
     """{role: model name} for the resolved family, the roles that could NOT be
     resolved, and {role: which path bound it} (BOUND_BY_*). Prefers whatever
@@ -404,7 +419,20 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
     which is the wrong answer for an elevated block. So when a domain IS
     stated, the same ranker the election site uses runs FIRST here, and the
     fixed lists become the tiebreak. When no domain is stated the key is
-    untouched — a design that declares no voltage binds what it always did."""
+    untouched — a design that declares no voltage binds what it always did.
+
+    `family` is the registry key `_registry_entry` resolved. When given, the
+    PDK's CURATED `device_map` is consulted after the deck context and BEFORE
+    the substring heuristic below. Precedence is deliberate and does not move
+    any binding that already worked: the curated table is authored per PDK, so
+    where it answers at all it answers exactly, and where it is absent (every
+    family that declares no `device_map`) the branch is a no-op. What it adds
+    is the roles the heuristic CANNOT reach -- `_ROLE_TOKENS` has four keys, so
+    any other role the topology IR asks for falls straight through to
+    `unresolved` no matter how completely the PDK declares it."""
+    _curated: Dict[str, str] = {}
+    if family:
+        _curated = _pdm.device_map(family)
     _rank_for_domain = None
     if domain is not None:
         try:
@@ -431,6 +459,10 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
         if ctx_device_map.get(role):
             out[role] = ctx_device_map[role]
             bound_by[role] = BOUND_BY_DECK_CONTEXT
+            continue
+        if _curated.get(role):
+            out[role] = _curated[role]
+            bound_by[role] = BOUND_BY_DEVICE_MAP
             continue
         toks = _ROLE_TOKENS.get(role, ())
         cands = [m for m in models
@@ -530,7 +562,7 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
 
     fam_name, fam_entry = _registry_entry(family or pdk)
     models, unresolved, bound_by = resolve_role_models(
-        fam_entry, roles, device_map, domain)
+        fam_entry, roles, device_map, domain, family=fam_name)
     return {
         "status": status,
         "family": family,

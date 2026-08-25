@@ -52,7 +52,7 @@ requirements:
     description: >-
       Names the program that ran first and its exit code
     pattern: '(?i)Program-first:\s*\S+\s+rc=\d+'
-    positive_sample: 'Program-first: _ppa/agent_router.py rc=2'
+    positive_sample: 'Program-first: ppa_diagnostic_router.py rc=0'
     negative_sample: 'Program-first: not run'
   - id: R_hypotheses_section
     description: >-

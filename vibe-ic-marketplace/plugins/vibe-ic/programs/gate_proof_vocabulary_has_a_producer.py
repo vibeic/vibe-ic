@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """An axis whose whole proof vocabulary is produced by nobody.
 
-THIS GATE BLOCKS (rc=1), AND IT IS RED ON THE TREE IT SHIPPED WITH.
+THIS GATE BLOCKS (rc=1). IT IS GREEN ON THIS TREE — see the 2026-08-25 section
+below for the false red it shipped with and what was wrong with it.
 
 WHAT IT ASKS THE REPOSITORY
 ===========================
@@ -14,31 +15,61 @@ promoted.
 
 The check is a set difference between two tables that already exist.
 
-WHAT IT FINDS, AND WHY IT IS NOT INVENTORIED
-============================================
-    10 feasibility axes, 38 emitting modules, 143 declared names
-    ONE axis has NOT ONE of its proof names produced:
+WHAT IT FOUND, AND WHY THE ANSWER MOVED (2026-08-25)
+====================================================
+As shipped this gate reported ONE unprovable axis:
 
         drv   timing.drv.violations
               timing.drv.max_tran_violations
               timing.drv.max_cap_violations
               timing.drv.max_fanout_violations
 
-`timing.drv.*` occurs in exactly two places in this tree: the CONSUMER
-(`_ppa/feasibility.py`, where the axis is declared) and the tests. No producer
-emits any of the four. The drv axis is structurally unprovable — no run of this
-flow can produce the evidence it proves from, on any design, ever.
+THAT VERDICT WAS FALSE, and false in the blocking direction. It was measured
+false twice from two directions — by the sibling lane's
+`every_required_metric_key_has_a_producer` ("Swept, it declared the whole `drv`
+axis STRUCTURALLY UNPROVABLE and named four keys as having no producer. That
+verdict was FALSE") and by the cross-branch audit recorded as F15 in
+`docs/findings/2026-08-22-two-capture-distillation-branches-verified.md`.
 
-THIS EXACT CLASS IS ALREADY DOCUMENTED IN THE CONSUMER'S OWN SOURCE, for a
-different axis, as a past defect:
+THE CAUSE WAS A SCAN-SCOPE BOUNDARY, not a format-built name. All four keys are
+declared as PLAIN STRING LITERALS by live producers that this gate could not
+see, because both of them live one directory outside its scan root:
+
+    ppa-crosslayer/tools/drv_records.py   `_CHECKS` names max_tran / max_cap /
+                                          max_fanout and emits them MEASURED
+    ppa-e2e/tools/signoff_records.py:204  `emit("timing.drv.violations", ...)`
+
+So the gate's premise was true of `programs/` and FALSE of the repository, and
+its verdict sentence — "on any design, forever" — was a claim about the
+repository drawn from a directory. A gate whose own docstring says "THE
+POPULATION IS THE LAYER RELATION, NOT A DIRECTORY" had a second, larger
+directory-shaped narrowing left in it.
+
+THE REPAIR IS THE TWO-PART ONE THAT F15 MEASURED, and widening alone is only
+half of it: with the root widened, three of the four keys resolve and
+`timing.drv.violations` still does not, because the population is a RELATION —
+"in the `_ppa` package or IMPORTS it" — and `signoff_records.py` mentions `_ppa`
+only in prose. Package coupling was standing in for "is a producer". So the
+producing side is now ALSO admitted by what a module EMITS (see
+`_writes_metric_records`), and the whole repository is walked.
+
+WHY "EMITS" IS THREE CONJUNCTS AND NOT A SCHEMA SUBSTRING. The obvious version
+— search for the record schema id — re-admits the CONSUMER, which carries the
+same string, and destroys the discrimination the consumer-exclusion exists for.
+A producer CONSTRUCTS a record (a `"metric"` key or an `emit(...)` call), gives
+it a MEASURED / NOT_MEASURED status, and WRITES it. The consumer does the first
+two and never the third; that is the conjunct that separates them.
+
+THE CLASS THIS RULE EXISTS FOR IS REAL, and is documented in the consumer's own
+source, for a different axis, as a past defect:
 
     "both `timing.setup.wns_ns` and `timing.hold.wns_ns` are NOT_MEASURED on
      every view ... So the hold axis was STRUCTURALLY unprovable: no run of
      this flow could produce the evidence it proved from, on any design, ever."
 
 That was repaired by adding a `worst_slack_ns` group to setup and hold — a
-per-axis fix. Because it was a fix and not a RULE, the same shape survived on
-drv and nobody noticed. This program is the rule.
+per-axis fix. Because it was a fix and not a RULE, nothing stopped the same
+shape recurring. This program is the rule.
 
 There is no inventory. A waiver would restore precisely the state the comment
 above describes: an axis that reads healthy and can never be answered.
@@ -69,17 +100,105 @@ import ast
 import json
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 
+# Parsing the whole repository reaches modules with a literal `\s` in a
+# non-raw string. That is a fact about those files and not a finding of this
+# gate; letting it onto stderr would make two runs of the same tree differ in
+# output for a reason the verdict does not depend on.
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+
 #: The gate side. A name declared here is a REQUIREMENT, never a production.
 _CONSUMERS = frozenset({"feasibility.py", "search_feasibility.py", "pareto.py"})
 
 #: A canonical metric name: dotted, lower-case, at least two segments.
 _METRIC_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){1,4}$")
+
+#: Directories that are not source of this repository. `benchmark-data` holds
+#: RUN TREES — published records, not producers — and walking it would make the
+#: population depend on which runs happen to be checked out.
+_PRUNE = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules",
+                    ".venv", "venv", "benchmark-data", ".mypy_cache"})
+
+#: The status vocabulary a metric record carries. A module that never names one
+#: of these is not writing metric records whatever else it writes.
+_STATUSES = frozenset({"MEASURED", "NOT_MEASURED"})
+
+#: Attribute/function names that PUT a constructed record somewhere durable.
+_WRITE_CALLS = frozenset({"write_text", "write_json", "write", "dump"})
+
+
+def _walk(root: Path):
+    """Every non-test `*.py` in the REPOSITORY, pruned of caches and run trees.
+
+    THE ROOT IS THE REPOSITORY BECAUSE THE RULE IS ABOUT THE REPOSITORY. The
+    previous root was `<root>/vibe-ic-marketplace/plugins/vibe-ic/programs`, and
+    with it this gate concluded "on any design, forever" about a tree it had not
+    read — the two live `timing.drv.*` producers sit in `ppa-crosslayer/tools`
+    and `ppa-e2e/tools`. Naming those two directories would be the same mistake
+    one directory wider, so the walk is the whole tree and the POPULATION is
+    decided by the relation below, which is what the docstring always said.
+    """
+    import os
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _PRUNE)
+        rel = Path(dirpath).relative_to(root).parts
+        if "tests" in rel:
+            dirnames[:] = []
+            continue
+        for f in sorted(filenames):
+            if f.endswith(".py"):
+                out.append(Path(dirpath) / f)
+    return out
+
+
+def _writes_metric_records(tree: ast.AST) -> bool:
+    """The producing side, defined by what a module EMITS rather than by what it
+    imports. THREE CONJUNCTS, and each one earns its place:
+
+        1. it CONSTRUCTS a record — a dict literal with a `"metric"` key, or a
+           call to an `emit(...)` helper;
+        2. the record carries a MEASURED / NOT_MEASURED status;
+        3. it WRITES the result somewhere.
+
+    The consumer `_ppa/feasibility.py` satisfies 1 and 2 — it builds evidence
+    dicts with a `"metric"` key and names both statuses — and never 3. That is
+    the whole discrimination: a substring test for the record schema id admits
+    the consumer as its own producer, which is the disease this gate is named
+    after, one level up.
+    """
+    constructs = statuses = writes = False
+    for n in ast.walk(tree):
+        if not constructs:
+            if isinstance(n, ast.Dict):
+                for k in n.keys:
+                    if (isinstance(k, ast.Constant) and k.value == "metric"):
+                        constructs = True
+                        break
+            elif isinstance(n, ast.Call):
+                fn = n.func
+                nm = fn.id if isinstance(fn, ast.Name) else (
+                    fn.attr if isinstance(fn, ast.Attribute) else "")
+                if nm == "emit" and n.args:
+                    constructs = True
+        if not statuses and isinstance(n, ast.Constant) \
+                and isinstance(n.value, str) and n.value in _STATUSES:
+            statuses = True
+        if not writes and isinstance(n, ast.Call):
+            fn = n.func
+            nm = fn.id if isinstance(fn, ast.Name) else (
+                fn.attr if isinstance(fn, ast.Attribute) else "")
+            if nm in _WRITE_CALLS:
+                writes = True
+        if constructs and statuses and writes:
+            return True
+    return False
 
 
 def _axes(programs: Path) -> Optional[Dict[str, List[List[str]]]]:
@@ -121,7 +240,7 @@ def _const_table(files) -> Dict[Tuple[str, str], str]:
     return out
 
 
-def _produced(programs: Path) -> Tuple[Set[str], int]:
+def _produced(root: Path, programs: Path) -> Tuple[Set[str], int]:
     """Names mentioned by the PRODUCING side of the ppa layer.
 
     THE POPULATION IS THE LAYER RELATION, NOT A DIRECTORY. An earlier version
@@ -144,7 +263,7 @@ def _produced(programs: Path) -> Tuple[Set[str], int]:
     NOWHERE on the producing side, and an axis all of whose proof names are
     absent from every producer is unprovable whatever the runtime does.
     """
-    files = [f for f in sorted(programs.rglob("*.py")) if "tests" not in f.parts]
+    files = _walk(root)
     consts = _const_table(files)
     names: Set[str] = set()
     mods = 0
@@ -173,7 +292,13 @@ def _produced(programs: Path) -> Tuple[Set[str], int]:
         # (it uses relative imports); restricting to importers alone dropped
         # the extractor tables and made setup/hold/ir/lvs/equivalence look
         # unprovable -- five false positives, caught by re-running.
-        if not (imports_ppa or "_ppa" in f.parts):
+        # THE THIRD ADMISSION PATH. Package coupling alone was standing in
+        # for "is a producer", and `ppa-e2e/tools/signoff_records.py` — which
+        # declares `timing.drv.violations` as a literal and writes it — names
+        # `_ppa` only in its prose. A real producer stayed invisible however
+        # wide the root, so the relation now also admits what a module EMITS.
+        if not (imports_ppa or "_ppa" in f.parts
+                or _writes_metric_records(tree)):
             continue
         got: Set[str] = set()
         for n in ast.walk(tree):
@@ -195,7 +320,7 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     axes = _axes(programs)
     if axes is None:
         raise RuntimeError("the axis table could not be read")
-    produced, mods = _produced(programs)
+    produced, mods = _produced(root, programs)
     findings: List[dict] = []
     for name, groups in sorted(axes.items()):
         every = [m for g in groups for m in g]

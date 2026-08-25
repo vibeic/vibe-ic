@@ -984,3 +984,93 @@ def test_a_refusal_still_carries_both_corpus_lists():
     # both the refusal record and every no-transition record left the reader
     # guessing between "none" and "never looked".
     assert refused["corpus_transitions"] == [], refused
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SAME TOOLCHAIN — the axis the host check does not cover (vibe-ic#1327)
+#
+# `toolchain_profile` decides comparability and had no caller. These cases
+# drive it through this program's refusal path in all three directions, with
+# the SAME two records and the SAME denominator on every arm: what moves is
+# only the profile written beside them.
+# ══════════════════════════════════════════════════════════════════════
+
+import toolchain_profile as _TC  # noqa: E402
+
+
+def _profile(*, iverilog: bool):
+    """A profile in the shipped shape, differing in ONE keyed tool."""
+    keyed = {t: True for t in _TC.KEYED_TOOLS}
+    versions = {t: "1.0" for t in _TC.KEYED_TOOLS}
+    keyed["iverilog"] = iverilog
+    if not iverilog:
+        versions["iverilog"] = _TC.UNKNOWN_VERSION
+    return {"keyed": keyed,
+            "recorded": {t: True for t in _TC.RECORDED_TOOLS},
+            "versions": versions,
+            "fingerprint": _TC.fingerprint(keyed, versions)}
+
+
+def _pair(tmp_path):
+    """One clean/clean pair: without a sidecar this comparison is CLEAN."""
+    base = _write(tmp_path, "base.json", _record(_base_gates()))
+    cand = _write(tmp_path, "cand.json", _record(_base_gates()))
+    return base, cand
+
+
+def test_no_sidecar_is_disclosed_not_refused(tmp_path):
+    """A record from before this axis existed must not ban a landing."""
+    base, cand = _pair(tmp_path)
+    rc, out = _run(base, cand)
+    assert rc == 0, out
+
+
+def test_matching_toolchains_do_not_refuse(tmp_path):
+    base, cand = _pair(tmp_path)
+    for p in (base, cand):
+        H.toolchain_sidecar(p).write_text(json.dumps(_profile(iverilog=True)))
+    rc, out = _run(base, cand)
+    assert rc == 0, out
+
+
+def test_a_differing_toolchain_refuses(tmp_path):
+    """THE MUTATION IS ONE TOOL. Same gates, same host, same day — the arms
+    were simply not measured under the same tool set, and 25 failures of this
+    repo's own red set turned on exactly that difference."""
+    base, cand = _pair(tmp_path)
+    H.toolchain_sidecar(base).write_text(json.dumps(_profile(iverilog=True)))
+    H.toolchain_sidecar(cand).write_text(json.dumps(_profile(iverilog=False)))
+    rc, out = _run(base, cand)
+    assert rc == 2, out
+    assert "same toolchain" in out
+    assert "iverilog" in out
+
+
+def test_an_unreadable_profile_refuses_and_says_so(tmp_path):
+    """UNREADABLE never collapses into DIFFERENT: both refuse, and only one of
+    them is somebody's fault."""
+    base, cand = _pair(tmp_path)
+    H.toolchain_sidecar(base).write_text("{not json")
+    H.toolchain_sidecar(cand).write_text(json.dumps(_profile(iverilog=True)))
+    rc, out = _run(base, cand)
+    assert rc == 2, out
+    assert "UNREADABLE" in out
+
+
+def test_the_writer_and_the_reader_spell_the_sidecar_the_same(tmp_path):
+    """Two spellings of one path is a write nothing ever reads."""
+    import gatekeeper_review as GR
+    p = tmp_path / "hygiene.json"
+    assert GR.toolchain_sidecar(p) == H.toolchain_sidecar(p)
+
+
+def test_gatekeeper_review_stamps_a_profile_it_can_adjudicate(tmp_path):
+    """The producer's output must be an input `toolchain_profile.compare`
+    calls SAME against this host — a stamp nothing can read is not a record."""
+    import gatekeeper_review as GR
+    p = tmp_path / "hygiene.json"
+    p.write_text("{}")
+    GR._stamp_toolchain(p)
+    doc = json.loads(GR.toolchain_sidecar(p).read_text())
+    verdict, _ = _TC.compare(doc, _TC.profile())
+    assert verdict == _TC.SAME, verdict

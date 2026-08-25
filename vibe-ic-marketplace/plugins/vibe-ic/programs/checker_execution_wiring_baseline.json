@@ -4,19 +4,15 @@
   "scope_expanded": "vibe-ic#1347: the audit now reads the SHAPE of each reference (invocation vs mention) on the raw source, not merely whether the name is one of the file's tokens; three checkers held up only by another program's message text are now visible as test-only.",
   "known": [
     "agent_report_presence_check.py",
-    "cross_design_identity_check.py",
     "eda_log_check.py",
     "hw_vs_rtl_verdict_check.py",
     "ip_catalog_upstream_audit.py",
     "lesson_consumption_check.py",
     "lessons_corpus_consistency_check.py",
-    "pdk_consistency_check.py",
-    "phase1_parity_source_tier_check.py",
     "phase23_completion_self_audit_check.py",
     "rtl_signal_name_semantic_check.py",
     "skill_doc_section_present_check.py",
-    "sv_compat_check.py",
-    "verilator_timing_fallback_check.py"
+    "sv_compat_check.py"
   ],
   "triage": {
     "agent_report_presence_check.py": "vibe-ic#1347. Never wired; it only LOOKED wired because `agent_report_sha256_attestation_check` names it in an error message (\"; agent_report_presence_check owns that failure mode.\"), and the audit read that token as an execution path. Takes a project_dir, so it is a per-design Phase-2/3 checker: `repo_hygiene_gates.sh` is the wrong home (it runs repo-wide and this cannot answer without a design), and the flow registry in `flow_compliance_check.py` is the right one. Registering it needs its owning step identified and the gate measured green on a real design tree first (#1253: wiring a red gate turns 'unverified' into 'blocking', which is a different repair).",
@@ -25,7 +21,6 @@
     "analog_hil_convergence_log_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "analog_sigma_delta_gain_floor_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "behavioral_evidence_per_spec_item_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
-    "cross_design_identity_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only projects, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "dispatcher_awake_gate_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "eda_log_check.py": "vibe-ic#1347. Never wired; held up solely by the fragment \"eda_log_check)\" at the end of a sentence in `openroad_tcl_deprecation_check`'s deprecation table. Takes --log-file, so it is per-design and belongs in `flow_compliance_check.py`'s registry at the step that produces the log it should read, not in the repo-wide hygiene gates. Needs that step identified and a green measurement on a real design tree before being declared (#1253).",
     "flow_stage_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
@@ -39,8 +34,6 @@
     "lesson_consumption_check.py": "rc=2 SKIPs / refuses without its input — [--ack ACK] [--strict]",
     "lessons_corpus_consistency_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "level_hysteresis_flag_oracle_check.py": "rc=2 SKIPs / refuses without its input — [--top TOP] [--json JSON]",
-    "pdk_consistency_check.py": "rc=2 SKIPs / refuses without its input — [--project-json PROJECT_JSON] --pdk-lib",
-    "phase1_parity_source_tier_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only parity_root, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "phase1_provenance_presence_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only target, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "phase23_completion_self_audit_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "pnr_via_stack_completeness_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
@@ -51,7 +44,6 @@
     "skill_doc_section_present_check.py": "rc=2 SKIPs / refuses without its input — [--json JSON]",
     "sv_compat_check.py": "vibe-ic#1347. Never wired; held up by three sentences in `yosys_script_template_check` telling a reader to run it. The only `sv_compat_check.py` anywhere is a description string in `skills/synth-doctor/compliance.yaml` — prose, and not in any haystack. Takes --rtl-dir/--out-dir, so it is per-design and belongs in `flow_compliance_check.py`'s registry at the synthesis step, measured green on real RTL first (#1253).",
     "synth_wrapper_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
-    "verilator_timing_fallback_check.py": "rc=2 SKIPs / refuses without its input — --tb-top TB_TOP --dut-name DUT_NAME",
     "waiver_growth_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659)."
   },
   "unwired_by_decision": {

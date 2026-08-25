@@ -42,6 +42,27 @@ This gate would have HARD-FAILED the v0118-vendor bug (FRAME_END_GAP=80us
 The gate is **structural** (parses RTL constants), not behavioral —
 runs in CI without any HW or testbench.
 
+THE MASTER-SIDE HALF, DISCLOSED AND NEVER REFUSED ON
+====================================================
+The budget above is the CHIP's: does the part answer before the master stops
+listening. The mirror question is the bench's: is the master's response-capture
+window long enough for the LONGEST response. A window sized for the median
+response silently truncates the longest one and the CRC residual then reports a
+bogus "CRC error" for every long opcode — a timing-window bug wearing a CRC
+bug's clothes.
+
+`bist_window_calculator.size_window` is that computation and it is IMPORTED
+here rather than restated, because this gate has already parsed every input it
+takes: the TX-PHY bit-cell constants, L2's inter-byte gap, and the checker
+clock. The result lands in `summary["bist_capture_window"]` and in the printed
+report.
+
+IT IS A DISCLOSURE, NOT A FINDING. An undersized capture window is a property
+of the BENCH HARNESS, not of the RTL this gate judges; failing a design for it
+would refuse the design for somebody else's constant. When an input is missing
+the entry says which one, because "not sized" and "sized to zero" must not read
+alike.
+
 Exit codes: 0 PASS / 1 FAIL (strict) / 2 skip
 """
 from __future__ import annotations
@@ -55,6 +76,7 @@ from pathlib import Path
 
 from gate_utils import find_rtl_files, read_text
 import _path_layout as _pl
+import bist_window_calculator as _bist
 
 
 def _l8_dispatch_cycles(project: Path) -> int | None:
@@ -238,6 +260,122 @@ def _ibt_max_and_tsrs(project: Path) -> tuple[
     return None, None, None
 
 
+_L3_GLOBS = (
+    "phase1/generated_docs/L3_CMD_PROTOCOL.json",
+    "phase1/generated_docs/L3*.json",
+    "input/docs/L3*.json",
+)
+#: Per-command response-length carriers, in the order `frame_end_gap_in_l8_check`
+#: and `l3_opcode_response_template_check` already read them. One convention,
+#: three readers -- a fourth spelling invented here would be a fourth answer.
+_RSP_LEN_KEYS = ("response_bytes", "response_payload", "response_length",
+                 "rsp_len", "response_len")
+_HEX_BYTE_RE = re.compile(r"\b[0-9A-Fa-f]{2}\b")
+
+
+def _len_of_response(value) -> int | None:
+    """Bytes in one command-table response entry, or None if it says nothing.
+
+    Three shapes are in the corpus and all three mean a length: an int IS the
+    count, a list is counted, and a hex-byte string is tokenised. A shape this
+    cannot read returns None and is left out of the max rather than counted as
+    zero -- a zero would shorten the window this exists to lengthen.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, list):
+        return len(value) or None
+    if isinstance(value, str):
+        n = len(_HEX_BYTE_RE.findall(value))
+        return n or None
+    return None
+
+
+def _max_response_bytes(project: Path) -> tuple[int | None, str]:
+    """Longest response the L3 command table declares, and where it came from."""
+    for pat in _L3_GLOBS:
+        for cand in sorted(project.glob(pat)):
+            if not cand.is_file():
+                continue
+            try:
+                data = json.loads(read_text(cand) or "{}")
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            cmds = data.get("command_table") or data.get("commands")
+            if not isinstance(cmds, list):
+                continue
+            lengths = [n for c in cmds if isinstance(c, dict)
+                       for n in (max((v for v in (
+                           _len_of_response(c.get(k)) for k in _RSP_LEN_KEYS)
+                           if v is not None), default=None),)
+                       if n is not None]
+            if lengths:
+                return max(lengths), f"{cand.name}.command_table"
+    return None, ""
+
+
+def _bit_cell_us(constants: dict[str, int], clk_mhz: float
+                 ) -> tuple[float | None, str]:
+    """Longest FULL TX bit cell (LOW + HIGH) in us, or None with the reason.
+
+    The latency budget above needs only the LOW half of the first bit; a
+    capture window has to hold whole bit cells, so the HIGH half is required
+    here and its absence is reported rather than defaulted.
+    """
+    def pick(*names: str) -> int | None:
+        for n in names:
+            v = constants.get(n)
+            if isinstance(v, int) and v > 0:
+                return v
+        return None
+
+    cells: list[int] = []
+    missing: list[str] = []
+    for bit in ("0", "1"):
+        low = pick(f"TX_BIT{bit}_LOW", f"CYC_TX_BIT{bit}_LOW",
+                   f"H{bit}_LOW_TICKS", f"BIT{bit}_LOW_TICKS")
+        high = pick(f"TX_BIT{bit}_HIGH", f"CYC_TX_BIT{bit}_HIGH",
+                    f"H{bit}_HIGH_TICKS", f"BIT{bit}_HIGH_TICKS")
+        if low is not None and high is not None:
+            cells.append(low + high)
+        elif low is not None:
+            missing.append(f"TX_BIT{bit}_HIGH")
+    if not cells:
+        return None, ("no complete TX bit cell in RTL (need both the LOW and "
+                      "the HIGH half of at least one bit; missing: "
+                      + (", ".join(missing) or "all TX_BIT*_LOW/HIGH") + ")")
+    return max(cells) / clk_mhz, ""
+
+
+def _capture_window(project: Path, constants: dict[str, int], clk_mhz: float,
+                    ibt_max_us: float | None) -> dict:
+    """Master-side capture-window sizing -- ADVISORY, never a Finding.
+
+    Delegates the arithmetic to `bist_window_calculator.size_window` so the
+    bench number this reports and the number that program's CLI prints are the
+    same number.
+    """
+    if ibt_max_us is None:
+        return {"sized": False, "reason": "L2 has no ibt_us[1]"}
+    bit_us, why = _bit_cell_us(constants, clk_mhz)
+    if bit_us is None:
+        return {"sized": False, "reason": why}
+    max_bytes, src = _max_response_bytes(project)
+    if max_bytes is None:
+        return {"sized": False,
+                "reason": "no per-command response length in the L3 command "
+                          "table (looked for: " + ", ".join(_RSP_LEN_KEYS) + ")"}
+    w = _bist.size_window(max_bytes, bit_us, float(clk_mhz),
+                          ibt_us=float(ibt_max_us))
+    w.update({"sized": True, "max_bytes_source": src,
+              "computed_by": "bist_window_calculator.size_window"})
+    return w
+
+
 def _is_half_duplex(project: Path) -> bool:
     ibt, tsrs, _ = _ibt_max_and_tsrs(project)
     return ibt is not None and tsrs is not None
@@ -255,6 +393,8 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
         "tsrs_min_us_l2": None,
         "chip_latency_us": None,
         "budget_us": None,
+        "bist_capture_window": {"sized": False,
+                                "reason": "gate did not reach the sizing step"},
         "skipped_reason": "",
     }
     if not _is_half_duplex(project):
@@ -399,6 +539,11 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
     summary["budget_us"] = budget_us
     summary["budget_basis"] = budget_basis
 
+    # ADVISORY (never a Finding, never an rc): the BENCH-side window that has
+    # to hold the LONGEST response, sized by `bist_window_calculator`.
+    summary["bist_capture_window"] = _capture_window(
+        project, constants, clk_mhz, ibt_max_l2)
+
     if chip_latency_us > budget_us:
         findings.append(Finding(
             severity="ERROR",
@@ -453,6 +598,14 @@ def main() -> int:
           f"{summary['tx_bit_low_max_us']}us)")
     print(f"  total = {summary['chip_latency_us']}us  budget = "
           f"{summary['budget_us']}us")
+    win = summary.get("bist_capture_window") or {}
+    if win.get("sized"):
+        print(f"  bench capture window (advisory, via "
+              f"bist_window_calculator): {win['window_us']:.1f}us for "
+              f"{win['max_bytes']}B  -> WIN_CYCLES={win['win_cycles']} "
+              f"SEQ_RX_CYCLES={win['seq_rx_cycles']}")
+    else:
+        print(f"  bench capture window: NOT SIZED — {win.get('reason', '?')}")
     for f in findings:
         print(f"[{f.severity}] {f.rule}: {f.message}")
     if not findings:

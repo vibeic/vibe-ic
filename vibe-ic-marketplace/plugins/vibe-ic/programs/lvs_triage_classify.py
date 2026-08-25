@@ -24,6 +24,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+import _vacuous_exit as _vx  # noqa: E402
 
 
 CATEGORIES = (
@@ -154,6 +155,20 @@ def _cli() -> int:
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
     args = p.parse_args()
+    # WIRED AS AN ADVISORY ON STEP 31 (2026-08-25), which is why the absent
+    # report is now a DISCLOSED rc=2 and not a traceback. `reports/phase3/
+    # lvs.rpt` is Step 31's own required_output, and whether it is there is
+    # already decided by that step's blocking `lvs_report_check` /
+    # `lvs_signoff_guard` slots. A triage classifier answering "the report
+    # you asked me to categorise does not exist" with `FileNotFoundError`
+    # spends a second gate's FINDING channel on the first gate's question,
+    # and prints a Python traceback into the flow log to do it.
+    if not args.report.is_file():
+        reason = f"LVS report not present: {args.report}"
+        _vx.announce_vacuous("lvs_triage_classify", reason)
+        print(_vx.verdict_line("lvs_triage_classify", passed=True,
+                               skipped=True, reason=reason))
+        return _vx.exit_code(passed=True, skipped=True)
     rep = classify_report(args.report.read_text(encoding="utf-8"))
     md = report_to_markdown(rep)
     if args.out_md:

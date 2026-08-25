@@ -133,6 +133,39 @@ reopen automatically puts the issue back in front of the
 core-agent — no special-casing. (`waiting` is always empty; the
 key is retained in the report shape for backwards compatibility.)
 
+Then, before picking one, ask which of them nobody has taken:
+
+```bash
+python3 plugins/vibe-ic/programs/open_issue_claim_scan.py --repo vibeic/vibe-ic
+```
+
+An issue is TAKEN when one of its comments starts with `CLAIMED:` —
+that is how a session announces it is working the issue, and it is
+the only signal another session has. This matters even though a
+single identity serializes the pushes: the Step-3 checklist below
+already warns that "another session's pull/edit shares this tree",
+so two ticks CAN be live at once, and the second one re-taking the
+first one's issue is the collision this scan prevents.
+
+Read its exit code the same way as `poll.py`'s, and note that this
+one has no rc 1: it either scanned or it did not.
+
+| rc | Meaning | Core-agent action |
+|----|---------|-------------------|
+| 0  | Scanned | Work `unclaimed[]`; post a `CLAIMED:` comment on the one you take, FIRST |
+| 2  | Could not scan | Log + exit this tick. **NOT "nothing is claimed"** |
+
+The rc 2 distinction is the whole reason this is a program. The hand-written
+form of this question — `gh issue view <n> --json comments` per issue, testing
+an unquoted count against `0` — prints nothing at all when the budget is
+exhausted, which is byte-identical to printing nothing because every issue is
+claimed. It also prints a well-formed list after examining 30 of 117, because
+`gh issue list` defaults to `--limit 30`. This program prints the DENOMINATOR
+with every answer and refuses (rc 2, empty stdout) rather than reporting a
+count it could not measure — including the case where the per-issue comment
+page came back AT its 100-comment cap, where a `CLAIMED:` past the cap would
+make the NEGATIVE answer "unclaimed" the one truncation fabricates.
+
 ### Step 2 — reproduce + fix
 
 For each actionable issue:
@@ -689,6 +722,8 @@ Deterministic gates backing this skill (the loop SCAFFOLD is fully
 programmable; only Step 2 fix-authoring is genuine LLM judgment):
 
 - Poll / actionability (every open non-PR issue): `programs/poll.py`
+- Which open issues nobody has taken, with the un-readable ones NAMED and
+  the denominator printed: `plugins/vibe-ic/programs/open_issue_claim_scan.py`
 - Close-comment 5-section shape + acceptance-execution trace:
   `compliance.yaml` (+ `_shared/skill_compliance_check.py`)
 - Acceptance-criterion executed + quoted in `本機驗證` (#478):

@@ -72,8 +72,55 @@ leave the row out.
 5. **Emit the coverage line.** Count `MEASURED`, `NOT_MEASURED`,
    `NOT_APPLICABLE`. An unstated denominator is how "we measured everything"
    and "we measured what happened to be lying around" print the same page.
-6. **Hand off.** Name the program that will read these records and state that the
+6. **Generate the report from the records — do not typeset it.** The markdown
+   below is emitted by `programs/ppa_report_gen.py`, which reads the records and
+   writes both the human page and the `claims.json` that binds every sentence in
+   it to the artefact behind it. See the next section.
+7. **Hand off.** Name the program that will read these records and state that the
    verdict is its output, not this document's.
+
+## The report is generated, and then it is checked
+
+```bash
+# records (file or directory of vibeic.ppa.metric.v1) -> page + claims
+python3 plugins/vibe-ic/programs/ppa_report_gen.py <records.json|records_dir> \
+    --out reports/ppa/report.md --claims reports/ppa/claims.json \
+    --json reports/ppa/report_run.json
+
+# the page may not say more than the claims support
+python3 plugins/vibe-ic/programs/ppa_page_claim_check.py reports/ppa/report.md \
+    --claims reports/ppa/claims.json --cite-numbers
+```
+
+**Why a generator and not a template.** A report is the last place a number is
+touched before a human believes it, and a sentence carries implications an
+artefact does not. `ppa_report_gen` is a gate, not a formatter:
+
+| rc | meaning |
+|---|---|
+| 0 | the page and `claims.json` were written |
+| 1 | `[REFUSE]` — a record cannot support the sentence it would become: a `NOT_MEASURED` carrying a `value`, a numeric sentinel (`0` / `-1` / `""`) standing in for "not measured", a collapsed single PPA score, or two records producing one claim id from different facts |
+| 2 | `[CANNOT CHECK] NO_INPUT` (the path is not readable) or `EMPTY_CORPUS` (the path is there and holds no record — the zero is STATED, with the path it counted) |
+
+An rc=1 is not a formatting problem to route around by writing the page by
+hand. It is the generator naming a record you must fix upstream, in step 2 or
+step 3.
+
+**`claims.json` is the runnable half of the prose.** Every sentence a reader
+will believe carries `[claim:<id>]`, and each claim names the artefact path and
+hash that supports it. `ppa_page_claim_check --cite-numbers` then re-runs the
+page every landing: a claim whose status outruns its weakest cited evidence, a
+citation that resolves to nothing, and a sentence stating a number with no
+citation are each rc=1. Prose cannot be re-read every landing; a citation can.
+
+Pass the records path the way it should appear in the published page — the
+generator quotes the path it was given, so a `/tmp/...` argument puts an
+absolute machine-local path into the artefact and trips this skill's
+`X_no_volatile_paths` cross-check.
+
+The `NOT_MEASURED` rows are printed by the generator, with their `reason`,
+never dropped. That is the same rule as step 5 and the "Do not" list below,
+enforced once in a program instead of remembered three times.
 
 ## Do not
 
@@ -87,6 +134,9 @@ leave the row out.
   any heading.
 - Do not restate a program's exit code as your own conclusion. Quote it with its
   program name and its rc.
+- Do not hand-write the report page when `ppa_report_gen` refuses your records.
+  The refusal is about a record, and typing the page yourself publishes exactly
+  the sentence the refusal was protecting a reader from.
 - Do not report a number whose artefact you could not open. "I could not read it"
   and "I read it and it was empty" are different results and must print differently.
 

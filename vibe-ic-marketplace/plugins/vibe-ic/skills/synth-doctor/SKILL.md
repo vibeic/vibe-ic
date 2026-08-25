@@ -108,6 +108,52 @@ or a pipeline stage — **not** a clock-period relax when the spec clock is fixe
 Designs that document a carry-save / carry-select / prefix / pipelined strategy
 (in module name, signal names, or comments) are recognised and not flagged.
 
+### prefix_adder_synth_recipe.py — the parallel-prefix half of that fix, emitted
+
+The remedy named above is not something to hand-write into a `.ys` file. yosys
+already ships the parallel-prefix carry-lookahead structures (Brent-Kung is the
+DEFAULT `$lcu` map; Kogge-Stone / Han-Carlson / Sklansky ship as `choices/`
+maps), so the gap was never the algorithm — it was invoking it correctly. This
+program emits the exact recipe, with the combinational-equivalence step
+attached:
+
+```bash
+python3 programs/prefix_adder_synth_recipe.py --list          # known topologies
+python3 programs/prefix_adder_synth_recipe.py \
+    --emit <rtl.v> --top <module> --topology kogge-stone      # RTL `a + b`
+python3 programs/prefix_adder_synth_recipe.py \
+    --emit <netlist.v> --top <module> --topology kogge-stone --gate-level
+```
+
+It prints the `.ys` script to stdout (rc 0); rc 2 is an argument error. Feed it
+to yosys, or to `eda_run_tcl` / the synth step, the same way as any other
+recipe.
+
+**Two things it encodes that are easy to get wrong by hand.**
+
+1. **Ordering.** For a NON-default topology the choice map and `+/techmap.v`
+   must be in the SAME `techmap` call with the choice map FIRST. Split across
+   two calls, `$alu` never lowers to `$lcu` and it silently falls through to
+   Brent-Kung — you would believe you had selected Kogge-Stone and measured
+   something else. There is no error message for this.
+2. **`--gate-level` is a different problem.** A netlist that is ALREADY a
+   gate-level ripple has no `$add`/`$alu` for the prefix techmap to match, so
+   the recipe first runs `extract_fa -fa -ha; opt_clean; lift_adder` to recover
+   the word-level adder. That path needs the vibeic yosys fork
+   (`vibeic-eda:0.2.5+`); on stock yosys `lift_adder` does not exist and the
+   script will error rather than quietly skip.
+
+**The CEC step is not decoration and you may not drop it.** This program is a
+QoR recipe emitter, not a correctness gate, and its ONE correctness guarantee
+is the equivalence proof it appends: a restructured adder is a different
+netlist, and `equiv_status` reporting anything other than proven-equivalent is a
+hard FAIL — do not ship the restructured netlist. `--no-cec` exists for
+measuring depth in isolation and is never the form that reaches a design.
+
+Measured in `vibeic-eda:0.2.3`, 32-bit `a+b`: AIG-AND depth ripple 128 →
+Brent-Kung 109 → Kogge-Stone 72, every form CEC-equal to the ripple reference;
+and with `--gate-level`, an already-gate-level 32-bit ripple went 128 → 73.
+
 ### output_latency_advisor.py — registered-output / sampling-latency notes
 
 Surfaces outputs that are registered (valid **+1 cycle** after their inputs).

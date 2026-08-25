@@ -85,6 +85,43 @@ import signal_gen_synth as _siggen                # noqa: E402  signal/square/tr
 #     this is that declaration made executable from the registry every caller
 #     actually reaches (design_one_shot_runner -> spec_artifact_registry).
 import parametric_spec_extractor as _param       # noqa: E402  prose parametric params -> structured
+# --- the TABLE tier. `spec_artifact_catalog` declares, for 17 element types,
+#     that `structured_table_extractor.extract_tables` is their deterministic
+#     baseline extractor and marks every one of them `status="live"`. NOTHING
+#     executed that declaration: the only import of the extractor in the tree is
+#     `spec_artifact_dual_pass`, which nothing reaches, so `detect()` -- the
+#     primitive every caller does reach -- could not report a register bit-field
+#     table, a command/opcode table, an encoding table, a memory map, a PVT
+#     corner table or a coverage matrix at all. The rows below are that catalog
+#     declaration made executable, and they are BUILT FROM THE CATALOG rather
+#     than retyped from it, so the two lists cannot drift.
+import spec_artifact_catalog as _cat            # noqa: E402  element-type declarations
+import structured_table_extractor as _tabx      # noqa: E402  TABLE-tier baseline extractor
+# --- the PROSE-RESIDUAL tier. Same defect, same repair, one tier over: for seven
+#     more element types `spec_artifact_catalog` declares
+#     `residual_recognizer.recognize_all` as the deterministic baseline and marks
+#     every one `status="live"`, and the ONLY import of that module in the tree
+#     was `spec_artifact_dual_pass`, which nothing reaches. So `detect()` could
+#     not report that a spec states functional requirements, a protocol state
+#     machine, a reference design, a DFT/scan plan, SVA properties, an analog
+#     electrical spec or OTP content -- the genuinely-PROSE types, the ones with
+#     no table to parse. These rows RECOGNIZE presence and ROUTE (`lead="ai"`,
+#     the dual-pass AI pass completes the extraction), attaching whatever partial
+#     data a regex can lift. Built FROM the catalog for the same anti-drift
+#     reason as the table tier above.
+import residual_recognizer as _resid             # noqa: E402  PROSE-tier routing recognizers
+# --- the PINOUT tier. THIRD instance of the identical defect the two tiers above
+#     repair: `spec_artifact_catalog` declares `pinout_table_extractor.extract_pinout`
+#     as the PORT / PINOUT element type's deterministic extractor and marks it
+#     `status="live"`, and the only import of that module in the tree was
+#     `spec_artifact_dual_pass`, which nothing reaches. So `detect()` -- the
+#     primitive every caller does reach -- could not report the INTERFACE, which
+#     is the one structural artifact present in essentially every spec, prompt and
+#     datasheet. It gets its OWN row rather than joining the table tier because
+#     ports appear in three forms (bullet list / Verilog port header / pipe table)
+#     and only the third is a table at all. Built FROM the catalog for the same
+#     anti-drift reason as both tiers above.
+import pinout_table_extractor as _pin             # noqa: E402  PORT/PINOUT extractor
 
 
 # --------------------------------------------------------------------------- #
@@ -300,6 +337,146 @@ class ArtifactType:
     desc: str
 
 
+#: The `program` string every TABLE-tier element type in the catalog declares.
+_TABLE_TIER_PROGRAM = "structured_table_extractor.extract_tables"
+
+
+#: Last (text, tables) pair parsed by the table tier. `detect()` walks EVERY row,
+#: so without this the 17 rows below re-parse the SAME document 17 times -- the
+#: extractor's one pass already classifies every table in it. One slot, not a
+#: growing map: the access pattern is one document walked once, and a cache that
+#: accumulates every document a long-lived process ever saw is a leak, not a
+#: speed-up. Keyed by the text ITSELF, so a different document cannot read the
+#: previous one's answer.
+_TABLE_TIER_MEMO: list = [None, None]
+
+
+def _tables_once(text: str):
+    """`structured_table_extractor.extract_tables(text)`, shared across the rows."""
+    if _TABLE_TIER_MEMO[0] is not text and _TABLE_TIER_MEMO[0] != text:
+        _TABLE_TIER_MEMO[0] = text
+        _TABLE_TIER_MEMO[1] = _tabx.extract_tables(text)
+    return _TABLE_TIER_MEMO[1]
+
+
+def _rec_structured_table(element_type: str):
+    """Recognizer for ONE catalog element type, over the general table extractor.
+
+    `extract_tables` classifies EVERY pipe table in a document by its header
+    signature and returns them all in one pass; a registry row is per element
+    type, so each row filters that one pass to its own type. A table the
+    extractor could not classify unambiguously comes back as the generic
+    `structured_table`, which no row claims -- §4.05: a table is reported under a
+    SPECIFIC type only when exactly one signature matched, never guessed.
+    Returns None (SKIP) when the document holds no table of this type.
+    """
+    def _recognize(text: str):
+        tabs = [tb for tb in _tables_once(text)
+                if tb.get("element_type") == element_type]
+        if not tabs:
+            return None
+        return {"tables": tabs,
+                "table_count": len(tabs),
+                "row_count": sum(int(tb.get("row_count") or 0) for tb in tabs)}
+    _recognize.__name__ = "_rec_structured_table__" + element_type
+    return _recognize
+
+
+#: One row per catalog element type that DECLARES the general table extractor as
+#: its baseline. Derived from `spec_artifact_catalog.CATALOG` so a type added,
+#: renamed or re-routed there is added, renamed or dropped here with it --
+#: hand-copying the key, title and l_docs is precisely how a declaration and its
+#: executable form come apart. `generate=None` BY CONSTRUCTION: these lift
+#: STRUCTURE out of a document, they do not synthesise a module, so `generate()`'s
+#: first-fire order over the hand-written rows below is untouched.
+_TABLE_TIER_ROWS: Tuple["ArtifactType", ...] = tuple(
+    ArtifactType(_e.key, _e.title, tuple(_e.l_docs),
+                 _rec_structured_table(_e.key), None,
+                 f"{_e.title} lifted from a classified pipe table "
+                 f"({_e.data_schema}). SKIPs a document carrying no such table.")
+    for _e in _cat.CATALOG
+    if _e.program == _TABLE_TIER_PROGRAM
+)
+
+
+#: The `program` string every PROSE-RESIDUAL element type in the catalog declares.
+_RESIDUAL_TIER_PROGRAM = "residual_recognizer.recognize_all"
+
+
+def _rec_residual_element(element_type: str):
+    """Recognizer for ONE catalog element type, over the prose residual recognizers.
+
+    `recognize_all` runs every prose/vision routing recognizer in one pass and
+    returns the rows that fired; a registry row is per element type, so each row
+    filters that one pass to its own type. The returned `data` carries `lead`
+    ("ai" -- the dual-pass AI pass extracts the full structured form) plus any
+    deterministic partial data the regex could lift (requirement bullets, scan-chain
+    count, assertion count). §4.05: a type is reported only when its recognizer
+    actually fired; returns None (SKIP) otherwise.
+    """
+    def _recognize(text: str):
+        for row in _resid.recognize_all(text):
+            if row.get("element_type") == element_type:
+                return row.get("data")
+        return None
+    _recognize.__name__ = "_rec_residual_element__" + element_type
+    return _recognize
+
+
+#: One row per catalog element type that DECLARES the residual recognizers as its
+#: baseline. Derived from `spec_artifact_catalog.CATALOG` for the same anti-drift
+#: reason as `_TABLE_TIER_ROWS`. `generate=None` BY CONSTRUCTION: recognizing that
+#: a document CONTAINS a protocol state machine is not synthesising one, so
+#: `generate()`'s first-fire order over every hand-written row is untouched.
+_RESIDUAL_TIER_ROWS: Tuple["ArtifactType", ...] = tuple(
+    ArtifactType(_e.key, _e.title, tuple(_e.l_docs),
+                 _rec_residual_element(_e.key), None,
+                 f"{_e.title} recognized in prose and routed to the AI pass "
+                 f"({_e.data_schema}). SKIPs a document that states none.")
+    for _e in _cat.CATALOG
+    if _e.program == _RESIDUAL_TIER_PROGRAM
+)
+
+
+#: The `program` string the catalog declares for the PORT / PINOUT element type.
+_PINOUT_TIER_PROGRAM = "pinout_table_extractor.extract_pinout"
+
+
+def _rec_pinout_table(text: str):
+    """The port list, from whichever of the three port forms the document uses.
+
+    `extract_pinout` reads a bullet list, a Verilog port header or a pipe table
+    with a Pin/Signal + Dir header, dedupes by name (first form wins) and
+    returns []. §4.05: an empty list is a SKIP, never an empty interface --
+    "this document declares no ports" and "this document has no port section"
+    must not print the same, and a downstream reader that saw `pins: []` would
+    read the first as the second.
+    """
+    pins = _pin.extract_pinout(text)
+    if not pins:
+        return None
+    return {"pins": pins,
+            "pin_count": len(pins),
+            "by_dir": {d: sum(1 for p in pins if p.get("dir") == d)
+                       for d in ("in", "out", "inout")}}
+
+
+#: One row per catalog element type that DECLARES the pinout extractor as its
+#: baseline. Derived from `spec_artifact_catalog.CATALOG` for the same anti-drift
+#: reason as the two tiers above. `generate=None` BY CONSTRUCTION: lifting an
+#: interface is not synthesising a module, so `generate()`'s first-fire order over
+#: every hand-written row is untouched.
+_PINOUT_TIER_ROWS: Tuple["ArtifactType", ...] = tuple(
+    ArtifactType(_e.key, _e.title, tuple(_e.l_docs),
+                 _rec_pinout_table, None,
+                 f"{_e.title} lifted from a bullet list, a Verilog port header "
+                 f"or a Pin/Dir pipe table ({_e.data_schema}). SKIPs a document "
+                 f"declaring no ports.")
+    for _e in _cat.CATALOG
+    if _e.program == _PINOUT_TIER_PROGRAM
+)
+
+
 REGISTRY: Tuple[ArtifactType, ...] = (
     ArtifactType("truth_table", "Truth Table", ("L15", "L4"),
                  _rec_truth_table, _ots.synth,
@@ -485,6 +662,20 @@ REGISTRY: Tuple[ArtifactType, ...] = (
                  _rec_crc_checksum, None,
                  "CRC width/polynomial/init/reflect/xorout. SKIPs a CRC named without "
                  "its polynomial."),
+    # --- TABLE-tier element types, spliced from the catalog (see
+    #     `_TABLE_TIER_ROWS` above). Last, for the same reason every wave above
+    #     was: every one carries `generate=None`, so the RTL-generation order of
+    #     the rows before them is bit-identical with or without this line.
+    *_TABLE_TIER_ROWS,
+    # --- PROSE-RESIDUAL element types, spliced from the catalog (see
+    #     `_RESIDUAL_TIER_ROWS` above). Same construction and same guarantee as
+    #     the table tier: every row carries `generate=None`, so the RTL-generation
+    #     order of every row before them is bit-identical with or without this line.
+    *_RESIDUAL_TIER_ROWS,
+    # --- PINOUT element type, spliced from the catalog (see `_PINOUT_TIER_ROWS`
+    #     above). Last, and carrying `generate=None`, so the RTL-generation order
+    #     of every row before it is bit-identical with or without this line.
+    *_PINOUT_TIER_ROWS,
 )
 
 _BY_KEY: Dict[str, ArtifactType] = {a.key: a for a in REGISTRY}

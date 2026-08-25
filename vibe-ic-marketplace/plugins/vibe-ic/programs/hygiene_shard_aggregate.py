@@ -50,6 +50,18 @@ DECIDED = ("PASS", "FAIL")
 UNDECIDED = ("NOT_CHECKED", "WROTE_CORPUS")
 #: Declared on this host, owned by another. Not a result.
 ELSEWHERE = ("OTHER_SHARD", "LISTED")
+#: The owning shard decided, before running it, that this change touches none of
+#: what the gate declares it reads. `_gate_dispatch.sh` gives it its own state
+#: for a reason it writes down: "not a PASS (nothing ran and nothing was
+#: examined), not NOT_CHECKED (the gate is perfectly able to run — it simply has
+#: nothing here to say)". So it is a FOURTH class here too. Folding it into
+#: DECIDED would be this program certifying gates that never executed; folding
+#: it into ELSEWHERE would make it invisible and let a shard that scoped
+#: EVERYTHING out report a full denominator; and leaving it unlisted — which is
+#: what this file did until 2026-08-25 — makes every scoped run refuse with
+#: `unknown state 'OUT_OF_SCOPE'`, which is a false alarm and, worse, one that
+#: hides the real coverage answer behind a parse error.
+NOT_ASKED = ("OUT_OF_SCOPE",)
 
 
 def load(paths: List[Path]):
@@ -94,6 +106,7 @@ def main(argv=None) -> int:
 
     decided: Dict[str, List[str]] = defaultdict(list)
     undecided: Dict[str, str] = {}
+    not_asked: Dict[str, str] = {}
     failed: List[str] = []
     wrote: List[str] = []
     seconds = 0
@@ -122,10 +135,12 @@ def main(argv=None) -> int:
                 undecided[label] = state
                 if state == "WROTE_CORPUS":
                     wrote.append(label)
+            elif state in NOT_ASKED:
+                not_asked[label] = state
             elif state not in ELSEWHERE:
                 problems.append(f"{path}: unknown state {state!r} for {label!r}")
 
-    seen = set(decided) | set(undecided)
+    seen = set(decided) | set(undecided) | set(not_asked)
     missing = [l for l in expected if l not in seen]
     if missing:
         problems.append(
@@ -144,7 +159,7 @@ def main(argv=None) -> int:
 
     n_dec, n_exp = len(decided), len(expected)
     head = (f"{n_dec} of {n_exp} gate(s) DECIDED across {len(docs)} shard(s), "
-            f"{len(undecided)} NOT CHECKED")
+            f"{len(undecided)} NOT CHECKED, {len(not_asked)} OUT OF SCOPE")
     if args.json:
         # vibe-ic#1082 — the declared report destination exists ONLY IF this
         # aggregate completed. A crashed run previously left a half-written
@@ -153,7 +168,8 @@ def main(argv=None) -> int:
         # exists to say what the run's reach WAS.
         write_json(args.json, {
             "expected": n_exp, "decided": n_dec,
-            "not_checked": sorted(undecided), "failed": sorted(set(failed)),
+            "not_checked": sorted(undecided), "out_of_scope": sorted(not_asked),
+            "failed": sorted(set(failed)),
             "wrote_corpus": sorted(set(wrote)),
             "shards": len(docs), "critical_path_seconds": seconds,
             "problems": problems,
@@ -173,9 +189,9 @@ def main(argv=None) -> int:
         print(f"[FAIL] hygiene_shard_aggregate: {len(set(failed))} gate(s) "
               f"FAILED: {', '.join(sorted(set(failed))[:6])} [{head}]")
         return 1
-    if undecided:
+    if undecided or not_asked:
         print(f"hygiene_shard_aggregate: {head} — this is NOT a pass over: "
-              + ", ".join(sorted(undecided)[:6]))
+              + ", ".join(sorted(set(undecided) | set(not_asked))[:6]))
         return 0
     print(f"[PASS] hygiene_shard_aggregate: {head}; critical path {seconds}s")
     return 0

@@ -34,6 +34,20 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ip_catalog_query import find_catalog_dir, load_manifests  # noqa: E402
 from ip_catalog_pull import LOCAL_MIRROR_ROOTS, LOCAL_MIRROR_MAP, find_local_mirror  # noqa: E402
+# THE CONTENT HALF OF THIS AUDIT'S OWN QUESTION.
+# The docstring above promises "each rtl_files path EXISTS in upstream at
+# canonical_commit", and existence is where the check stopped: a mirror file
+# edited byte-for-byte still exists, so the audit passed a tree that no longer
+# reproduces. `ip_catalog_reproduce_pull` is the program that answers the other
+# half — SHA256 of every rtl_files entry, mirror against a fresh clone — and it
+# was authored, tested and merged and then reached by nothing at all.
+#
+# WIRED HERE AND NOT ON THE LANDING LANE, for the same reason this module is
+# not on it: its two inputs are the developer's LOCAL MIRROR (~/ic_documents,
+# not in this repository) and the network. It is the NETWORK arm that pays for
+# it, and this module's `--no-network` arm — the one `ip_catalog_pull` calls on
+# every design pull — never reaches it, so a design run costs nothing.
+from ip_catalog_reproduce_pull import reproduce_one_ip  # noqa: E402
 
 
 # License keyword → SPDX inference
@@ -141,9 +155,6 @@ def find_license_file(repo_root: Path) -> Optional[Path]:
 def audit_local_files(m: Dict[str, Any]) -> Dict[str, Any]:
     """Verify rtl_files exist in LOCAL_MIRROR + check LICENSE matches."""
     ip_name = m.get("ip_name", "?")
-    claimed_lic = m.get("license", "?")
-    rtl_files = m.get("rtl_files", []) or []
-    issues: List[str] = []
 
     src_dir = find_local_mirror(ip_name)
     if src_dir is None:
@@ -153,6 +164,24 @@ def audit_local_files(m: Dict[str, Any]) -> Dict[str, Any]:
             "stage": "local_mirror",
             "issue": f"no local mirror found in {LOCAL_MIRROR_ROOTS}",
         }
+    return audit_against_mirror(m, src_dir)
+
+
+def audit_against_mirror(m: Dict[str, Any], src_dir: Path) -> Dict[str, Any]:
+    """The same audit against a mirror the CALLER already resolved.
+
+    Split out so `ip_catalog_pull.pull_catalog_ip` can ask this question about
+    the very directory it is copying from. Re-resolving the mirror here would
+    let the pull copy out of one tree while the audit judged another: the pull
+    selects with `find_local_mirror(ip_name, rtl_files)` — content-gated on the
+    manifest's own file list (ORGANIC #665) — and this module's own caller
+    selects without it, so the two can legitimately land on different dirs for
+    the same IP.
+    """
+    ip_name = m.get("ip_name", "?")
+    claimed_lic = m.get("license", "?")
+    rtl_files = m.get("rtl_files", []) or []
+    issues: List[str] = []
 
     # 1. rtl_files existence
     files_present = []
@@ -326,6 +355,20 @@ def audit_upstream(m: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
+    # CONTENT, not merely presence. `reproduce_one_ip` clones upstream a second
+    # time and compares the SHA256 of every `rtl_files` entry against the local
+    # mirror's copy. Its SKIP statuses are not findings — with no mirror, or no
+    # HTTP(S) canonical_url, there is no pair to compare and it says so — but a
+    # DRIFT_DETECTED names files the catalog claims come from upstream and that
+    # upstream does not have, which is precisely what this stage exists to
+    # refuse. Recorded whatever it says, so a reader can tell "compared and
+    # identical" from "never compared".
+    reproduce = reproduce_one_ip(m)
+    if reproduce.get("status") == "DRIFT_DETECTED":
+        issues.append(
+            f"{reproduce.get('n_diverge')} rtl_file(s) DIVERGE between the "
+            f"local mirror and upstream: {reproduce.get('diverged_files')}")
+
     return {
         "ip_name": ip_name,
         "ok": not issues,
@@ -334,6 +377,7 @@ def audit_upstream(m: Dict[str, Any]) -> Dict[str, Any]:
         "canonical_commit": commit,
         "commit_found_in_refs": commit_found,
         "files_audit": files_audit,
+        "reproduce": reproduce,
         "issues": issues,
     }
 
@@ -356,6 +400,14 @@ def main(argv: List[str]) -> int:
         manifests = [m for m in manifests if m.get("ip_name") == args.ip]
 
     skip_network = args.no_network or args.local_mirror_only
+
+    if not manifests:
+        # A verdict about a catalog nobody opened is not a verdict. Without
+        # this the summary reads `0/0 local PASS` and the process exits 0 —
+        # the zero-denominator pass this repo refuses everywhere else.
+        print(f"ERROR: 0 manifest(s) found under {catalog_dir} — an audit over "
+              f"an empty catalog is not a pass", file=sys.stderr)
+        return 2
 
     results: List[Dict[str, Any]] = []
     for m in manifests:
@@ -403,6 +455,17 @@ def main(argv: List[str]) -> int:
                     print(f"    - {issue}")
         print()
         print(f"=== SUMMARY: {n_pass_local}/{len(results)} local PASS, {n_pass_up}/{len(results)} upstream PASS (skip_network={skip_network}) ===")
+
+    # THE VERDICT REACHES THE EXIT CODE. Until this line the program printed
+    # `[FAIL local] <ip>` beside a mismatched licence and returned 0, so every
+    # caller that reads a status — which is every automatic one — was told the
+    # catalog was clean. The findings were in the OUTPUT and the aggregation
+    # reads the CODE; that is the exact substitution
+    # `gate_zero_denominator_refuses_check` was written about one case over.
+    if n_pass_local != len(results):
+        return 1
+    if not skip_network and n_pass_up != len(results):
+        return 1
     return 0
 
 

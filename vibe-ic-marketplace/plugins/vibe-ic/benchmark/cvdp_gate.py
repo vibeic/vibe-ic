@@ -151,6 +151,16 @@ try:
         check_text as _handshake_check_text)
 except Exception:  # pragma: no cover - defensive (program missing)
     _handshake_check_text = None
+# B5 clause smoke TB (#740 G2) — B2's EXAMPLE-FREE complement. B2 executes the
+# prompt's worked-example ROWS; a prompt that states its function prosaically
+# ("`y` is HIGH when `a` is GREATER THAN `b`") carries no rows, B2 finds
+# nothing, and the deterministic chain then has no functional check at all on
+# exactly the records B2 cannot reach. This one derives the vectors from the
+# RELATIONAL CLAUSE instead.
+try:
+    import clause_smoke_tb as _clause_smoke  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _clause_smoke = None
 
 # ANY-info-string fence tokenizer (adversarial-review HIGH): an opener whose
 # tag is not verilog-ish (```text / ```python / untagged prose) must STILL
@@ -2962,6 +2972,42 @@ def spec_example_smoke_gate_record(rid, completion, prompt_text, top, workdir):
     return True, f"spec-example-smoke {verdict}: {reason}"
 
 
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — B5 CLAUSE smoke-TB PRE-EMIT block ──────────
+# clause_smoke_tb (#740 G2) is the EXAMPLE-FREE complement to B2 above. It
+# parses the prompt's RELATIONAL functional clauses ("`y` is HIGH when `a` is
+# GREATER THAN `b`"), derives a TRUE-case and a FALSE-case operand pair per
+# clause, and asserts the named 1-bit output. A first draft that inverts a
+# comparator is caught BLIND — prompt + RTL only, no golden table, no scorer.
+#
+# BLOCK ONLY on verdict=='BLOCK'. Its §4.05 contract makes that the sole
+# blocking verdict it can reach: it exits NOT_APPLICABLE when no clause is
+# confidently derivable (both operands and the output must resolve to real RTL
+# ports), SKIP when iverilog/vvp are absent, and it downgrades a TB-compile
+# failure of its OWN generated bench to advisory. So the block is always a
+# real contradiction between the RTL and a relation the prompt states.
+def clause_smoke_gate_record(rid, completion, prompt_text, top, workdir):
+    """Return (ok, note). ok=False only on a clear clause-smoke BLOCK."""
+    if _clause_smoke is None:
+        return True, "clause-smoke unavailable — skipped"
+    if not prompt_text:
+        return True, "no prompt — clause-smoke skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL — clause-smoke skipped"
+    rp = workdir / "dut_clause.sv"
+    try:
+        rp.write_text(code)
+        rc, report = _clause_smoke.run_clause_smoke(rp, prompt_text, top,
+                                                    warn=False)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"clause-smoke raised (advisory): {e}"
+    verdict = report.get("verdict", "NOT_APPLICABLE")
+    reason = report.get("reason", "")
+    if rc != 0 and verdict == "BLOCK":
+        return False, f"clause-smoke BLOCK: {reason}"
+    return True, f"clause-smoke {verdict}: {reason}"
+
+
 def _structural_finding_gate(check_text_fn, label, completion):
     """Shared driver for the two zero-FP STRUCTURAL checks (B3 FSM transition
     completeness #522 / B4 handshake livelock + result stability #523): run the
@@ -3659,6 +3705,19 @@ def main(argv=None) -> int:
                     ok = False
                     entry["verdict"] = "BLOCKED"
                     entry["handshake_block"] = _b4_note
+                # B5 — the EXAMPLE-FREE clause smoke TB. Reuses B2's per-record
+                # workdir: both write their own filenames into it, and a record
+                # that reached B2 has already created it.
+                _b5_ok, _b5_note = clause_smoke_gate_record(
+                    _rid_s, out_rec.get("completion", ""),
+                    prompts.get(_rid_s, ""), _ex_top, _b2wd)
+                if _b5_note.startswith(("clause-smoke PASS",
+                                        "clause-smoke BLOCK")):
+                    entry["clause_smoke"] = _b5_note
+                if not _b5_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["clause_block"] = _b5_note
             report.append(entry)
             if ok:
                 # ORGANIC (run_v1239_converge) — harness-TOPLEVEL alias repair.

@@ -38,6 +38,18 @@ import _semantic_child_progress as _semantic_progress
 import gate_process_attestation as _gate_attestation
 from _atomic_artefact import write_json, write_text
 from hygiene_shard_plan import load_profile, plan
+# THE OTHER HALF OF #1144, AND IT HAD NO CALLER.
+# `hygiene_shard_plan` splits the gates and this module has imported it since
+# the day it landed; `hygiene_shard_aggregate` — the program that answers "did
+# every gate the plan assigned actually get decided, exactly once, by a shard
+# that agrees it was sharded" — was authored, tested and merged beside it and
+# then reached by nothing. `merge_records` below answers a NEIGHBOURING
+# question: it reconciles the shard records against the dispatcher's own
+# `--list`. The aggregate answers it against the PLAN, which is the denominator
+# that came from outside the records being checked, and that is the distinction
+# its header is written about: "deriving the denominator from the records
+# themselves would let a run that lost a shard agree with itself."
+import hygiene_shard_aggregate as _shard_aggregate
 from policy_direction_pin_check import acquire_run_lock, recover_all_journals
 
 HOST_LABEL = "gates are host-independent"
@@ -1347,6 +1359,26 @@ def main(argv=None) -> int:
             print("[ERROR] dependent host-independence phase not launched: "
                   "Arm A coverage is incomplete", file=sys.stderr)
             all_attestations = a_attestations
+
+        # COVERAGE, AGAINST THE PLAN RATHER THAN AGAINST THE RECORDS.
+        # `labels` is what the dispatcher DECLARED and `buckets` + the sensitive
+        # wave + HOST_LABEL are what the planner ASSIGNED; the aggregate is
+        # given the latter, written out, and every Arm-A shard record. It
+        # refuses a run that lost a shard, ran a gate twice, ran one nobody
+        # planned, or was aggregated as sharded while a host ignored its
+        # assignment — each of which is a smaller run wearing a full
+        # denominator. Its refusal joins `problems`, which already means the
+        # run returns 2 and prints "coverage loss is not a result".
+        planned = [*(l for b in buckets for l in b), *sensitive, HOST_LABEL]
+        expect_path = tmp / "planned-labels.txt"
+        expect_path.write_text("\n".join(planned) + "\n", encoding="utf-8")
+        coverage_rc = _shard_aggregate.main(
+            [*(str(path) for path, _ in docs), "--expect", str(expect_path),
+             "--shards", str(total_shards)])
+        if coverage_rc != 0:
+            problems.append(
+                "hygiene_shard_aggregate refused the run's coverage against "
+                "the measured plan (see the [COVERAGE] lines above)")
 
         elapsed = int(time.monotonic() - started)
         final = merge_records(reference, docs, all_attestations, elapsed,

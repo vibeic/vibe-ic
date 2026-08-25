@@ -52597,6 +52597,90 @@ def _write_regmap_tables_not_registers(
             pass
 
 
+#: The spec-artifact inventory the dual-pass understanding layer produces.
+SPEC_ARTIFACT_INVENTORY_FILENAME = "spec_artifact_inventory.json"
+
+
+def _post_emit_spec_artifact_inventory(project: Path) -> None:
+    """Record WHICH STRUCTURED ELEMENTS the input documents actually contain.
+
+    THE DUAL-PASS UNDERSTANDING LAYER, REACHED FOR THE FIRST TIME.
+    `spec_artifact_dual_pass` owns the doctrine that reading a spec is TWO
+    passes — a deterministic PROGRAM baseline that is the guaranteed floor, and
+    the AI interpretation that leads on prose — plus the reconcile that turns
+    their disagreement into a new-extractor queue. It also owns the only
+    aggregation of six extraction-only recognizers (register map, pinout, the
+    general table tier, the prose parametric tier, the prose residual tier and
+    the figure/vision tier) and the `spec_artifact_catalog` vocabulary they
+    target. Nothing in the tree called any of it, so a Phase-1 run knew what it
+    had EXTRACTED and never what it had been GIVEN.
+
+    THIS IS THE BASELINE HALF, AND IT SAYS SO. `ai_elements` is not supplied
+    here: the runner is the program pass, and the container it writes is marked
+    `baseline_only`. That is the honest shape — the floor is what a program can
+    guarantee, and an AI pass that has not run must not be implied by the file.
+    The IC Expert Agent reconciles against this artefact rather than re-deriving
+    it, which is what makes its `ai_only` finds a measurable extractor backlog
+    instead of an impression.
+
+    Written under `reports/` only, and on EVERY run including the empty one: an
+    inventory that says zero elements is the statement that the documents
+    carried none the program layer recognises, which an absent file does not
+    make. Best-effort throughout — a Phase-1 run never fails on its own
+    disclosure.
+    """
+    idir = _pl.input_doc_dir(project)
+    if not idir.is_dir():
+        return
+    blob = ""
+    for f in sorted(idir.iterdir()):
+        if f.is_file() and f.suffix.lower() in (".txt", ".md", ".rst"):
+            try:
+                blob += f.read_text(errors="ignore") + "\n"
+            except OSError:
+                continue
+    if not blob.strip():
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import spec_artifact_dual_pass as _dp
+        import spec_artifact_catalog as _cat
+        result = _dp.extract_dual_pass(blob, document_id=project.name)
+    except Exception as exc:                        # noqa: BLE001
+        print(f"WARN: spec-artifact inventory not produced "
+              f"({type(exc).__name__}: {exc})", file=sys.stderr)
+        return
+    els = result.get("container", {}).get("structural_elements", []) or []
+    found = sorted({e.get("element_type") for e in els if e.get("element_type")})
+    payload = {
+        "produced_by": "_post_emit_spec_artifact_inventory",
+        "meaning": (
+            "the DETERMINISTIC BASELINE of structured element types the input "
+            "documents carry, from spec_artifact_dual_pass.program_baseline. "
+            "This is the floor, not the whole reading: element types the "
+            "catalog marks prose- or vision-tier are led by the AI pass, which "
+            "has not run here. An empty list means the program layer "
+            "recognised nothing, NOT that the documents are empty."),
+        "baseline_only": bool(result.get("baseline_only")),
+        "catalog_vocabulary_size": len(_cat.CATALOG),
+        "element_types_found": found,
+        "count": len(els),
+        "container": result.get("container"),
+    }
+    out_dir = _pl.reports_phase1_dir(project)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / SPEC_ARTIFACT_INVENTORY_FILENAME).write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+    except OSError as exc:
+        print(f"WARN: spec-artifact inventory not written: {exc}",
+              file=sys.stderr)
+        return
+    print(f"      spec-artifact baseline: {len(els)} element(s) over "
+          f"{len(found)} type(s) of a {len(_cat.CATALOG)}-type catalog")
+
+
 def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
     """v1.6.106 (#36 Bug 1 P0) — PDF tabular regmap row scan.
 
@@ -60172,6 +60256,12 @@ def main() -> int:
     # accurate. Chip-AGNOSTIC: regex over input_doc/*.txt rows of
     # the shape `0x<HEX> (r|r/w|w) <name> - <description>`.
     _post_emit_pdf_regmap_table_rows(project)
+
+    # The DUAL-PASS understanding layer's program half. Runs here, beside the
+    # other post-emit extractors, because it reads the SAME input documents and
+    # its inventory is only meaningful once the L docs it will be reconciled
+    # against exist. Writes under reports/ and never fails the run.
+    _post_emit_spec_artifact_inventory(project)
 
     # v1.6.106 (#36 Bug 4 P1) — crypto-class L1.architecture picker.
     # Lifts digest_width_bits / message_block_bits / state_bits /

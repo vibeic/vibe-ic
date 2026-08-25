@@ -97,13 +97,33 @@ mode — verification is the gate, not permission.
    text, not about meaning.
 
 2. **Fix every open issue/PR on every fork repo and on `vibeic-eda`,
-   yourself, without being asked case by case.** Most fork repos have
-   GitHub Issues disabled (they are forks, not standalone projects) — check
-   `gh api repos/vibeic/<repo> --jq .has_issues` before concluding a blank
-   `gh issue list` means "nothing to check" versus "the feature is off".
-   `vibeic-eda` itself is where real issues accumulate; a `gh issue list
-   --repo vibeic/vibeic-eda --state open` with anything in it is a to-do
-   list, not a status report. Fixing means: reproduce, fix, RED-then-GREEN
+   yourself, without being asked case by case.** Enumerate the org's open
+   work with the program, not by hand:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/org_open_work_poll.py vibeic
+   ```
+
+   It answers the whole of duty 2's first question in one place, and it
+   refuses the three ways the hand-written form of it reports an absence it
+   never measured. `gh repo list vibeic --limit 60` was the line it replaces;
+   the org has more repositories than that, so three were never looked at on
+   every round of a long session — and a truncated listing is byte-for-byte
+   indistinguishable from a complete one. This program REFUSES (rc 2, nothing
+   on stdout) when the listing comes back AT the cap rather than reporting a
+   floor as a count, refuses to report 0 for a repository whose own PR/issue
+   listing failed, and — the part duty 2 already knew to worry about —
+   counts and NAMES the repositories with issues DISABLED separately, because
+   most fork repos have GitHub Issues off (they are forks, not standalone
+   projects) and "0 open issues" there is a fact about the settings, not
+   about the backlog. It enumerates over GraphQL for the reason CONTRIBUTING
+   records: the REST listings and the search index answer HTTP 200 with an
+   empty set for a repository whose issues are intact.
+
+   rc 0 with a JSON summary is a MEASURED count; rc 2 is "I could not look",
+   and treating it as a clean org is the one reading that must never happen.
+   `vibeic-eda` itself is where real issues accumulate; anything the poll
+   attributes to it is a to-do list, not a status report. Fixing means: reproduce, fix, RED-then-GREEN
    test evidence, commit with a full mechanism-and-evidence message, push,
    **then close the issue on GitHub with the commit sha and evidence cited
    in the closing comment** — a fix that is landed but not closed looks

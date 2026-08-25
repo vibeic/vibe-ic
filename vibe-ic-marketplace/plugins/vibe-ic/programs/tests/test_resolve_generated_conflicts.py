@@ -6,8 +6,16 @@ The whole value of this script is that it is safe to run without reading the
 diff. That property is worth exactly as much as the refusal path is strict, so
 every test here is paired: one that it resolves, one that it must NOT.
 
+THE SANDBOX CARRIES THE RESOLVER, because the script is now the command-line
+name of `programs/generated_artifact_conflict_resolve.py` rather than a second
+copy of the rule. These tests still drive the SCRIPT — the entry point an
+operator types — end to end over a real stopped merge, which is the only way to
+show that the delegation actually resolves, actually refuses, and actually
+leaves a bad tree alone.
+
 chip-AGNOSTIC: builds throwaway git repos in tmp_path; touches no real tree.
 """
+import json
 import shutil
 import subprocess
 import textwrap
@@ -17,6 +25,12 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[5]
 SCRIPT = REPO / "tools" / "resolve_generated_conflicts.sh"
+PROGRAMS = Path(__file__).resolve().parents[1]
+#: The rule itself, plus the one sibling it imports. Both are COPIED rather than
+#: referenced so the sandbox stays a self-contained tree at the repo-relative
+#: path the script looks under.
+RESOLVER_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs"
+RESOLVER_FILES = ("generated_artifact_conflict_resolve.py", "_atomic_artefact.py")
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="needs git")
@@ -56,6 +70,8 @@ def _sandbox(tmp_path):
     _git(w, "config", "user.name", "t")
     shutil.copy(SCRIPT, w / "tools" / "resolve_generated_conflicts.sh")
     (w / "tools" / "resolve_generated_conflicts.sh").chmod(0o755)
+    for name in RESOLVER_FILES:
+        shutil.copy(PROGRAMS / name, gen_dir / name)
 
     # the script hard-codes the real generated path, so use that path here too
     (gen_dir / "base.txt").write_text("x")
@@ -132,8 +148,9 @@ def test_a_conflict_in_an_AUTHORED_file_is_refused_and_nothing_is_staged(tmp_pat
     r = _run(w)
     after = _git(w, "diff", "--name-only", "--diff-filter=U").stdout
 
-    assert r.returncode != 0, "must refuse an authored conflict"
-    assert "REFUSING" in (r.stdout + r.stderr)
+    assert r.returncode == 1, "must refuse an authored conflict"
+    assert "[REFUSED]" in (r.stdout + r.stderr), (r.stdout + r.stderr)
+    assert "authored.md" in (r.stdout + r.stderr), "the foreign path must be NAMED"
     assert before == after, "the conflict must be left exactly as it was"
     assert "hand written" in (gen_dir / "authored.md").read_text()
 
@@ -193,3 +210,72 @@ def test_no_conflict_is_a_clean_no_op(tmp_path):
     r = _run(w)
     assert r.returncode == 0
     assert "nothing to resolve" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# the SECOND derived artefact — the case a one-entry registry gets wrong
+# ---------------------------------------------------------------------------
+_INV_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs/PROGRAM_INVENTORY.json"
+_INV_GEN = "vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py"
+
+
+def _sandbox_two_artefacts(tmp_path):
+    """The same shape as `_sandbox`, with a SECOND generated file that every
+    branch also rewrites — which is what `PROGRAM_INVENTORY.json` is."""
+    w = _sandbox(tmp_path)
+    (w / _INV_GEN).write_text(textwrap.dedent("""
+        import json, sys
+        from pathlib import Path
+        d = Path(__file__).resolve().parent
+        out = d / "PROGRAM_INVENTORY.json"
+        names = sorted(p.stem for p in d.glob("*.txt"))
+        body = json.dumps({"total": len(names), "programs": names}, indent=2) + "\\n"
+        if "--check-artifact" in sys.argv:
+            sys.exit(0 if out.read_text() == body else 1)
+        out.write_text(body)
+        """).lstrip())
+    subprocess.run(["python3", _INV_GEN], cwd=w, check=True)
+    _git(w, "add", "-A")
+    _git(w, "commit", "-qm", "second generated artefact")
+    return w
+
+
+def _branch_adding_both(w, name, entry):
+    gen_dir = w / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    _git(w, "checkout", "-q", "-B", name, "main")
+    (gen_dir / f"{entry}.txt").write_text("x")
+    subprocess.run(["python3", "tools/gen_programs_index.py"], cwd=w, check=True)
+    subprocess.run(["python3", _INV_GEN], cwd=w, check=True)
+    _git(w, "add", "-A")
+    _git(w, "commit", "-qm", f"add {entry}")
+
+
+def test_every_registered_derived_artefact_is_resolved_not_only_the_first(tmp_path):
+    """The measured miss (a4caccefe): a merge conflicting on BOTH derived files.
+
+    Against a registry holding only `INDEX.md`, the inventory is a FOREIGN path
+    and the whole resolution is refused — including the half that was
+    resolvable — so the merge gets finished by hand. Registered, both are
+    regenerated from the merged tree, verified with each generator's own
+    freshness check, and staged.
+    """
+    w = _sandbox_two_artefacts(tmp_path)
+    _branch_adding_both(w, "a", "aaa")
+    _branch_adding_both(w, "b", "zzz")
+    _git(w, "checkout", "-q", "a")
+    _git(w, "merge", "--no-ff", "--no-edit", "b", check=False)
+
+    unmerged = _git(w, "diff", "--name-only", "--diff-filter=U").stdout.split()
+    assert len(unmerged) == 2, unmerged
+    assert _INV_REL in unmerged, "the premise: both generated files must collide"
+
+    r = _run(w)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not _git(w, "diff", "--name-only", "--diff-filter=U").stdout.strip()
+
+    # resolved to the RIGHT content on BOTH sides, not merely un-conflicted.
+    idx = (w / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+           / "INDEX.md").read_text()
+    assert "total: 3" in idx and "- aaa" in idx and "- zzz" in idx, idx
+    inv = json.loads((w / _INV_REL).read_text())
+    assert inv["total"] == 3 and {"aaa", "zzz"} <= set(inv["programs"]), inv

@@ -176,3 +176,51 @@ def test_real_approver_still_accepted(tmp_path):
         })
         r = _run(tmp_path)
         assert r.returncode == 0, f"{good!r} was wrongly rejected: {r.stdout}{r.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# THE EMITTER'S GUARANTEE IS NOW A WIRING, NOT A COINCIDENCE OF TWO LISTS.
+#
+# `waiver_template_gen.py` says its scaffold values are ones this schema is
+# "GUARANTEED to reject". Until this edge that held only because the two files
+# happened to spell the same words, nothing compared them, and the emitter was
+# reachable from no runner, flow clause, gate or skill. The test below changes
+# the EMITTER's value to a word this file's own sets do not carry and asserts
+# the schema still rejects it — which is false unless the value is read.
+# ---------------------------------------------------------------------------
+import importlib
+
+
+def _reload_schema():
+    sys.path.insert(0, str(SCRIPT.parent))
+    import waivers_schema_check as W
+    return importlib.reload(W)
+
+
+def test_placeholder_sets_are_read_from_the_emitter():
+    W = _reload_schema()
+    assert W.TEMPLATE_PLACEHOLDER_SOURCE == "waiver_template_gen"
+    import waiver_template_gen as G
+    assert G.PLACEHOLDER_APPROVER.strip().lower() in W.PLACEHOLDER_APPROVERS
+    assert G.PLACEHOLDER_REASON.strip().lower() in W.PLACEHOLDER_REASONS
+
+
+def test_a_novel_emitter_placeholder_is_still_rejected(tmp_path):
+    """THE MUTATION IS IN THE EMITTER. Same waiver shape, same denominator; what
+    moves is the word the scaffold leaves behind, and the schema must follow it."""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import waiver_template_gen as G
+    novel = "zzq_unfilled_slot"
+    old_a, old_r = G.PLACEHOLDER_APPROVER, G.PLACEHOLDER_REASON
+    # Sanity: the shipped sets do NOT carry it, so a pass here would be the
+    # coincidence and not the wiring.
+    W0 = _reload_schema()
+    assert novel not in (W0.PLACEHOLDER_APPROVERS | W0.SELF_APPROVERS)
+    try:
+        G.PLACEHOLDER_APPROVER = novel
+        W = _reload_schema()
+        assert novel in W.PLACEHOLDER_APPROVERS
+        assert W._is_placeholder_approver(novel)
+    finally:
+        G.PLACEHOLDER_APPROVER, G.PLACEHOLDER_REASON = old_a, old_r
+        _reload_schema()

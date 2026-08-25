@@ -81,6 +81,17 @@ never re-implemented):
                                          are all self-authored fixtures
                                          cannot tell itself from its own
                                          absence
+  * corpus_cardinality_pin_scan.py     — ADVISORY: a test that asserts the
+                                         SIZE of the published corpus goes
+                                         red on the next reorganisation and
+                                         reads as a regression in whatever
+                                         change is in flight
+  * content_pinned_authority_verified_only_at_merge.py — ADVISORY: the
+                                         authority manifest's readers all ran
+                                         AT THE MERGE, so a pin that no longer
+                                         describes the tree was reported after
+                                         the point of repair; this is the early
+                                         reader, and it never blocks
   * ci_ran_at_all_check.py             — an absent CI run is DISCLOSED,
                                          never rendered as a passing one
   * ppa_pr_scope_check.py              — the PPA Appendix-C merge
@@ -633,6 +644,102 @@ def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
     summary = (body[0] if body else "(no output)")[:240]
     return GateResult("real_artefact_test_backing_check", 0,
                       f"ADVISORY — {summary}")
+
+
+# --------------------------------------------------------------------------
+# content_pinned_authority_verified_only_at_merge — ADVISORY.
+#
+# A tracked manifest pins the content hash of the protected authority paths,
+# and until now its ONLY readers ran AT THE MERGE: the merge-time verification
+# script, the manifest author, the trusted-selection helper, the census tool
+# and two unit tests. `tools/ci/repo_hygiene_gates.sh` mentions it exactly once
+# and that occurrence is a COMMENT, so no pre-merge check ever compared a pin
+# against the tree. The verdict was correct and arrived after the point of
+# repair, which is a different defect from a verdict that is wrong.
+#
+# This is where the early reader belongs: gatekeeper_review is the gate a
+# maintainer runs BEFORE every push, so the author learns that the manifest
+# describes no tree that exists while the manifest is still theirs to
+# re-render.
+#
+# NEVER BLOCKING, and NEVER `--strict`. A mismatch on a branch that legitimately
+# edits a pinned path is the EXPECTED state — blocking it would refuse the very
+# change the manifest exists to record — and the program's own header says
+# "VERDICT CLASS: ADVISORY ... it must stay advisory". Measured on this tree at
+# the time of wiring: 13 pinned paths hash to neither transition state, on
+# trunk, so a strict wiring here would refuse thirteen pre-existing changes
+# nothing on the producing side ever flagged. rc 2 is CANNOT DETERMINE (no
+# manifest under this root) and is disclosed as a skip, never as a pass.
+# --------------------------------------------------------------------------
+def pinned_authority_gate(repo: Path) -> GateResult:
+    name = "content_pinned_authority_verified_only_at_merge"
+    prog = _PROGRAMS_DIR / f"{name}.py"
+    if not prog.is_file():
+        return GateResult(name, -1, f"checker missing at {prog}")
+    rc, out, err = _run_program(prog, ["--root", str(repo)])
+    body = [ln.strip() for ln in (out.strip() or err.strip()).splitlines()
+            if ln.strip()]
+    if rc == 2:
+        return GateResult(name, -1,
+                          (body[0] if body else "cannot determine")[:240])
+    warn = [ln for ln in body if ln.startswith("[WARN]")]
+    neither = [ln for ln in body if ln.lower().startswith("hashing to neither")]
+    if warn:
+        summary = warn[0]
+    elif neither:
+        summary = neither[0]
+    else:
+        summary = (body[0] if body else "(no output)")
+    # rc is forced to 0 on the program's own written instruction.
+    return GateResult(name, 0, f"ADVISORY — {summary[:240]}")
+
+
+# --------------------------------------------------------------------------
+# corpus_cardinality_pin_scan — ADVISORY.
+#
+# A test that asserts `len(rows) == 23` over whatever is published under the
+# benchmark corpus has pinned the size of the publication set on the day it was
+# typed, not a property of the code under test. Publish a cell, withdraw one,
+# reorganise the tree, and the assertion fires with a message that says
+# `23 != 22` — which reads as a regression in whatever change happened to be in
+# flight. Measured on this repo: the #905 corpus reorganisation turned
+# `test_issue377_l17_name_fuses_declared_signals` red at `fired == 16` with the
+# checker byte-for-byte unchanged.
+#
+# Review time is when that is cheap to see, and this is the review-time gate
+# that already carries the other test-quality disclosure
+# (`real_artefact_test_backing_check`). It sits beside it for the same reason:
+# to surface the split before a third round, not after.
+#
+# NEVER BLOCKING, and it structurally cannot be otherwise — the program is a
+# REPORTER that exits 0 whatever it finds, on its own written instruction,
+# because plenty of hits are load-bearing (a 32 that is an md5 hex length, a
+# `== 0` that means "zero offenders"). Deciding which integer is the PROPERTY
+# and which is a stand-in for one is a judgement, and a gate whose output needs
+# triage gets ignored. An ABSENT tests tree is disclosed as a skip rather than
+# reported as a clean zero: "0 pins" from a directory nobody opened is the
+# empty-population claim this repo keeps paying for.
+# --------------------------------------------------------------------------
+def corpus_pin_scan_gate(plugin_root: Path) -> GateResult:
+    name = "corpus_cardinality_pin_scan"
+    prog = _PROGRAMS_DIR / f"{name}.py"
+    if not prog.is_file():
+        return GateResult(name, -1, f"checker missing at {prog}")
+    tests_dir = plugin_root / "programs" / "tests"
+    if not tests_dir.is_dir():
+        return GateResult(name, -1,
+                          f"skipped — no tests tree at {tests_dir}; nothing "
+                          f"was opened, so this is not a clean scan")
+    rc, out, err = _run_program(prog, [str(tests_dir)])
+    body = [ln.strip() for ln in (out.strip() or err.strip()).splitlines()
+            if ln.strip()]
+    if rc != 0:
+        return GateResult(name, -1,
+                          f"skipped — scanner rc {rc}: "
+                          f"{(body[0] if body else '(no output)')[:200]}")
+    total = [ln for ln in body if ln.startswith("TOTAL ")]
+    summary = total[-1] if total else (body[-1] if body else "(no output)")
+    return GateResult(name, 0, f"ADVISORY — {summary[:240]}")
 
 
 # --------------------------------------------------------------------------
@@ -1323,6 +1430,34 @@ def _git_text(cwd: Path, argv: List[str]) -> Optional[str]:
     return out or None
 
 
+#: Where the toolchain profile of a hygiene record lives. ONE spelling, used by
+#: the writer here and by `hygiene_finding_delta`'s reader, so the two cannot
+#: drift into writing and looking for different names.
+def toolchain_sidecar(record: Path) -> Path:
+    return Path(str(record) + ".toolchain.json")
+
+
+def _stamp_toolchain(record: Path) -> None:
+    """Record THIS host's toolchain beside a hygiene record. Never raises.
+
+    A failure to stamp leaves NO sidecar, which the consumer reads as "not
+    recorded" and discloses. It must never leave a WRONG one: a profile that
+    does not describe the run it sits beside is worse than none, because the
+    comparison it enables would be believed.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import toolchain_profile as _tc
+        toolchain_sidecar(record).write_text(
+            json.dumps(_tc.profile(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8")
+    except Exception:                      # pragma: no cover - best effort
+        try:
+            toolchain_sidecar(record).unlink()
+        except OSError:
+            pass
+
+
 def repo_hygiene_gate(repo: Path,
                       script: Optional[Path] = None,
                       stall_grace: int = _HYGIENE_STALL_GRACE_S,
@@ -1448,6 +1583,24 @@ def repo_hygiene_gate(repo: Path,
                 return GateResult(name, 2,
                                   f"ERROR — could not hand on the coverage "
                                   f"record: {exc}")
+            # AND THE TOOLCHAIN THIS RECORD WAS MEASURED UNDER (vibe-ic#1327).
+            #
+            # `hygiene_finding_delta` differences two of these records and
+            # already refuses across HOSTS, because a finding is host-dependent.
+            # Same host is not the same toolchain: measured on 8HD-8 at one
+            # commit, the bare host and the full container disagreed by 25
+            # failures over the identical tree, and the `test_cvdp_gate*` family
+            # alone went 29 red -> 0 red with tools added. A subtraction across
+            # that difference attributes the delta to the branch.
+            #
+            # A SIDECAR, not a new key in the record: `repo_hygiene_parallel`
+            # rebuilds this document field by field and `test_routed_def_corpus
+            # _dispatch` pins its exact top-level key set, so a key added here
+            # would have to be added in two more places to stay consistent —
+            # and a record whose shape depends on which runner wrote it is worse
+            # than a file beside it. The consumer treats an ABSENT sidecar as
+            # "not recorded", never as "the toolchains matched".
+            _stamp_toolchain(summary_out)
 
     return _hygiene_verdict(doc, supervised.rc)
 
@@ -1959,7 +2112,9 @@ def review(base: str, head: str, *,
     # what the old comment promised and the code now delivers.
     gates.append(one_commit_gate(repo, base, head, batch=batch))
     gates.append(real_artefact_backing_gate(repo, base, head))
+    gates.append(corpus_pin_scan_gate(plugin_root))
     gates.append(acceptance_control_gate(repo, base, head))
+    gates.append(pinned_authority_gate(repo))
     gates.append(ppa_pr_scope_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))

@@ -58,6 +58,26 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import _path_layout as _pl
+# THE OTHER HALF OF THIS GATE'S OWN QUESTION. `_find_gaps` below carries the
+# comment "Contiguous: u_max + 1 >= l_min (overlap is OK)" — and then never
+# measures the overlap it just declared acceptable. An overlap is not a defect
+# by itself, but it is a REQUIREMENT: two symbol classes claiming the same tick
+# width decode deterministically only if a priority rule exists, and this gate
+# neither knows nor asks whether one does. `rx_tolerance_sweep` is the program
+# that answers it — a general pulse-width decode-window sweep that reports
+# coverage gaps, OVERLAP zones and per-symbol jitter robustness for ANY
+# pulse-width/PPM-encoded protocol. It was authored out of the 2026-04-16
+# half-duplex debug (the H1/H0 boundary at width=8 was unmapped) and then run
+# from nothing but its own unit tests; this gate holds exactly the table it
+# sweeps, and is itself run on every project by the P0 umbrella
+# (`flow_compliance_check._STRUCTURAL_RTL_GATES`), so this is where it belongs.
+#
+# DISCLOSURE ONLY, and deliberately so: the sweep's findings are recorded at
+# severity WARN and `verdict` is not read from them, so this gate's rc over any
+# tree is bit-identical with and without this block. GAPS are excluded from what
+# is surfaced here — they are this gate's own verdict and would be reported
+# twice; only the half the gate does not otherwise measure is added.
+import rx_tolerance_sweep as _sweep
 
 # ----------------------------------------------------------------------
 # Synonyms — generic protocol-classifier vocabulary
@@ -220,6 +240,88 @@ def _find_gaps(table: Dict[str, int]) -> List[dict]:
 
 
 # ----------------------------------------------------------------------
+# Decode-window sweep (disclosure; see the import note at the top)
+# ----------------------------------------------------------------------
+#: class -> (min key, max key). Only classes whose BOTH bounds are present in
+#: the flattened L8 table become symbols; a half-stated class is skipped rather
+#: than guessed, the same silent-skip rule `_find_gaps` uses for a missing pair.
+_SWEEP_CLASSES: Tuple[Tuple[str, str, str], ...] = (
+    ("BIT1", "h1_min", "h1_max"),
+    ("BIT0", "h0_min", "h0_max"),
+    ("BR",   "br_min", "br_max"),
+    ("IBT",  "ibt_min", "ibt_max"),
+    ("WKP",  "wkp_min", "wkp_max"),
+)
+
+
+def _decode_table(table: Dict[str, int]) -> Optional[dict]:
+    """The L8 threshold table in `rx_tolerance_sweep`'s decode-table shape.
+
+    Each class is an inclusive [min..max] tick range, so its accepted widths are
+    exactly `range(min, max + 1)` — a restatement, not an interpretation.
+    Returns None when fewer than two classes are fully stated, because a sweep
+    over one symbol can report no overlap and would be a vacuous disclosure.
+    """
+    symbols: List[dict] = []
+    for name, k_min, k_max in _SWEEP_CLASSES:
+        if k_min not in table or k_max not in table:
+            continue
+        lo, hi = table[k_min], table[k_max]
+        if lo > hi:
+            continue
+        symbols.append({"name": name, "widths": list(range(lo, hi + 1))})
+    if len(symbols) < 2:
+        return None
+    return {"max_width": max(w for s in symbols for w in s["widths"]),
+            "symbols": symbols}
+
+
+def _sweep_findings(table: Dict[str, int]) -> Tuple[List[Finding], dict]:
+    """(WARN findings, summary block) from the decode-window sweep, or ([], {}).
+
+    Never raises and never returns an ERROR: a disclosure that could fail the
+    gate would change a verdict this gate's tests and every published P0 run
+    already pin.
+    """
+    dt = _decode_table(table)
+    if dt is None:
+        return [], {}
+    try:
+        found = _sweep.analyze(dt)
+        robust = _sweep.simulate_jitter(dt, 1)
+    except Exception:                                    # noqa: BLE001
+        return [], {}
+    overlaps = [f for f in found if f.kind == "overlap"]
+    # ONE finding per contending CLASS PAIR, not per tick: a 200-tick overlap is
+    # one decision to state a priority rule, and 200 identical lines would bury
+    # this gate's own verdict line in the P0 umbrella's output.
+    by_pair: Dict[str, List[int]] = {}
+    for f in overlaps:
+        by_pair.setdefault(", ".join(f.symbols), []).append(f.width)
+    out: List[Finding] = []
+    for pair, widths in sorted(by_pair.items()):
+        out.append(Finding(
+            rule="RX_CLASSIFIER_THRESHOLD_OVERLAP",
+            severity="WARN",
+            message=(f"WARN — {len(widths)} tick width(s) "
+                     f"[{min(widths)}..{max(widths)}] are claimed by BOTH "
+                     f"{pair}; two classes accepting one width decode "
+                     f"deterministically only if the RTL states a priority "
+                     f"rule between them. Disclosure only: this gate's "
+                     f"verdict is the GAP question, not this one."),
+        ))
+    return out, {
+        "decode_sweep": {
+            "symbols": [s["name"] for s in dt["symbols"]],
+            "max_width": dt["max_width"],
+            "overlap_widths": [f.width for f in overlaps],
+            "jitter_robustness_1_tick": robust,
+            "disclosure_only": True,
+        }
+    }
+
+
+# ----------------------------------------------------------------------
 # Audit driver
 # ----------------------------------------------------------------------
 def run_audit(project: Path) -> AuditResult:
@@ -245,7 +347,9 @@ def run_audit(project: Path) -> AuditResult:
             message=(f"Waiver '{WAIVER_KEY}' set; "
                      f"{len(gaps)} gap(s) deferred"),
         ))
-        result.summary = {"thresholds": table, "gaps": gaps}
+        _sf, _ss = _sweep_findings(table)
+        result.findings.extend(_sf)
+        result.summary = {"thresholds": table, "gaps": gaps, **_ss}
         return result
 
     if gaps:
@@ -276,7 +380,9 @@ def run_audit(project: Path) -> AuditResult:
                 message=f"FAIL — RX_CLASSIFIER_THRESHOLD_GAP "
                         f"({shorthand}). {tail}",
             ))
-        result.summary = {"thresholds": table, "gaps": gaps}
+        _sf, _ss = _sweep_findings(table)
+        result.findings.extend(_sf)
+        result.summary = {"thresholds": table, "gaps": gaps, **_ss}
         return result
 
     result.findings.append(Finding(
@@ -285,7 +391,9 @@ def run_audit(project: Path) -> AuditResult:
         message=("All adjacent threshold pairs in "
                  "L8.rx_classifier_ticks are contiguous (no gap)."),
     ))
-    result.summary = {"thresholds": table, "gaps": []}
+    _sf, _ss = _sweep_findings(table)
+    result.findings.extend(_sf)
+    result.summary = {"thresholds": table, "gaps": [], **_ss}
     return result
 
 

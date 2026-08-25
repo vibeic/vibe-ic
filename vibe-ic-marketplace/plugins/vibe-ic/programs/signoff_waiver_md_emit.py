@@ -310,6 +310,52 @@ def _load_meta(meta_path: Path) -> ProjectMeta:
     return meta
 
 
+#: Where a project keeps the machine-readable waiver pair and the one
+#: submission-level metadata file the Markdown needs on top of them. Named here,
+#: beside the emitter, because the emitter is what has to agree with it.
+WAIVER_DIR = "signoff/waivers"
+PROJECT_META_FILENAME = "project_meta.json"
+WAIVER_MD_FILENAME = "signoff_waiver.md"
+
+
+def emit_for_project(project: Path) -> Optional[Path]:
+    """Emit the submitter-facing Markdown for `project`, or None if it has no
+    submission to make. Returns the path written.
+
+    THE PROJECT-LEVEL ENTRY, and the reason it lives here. This module owned an
+    `emit_markdown(waivers, meta)` reachable only from its own `--meta/--waiver`
+    CLI, so a run that HAD produced both inputs still had to be told by hand to
+    turn them into the document a reviewer reads. Putting the path convention in
+    the caller instead would have put it in a 45k-line runner, where it drifts
+    from the emitter it has to agree with.
+
+    NOTHING IS INVENTED. Two inputs must already be on disk — the JSON waivers
+    `signoff_waiver_emit` writes, and the one submission-level
+    `project_meta.json` a human supplies (shuttle, submitter, root cause,
+    recommendation). Either one absent returns None and writes nothing: a
+    fabricated waiver document is worse than none, and an absent one is an
+    honest "this project has no waiver package".
+    """
+    wdir = Path(project) / WAIVER_DIR
+    meta_path = wdir / PROJECT_META_FILENAME
+    if not meta_path.is_file():
+        return None
+    waivers: List[Dict[str, Any]] = []
+    for wp in sorted(wdir.glob("*.json")):
+        if wp.name == PROJECT_META_FILENAME:
+            continue
+        try:
+            waivers.append(json.loads(wp.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    if not waivers:
+        return None
+    meta = _load_meta(meta_path)
+    out = wdir / WAIVER_MD_FILENAME
+    out.write_text(emit_markdown(waivers, meta), encoding="utf-8")
+    return out
+
+
 def _cli() -> int:
     p = argparse.ArgumentParser(
         description="Emit submitter-facing waiver Markdown from JSON inputs.")

@@ -50,15 +50,44 @@ hours.
 Before any narrative estimate:
 
 ```bash
-# Extract any PPA hints already declared in the project README / spec:
+# 1. Extract any PPA hints already declared in the project README / spec:
 python3 plugins/vibe-ic/programs/readme_ppa_extractor.py \
     --rtl-dir <rtl> --readme <README.md> --json /tmp/ppa_hints.json
+
+# 2. Turn the RTL cell count + the PDK + those hints into the numbers
+#    themselves. This is the program that owns the arithmetic:
+python3 plugins/vibe-ic/programs/ppa_predict_aggregate.py \
+    --cell-count <yosys stat cells> --pdk <gf180mcuD|sky130A|...> \
+    [--fmax-hint-mhz <from step 1>] \
+    [--declared-area-um2 <from step 1>] [--declared-power-uw <from step 1>] \
+    --out-md /tmp/ppa_estimate.md --out-json /tmp/ppa_estimate.json
 ```
 
 Use the JSON output as the floor of any estimate you state. **Do not
 overclaim a tighter number than the program returned** — the program
 read the actual spec/README declared values; LLM-generated estimates
 without that anchor have a known confabulation rate.
+
+**Step 2 is not optional and it is not a formatter.** Every area, power and
+Fmax number this skill reports comes from `ppa_predict_aggregate`, and the
+report you write quotes it rather than re-deriving it. The doctrine line at the
+top of this file — *把修法寫進工具，而非寫進 prompt* — is exactly this: the
+cell-count → area/power tables, the per-PDK constants, the `ESTIMATED` /
+`RTL_PROXY` labels, the `eligible_for_physical_ppa: false` flag and the
+per-figure "what this number assumed" block are all IN the program. A narrative
+estimate written beside it is a second table nobody can diff against the first.
+
+Its exit codes are the same three this lane uses everywhere:
+
+| rc | meaning | what you do |
+|---|---|---|
+| 0 | an estimate was produced | quote it; add trade-off narration only |
+| 2 | `[CANNOT CHECK]` — e.g. `--cell-count 0`, which is a count that was never taken, not a design of zero cells | say the count is missing and stop; do NOT supply a number of your own |
+| 3 | bad invocation | fix the arguments |
+
+An rc=2 is the one to be careful with: this skill's whole failure mode is
+producing a fluent number when it has no anchor, and rc=2 is the program saying
+there is no anchor.
 
 ## When to use
 

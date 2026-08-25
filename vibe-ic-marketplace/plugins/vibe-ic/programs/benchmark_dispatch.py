@@ -54,16 +54,36 @@ def _entry(name: str) -> dict:
     return e
 
 
+# THE HOST-REQUIREMENT MODEL LIVES IN ONE PLACE (`benchmark_setup`), AND THIS
+# IS THE EDGE THAT REACHES IT. `_env_check` used to probe two tools of its own
+# — iverilog and the container — while `benchmark_setup` already carried the
+# seven-probe summary AND the per-SHAPE requirement table (`needs`), and
+# nothing invoked it. Two answers to "is this host ready" is the drift shape
+# this repo keeps removing: the weaker one is the one every caller saw, so a
+# Shape-D run missing `docker`, or a Shape-A/B run missing `yosys`, printed a
+# clean environment line and then failed inside the runner.
+import benchmark_setup as _setup                       # noqa: E402
+
+
 def _env_check():
-    """Detect environment requirements (iverilog, vibeic-eda container, MCP)."""
-    have_iverilog = subprocess.run(["which", "iverilog"], capture_output=True).returncode == 0
-    try:
-        docker_ps = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
-                                   capture_output=True, text=True, timeout=5).stdout
-        have_iiceda = "vibeic-eda" in docker_ps
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        have_iiceda = False
-    return {"iverilog": have_iverilog, "iic_eda_running": have_iiceda}
+    """The host probe, delegated to the module that owns it.
+
+    Returns `benchmark_setup.env_summary()` — a SUPERSET of the two keys this
+    function used to return (`iverilog`, `iic_eda_running` are both still
+    present and mean the same thing), so every existing reader keeps working
+    and the requirement table below can be asked about the other five.
+    """
+    return _setup.env_summary()
+
+
+def _requirement_report(entry: dict, env: dict) -> tuple[list, list]:
+    """`(needed, missing)` for one registry entry, per `benchmark_setup.needs`.
+
+    The shape->requirement mapping is NOT restated here. `needs()` is the one
+    table, and a shape added to it is answered by this dispatcher for free.
+    """
+    needed = sorted(_setup.needs(entry))
+    return needed, [k for k in needed if not env.get(k)]
 
 
 def cmd_list():
@@ -394,8 +414,85 @@ def cmd_reattempt_floor(bench: str) -> int:
     return 0
 
 
+# ── OUR OWN GOLDEN CORPUS, CAPTURED AT THE MOMENT THE HOST SAYS PASS ─────────
+# `benchmark_golden_capture` records a HOST-VERIFIED, vibe-ic-AUTHORED solution
+# tagged with the plugin version + AI model that produced it, in a corpus kept
+# SEPARATE from the downloaded `reference_solution` (user directive
+# 2026-06-22). The only place that verdict exists is the scorer's
+# `pass_at_1.json`, and nothing read it back — so the corpus stayed empty and
+# the "how do our solutions evolve across plugin versions / models" question it
+# was built to answer had no data at all.
+#
+# WHY THE MODEL IS REQUIRED AND NOT DEFAULTED. Nothing on this host knows which
+# model authored the samples; a default would stamp every row with a guess and
+# the cross-version diff would compare two rows that are not comparable. The
+# capture is therefore requested explicitly, and refuses without `--ai-model`
+# rather than inventing one.
+_GOLDEN_DEFAULT_DB = os.path.expanduser("~/vibe_golden/vibe_golden.sqlite")
+
+
+def _sample_for(run_p: Path, shape: str, ident_value: str) -> Path | None:
+    """The on-disk sample the scorer graded, by the harness's own naming.
+
+    Shape B writes `<design>.v` (or `.sv`); Shape C writes `<Prob>_sample01.sv`.
+    Returns None when nothing is there — a PASS with no readable sample is not
+    capturable and is reported, never captured as an empty solution.
+    """
+    leaf = ident_value.split("/")[-1]
+    cands = ([run_p / "samples" / f"{leaf}_sample01.sv"] if shape == "C"
+             else [run_p / "samples" / f"{leaf}.v", run_p / "samples" / f"{leaf}.sv"])
+    for c in cands:
+        if c.is_file():
+            return c
+    return None
+
+
+def capture_goldens(run_p: Path, bench: str, ai_model: str,
+                    db: str | None = None, backup: str | None = None) -> dict:
+    """Capture every HOST-VERIFIED PASS in `pass_at_1.json` as our own golden.
+
+    Returns a report dict. Counts are stated with their denominator: "captured
+    N of M PASSing problems" — a capture count alone would not say how many it
+    could not reach.
+    """
+    import benchmark_golden_capture as _gold             # noqa: PLC0415
+    from l_doc_generator_stamp import plugin_version     # noqa: PLC0415
+
+    summary_p = run_p / "pass_at_1.json"
+    if not summary_p.is_file():
+        return {"captured": 0, "passing": 0,
+                "why": f"no {summary_p} — the scorer wrote no verdict to capture"}
+    doc = json.loads(summary_p.read_text())
+    shape = doc.get("shape", "")
+    results = doc.get("results") or []
+    ident = "design" if shape == "B" else "problem"
+    version = plugin_version() or "UNSTAMPED"
+    scorer = doc.get("tool", "")
+    db_path = db or _GOLDEN_DEFAULT_DB
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+
+    passing = [r for r in results if r.get("verdict") == "PASS"]
+    captured, unreachable = 0, []
+    for r in passing:
+        pid = str(r.get(ident, "")).split("/")[-1]
+        sample = _sample_for(run_p, shape, str(r.get(ident, "")))
+        if sample is None:
+            unreachable.append(pid)
+            continue
+        _gold.capture(db_path, bench, pid, str(sample), None, version, ai_model,
+                      host_verdict="PASS", scorer=scorer, run_id=str(run_p),
+                      **({"backup": backup} if backup else {}))
+        captured += 1
+    return {"captured": captured, "passing": len(passing),
+            "total_scored": len(results), "db": db_path,
+            "plugin_version": version, "ai_model": ai_model,
+            "sample_not_found": unreachable}
+
+
 def cmd_score(bench: str, run: str, dataset: str | None,
-              allow_ungated: bool = False, allow_direct_agent: bool = False):
+              allow_ungated: bool = False, allow_direct_agent: bool = False,
+              capture_golden: bool = False, ai_model: str | None = None,
+              golden_db: str | None = None):
     e = _entry(bench)
     if e["shape"] not in ("B", "C"):
         raise SystemExit(f"--score only handles Shape B + C here. Shape {e['shape']} → use score_cocotb_mcp.py / benchmark-verify skill.")
@@ -499,7 +596,24 @@ def cmd_score(bench: str, run: str, dataset: str | None,
     scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
     cmd = [sys.executable, str(scorer), "--bench", bench, "--dataset", str(ds_p), "--run", str(run_p)]
     print("$ " + " ".join(cmd))
-    sys.exit(subprocess.call(cmd))
+    rc = subprocess.call(cmd)
+    if capture_golden:
+        if not ai_model:
+            raise SystemExit(
+                "--capture-golden needs --ai-model: nothing on this host knows "
+                "which model authored the samples, and a defaulted tag would "
+                "make two incomparable rows look comparable.")
+        rep = capture_goldens(run_p, bench, ai_model, db=golden_db)
+        if rep.get("why"):
+            print(f"golden capture: NOT DONE — {rep['why']}")
+        else:
+            print(f"golden capture: {rep['captured']} of {rep['passing']} "
+                  f"PASSing problem(s) recorded (of {rep['total_scored']} scored) "
+                  f"as plugin v{rep['plugin_version']} / {rep['ai_model']} -> "
+                  f"{rep['db']}")
+            if rep["sample_not_found"]:
+                print(f"  NOT captured (no sample on disk): {rep['sample_not_found']}")
+    sys.exit(rc)
 
 
 # ── FORMAT BINDING ───────────────────────────────────────────────────────────
@@ -511,6 +625,33 @@ _BENCH_FORMAT = {
     "rtllm": "rtllm",
     "cvdp-open": "cvdp",
 }
+
+# ── THE SAME COMPLETENESS ENGINE, PER FORMAT ─────────────────────────────────
+# `benchmark_completeness` is the THIN-ADAPTER layer over the ONE general
+# engine (`spec_complete_extract.assess_spec`): each benchmark differs only in
+# how it states its interface, and the COMPLETE / EXTRACTION_GAP / SPEC_ABSENT
+# verdict comes from the same place for all of them and for a plain Phase-1
+# doc. It had no caller, so `--solve` recorded rc/ok per problem and NOTHING
+# about whether the prompt it was handed could be solved at all — which is the
+# FLOOR half of the triage rubric (benchmark-defect / under-spec) that
+# open-benchmark-methodology § 4 requires a run to separate out.
+#
+# A MAPPING, not a code path: a format added to `_BENCH_FORMAT` above and to
+# this table is assessed with no further change here. `cvdp` is deliberately
+# absent — its interface arrives as a cocotb harness + `.env` TOPLEVEL, which
+# `cvdp_complete_extract.extract(record)` reads from the RECORD, not from the
+# staged prompt text this loop has in hand.
+def _completeness_adapters() -> dict:
+    """`{format: assess(prompt) -> spec}`. Imported lazily and never fatally.
+
+    A completeness verdict is DISCLOSURE on the solve report; an import error
+    here must not stop a run from solving. It is recorded by name instead of
+    swallowed, so `completeness: "UNAVAILABLE: ..."` is distinguishable from a
+    real SPEC_ABSENT.
+    """
+    import benchmark_completeness as _bc                # noqa: PLC0415
+    return {"rtllm": _bc.assess_rtllm,
+            "verilogeval": _bc.assess_verilogeval}
 
 
 def _rtl_gen_waive(project: Path) -> dict | None:
@@ -562,6 +703,12 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
     import benchmark_io_adapter as bio                    # noqa: PLC0415
     import task_nature_route as tnr                       # noqa: PLC0415
 
+    try:
+        _assessors = _completeness_adapters()
+        _assess_why = ""
+    except Exception as exc:                              # noqa: BLE001
+        _assessors, _assess_why = {}, f"UNAVAILABLE: {type(exc).__name__}: {exc}"
+
     fmt = _BENCH_FORMAT.get(bench)
     if fmt is None:
         print(f"ERROR: no IO adapter bound for {bench!r}. Known: "
@@ -585,9 +732,22 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
 
         rtl_present = any((proj / "input" / "rtl").glob("*")) \
             if (proj / "input" / "rtl").is_dir() else False
+        prompt_text = (proj / "input" / "phase1_prompt.md").read_text(errors="replace")
+
+        # SPEC COMPLETENESS, from the one general engine via this format's thin
+        # adapter. Recorded, never acted on: a prompt the engine calls
+        # INCOMPLETE_SPEC_ABSENT is still solved and still scored — the verdict
+        # is what lets a FAIL be triaged as FLOOR rather than as an agent miss.
+        completeness = _assess_why or "NOT_ADAPTED"
+        assess = _assessors.get(fmt)
+        if assess is not None:
+            try:
+                completeness = assess(prompt_text).get("completeness", "?")
+            except Exception as exc:                      # noqa: BLE001
+                completeness = f"UNAVAILABLE: {type(exc).__name__}: {exc}"
+
         verdict = tnr.classify_task_nature(
-            (proj / "input" / "phase1_prompt.md").read_text(errors="replace"),
-            rtl_present, None)
+            prompt_text, rtl_present, None)
         nature = verdict["nature"]
         entry = tnr.NATURE_ENTRY.get(nature, {}).get("entry_step")
         ev = tnr.NATURE_ENTRY.get(nature, {}).get("default_evidence")
@@ -611,6 +771,7 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         results.append({"id": pid, "nature": nature, "entry": entry,
                         "evidence": ev, "exit": exit_step, "rc": rc,
                         "ok": got.get("ok"), "staged": staged["prompt_chars"],
+                        "completeness": completeness,
                         "awaiting_ai": bool(waive and not got.get("ok"))})
         state = ("rtl" if got.get("ok")
                  else ("WAIVE->AI" if waive else "no-rtl"))
@@ -645,9 +806,16 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         print(f"  author RTL into each project's phase2/stage1/rtl/, then:")
         print(f"    python3 {Path(__file__).name} {bench} --resume "
               f"--dataset {ds} --run {run_p}")
+    # The completeness roll-up carries its own denominator: "3 SPEC_ABSENT" out
+    # of an unstated population is the shape this repo refuses everywhere else.
+    comp_counts: dict = {}
+    for r in results:
+        comp_counts[r.get("completeness", "?")] = comp_counts.get(r.get("completeness", "?"), 0) + 1
     (run_p / "solve_report.json").write_text(json.dumps(
         {"bench": bench, "format": fmt, "dataset": str(ds),
          "solved": sum(1 for r in results if r["ok"]), "total": len(results),
+         "completeness_counts": comp_counts,
+         "completeness_assessed_of": f"{sum(comp_counts.get(k, 0) for k in comp_counts if not k.startswith(('UNAVAILABLE', 'NOT_ADAPTED')))} of {len(results)}",
          "results": results}, indent=2))
     ok = sum(1 for r in results if r["ok"])
     waiting = sum(1 for r in results if r.get("awaiting_ai"))
@@ -758,6 +926,15 @@ def main():
                     help="OPT-IN: score even if some samples lack an emit-path attestation "
                          "(a disclosed exploratory direct-author run, NON-CANONICAL). Default "
                          "HARD-BLOCKs ungated samples so the published number reflects the runner.")
+    ap.add_argument("--capture-golden", action="store_true",
+                    help="after --score, record every HOST-VERIFIED PASS into "
+                         "OUR OWN golden corpus (benchmark_golden_capture), "
+                         "tagged with the plugin version + --ai-model")
+    ap.add_argument("--ai-model", default=None,
+                    help="the model that authored the samples; REQUIRED by "
+                         "--capture-golden (never defaulted)")
+    ap.add_argument("--golden-db", default=None,
+                    help=f"sqlite for --capture-golden (default {_GOLDEN_DEFAULT_DB})")
     ap.add_argument("--allow-direct-agent", action="store_true",
                     help="OPT-IN: score even if the run lacks Vibe-IC runner entry evidence "
                          "(NON-CANONICAL). Default HARD-BLOCKs direct-agent authoring/patching.")
@@ -800,7 +977,10 @@ def main():
             raise SystemExit("--score requires --run")
         cmd_score(a.bench, a.run, a.dataset,
                   allow_ungated=a.allow_ungated,
-                  allow_direct_agent=a.allow_direct_agent)
+                  allow_direct_agent=a.allow_direct_agent,
+                  capture_golden=a.capture_golden,
+                  ai_model=a.ai_model,
+                  golden_db=a.golden_db)
         return
     if a.resume:
         if not (a.dataset and a.run):
@@ -817,6 +997,21 @@ def main():
     env = _env_check()
     print(f"# Environment: iverilog={'OK' if env['iverilog'] else 'MISSING'}, "
           f"vibeic-eda container={'RUNNING' if env['iic_eda_running'] else 'NOT RUNNING'}")
+    # The per-SHAPE requirement check, from `benchmark_setup.needs()`. Printed
+    # before the plan because a plan whose step 3 cannot run is worse than no
+    # plan: the reader follows it and finds out inside the runner.
+    try:
+        _entry_for_env = _entry(a.bench)
+    except SystemExit:
+        _entry_for_env = None
+    if _entry_for_env is not None:
+        needed, missing = _requirement_report(_entry_for_env, env)
+        print(f"# Requirements for shape {_entry_for_env.get('shape','?')}: "
+              + ", ".join(f"{k}={'OK' if env.get(k) else 'MISSING'}" for k in needed))
+        if missing:
+            print(f"# MISSING: {', '.join(missing)} — this host cannot run "
+                  f"{a.bench} as scoped. Detail + install pointers:")
+            print(f"#   python3 {Path(__file__).resolve().parent / 'benchmark_setup.py'} {a.bench}")
     print()
     cmd_show(a.bench)
 

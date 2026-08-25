@@ -39,6 +39,25 @@ Usage
 =====
   python3 tb_vcs_only_construct_detect.py <testbench.v|.sv> [--json out.json]
 
+  # RUN the § 4.1 floor-proof instead of only asking for one:
+  python3 tb_vcs_only_construct_detect.py <tb> --golden <golden.v>
+      --tb-top <tb_module> --dut-name <name-the-TB-instantiates>
+      [--golden-top <name>] [--data-dir <dir>] [--json out.json]
+
+  # ALSO try the deterministic safe-subset rewrite (break;/continue;/
+  # unique-priority) into a *_iv sidecar instead of routing straight to the
+  # fork backlog. With --golden the rewrite is rejected unless the golden
+  # STILL passes the rewritten TB:
+  python3 tb_vcs_only_construct_detect.py <tb> --remediate
+      [--remediate-out <path>] [--golden <golden.v> --tb-top ... --dut-name ...]
+
+  With `--golden` the report carries a `floor_proof` record measured by
+  `verilator_timing_fallback_check.adjudicate` — golden PASSES its own TB under
+  Verilator --timing => `disposition = SCORABLE-UNDER-VERILATOR`; golden FAILS
+  or Verilator is absent => the FLOOR-D stands and the disposition is unchanged.
+  The exit code is the DETECTOR's either way: the construct is present, and
+  rc 1 means "the detector fired", which is this program's stated contract.
+
 Honest failure / semantics
 ==========================
   * FAIL (rc 1) means "VCS-only construct(s) FOUND" → the TB is a
@@ -120,11 +139,160 @@ def scan_text(text: str) -> list[dict]:
     return hits
 
 
+#: THE § 4.1 FLOOR-PROOF, RUN RATHER THAN REQUESTED (the chain edge).
+#:
+#: Everything above detects a construct. The docstring then says the next step
+#: is to "build+run the GOLDEN under a tool that supports the feature —
+#: Verilator `--timing`" — and until this edge existed that sentence was the
+#: whole of it: `floor_proof_required` was a STRING asking a reader to go and
+#: measure something, and `verilator_timing_fallback_check.py`, which performs
+#: exactly that measurement, was reachable from nothing but its own unit test.
+#:
+#: The adjudicator is the one in `verilator_timing_fallback_check.adjudicate`,
+#: imported rather than re-implemented: it carries the FAITHFULNESS GUARD (the
+#: golden must pass its OWN TB under Verilator before Verilator is allowed to
+#: score anything), which a second copy here would drift away from.
+#:
+#: rc is DELIBERATELY UNCHANGED by the proof. This program's own contract says
+#: rc 1 is "the detector firing", and the construct is present either way; what
+#: the proof decides is the DISPOSITION, which is the thing a triage reads.
+def floor_proof(tb, golden, tb_top: str, dut_name: str,
+                golden_top: str | None = None,
+                data_dir=None) -> dict:
+    """Run the § 4.1 floor-proof for a detected Category-D construct.
+
+    Returns a record with `verdict` in
+    VERILATOR_FAITHFUL / VERILATOR_UNFAITHFUL / VERILATOR_ABSENT, the
+    adjudicator's own sentence, and the disposition the triage should carry.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import verilator_timing_fallback_check as _vtf
+
+    rc, detail = _vtf.adjudicate(
+        Path(tb), Path(golden), tb_top, dut_name,
+        golden_top or dut_name,
+        Path(data_dir) if data_dir else None,
+        list(_vtf._DEFAULT_PASS), list(_vtf._DEFAULT_FAIL))
+    verdict, disposition = {
+        0: ("VERILATOR_FAITHFUL", "SCORABLE-UNDER-VERILATOR"),
+        1: ("VERILATOR_UNFAITHFUL", "FORK-FIXABLE"),
+    }.get(rc, ("VERILATOR_ABSENT", "FORK-FIXABLE"))
+    return {"tool": "verilator_timing_fallback_check",
+            "verdict": verdict, "rc": rc, "detail": detail,
+            "disposition": disposition,
+            "golden": str(golden), "tb_top": tb_top, "dut_name": dut_name}
+
+
+#: THE OTHER HALF OF § 4.1, AND THE OTHER EDGE THAT WAS MISSING.
+#:
+#: `floor_proof` answers "is this construct really a tool-gap". This answers the
+#: question that comes next and is cheaper: "does this construct need the fork at
+#: all, or is it one of the three iverilog rejects for a reason a deterministic
+#: source rewrite removes?" `tb_vcs_only_construct_remediate` was written to
+#: answer exactly that -- break; / continue; / unique-priority case, rewritten to
+#: labelled-block `disable` and a dropped qualifier, into a `*_iv` SIDECAR with
+#: the ORIGINAL TB untouched -- and it was reachable from nothing but its own
+#: unit test, so every Category-D hit was routed to the fork backlog including
+#: the ones a rewrite already closes.
+#:
+#: THE REWRITE IS NOT TRUSTED, IT IS CHECKED. Two guards, both the remediator's
+#: own and neither re-implemented here: it RE-SCANS its output and REFUSES if any
+#: blocking construct survives (never a partially-fixed TB), and when a golden is
+#: supplied the golden must STILL PASS the rewritten TB or the sidecar is deleted
+#: and the case stays FLOOR-D. A rewrite that lets a wrong design pass is a
+#: weaker TB, which is the one outcome worse than a missing capability.
+#:
+#: OPT-IN AND rc-NEUTRAL, for the same reason `floor_proof` is: the construct is
+#: present either way, so this program's rc 1 ("the detector fired") does not
+#: move. What changes is the DISPOSITION a triage reads.
+def remediate(tb, out=None, golden=None) -> dict:
+    """Attempt the closed-safe-subset rewrite of a Category-D testbench.
+
+    Returns a record with `verdict` in REMEDIATED / REFUSED, the remediator's
+    own reason, the sidecar path when one was written, and the disposition the
+    triage should carry.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import tb_vcs_only_construct_remediate as _rem
+
+    tb = Path(tb)
+    remediated, report = _rem.remediate_text(
+        tb.read_text(encoding="utf-8", errors="replace"))
+    rec = {"tool": "tb_vcs_only_construct_remediate",
+           "rewrites": report.get("rewrites", {}),
+           "refuse_constructs": report.get("refuse_constructs", []),
+           "residual": report.get("residual", []),
+           "sidecar": None, "golden_still_passes": None}
+    if remediated is None:
+        rec.update(verdict="REFUSED", reason=report.get("reason", ""),
+                   disposition="FORK-FIXABLE")
+        return rec
+
+    sidecar = Path(out) if out else tb.with_name(tb.stem + "_iv" + tb.suffix)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text(remediated, encoding="utf-8")
+    rec["sidecar"] = str(sidecar)
+
+    if golden is not None:
+        # §4.05 TB-WEAKENING GUARD. A rewrite the golden no longer passes is
+        # rejected and its sidecar removed, so a refused remediation cannot
+        # leave a file behind that a later step would pick up as scorable.
+        if not _rem.golden_still_passes(Path(golden), sidecar):
+            try:
+                sidecar.unlink()
+            except OSError:
+                pass
+            rec.update(verdict="REFUSED", sidecar=None,
+                       golden_still_passes=False,
+                       reason="golden does NOT still pass the remediated TB "
+                              "-- rewrite rejected as TB-weakening (§4.05)",
+                       disposition="FORK-FIXABLE")
+            return rec
+        rec["golden_still_passes"] = True
+
+    rec.update(verdict="REMEDIATED",
+               reason="closed safe subset rewritten; original TB untouched",
+               disposition="SCORABLE-AFTER-REWRITE")
+    return rec
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("tb", help="path to the testbench .v / .sv")
     ap.add_argument("--json", help="write JSON report to this path")
+    # THE § 4.1 FLOOR-PROOF, OPTIONAL AND OFF BY DEFAULT. Supplying a golden is
+    # what turns `floor_proof_required` from a request into a measurement; a
+    # caller that has no golden gets byte-for-byte the report it got before.
+    ap.add_argument("--golden",
+                    help="the dataset's OWN golden RTL — supply it to RUN the "
+                         "§ 4.1 floor-proof instead of only asking for one")
+    ap.add_argument("--tb-top", help="the testbench's top module name "
+                                     "(required with --golden)")
+    ap.add_argument("--dut-name", help="the module name the TB instantiates "
+                                       "(required with --golden)")
+    ap.add_argument("--golden-top",
+                    help="the golden's own top module name (default --dut-name)")
+    ap.add_argument("--data-dir",
+                    help="directory holding $readmemh/$readmemb data files")
+    # THE SAFE-SUBSET REWRITE, OPTIONAL AND OFF BY DEFAULT. Without it the
+    # report is byte-for-byte what it was; with it the same run also says
+    # whether the construct needs the fork at all. `--remediate-out` keeps the
+    # sidecar out of a read-only dataset directory when the caller wants it
+    # elsewhere; `--golden` (already required to be a real golden above) is
+    # reused as the TB-weakening guard's reference when it is supplied.
+    ap.add_argument("--remediate", action="store_true",
+                    help="attempt the closed-safe-subset rewrite (break; / "
+                         "continue; / unique-priority case) into a *_iv "
+                         "SIDECAR; the ORIGINAL testbench is never modified")
+    ap.add_argument("--remediate-out",
+                    help="sidecar path for --remediate "
+                         "(default: <tb-stem>_iv<ext> beside the testbench)")
     a = ap.parse_args(argv)
+
+    if a.golden and not (a.tb_top and a.dut_name):
+        print("usage error: --golden requires --tb-top and --dut-name",
+              file=sys.stderr)
+        return 2
 
     p = Path(a.tb)
     if not p.is_file():
@@ -152,6 +320,23 @@ def main(argv: list[str] | None = None) -> int:
             "run the GOLDEN under a tool that supports the feature "
             "(Verilator --timing / forked iverilog); PASS => genuine tool-gap "
             "=> fork the capability; golden ALSO fails => re-triage dataset/RTL")
+        if a.golden:
+            proof = floor_proof(p, Path(a.golden), a.tb_top, a.dut_name,
+                                a.golden_top, a.data_dir)
+            report["floor_proof"] = proof
+            report["disposition"] = proof["disposition"]
+            print(f"FLOOR-PROOF {proof['verdict']}: {proof['detail']}",
+                  file=sys.stderr)
+        if a.remediate:
+            rem = remediate(p, a.remediate_out, a.golden)
+            report["remediation"] = rem
+            # A successful rewrite RELAXES the disposition; a refusal leaves
+            # whatever the floor-proof (or the default) already decided,
+            # because a rewrite that did not happen changes nothing.
+            if rem["verdict"] == "REMEDIATED":
+                report["disposition"] = rem["disposition"]
+            print(f"REMEDIATION {rem['verdict']}: {rem['reason']}",
+                  file=sys.stderr)
         _emit(a, report)
         for h in hits:
             print(f"CATEGORY-D (FORK-FIXABLE, route to FIX_STATUS.md): "

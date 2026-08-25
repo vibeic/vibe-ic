@@ -63,6 +63,24 @@ pinned table above is the only way to see whether the 2026-08-03 argument still
 holds; typing them here instead would put this docstring back in the state that
 `derived_corpus_figure_check` exists to end.
 
+HOW MANY OF THOSE OUTSIDERS ACTUALLY BEHAVE LIKE A CHECKER
+----------------------------------------------------------
+The subtraction above says how many programs the glob does not reach. It does
+NOT say how many of them emit a verdict, which is the only reason to care that
+they are outside. That figure is
+{figure:outside_population_emitting_a_verdict}, and it is neither typed here
+nor recomputed here: the binding imports
+`checker_population_is_structural_not_filename_shaped_census` and calls its
+`scan_programs`. A second implementation of "behaves like a checker" living in
+this file would be free to drift away from the census whose entire subject is
+that predicate, which is the same defect as a re-typed suffix tuple.
+
+THIS DOES NOT WIRE THE CENSUS AS A GATE, and its own header forbids that: it
+reports a count and exits 0. Nothing here reads its exit status, and no value
+it returns can change this audit's verdict. It is a DISCLOSURE — the size of
+what this audit's population excludes, measured by the instrument that defines
+the exclusion, so the excluded set stops being a number nobody computes.
+
 WHAT IT MEASURES
 ----------------
 For every `*_check.py` / `*_audit.py` / `*_guard.py` / `*_lint.py` /
@@ -840,6 +858,28 @@ def _named(programs: Path, *suffixes: str) -> int:
     return len({p.name for suf in suffixes for p in programs.glob(suf)})
 
 
+def _outside_population_emitting_a_verdict(root: Path) -> int:
+    """Programs outside this audit's population that EMIT A VERDICT.
+
+    THE EDGE, not a copy. `programs_outside_population` above is a bare
+    subtraction: every program the filename glob does not reach, whether it is
+    a generator, a helper or a checker this audit is structurally blind to.
+    Only the last kind is a finding, and deciding which is which is exactly
+    what `checker_population_is_structural_not_filename_shaped_census` does —
+    so it is imported and called rather than reimplemented here.
+
+    IMPORTED LAZILY. This runs only when a figure binding is evaluated (the
+    `derived_corpus_figure_check` sweep, or `--figures`); the audit path itself
+    never parses 1000+ files a second time.
+
+    Its rc is never read. The census's own header says it must not be wired as
+    a blocking check, and a count is all this asks it for.
+    """
+    import checker_population_is_structural_not_filename_shaped_census as _cen
+    _findings, denom = _cen.scan_programs(Path(root) / "programs")
+    return int(denom["outside_and_emitting_a_verdict"])
+
+
 #: The populations this file's docstring argues from, bound to the code that
 #: produces them so the prose cannot drift away from the predicate. LAZY --
 #: nothing here runs on the audit path. `all_programs` deliberately mirrors
@@ -855,6 +895,8 @@ CORPUS_FIGURES = CorpusFigures({
     "programs_outside_population":
         lambda root: (len(list((root / "programs").glob("*.py")))
                       - len(checker_population(root / "programs"))),
+    "outside_population_emitting_a_verdict":
+        _outside_population_emitting_a_verdict,
 })
 
 

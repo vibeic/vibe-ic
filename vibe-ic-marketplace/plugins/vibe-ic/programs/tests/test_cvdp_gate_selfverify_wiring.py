@@ -811,6 +811,80 @@ def test_main_b4_handshake_blocks(tmp_path):
     assert "handshake-load-livelock" in entry.get("handshake_block", "")
 
 
+# ════════════ B5 — clause smoke TB (#740 G2, EXAMPLE-FREE) ═══════════════════
+# B2 executes the prompt's worked-example ROWS. A prompt that states its
+# function PROSAICALLY carries no rows, so on exactly those records B2 finds
+# nothing and the deterministic chain had no functional check at all.
+# clause_smoke_tb derives the vectors from the RELATIONAL CLAUSE instead, and
+# was reachable from nothing until it was wired here. These tests are what
+# keeps that edge from being removed again.
+_CLAUSE_PROMPT = (
+    "Design a module `cmp2` with 4-bit inputs `a` and `b` and a 1-bit output "
+    "`gt`.\n"
+    "Output `gt` is HIGH when `a` is greater than `b`.\n")
+# NOTE: no worked-example row anywhere in that prompt — that is the point.
+_CMP_OK = ("```verilog\nmodule cmp2(input [3:0] a, input [3:0] b, "
+           "output gt);\n  assign gt = (a > b);\nendmodule\n```\n")
+_CMP_INVERTED = _CMP_OK.replace("(a > b)", "(a < b)")
+
+
+def test_b5_is_actually_imported_by_the_gate():
+    """The chain edge itself. A hook that silently degrades to `None` is a
+    permanently-green gate, which is the shape the wiring exists to end."""
+    assert G._clause_smoke is not None, \
+        "cvdp_gate no longer imports clause_smoke_tb"
+
+
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason="needs iverilog + vvp")
+def test_b5_clause_smoke_blocks_an_inverted_comparator(tmp_path):
+    ok, note = G.clause_smoke_gate_record(
+        "x", _CMP_INVERTED, _CLAUSE_PROMPT, "cmp2", tmp_path)
+    assert ok is False, note
+    assert "clause-smoke BLOCK" in note
+
+
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason="needs iverilog + vvp")
+def test_b5_clause_smoke_passes_the_correct_comparator(tmp_path):
+    """The same prompt and the same denominator — only the RTL moves."""
+    ok, note = G.clause_smoke_gate_record(
+        "x", _CMP_OK, _CLAUSE_PROMPT, "cmp2", tmp_path)
+    assert ok is True, note
+    assert "clause-smoke PASS" in note
+
+
+def test_b5_no_prompt_and_no_rtl_are_never_a_block(tmp_path):
+    """§4.05 — B5 may only ever block on a real derived-clause contradiction."""
+    assert G.clause_smoke_gate_record("x", _CMP_INVERTED, "", "cmp2",
+                                      tmp_path)[0] is True
+    assert G.clause_smoke_gate_record("x", "", _CLAUSE_PROMPT, "cmp2",
+                                      tmp_path)[0] is True
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_b5_clause_smoke_blocks(tmp_path):
+    rid = "cvdp_copilot_cmp_0001"
+    batch = [{"id": rid, "completion": _CMP_INVERTED}]
+    prompts = [{"id": rid, "prompt": _CLAUSE_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 1
+    assert all(r.get("id") != rid for r in emitted), "not dropped"
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "clause-smoke BLOCK" in entry.get("clause_block", "")
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_b5_correct_comparator_still_emits(tmp_path):
+    """The no-false-block arm of the same pair, through the same main()."""
+    rid = "cvdp_copilot_cmp_0002"
+    batch = [{"id": rid, "completion": _CMP_OK}]
+    prompts = [{"id": rid, "prompt": _CLAUSE_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 0
+    assert any(r.get("id") == rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "clause-smoke PASS" in entry.get("clause_smoke", "")
+
+
 # ════════════ MULTI-FILE emit split — name-aware mapping (ORGANIC) ═══════════
 # A MULTI-FILE problem (output.context lists >1 rtl/*.sv) whose completion is a
 # single bare blob must map EACH module to the expected file whose basename

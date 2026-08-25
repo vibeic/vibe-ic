@@ -251,6 +251,48 @@ def pull_catalog_ip(match: CatalogMatch,
             "size_bytes": dest_path.stat().st_size,
         })
 
+    # 3b. AUDIT THE MIRROR THE FILES CAME OUT OF, before the provenance line
+    #     claims anything about them. `audit_against_mirror` re-derives the SPDX
+    #     identifier from the mirror's own LICENSE/COPYING (or, for the
+    #     Usselmann-style cores, from a .v header) and compares it against what
+    #     the manifest CLAIMS, and it reports which of `rtl_files` the mirror
+    #     actually holds.
+    #
+    #     Only on the local-mirror path. A `git_clone` fallback tree is a fresh
+    #     checkout of the canonical_url the manifest itself names, so the audit
+    #     would be comparing the manifest against its own source of truth; the
+    #     drift this catches is a MIRROR that stopped matching the claim.
+    #
+    #     A definite license MISMATCH REJECTS the pull. That is the one finding
+    #     that must not become an advisory note: the whole point of
+    #     `check_license_compatibility` above is that no copyleft RTL enters a
+    #     design, and it decides on the manifest's WORD. If the vendored tree
+    #     carries a different licence, that word has already been shown to be
+    #     wrong, and copying the files anyway would put the design under a
+    #     licence nobody checked. Missing files and an un-inferrable licence are
+    #     recorded in the audit dict and in provenance, not refused — the copy
+    #     step below already reports missing files as PARTIAL/FAIL.
+    #     IMPORTED HERE AND NOT AT MODULE SCOPE, and it is not a style choice:
+    #     `ip_catalog_upstream_audit` imports LOCAL_MIRROR_ROOTS /
+    #     LOCAL_MIRROR_MAP / find_local_mirror from THIS module, so a top-level
+    #     import is a cycle that fails at interpreter start.
+    from ip_catalog_upstream_audit import audit_against_mirror
+
+    mirror_audit = None
+    if pull_method == "local_mirror":
+        mirror_audit = audit_against_mirror(
+            {"ip_name": match.ip_name, "license": match.license,
+             "rtl_files": match.rtl_files}, src_dir)
+        if mirror_audit.get("license_check", {}).get("match") is False:
+            return {
+                "ip_name": match.ip_name,
+                "status": "REJECTED",
+                "reason": (
+                    f"local mirror contradicts the manifest's licence claim: "
+                    f"{'; '.join(mirror_audit.get('issues', []))}"),
+                "local_mirror_audit": mirror_audit,
+            }
+
     # 4. Locate license file in source dir (for attribution)
     license_file_text = ""
     for license_name in ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]:
@@ -271,6 +313,7 @@ def pull_catalog_ip(match: CatalogMatch,
         "source_dir": str(src_dir),
         "spec_match_pattern": match.matched_pattern,
         "spec_match_confidence": match.confidence,
+        "local_mirror_audit": mirror_audit,
         "files_copied": files_copied,
         "files_missing": files_missing,
         "n_files_copied": len(files_copied),
@@ -307,6 +350,9 @@ def pull_catalog_ip(match: CatalogMatch,
             "version": match.version,
             "license": match.license,
             "commit_pinned": match.canonical_commit,
+            "license_verified_against_mirror": (
+                None if mirror_audit is None
+                else mirror_audit.get("license_check", {}).get("match")),
             "files_pulled": len(files_copied),
             "outputs": outputs_map,
             "outputs_sha256": sorted(f["sha256"] for f in files_copied),

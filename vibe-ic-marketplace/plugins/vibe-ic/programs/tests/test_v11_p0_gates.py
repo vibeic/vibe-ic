@@ -366,6 +366,93 @@ endmodule
                for f in rpt["findings"])
 
 
+# --- P0.5 wiring: the two CRC programs this gate COMPOSES -------------------
+# Both were authored, tested and merged, and then nothing outside their own
+# tests ran them. They are reached from here, so these two tests are what keeps
+# the edge from being quietly removed again.
+
+def test_p05_oracle_delegates_to_the_shared_parametric_reference():
+    """`crc_vector_gen.crc_byte_mode` IS this gate's oracle, not a lookalike.
+
+    Two directions, because either alone is satisfiable by dead code:
+      (a) the delegated result equals the reflected engine it replaced, over
+          random operands — so wiring it changed no verdict;
+      (b) breaking the reference BREAKS the gate — so the call is live.
+    """
+    import random
+    sys.path.insert(0, str(PROGS))
+    import crc_oracle_vector_check as C
+    import crc_vector_gen as cvg
+
+    assert C._crcgen is cvg, "gate no longer composes crc_vector_gen"
+
+    def reflected(data, poly_reflected, init):
+        crc = init & 0xFF
+        for byte in data:
+            crc ^= byte & 0xFF
+            for _ in range(8):
+                crc = (crc >> 1) ^ poly_reflected if crc & 1 else crc >> 1
+        return crc & 0xFF
+
+    rng = random.Random(20260825)
+    for _ in range(500):
+        data = [rng.randint(0, 255) for _ in range(rng.randint(0, 12))]
+        pr, ini = rng.randint(0, 255), rng.randint(0, 255)
+        assert C._crc8_reflected(data, pr, ini) == reflected(data, pr, ini)
+
+    original = cvg.crc_byte_mode
+    try:
+        cvg.crc_byte_mode = lambda data, spec: 0xA5
+        assert C._crc8_reflected([0x12, 0x34], 0x8C, 0xFF) == 0xA5, \
+            "the delegation is dead code — the gate has its own copy again"
+    finally:
+        cvg.crc_byte_mode = original
+
+
+def test_p05_mismatch_names_the_parameters_the_vectors_imply(tmp_path):
+    """A mismatch must name the REPAIR, not only the defect.
+
+    Same vectors, same RTL, same denominator in both arms — only the DECLARED
+    init moves. The correct declaration passes; the wrong one fails AND the
+    finding carries the parameter set `cmd_protocol_crc_verify` derived from
+    the vectors themselves.
+    """
+    vectors = [
+        {"input": [0x70, 0x00, 0x00], "expected": "0x3D"},
+        {"input": [0x72], "expected": "0x71"},
+        {"input": [0x76], "expected": "0x10"},
+        {"input": [0x78, 0x01], "expected": "0x1F"},
+    ]
+    rtl = """\
+module crc8;
+  reg [7:0] crc_q;
+  initial crc_q = 8'hFF;
+  wire [7:0] poly = 8'h8C;
+  wire [7:0] zero = 8'h00;
+endmodule
+"""
+    # arm 1 — the declaration the vectors were computed with.
+    _l3_crc(tmp_path, init=0xFF, poly_refl=0x8C, vectors=vectors)
+    _rtl(tmp_path, "crc8.sv", rtl)
+    ok = _run("crc_oracle_vector_check", tmp_path)
+    assert ok.returncode == 0, ok.stdout
+    assert _load(tmp_path, "crc_oracle_vector_check")["summary"]["vectors_pass"] == 4
+
+    # arm 2 — one declared field is wrong; the vectors are untouched.
+    _l3_crc(tmp_path, init=0x00, poly_refl=0x8C, vectors=vectors)
+    bad = _run("crc_oracle_vector_check", tmp_path)
+    assert bad.returncode == 1, bad.stdout
+    rpt = _load(tmp_path, "crc_oracle_vector_check")
+    errs = [f for f in rpt["findings"]
+            if f["rule"] == "CRC_ORACLE_VECTOR_MISMATCH"]
+    assert len(errs) == 4, errs
+    assert rpt["summary"]["vectors_run"] == 4, rpt["summary"]
+    derived = rpt["summary"].get("derived_parameters", "")
+    assert "cmd_protocol_crc_verify" in derived, rpt["summary"]
+    assert "poly=0x31" in derived and "init=0xFF" in derived, derived
+    assert "cmd_protocol_crc_verify" in errs[0]["message"], errs[0]["message"]
+
+
 # ===========================================================================
 # P0.6: arbiter_starvation_check
 # ===========================================================================

@@ -95,6 +95,15 @@ def main(argv: List[str]) -> int:
         return 2
 
     manifests = load_manifests(catalog_dir)
+    if not manifests:
+        # A validator that opened nothing has not validated anything. Without
+        # this the gate answers `PASS: 0  FAIL: 0` and exits 0 for a catalog
+        # that MOVED — the shape `gate_zero_denominator_refuses_check` exists
+        # to name. rc 2 is the disclosed-skip tier, never a clean result.
+        print(f"ERROR: 0 manifest(s) found under {catalog_dir} — a validation "
+              f"over an empty catalog is not a pass", file=sys.stderr)
+        return 2
+
     results = []
     n_pass = n_fail = 0
     for m in manifests:

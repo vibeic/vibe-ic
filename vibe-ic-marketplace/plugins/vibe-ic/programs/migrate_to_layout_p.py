@@ -42,11 +42,20 @@ Usage:
     python3 migrate_to_layout_p.py <project_dir> --no-git
     python3 migrate_to_layout_p.py <project_dir> --dry-run
 
-Exit codes:
+Exit codes (APPLY mode — unchanged):
     0 — migration applied (or already-migrated; idempotent).
     1 — migration encountered an error that left the project in an
         inconsistent state (caller must inspect).
     2 — usage / IO error before any move was attempted.
+
+Exit codes (--dry-run, the DETECTOR mode):
+    0 — the project is already on v2 Layout P; nothing to migrate.
+    1 — pre-v2 residue found. Nothing was moved; the printed remedy is
+        this same command without --dry-run.
+    2 — usage / IO error.
+    --dry-run writes NOTHING, which is why it is the mode a gate may run:
+    every mover is guarded by `ctx.dry_run` and the provenance rewrite is
+    computed and then discarded.
 """
 from __future__ import annotations
 
@@ -104,6 +113,12 @@ class MigCtx:
         self.dry_run = dry_run
         self.moves: List[Tuple[Path, Path]] = []
         self.notes: List[str] = []
+        #: Provenance records whose paths still spell the pre-v2 layout. Part
+        #: of the SAME question `moves` answers — a project whose directories
+        #: were moved by hand but whose provenance still names `phase2a/` is
+        #: not on Layout P either — and counted separately only so the
+        #: --dry-run verdict can say which of the two it found.
+        self.prov_rewrites: int = 0
 
     def _mv(self, src: Path, dst: Path) -> None:
         if not src.exists():
@@ -228,6 +243,7 @@ def _step6_rewrite_provenance(ctx: MigCtx) -> None:
         new_lines.append(json.dumps(rec, ensure_ascii=False))
     if rewrites and not ctx.dry_run:
         prov.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    ctx.prov_rewrites = rewrites
     ctx.notes.append(f"provenance.jsonl: rewrote {rewrites} record(s)")
 
 
@@ -268,10 +284,44 @@ def _rewrite_dict_paths(obj) -> None:
 
 
 def _rewrite_str(s: str) -> str:
+    """Apply `_PATH_MAPS` to one string, ONCE, however many times it is run.
+
+    THE PROVENANCE ARM WAS NOT IDEMPOTENT, and the module docstring three
+    screens up promises that it is. Three of the six maps have a replacement
+    that CONTAINS its own pattern::
+
+        manufacturing/                 -> phase3/stage5_manufacturing/
+        analog/hardmacro/              -> phase3/analog/hardmacro/
+        analog/analog_block_list.json  -> phase1/analog/analog_block_list.json
+
+    so a plain `str.replace` re-fires on its own output. Measured 2026-08-25 on
+    the very fixture `tests/test_migrate_to_layout_p.py::_build_prev2` already
+    ships::
+
+        run 1  manufacturing/yield.json
+            -> phase3/stage5_manufacturing/yield.json
+        run 2  -> phase3/stage5_phase3/stage5_manufacturing/yield.json
+        run 3  -> phase3/stage5_phase3/stage5_phase3/stage5_manufacturing/...
+
+    Each re-run corrupts the audit trail one level further, and the directory
+    moves stay clean throughout — so the run prints `moves: 0`, reports itself
+    a no-op, and has just rewritten a path to somewhere that does not exist.
+    The shipped idempotency test asserted on `ctx.moves` alone and could not
+    see it; it was found by wiring `--dry-run` into flow step D1, where a
+    correctly migrated project began reporting residue it did not have.
+
+    THE FIX: when the pattern occurs inside the replacement, rewrite only the
+    occurrences that are not already part of a replacement — split on `new`
+    first, substitute inside each segment, and rejoin.
+    """
     for old, new in _PATH_MAPS:
         # match either bare prefix at start, or as a substring (covers
         # absolute paths like /home/.../phase2b/...).
-        if old in s:
+        if old not in s:
+            continue
+        if old in new:
+            s = new.join(seg.replace(old, new) for seg in s.split(new))
+        else:
             s = s.replace(old, new)
     return s
 
@@ -314,7 +364,30 @@ def main() -> int:
     for note in ctx.notes:
         print(f"NOTE: {note}")
     print("=== done ===")
-    return 0
+
+    # --dry-run IS A DETECTOR, AND UNTIL 2026-08-25 IT RETURNED 0 EITHER WAY.
+    # Measured on two fixture projects at that date: a canonical tree printed
+    # `moves: 0` and a pre-v2 tree printed `moves: 4`, and BOTH exited 0. The
+    # answer was only ever in the prose, so nothing automatic could read it and
+    # this program had no caller that was not a human reading its output.
+    #
+    # Inspection now carries a verdict:  0 = already Layout P (nothing to do),
+    # 1 = pre-v2 residue found, and the remedy is this same command without
+    # --dry-run. THE APPLY CONTRACT IS UNCHANGED — 0 on a completed migration,
+    # idempotent as before — because a migration that ran and left nothing
+    # behind is a success, and returning 1 for the work it just did would make
+    # the caller re-run it forever.
+    if not args.dry_run:
+        return 0
+    pending = len(ctx.moves) + ctx.prov_rewrites
+    if not pending:
+        print("[PASS] migrate_to_layout_p: project is on v2 Layout P; "
+              "nothing to migrate.")
+        return 0
+    print(f"[FAIL] migrate_to_layout_p: {len(ctx.moves)} pre-v2 path(s) and "
+          f"{ctx.prov_rewrites} provenance record(s) still spell the pre-v2 "
+          f"layout. Remedy:  python3 migrate_to_layout_p.py {project}")
+    return 1
 
 
 if __name__ == "__main__":
