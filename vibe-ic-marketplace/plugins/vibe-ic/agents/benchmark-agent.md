@@ -320,8 +320,8 @@ solving method** and converges every solvable residual to a deterministic 5/5.
 Proven this way on VE-v2 (156), VE-Human (156), RTLLM (50), CVDP (302).
 
 ### What it measures
-Classify EVERY design into a **stability Tier T1–T5** (the `<suite>_tier_pipeline.py`
-/ `cvdp_solve_pipeline.py` `--dist`), then run EACH design **5 independent CLEAN
+Classify EVERY design into a **stability Tier T1–T5** (`benchmark_dispatch.py
+--solve`, which names the emitter per problem), then run EACH design **5 independent CLEAN
 runs** and record per-run pass/fail. The 5-run pass-count IS the pass@5 stability:
 - **T1** deterministic program emit → must be **5/5** every run. A T1 below 5/5 is a
   determinism bug in the emitter — surface it.
@@ -428,9 +428,13 @@ the runner reads ONLY the prompt (clean-room), the host scorer reads the golden+
   `git clone https://github.com/nvidia/cvdp-benchmark` (provides `run_benchmark.py` +
   `src/`). **No API key** is needed for OBJECTIVE scoring — use `-m local_import`
   (subjective `sbj_score` errors about "No API key" are harmless and skipped).
-- The tier pipelines that read these DBs: `programs/{verilogeval_tier_pipeline,
-  verilogeval_human_tier_pipeline, rtllm_tier_pipeline, cvdp_solve_pipeline}.py`
-  (`--dataset`/`--root`/`--jsonl … --dist`).
+- What reads these DBs: `programs/benchmark_dispatch.py --solve --dataset … --run …`.
+  The four per-suite tier pipelines it replaced are DELETED — four private copies
+  of one judgement, three of them reachable only by importing a benchmark's own
+  module. Their capability moved to `task_nature_route` (classify),
+  `deterministic_emit_chain` (emit + the emit-blocking parity check),
+  `spec_conformance_gate` (build_gate/gate_check) and `testbench_verdict`
+  (transcript -> PASS/FAIL), all of which the general flow can reach.
 
 **CVDP scoring env — the exact working recipe** (re-stated; this is the setting that
 golden-mode and the API-model `--llm` path both FAIL on):

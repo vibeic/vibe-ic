@@ -499,7 +499,6 @@
     "vector_op_rtl_gen.py",
     "verdict_token_propagation_check.py",
     "verilator_coverage_measure.py",
-    "verilogeval_tier_pipeline.py",
     "version_bump_monotonic_check.py",
     "vibe_ic_entry_guard.py",
     "wafer_map_pattern_classify.py",
