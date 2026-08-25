@@ -1,4 +1,4 @@
-"""test_matrix_63x8_coverage.py — the meta-test that makes "full coverage" a
+"""test_matrix_coverage.py — the meta-test that makes "full coverage" a
 CLAIM THAT CAN BE FALSIFIED rather than an assertion in a commit message.
 
     63 flow steps x 8 audit dimensions = 504 cells.
@@ -46,7 +46,7 @@ HOW EACH PROPERTY IS MEASURED (all live, none read from a table)
    would be exactly the adjacent measurement the campaign removes. What it does
    instead is CROSS-CHECK the module's answer against two independent sources:
 
-     * the central waiver registry (``matrix_63x8.waivers.WAIVERS``), and
+     * the central waiver registry (``matrix.waivers.WAIVERS``), and
      * the ``xfail`` markers pytest actually collected.
 
    All three must agree, in both directions. A module that called a cell
@@ -105,10 +105,10 @@ from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 import pytest
 
-from matrix_63x8 import flowref as F
-from matrix_63x8 import substitution as SUB
-from matrix_63x8 import waivers as W
-from matrix_63x8.cells import DIMENSIONS, DIMENSION_NAMES
+from matrix import flowref as F
+from matrix import substitution as SUB
+from matrix import waivers as W
+from matrix.cells import DIMENSIONS, DIMENSION_NAMES
 
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = F.PLUGIN_ROOT
@@ -168,7 +168,7 @@ NOT_MEASURED = "NOT_MEASURED"
 #:     cells out of the published SUBSTITUTED column and back into the total a
 #:     reader quotes — the exact erasure this contract closes;
 #:   * a dimension GAINING one changes the published split, so the generated
-#:     census table in ``matrix_63x8/README.md`` must be regenerated in the same
+#:     census table in ``matrix/README.md`` must be regenerated in the same
 #:     change rather than left asserting a number that no longer reproduces.
 #:
 #: Dimension 9 joined on 2026-08-21: its L3 leg holds 68 of 69 steps' gates at a
@@ -180,7 +180,7 @@ NOT_MEASURED = "NOT_MEASURED"
 #:
 #: The remaining dimensions are deliberately NOT here. The question is open for them and
 #: is not answerable from outside the module that built the predicate — see
-#: ``matrix_63x8/substitution.py``, "WHY UNDECLARED IS A STATE AND NOT A
+#: ``matrix/substitution.py``, "WHY UNDECLARED IS A STATE AND NOT A
 #: DEFAULT". Their cells are published as UNDECLARED, never folded into either
 #: answer.
 DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8, 9)
@@ -203,7 +203,7 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8, 9)
 #:   * STEPS: the pin said 67 while `STEP_IDS_AS_MEASURED` beside it listed 68
 #:     ids — the pair is meant to move together and had been moved half-way, so
 #:     the count was already wrong before this change. Measured live:
-#:       `python3 -c "from matrix_63x8 import flowref as F; print(len(F.step_ids()))"`
+#:       `python3 -c "from matrix import flowref as F; print(len(F.step_ids()))"`
 #:       -> 69, ids delta against the old list: +'0.5ic', +'1.6x', -'37.5self'
 #:     (68 + 2 - 1 = 69). '1.6x' landed in v1.11.15, '37.5self' was retired in
 #:     v1.11.18; '0.5ic' predates both.
@@ -211,7 +211,7 @@ DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8, 9)
 #:
 #: This number is DELIBERATELY not derived from the yaml. Deriving a tripwire
 #: from the same source the assertion reads makes the assertion tautological —
-#: see `matrix_63x8/README.md`. It is moved by hand, once, with the measurement
+#: see `matrix/README.md`. It is moved by hand, once, with the measurement
 #: above recorded beside it.
 # 2026-08-24: the former 1.6x contract is now a Step-2 clause, so the
 # independently reviewed flow population is again 68 x 9.
@@ -972,9 +972,9 @@ def test_a_substituted_cell_is_never_counted_as_enforcing_its_own_mechanism():
         f"— those cells' substituted enforcement stops being published and "
         f"folds back into the total a reader quotes.\n"
         f"Added: {sorted(set(declared) - set(DIMENSIONS_DECLARING_SUBSTITUTION))} "
-        f"— good, and the generated census in matrix_63x8/README.md must be "
+        f"— good, and the generated census in matrix/README.md must be "
         f"regenerated in the same change "
-        f"(`python3 tools/gen_matrix_63x8_census.py`)."
+        f"(`python3 tools/gen_matrix_census.py`)."
     )
     # A declared dimension whose every cell reads OWN has an inert hook: the
     # disclosure mechanism exists and reports nothing, which looks identical to
@@ -1022,7 +1022,7 @@ def test_state_agrees_with_the_waiver_registry_and_the_collected_marks():
     Three independent sources; disagreement in EITHER direction is a finding:
 
       * a cell the module calls WAIVED with no registry entry -> the waiver is
-        invisible to anyone reading ``matrix_63x8/waivers.py``;
+        invisible to anyone reading ``matrix/waivers.py``;
       * a registry entry whose cell the module calls ENFORCED -> a stale waiver
         that is silently suppressing nothing;
       * a strict xfail collected for a cell nobody calls WAIVED -> a cell
@@ -1040,7 +1040,7 @@ def test_state_agrees_with_the_waiver_registry_and_the_collected_marks():
             if registry is None:
                 problems.append(
                     f"{sid}/d{dim}: the module reports WAIVED but "
-                    f"matrix_63x8.waivers.WAIVERS has no entry — the accepted "
+                    f"matrix.waivers.WAIVERS has no entry — the accepted "
                     f"gap is invisible in the one place it is supposed to be "
                     f"published")
             if not marked:
@@ -1430,8 +1430,8 @@ def test_the_census_is_reported_for_humans(record_property):
     summary = (f"{len(census)} cells = {len(F.step_ids())} steps x "
                f"{len(DIMENSIONS)} dimensions; {totals}; "
                f"ENFORCED splits {split}")
-    record_property("matrix_63x8_census", summary)
-    record_property("matrix_63x8_per_dimension", " | ".join(lines))
+    record_property("matrix_census", summary)
+    record_property("matrix_per_dimension", " | ".join(lines))
     assert len(census) == expected_cells(), summary
 
 
@@ -2357,7 +2357,7 @@ def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
             + f"\nTWO-AXIS census (what is true): {counts}"
             + "\n\nA cell in this list is counted as coverage and is not "
               "covering anything. Fix the predicate or waive it on the "
-              "record; see matrix_63x8/README.md, 'The three-state rule'.")
+              "record; see matrix/README.md, 'The three-state rule'.")
 
 
 def test_the_enforcement_census_is_reported_for_humans(record_property):
@@ -2372,8 +2372,8 @@ def test_the_enforcement_census_is_reported_for_humans(record_property):
                                 for lab in sorted(set(per))))
     summary = (f"{len(joined)} cells = {len(F.step_ids())} steps x "
                f"{len(DIMENSIONS)} dimensions; {counts}")
-    record_property("matrix_63x8_enforcement_census", summary)
-    record_property("matrix_63x8_enforcement_per_dimension", " | ".join(lines))
+    record_property("matrix_enforcement_census", summary)
+    record_property("matrix_enforcement_per_dimension", " | ".join(lines))
     assert len(joined) == expected_cells(), summary
     assert sum(counts.values()) == expected_cells(), counts
 

@@ -56,10 +56,35 @@ BRIDGES: List[Tuple[str, Callable[[str], str]]] = [
 ]
 
 
+def _already_parses(text: str) -> bool:
+    """Does `port_parser` already read a BOTH-SIDED interface out of the raw
+    text? If so, no reader may touch it.
+
+    THE MEASURED REASON THIS GUARD EXISTS. Every reader here PREPENDS a bullet
+    block, and `parse_ports` reads the first interface it finds. When the raw
+    prose already parses, a prepended block does not add to it — it SHADOWS it.
+    Measured over 302 real CVDP prompts without this guard: 13 gained and 13
+    LOST, e.g. a converter prompt going from 4 in / 1 out to 1 in / 0 out. The
+    aggregate was identical either way (217 both times), so the regression was
+    invisible in the total and only a per-record diff found it.
+
+    A bridge exists to make an UNPARSEABLE form parseable. Handing it a form
+    that already parses can only make things worse, so it is refused."""
+    try:
+        import port_parser as _pp                        # noqa: PLC0415
+        ins, outs = _pp.parse_ports(text)
+        return bool(ins) and bool(outs)
+    except Exception:
+        return False
+
+
 def bridge(text: str) -> str:
     """Prose in, prose out, with a parseable interface block prepended if any
-    reader recognised one. Unchanged when none did."""
+    reader recognised one. Unchanged when none did, and unchanged when the raw
+    text already yields a both-sided parse — see `_already_parses`."""
     if not (text or "").strip():
+        return text
+    if _already_parses(text):
         return text
     for _name, fn in BRIDGES:
         try:

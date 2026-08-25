@@ -49,7 +49,7 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
-import matrix_63x8.flowref as F
+import matrix.flowref as F
 import test_matrix_d6_skip_discipline as D6
 
 #: Inner-subprocess ceiling for this repo's harness: `--timeout=180` with
@@ -100,7 +100,7 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 class _FakeCell:
-    """Stands in for a `matrix_63x8.cells.Cell` in a callspec."""
+    """Stands in for a `matrix.cells.Cell` in a callspec."""
 
     def __init__(self, step_id: str) -> None:
         self.step_id = step_id

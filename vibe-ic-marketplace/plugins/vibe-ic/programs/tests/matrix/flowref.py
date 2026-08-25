@@ -1,4 +1,4 @@
-"""matrix_63x8.flowref — LIVE, cached accessors over the flow yaml.
+"""matrix.flowref — LIVE, cached accessors over the flow yaml.
 
 Everything here is recomputed from
 ``<plugin_root>/flow/phase1_phase2_phase3.yaml`` on first access and then
@@ -28,7 +28,7 @@ never sort them naively. Use :func:`normalize_id` (``str()``) for dict keys and
 :func:`step_ids` for the raw, declaration-ordered tuple.
 
 Key presence, DERIVED — every digit below is written by
-``tools/gen_matrix_63x8_census.py`` from the yaml, and the ``<!--figure:...-->``
+``tools/gen_matrix_census.py`` from the yaml, and the ``<!--figure:...-->``
 anchor beside it names the binding that produced it. Do not hand-edit them:
 run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
 
@@ -122,12 +122,12 @@ a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
     program_exit_zero          116<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
-    advisory_program_exit_zero 37<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
+    advisory_program_exit_zero 56<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
     files_exist                32<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 29<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     215<!--figure:gate_clauses_total-->, of which
+    total                     234<!--figure:gate_clauses_total-->, of which
                               178<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
@@ -143,8 +143,8 @@ Use :func:`gate_clauses` (typed) rather than re-walking the dict.
 4. Program resolution
 --------------------------------------------------------------------
 A gate command's FIRST whitespace token is the program basename. Of the
-173<!--figure:gate_program_tokens_distinct--> distinct tokens across the
-182<!--figure:gate_commands_total--> gate commands, all but
+192<!--figure:gate_program_tokens_distinct--> distinct tokens across the
+201<!--figure:gate_commands_total--> gate commands, all but
 0<!--figure:gate_programs_unresolved--> resolve to ``programs/<token>.py``, and
 zero commands shell out via ``python3 <file>``. This figure is the live count
 of gates naming a program that does not exist. It went 0 -> 3 when the
@@ -221,7 +221,7 @@ PROGRAMS_DIR: Path = PLUGIN_ROOT / "programs"
 #: Point this at a scratch copy instead, then call :func:`clear_caches`.
 #:
 #: It is also a loaded gun: a suite run with it set is measuring a file nobody
-#: reviewed. ``test_matrix_63x8_ledger.py`` asserts it is UNSET, so a normal run
+#: reviewed. ``test_matrix_ledger.py`` asserts it is UNSET, so a normal run
 #: cannot silently be redirected.
 FLOW_YAML_ENV = "VIBE_IC_MATRIX_FLOW_YAML"
 

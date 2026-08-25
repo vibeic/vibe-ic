@@ -54,7 +54,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix_63x8 import flowref as F  # noqa: E402
+from matrix import flowref as F  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parents[2]
 PROGRAMS = PLUGIN / "programs"

@@ -256,7 +256,7 @@ def test_the_flow_declares_this_producer_at_a8_and_keeps_it_out_of_the_gate():
       reference run manufactured delta_sigma.gds (2042 B) and ldo.gds (1706 B);
       without it, zero files.
     """
-    from matrix_63x8 import flowref as F
+    from matrix import flowref as F
 
     outs = list(F.required_outputs("A8"))
     assert any(o.endswith("*.gds") for o in outs), outs

@@ -81,7 +81,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from matrix_63x8 import flowref as F
+from matrix import flowref as F
 
 DECLARED_PATH = "reports/spare_cell_coverage.json"
 DECLARING_STEP = "18"

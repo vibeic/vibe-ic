@@ -86,7 +86,7 @@ _PLUGIN = _HERE.parent.parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_PLUGIN / "programs"))
 
-from matrix_63x8 import flowref as F  # noqa: E402
+from matrix import flowref as F  # noqa: E402
 
 import flow_compliance_check as FCC  # noqa: E402
 import _run_isolation as _iso  # noqa: E402

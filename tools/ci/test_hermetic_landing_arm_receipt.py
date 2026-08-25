@@ -50,11 +50,11 @@ MATRIX_LEDGER = (
 )
 MATRIX_CENSUS_TEST = (
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-    "test_matrix_63x8_census_freshness.py"
+    "test_matrix_census_freshness.py"
 )
 MATRIX_TEST = (
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-    "test_matrix_63x8_coverage.py"
+    "test_matrix_coverage.py"
 )
 MATRIX_ARTEFACT_TEST = (
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"

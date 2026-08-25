@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the 63x8 census table in ``matrix_63x8/README.md`` from the live
+"""Regenerate the 63x8 census table in ``matrix/README.md`` from the live
 suite, so the number a reader quotes cannot drift away from the tree again.
 
 WHY THIS EXISTS
@@ -20,14 +20,14 @@ being recomputed live, which is the whole point of the suite. The README even
 carried the command that disproves it, two lines below the table.
 
 Editing the table to say 481 would have bought a fortnight. It is generated
-instead, and a freshness test (``programs/tests/test_matrix_63x8_census_freshness.py``)
+instead, and a freshness test (``programs/tests/test_matrix_census_freshness.py``)
 diffs the regenerated block against the committed one exactly as
 ``test_programs_index_freshness.py`` does for ``programs/INDEX.md`` — the house
 pattern for a derived artefact in this repo.
 
 WHAT IT COMPUTES, and how
 -------------------------
-Everything comes from ``test_matrix_63x8_coverage``, which is the module that
+Everything comes from ``test_matrix_coverage``, which is the module that
 already asks each dimension for the state of the cells it owns and cross-checks
 the answer against pytest's own collection. This program adds no opinion of its
 own; it renders.
@@ -36,7 +36,7 @@ own; it renders.
 * The ENFORCED split -- ``substitution_census()``: for each ENFORCED cell, did
   its predicate run against the step's OWN mechanism, against a SUBSTITUTED
   stand-in, or is the dimension UNDECLARED? See
-  ``matrix_63x8/substitution.py``.
+  ``matrix/substitution.py``.
 
 WHAT IT REFUSES
 ---------------
@@ -60,10 +60,10 @@ WHAT THE MARKED BLOCK DOES NOT REACH — and what now does (vibe-ic#961)
 by construction, whatever it says. Measured on ``origin/main`` at ``8ad04f45``,
 five live-derived figures OUTSIDE the block were stale:
 
-    matrix_63x8/README.md:132   blocks_on present 62 / non-empty 60   (live 63/61)
-    matrix_63x8/README.md:141   "all 126 required_outputs entries"    (live 133)
-    matrix_63x8/README.md:232   "150 blocking clauses"                (live 160)
-    matrix_63x8/flowref.py:61   "126 entries over 61 steps"           (live 133)
+    matrix/README.md:132   blocks_on present 62 / non-empty 60   (live 63/61)
+    matrix/README.md:141   "all 126 required_outputs entries"    (live 133)
+    matrix/README.md:232   "150 blocking clauses"                (live 160)
+    matrix/flowref.py:61   "126 entries over 61 steps"           (live 133)
     test_matrix_d2_falsifiable.py:186  "150 blocking clauses"         (live 160)
 
 The first went stale at ``332b9985`` (#929) — the exact commit this gate's own
@@ -124,13 +124,13 @@ so a human, the freshness test and the host-independence probe are unaffected.
 
 Run::
 
-    python3 tools/gen_matrix_63x8_census.py                 # rewrite the block
-    python3 tools/gen_matrix_63x8_census.py --check         # exit 1 on drift
-    python3 tools/gen_matrix_63x8_census.py <root> --check  # …for THAT tree
-    python3 tools/gen_matrix_63x8_census.py --check-figures # anchors only (cheap)
-    python3 tools/gen_matrix_63x8_census.py --fix-figures   # rewrite the anchors
-    python3 tools/gen_matrix_63x8_census.py --fix          # anchors AND census block
-    python3 tools/gen_matrix_63x8_census.py --fix \
+    python3 tools/gen_matrix_census.py                 # rewrite the block
+    python3 tools/gen_matrix_census.py --check         # exit 1 on drift
+    python3 tools/gen_matrix_census.py <root> --check  # …for THAT tree
+    python3 tools/gen_matrix_census.py --check-figures # anchors only (cheap)
+    python3 tools/gen_matrix_census.py --fix-figures   # rewrite the anchors
+    python3 tools/gen_matrix_census.py --fix          # anchors AND census block
+    python3 tools/gen_matrix_census.py --fix \
         --written-json /tmp/w.json                         # …and DECLARE what it wrote
 
 WHERE THIS IS DERIVED, AND WHY IT IS NOT AT PUSH TIME (vibe-ic#1382)
@@ -144,8 +144,8 @@ same caller:
 The re-derivation runs at LAND, not at PUSH, and that was a choice between two
 readings with measurements on both sides. Moving `--check` into `pre-push` would
 show a PR author the staleness in seconds instead of an hour — but the 57
-anchored figures live in THREE shared files (`matrix_63x8/README.md`,
-`matrix_63x8/flowref.py`, `test_matrix_d2_falsifiable.py`) and every one of them
+anchored figures live in THREE shared files (`matrix/README.md`,
+`matrix/flowref.py`, `test_matrix_d2_falsifiable.py`) and every one of them
 carries tree-wide COUNTERS. Two branches that each add a gate rewrite the same
 lines with different totals, so per-PR re-derivation converts every gate-adding
 PR into a conflict with every other one. That is not a prediction: it is what
@@ -170,7 +170,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-README = PLUGIN_ROOT / "programs" / "tests" / "matrix_63x8" / "README.md"
+README = PLUGIN_ROOT / "programs" / "tests" / "matrix" / "README.md"
 
 #: The tree swept for anchored figures. Not the README's own directory: the
 #: figures this substrate publishes are quoted by the dimension modules that
@@ -195,7 +195,7 @@ MATRIX_REL = (README.parent).relative_to(REPO_ROOT)
 CORPUS_TOKEN = "flowref"
 CORPUS_SUFFIXES = (".py", ".md")
 
-BEGIN = ("<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — "
+BEGIN = ("<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_census.py — "
          "DO NOT EDIT BY HAND -->")
 END = "<!-- END GENERATED CENSUS -->"
 
@@ -234,7 +234,7 @@ SUBJECT_CROSS_TREE = "CROSS_TREE"
 CENSUS_INPUTS_REL: Tuple[Path, ...] = (
     MATRIX_REL / "cells.py",            # DIMENSIONS / NAMES / QUESTIONS
     MATRIX_REL / "substitution.py",     # the ENFORCED split buckets
-    FIGURES_REL / "test_matrix_63x8_coverage.py",   # enforcement_census()
+    FIGURES_REL / "test_matrix_coverage.py",   # enforcement_census()
 )
 
 
@@ -333,9 +333,9 @@ def _load():
         sp = str(p)
         if sp not in sys.path:
             sys.path.insert(0, sp)
-    import test_matrix_63x8_coverage as CV  # noqa: E402
-    from matrix_63x8 import substitution as SUB  # noqa: E402
-    from matrix_63x8.cells import (  # noqa: E402
+    import test_matrix_coverage as CV  # noqa: E402
+    from matrix import substitution as SUB  # noqa: E402
+    from matrix.cells import (  # noqa: E402
         DIMENSIONS, DIMENSION_NAMES, DIMENSION_QUESTIONS,
     )
     return CV, SUB, DIMENSIONS, DIMENSION_NAMES, DIMENSION_QUESTIONS
@@ -345,7 +345,7 @@ def _load():
 # DERIVED FIGURES OUTSIDE THE BLOCK (vibe-ic#961)
 # ============================================================================
 def _flowref():
-    """``matrix_63x8.flowref``, with the plugin's import posture.
+    """``matrix.flowref``, with the plugin's import posture.
 
     Deliberately NOT ``_load()``: that one drags in the coverage meta-test and
     the 504-cell outcome run behind it. Every figure below is a property of the
@@ -356,7 +356,7 @@ def _flowref():
         sp = str(p)
         if sp not in sys.path:
             sys.path.insert(0, sp)
-    from matrix_63x8 import flowref as F  # noqa: E402
+    from matrix import flowref as F  # noqa: E402
     return F
 
 
@@ -457,7 +457,7 @@ def _build_corpus_figures() -> CorpusFigures:
         1 for s in f.step_ids() for e in f.blocks_on(s) if isinstance(e, str))
 
     def _dimensions():
-        from matrix_63x8.cells import DIMENSIONS  # noqa: E402
+        from matrix.cells import DIMENSIONS  # noqa: E402
         return DIMENSIONS
 
     table["matrix_dimensions"] = lambda f: len(_dimensions())
@@ -1141,8 +1141,8 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
                "without re-running):")
     out.append("")
     out.append("```")
-    out.append("python3 tools/gen_matrix_63x8_census.py          # rewrite")
-    out.append("python3 tools/gen_matrix_63x8_census.py --check  # exit 1 on drift")
+    out.append("python3 tools/gen_matrix_census.py          # rewrite")
+    out.append("python3 tools/gen_matrix_census.py --check  # exit 1 on drift")
     out.append("```")
     out.append("")
     out.append(END)
@@ -1195,7 +1195,7 @@ def run_figures(args) -> Tuple[int, Dict, List[str]]:
                 lines.append(f"  [FAIL] {f['rel']}:{a.line}  {a.describe()}")
         lines.append(
             f"[FAIL] {len(stale)} anchored figure(s) disagree with the tree; "
-            f"re-run `python3 tools/gen_matrix_63x8_census.py --fix` "
+            f"re-run `python3 tools/gen_matrix_census.py --fix` "
             f"(--fix-figures repairs these anchors but leaves the README "
             f"census block stale, which still exits 1)")
         return 1, report, lines
@@ -1381,7 +1381,7 @@ def _run(args: argparse.Namespace) -> int:
         if updated != text:
             sys.stderr.write(
                 f"{path} census block is stale; re-run "
-                f"`python3 tools/gen_matrix_63x8_census.py --fix` "
+                f"`python3 tools/gen_matrix_census.py --fix` "
                 f"(the plain run repairs this block but leaves any stale "
                 f"anchored figure, which still exits 1)\n")
             return 1

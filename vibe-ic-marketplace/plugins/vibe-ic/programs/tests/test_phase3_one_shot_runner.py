@@ -50,7 +50,7 @@ import pytest
 #: --timeout-method=thread` yields `2 passed`, not a killed session.
 #:
 #: WHY NOT SIMPLY LOWER `_run` TO 60: measured, that is a FALSE RED under
-#: contention -- the trade `test_matrix_63x8_census_freshness.py` already
+#: contention -- the trade `test_matrix_census_freshness.py` already
 #: refused for the same reason.
 pytestmark = pytest.mark.timeout(600)
 

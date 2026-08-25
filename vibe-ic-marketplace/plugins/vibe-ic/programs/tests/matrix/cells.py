@@ -1,4 +1,4 @@
-"""matrix_63x8.cells — the 504-cell ledger.
+"""matrix.cells — the 504-cell ledger.
 
 63 flow steps x 8 audit dimensions = 504 cells. Every cell must end up in
 exactly one of three machine-checkable states (ENFORCED / WAIVED / NA) — see
@@ -15,7 +15,7 @@ WHERE THE 63 COME FROM — AND WHERE THEY DELIBERATELY DO NOT
 The step list is read **live from the flow yaml**, never from
 ``.audit_63x8.json``. That is the whole point: if someone adds a 64th step or
 deletes one, the ledger changes with the repo and the meta-test
-(``programs/tests/test_matrix_63x8_ledger.py``) notices immediately. A ledger
+(``programs/tests/test_matrix_ledger.py``) notices immediately. A ledger
 sourced from the audit JSON would keep reporting a tidy 504 while the flow
 drifted underneath it — which is the exact failure mode this campaign exists to
 stamp out.
@@ -77,7 +77,7 @@ succeed. Losing the history must never break a live predicate.
 
 Generate the (optional) vendored snapshot::
 
-    python3 -m matrix_63x8.cells --write-snapshot
+    python3 -m matrix.cells --write-snapshot
 """
 from __future__ import annotations
 
@@ -399,7 +399,7 @@ def build_snapshot() -> Dict[str, Any]:
         "_comment": (
             "Distilled history from the 2026-07 63x8 audit. HISTORY ONLY - no "
             "test may assert on these values. Regenerate with "
-            "`python3 -m matrix_63x8.cells --write-snapshot`."
+            "`python3 -m matrix.cells --write-snapshot`."
         ),
         "generated_from": src.name if src else None,
         "dimension_names": {str(k): v for k, v in DIMENSION_NAMES.items()},

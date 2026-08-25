@@ -93,7 +93,7 @@ def _domain_progress(scope: str, completed: int, total: int) -> None:
     progress = getattr(plugin, "domain_progress", None)
     if callable(progress):
         progress(scope, completed, total)
-from matrix_63x8 import flowref as F
+from matrix import flowref as F
 
 #: WHERE THE EVIDENCE WENT. Every entry in ``L.ARTEFACT_MUTATIONS`` names ONE
 #: published run — `ic/spm/v1.10.18_sky130A` — and the published runs now live
@@ -375,7 +375,7 @@ def test_the_published_finding_count_is_pinned(record_property):
 #: bound it. Sentinels rather than "the first table after the heading": a
 #: section grows paragraphs, and a locator that drifts with the prose would
 #: start comparing the wrong table and say nothing about it.
-_README = F.PLUGIN_ROOT / "programs" / "tests" / "matrix_63x8" / "README.md"
+_README = F.PLUGIN_ROOT / "programs" / "tests" / "matrix" / "README.md"
 _TABLE_BEGIN = "<!-- ARTEFACT FINDINGS TABLE"
 _TABLE_END = "<!-- END ARTEFACT FINDINGS TABLE -->"
 

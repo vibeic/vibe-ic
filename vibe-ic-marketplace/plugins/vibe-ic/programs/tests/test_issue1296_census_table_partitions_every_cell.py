@@ -2,8 +2,8 @@
 
 WHAT THE INSTRUMENT MEASURED vs WHAT IT CLAIMED
 ===============================================
-`tools/gen_matrix_63x8_census.py` publishes a per-dimension table into
-`matrix_63x8/README.md`, and the comment directly above that table claimed
+`tools/gen_matrix_census.py` publishes a per-dimension table into
+`matrix/README.md`, and the comment directly above that table claimed
 "Every one of the 504 is now in exactly one" column. It printed SIX columns —
 own / substituted / undeclared / CONTRADICTED / WAIVED / NA — while `_join_axes`
 had learned to emit a seventh kind of label, `{state}-SKIPPED`, for a cell whose
@@ -37,7 +37,7 @@ that every cell reaches a printed column — is a property of the renderer, and 
 guard nobody can afford to run is a guard that stops running.
 
 The live half is covered by
-`test_matrix_63x8_census_freshness.py::test_the_published_total_equals_the_live_census`.
+`test_matrix_census_freshness.py::test_the_published_total_equals_the_live_census`.
 
 Run::
 
@@ -55,7 +55,7 @@ from typing import Dict, List
 import pytest
 
 _REPO = Path(__file__).resolve().parents[5]
-_GEN = _REPO / "tools" / "gen_matrix_63x8_census.py"
+_GEN = _REPO / "tools" / "gen_matrix_census.py"
 
 #: The shape MEASURED on `7c376e348`: dimension 3's corpus-dependent cells all
 #: skipped, so 52 of its 63 carried a `-SKIPPED` label, and one of d7's did.

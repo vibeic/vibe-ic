@@ -123,7 +123,7 @@ def test_integration_aggregate_report_shape(tmp_path):
 #: WHY A MARKER AND AN INLINE LAUNCH RATHER THAN A SMALLER BOUND, which is the
 #: gate's first remedy: there is no `--skip-phase2`, so the work cannot be made
 #: to fit 60 s — squeezing the bound would convert a session kill into a false
-#: red, which `test_matrix_63x8_census_freshness.py` already rejected for the
+#: red, which `test_matrix_census_freshness.py` already rejected for the
 #: same reason. The marker is the gate's SECOND remedy ("move the test out of
 #: the targeted subset if it genuinely needs longer") and the mechanism is
 #: pinned in this tree by `test_issue1181_probe_budget_and_summary.py::

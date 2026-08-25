@@ -2,7 +2,7 @@
 
 WHAT WENT WRONG, AND WHAT CAUGHT IT
 ===================================
-``matrix_63x8.waivers`` carried a waiver for cell A8 / dimension 3 whose
+``matrix.waivers`` carried a waiver for cell A8 / dimension 3 whose
 ``evidence`` field asserted, verbatim::
 
     "`git ls-tree -r --name-only HEAD` matches ZERO paths against
@@ -36,7 +36,7 @@ what must not have changed.
   FORWARD  ``test_control_a8_gds_is_produced_and_evidenced_from_the_commit``
            ``test_control_the_published_root_is_named_in_the_manifest_and_is_in_repo``
            ``test_control_a_published_cell_must_show_a_converged_verdict``
-           All three FAIL on the byte-identical pre-fix ``matrix_63x8/
+           All three FAIL on the byte-identical pre-fix ``matrix/
            waivers.py`` + ``fixtures/matrix_d3_output_manifest.json`` (the
            waiver is present, the entry is recorded UNPROVEN and the published
            root is not registered, so the resolver reports the entry
@@ -78,8 +78,8 @@ from pathlib import Path
 
 import pytest
 
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers as W
+from matrix import flowref as F
+from matrix import waivers as W
 
 import _plugin_tree
 
@@ -124,7 +124,7 @@ def test_control_a8_still_declares_the_gds_and_keeps_no_waiver_for_it():
     reads a published artefact and therefore has to skip where there is none —
     but two of its claims never read one: A8 still DECLARES the ``.gds`` entry,
     and dimension 3's accepted-gap registry is exactly ``{6, 39}``. Both are
-    facts about ``matrix_63x8``, they are checkable in any checkout, and letting
+    facts about ``matrix``, they are checkable in any checkout, and letting
     them travel inside the corpus-dependent test would have made the corpus's
     absence quietly stop enforcing them — the registry could be emptied or grown
     and nothing here would notice.
@@ -170,7 +170,7 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
 
     Pre-fix this fails at (4) on both halves: the manifest records the entry
     ``UNPROVEN`` and no admissible run root carries it, and
-    ``matrix_63x8.waivers`` still holds the A8/d3 entry.
+    ``matrix.waivers`` still holds the A8/d3 entry.
     """
     repo = _repo()
 
@@ -243,7 +243,7 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
     # mixed-signal steps: M1's dimension-3 entry stopped being an accepted GAP
     # and became NA_DORMANT_CONDITION -- its condition is met nowhere, so there
     # is no gap left to disclose. That commit moved `waivers.py`, the manifest
-    # and `test_matrix_63x8_ledger.py`; it did not move this file.
+    # and `test_matrix_ledger.py`; it did not move this file.
     waived = {W.flowref.normalize_id(w.step_id) for w in W.waivers_for_dim(3)}
     assert waived == {"6", "39"}, (
         f"dimension 3's waived set is {sorted(waived)}; after A8's removal "

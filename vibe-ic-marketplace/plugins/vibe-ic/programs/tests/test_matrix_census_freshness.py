@@ -3,7 +3,7 @@
 
 WHAT WENT WRONG
 ===============
-``matrix_63x8/README.md`` published a hand-written census table::
+``matrix/README.md`` published a hand-written census table::
 
     | **total** |  | **483** | **9** | **12** |
 
@@ -24,7 +24,7 @@ not travel with the number is not a caveat.
 
 WHAT THIS FILE LOCKS
 ====================
-1. The block is GENERATED. ``tools/gen_matrix_63x8_census.py --check`` re-derives
+1. The block is GENERATED. ``tools/gen_matrix_census.py --check`` re-derives
    it from the live suite and this test fails on any drift — the same shape as
    ``test_programs_index_freshness.py`` for ``programs/INDEX.md``.
 2. The published figures EQUAL the live census, checked here independently of
@@ -37,7 +37,7 @@ WHAT THIS FILE LOCKS
 Run::
 
     cd .../plugins/vibe-ic && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \\
-      python3 -m pytest programs/tests/test_matrix_63x8_census_freshness.py -q
+      python3 -m pytest programs/tests/test_matrix_census_freshness.py -q
 """
 from __future__ import annotations
 
@@ -51,14 +51,14 @@ import pytest
 
 from _plugin_tree import plugin_path, repo_path_or_missing
 
-from matrix_63x8 import substitution as SUB
+from matrix import substitution as SUB
 
-import test_matrix_63x8_coverage as CV
+import test_matrix_coverage as CV
 
-GEN = repo_path_or_missing("tools", "gen_matrix_63x8_census.py")
-README = plugin_path("programs", "tests", "matrix_63x8", "README.md")
+GEN = repo_path_or_missing("tools", "gen_matrix_census.py")
+README = plugin_path("programs", "tests", "matrix", "README.md")
 
-BEGIN = ("<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — "
+BEGIN = ("<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_census.py — "
          "DO NOT EDIT BY HAND -->")
 END = "<!-- END GENERATED CENSUS -->"
 
@@ -119,7 +119,7 @@ def test_the_census_block_is_present_and_marked_generated():
 #: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
 #: and every other file in the subset loses its verdict.
 #:
-#: The landed value was 1800 on a `gen_matrix_63x8_census.py --check` launch,
+#: The landed value was 1800 on a `gen_matrix_census.py --check` launch,
 #: and simply lowering it was NOT available. MEASURED on this tree, that launch
 #: takes 119.13 s idle / 136.67 s under load, and `cProfile` says where: of
 #: 115.70 s total, 97.54 s is `cell_outcomes()` — all eight dimension modules
@@ -132,7 +132,7 @@ def test_the_census_block_is_present_and_marked_generated():
 #:   * `test_the_census_block_is_fresh` asserts exactly what `--check` asserts
 #:     — committed text == splice(render(census_rows())) — IN-PROCESS, where
 #:     every process launch underneath is a per-dimension outcome run that
-#:     `test_matrix_63x8_coverage` bounds at 60 s each (measured worst module:
+#:     `test_matrix_coverage` bounds at 60 s each (measured worst module:
 #:     35.18 s). It also stops one census being computed twice per session.
 #:     MEASURED, this file: 136.75 s -> 116.56 s, because the sibling
 #:     `test_the_published_total_equals_the_live_census` was paying 16.87 s for
@@ -151,7 +151,7 @@ _CLI_TIMEOUT_S = 60
 
 #: Runs the real generator CLI over a SYNTHETIC census. The stub is installed
 #: in `sys.modules` before `_load()` runs, so the generator's own `import
-#: test_matrix_63x8_coverage` resolves to it instead of importing the real one
+#: test_matrix_coverage` resolves to it instead of importing the real one
 #: — the same interception `test_blocker_list_report_contract` uses to put a
 #: program under test on a known input. Everything else is the real generator:
 #: `_load`, `census_rows`, `render`, `splice`, `main`, the partition guard and
@@ -172,7 +172,7 @@ class _Verdict:
 def _dims():
     # Importable only after the generator's `_load()` has put the plugin test
     # directories on sys.path, which it does before it touches the census.
-    from matrix_63x8.cells import DIMENSIONS
+    from matrix.cells import DIMENSIONS
     return DIMENSIONS
 
 
@@ -185,16 +185,16 @@ def enforcement_census():
 
 
 def substitution_census():
-    from matrix_63x8 import substitution as SUB
+    from matrix import substitution as SUB
     return {("1", dim): SUB.OWN_MECHANISM for dim in _dims()}
 
 
-stub = types.ModuleType("test_matrix_63x8_coverage")
+stub = types.ModuleType("test_matrix_coverage")
 stub.enforcement_census = enforcement_census
 stub.substitution_census = substitution_census
-sys.modules["test_matrix_63x8_coverage"] = stub
+sys.modules["test_matrix_coverage"] = stub
 
-sys.argv = ["gen_matrix_63x8_census.py"]
+sys.argv = ["gen_matrix_census.py"]
 if mode == "check":
     sys.argv.append("--check")
 sys.argv += ["--out", out_path]
@@ -231,7 +231,7 @@ def _load_generator():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "_gen_matrix_63x8_census", str(_gen_or_skip()))
+        "_gen_matrix_census", str(_gen_or_skip()))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     prev = sys.dont_write_bytecode
@@ -278,7 +278,7 @@ def test_the_census_block_is_fresh():
     rendered = gen.render(rows, totals)
     assert gen.splice(text, rendered) == text, (
         f"the census in {README} is stale — re-run "
-        f"`python3 tools/gen_matrix_63x8_census.py`.\n"
+        f"`python3 tools/gen_matrix_census.py`.\n"
         f"committed:\n{_block()[:1200]}\n\n"
         f"re-derived:\n{rendered[:1200]}")
 

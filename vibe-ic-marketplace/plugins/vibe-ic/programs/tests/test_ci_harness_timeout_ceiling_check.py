@@ -1382,7 +1382,7 @@ def test_a_zero_marker_is_no_item_bound_not_a_bound_of_zero(tmp_path):
 
     pytest-timeout treats 0 as DISABLED. Reading it as a bound of zero gives a
     ceiling of `0 // 3 == 0`, which makes EVERY inner timeout in the file a
-    violation -- that is what reported `test_matrix_63x8_coverage.py:305
+    violation -- that is what reported `test_matrix_coverage.py:305
     subprocess.run(timeout=60)` as a session risk and blocked landing on main.
     Reading it as "unbounded" is the opposite error and installs a one-line
     silencer. It is neither: with no item clock the stall window is what ends the

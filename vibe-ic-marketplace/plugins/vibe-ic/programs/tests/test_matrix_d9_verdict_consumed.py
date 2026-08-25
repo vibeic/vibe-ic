@@ -152,7 +152,7 @@ from typing import Dict, List, Optional, Tuple
 import pytest
 import yaml
 
-from matrix_63x8 import cells as C, flowref as F, waivers as W
+from matrix import cells as C, flowref as F, waivers as W
 
 sys.path.insert(0, str(F.PLUGIN_ROOT / "programs"))
 import flow_compliance_check as FCC  # noqa: E402

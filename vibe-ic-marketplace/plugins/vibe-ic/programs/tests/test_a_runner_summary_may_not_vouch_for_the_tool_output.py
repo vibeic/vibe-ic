@@ -34,7 +34,7 @@ what it is a summary OF::
 so the document vouching for the tool's output declared itself a derivative of
 the very file that had been destroyed.
 
-THE SHAPE WAS ALREADY ON RECORD. `matrix_63x8/README.md` describes two artefact
+THE SHAPE WAS ALREADY ON RECORD. `matrix/README.md` describes two artefact
 findings that closed for this reason — "the gate believed a summary the RUNNER
 wrote instead of the output the TOOL wrote" — and says outright that it "is the
 shape to look for next".

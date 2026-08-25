@@ -512,10 +512,17 @@ def _table_interface(prompt: str) -> Tuple[List[str], List[str]]:
 # (d) prose "Input/Output ports" block — reuse the registry's own prose reader
 # --------------------------------------------------------------------------- #
 def _prose_ports(prompt: str) -> Tuple[List[Port], List[Port]]:
+    # THE CHAIN, not one reader. This called `prose_port_block_read` directly,
+    # so it read the indented `Input ports:` form and nothing else — a spec
+    # stating its ports as a markdown signal/direction table (the commonest
+    # datasheet form there is) parsed to ([], []) here even though a reader for
+    # it exists. `prose_interface_bridge` tries every reader in order and each
+    # is a no-op on text it does not recognise, so this is strictly wider with
+    # no behaviour change on the form it already read.
     try:
         import port_parser as _pp
-        import prose_port_block_read as _bridge
-        ins, outs = _pp.parse_ports(_bridge.bridge_prompt(prompt))
+        import prose_interface_bridge as _bridge
+        ins, outs = _pp.parse_ports(_bridge.bridge(prompt))
         return ins, outs
     except Exception:
         return [], []

@@ -109,7 +109,7 @@ Reproduce on either tree with::
     PYTHONPATH=programs:programs/tests python3 -c "
     import sys; sys.path[:0]=['programs','programs/tests']
     import matrix_d4_probe as PR
-    from matrix_63x8 import flowref as F
+    from matrix import flowref as F
     from collections import Counter
     c=Counter()
     for s in F.step_ids():
@@ -172,7 +172,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from matrix_63x8 import flowref as F
+from matrix import flowref as F
 
 PROGRAMS_DIR: Path = F.PROGRAMS_DIR
 

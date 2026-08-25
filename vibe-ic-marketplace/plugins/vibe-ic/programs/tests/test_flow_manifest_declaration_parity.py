@@ -54,7 +54,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
-from matrix_63x8 import flowref as F
+from matrix import flowref as F
 
 # The manifest is READ THROUGH ITS CONSUMER, not re-opened from a path spelled
 # again here. A guard that loaded its own copy of the file would keep passing if

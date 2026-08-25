@@ -17,7 +17,7 @@ None of those is a judgement. Each has a program that already knows the answer:
 every marketplace.json and the README prose in one place),
 `marketplace_version_sync_check.py --fix` (residual manifest drift),
 `tools/gen_programs_index.py` (the index), and
-`tools/gen_matrix_63x8_census.py --fix` (the 63x8 derived figures).
+`tools/gen_matrix_census.py --fix` (the 63x8 derived figures).
 
 WHERE THE 63x8 CENSUS IS DERIVED, AND WHY IT IS HERE (vibe-ic#1382)
 ====================================================================
@@ -49,7 +49,7 @@ because "push means publish this branch; it does not mean this is fit to become
 main", and at push the only remedy was to rebuild the entire batch.
 
 Re-deriving here does NOT silence the gate. `repo_hygiene_gates.sh` still runs
-`gen_matrix_63x8_census.py --check` afterwards, on the tree this step produced,
+`gen_matrix_census.py --check` afterwards, on the tree this step produced,
 and still fails it on anything a generator run cannot reach.
 
 BEST EFFORT, AND ONLY THIS STEP — stated because the asymmetry is deliberate
@@ -99,7 +99,7 @@ file — it is collected from the writers themselves at run time:
   * `marketplace_version_sync_check.py --fix` writes only manifests already in
     the set above; it is run for residual drift and any path it touches must
     still fall inside that set or this program refuses.
-  * `tools/gen_matrix_63x8_census.py --fix` is asked for `--written-json`, a
+  * `tools/gen_matrix_census.py --fix` is asked for `--written-json`, a
     JSON list of the repo-relative paths that run actually wrote. It is asked
     rather than assumed for the same reason as the index: the corpus is
     DISCOVERED by content ("a typed list is a promise that nobody will add a
@@ -145,7 +145,7 @@ PLUGIN = HERE.parent
 REPO = PLUGIN.parent.parent.parent
 INDEX = HERE / "INDEX.md"
 GEN_INDEX = REPO / "tools" / "gen_programs_index.py"
-GEN_CENSUS = REPO / "tools" / "gen_matrix_63x8_census.py"
+GEN_CENSUS = REPO / "tools" / "gen_matrix_census.py"
 
 #: Wall-clock bound on the census re-derivation, in seconds.
 #:

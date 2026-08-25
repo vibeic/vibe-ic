@@ -1,6 +1,6 @@
 """#1382 — the repair a failure message names must be the COMPLETE repair.
 
-`gen_matrix_63x8_census.py` has two halves: the anchored figures scattered
+`gen_matrix_census.py` has two halves: the anchored figures scattered
 through prose (`--fix-figures`) and the generated census block in README.md
 (the plain run). Each half's failure message used to name only its own half, so
 following the instruction verbatim left the tree still failing — and failing
@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[5]
-_GEN = _REPO / "tools" / "gen_matrix_63x8_census.py"
+_GEN = _REPO / "tools" / "gen_matrix_census.py"
 
 
 def _source() -> str:
@@ -82,7 +82,7 @@ def test_neither_remediation_message_names_a_partial_repair():
         assert m, f"the {label} message has moved; re-read this test"
         # the remediation is quoted within ~400 chars of the diagnosis
         window = src[m.start():m.start() + 400]
-        cmds = re.findall(r"gen_matrix_63x8_census\.py([^`\\\n]*)", window)
+        cmds = re.findall(r"gen_matrix_census\.py([^`\\\n]*)", window)
         assert cmds, f"the {label} message names no remediation command"
         if not any("--fix" in c and "--fix-figures" not in c.split("--fix")[0]
                    for c in cmds):

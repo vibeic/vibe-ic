@@ -49,8 +49,8 @@ _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
-from matrix_63x8 import flowref as F  # noqa: E402
-from matrix_63x8 import waivers as W  # noqa: E402
+from matrix import flowref as F  # noqa: E402
+from matrix import waivers as W  # noqa: E402
 
 #: The registry module is the ONE place a ``Waiver`` container is legitimate.
 _REGISTRY_MODULE = W.__name__
@@ -140,7 +140,7 @@ def test_no_matrix_module_holds_its_own_waiver_table():
         f"admission and can have exactly one text; the readers resolve "
         f"`central or local`, so the local copy is inert the moment the central "
         f"entry exists and drifts from it unnoticed thereafter. Put the waiver "
-        f"in matrix_63x8/waivers.py and delete the local copy."
+        f"in matrix/waivers.py and delete the local copy."
     )
 
 
@@ -227,7 +227,7 @@ def test_no_cell_is_waived_without_the_central_registry(monkeypatch):
 
     for attr in _CENTRAL_LOOKUPS:
         assert hasattr(W, attr), (
-            f"matrix_63x8.waivers no longer exposes {attr!r}; this guard "
+            f"matrix.waivers no longer exposes {attr!r}; this guard "
             f"neutralises a lookup that no longer exists and would pass "
             f"vacuously"
         )
@@ -241,7 +241,7 @@ def test_no_cell_is_waived_without_the_central_registry(monkeypatch):
     assert not survivors, (
         f"with the central registry neutralised these cells are STILL waived: "
         f"{survivors}. Their waiver text comes from somewhere other than "
-        f"matrix_63x8/waivers.py, which means one accepted gap has two "
+        f"matrix/waivers.py, which means one accepted gap has two "
         f"accounts and nothing reconciles them."
     )
 

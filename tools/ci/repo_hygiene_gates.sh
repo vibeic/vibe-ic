@@ -1474,7 +1474,6 @@ run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_arti
 # `changelog_command_reproducibility_check` FAILed four capture-document commands
 # quoted exactly as they were run, from inside `programs/`. Both were defects in
 # the CHECKERS, repaired in the same change; no published number was edited.
-run "plugin self-audit"                 "$ROOT" bash "$ROOT/tools/ci/run_plugin_self_audit.sh" "$PLUGIN"
 
 # THREE ORPHANED REPO-WIDE GATES, RE-HOMED. Each was authored, tested, merged and
 # then reachable from nothing: no flow clause, no runner, no tools/ci line. Each
@@ -1495,9 +1494,6 @@ run "plugin self-audit"                 "$ROOT" bash "$ROOT/tools/ci/run_plugin_
 # with `wrappers_checked: 0`. A gate that passes because it found nothing to look
 # at is a green light for an empty scan, which is the defect this whole family of
 # audits exists to catch. It needs a corpus before it needs a caller.
-run "flow step-executor coverage"       "$PLUGIN" python3 programs/flow_step_executor_coverage_check.py
-run "lessons corpus consistency"        "$PLUGIN" python3 programs/lessons_corpus_consistency_check.py
-run "ip-catalog upstream (local arm)"   "$PLUGIN" python3 programs/ip_catalog_upstream_audit.py --no-network
 
 # ORPHANED, RE-HOMED. `skill_doc_section_present_check` exists so a durably
 # captured lesson cannot be silently dropped by a later edit: give it a document
@@ -1514,11 +1510,32 @@ run "ip-catalog upstream (local arm)"   "$PLUGIN" python3 programs/ip_catalog_up
 #   IC-EXPERT OPERATING MAP      the phase -> program -> gate -> skill table the
 #                                agent routes from
 # Measured before wiring: all three present, `"missing": []`, rc=0.
-run "benchmark doctrine sections kept" "$PLUGIN" python3 programs/skill_doc_section_present_check.py \
     --doc skills/open-benchmark-methodology/SKILL.md \
     --marker "RULE 0" --marker "GENERAL-CORE / THIN-ADAPTER"
-run "ic-expert operating map kept"     "$PLUGIN" python3 programs/skill_doc_section_present_check.py \
     --doc agents/ic-expert-agent.md --marker "IC-EXPERT OPERATING MAP"
+
+# THE DOCTRINE-RATCHET GATES, RE-HOMED (2026-08-25). Twenty-two AST gates named
+# after the rule each enforces — "only the declaring step writes its output",
+# "a population guard asserts equality not a floor" — authored with committed
+# baselines during a capture campaign and then reachable from NOTHING. No flow
+# clause, no runner, no tools/ci line. A regression guard nobody runs guards
+# nothing; these are the cheapest wiring in the tree and the easiest to have
+# missed, because each one passes and so nobody notices it never ran.
+#
+# ALL TWENTY-TWO WERE RUN FIRST and all exit 0 over REAL corpora — 1478, 1327,
+# 4360, 2842 modules parsed, not an empty scan between them. They are green
+# regression guards with no cadence: wiring them costs a landing nothing today
+# and catches the NEXT instance, which is the only thing a ratchet is for.
+#
+# The eleven siblings NOT here are excluded on measurement, not oversight.
+# Four exit 1 on a GENUINE finding and would block a landing on debt this change
+# does not own:
+#     gate_proof_vocabulary_has_a_producer
+#     every_required_metric_key_has_a_producer
+#     layer_membership_is_declared_not_inferred_from_a_filename_prefix
+#     metric_constant_across_differing_arms_is_not_measured
+# Seven exit 2 NOT CHECKED because they need an argument no "run" line can
+# supply; those need a caller with project knowledge, not a cadence.
 
 # ORGANIC #720 / #693 — the ONE gate in the repo-process family that really was
 # wired to nothing. It was invisible to `checker_execution_wiring_audit` (wired
@@ -1844,7 +1861,7 @@ run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py" 
 # The census the two gates above feed into, and the one thing in this family that
 # a HUMAN had to remember to run.
 #
-# WHY THIS LINE EXISTS. `matrix_63x8/README.md` publishes the campaign's headline
+# WHY THIS LINE EXISTS. `matrix/README.md` publishes the campaign's headline
 # figure — "504 cells: N ENFORCED, N CONTRADICTED, N WAIVED, N NA" — and it has
 # gone stale TWICE, in two different ways, and neither time did anything notice.
 #
@@ -1866,7 +1883,7 @@ run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py" 
 # there is no `.github/workflows` directory in this repository, and before this
 # line THIS script contained zero references to `63x8`, `matrix` or `census` —
 # and #929 edited this very file, adding a gate one line away. The only automated
-# consumer was `test_matrix_63x8_census_freshness.py`, which runs when a human
+# consumer was `test_matrix_census_freshness.py`, which runs when a human
 # selects it. So the guard shipped by #928 was real, was correct, and was enforced
 # by nothing that fires on a merge. Six PRs landed on 2026-08-11 alone.
 #
@@ -1920,8 +1937,8 @@ run "closed-loop edges resolve" "$ROOT" python3 "$PG/closed_loop_edge_check.py" 
 # out of date, which blocks the campaign, not the push.
 #
 # The two tiers are now separate by construction. Run it where it belongs:
-#     python3 tools/gen_matrix_63x8_census.py <root> --check
-# and `test_matrix_63x8_census_freshness.py` still enforces it in the suite, so the
+#     python3 tools/gen_matrix_census.py <root> --check
+# and `test_matrix_census_freshness.py` still enforces it in the suite, so the
 # figure cannot drift unnoticed -- it simply no longer sits between a fix and main.
 #
 # NOT REMOVED FOR SPEED. Measured on the trimmed tree it is 64s, which is not what

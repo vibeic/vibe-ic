@@ -345,7 +345,7 @@ def test_cli_mode_flag_plumbs_through(monkeypatch, capsys):
 
 # ---- rule 4: shared TEST-HELPER modules (vibe-ic#534) ----------------------
 #
-# The gap these pin: `programs/tests/matrix_63x8/waivers.py` is the single
+# The gap these pin: `programs/tests/matrix/waivers.py` is the single
 # central waiver registry that #527 (v1.7.86) and #530 (v1.7.88) consolidated
 # — one accepted gap, one text — and BEFORE rule 4 a change to it selected
 # nothing but the smoke floor, so the eight dimension modules whose verdicts it
@@ -359,14 +359,14 @@ def test_cli_mode_flag_plumbs_through(monkeypatch, capsys):
 # re-derived from the tests' own import lines by a regex that shares no code
 # with the selector's `ast` implementation, so the two can disagree.
 
-_MATRIX_PKG = "matrix_63x8"
+_MATRIX_PKG = "matrix"
 _REGISTRY_REL = f"{TESTS_REL}/{_MATRIX_PKG}/waivers.py"
 _IMPORTS_MATRIX = re.compile(rf"^[ \t]*(?:from|import)[ \t]+{_MATRIX_PKG}\b", re.M)
 
 
 #: A test file may reach the registry through a HELPER in `programs/tests/`
 #: rather than importing the package itself — `matrix_d7_artifact_graph.py`
-#: carries `from matrix_63x8 import flowref` at its own line 207, so a test that
+#: carries `from matrix import flowref` at its own line 207, so a test that
 #: imports only that helper is a genuine consumer and the selector is right to
 #: pick it. Matching direct imports alone made this oracle NARROWER than the
 #: truth, and the first test file to consume a helper without also importing the
@@ -460,7 +460,7 @@ def test_helper_rule_does_not_widen_unrelated_selections():
 
     vibe-ic#1058 changed ONE fixture here and nothing about the intent. The
     "docs only" row used to pass `{TESTS_REL}/{_MATRIX_PKG}/README.md`, which is
-    not docs: `test_matrix_63x8_census_freshness.py:66` does
+    not docs: `test_matrix_census_freshness.py:66` does
     `text = README.read_text(...)` and asserts on its contents. Four tests read
     it. Rule 7 selects them, correctly — so that fixture no longer isolates
     rule 4, which is all this test was ever measuring.
@@ -569,7 +569,7 @@ def test_helper_rule_ignores_the_name_in_string_literals(tmp_path):
 def test_helper_rule_follows_helper_to_helper_edges(tmp_path):
     """A change two hops away still reaches the test.
 
-    `matrix_d4_probe` imports `matrix_63x8.flowref` and the d4 test imports the
+    `matrix_d4_probe` imports `matrix.flowref` and the d4 test imports the
     probe; without transitivity a flowref change would miss that test whenever
     it stops importing flowref itself.
     """

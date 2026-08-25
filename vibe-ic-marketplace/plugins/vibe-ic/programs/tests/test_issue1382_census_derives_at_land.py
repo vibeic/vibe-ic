@@ -44,12 +44,12 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 MOD = PROGRAMS / "gatekeeper_prepare_landing.py"
 REPO = Path(__file__).resolve().parents[5]
-GEN = REPO / "tools" / "gen_matrix_63x8_census.py"
+GEN = REPO / "tools" / "gen_matrix_census.py"
 
 INDEX_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs/INDEX.md"
 PJSON_REL = "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
 CENSUS_REL = ("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-              "matrix_63x8/README.md")
+              "matrix/README.md")
 # An ANCHORED-FIGURE file, named as one of the corpus files `--fix` rewrites.
 # Deliberately NOT the other one: the census corpus is discovered by content
 # ("a typed list is a promise that nobody will add a document"), and a file that
@@ -139,7 +139,7 @@ def test_the_real_default_writer_is_wired_in_and_is_the_census_generator():
     """A test that only ever sees an injected writer cannot notice that the
     default was unplugged, which is how a fix stops reaching the code that runs.
     """
-    assert G.GEN_CENSUS.name == "gen_matrix_63x8_census.py", G.GEN_CENSUS
+    assert G.GEN_CENSUS.name == "gen_matrix_census.py", G.GEN_CENSUS
 
     # ASSERTED BY BEHAVIOUR, NOT BY SPELLING.
     #
@@ -320,7 +320,7 @@ def test_the_expensive_check_is_not_moved_into_the_push_hook(repo):
     if not hook.is_file():
         pytest.skip(f"no pre-push hook at {hook} — nothing to assert about")
     text = hook.read_text(encoding="utf-8")
-    assert "gen_matrix_63x8_census" not in text, (
+    assert "gen_matrix_census" not in text, (
         "the census check has been added to pre-push. Reading (b) of #1382 "
         "costs a guaranteed conflict on every gate-adding PR; if that is now "
         "the intended contract, change this test and say why in the PR.")
@@ -337,7 +337,7 @@ def test_the_written_json_declaration_survives_a_failing_run():
     tree = ast.parse(GEN.read_text(encoding="utf-8"))
     main = next((n for n in ast.walk(tree)
                  if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
-    assert main is not None, "gen_matrix_63x8_census.py has no main()"
+    assert main is not None, "gen_matrix_census.py has no main()"
     finallys = [n for n in ast.walk(main)
                 if isinstance(n, ast.Try) and n.finalbody]
     assert finallys, (

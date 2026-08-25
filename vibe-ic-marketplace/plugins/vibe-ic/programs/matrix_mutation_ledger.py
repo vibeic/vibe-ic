@@ -11,7 +11,7 @@ RUNNABLE mutation has been shown to turn it red.
 ====================================================================
 WHY THIS EXISTS (and why the 504-cell coverage meta-test is not enough)
 ====================================================================
-``programs/tests/test_matrix_63x8_coverage.py`` already proves every cell has a
+``programs/tests/test_matrix_coverage.py`` already proves every cell has a
 real, collected, non-skipping pytest item in a known state. Its own docstring
 says plainly what it does NOT prove: *"``ENFORCED`` here means the module says
 this cell's live predicate runs and passes. It does not mean the predicate would
@@ -1032,7 +1032,7 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "which is precisely why it is waived. "
                  "STEP 12 WAS ADDED 2026-08-11 and the old note's claim that it "
                  "'has no executable clause to blind' was, by then, false. "
-                 "`23d96bf5` (v1.10.0, 'close the matrix_63x8 dimension-2 "
+                 "`23d96bf5` (v1.10.0, 'close the matrix dimension-2 "
                  "content gap on Step 12') gave step 12 a "
                  "`program_exit_zero: dft_post_optimization_scan_survival_check` "
                  "clause and lifted its dimension-2 waiver in the same change — "

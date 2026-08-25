@@ -21,8 +21,8 @@ while IFS=$'\t' read -r v wt br head st nown ndiff nnovel nsuper f sa sb la lb d
       f="(untracked) vibe-ic-marketplace/plugins/vibe-ic/programs/declared_clock_period.py";;
     /tmp/regen_4e51c4853)
       v=KEEP; st=KEEP_UNCOMMITTED_MODIFIED
-      note="Committed content matches main. One tracked file is modified on disk and differs from main: \`programs/tests/matrix_63x8/README.md\` (7 lines changed). Small, but it is not on main and not committed anywhere."
-      f="(modified) vibe-ic-marketplace/plugins/vibe-ic/programs/tests/matrix_63x8/README.md";;
+      note="Committed content matches main. One tracked file is modified on disk and differs from main: \`programs/tests/matrix/README.md\` (7 lines changed). Small, but it is not on main and not committed anywhere."
+      f="(modified) vibe-ic-marketplace/plugins/vibe-ic/programs/tests/matrix/README.md";;
     /home/reyerchu/vibe-ic-shard)
       note="**Clone root, not a plain worktree** — its \`.git\` owns the 16 \`/tmp/shard_*\` and \`/tmp/regen_*\` worktrees below and their objects. Its committed content matches main, and its 21951 status lines are ALL \`D\`: the working files were deleted from disk, so there is nothing in the tree to recover. Dropping the *content* is right; deleting the *directory* would take the object store with it."
       st=DROP_ALL_FILES_MATCH_TREE_EMPTIED;;

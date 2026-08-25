@@ -27,7 +27,7 @@ key), `triage_record_check`'s `close_loop` triage flag, and
 `phase1_doc_one_shot_runner._v1_6_581_route_l1_fallback_top_module`.
 
 The 63x8 matrix even SHIPS the accessor and exports it —
-`tests/matrix_63x8/flowref.py: def closed_loop(step_id)`, listed in `__all__` —
+`tests/matrix/flowref.py: def closed_loop(step_id)`, listed in `__all__` —
 and no dimension module and no test calls it. The capability was built and left
 unwired, which is the same shape as the four PPA programs the flow references
 zero times.

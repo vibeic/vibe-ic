@@ -213,9 +213,9 @@ import flow_compliance_check as FCC
 import matrix_d7_artifact_graph as G
 import matrix_d7_write_record as R
 import step_write_ledger as SWL
-from matrix_63x8 import flowref as F
-from matrix_63x8 import waivers
-from matrix_63x8.cells import cells_for
+from matrix import flowref as F
+from matrix import waivers
+from matrix.cells import cells_for
 
 # WHERE W2's OBSERVED PRODUCER ORACLE WENT.
 #
@@ -245,7 +245,7 @@ RESOLUTION_LIMITS_AS_MEASURED = 6
 # ─────────────────────────────────────────────────────────────────────
 # This module used to carry a `PENDING_WAIVERS` mirror of its nine dimension-7
 # waivers, added while eight agents shared one worktree and a concurrent edit to
-# `matrix_63x8/waivers.py` could lose an entry. The orchestrator has since
+# `matrix/waivers.py` could lose an entry. The orchestrator has since
 # landed all nine centrally, so `_waiver_for` read the central copy and ignored
 # the local one — the mirror's own comment predicted it would become "dead
 # weight that should be deleted" once that happened, and it had.
@@ -1920,7 +1920,7 @@ def test_the_pin_is_SILENT_on_a_healthy_binding():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
+# UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_coverage.py)
 #
 # The coverage meta-test must be able to ask every dimension module the same
 # question and get an answer the module itself computes. Anything it derived on

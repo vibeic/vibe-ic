@@ -951,7 +951,7 @@ def driver_stall_window(repo_root: Path) -> Optional[int]:
     ``timeout(0)`` resolves to the stall window rather than to zero: zero means
     "no per-item clock", and the stall clock is then the only thing left that can
     end the call. Reading 0 as a BOUND of zero made every inner timeout in such a
-    file a violation -- which is how ``test_matrix_63x8_coverage.py:305
+    file a violation -- which is how ``test_matrix_coverage.py:305
     subprocess.run(timeout=60)`` was reported as a session risk in a file whose
     items cannot be killed by the item clock at all, and blocked landing on main.
 
@@ -1422,7 +1422,7 @@ def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
     harness bounds every ITEM at `--timeout=180`. That is not true of an item
     carrying this marker: pytest-timeout applies the MARKER to that test
     instead, which is the whole reason the marker exists, and this repository
-    already relies on it — `test_matrix_63x8_census_freshness.py` carries
+    already relies on it — `test_matrix_census_freshness.py` carries
     `@pytest.mark.timeout(600)` with its measurement, and
     `test_issue1181_probe_budget_and_summary.py` PINS the mechanism (a marked
     test under `--timeout=2 --timeout-method=thread` yields `2 passed` rather

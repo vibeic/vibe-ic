@@ -251,7 +251,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from matrix_63x8 import flowref as F
+from matrix import flowref as F
 
 import _plugin_tree
 

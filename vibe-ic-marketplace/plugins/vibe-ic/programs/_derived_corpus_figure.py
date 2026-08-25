@@ -39,7 +39,7 @@ DERIVE   The figure describes the tree as it is NOW. It must be recomputed
            block, but without confining the figure to one marked region.
 
          Anchors exist because a marked-block generator only guards what is
-         inside its markers. ``tools/gen_matrix_63x8_census.py`` guarded a
+         inside its markers. ``tools/gen_matrix_census.py`` guarded a
          36-line block of a 501-line README and printed "census fresh" over
          five live-derived figures outside it, one of them invalidated by
          the very commit that gate's own message cites (vibe-ic#961).
