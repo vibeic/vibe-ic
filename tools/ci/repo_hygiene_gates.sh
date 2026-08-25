@@ -1476,6 +1476,29 @@ run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_arti
 # the CHECKERS, repaired in the same change; no published number was edited.
 run "plugin self-audit"                 "$ROOT" bash "$ROOT/tools/ci/run_plugin_self_audit.sh" "$PLUGIN"
 
+# THREE ORPHANED REPO-WIDE GATES, RE-HOMED. Each was authored, tested, merged and
+# then reachable from nothing: no flow clause, no runner, no tools/ci line. Each
+# was RUN before being wired here, because a gate that cannot pass on the tree it
+# is about to gate is not a wiring job, and each one's measured verdict is:
+#
+#   flow_step_executor_coverage_check  steps=75 WIRED=59 ORPHANED=0 -> PASS
+#   lessons_corpus_consistency_check   PASS, over the real lessons corpus
+#   ip_catalog_upstream_audit          18/18 local PASS
+#
+# `--no-network` on the last one is deliberate and not a weakening: its upstream
+# arm does `git ls-remote` and a shallow clone per IP, so wiring it without the
+# flag makes this lane fail when github is unreachable — a red that says nothing
+# about the tree. The local arm checks every manifest's files and license against
+# what is actually vendored, which is the half a landing can be responsible for.
+#
+# NOT WIRED, and the reason is the point: `synth_wrapper_check` also exits 0 here,
+# with `wrappers_checked: 0`. A gate that passes because it found nothing to look
+# at is a green light for an empty scan, which is the defect this whole family of
+# audits exists to catch. It needs a corpus before it needs a caller.
+run "flow step-executor coverage"       "$PLUGIN" python3 programs/flow_step_executor_coverage_check.py
+run "lessons corpus consistency"        "$PLUGIN" python3 programs/lessons_corpus_consistency_check.py
+run "ip-catalog upstream (local arm)"   "$PLUGIN" python3 programs/ip_catalog_upstream_audit.py --no-network
+
 # ORGANIC #720 / #693 — the ONE gate in the repo-process family that really was
 # wired to nothing. It was invisible to `checker_execution_wiring_audit` (wired
 # at line 247) purely by FILENAME: that gate's population was `*_check.py` +
