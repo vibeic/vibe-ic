@@ -1313,6 +1313,20 @@ steps:
         # This is deliberately redder: on a host without Verilator this step
         # can no longer reach PASS.
         - program_exit_zero: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
+        # ORPHANED, RE-HOMED (2026-08-25). The clause above MEASURES coverage;
+        # this one asks whether the state TRANSITIONS the design declares were
+        # each exercised, which a line/toggle percentage cannot answer. Its
+        # input is the very file the clause above writes, so the producer is
+        # this step and the condition is exact.
+        - optional_program_exit_zero:
+            command: "functional_state_transition_coverage_check --coverage reports/phase2/coverage/coverage_actual.json --json reports/phase2/gates/fsm_transition_coverage.json"
+            condition_files_exist: ["reports/phase2/coverage/coverage_actual.json"]
+            absent_condition_reason: >-
+              Scoped to a measured coverage run. The clause above writes
+              `coverage_actual.json`; a project whose simulation produced no
+              coverage database has no transition record for this clause to
+              read, and saying so is not the same as saying every transition was
+              covered.
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. UNCONDITIONAL
         # (vibe-ic#236, resolving the #220 known-open ownership question): the
@@ -5725,6 +5739,21 @@ steps:
         # VACUOUS_PASS (rc 2) when no DEF describes the layout; blocks only on a
         # PLACED port with no label. Flips 0 of the 4 real sign-off GDS here.
         - program_exit_zero: "gds_port_label_check . --json reports/phase3/gds_port_labels.json"
+        # ORPHANED, RE-HOMED (2026-08-25). Step 37 is where a design publishes
+        # its numbers, so it is the step that can ask whether every figure in
+        # the final report is backed by an artefact on disk rather than typed
+        # in. Conditioned on the report existing: a project that has not written
+        # one has no claim to check, which is a different statement from "its
+        # claims are backed".
+        - optional_program_exit_zero:
+            command: "reported_figure_artifact_backing_check --report FINAL_REPORT.md --json reports/phase3/gates/figure_backing.json"
+            condition_files_exist: ["FINAL_REPORT.md"]
+            absent_condition_reason: >-
+              Scoped to a published final report. No FINAL_REPORT.md means no
+              reported figure, and a gate over zero figures must not read as
+              "all figures are backed" — the `[CLEAN] BACKED — all 0 figure(s)`
+              it prints over an empty scan is exactly the vacuous pass this
+              condition exists to keep out of the record.
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
