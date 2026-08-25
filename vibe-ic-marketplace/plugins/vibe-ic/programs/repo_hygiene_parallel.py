@@ -49,7 +49,15 @@ from hygiene_shard_plan import load_profile, plan
 # that came from outside the records being checked, and that is the distinction
 # its header is written about: "deriving the denominator from the records
 # themselves would let a run that lost a shard agree with itself."
-import hygiene_shard_aggregate as _shard_aggregate
+#
+# IMPORTED AT THE CALL SITE, not here. `gatekeeper-verify-merge.sh` runs this
+# module out of a TRUSTED SNAPSHOT — a `git archive` of a base commit — and the
+# merge-verdict fixture builds that base from a file list. A module-level
+# import makes every consumer of this file, including one that never reaches
+# the aggregation, fail to LOAD when the snapshot does not carry the neighbour:
+# `ModuleNotFoundError: No module named 'hygiene_shard_aggregate'`, raised
+# before a single gate ran. At the call site the dependency is exactly as real
+# and costs nothing to anyone who does not aggregate.
 from policy_direction_pin_check import acquire_run_lock, recover_all_journals
 
 HOST_LABEL = "gates are host-independent"
@@ -1372,6 +1380,7 @@ def main(argv=None) -> int:
         planned = [*(l for b in buckets for l in b), *sensitive, HOST_LABEL]
         expect_path = tmp / "planned-labels.txt"
         expect_path.write_text("\n".join(planned) + "\n", encoding="utf-8")
+        import hygiene_shard_aggregate as _shard_aggregate  # noqa: PLC0415
         coverage_rc = _shard_aggregate.main(
             [*(str(path) for path, _ in docs), "--expect", str(expect_path),
              "--shards", str(total_shards)])

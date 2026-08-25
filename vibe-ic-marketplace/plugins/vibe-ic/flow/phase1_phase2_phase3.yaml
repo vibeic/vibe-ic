@@ -1471,7 +1471,26 @@ steps:
         # wins — and it REFUSES with rc=2 rather than guessing when the design
         # owns no period, because a turnaround budget against a fabricated clock
         # looks like a measurement and is not one.
-        - advisory_program_exit_zero: "protocol_turnaround_audit --rtl-dir phase2/stage1/rtl --l2-json phase1/generated_docs/L2_FRS.json"
+        #
+        # CONDITIONAL ON THE LAYER IT READS, and the condition is not
+        # decoration. `audit_rtl_dir` opens `--l2-json` behind
+        # `if l2_json.exists()` and falls through to `l2_data = {}` when it
+        # does not — the three timing parameters then resolve to None,
+        # `min_safe_cycles` becomes the -1 unknown sentinel, and every finding
+        # is emitted against a budget that was never computed. Wired
+        # unconditionally, a project with no L2 got a printed turnaround report
+        # and an advisory `ok` over a comparison that did not happen. The other
+        # ten clauses in this flow that name a `phase1/generated_docs/L*.json`
+        # are each conditioned on that very file for this reason, and
+        # `phase1_planned_consumer_starved_check` reads exactly that
+        # declaration to decide whether a layer is PLANNED for a project: an
+        # unconditional clause claims every project plans this read, so a
+        # project with no L2 was recorded as a planned read of an ABSENT layer.
+        - advisory_program_exit_zero:
+            command: "protocol_turnaround_audit --rtl-dir phase2/stage1/rtl --l2-json phase1/generated_docs/L2_FRS.json"
+            condition_files_exist:
+              - "phase1/generated_docs/L2_FRS.json"
+            absent_condition_reason: "The turnaround budget is computed from the L2 timing layer — delimiter_max, delimiter_detect_threshold and t_turnaround_min. A design whose Phase 1 emitted no L2 owns none of the three, and the program answers that by auditing the RTL against an unknown-sentinel budget rather than refusing, which reads as a measurement and is not one. Scoped to the runs that carry the layer."
         # vibe-ic#306 slot — ADVISORY coverage GAP ANALYSIS.
         #
         # `coverage_closure` has been declared in this step's `programs:` list
@@ -1788,7 +1807,13 @@ steps:
     required_outputs:
       - "phase2/stage2/constraints/*.sdc"
       - "phase2/stage2/constraints/pvt_matrix.json"
-      - "phase2/stage2/constraints/*.upf"
+      # NOT DECLARED, and the clause below says why in its own words:
+      # `l21_to_upf_emit` is "measured rc=2 SKIP whenever L21 declares no
+      # power_domains". `required_outputs` is UNCONDITIONAL — the same rule
+      # already written out at step 6 — so a design with no power intent would
+      # be asked for a `.upf` nothing produced. The emit still writes
+      # `phase2/stage2/constraints/<top>.upf` and still self-validates it; what
+      # is refused is the unconditional CLAIM, not the artefact.
     gate:
       all_of:
         - files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
@@ -2754,6 +2779,13 @@ steps:
         # corpus (today it is red on both roots that carry corner data, for
         # an unrelated and fixable producer reason), so that a blocking
         # placement would actually execute.
+        # These two sit ABOVE the realism lint deliberately. `_evaluate_gate`
+        # re-runs only the advisory entries that come AFTER the sub-gate that
+        # failed, and the lint has to stay LAST for its own wiring test; both
+        # of these still follow every blocking sub-gate, so both are still
+        # re-run. Order here is a re-run contract, not a preference.
+        - advisory_program_exit_zero: "analog_adc_enob_corner_check ."
+        - advisory_program_exit_zero: "analog_sigma_delta_gain_floor_check ."
         - advisory_program_exit_zero: "analog_corner_lib_realism_lint ."
         # THREE ORPHANED ANALOG GATES, RE-HOMED HERE (2026-08-25). Each was
         # authored with tests and then reachable from nothing — no flow clause,
@@ -2770,9 +2802,14 @@ steps:
         # exercised against a real analog corpus yet. A gate whose first
         # blocking run would be its first run at all is not something to put in
         # front of a landing; it reports until an analog design has answered it.
-        - advisory_program_exit_zero: "analog_corner_margin_check ."
-        - advisory_program_exit_zero: "analog_adc_enob_corner_check ."
-        - advisory_program_exit_zero: "analog_sigma_delta_gain_floor_check ."
+        # A FOURTH gate of this family is deliberately absent, and this
+        # comment cannot name it: the test that keeps it out of the flow is a
+        # raw substring scan of this whole file, so a comment naming it reads
+        # as wiring. Its reason lives where a machine reads it instead —
+        # `checker_execution_wiring_baseline.json`, whose triage entry states
+        # which two of its rules are unreachable through the blocking gate
+        # above. That is what `test_the_margin_gate_is_recorded_as_unwired_
+        # with_a_reason` asserts, and this file's SILENCE is the other half.
     blocks_on: [A3]
 
   - id: A5

@@ -4,6 +4,7 @@
   "scope_expanded": "vibe-ic#1347: the audit now reads the SHAPE of each reference (invocation vs mention) on the raw source, not merely whether the name is one of the file's tokens; three checkers held up only by another program's message text are now visible as test-only.",
   "known": [
     "agent_report_presence_check.py",
+    "analog_corner_margin_check.py",
     "eda_log_check.py",
     "phase23_completion_self_audit_check.py",
     "rtl_signal_name_semantic_check.py",
