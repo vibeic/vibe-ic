@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1210
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1210)
+- **Total programs (excluding helpers / shims):** 1213
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1213)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1201 |
+| `any` | 1204 |
 
 ## Alphabetical listing
 
@@ -264,7 +264,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_atomic_bridge` | any | — | a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi... |
 | `cvdp_complete_extract` | any | — | a UNIFIED CVDP complete-extraction layer. |
 | `cvdp_context_interface_recover` | any | — | recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3). |
-| `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m... |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
 | `d3_manifest_declaration_parity_check` | any | — | Every declared `required_outputs` path must be covered by the d3 manifest. |
 | `dali_protocol_synth` | any | v0.1.84 | DALI-class protocol synth helper. |
@@ -889,7 +888,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
 | `prompt_example_selftest` | any | — | RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL. |
+| `prose_interface_bridge` | any | — | try every prose-interface reader, in order. |
+| `prose_interface_bridge_md` | any | — | read a MARKDOWN-table interface block. |
 | `prose_interface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base prose_port_block_read does not yet read. |
+| `prose_interface_table_read` | any | — | read an interface stated as a MARKDOWN TABLE. |
 | `prose_polarity_census` | any | — | how many prose extractors do NOT consult polarity, counted with a predicate sharper than the gate's, and never blocking on it. |
 | `prose_polarity_consulted_check` | any | — | A prose extractor that never asks whether the sentence DENIES the value. |
 | `prose_port_block_read` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output... |
@@ -1145,6 +1147,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tb_vcs_only_construct_remediate` | any | — | ORGANIC #717 |
 | `testbench_exists_check` | any | — | Deterministic testbench existence and coverage checker. |
 | `testbench_gen` | any | — | emit unit testbenches from L10 test_cases. |
+| `testbench_verdict` | any | — | read a simulator run and say what it MEANT. |
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
 | `tester_verdict_frame_decode` | any | — | Chip-agnostic, tester-agnostic post-processor that decodes raw tester |
 | `thermal_screen_check` | any | — | power-density / junction-temperature screen. |
@@ -1282,7 +1285,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1201 programs)
+### `any` (1204 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1519,7 +1522,6 @@ _(no programs in this group)_
 - `cvdp_atomic_bridge` — a CVDP-prose -> atomic-spec BRIDGE that lets the existing deterministic registry solvers (spec_artifact_registry) program-SOLVE the atomi...
 - `cvdp_complete_extract` — a UNIFIED CVDP complete-extraction layer.
 - `cvdp_context_interface_recover` — recover the TARGET module's PORT INTERFACE from the PROVIDED `input['context']` RTL header (CONVERGE lever: Tier4 -> Tier3).
-- `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m...
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
 - `d3_manifest_declaration_parity_check` — Every declared `required_outputs` path must be covered by the d3 manifest.
 - `dali_protocol_synth` — DALI-class protocol synth helper.  _[v0.1.84]_
@@ -2142,7 +2144,10 @@ _(no programs in this group)_
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
 - `prompt_example_selftest` — RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL.
+- `prose_interface_bridge` — try every prose-interface reader, in order.
+- `prose_interface_bridge_md` — read a MARKDOWN-table interface block.
 - `prose_interface_recover` — a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base prose_port_block_read does not yet read.
+- `prose_interface_table_read` — read an interface stated as a MARKDOWN TABLE.
 - `prose_polarity_census` — how many prose extractors do NOT consult polarity, counted with a predicate sharper than the gate's, and never blocking on it.
 - `prose_polarity_consulted_check` — A prose extractor that never asks whether the sentence DENIES the value.
 - `prose_port_block_read` — a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output...
@@ -2396,6 +2401,7 @@ _(no programs in this group)_
 - `tb_vcs_only_construct_remediate` — ORGANIC #717
 - `testbench_exists_check` — Deterministic testbench existence and coverage checker.
 - `testbench_gen` — emit unit testbenches from L10 test_cases.
+- `testbench_verdict` — read a simulator run and say what it MEANT.
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
 - `tester_verdict_frame_decode` — Chip-agnostic, tester-agnostic post-processor that decodes raw tester
 - `thermal_screen_check` — power-density / junction-temperature screen.
