@@ -93,6 +93,20 @@ def _port_width_is_wide(port: Dict[str, Any]) -> bool:
 def _size_param_from(port: Dict[str, Any], default_name: str = "size",
                      default_val: int = 32) -> Tuple[str, int]:
     """Resolve the parametric width name + default for the parallel operand."""
+    # v1.11.91 — the STRUCTURED answer first. When phase 1 resolved a symbolic
+    # width against the parameters of the same document, it wrote the integer
+    # into `width`/`msb` and moved the symbol into `width_resolution`. Reading
+    # the prose fields alone would then find no identifier and silently fall
+    # back to this function's own `default_name` / `default_val` — a real
+    # parameter name replaced by a guess with no diagnostic. The provenance
+    # record carries both, already parsed, so no regex is involved.
+    res = port.get("width_resolution")
+    if isinstance(res, dict):
+        ident = res.get("identifier")
+        dv = res.get("parameter_default_int")
+        if isinstance(ident, str) and ident and isinstance(dv, int) \
+                and not isinstance(dv, bool):
+            return ident, dv
     for src in (port.get("width_symbolic"), port.get("width"), port.get("msb")):
         m = re.search(r"([A-Za-z_]\w*)\s*-\s*1", str(src or ""))
         if m:

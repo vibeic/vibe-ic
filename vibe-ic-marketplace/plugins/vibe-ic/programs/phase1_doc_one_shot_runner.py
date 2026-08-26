@@ -58145,6 +58145,286 @@ def _post_emit_mirror_parameters_to_l9_v1_6_327(
     _stamp.dump(out, l9)
 
 
+# ---------------------------------------------------------------------------
+# v1.11.91 — for the SPM symbolic-port-width defect. Resolve a SYMBOLIC port
+# width against the parameters declared in the SAME emitted document, and
+# write the resolved integer INTO that document.
+#
+# WHY HERE AND NOT IN THE CONSUMER
+# --------------------------------
+# `phase2_scaffold_gen.derive_signals` refuses a width it cannot read as an
+# integer (`width: None`), every scaffold emitter then raises
+# `UnresolvedPortWidth`, and both
+# `l17_channel_catalog_consumer_contract_check` and
+# `cross_layer_reference_check` report the layer. Their remedy text is
+# explicit and is the contract this hook implements:
+#
+#   "The remedy is in L1/L9: state the width as an integer, or declare the
+#    parameter the range names in the same document. Resolving it inside the
+#    consumer is NOT the remedy — #404 measured that a wrong resolution and a
+#    right one are indistinguishable from outside."
+#
+# A resolution performed HERE lands in the emitted DOCUMENT, where it is
+# auditable: the number, the symbol it came from, the parameter that carried
+# it and that parameter's own `source` all ship together in
+# `width_resolution`, so a reader can re-derive the number without running
+# anything. A resolution performed in the consumer leaves no such record —
+# that is precisely why #404 withdrew it.
+#
+# WHY THE JOIN IS SOUND HERE AND WAS NOT IN #404
+# ----------------------------------------------
+# #404's withdrawn resolver joined `parameters[]` CORPUS-GLOBALLY by bare
+# name, so an L12 scan-chain count `N=4` could size a data bus documented as
+# 48. This hook joins ONLY against `l9["parameters"]` — the parameter list of
+# the very document that carries the port — which is the scope the gates'
+# own remedy sentence names ("in the same document").
+#
+# WHEN IT REFUSES — refusing is always the correct fallback
+# --------------------------------------------------------
+# Every one of these leaves the entry untouched, so the consumer keeps
+# refusing and the gates keep firing:
+#   * the range expression names zero identifiers, or more than one;
+#   * the identifier is not a declared parameter OF THIS DOCUMENT;
+#   * two declared parameters answer to that name with different defaults;
+#   * the default is not an integer literal (decimal or hex);
+#   * either range term is not a `<ident|int>([+-]<ident|int>)*` expression;
+#   * the arithmetic does not yield a width >= 1.
+# A width is NEVER guessed. Chip-AGNOSTIC: pure range grammar + this
+# document's own parameter table; no chip-class literal participates.
+# ---------------------------------------------------------------------------
+
+_V1_11_91_PORT_LIST_KEYS = ("ports", "top_ports", "top_module_pins")
+_V1_11_91_RE_IDENT = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
+_V1_11_91_RE_LINEAR_TERM = re.compile(
+    r"[+-]?[A-Za-z_0-9]+(?:[+-][A-Za-z_0-9]+)*")
+_V1_11_91_RE_DEC = re.compile(r"[+-]?\d+")
+_V1_11_91_RE_HEX = re.compile(r"[+-]?0[xX][0-9a-fA-F]+")
+
+
+def _v1_11_91_parameter_default_int(raw: Any) -> Optional[int]:
+    """Return the integer a parameter default states, or None.
+
+    Decimal and hex literals only. Anything else — a prose default, a
+    range, an empty string — is NOT an integer this hook may act on.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if _V1_11_91_RE_HEX.fullmatch(s):
+        return int(s, 16)
+    if _V1_11_91_RE_DEC.fullmatch(s):
+        return int(s, 10)
+    return None
+
+
+def _v1_11_91_eval_linear_term(term: str,
+                               env: Dict[str, int]) -> Optional[int]:
+    """Evaluate `<ident|int>([+-]<ident|int>)*` over `env`. None on refusal.
+
+    A hand-written tokeniser rather than `eval`: the grammar is exactly
+    addition and subtraction of non-negative integer literals and declared
+    identifiers, and nothing outside it may be evaluated.
+    """
+    s = (term or "").replace(" ", "")
+    if not s or not _V1_11_91_RE_LINEAR_TERM.fullmatch(s):
+        return None
+    total = 0
+    sign = 1
+    pos = 0
+    if s[0] in "+-":
+        sign = -1 if s[0] == "-" else 1
+        pos = 1
+    while pos < len(s):
+        m = re.match(r"[A-Za-z_0-9]+", s[pos:])
+        if m is None:
+            return None
+        tok = m.group(0)
+        pos += len(tok)
+        if tok.isdigit():
+            total += sign * int(tok, 10)
+        elif _V1_11_91_RE_IDENT.fullmatch(tok):
+            if tok not in env:
+                return None
+            total += sign * env[tok]
+        else:
+            # e.g. `1a` — neither a literal nor an identifier.
+            return None
+        if pos >= len(s):
+            break
+        nxt = s[pos]
+        if nxt == "+":
+            sign = 1
+        elif nxt == "-":
+            sign = -1
+        else:
+            return None
+        pos += 1
+    return total
+
+
+def _v1_11_91_resolve_symbolic_range(
+        symbolic: Any,
+        parameters: Any) -> Optional[Dict[str, Any]]:
+    """Resolve `<msb_expr>:<lsb_expr>` against a document's parameters.
+
+    Returns a provenance dict carrying the resolved width, msb, lsb, the
+    identifier consumed and that parameter's own default + source; or None
+    whenever the resolution is not unambiguous, in which case the caller
+    must leave the port's declared width exactly as the layer states it.
+    """
+    if not isinstance(symbolic, str) or not symbolic.strip():
+        return None
+    sym = symbolic.strip()
+    parts = sym.split(":")
+    if len(parts) != 2:
+        return None
+    idents = sorted(set(_V1_11_91_RE_IDENT.findall(sym)))
+    # EXACTLY ONE identifier. Zero is a numeric range some other path
+    # already handles; two or more cannot be resolved without choosing
+    # which parameter list to believe, and choosing is guessing.
+    if len(idents) != 1:
+        return None
+    ident = idents[0]
+    if not isinstance(parameters, list) or not parameters:
+        return None
+    # Case-INSENSITIVE candidate set on purpose. `L9.parameters` is
+    # deduplicated by `name.upper()` upstream
+    # (`_post_emit_mirror_parameters_to_l9_v1_6_327`), so this corpus already
+    # treats `size` and `SIZE` as one parameter. Collecting only the
+    # exactly-matching entry would let a second entry that differs in case
+    # AND in default sit unread beside it, and the resolution would then pick
+    # one of two answers with nothing to choose between them.
+    cands = [p for p in parameters
+             if isinstance(p, dict)
+             and isinstance(p.get("name"), str)
+             and p["name"].strip().lower() == ident.lower()]
+    if not cands:
+        return None
+    defaults = []
+    for p in cands:
+        v = _v1_11_91_parameter_default_int(p.get("default"))
+        if v is None:
+            # A declared parameter whose default is not an integer is a
+            # refusal, not a reason to look at the next candidate.
+            return None
+        defaults.append(v)
+    if len(set(defaults)) != 1:
+        # The document answers to this name twice, with two different
+        # numbers. Picking one is guessing.
+        return None
+    env = {ident: defaults[0]}
+    msb = _v1_11_91_eval_linear_term(parts[0], env)
+    lsb = _v1_11_91_eval_linear_term(parts[1], env)
+    if msb is None or lsb is None:
+        return None
+    width = abs(msb - lsb) + 1
+    if width < 1:
+        return None
+    # Prefer the exactly-spelled entry for the provenance record; every
+    # candidate carries the same default by the check above, so this only
+    # decides which `source` is quoted.
+    src = next((p for p in cands if p["name"].strip() == ident), cands[0])
+    return {
+        "width_symbolic": sym,
+        "identifier": ident,
+        "parameter_default": src.get("default"),
+        "parameter_default_int": defaults[0],
+        "parameter_source": src.get("source"),
+        "parameter_extraction_strategy": src.get("extraction_strategy"),
+        "scope": "same_document_parameters",
+        "resolved_width": width,
+        "msb": msb,
+        "lsb": lsb,
+        "resolved_by": (
+            "phase1_doc_one_shot_runner."
+            "_v1_11_91_resolve_symbolic_port_widths"),
+    }
+
+
+def _v1_11_91_apply_symbolic_width(entry: dict,
+                                   parameters: Any) -> bool:
+    """Resolve one port entry in place. True when it was resolved."""
+    if not isinstance(entry, dict):
+        return False
+    prov = _v1_11_91_resolve_symbolic_range(
+        entry.get("width_symbolic"), parameters)
+    if prov is None:
+        return False
+    prov = dict(prov)
+    declared = entry.get("width")
+    if declared is not None:
+        # The prose the layer stated is kept as provenance — the document
+        # must not lose the sentence the number was derived from.
+        prov["width_declared"] = declared
+    entry["width"] = prov["resolved_width"]
+    entry["msb"] = prov["msb"]
+    entry["lsb"] = prov["lsb"]
+    # The symbol now lives in `width_resolution` ONLY. Leaving it in place
+    # would keep every consumer-contract rail firing on a width that is no
+    # longer symbolic, which is the same defect wearing the fix's clothes.
+    entry.pop("width_symbolic", None)
+    entry["width_resolution"] = prov
+    strat = entry.get("extraction_strategy")
+    tag = "symbolic_width_resolved_v1_11_91"
+    if isinstance(strat, str) and strat and tag not in strat:
+        entry["extraction_strategy"] = strat + "+" + tag
+    elif not strat:
+        entry["extraction_strategy"] = tag
+    return True
+
+
+def _v1_11_91_resolve_symbolic_port_widths_in_doc(doc: dict) -> int:
+    """Resolve every resolvable symbolic port width in one L-doc dict."""
+    if not isinstance(doc, dict):
+        return 0
+    parameters = doc.get("parameters")
+    if not isinstance(parameters, list) or not parameters:
+        return 0
+    changed = 0
+    seen: Set[int] = set()
+    for key in _V1_11_91_PORT_LIST_KEYS:
+        lst = doc.get(key)
+        if not isinstance(lst, list):
+            continue
+        for entry in lst:
+            if not isinstance(entry, dict):
+                continue
+            # `ports` / `top_ports` / `top_module_pins` can alias the SAME
+            # list objects in memory; resolving one twice is a no-op but
+            # skipping is cheaper and keeps the count honest.
+            if id(entry) in seen:
+                continue
+            seen.add(id(entry))
+            if _v1_11_91_apply_symbolic_width(entry, parameters):
+                changed += 1
+    return changed
+
+
+def _post_emit_resolve_symbolic_port_widths_v1_11_91(
+        project: Path) -> None:
+    """Rewrite L9 port widths this document's own parameters determine.
+
+    Runs AFTER `_post_emit_mirror_parameters_to_l9_v1_6_327`, because the
+    parameter table it joins against may only have arrived in L9 by that
+    mirror. Idempotent: an entry with no `width_symbolic` is not touched.
+    """
+    try:
+        l9 = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
+    except Exception:
+        l9 = None
+    if not isinstance(l9, dict):
+        return
+    if not _v1_11_91_resolve_symbolic_port_widths_in_doc(l9):
+        return
+    _ensure_bool_flags(l9)
+    _stamp.dump(
+        _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json", l9)
+
+
 # v1.6.551 — for #373 P3 ORGANIC. L7.debug_observability cross-walk
 # from L9.ports. When the primary L7 walkers (file-keyword grep +
 # RST grid Interface table parser) yield zero `debug_observability`
@@ -60139,6 +60419,16 @@ def main() -> int:
     # depends on L9.parameters can see them at the same evaluation
     # tier. Chip-AGNOSTIC.
     _post_emit_mirror_parameters_to_l9_v1_6_327(project)
+
+    # v1.11.91 — resolve SYMBOLIC port widths (`[size-1:0]`) against the
+    # parameter table of the SAME document and write the integer into that
+    # document, with the symbol + the parameter's own source kept as
+    # `width_resolution` provenance. Placed immediately after the parameter
+    # mirror above, which is what may have put `L9.parameters` on disk in
+    # the first place. Refuses — leaving the layer exactly as it was, so the
+    # consumer keeps refusing and the gates keep firing — whenever the
+    # resolution is not unambiguous. Chip-AGNOSTIC.
+    _post_emit_resolve_symbolic_port_widths_v1_11_91(project)
 
     # v1.6.323 — for #222 P1 ORGANIC. Symmetric clock derive: when
     # L8 supplied no clock_domains and L9 inherited none, walk

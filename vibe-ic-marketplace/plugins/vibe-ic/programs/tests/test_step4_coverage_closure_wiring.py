@@ -4,7 +4,7 @@
 THE DEFECT
 ==========
 `coverage_closure` was named in Step 4's `programs:` list ("gap analysis from
-coverage_actual.json") and executed by nothing:
+coverage_verilator.json") and executed by nothing:
 
   * it is not a `gate:` entry in flow/phase1_phase2_phase3.yaml,
   * it is not in `flow_compliance_check._STRUCTURAL_RTL_GATES`,
@@ -102,7 +102,7 @@ def _project(tmp_path: Path, payload) -> Path:
     (p / "reports" / "phase2" / "coverage").mkdir(parents=True, exist_ok=True)
     if payload is not None:
         (p / "reports" / "phase2" / "coverage" /
-         "coverage_actual.json").write_text(json.dumps(payload))
+         "coverage_verilator.json").write_text(json.dumps(payload))
     return p
 
 
@@ -137,7 +137,7 @@ def test_DEFECT_finding_is_recorded_when_a_real_gap_exists(tmp_path):
     (proj / "reports" / "phase2" / "coverage").mkdir(parents=True)
     payload = _measured_payload(proj, 65.0, 90.0, 88.0)
     (proj / "reports" / "phase2" / "coverage" /
-     "coverage_actual.json").write_text(json.dumps(payload))
+     "coverage_verilator.json").write_text(json.dumps(payload))
 
     sub, _key, _cmd = _coverage_closure_subgate()
     assert sub is not None, "not wired — see the previous test"
@@ -174,7 +174,7 @@ def test_GUARD_coverage_closure_never_blocks_step4(tmp_path):
     (proj / "reports" / "phase2" / "coverage").mkdir(parents=True)
     payload = _measured_payload(proj, 5.0, 5.0, 5.0)   # catastrophically low
     (proj / "reports" / "phase2" / "coverage" /
-     "coverage_actual.json").write_text(json.dumps(payload))
+     "coverage_verilator.json").write_text(json.dumps(payload))
     sub, key, _cmd = _coverage_closure_subgate()
     if sub is None:
         pytest.skip("not wired on this tree — the DEFECT tests cover that")

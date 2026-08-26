@@ -9,10 +9,48 @@ The v0.52 fresh-agent <half-duplex-tester> PASS was accompanied by a self-report
 was 78.3 %, toggle 75.5 %, branch 82.3 %. This gate rejects reports that
 lack tool-generated coverage artefacts.
 
-Two modes:
-  measure — run Verilator + compile + simulate + parse coverage.dat
-  check   — only verify that a prior run produced coverage.dat +
-            coverage_actual.json with tool-generated content
+Three modes:
+  measure    — run Verilator + compile + simulate a C++ driver + parse
+               coverage.dat
+  measure-tb — INSTRUMENT AND RUN THE PROJECT'S OWN VERILOG TESTBENCH.
+               `verilator --binary --timing --coverage --coverage-line
+               --coverage-toggle` builds a standalone simulation from the
+               same TB the flow simulated, executes it, and the real
+               line/toggle/branch points are read out of the coverage.dat
+               that run produced. No C++ driver needed, so this is the mode
+               a flow can actually wire.
+  check      — only verify that a prior run produced coverage.dat +
+               a coverage JSON with tool-generated content
+
+ONE PRODUCER PER PATH
+=====================
+`reports/phase2/coverage/coverage_actual.json` used to be written by TWO
+producers: `design_one_shot_runner`, which writes a FUNCTIONAL-verification
+verdict payload there (verdict / evidence / verification_track /
+scenarios_covered, NO `totals` container), and this program's `measure`,
+which writes the line/toggle/branch measurement. A path with two producers
+cannot be read: on every real run the functional payload landed there first
+and `check` correctly reported that line/toggle/branch was never measured.
+
+The two are now SEPARATE artefacts:
+
+  reports/phase2/coverage/coverage_actual.json     functional verdict
+                                                   (design_one_shot_runner)
+  reports/phase2/coverage/coverage_verilator.json  the measurement
+                                                   (this program)
+
+`COVERAGE_MEASUREMENT_REL` below is the single name for the measurement
+path; the Step-4 gate, `coverage_closure` and `fpga_verification_audit`
+all read it. Nothing about the checker's standard changed — it still
+refuses anything that is not a real tool-generated measurement.
+
+SCOPE — the DESIGN, not the testbench
+=====================================
+A testbench is driven top to bottom by construction, so folding its points
+into the totals only dilutes them upward. `measure-tb` totals the points of
+the RTL SOURCES ONLY (`--scope-file`, defaulted to the DUT sources handed to
+Verilator) and records the per-file breakdown for everything, testbench
+included, so the exclusion is visible rather than assumed.
 
 Usage:
     # Measure from scratch (assumes RTL under ./rtl and main driver under
@@ -23,9 +61,14 @@ Usage:
         --main sim/cov_build/main.cpp \\
         --out reports/coverage/coverage_actual.json
 
+    # Measure by instrumenting the project's OWN Verilog testbench
+    python3 verilator_coverage_measure.py measure-tb \\
+        --project . \\
+        --out reports/phase2/coverage/coverage_verilator.json
+
     # Check-only mode (no rebuild, verify stored artefact)
     python3 verilator_coverage_measure.py check \\
-        --coverage-json reports/coverage/coverage_actual.json \\
+        --coverage-json reports/phase2/coverage/coverage_verilator.json \\
         --min-line 70 --min-toggle 60 --min-branch 70
 
 Exit code (`measure`):
@@ -139,6 +182,137 @@ def verilate_and_run(rtl_dir: str, top: str, main_cpp: str, build_dir: str) -> s
     if not dat.exists():
         raise SystemExit(f"coverage.dat not produced under {build_dir}")
     return str(dat)
+
+
+#: Canonical relative path of the MEASUREMENT artefact this program produces,
+#: under the project's reports root. Kept as one name so the Step-4 gate,
+#: `coverage_closure` and `fpga_verification_audit` cannot drift apart, and so
+#: it can never again collide with the functional-verdict payload
+#: `design_one_shot_runner` writes to `coverage/coverage_actual.json`.
+COVERAGE_MEASUREMENT_REL = "coverage/coverage_verilator.json"
+
+#: Verilator flags that turn instrumentation ON. Named once: an argv that
+#: lacks them produces a coverage.dat with no line/toggle/branch points, which
+#: is exactly the "measured nothing" state this program exists to refuse.
+COVERAGE_INSTRUMENTATION_FLAGS = (
+    "--coverage", "--coverage-line", "--coverage-toggle",
+)
+
+
+def _tb_top_module(tb_path: Path) -> str:
+    """Top module name of a Verilog testbench: the first `module <name>`.
+
+    Falls back to the file stem, which is the convention every TB the flow
+    generates already follows (`tb_<top>_oracle.v` holds `tb_<top>_oracle`).
+    """
+    try:
+        text = tb_path.read_text(errors="replace")
+    except OSError:
+        return tb_path.stem
+    m = re.search(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)", text, re.M)
+    return m.group(1) if m else tb_path.stem
+
+
+def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
+                        run_dir: str,
+                        exec_fn=None, build_jobs: int = 0) -> str:
+    """Instrument + build + RUN the project's own Verilog testbench.
+
+    `verilator --binary --timing` builds a standalone simulation executable
+    straight from the TB's `initial`/`always` blocks — no C++ driver — so the
+    SAME testbench the flow simulated is what gets instrumented. The three
+    `COVERAGE_INSTRUMENTATION_FLAGS` are what make the run emit coverage
+    points at all.
+
+    `exec_fn(argv, cwd) -> (rc, stdout, stderr)` lets a caller dispatch the
+    two commands somewhere else (e.g. into the pinned tool container) while
+    the discovery, parsing and thresholding stay here. Default: run locally.
+
+    Returns the path of the coverage.dat the RUN produced. Raises SystemExit
+    when Verilator, the build or the simulation did not produce one — an
+    absent measurement is reported as absent, never substituted.
+    """
+    if exec_fn is None:
+        def exec_fn(argv, cwd):  # noqa: ANN001 — local default
+            r = run(argv, cwd=cwd, check=False)
+            return r.returncode, r.stdout, r.stderr
+
+    if not rtl_files:
+        raise SystemExit("no RTL sources to instrument")
+    tb = Path(tb_path)
+    if not tb.is_file():
+        raise SystemExit(f"testbench not found: {tb_path}")
+    top = _tb_top_module(tb)
+    Path(build_dir).mkdir(parents=True, exist_ok=True)
+    Path(run_dir).mkdir(parents=True, exist_ok=True)
+
+    vcmd = ["verilator", "--binary", "--timing",
+            *COVERAGE_INSTRUMENTATION_FLAGS,
+            "-Wno-fatal", "-Wno-lint",
+            f"-I{tb.parent}",
+            "--top-module", top,
+            "-Mdir", str(build_dir)]
+    if build_jobs > 0:
+        vcmd += ["--build-jobs", str(build_jobs)]
+    vcmd += [str(tb)] + [str(f) for f in rtl_files]
+    rc, out, err = exec_fn(vcmd, run_dir)
+    if rc != 0:
+        raise SystemExit(
+            f"verilator coverage build failed (rc={rc}):\nSTDERR:\n{err}\n"
+            f"STDOUT:\n{out}")
+
+    exe = Path(build_dir) / f"V{top}"
+    rc, out, err = exec_fn([str(exe)], run_dir)
+    if rc != 0:
+        # A TB may $finish non-zero; coverage.dat can still be valid, so this
+        # is a warning, not a substitution.
+        sys.stderr.write(
+            f"[warn] simulation exit={rc}; continuing if coverage.dat present\n")
+
+    for cand in (Path(run_dir) / "coverage.dat",
+                 Path(build_dir) / "coverage.dat",
+                 Path(build_dir) / "logs" / "coverage.dat"):
+        if cand.is_file():
+            return str(cand)
+    raise SystemExit(
+        f"no coverage.dat produced by the instrumented run under {run_dir} "
+        f"— the simulation did not emit coverage points")
+
+
+def scope_totals(cov: Dict[str, Any],
+                 scope_basenames: List[str]) -> Optional[Dict[str, Any]]:
+    """Re-total `cov` over ONLY the named source files.
+
+    A testbench is executed top to bottom by construction, so leaving it in
+    the totals reports the testbench's own coverage as if it were the
+    design's. Returns None when NONE of the named sources appear in the
+    coverage data — that means the instrumented run covered a different
+    closure than the one claimed, and the caller must refuse rather than
+    report the unscoped number instead.
+    """
+    wanted = {Path(n).name for n in scope_basenames}
+    agg = {"line": [0, 0], "toggle": [0, 0], "branch": [0, 0]}
+    matched: List[str] = []
+    for src, pf in (cov.get("per_file") or {}).items():
+        if Path(src).name not in wanted:
+            continue
+        matched.append(src)
+        for cat in agg:
+            entry = pf.get(cat)
+            if isinstance(entry, dict):
+                agg[cat][0] += int(entry.get("covered", 0))
+                agg[cat][1] += int(entry.get("total", 0))
+    if not matched:
+        return None
+
+    def pct(pair: List[int]) -> float:
+        return round(100.0 * pair[0] / pair[1], 2) if pair[1] > 0 else 0.0
+
+    return {
+        "totals": {c: {"covered": agg[c][0], "total": agg[c][1],
+                       "pct": pct(agg[c])} for c in agg},
+        "scope_files": sorted(matched),
+    }
 
 
 # ----- parsing ------------------------------------------------------
@@ -416,6 +590,107 @@ def cmd_measure(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Where the flow's own testbenches live, most-authoritative first. The
+#: oracle TB is the one the flow actually simulates for a functional verdict,
+#: so instrumenting it measures the run that was believed, not a second
+#: stimulus written to make a number look better.
+_TB_DISCOVERY_ORDER = (
+    ("phase2/stage1/sim_full_stack", "tb_*_oracle.v"),
+    ("phase2/stage1/sim_full_stack", "tb_*_full.v"),
+    ("phase2/stage1/sim/tb", "*.v"),
+)
+
+
+def discover_measure_inputs(project: Path) -> Tuple[List[str], Optional[str]]:
+    """(RTL sources, testbench) for `project`, or ([], None) when absent.
+
+    RTL selection reuses `design_one_shot_runner._select_asic_rtl_sources`
+    when it can be imported — the SAME selector the simulation itself used —
+    so the instrumented closure is the simulated closure. The fallback is a
+    plain non-testbench glob of the RTL directory.
+    """
+    rtl_dir = project / "phase2" / "stage1" / "rtl"
+    rtl: List[str] = []
+    if rtl_dir.is_dir():
+        try:
+            import design_one_shot_runner as _dosr  # noqa: PLC0415
+            rtl = [str(f) for f in _dosr._select_asic_rtl_sources(rtl_dir)]
+        except Exception:  # noqa: BLE001 — selector is an optimisation
+            rtl = [str(f) for f in
+                   sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v"))
+                   if not (f.name.startswith("tb_") or f.stem.endswith("_tb"))]
+    tb: Optional[str] = None
+    for rel, pat in _TB_DISCOVERY_ORDER:
+        hits = sorted((project / rel).glob(pat)) if (project / rel).is_dir() \
+            else []
+        if hits:
+            tb = str(hits[0])
+            break
+    return rtl, tb
+
+
+def cmd_measure_tb(args: argparse.Namespace) -> int:
+    """Instrument + run the project's own testbench and write the measurement."""
+    rtl = list(args.rtl or [])
+    tb = args.tb
+    if args.project:
+        d_rtl, d_tb = discover_measure_inputs(Path(args.project))
+        rtl = rtl or d_rtl
+        tb = tb or d_tb
+    if not rtl:
+        print("[measure-tb] no RTL sources found to instrument",
+              file=sys.stderr)
+        return 1
+    if not tb:
+        print("[measure-tb] no testbench found to instrument — coverage "
+              "cannot be measured without a stimulus that actually ran",
+              file=sys.stderr)
+        return 1
+
+    default_build = (Path(args.project) / "phase2" / "stage1" / "sim"
+                     / "cov_build") if args.project \
+        else (Path(args.out).parent / "cov_build")
+    build_dir = args.build_dir or str(default_build)
+    run_dir = args.run_dir or build_dir
+    dat = verilate_tb_and_run(rtl, tb, build_dir, run_dir,
+                              build_jobs=args.build_jobs)
+    cov = parse_coverage_dat(dat)
+    scope = args.scope_file or rtl
+    scoped = scope_totals(cov, scope)
+    if scoped is None:
+        print(f"[measure-tb] the instrumented run recorded no coverage points "
+              f"for any of {[Path(x).name for x in scope]} — refusing to "
+              f"report the unscoped total in their place", file=sys.stderr)
+        return 1
+    out = {
+        "tool": "verilator",
+        "measurement_mode": "measure-tb",
+        "coverage_dat": dat,
+        "testbench": tb,
+        "rtl_sources": [str(x) for x in rtl],
+        "totals": scoped["totals"],
+        "scope_files": scoped["scope_files"],
+        "per_file": cov["per_file"],
+        "format_detected": cov["format_detected"],
+    }
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(out, indent=2))
+    t = scoped["totals"]
+    print(f"[measure-tb] line={t['line']['pct']}% "
+          f"toggle={t['toggle']['pct']}% branch={t['branch']['pct']}% "
+          f"(scope {scoped['scope_files']}, from {dat}) -> {args.out}")
+    below = [f"{c} {t[c]['pct']}% < {th}%"
+             for c, th in (("line", args.min_line),
+                           ("toggle", args.min_toggle),
+                           ("branch", args.min_branch))
+             if t[c]["pct"] < th]
+    if below:
+        print("[measure-tb] below threshold(s): " + "; ".join(below),
+              file=sys.stderr)
+        return 1
+    return 0
+
+
 #: Exit code + stdout sentinel `flow_compliance_check._check_program_exit_zero`
 #: recognises as "PASSED WITH WAIVERS" -> step tier WAIVED-DEFERRED. Both are
 #: required there, so a stray rc=3 from an unrelated program is never waived.
@@ -517,7 +792,28 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--min-branch", type=float, default=70.0)
     m.set_defaults(func=cmd_measure)
 
-    c = sub.add_parser("check", help="Verify an existing coverage_actual.json")
+    mt = sub.add_parser(
+        "measure-tb",
+        help=("Instrument the project's own Verilog testbench with "
+              "verilator --binary --timing --coverage and measure the run"))
+    mt.add_argument("--project", help="project root; discovers RTL + testbench")
+    mt.add_argument("--rtl", action="append",
+                    help="RTL source (repeatable); overrides discovery")
+    mt.add_argument("--tb", help="testbench file; overrides discovery")
+    mt.add_argument("--scope-file", action="append",
+                    help=("source whose points are totalled (repeatable). "
+                          "Default: the RTL sources, so the testbench's own "
+                          "coverage never inflates the design's."))
+    mt.add_argument("--build-dir")
+    mt.add_argument("--run-dir")
+    mt.add_argument("--build-jobs", type=int, default=0)
+    mt.add_argument("--out", required=True)
+    mt.add_argument("--min-line", type=float, default=70.0)
+    mt.add_argument("--min-toggle", type=float, default=60.0)
+    mt.add_argument("--min-branch", type=float, default=70.0)
+    mt.set_defaults(func=cmd_measure_tb)
+
+    c = sub.add_parser("check", help="Verify an existing coverage measurement")
     c.add_argument("--coverage-json", required=True)
     c.add_argument("--min-line", type=float, default=70.0)
     c.add_argument("--min-toggle", type=float, default=60.0)

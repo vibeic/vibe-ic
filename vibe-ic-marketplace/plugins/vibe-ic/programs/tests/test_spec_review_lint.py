@@ -158,12 +158,18 @@ Back-to-back requests are accepted.
 
 # ---- a genuine timing statement WITH no ref edge IS flagged ----------------
 def test_timing_without_ref_edge_is_flagged(tmp_path):
+    # This spec states its clock DOMAIN ("synchronous to clk") but never
+    # declares a reference EDGE anywhere, so the "3 ns setup" sentence has no
+    # edge to be relative to and must be flagged. (A document that DOES declare
+    # its reference edge once is covered by
+    # test_a_document_level_reference_edge_governs_the_document in
+    # test_spec_review_lint_language_and_applicability.py.)
     spec = """\
 Implement TopModule.
  - input  clk
  - input  rst_n
  - output q
-rst_n is an active-low asynchronous reset; q is sampled on the rising edge of clk
+rst_n is an active-low asynchronous reset; q is registered synchronous to clk
 and reset by rst_n. The output must meet a 3 ns setup. A reset during operation
 clears q. Back-to-back requests are accepted. On overflow it saturates; on empty
 underflow it holds. Illegal opcodes are ignored.
@@ -199,12 +205,16 @@ Implement TopModule.
  - input  rst_n
  - output q
 rst_n is an active-low asynchronous reset; q is sampled on the rising edge of clk
-and reset by rst_n. The block just registers the input.
+and reset by rst_n. The block just registers the input. The command word is
+0x0 = LOAD, 0x1 = SHIFT, 0x2 = CLEAR.
 """
     res, f = run(tmp_path, spec)
-    # none of the four corner cases addressed -> four uncovered findings
+    # An opcode layer with enumerated code points is present, so all four
+    # checklist items apply here; none of the four is addressed -> four
+    # uncovered findings, and none of them is a self-skip.
     cc = [x for x in f if x['code'] == 'corner-case-uncovered']
     assert len(cc) == 4, f
+    assert [x for x in f if x['code'] == 'corner-case-not-applicable'] == [], f
 
 
 # ---- no-false-alert: pure prose (no interface list) -> no signal findings --
@@ -311,14 +321,20 @@ def test_a_directory_argument_can_never_execute(tmp_path):
     assert _lint(tmp_path, ['--strict', str(tmp_path)]).returncode == 2
 
 
-def test_corner_case_checklist_is_evaluated_per_file_not_per_corpus(tmp_path):
-    """MEASURED DEFECT, pinned so a fix has to update this test deliberately.
+def test_corner_case_checklist_is_evaluated_per_corpus_not_per_file(tmp_path):
+    """The fix for the measured defect this test used to pin.
 
-    A complete spec scores 0 findings alone. Adding one benign, unrelated
-    appendix file to the SAME invocation yields 4 `corner-case-uncovered`
-    WARNs — the appendix does not mention the corner cases, and the checklist
-    is asked per FILE instead of per corpus. This is why `--strict` is wired
-    ADVISORY: 78% of the WARNs measured over the published corpus are this.
+    HISTORY: the checklist was asked once per FILE, so adding one benign,
+    unrelated appendix to the SAME invocation charged the appendix all four
+    checklist items even though the spec beside it addressed every one of them.
+    Measured over the 16 published runs, 329 of 422 WARNs (78%) were this. That
+    is why `--strict` was wired ADVISORY, and the module header named a
+    corpus-scoped checklist as the precondition for promoting it.
+
+    The checklist now asks its question of the SPEC: an item is covered when ANY
+    document addresses it, and it is reported ONCE for the corpus when none
+    does. The adversarial direction is asserted here too — strip the covering
+    sentences and the corpus goes red again, once per item.
     """
     d = tmp_path / 'docs'
     d.mkdir()
@@ -330,5 +346,19 @@ def test_corner_case_checklist_is_evaluated_per_file_not_per_corpus(tmp_path):
     (d / 'appendix.md').write_text(
         "# Appendix A — Revision history\nRev 1.0 first release.\n")
     both = _lint(tmp_path, ['--strict', str(d / 'a.md'), str(d / 'appendix.md')])
-    assert both.returncode == 1
-    assert both.stdout.count('corner-case-uncovered') == 4
+    # a.md covers all four items FOR THE SPEC, so the appendix is charged none.
+    assert both.stdout.count('corner-case-uncovered') == 0, both.stdout
+    assert both.stdout.count('corner-case-not-applicable') == 0, both.stdout
+    assert both.returncode == 0
+
+    # CONTROL: the check is still load-bearing. Remove the paragraph in a.md
+    # that covers the checklist and the corpus goes red — once per item, not
+    # once per item per file.
+    stripped = COMPLETE[:COMPLETE.index('Corner cases:')]
+    (d / 'a.md').write_text(stripped)
+    red = _lint(tmp_path, ['--strict', str(d / 'a.md'), str(d / 'appendix.md')])
+    assert red.returncode == 1
+    assert red.stdout.count('corner-case-uncovered') == 3
+    assert red.stdout.count('corner-case-not-applicable') == 1
+    assert (red.stdout.count('corner-case-uncovered')
+            + red.stdout.count('corner-case-not-applicable')) == 4

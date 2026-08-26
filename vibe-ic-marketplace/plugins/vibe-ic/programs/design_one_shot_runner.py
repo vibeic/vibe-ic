@@ -14854,6 +14854,134 @@ def _sha256_file(path: Path) -> Optional[str]:
     return f"sha256:{h.hexdigest()}"
 
 
+def _verilator_stage_exec(container: str):
+    """`exec_fn(argv, cwd) -> (rc, out, err)` for the coverage build + run.
+
+    Same container-first dispatch `_run_iverilog_stage` uses for the
+    simulator, keyed on `verilator` instead: the coverage measurement must
+    come from the SAME pinned toolchain the run declared, not from whatever
+    the host happens to carry. Falls back to the host only when the container
+    has no verilator or cannot see the run tree — the two cases where the
+    container genuinely cannot do the job.
+    """
+    import shlex as _shlex
+
+    def _exec(argv, cwd):
+        argv = [str(a) for a in argv]
+        run_dir = Path(cwd)
+        in_container = bool(container) \
+            and _tool_in_container(container, "verilator")
+        if in_container:
+            ok, _why = _iverilog_sources_visible(argv, run_dir, container)
+            in_container = ok
+        if not in_container:
+            rc, out, err = _run(argv, cwd=run_dir, timeout=900)
+            return rc, out, err
+        c_dir = _to_container_path(str(run_dir), container)
+        c_argv = " ".join(_shlex.quote(_to_container_path(tok, container))
+                          for tok in argv)
+        cmd = (f"cd {_shlex.quote(c_dir)} && "
+               f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && {c_argv}")
+        return _docker_exec(container, cmd, timeout=900)
+
+    return _exec
+
+
+def step_verilator_coverage(project: Path, top_name: str = "",
+                            container: str = "") -> StepResult:
+    """MEASURE line / toggle / branch coverage by instrumenting the run's own
+    testbench.
+
+    THIS STEP EXISTS BECAUSE NOTHING RAN THE MEASUREMENT. The Step-4 gate has
+    invoked `verilator_coverage_measure check` since v0.53, but the flow YAML
+    left the `measure` half to "the agent before this gate" and no runner, no
+    gate and no program ever called it. `--coverage / --coverage-line /
+    --coverage-toggle` appeared in exactly one file in the plugin — the
+    measure program itself — so no run in the corpus ever carried a coverage
+    measurement, and the artefact the gate read was the FUNCTIONAL-verdict
+    payload another producer writes next door.
+
+    The design is simulated by iverilog; Verilator only linted it. So a
+    coverage measurement is a SECOND simulation of the same closure, and it is
+    priced as one: `verilator --binary --timing` builds a standalone
+    executable from the SAME testbench iverilog ran (the oracle TB when there
+    is one), instrumented, and runs it. On this class of design that is a
+    ~50 s C++ build plus a sub-second run. The iverilog numbers are NOT reused
+    for Verilator's, and Verilator's are not reused for iverilog's: the
+    functional verdict stays where it was measured, and the coverage numbers
+    come from the run that recorded coverage points.
+
+    Writes `reports/phase2/coverage/coverage_verilator.json` — the coverage
+    producer's OWN path. `reports/phase2/coverage/coverage_actual.json` keeps
+    belonging to the functional-verdict producer.
+
+    Fail-safe and never fabricating: no RTL, no testbench, or no Verilator
+    reachable -> a disclosed SKIP that writes NOTHING. The Step-4 gate then
+    reports the missing measurement on its own terms (rc=1 where Verilator is
+    installed, rc=3 named capability gap where it is not) instead of being
+    handed a number nobody measured.
+    """
+    t0 = time.time()
+    import shutil as _shutil
+    import verilator_coverage_measure as _vcm
+
+    rtl, tb = _vcm.discover_measure_inputs(project)
+    if not rtl:
+        return StepResult("verilator_coverage", "SKIP", time.time() - t0,
+                          "no RTL sources to instrument", [])
+    if not tb:
+        return StepResult("verilator_coverage", "SKIP", time.time() - t0,
+                          "no testbench to instrument — coverage cannot be "
+                          "measured without a stimulus that actually ran", [])
+    have = bool(container and _tool_in_container(container, "verilator")) \
+        or bool(_shutil.which("verilator"))
+    if not have:
+        return StepResult("verilator_coverage", "SKIP", time.time() - t0,
+                          "verilator not reachable (neither in container "
+                          f"{container!r} nor on host PATH) — no measurement "
+                          "taken, and none invented", [])
+
+    out_path = _pl.report_path(project, _vcm.COVERAGE_MEASUREMENT_REL)
+    # Build under the sim tree, not under reports/: reports/ is the signed
+    # artefact surface and a Verilator obj_dir is neither a report nor stable.
+    build_dir = _pl.sim_dir(project) / "cov_build"
+    try:
+        dat = _vcm.verilate_tb_and_run(
+            [str(x) for x in rtl], str(tb), str(build_dir), str(build_dir),
+            exec_fn=_verilator_stage_exec(container),
+            build_jobs=_eda_thread_count())
+        cov = _vcm.parse_coverage_dat(dat)
+        scoped = _vcm.scope_totals(cov, [str(x) for x in rtl])
+    except SystemExit as exc:
+        return StepResult("verilator_coverage", "SKIP", time.time() - t0,
+                          f"coverage instrumentation did not produce a "
+                          f"measurement: {exc}", [])
+    if scoped is None:
+        return StepResult("verilator_coverage", "SKIP", time.time() - t0,
+                          "the instrumented run recorded no coverage points "
+                          "for the RTL sources — refusing to report the "
+                          "testbench's own coverage as the design's", [])
+    payload = {
+        "tool": "verilator",
+        "measurement_mode": "measure-tb",
+        "coverage_dat": dat,
+        "testbench": str(tb),
+        "rtl_sources": [str(x) for x in rtl],
+        "totals": scoped["totals"],
+        "scope_files": scoped["scope_files"],
+        "per_file": cov["per_file"],
+        "format_detected": cov["format_detected"],
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _aa.write_text(out_path, json.dumps(payload, indent=2) + "\n")
+    t = scoped["totals"]
+    return StepResult(
+        "verilator_coverage", "PASS", time.time() - t0,
+        f"measured line={t['line']['pct']}% toggle={t['toggle']['pct']}% "
+        f"branch={t['branch']['pct']}% from {dat}",
+        [str(out_path.relative_to(project))])
+
+
 def step_arith_declaration_emit(project: Path) -> StepResult:
     """Run the deterministic `plugin_output/declaration.json` emitter.
 
@@ -16548,6 +16676,10 @@ def main() -> int:
     # Emit plugin_output/declaration.json from the now-final RTL + the
     # oracle TB's measured framing, BEFORE the manifests/audit read it.
     plan.append(step_arith_declaration_emit(project))
+    # MEASURE coverage before the manifests/audit read it. Nothing used to run
+    # the measurement at all — see step_verilator_coverage's docstring.
+    plan.append(step_verilator_coverage(project, args.top_name,
+                                        args.container))
     plan.append(step_emit_phase2_manifests(project, plan, args.top_name,
                                            args.container))
     # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the

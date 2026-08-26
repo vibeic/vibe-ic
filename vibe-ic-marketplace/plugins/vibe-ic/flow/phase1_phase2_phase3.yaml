@@ -1307,9 +1307,16 @@ steps:
                                       # have a matching sim/tb/tb_*.v
       - verilator_coverage_measure    # real verilator --coverage replaces
                                       # agent-estimated %. The `check`
-                                      # subcommand is invoked here; the
-                                      # `measure` subcommand is run by the
-                                      # agent before this gate.
+                                      # subcommand is invoked by the gate
+                                      # below; the MEASUREMENT is taken by
+                                      # design_one_shot_runner.step_verilator_coverage,
+                                      # which runs `measure-tb` — verilator
+                                      # --binary --timing --coverage-line
+                                      # --coverage-toggle over the project's
+                                      # own testbench. It used to be left to
+                                      # "the agent before this gate", which is
+                                      # to say nobody ran it and no run in the
+                                      # corpus ever carried a measurement.
     required_outputs:
       # ONE requirement — "a simulation ran and left a transcript" — in the
       # three shapes the supported TB paths actually emit, not three
@@ -1320,19 +1327,28 @@ steps:
       # as separate entries these were ALL-of-required, so every real run was
       # missing at least one and no run could satisfy them together.
       - "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag OR phase2/stage1/sim_professional/**/results.xml"
-      # DECLARATION CORRECTION. This used to read "produced by
-      # verilator_coverage_measure", which is not true on any real run: the
-      # path has TWO producers — `verilator_coverage_measure measure` (the
-      # tool-generated line/toggle/branch artefact the gate below audits) and
+      # DECLARATION — ONE PRODUCER PER PATH (the collision is untangled).
+      # `coverage_actual.json` used to be written by TWO producers:
       # design_one_shot_runner, which writes a FUNCTIONAL-verification verdict
-      # payload here (verdict / evidence / verification_track /
-      # scenarios_covered, with NO `totals` container). The coverage gate now
-      # NAMES that collision instead of reading the foreign payload as an
-      # "input not applicable" exemption. Untangling the two onto separate
-      # paths moves every reader (coverage_closure, fpga_verification_audit
-      # --coverage, phase3 step_canonicalize_artefacts, flow_compliance_check's
-      # coverage self-skip supersession) and is not a gate-local change.
+      # payload (verdict / evidence / verification_track / scenarios_covered,
+      # with NO `totals` container), and `verilator_coverage_measure measure`,
+      # which writes the line/toggle/branch measurement. On every real run the
+      # functional payload landed there first, so the coverage gate correctly
+      # reported that line/toggle/branch was never measured — the artefact at
+      # the declared coverage path was somebody else's.
+      #
+      # The two now have their OWN paths, and each reader follows the artefact
+      # it actually reads:
+      #   coverage_actual.json     — functional verdict. Producers:
+      #       design_one_shot_runner.step_emit_phase2_manifests, phase3
+      #       step_canonicalize_artefacts (#609 re-emit). Reader:
+      #       flow_compliance_check's coverage self-skip supersession.
+      #   coverage_verilator.json  — the MEASUREMENT. Producer:
+      #       design_one_shot_runner.step_verilator_coverage (which runs
+      #       `verilator_coverage_measure measure-tb`). Readers: the gate
+      #       below, coverage_closure, fpga_verification_audit --coverage.
       - "reports/phase2/coverage/coverage_actual.json"
+      - "reports/phase2/coverage/coverage_verilator.json"
     gate:
       all_of:
         - files_exist: ["phase2/stage1/sim/results.xml", "phase2/stage1/sim/pass.flag"]
@@ -1422,12 +1438,22 @@ steps:
         #         review_required and NOT counted as executed-PASS
         # This is deliberately redder: on a host without Verilator this step
         # can no longer reach PASS.
-        - program_exit_zero: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
+        # POINTED AT THE MEASUREMENT, not at the other producer's payload.
+        # The standard is unchanged — corrupt/mislabelled/forged is still rc=1,
+        # below-threshold is still rc=1, and an absent measurement on a host
+        # that HAS Verilator is still rc=1. What changed is that the artefact
+        # at this path is now written by the coverage producer alone, so the
+        # gate is reading the thing it audits.
+        - program_exit_zero: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_verilator.json"
         # ORPHANED, RE-HOMED (2026-08-25). The clause above MEASURES coverage;
         # this one asks whether the state TRANSITIONS the design declares were
         # each exercised, which a line/toggle percentage cannot answer. Its
-        # input is the very file the clause above writes, so the producer is
-        # this step and the condition is exact.
+        # input is coverage_actual.json, the FUNCTIONAL-verdict payload this
+        # step's own design_one_shot_runner writes, so the producer is this
+        # step and the condition is exact. (Before the one-producer-per-path
+        # split above, that path also carried the line/toggle measurement; the
+        # measurement has moved to coverage_verilator.json and this clause
+        # keeps the functional payload it always read.)
         - advisory_program_exit_zero: "functional_state_transition_coverage_check phase2/stage1/sim/tb --coverage reports/phase2/coverage/coverage_actual.json"
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. UNCONDITIONAL
@@ -1687,7 +1713,7 @@ steps:
         # not all projects ship one (FPGA-skip projects, sub-agent runs
         # without a board). Skips harmlessly via condition_files_exist.
         - optional_program_exit_zero:
-            command: "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_actual.json --out reports/phase2/gates/fpga_verification_audit.json"
+            command: "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_verilator.json --out reports/phase2/gates/fpga_verification_audit.json"
             condition_files_exist: ["reports/fpga_verification_report.md"]
             absent_condition_reason: >-
               Scoped to a HUMAN deliverable on a hardware-bearing run. The

@@ -198,6 +198,44 @@ def liberty_input_is_usable(liberty_exists: bool,
 DEFAULT_SEQ_DEPTHS = (4, 16, 64)
 
 
+# ---------------------------------------------------------------------------
+# The Liberty is the ONLY source that carries cell FUNCTION; blackbox Verilog is
+# an interface stub. Read them in that priority.
+# ---------------------------------------------------------------------------
+# Both sources describe the SAME standard cells, from opposite ends:
+#   * the Liberty `.lib` carries each cell's `function` / ff / latch group ->
+#     read_liberty (no `-lib`) expands it into Yosys primitives the SAT engine
+#     can reason about. This is what an equivalence proof consumes.
+#   * `<lib>__blackbox.v` declares the same cells as EMPTY modules (ports only,
+#     no body). It exists to give a name+interface to the cells the Liberty
+#     does NOT model at all -- fill / tap / endcap / antenna-diode / IO pads --
+#     so `hierarchy` does not abort on the routed netlist.
+# The recipe read the Liberty and then read the blackbox Verilog with plain
+# `read_verilog -lib`, whose DEFAULT is to overwrite an existing module. Yosys
+# refused the collision outright:
+#     sky130_fd_sc_hd__blackbox.v:37: ERROR: Re-definition of module ...
+# so the whole proof aborted (verdict RUN_ERROR, equivalence unproven) on every
+# PDK that ships both a Liberty and a matching blackbox Verilog for one library.
+#
+# The fix is NOT to drop a source: dropping the Liberty leaves function-less
+# stubs and the proof becomes VACUOUS in the worst way (equiv_make would assume
+# matched cells equal -- NAND vs NOR would "prove"); dropping the blackbox
+# Verilog leaves fill/tap/pads undefined and `hierarchy` aborts. Both are
+# needed, with a PRIORITY: `-nooverwrite` makes the blackbox read ADDITIVE, so
+# every cell the Liberty modelled keeps its FUNCTION and only the cells the
+# Liberty never defined come from the stub. Nothing is discarded.
+def _read_blackbox_cmd(path: str) -> str:
+    """The Yosys read command for one blackbox-Verilog input.
+
+    `-lib`         : ports only, no cell body (an inert blackbox).
+    `-nooverwrite` : a module already defined (by read_liberty, which ran
+                     first) is KEPT -- the empty stub never replaces a
+                     functional Liberty model, and the frontend does not abort
+                     on the re-definition it would otherwise refuse.
+    """
+    return f"read_verilog -lib -nooverwrite {path}"
+
+
 def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                              blackbox_v: Optional[List[str]] = None,
                              seq_depths: Optional[List[int]] = None,
@@ -210,7 +248,9 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     lib    : Liberty for cell semantics (functional cells).
     blackbox_v : PDK blackbox Verilog files (physical-only cells: tap/fill/
                  decap/diode/endcap have no Liberty model and would abort
-                 hierarchy). Read as -lib so they become inert blackboxes.
+                 hierarchy). Read as `-lib -nooverwrite` so they can only ADD
+                 the cells the Liberty does not define, never REPLACE a Liberty
+                 cell (see _read_blackbox_cmd).
     seq_depths : ascending equiv_induct `-seq` depths to try in one script
                  (default DEFAULT_SEQ_DEPTHS = (4, 16, 64)). The escalation makes
                  the proof depth-adaptive so a retiming/pipeline-equivalent pair
@@ -227,7 +267,7 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
 
     All paths are used verbatim (caller translates host->container). Same
     engine shape as `eda_lvs mode=yosys_equiv`."""
-    bb = "\n".join(f"read_verilog -lib {q}" for q in (blackbox_v or []))
+    bb = "\n".join(_read_blackbox_cmd(q) for q in (blackbox_v or []))
     bb_block = (bb + "\n") if bb else ""
     # v1.3.93 — the routed gate netlist carries top-level SUPPLY ports (VDD/VSS…
     # added by PDN insertion) that the pre-PnR synth GOLD reference does not, so
@@ -258,8 +298,10 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
         #   GOTCHA 3 — `opt -purge; opt_clean -purge` (BOTH sides): source-RTL
         #     dead unobservable public nets get $equiv key-points induction
         #     can't close → spurious unproven; purge prunes them. chip-agnostic.
-        # The physical-only cell blackbox block ({bb_block}) is kept: fill/tap/
-        # decap/diode/antenna carry no function and stay inert -lib blackboxes.
+        # The physical-only cell blackbox block ({bb_block}) is kept, and is
+        # read AFTER read_liberty with -nooverwrite: fill/tap/decap/diode/
+        # antenna carry no function and stay inert blackboxes, while every cell
+        # the Liberty DID model keeps its function (see _read_blackbox_cmd).
         def _func_side(read_v: str, stash: str, extra_strip: str = "") -> str:
             return (f"read_liberty {lib}\n"
                     f"{bb_block}{read_v}\n"
@@ -286,8 +328,10 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
 
     # BLACKBOX `-lib` recipe (available on ANY yosys; UNSOUND — equiv_make
     # assumes matched cells equal, so NAND≡NOR false-passes). Used only as the
-    # fallback when the binary cannot do functional read_liberty. Byte-identical
-    # to the pre-functional recipe so the -lib path is unchanged.
+    # fallback when the binary cannot do functional read_liberty. The blackbox
+    # Verilog is read `-nooverwrite` here too: on this path both sources are
+    # blackboxes so no function is at stake, but the frontend still refuses the
+    # re-definition without it (the same RUN_ERROR abort).
     return f"""# Vibe-IC post-layout LEC — gold(reference) vs gate(routed) structural equiv.
 read_liberty -lib {lib}
 {bb_block}read_verilog -sv {gold_v}

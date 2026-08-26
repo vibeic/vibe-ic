@@ -155,7 +155,8 @@ def test_audit_fails_when_coverage_claimed_but_no_artefact():
     findings, ok = gate.audit(md, {}, coverage=None)
     assert ok is False
     cov_findings = [f for f in findings if f["kind"] == "coverage"]
-    assert any(not f["ok"] and "coverage_actual.json" in f["detail"]
+    assert any(not f["ok"]
+               and "MEASUREMENT artefact was not found" in f["detail"]
                for f in cov_findings)
 
 

@@ -13,7 +13,8 @@ This gate reads the markdown and enforces:
      "1083 PASS", "1083/1083 PASS") must match `sim/work/summary.txt`'s
      `GRAND_TOTAL PASS=<N> FAIL=<0>` line.
   2. Any coverage percentage claim ("line coverage 78 %", "branch 82 %")
-     must match the totals in `reports/coverage/coverage_actual.json`.
+     must match the totals in
+     `reports/phase2/coverage/coverage_verilator.json`.
   3. Estimation keywords ("estimated", "approx", "≥ 95 %", ">=95") are
      flagged as untrusted claims that must be replaced by tool numbers.
   4. Tool name mentions (Verilator, Icarus, iverilog, verilator_coverage)
@@ -28,7 +29,7 @@ Usage:
     python3 fpga_verification_audit.py \\
         --report reports/fpga_verification_report.md \\
         --summary sim/work/summary.txt \\
-        --coverage reports/coverage/coverage_actual.json \\
+        --coverage reports/phase2/coverage/coverage_verilator.json \\
         --out reports/gates/fpga_verification_audit.json
 
 Exit code:
@@ -251,7 +252,7 @@ def audit(
                 {
                     "kind": "coverage",
                     "ok": False,
-                    "detail": "report makes coverage claims but coverage_actual.json not found",
+                    "detail": "report makes coverage claims but the coverage MEASUREMENT artefact was not found",
                 }
             )
             all_ok = False
@@ -269,7 +270,7 @@ def audit(
                         {
                             "kind": "coverage",
                             "ok": False,
-                            "detail": f"report claims {kind}={pct}% but coverage_actual.json has no {canon}",
+                            "detail": f"report claims {kind}={pct}% but the measurement has no {canon}",
                         }
                     )
                     all_ok = False
@@ -278,7 +279,7 @@ def audit(
                         {
                             "kind": "coverage",
                             "ok": False,
-                            "detail": f"{canon}: report={pct}% vs coverage_actual.json={tool_pct}%",
+                            "detail": f"{canon}: report={pct}% vs measured={tool_pct}%",
                         }
                     )
                     all_ok = False
@@ -325,7 +326,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--report", required=True, help="markdown report to audit")
     p.add_argument("--summary", default="phase2/stage1/sim/work/summary.txt")
-    p.add_argument("--coverage", default="reports/coverage/coverage_actual.json")
+    # The MEASUREMENT artefact, not `coverage_actual.json` — that path is
+    # owned by the functional-verdict producer (design_one_shot_runner) and
+    # carries no line/toggle/branch to compare a report claim against.
+    p.add_argument("--coverage",
+                   default="reports/phase2/coverage/coverage_verilator.json")
     p.add_argument("--out", default="reports/gates/fpga_verification_audit.json")
     p.add_argument("--keywords-yaml", default=None,
                    help="Override estimation-keywords list "

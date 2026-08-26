@@ -2235,7 +2235,7 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
     ("6", "fpga_verification_audit --report reports/"
           "fpga_verification_report.md --summary phase2/stage1/sim/work/"
           "summary.txt --coverage reports/phase2/coverage/"
-          "coverage_actual.json --out reports/phase2/gates/"
+          "coverage_verilator.json --out reports/phase2/gates/"
           "fpga_verification_audit.json"):
         "PASS: needs a human FPGA verification report contradicting the sim "
         "summary; the contradiction is the input, not the absence",

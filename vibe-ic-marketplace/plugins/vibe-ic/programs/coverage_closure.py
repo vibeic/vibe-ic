@@ -3,11 +3,19 @@
 
 ENFORCEMENT: advisory
 
-Reads the declared coverage artefact
-(``reports/phase2/coverage/coverage_actual.json``) and reports which measured
-categories sit below the closure goal. It is a GAP ANALYSIS, not the floor:
-the blocking coverage floor for Step 4 is ``verilator_coverage_measure check``,
-wired unconditionally in the same gate with its own thresholds.
+Reads the declared coverage MEASUREMENT
+(``reports/phase2/coverage/coverage_verilator.json``) and reports which
+measured categories sit below the closure goal. It is a GAP ANALYSIS, not the
+floor: the blocking coverage floor for Step 4 is
+``verilator_coverage_measure check``, wired unconditionally in the same gate
+with its own thresholds, and reading the SAME artefact.
+
+PATH: this used to read ``coverage/coverage_actual.json``, which has a second
+producer — ``design_one_shot_runner`` writes a functional-verdict payload
+there. Reading a path with two producers is why all 27 tracked artefacts
+classified ``foreign``. The measurement now has its own path,
+``verilator_coverage_measure.COVERAGE_MEASUREMENT_REL``, and this program
+follows it.
 
 WHAT IT READS — the real schema, measured
 -----------------------------------------
@@ -70,7 +78,8 @@ from pathlib import Path
 from typing import List, Tuple
 
 import _path_layout as _pl
-from verilator_coverage_measure import classify_coverage_artefact
+from verilator_coverage_measure import (COVERAGE_MEASUREMENT_REL,
+                                        classify_coverage_artefact)
 
 #: The closure GOAL this gap analysis reports against. Deliberately higher than
 #: the blocking floor in `verilator_coverage_measure check` (70/60/70): a gap
@@ -87,7 +96,7 @@ def analyse(project: Path, goal: float = DEFAULT_GOAL) -> Tuple[int, List[str]]:
     Kept separate from ``main`` so tests can drive the decision directly
     instead of scraping stdout.
     """
-    cov = _pl.report_path(project, "coverage/coverage_actual.json")
+    cov = _pl.report_path(project, COVERAGE_MEASUREMENT_REL)
     kind, detail, data = classify_coverage_artefact(cov)
 
     if kind in ("absent", "foreign"):

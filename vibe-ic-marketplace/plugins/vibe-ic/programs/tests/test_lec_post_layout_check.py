@@ -38,8 +38,11 @@ def test_recipe_has_equiv_engine_and_blackbox():
     for cmd in ("equiv_make gold gate equiv", "equiv_simple", "equiv_induct",
                 "equiv_status", "read_liberty -lib lib.lib"):
         assert cmd in ys, cmd
-    # the physical-cell blackbox is read as -lib (inert modules)
-    assert "read_verilog -lib /pdk/sc__blackbox.v" in ys
+    # the physical-cell blackbox is read as -lib (inert modules), and
+    # -nooverwrite so it can only ADD cells the Liberty does not define — a
+    # plain -lib read collides with the Liberty cells of the same name and
+    # yosys aborts the whole proof ("Re-definition of module").
+    assert "read_verilog -lib -nooverwrite /pdk/sc__blackbox.v" in ys
     assert "read_verilog -sv gold.v" in ys and "read_verilog -sv gate.v" in ys
 
 
@@ -77,7 +80,7 @@ def test_functional_recipe_keeps_physical_blackbox():
     ys = L.build_yosys_equiv_script(
         "gold.v", "gate.v", "lib.lib", "top",
         blackbox_v=["/pdk/sc__fill.v"], functional_lib=True)
-    assert "read_verilog -lib /pdk/sc__fill.v" in ys
+    assert "read_verilog -lib -nooverwrite /pdk/sc__fill.v" in ys
 
 
 def test_functional_recipe_strips_gate_supply_ports():

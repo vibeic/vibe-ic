@@ -37109,13 +37109,23 @@ def _synthesize_physical_cell_stubs(pdk: PdkConfig, top: str, gate_v: Path,
     instantiated.discard(top)
     if not instantiated:
         return None
-    liberty_cells = set()
-    try:
-        if pdk.liberty:
-            liberty_cells = {m.group(1) for m in
-                             _LIBERTY_CELL_RE.finditer(Path(pdk.liberty).read_text(errors="ignore"))}
-    except OSError:
-        pass
+    # The Liberty lives INSIDE the EDA container (`/foss/pdks/...`), so the plain
+    # host `Path(...).read_text()` this used raised OSError on every containerised
+    # PDK and left `liberty_cells` EMPTY. "undefined" then meant "every cell the
+    # netlist instantiates", and the stub file blackboxed the FUNCTIONAL standard
+    # cells too (MEASURED on spm x sky130A: 46 stubs, including nand2/a211oi/
+    # mux2 — every cell in the design). A stub carries no function, so had those
+    # stubs won the module race the equivalence proof would have compared
+    # function-less boxes and "proven" anything. Read it the container-aware way.
+    liberty_text = _read_pdk_text(str(pdk.liberty) if pdk.liberty else None,
+                                  container)
+    if liberty_text is None:
+        # Cannot tell which cells the Liberty models -> cannot tell which ones
+        # are safe to stub. Emit NOTHING rather than stub a functional cell: a
+        # genuinely undefined cell then aborts yosys and the gate REFUSES, which
+        # is honest. Stubbing everything would have been a silent false pass.
+        return None
+    liberty_cells = {m.group(1) for m in _LIBERTY_CELL_RE.finditer(liberty_text)}
     undefined = instantiated - liberty_cells
     if not undefined:
         return None
@@ -37228,9 +37238,23 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         }, indent=2) + "\n")
         notes.append("post-layout LEC: SKIP — no routed/ECO netlist.")
         return "SKIP"
-    # GOLD (reference): the synth netlist (both gate-level => cleanest), else RTL.
-    gold = synth_out / f"{top}_synth.v"
-    gold_kind = "synth"
+    # GOLD (reference): the netlist PnR ACTUALLY ROUTED — `pnr_input_netlist` is
+    # the same measured selection the PnR step made, so the pair being proven is
+    # exactly (what went into PnR) vs (what came out). This unconditionally read
+    # `<top>_synth.v`, the PRE-DFT netlist; on any design with an inserted scan
+    # chain PnR routes `post_dft_netlist.v` instead, and comparing the pre-DFT
+    # gold against a post-DFT routed gate cannot even match the port lists —
+    # `equiv_make` aborts "Can't match gate port `shift_gate' to a gold port",
+    # a RUN_ERROR that says nothing about the routed logic. Step 13 already
+    # proved RTL == the PnR input, so gold := the PnR input closes the chain
+    # RTL == (step 13) == PnR input == (this gate) == routed with no gap. On a
+    # design with no scan chain `pnr_input_netlist` returns `<top>_synth.v` and
+    # the selection is unchanged.
+    gold, _gold_note, _gold_is_scan = pnr_input_netlist(project, top)
+    gold_kind = "post_dft" if _gold_is_scan else "synth"
+    if not gold.is_file():
+        gold = synth_out / f"{top}_synth.v"
+        gold_kind = "synth"
     if not gold.is_file():
         rtl_candidates = [_pl.rtl_dir(project) / f"{top}.v",
                           _pl.rtl_dir(project) / f"{top}.sv"]
@@ -37245,6 +37269,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         }, indent=2) + "\n")
         notes.append("post-layout LEC: SKIP — no golden reference netlist/RTL.")
         return "SKIP"
+    notes.append(f"post-layout LEC: gold = {_gold_note}")
     lib_c = _to_container_path(str(pdk.liberty), container)
     gold_c = _to_container_path(str(gold), container)
     gate_c = _to_container_path(str(gate), container)
@@ -37345,6 +37370,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         "tool": "yosys-equiv",
         "top": top,
         "gold": str(gold), "gold_kind": gold_kind,
+        "gold_provenance": _gold_note,
         "gate": str(gate),
         "blackbox_verilog": blackbox,
         "proven_points": parsed.get("proven"),

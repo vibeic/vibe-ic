@@ -305,9 +305,16 @@ _COVERAGE_BODY = (
 )
 
 #: Keyed by the tail of the declared path, consulted BEFORE the suffix table.
-#: One entry today; the mechanism exists so the NEXT content-aware gate is a
-#: one-line addition rather than a second special case grown beside this one.
+#: The mechanism exists so the NEXT content-aware gate is a one-line addition
+#: rather than a second special case grown beside this one.
+#:
+#: `coverage_verilator.json` is where the MEASUREMENT lives — the coverage
+#: producer's own path, split out from `coverage_actual.json` once it was
+#: measured that the latter has a second producer (design_one_shot_runner's
+#: functional verdict) which always won the path. Step 4's gate reads the
+#: measurement path, so that is the one whose body must be coverage-shaped.
 _PATH_BODIES: Tuple[Tuple[str, str], ...] = (
+    ("reports/phase2/coverage/coverage_verilator.json", _COVERAGE_BODY),
     ("reports/phase2/coverage/coverage_actual.json", _COVERAGE_BODY),
 )
 

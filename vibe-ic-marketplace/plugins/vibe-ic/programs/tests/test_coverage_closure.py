@@ -10,7 +10,7 @@ The previous version encoded the defect as expected behaviour. It asserted:
 
 Neither payload is a coverage MEASUREMENT. `verilator_coverage_measure
 measure` — the only producer of a measurement at
-`reports/phase2/coverage/coverage_actual.json` — writes
+`reports/phase2/coverage/coverage_verilator.json` — writes
 `totals.{line,toggle,branch}.pct` and never a bare `coverage_pct`/`pct`. So
 the two "positive" cases were asserting that a coverage CLAIM with nothing
 behind it buys a PASS, which is precisely the forgery
@@ -44,6 +44,9 @@ import pytest
 
 PROG = Path(__file__).resolve().parent.parent / "coverage_closure.py"
 
+sys.path.insert(0, str(PROG.parent))
+from verilator_coverage_measure import COVERAGE_MEASUREMENT_REL  # noqa: E402
+
 
 def _run(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -55,7 +58,10 @@ def _run(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
 def _write_cov(project: Path, body) -> None:
     cov_dir = project / "reports" / "phase2" / "coverage"
     cov_dir.mkdir(parents=True, exist_ok=True)
-    target = cov_dir / "coverage_actual.json"
+    # The MEASUREMENT path. `coverage_actual.json` belongs to the functional-
+    # verdict producer; coverage_closure reads the coverage producer's own
+    # artefact, and the name is taken from the program so the two cannot drift.
+    target = cov_dir / Path(COVERAGE_MEASUREMENT_REL).name
     if isinstance(body, str):
         target.write_text(body)
     else:
@@ -126,7 +132,7 @@ def test_DEFECT_foreign_producer_payload_is_disclosed_not_scored(tmp_path):
 
     `design_one_shot_runner` writes a functional-verification verdict payload
     (verdict / evidence / verification_track / scenarios_covered) to
-    reports/phase2/coverage/coverage_actual.json. No line/toggle/branch was
+    reports/phase2/coverage/coverage_verilator.json. No line/toggle/branch was
     measured there. origin/main turns that into the specific, false claim
     `0% < 80%`; the honest answer is a DISCLOSED skip (rc=2), which
     flow_compliance_check renders as `n/a`, never as a clean result.
