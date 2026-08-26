@@ -206,16 +206,19 @@ def test_the_power_fixture_pair_is_present():
 
 
 @pytest.mark.parametrize("rpt", POWER_REPORTS, ids=lambda p: p.name)
-@_pin("F-4", "power.metric_records writes `liberty: None` into every scope and "
-             "metrics.validate refuses a None scope field; 48 of 48 refused")
 def test_power_records_are_accepted_by_the_canonical_consumer(rpt):
     """F-4. Measured on `e36d81c0a`: 24 records per fixture, 24 refused, both
-    fixtures. `metric_records` puts `liberty: None` into every scope when the
-    artefact does not name one, and `validate` refuses a None scope field.
+    fixtures. `metric_records` put `liberty: None` and `tool: None` into every
+    scope, and `validate` refuses a None scope field.
 
-    Either the producer must omit an unstated scope field or record it as a
-    declared absence, or the consumer must accept one. This test does not
-    choose; it fails while they disagree.
+    THE PIN IS GONE BECAUSE THE DISAGREEMENT IS. The producer took the first of
+    the two resolutions this docstring named: `_ppa/power.py` reads the
+    provenance block in BOTH spellings the flow ships, so these artefacts --
+    which STATE their liberty and their tool -- establish both; and a condition
+    an artefact does not state is now OMITTED from scope with its reason in
+    `provenance.scope_gaps`, never nulled. The consumer was not touched: a
+    MEASURED record off an artefact that names no tool is still refused
+    SOURCE_UNTOOLED.
     """
     report = P.read_power_report(rpt)
     assert report is not None, f"{rpt.name} did not parse"

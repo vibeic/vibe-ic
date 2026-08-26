@@ -145,12 +145,62 @@ _ANNOTATED_RE = re.compile(
 _FAIL_RE = re.compile(
     r"^(?P<line>(?:READ_VCD_FAIL|READ_SAIF_FAIL|REPORT_POWER_FAIL):.*)$", re.M)
 #: The tool's own banner, used for `source.tool_version`. Never for a verdict.
+#: Only the runner's `-no_splash` invocations are shipped, so this banner is
+#: absent from every published artefact and the envelope reader below is what
+#: actually establishes the tool.
 _TOOL_RE = re.compile(r"^(?P<tool>OpenSTA)[ \t]+(?P<version>\S+)", re.M)
-#: The provenance envelope the runner prepends. The LIBERTY is a measurement
-#: CONDITION: a power number at one corner's library is not the same metric as
-#: one at another's, so it belongs in `scope` and not only in prose.
-_LIBERTY_RE = re.compile(r"^#[ \t]*liberty:[ \t]*(?P<liberty>\S+)", re.M)
-_NETLIST_RE = re.compile(r"^#[ \t]*netlist:[ \t]*(?P<netlist>\S+)", re.M)
+
+#: The provenance envelope, in BOTH spellings the flow has shipped. The LIBERTY
+#: and the TOOL are measurement CONDITIONS: a power number at one corner's
+#: library, or off one engine, is not the same metric as one at another's, so
+#: they belong in `scope` and not only in prose.
+#:
+#: MEASURED on this checkout. `phase3_one_shot_runner.canonicalize_artefacts`
+#: prepends a COLON-delimited block (`#   liberty: <name>`), and the published
+#: artefacts this repository ships as fixtures carry a column-ALIGNED one
+#: (`#   liberty  <path>`, `#   tool     OpenSTA 2.7.0 in <image>`) with no
+#: colon at all. The old expressions read only the colon spelling, so for an
+#: artefact that STATES its liberty and its tool this module resolved neither
+#: and then wrote both into `scope` as `null` — see `metric_records`. The
+#: punctuation between a key and its value is not a second fact, so one reader
+#: accepts either. The key must still be the FIRST token of the comment line,
+#: which is what keeps a prose line that merely mentions the word out of it.
+_ENVELOPE_RE = {
+    key: re.compile(r"^[ \t]*#[ \t]*" + key + r"[ \t]*:?[ \t]+(?P<value>\S+)",
+                    re.M | re.IGNORECASE)
+    for key in ("liberty", "netlist", "tool")
+}
+#: A version token, so a `tool` line whose second token is NOT one (the runner
+#: writes `# Tool: openroad / sta (...)`) reports no version rather than the
+#: punctuation that happened to follow. An invented version is a provenance
+#: claim nobody made.
+_VERSION_TOKEN_RE = re.compile(r"^v?\d+(?:\.\d+)*$")
+
+
+def _envelope(text: str, key: str) -> Optional[str]:
+    """The value the artefact's provenance block states for `key`, or None."""
+    m = _ENVELOPE_RE[key].search(text)
+    return m.group("value") if m else None
+
+
+def _tool_of(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """`(tool, tool_version)` as the ARTEFACT states them, or `(None, None)`.
+
+    The tool's own banner wins when it is present; the provenance envelope is
+    read only when it is not. Neither is guessed: an artefact that names no
+    tool returns None here and `metrics.validate` then refuses the MEASURED
+    record for `SOURCE_UNTOOLED`, which is the correct outcome — a number with
+    no provenance cannot be checked against the artefact it came from.
+    """
+    m = _TOOL_RE.search(text)
+    if m:
+        return m.group("tool").lower(), m.group("version")
+    m = _ENVELOPE_RE["tool"].search(text)
+    if not m:
+        return None, None
+    rest = m.string[m.end():].split("\n", 1)[0].split()
+    version = rest[0] if rest and _VERSION_TOKEN_RE.match(rest[0]) else None
+    return m.group("value").lower(), version
 
 #: What a declared mode token means. Unrecognised tokens are UNSTATED, not
 #: guessed — a mode this module does not know is a mode it cannot corroborate.
@@ -354,16 +404,14 @@ def parse_power_report(text: str, *, path: Optional[str] = None,
     total_rows = [r for r in rows if r["group"].lower() == TOTAL_GROUP.lower()]
     group_rows = [r for r in rows if r["group"].lower() != TOTAL_GROUP.lower()]
 
-    tm = _TOOL_RE.search(text)
-    lm = _LIBERTY_RE.search(text)
-    nm = _NETLIST_RE.search(text)
+    tool, tool_version = _tool_of(text)
     out: Dict[str, Any] = {
         "path": path,
         "sha256": sha256,
-        "tool": (tm.group("tool").lower() if tm else None),
-        "tool_version": (tm.group("version") if tm else None),
-        "liberty": (lm.group("liberty") if lm else None),
-        "netlist": (nm.group("netlist") if nm else None),
+        "tool": tool,
+        "tool_version": tool_version,
+        "liberty": _envelope(text, "liberty"),
+        "netlist": _envelope(text, "netlist"),
         "activity": activity_provenance(text),
         "rows": group_rows,
         "total_row": total_rows[0] if total_rows else None,
@@ -497,9 +545,38 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
     # differ by 4.3x.  The CORROBORATION state is deliberately NOT here: it
     # describes how well we know the basis, not what was measured.
     base_scope = {"stage": stage, "scenario": scenario,
-                  "activity_basis": basis,
-                  "liberty": report.get("liberty"),
-                  "tool": report.get("tool")}
+                  "activity_basis": basis}
+    # ── the two conditions this module used to NULL ────────────────────────
+    # `liberty` and `tool` were written in unconditionally as
+    # `report.get(...)`, which is `None` for any artefact whose provenance
+    # block this module could not read -- and until `_envelope`/`_tool_of`
+    # above that was EVERY published artefact, because only one of the two
+    # shipped spellings was parsed. §2: "a `scope` key that is present and null
+    # is worse than one that is absent", because `null == null` makes two runs
+    # against two different libraries, or off two different engines, one
+    # measurement -- and `metrics.validate` refuses the null spelling outright
+    # (SCOPE_SENTINEL), so 48 of 48 records built from this repository's own
+    # power fixtures were refused by the canonical consumer.
+    #
+    # They are now emitted under the SAME rule the PVT keys below already
+    # follow: only what the artefact STATES is emitted, a condition it does not
+    # state is left OUT rather than nulled, and the reason is recorded in
+    # `provenance.scope_gaps` -- outside `scope`, where it cannot make two
+    # records compare equal. An artefact that names no tool still loses its
+    # MEASURED records to `SOURCE_UNTOOLED`; that refusal is correct and it is
+    # deliberately not softened here.
+    scope_gaps: Dict[str, str] = {}
+    for key, val, gap in (
+            ("liberty", report.get("liberty"),
+             "the artefact states no liberty file, so the library these "
+             "figures were computed against is unread"),
+            ("tool", report.get("tool"),
+             "the artefact states no tool, so the engine that produced these "
+             "figures is unread")):
+        if val:
+            base_scope[key] = val
+        else:
+            scope_gaps[key] = gap
     # ── the PVT the liberty file names ────────────────────────────────────
     # `_ppa/benchmark.REQUIRED_SCOPE["power_mw"]` needs stage, mode, process,
     # voltage_v, temperature_c and activity_basis before two power numbers may
@@ -539,7 +616,8 @@ def metric_records(report: Dict[str, Any], *, stage: str = "unknown",
                                   "the mode from"))
     if mode is not None:
         base_scope["mode"] = mode
-    provenance = {"activity_corroboration": act.get("corroboration"),
+    provenance = {"scope_gaps": scope_gaps or None,
+                  "activity_corroboration": act.get("corroboration"),
                   "activity_reason": act.get("reason"),
                   # NOT the scope's `mode`. This is the ACTIVITY token
                   # (`vcd`/`saif`/`vectorless`) that `POWER_ANALYSIS_MODE:`

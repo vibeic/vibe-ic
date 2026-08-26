@@ -182,16 +182,12 @@
                 "type": "string"
               },
               "tool": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": "string",
+                "minLength": 1
               },
               "liberty": {
-                "type": [
-                  "string",
-                  "null"
-                ],
+                "type": "string",
+                "minLength": 1,
                 "description": "The Liberty library the figures were computed against. A measurement CONDITION: a power number at one corner's library is not the same metric as one at another's, so it lives in scope and is compared."
               }
             },
