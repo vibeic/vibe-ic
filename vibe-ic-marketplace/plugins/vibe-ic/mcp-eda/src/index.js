@@ -69,6 +69,7 @@ import {
 import { antennaRepairTcl } from "./lib/pnr_antenna.mjs";
 import { threadCountTcl } from "./lib/pnr_threads.mjs";
 import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
+import { evaluateStaEvidence, staEvidenceTcl, STA_EVIDENCE_TERMS } from "./lib/sta_evidence.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -1729,10 +1730,18 @@ server.tool(
       if (flatResult.success) { canonicalizeNetlistSrcCoords(flatNetlist); effectiveNetlist = flatNetlist; }
     }
 
-    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'EOF'
+    // ── STA evidence channels (see src/lib/sta_evidence.mjs for the measurements) ──
+    // The metrics JSON is a SECOND, independent channel next to the exit code.
+    // It is written into the netlist's own directory and DELETED FIRST: a
+    // metrics file left behind by an earlier run would otherwise satisfy the
+    // "file present" term with numbers from a different design.
+    const staDir = (netlist.substring(0, netlist.lastIndexOf("/")) || "/tmp");
+    const staMetricsFile = `${staDir}/sta_metrics.json`;
+    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && rm -f ${staMetricsFile} && openroad -threads ${_edaOpenroadThreadsToken()} -metrics ${staMetricsFile} -exit << 'EOF'
 read_liberty ${libPath(cfg)}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
+${staEvidenceTcl()}
 create_clock -name clk -period ${clock_period_ns} [get_ports ${clock_port}]
 report_checks -path_delay max -format full
 report_checks -path_delay min -format full
@@ -1747,7 +1756,34 @@ EOF`;
     const wnsMatch = result.output.match(/wns\s+([\d.-]+)/i);
     const tnsMatch = result.output.match(/tns\s+([\d.-]+)/i);
 
-    if (result.success) {
+    // Read the metrics file back. The sentinel distinguishes an ABSENT file
+    // from an EMPTY one — `cat ... || true` cannot, and conflating them is
+    // exactly the mistake this channel exists to prevent. Measured: the file
+    // IS absent after a SIGKILL (rc=137) and after an unwritable-path run
+    // (rc=1, UTL-0010), so absent must mean UNMEASURED, never "zero errors".
+    const mRead = dockerExec(
+      `if [ -f ${staMetricsFile} ]; then echo __STA_METRICS_PRESENT__; cat ${staMetricsFile}; else echo __STA_METRICS_ABSENT__; fi`,
+      15000);
+    const mOut = mRead.output || "";
+    const staMetricsPresent = mOut.includes("__STA_METRICS_PRESENT__");
+    const staMetricsRaw = staMetricsPresent
+      ? mOut.slice(mOut.indexOf("__STA_METRICS_PRESENT__") + "__STA_METRICS_PRESENT__".length)
+      : null;
+
+    // THE CONJUNCTION. `result.success` (the exit code) is ONE term, not the
+    // verdict. Measured on openroad 26Q3-1797-g1c09d62b96: a file script that
+    // aborts gives rc=1 with flow__errors__count=0, while the stdin form gives
+    // rc=0 with flow__errors__count=4 — the two terms are wrong in OPPOSITE
+    // directions on the same broken input, so neither may stand alone. Do not
+    // reduce this to `result.success`, and do not reduce it to the metrics.
+    const staEvidence = evaluateStaEvidence({
+      exitCode: result.success ? 0 : 1,
+      metricsFileExists: staMetricsPresent,
+      metricsRaw: staMetricsRaw,
+    });
+    const staPass = staEvidence.pass;
+
+    if (staPass) {
       const dir = netlist.substring(0, netlist.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "sta",
@@ -1755,6 +1791,18 @@ EOF`;
         tool: "OpenSTA",
         wns: wnsMatch ? parseFloat(wnsMatch[1]) : null,
         tns: tnsMatch ? parseFloat(tnsMatch[1]) : null,
+        evidence_terms: STA_EVIDENCE_TERMS,
+      });
+    } else {
+      const dir = netlist.substring(0, netlist.lastIndexOf("/"));
+      writeManifest(dir || "/tmp", {
+        step: "sta",
+        status: staEvidence.verdict,   // FAIL, or UNMEASURED when no evidence was produced
+        tool: "OpenSTA",
+        wns: null,
+        tns: null,
+        failed_terms: staEvidence.failedTerms,
+        reasons: staEvidence.reasons,
       });
     }
 
@@ -1781,9 +1829,18 @@ EOF`;
         {
           type: "text",
           text: JSON.stringify({
-            success: result.success,
-            wns: wnsMatch ? parseFloat(wnsMatch[1]) : null,
-            tns: tnsMatch ? parseFloat(tnsMatch[1]) : null,
+            success: staPass,
+            exit_code_ok: result.success,   // ONE term of the AND, never the verdict
+            sta_verdict: staEvidence.verdict,
+            sta_evidence: {
+              terms: staEvidence.terms,
+              failed_terms: staEvidence.failedTerms,
+              reasons: staEvidence.reasons,
+              metrics: staEvidence.metrics,
+              metrics_file: staMetricsFile,
+            },
+            wns: staPass && wnsMatch ? parseFloat(wnsMatch[1]) : null,
+            tns: staPass && tnsMatch ? parseFloat(tnsMatch[1]) : null,
             report: result.output.slice(-3000),
           }),
         },
