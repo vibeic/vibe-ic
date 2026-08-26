@@ -1,6 +1,26 @@
 #!/usr/bin/env python3
 """sweep_reach_check.py — refuse to read a sweep as clean when it reached nothing.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This is wired at flow step 31 as an
+`advisory_program_exit_zero` clause, conditional on the PERC sweep above it
+having emitted a report.
+
+ADVISORY because the sweep it judges is advisory itself and emits only when it
+found a routed DEF: a reach verdict is exactly as strong as the sweep it reads,
+and making the consumer blocking while the producer cannot fail would put the
+harder verdict on the weaker evidence. It becomes `program_exit_zero` when the
+sweep does.
+
+WHY IT WAS UNWIRED FOR SO LONG, recorded because the mechanism outlived the
+instance. Its only non-comment referrer in the entire repository was one line
+of argparse help text in `perc_corpus_sweep` — `help="write {rows, reach} here
+— the document `sweep_reach_check.py --report` consumes"` — and three separate
+wiring auditors read that SENTENCE as an invocation. A reachability instrument
+was certified as wired by a description of itself.
+
 A corpus sweep is the standard acceptance evidence for a new guard in this
 plugin: run it over every tracked project, publish the exit code. The evidence
 has a hole. A sweep that exits 0 having never entered the guard it is exercising

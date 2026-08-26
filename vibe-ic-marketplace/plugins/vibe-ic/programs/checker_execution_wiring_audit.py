@@ -359,6 +359,69 @@ _INVOCATION, _MENTION, _UNDETERMINED = "INVOCATION", "MENTION", "UNDETERMINED"
 #: is what makes it an argv rather than a sentence.
 _PY_FILE_RE = re.compile(r"([A-Za-z0-9_]+)\.py\b")
 #: A string literal that is EXACTLY one identifier: a registry-key shape.
+#: A string constant that is a SENTENCE, not a command line.
+#:
+#: THE THIRD FORM, and the one vibe-ic#1012's fix did not reach. That change
+#: stopped a COMMENT from certifying wiring; the docstring set above stops a
+#: DOCSTRING. A plain string literal was left standing, so an argparse `help=`,
+#: a print message or a JSON description still counted as a call. Measured
+#: instance, verbatim:
+#:
+#:     programs/perc_corpus_sweep.py:337
+#:         help="write {rows, reach} here — the document
+#:               `sweep_reach_check.py --report` consumes"
+#:
+#: That one line is `sweep_reach_check`'s ONLY non-comment referrer in the
+#: repository, and on the strength of it three wiring auditors certified a
+#: reachability instrument as wired. A 36-agent carpet search over all 1291
+#: programs put the honest orphan count at 11 while the tree published 0.
+#:
+#: WHAT IS *NOT* PROSE, and why the predicate is shaped this way. A string is
+#: also how an argv is written — `subprocess.run([sys.executable,
+#: "foo_check.py"])` is a real invocation whose name lives in a string literal,
+#: and so is `python3 tools/x.py --root .` written as one string. Token shape
+#: cannot separate those from `run gate_x_check.py to reproduce`, whose every
+#: word is path-shaped too.
+#:
+#: What separates them is FUNCTION WORDS. A command line contains none — it is
+#: paths, flags and values. A sentence about a command cannot avoid them. The
+#: list is short, closed, and English-only on purpose: it is a grammar test,
+#: not a vocabulary, so it carries no chip, protocol or project term and stays
+#: true for a repository whose subject changes.
+#:
+#: Over-crediting is the safe direction for an ACCUSATION, so a string that
+#: cannot be shown to be prose keeps its invocation credit.
+_PROSE_FUNCTION_WORDS = frozenset("""
+a an the this that these those
+is are was were be been being
+and or but nor so then than
+to of in on at by for from with without into onto via
+it its they them their there here
+what which who whom whose when where why how
+do does did done doing
+can could may might must should would will shall
+not no nor only just also too very
+run runs ran write writes writing read reads reading
+use uses used using see sees consume consumes consumed
+produce produces produced emit emits emitted
+""".split())
+
+
+def _is_prose_string(value: str) -> bool:
+    """True when *value* reads as a sentence rather than as a command line.
+
+    The FIRST word is excluded from the test, and that is not a fudge: a shell
+    declaration opens with its verb — `run "label" "$ROOT" python3 ...` — and
+    that leading `run` is the COMMAND, not English. Prose does not put its only
+    function word first and nothing else after; a sentence carries them
+    throughout. Measured against both shapes below in the unit tests."""
+    words = value.split()
+    if len(words) < 3:
+        return False              # a path, a flag pair — never a sentence
+    lowered = (w.strip("`\'\"(),.;:*_[]{}").lower() for w in words[1:])
+    return any(w in _PROSE_FUNCTION_WORDS for w in lowered)
+
+
 _BARE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 #: A program filename built from a VARIABLE, in a shell or YAML haystack:
 #: `python3 "$PROGRAMS/${gate}.py"`. The same dispatcher shape as the Python
@@ -436,7 +499,7 @@ def _py_evidence(tree: "ast.AST"):
         if isinstance(node, ast.Constant):
             if isinstance(node.value, str) and id(node) not in docstrings:
                 value = node.value
-                if ".py" in value:
+                if ".py" in value and not _is_prose_string(value):
                     # An argv, wherever it is written: a subprocess list, a
                     # `run "<label>" ... "$PG/<stem>.py"` line, a CI `run:`.
                     for m in _PY_FILE_RE.finditer(value):
