@@ -336,7 +336,12 @@ def test_the_runner_invokes_this_producer(tmp_path):
     # of every installed PDK in the shipped image -- and abstracted every design
     # against whichever technology sorted first. The `pdk` argument is what
     # makes the producer's refusal the exception instead of the rule.
-    assert "plan.append(step_digital_hardmacro_gen(project, pdk))" in src
+    # AND THE CONTAINER THE TOOLS RUN IN. Every EDA step around this one is
+    # dispatched into the container; this step is a plain host subprocess, so
+    # without the container name the producer probes the one environment
+    # magic is known not to be in and reports the tool absent.
+    assert ("plan.append(step_digital_hardmacro_gen(project, pdk, "
+            "args.container))" in src)
 
 
 def test_the_gate_never_invokes_this_producer():

@@ -32630,7 +32630,8 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                       time.time() - t0, detail, written)
 
 
-def _hardmacro_pdk_dir(pdk: Optional["PdkConfig"]) -> Optional[str]:
+def _hardmacro_pdk_dir(pdk: Optional["PdkConfig"],
+                       container: str = "") -> Optional[str]:
     """The DESIGN'S PDK directory, for `digital_hardmacro_gen --pdk-root`.
 
     MEASURED DEFECT this exists to close. `digital_hardmacro_gen._magicrc_for`
@@ -32652,19 +32653,37 @@ def _hardmacro_pdk_dir(pdk: Optional["PdkConfig"]) -> Optional[str]:
     reconstructed and no PDK name is hard-coded: if the layout is not the
     standard one this returns None, the producer sees the bare `$PDK_ROOT` and
     refuses with its own stated reason. Degrades to a refusal, never to a guess.
+
+    AND IT ASKS THE SIDE THE PDK IS INSTALLED ON. `$PDK_ROOT` is a
+    CONTAINER path: on a host-launched run the variable is usually unset and
+    `/foss/pdks` is not on this filesystem at all, so the host answer below is
+    None for every real flow run — and the producer then fell back to a bare
+    `$PDK_ROOT` it could not see either. `_pdk_dir_of` derives the same
+    directory from the tech LEF this run is ALREADY driving OpenROAD with (no
+    env, no host filesystem), and the CONTAINER is asked whether it holds the
+    technology, because that is the side magic reads it from. Same boundary,
+    same fix, as the magic probe in the producer.
     """
     if pdk is None or not getattr(pdk, "name", ""):
         return None
     root = os.environ.get("PDK_ROOT", "")
-    if not root:
-        return None
-    cand = Path(root) / pdk.name
-    return str(cand) if (cand / "libs.tech" / "magic").is_dir() else None
+    if root:
+        cand = Path(root) / pdk.name
+        if (cand / "libs.tech" / "magic").is_dir():
+            return str(cand)
+    cand_c = _pdk_dir_of(pdk)
+    if cand_c and container:
+        rc, _o, _e = _docker_exec(
+            container,
+            f"test -d {shlex.quote(cand_c + '/libs.tech/magic')}", timeout=30)
+        if rc == 0:
+            return cand_c
+    return None
 
 
 def step_digital_hardmacro_gen(project: Path,
-                               pdk: Optional["PdkConfig"] = None
-                               ) -> StepResult:
+                               pdk: Optional["PdkConfig"] = None,
+                               container: str = "") -> StepResult:
     """Canonical step 37.5ip — the cell/IP path TERMINAL producer.
 
     WIRED HERE AND NOT INTO THE GATE, for the reason step A8 already records in
@@ -32697,9 +32716,16 @@ def step_digital_hardmacro_gen(project: Path,
     # THE DESIGN'S PDK, NAMED. Without it the producer sees only `$PDK_ROOT`
     # and, before it learned to refuse, silently picked whichever technology
     # sorted first. See `_hardmacro_pdk_dir`.
-    _pdk_dir = _hardmacro_pdk_dir(pdk)
+    _pdk_dir = _hardmacro_pdk_dir(pdk, container)
     if _pdk_dir:
         cmd += ["--pdk-root", _pdk_dir]
+    # AND THE CONTAINER THE TOOLS ARE IN. This step is a plain host
+    # subprocess while every EDA step around it is dispatched into the
+    # container, so without this the producer probes the ONE environment
+    # magic is known not to be in and reports the tool absent — measured, on
+    # a run whose own provenance carried `tool magic, exit_code 0`.
+    if container:
+        cmd += ["--container", container]
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
                             errors="replace", timeout=1800)
@@ -42345,7 +42371,7 @@ def main() -> int:
     # produced digitally could be placed by anybody: a completed sign-off run
     # contained no `.lef` anywhere. Immediately after canonicalisation, which
     # is what puts the sign-off GDS at this producer's declared input path.
-    plan.append(step_digital_hardmacro_gen(project, pdk))
+    plan.append(step_digital_hardmacro_gen(project, pdk, args.container))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares

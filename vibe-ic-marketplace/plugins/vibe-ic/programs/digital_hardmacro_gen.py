@@ -46,8 +46,11 @@ before coding it, and three of its eight steps are REFUSALS. Same shape here:
   6. Write the LEF BY CALLING MAGIC, through the PDK's own `.magicrc`,
      mirroring `librelane/scripts/magic/lef.tcl`: `gds read`, `load <top>`,
      `lef write -hide` (the abstract form, which is upstream's default).
-     Magic unreachable, or the PDK has no magicrc -> SKIP with a stated
-     reason and rc 2. DO NOT WRITE A LEF WRITER.
+     Magic is looked for in THIS environment first and then in the EDA
+     container the flow dispatches its tools into, and the technology and
+     the launch go to whichever side answered — see "WHERE MAGIC ACTUALLY
+     IS". Reachable on NEITHER side, or the PDK has no magicrc there ->
+     SKIP with a stated reason and rc 2. DO NOT WRITE A LEF WRITER.
   7. Emit the Liberty and Verilog views from the pin list of step 4.
   8. Write the JSON record, whatever happened.
 
@@ -99,6 +102,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -107,6 +111,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import _container_exec  # noqa: E402  container-side deadlines
 import _path_layout as _pl
 import _watchdog  # noqa: E402  plugin-wide progress-stall process supervision
 from _atomic_artefact import write_text as atomic_write_text
@@ -486,30 +491,307 @@ def magicrc_candidates(pdk_root: str) -> List[str]:
         root.glob("*/libs.tech/magic/*.magicrc")))]
 
 
+# ── WHERE MAGIC ACTUALLY IS ───────────────────────────────────────────────
+#
+# THE MEASURED DEFECT THIS SECTION EXISTS TO CLOSE. The LEF write asked
+# `shutil.which("magic")` and, on a real sign-off run, answered
+#
+#     ENV_UNAVAILABLE  digital_hardmacro_gen
+#     [SKIPPED_NO_CAPABILITY] magic is not on PATH in this environment
+#
+# while that same run had already streamed its GDS out WITH MAGIC — its own
+# provenance line reads `tool magic, version 8.3.681, exit_code 0`. Both
+# statements were true of the environment each was made in, and that is the
+# entire defect: the runner executes on the HOST and dispatches every EDA
+# tool into the EDA CONTAINER, so a probe that reads THIS process's PATH
+# interrogates the one environment the tools are known not to be in. The
+# report is not "magic is missing", it is "I looked in the wrong place", and
+# the two are indistinguishable to everybody downstream.
+#
+# THE PDK IS ON THE SAME SIDE AS THE TOOLS, so this was the same error three
+# times over: the `magic` probe, the `_magicrc_for` glob (`/foss/pdks` does
+# not exist on the host either) and the `magic` launch itself all read the
+# host. Resolving a SITE once and doing all three there is what keeps them
+# from disagreeing.
+#
+# The plugin has closed this class twice already — `_klayout_launch`
+# .find_runner (host first, then `$VIBEIC_EDA_CONTAINER`) and
+# `analog_pdk_deck_context.container_reader` (host read, then `docker exec
+# cat`). This is that resolution for Magic, and it follows the same order.
+# HOST FIRST is not a preference: it is what makes one program correct in
+# both environments. Inside the image — where the plugin's own tests and an
+# in-image flow run live — magic is on PATH and there is no docker client at
+# all; on the host it is the container that has magic and the PDK.
+#
+# WHAT IT MUST STILL BE ABLE TO SAY IS NO. A probe that cannot report an
+# absent tool is worse than one that reports it wrongly, so absence is
+# resolved to None here and stated by the caller as the capability gap it is
+# — never quietly turned into a pass.
+
+#: The EDA container the flow dispatches tools into. Same env var and same
+#: default `_klayout_launch` uses, so a per-run container name is set once.
+DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
+
+
+def _sh(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
+    """Bounded subprocess. The single monkeypatch surface for the tests."""
+    try:
+        cp = subprocess.run([str(a) for a in argv], capture_output=True,
+                            text=True, errors="replace", timeout=timeout)
+        return cp.returncode, cp.stdout or "", cp.stderr or ""
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timed out after {timeout}s"
+    except OSError as exc:
+        return 127, "", str(exc)
+
+
+def choose_magicrc(own: List[str], nested: List[str]) -> Optional[str]:
+    """THE rule for picking a technology, over listings from ANY filesystem.
+
+    Written once and applied to both the host and the container listing: two
+    copies of this rule would be free to disagree about which technology a
+    design is abstracted against, which is the failure `_magicrc_for`'s own
+    docstring records. See there for why more than one candidate REFUSES.
+    """
+    if own:
+        return own[0]
+    if len(nested) == 1:
+        return nested[0]
+    return None
+
+
+class MagicSite:
+    """The ONE environment magic, the PDK and the work files all live in.
+
+    `container` empty (or the literal "host") means this process's own
+    environment. Otherwise every read, every listing and the tool launch
+    itself cross into that container, and the work files cross with
+    `docker cp` — so the project may sit at any host path, mounted or not,
+    including a pytest `tmp_path`.
+    """
+
+    def __init__(self, container: str = "") -> None:
+        self.container = (container or "").strip()
+        self.path: Optional[str] = None
+
+    @property
+    def in_container(self) -> bool:
+        return self.container not in ("", "host")
+
+    @property
+    def where(self) -> str:
+        return (f"container {self.container!r}" if self.in_container
+                else "this environment")
+
+    # ── probes ────────────────────────────────────────────────────────────
+    def has_magic(self) -> bool:
+        if not self.in_container:
+            return shutil.which("magic") is not None
+        return self.sh("command -v magic >/dev/null 2>&1", timeout=60)[0] == 0
+
+    def magic_version(self) -> str:
+        """The tool's own banner, from the binary this site would launch.
+
+        Launched WITHOUT a shell in this environment, because that is how
+        the LEF write launches it: a login shell resolves its own PATH and
+        could answer for a different binary than the one that will run.
+        """
+        if self.in_container:
+            rc, out, err = self.sh("magic --version", timeout=60)
+        else:
+            rc, out, err = _sh(["magic", "--version"], timeout=60)
+        text = (out or err).strip()
+        return text.splitlines()[-1] if rc == 0 and text else ""
+
+    def _ls(self, pattern: str) -> List[str]:
+        """Absolute paths matching `pattern`, LISTED WHERE THEY LIVE.
+
+        Only lines that are absolute paths are kept. The image's profile
+        prints a startup banner (`[INFO] Final PATH variable: ...`) on every
+        LOGIN shell, ahead of the command's own output, and a listing that
+        counted those lines as candidates would hand `choose_magicrc` a
+        first entry that is not a technology file at all.
+        """
+        _rc, out, _err = self.sh(f"ls -1d {pattern} 2>/dev/null", timeout=60)
+        return sorted(x.strip() for x in (out or "").splitlines()
+                      if x.strip().startswith("/"))
+
+    def magicrc(self, pdk_root: str) -> Optional[str]:
+        """The technology file, chosen by `choose_magicrc` where it lives."""
+        if not self.in_container:
+            return _magicrc_for(pdk_root)
+        if not pdk_root:
+            return None
+        q = shlex.quote(pdk_root.rstrip("/"))
+        return choose_magicrc(self._ls(f"{q}/libs.tech/magic/*.magicrc"),
+                              self._ls(f"{q}/*/libs.tech/magic/*.magicrc"))
+
+    def magicrc_candidates(self, pdk_root: str) -> List[str]:
+        if not self.in_container:
+            return magicrc_candidates(pdk_root)
+        if not pdk_root:
+            return []
+        q = shlex.quote(pdk_root.rstrip("/"))
+        own = self._ls(f"{q}/libs.tech/magic/*.magicrc")
+        return own or self._ls(f"{q}/*/libs.tech/magic/*.magicrc")
+
+    # ── the work directory ────────────────────────────────────────────────
+    def open(self, host_tmp: Path) -> Tuple[bool, str]:
+        if not self.in_container:
+            host_tmp.mkdir(parents=True, exist_ok=True)
+            self.path = str(host_tmp)
+            return True, ""
+        rc, out, err = _sh(["docker", "exec", self.container, "mktemp", "-d"],
+                           timeout=60)
+        if rc != 0 or not out.strip():
+            return False, (f"cannot open a working directory in "
+                           f"{self.where}: {(err or out).strip()[:200]}")
+        self.path = out.strip()
+        return True, ""
+
+    def put(self, src: Path, name: str) -> Tuple[bool, str]:
+        dst = f"{self.path}/{name}"
+        if not self.in_container:
+            try:
+                Path(dst).write_bytes(Path(src).read_bytes())
+                return True, ""
+            except OSError as exc:
+                return False, str(exc)
+        rc, out, err = _sh(["docker", "cp", str(src),
+                            f"{self.container}:{dst}"], timeout=300)
+        return (rc == 0), (err or out).strip()[:200]
+
+    def put_text(self, text: str, name: str, host_tmp: Path
+                 ) -> Tuple[bool, str]:
+        tmp = host_tmp / f".stage_{name}"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text, encoding="utf-8")
+        return self.put(tmp, name)
+
+    def get(self, name: str, dst: Path) -> Tuple[bool, str]:
+        src = f"{self.path}/{name}"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not self.in_container:
+            try:
+                dst.write_bytes(Path(src).read_bytes())
+                return True, ""
+            except OSError as exc:
+                return False, str(exc)
+        rc, out, err = _sh(["docker", "cp", f"{self.container}:{src}",
+                            str(dst)], timeout=300)
+        return (rc == 0 and dst.is_file()), (err or out).strip()[:200]
+
+    def sh(self, cmd: str, timeout: int = 900) -> Tuple[int, str, str]:
+        if not self.in_container:
+            return _sh(["bash", "-lc", cmd], timeout=timeout)
+        # THE DEADLINE GOES WHERE THE TOOL IS. A client-side timeout kills
+        # the `docker exec` client and leaves the tool running, holding its
+        # cores and never finishing the file the caller waits for — the
+        # measured defect `_container_exec` exists for.
+        try:
+            cp = _container_exec.run_in_container(self.container, cmd,
+                                                  deadline_s=int(timeout))
+        except (subprocess.SubprocessError, OSError) as exc:
+            # A wedged container, or no docker client at all: NOT a verdict
+            # about the design. Surfaced as a non-zero rc with the reason.
+            return 127, "", str(exc)
+        return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+    def close(self) -> None:
+        if self.path and self.in_container:
+            _sh(["docker", "exec", self.container, "rm", "-rf", self.path],
+                timeout=60)
+            self.path = None
+
+
+def find_magic_site(container: str = "") -> Optional[MagicSite]:
+    """Resolve WHERE magic is: this environment first, then the container.
+
+    None means the tool is genuinely absent from both, and the caller must
+    then state the capability gap. Never returns a site whose magic it has
+    not just seen answer.
+    """
+    here = MagicSite("")
+    if here.has_magic():
+        return here
+    if shutil.which("docker") is None:
+        return None
+    name = (container or DEFAULT_CONTAINER).strip()
+    if not name or name == "host":
+        return None
+    there = MagicSite(name)
+    return there if there.has_magic() else None
+
+
+def magic_absent_reason(container: str = "") -> str:
+    """Why no magic could be reached — naming EVERY place that was looked."""
+    name = (container or DEFAULT_CONTAINER).strip() or DEFAULT_CONTAINER
+    if shutil.which("docker") is None:
+        return ("magic is not on PATH in this environment and there is no "
+                "docker client here to reach an EDA container with")
+    return (f"magic is not on PATH in this environment and not on PATH "
+            f"inside container {name!r} either")
+
+
 _LEF_HAS_PIN_RE = re.compile(r"(?m)^\s*PIN\s+\S+")
 
 
-def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
-                         pdk_root: str, full_lef: bool, pinonly: bool,
-                         timeout_s: int = 900) -> Tuple[bool, str]:
-    """(ok, reason). Never raises; a missing capability is a stated reason."""
-    if shutil.which("magic") is None:
-        return False, "magic is not on PATH in this environment"
-    magicrc = _magicrc_for(pdk_root)
-    if magicrc is None:
-        cands = magicrc_candidates(pdk_root)
-        if len(cands) > 1:
-            return False, (
-                f"PDK_ROOT {pdk_root!r} holds {len(cands)} PDK technologies "
-                f"and nothing here says which one this design is on, so no "
-                f"magicrc was chosen: {', '.join(cands)}. Pass the PDK "
-                f"DIRECTORY itself (the one holding `libs.tech/magic/`). "
-                f"Choosing between them would abstract the design against a "
-                f"technology that may not define its layers, which yields a "
-                f"LEF with an outline and no pins rather than an error.")
-        return False, (f"no `libs.tech/magic/*.magicrc` under PDK_ROOT "
-                       f"{pdk_root!r}; the PDK's own technology file is the "
-                       f"only one this program will use")
+def magic_env_for(magicrc: str, pdk_root: str) -> Dict[str, str]:
+    """`PDK` and `PDK_ROOT` as the SYSTEM magicrc expects to read them.
+
+    MEASURED, on the real sign-off GDS, once magic could finally be reached:
+    with `PDK_ROOT` set to the PDK DIRECTORY — which is what `--pdk-root`
+    now carries, because naming the design's own PDK is what stopped the
+    alphabetically-first technology being chosen — magic starts, exits 0 and
+    writes NO LEF:
+
+        Could not find file '/…/sky130A/sky130A/libs.tech/magic/sky130A.tech'
+
+    The system magicrc composes `$PDK_ROOT/$PDK/...` and reads both at
+    startup (`magic_port_extract_emit.build_shell_preamble` records the same
+    constraint), so the two are read TOGETHER and neither can be set without
+    the other. Both are derived from the technology file that was actually
+    CHOSEN, so they cannot describe a different PDK from the one the
+    abstract is written against.
+    """
+    rc = Path(magicrc)
+    # <pdk_dir>/libs.tech/magic/<name>.magicrc — three levels up is the PDK.
+    if len(rc.parents) >= 3:
+        pdk_dir = rc.parents[2]
+        return {"PDK": pdk_dir.name, "PDK_ROOT": str(pdk_dir.parent)}
+    return {"PDK_ROOT": pdk_root}
+
+
+def _accept_lef(produced: Path, out_lef: Path, rc: int,
+                tool_output: str) -> Tuple[bool, str]:
+    """The verdict on what magic wrote. ONE copy, whichever site wrote it.
+
+    A PIN-LESS ABSTRACT IS WORSE THAN NO ABSTRACT — it is an outline and a
+    set of obstructions with nothing to connect to, and it LOOKS like a
+    delivered view. Same posture as the sibling producer
+    `analog_hardmacro_gds_emit` takes on a hollow GDS: it is not left on
+    disk. The gate would refuse it anyway; shipping it and letting the gate
+    find it would mean the flow published a broken artefact.
+    """
+    if not produced.is_file() or produced.stat().st_size == 0:
+        tail = (tool_output or "").strip().splitlines()[-3:]
+        return False, (f"magic exited {rc} and wrote no LEF; "
+                       f"last output: {' | '.join(tail) or '(none)'}")
+    if not _LEF_HAS_PIN_RE.search(produced.read_text(errors="replace")):
+        return False, (
+            "magic wrote a LEF with NO `PIN` block — an outline and "
+            "obstructions with nothing to connect to. The macro's ports "
+            "did not reach Magic, so the abstract is not deliverable and "
+            "has not been staged.")
+    out_lef.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(produced, out_lef)
+    return True, ""
+
+
+def _write_lef_here(top: str, gds: Path, def_file: Path, out_lef: Path,
+                    pdk_root: str, magicrc: str, full_lef: bool,
+                    pinonly: bool, timeout_s: int) -> Tuple[bool, str]:
+    """Magic in THIS process's environment — the path taken inside the image."""
     with tempfile.TemporaryDirectory() as td:
         work = Path(td)
         staged = work / f"{top}.gds"
@@ -521,7 +803,7 @@ def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
                                         str(work / f"{top}.lef"),
                                         full_lef, pinonly))
         env = dict(os.environ)
-        env["PDK_ROOT"] = pdk_root
+        env.update(magic_env_for(magicrc, pdk_root))
         cmd = ["magic", "-noconsole", "-dnull", "-rcfile", magicrc,
                str(script)]
         # BLOCKING PROCESS POLICY: magic is a potentially long EDA run, so it
@@ -542,32 +824,102 @@ def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
             # stalled / ceiling / launch_error are NOT a LEF verdict: say which.
             return False, (f"magic did not complete: watchdog reported "
                            f"{cp.outcome} after {cp.elapsed_s:.0f}s")
-        produced = work / f"{top}.lef"
-        if not produced.is_file() or produced.stat().st_size == 0:
-            tail = (cp.err or cp.out or "").strip().splitlines()[-3:]
-            return False, (f"magic exited {cp.rc} and wrote no LEF; "
-                           f"last output: {' | '.join(tail) or '(none)'}")
-        # A PIN-LESS ABSTRACT IS WORSE THAN NO ABSTRACT — it is an outline and
-        # a set of obstructions with nothing to connect to, and it LOOKS like
-        # a delivered view. Same posture as the sibling producer
-        # `analog_hardmacro_gds_emit` takes on a hollow GDS: it is not left on
-        # disk. The gate would refuse it anyway; shipping it and letting the
-        # gate find it would mean the flow published a broken artefact.
-        if not _LEF_HAS_PIN_RE.search(produced.read_text(errors="replace")):
+        return _accept_lef(work / f"{top}.lef", out_lef, cp.rc,
+                           cp.err or cp.out)
+
+
+def _write_lef_in_container(site: "MagicSite", top: str, gds: Path,
+                            def_file: Path, out_lef: Path, pdk_root: str,
+                            magicrc: str, full_lef: bool, pinonly: bool,
+                            timeout_s: int) -> Tuple[bool, str]:
+    """Magic where the runner already dispatches every other EDA tool.
+
+    The inputs cross with `docker cp` rather than through a bind mount: the
+    project may sit at any host path, and a producer that only works for a
+    mounted one fails silently on the paths it was not tried against.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        host_tmp = Path(td)
+        ok, why = site.open(host_tmp)
+        if not ok:
+            return False, why
+        try:
+            for src, name in ((gds, f"{top}.gds"), (def_file, f"{top}.def")):
+                ok, why = site.put(Path(src), name)
+                if not ok:
+                    return False, (f"could not stage {name} into "
+                                   f"{site.where}: {why}")
+            work = site.path or ""
+            tcl = build_lef_tcl(top, f"{work}/{top}.gds", f"{work}/{top}.def",
+                                f"{work}/{top}.lef", full_lef, pinonly)
+            ok, why = site.put_text(tcl, "lef.tcl", host_tmp)
+            if not ok:
+                return False, f"could not stage lef.tcl into {site.where}: {why}"
+            exports = " ".join(
+                f"{k}={shlex.quote(v)}"
+                for k, v in sorted(magic_env_for(magicrc, pdk_root).items()))
+            cmd = (f"cd {shlex.quote(work)} && export {exports} && "
+                   f"magic -noconsole -dnull -rcfile {shlex.quote(magicrc)} "
+                   f"{shlex.quote(work + '/lef.tcl')}")
+            rc, out, err = site.sh(cmd, timeout=timeout_s)
+            if rc == _container_exec.TIMEOUT_EXPIRED_RC:
+                return False, (f"magic did not complete: the {timeout_s}s "
+                               f"deadline expired in {site.where}")
+            produced = host_tmp / f"{top}.lef"
+            got, why = site.get(f"{top}.lef", produced)
+            if not got:
+                tail = (err or out or "").strip().splitlines()[-3:]
+                return False, (f"magic exited {rc} and wrote no LEF; "
+                               f"last output: {' | '.join(tail) or '(none)'}")
+            return _accept_lef(produced, out_lef, rc, err or out)
+        finally:
+            site.close()
+
+
+def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
+                         pdk_root: str, full_lef: bool, pinonly: bool,
+                         timeout_s: int = 900, *, container: str = "",
+                         site: Optional["MagicSite"] = None
+                         ) -> Tuple[bool, str]:
+    """(ok, reason). Never raises; a missing capability is a stated reason.
+
+    `site` is resolved here when the caller has not resolved it already; the
+    tool, its technology file and its work directory are then all read on
+    that one side. See "WHERE MAGIC ACTUALLY IS" above for why asking THIS
+    process's PATH answered a question nobody had asked.
+    """
+    if site is None:
+        site = find_magic_site(container)
+    if site is None:
+        return False, magic_absent_reason(container)
+    magicrc = site.magicrc(pdk_root)
+    if magicrc is None:
+        cands = site.magicrc_candidates(pdk_root)
+        if len(cands) > 1:
             return False, (
-                "magic wrote a LEF with NO `PIN` block — an outline and "
-                "obstructions with nothing to connect to. The macro's ports "
-                "did not reach Magic, so the abstract is not deliverable and "
-                "has not been staged.")
-        out_lef.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(produced, out_lef)
-        return True, ""
+                f"PDK_ROOT {pdk_root!r} holds {len(cands)} PDK technologies "
+                f"and nothing here says which one this design is on, so no "
+                f"magicrc was chosen: {', '.join(cands)}. Pass the PDK "
+                f"DIRECTORY itself (the one holding `libs.tech/magic/`). "
+                f"Choosing between them would abstract the design against a "
+                f"technology that may not define its layers, which yields a "
+                f"LEF with an outline and no pins rather than an error.")
+        return False, (f"no `libs.tech/magic/*.magicrc` under PDK_ROOT "
+                       f"{pdk_root!r} in {site.where}; the PDK's own "
+                       f"technology file is the only one this program "
+                       f"will use")
+    if site.in_container:
+        return _write_lef_in_container(site, top, gds, def_file, out_lef,
+                                       pdk_root, magicrc, full_lef, pinonly,
+                                       timeout_s)
+    return _write_lef_here(top, gds, def_file, out_lef, pdk_root, magicrc,
+                           full_lef, pinonly, timeout_s)
 
 
 # ── the run ───────────────────────────────────────────────────────────────
 
-def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool
-        ) -> Tuple[int, Record]:
+def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
+        container: str = "") -> Tuple[int, Record]:
     rec = Record()
     rec.lef_policy = {"writer": "magic:lef write",
                       "abstract": not full_lef,
@@ -649,8 +1001,22 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool
     if lef_path.exists() and lef_path.stat().st_size > 0:
         rec.skipped.append(f"{lef_path.name} (already present)")
         return RC_OK, rec
-    ok, why = write_lef_with_magic(design, gds, def_path, lef_path, pdk_root,
-                                   full_lef, pinonly)
+    # THE TOOL IS RESOLVED BEFORE IT IS ASKED FOR ANYTHING, and the record
+    # says which environment answered. "magic is not on PATH" was reported by
+    # a run whose own provenance already carried a successful magic
+    # invocation; naming the site is what makes the two statements
+    # comparable instead of contradictory.
+    site = find_magic_site(container)
+    if site is None:
+        ok, why = False, magic_absent_reason(container)
+    else:
+        rec.lef_policy["magic_site"] = site.where
+        ver = site.magic_version()
+        if ver:
+            rec.lef_policy["magic_version"] = ver
+        ok, why = write_lef_with_magic(design, gds, def_path, lef_path,
+                                       pdk_root, full_lef, pinonly,
+                                       container=container, site=site)
     if not ok:
         rec.status, rec.reason = "SKIPPED_NO_CAPABILITY", why
         rec.notes.append(
@@ -672,6 +1038,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", default=None, help="write the JSON record here")
     ap.add_argument("--pdk-root", default=os.environ.get("PDK_ROOT", ""),
                     help="PDK_ROOT; the PDK's own magicrc is located under it")
+    ap.add_argument("--container", default=DEFAULT_CONTAINER,
+                    help="the EDA container to reach magic and the PDK in "
+                         "when neither is in THIS environment; 'host' or "
+                         "empty confines the search to this one")
     ap.add_argument("--full-lef", action="store_true",
                     help="upstream MAGIC_WRITE_FULL_LEF: every internal shape "
                          "instead of an abstracted view")
@@ -687,7 +1057,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         rc, rec = run(args.project_dir, args.pdk_root, args.full_lef,
-                      args.pinonly)
+                      args.pinonly, args.container)
     except RuntimeError as exc:
         rc, rec = RC_NO_CAPABILITY, Record(status="ERROR", reason=str(exc))
 
