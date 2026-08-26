@@ -120,3 +120,53 @@ def test_the_import_regex_matches_both_import_shapes():
         "import foo_check\nfrom bar_check import x\n"
         "# import commented_out\nxs = 'baz_check'\n") for n in m if n}
     assert found == {"foo_check", "bar_check"}, found
+
+
+# ── tier: reached WHERE ──────────────────────────────────────────────────────
+def test_a_blocking_flow_clause_is_recognised():
+    """"Reachable" is one bit and it hides the thing worth knowing. The campaign
+    that took this tree's orphan count 163 -> 0 closed 34 programs onto flow
+    clauses and ALL 34 were `advisory_program_exit_zero` — a clause
+    `flow_compliance_check` runs and then ignores. The count moved without any
+    step gaining the power to refuse."""
+    R = _mod()
+    blocking = R._flow_blocking_stems()
+    assert blocking, "no blocking clause found; the tier would be meaningless"
+    # a stem the flow really does gate on
+    assert "cdc_crossing_check" in blocking, sorted(blocking)[:8]
+
+
+def test_an_advisory_clause_is_not_counted_as_blocking():
+    """The whole point of the tier is that these two are different facts."""
+    R = _mod()
+    blocking = R._flow_blocking_stems()
+    import yaml
+    doc = yaml.safe_load((R.PLUGIN / "flow" / "phase1_phase2_phase3.yaml")
+                         .read_text(errors="replace"))
+    advisory_only = set()
+    for step in doc["steps"]:
+        for clause in (step.get("gate", {}) or {}).get("all_of", []) or []:
+            if not isinstance(clause, dict):
+                continue
+            v = clause.get("advisory_program_exit_zero")
+            if isinstance(v, dict):
+                v = v.get("command")
+            if isinstance(v, str) and v.strip():
+                advisory_only.add(v.split()[0].removesuffix(".py"))
+    advisory_only -= blocking
+    assert advisory_only, "no advisory-only clause; the distinction is untested"
+    assert not (advisory_only & blocking)
+
+
+def test_an_optional_clause_is_counted_conservatively():
+    """`optional_program_exit_zero` IS blocking — an unmet condition denies the
+    step its PASS tier — but only when its condition can be met, which this
+    program cannot know. It is therefore NOT counted as blocking, which
+    UNDERSTATES the number rather than overstating it. That is the safe
+    direction for a figure a reader uses to judge a campaign, and it is pinned
+    so a future widening has to argue for itself."""
+    R = _mod()
+    import inspect
+    src = inspect.getsource(R._flow_blocking_stems)
+    assert 'clause.get("program_exit_zero")' in src
+    assert "optional_program_exit_zero" not in src.split('"""')[2]

@@ -290,13 +290,75 @@ def audit() -> dict:
                 str(o.relative_to(ROOT)) + f' glob("{hit}")'
                 for o in glob_dispatch[hit] if o.stem in reached_names)
 
+    # HOW STRONGLY IS IT REACHED? "Reachable" is one bit and it hides the
+    # thing worth knowing.
+    #
+    # The campaign that took this tree's orphan count 163 -> 0 closed 34
+    # programs onto flow clauses, and all 34 went in as
+    # `advisory_program_exit_zero` — a clause `flow_compliance_check` RUNS and
+    # then IGNORES ("RECORDS the verdict and NEVER fails the step", :7968).
+    # Zero were blocking. Every one of those closures is real by the letter of
+    # this audit, and the count moved without any step gaining the power to
+    # refuse. An orphan closed onto a clause that cannot fail is a weaker
+    # closure than the number suggests, and a one-bit verdict cannot say so.
+    #
+    # So the tier is REPORTED, never enforced: this program's exit code still
+    # turns on reachability alone. Naming the tier is what lets a reader ask
+    # "wired where?" without re-deriving it; deciding what each tier is worth
+    # belongs to whoever reads the answer.
+    blocking = _flow_blocking_stems()
+    for r in rows:
+        if r["status"] != "REACHABLE":
+            r["tier"] = "unreached"
+        elif r["name"] in blocking:
+            r["tier"] = "blocking"          # a clause that can fail its step
+        elif r["yaml_command_hits"] or r.get("glob_dispatch_hits"):
+            r["tier"] = "advisory_or_dispatched"
+        elif r["shell_or_md_hits"]:
+            r["tier"] = "shell_or_doc"
+        else:
+            r["tier"] = "code_only"
+
     unreachable = [r for r in rows if r["status"] == "POTENTIALLY_UNREACHABLE"]
+    tiers: dict = {}
+    for r in rows:
+        tiers[r["tier"]] = tiers.get(r["tier"], 0) + 1
     return {
         "programs_total": len(rows),
         "unreachable_count": len(unreachable),
         "unreachable": [r["name"] for r in unreachable],
+        "tiers": tiers,
         "rows": rows,
     }
+
+
+def _flow_blocking_stems() -> set:
+    """Stems named by a flow clause that CAN fail its step.
+
+    `program_exit_zero` fails the step on a non-zero exit.
+    `optional_program_exit_zero` is blocking too — an unmet condition denies the
+    step its PASS tier — but only when its condition can be met, which this
+    program cannot know, so it is NOT counted here and lands in the advisory
+    tier. That understates the blocking count rather than overstating it, which
+    is the safe direction for a number a reader will use to judge a campaign.
+    """
+    out: set = set()
+    for f in _yaml_files():
+        try:
+            import yaml  # noqa: PLC0415
+            doc = yaml.safe_load(_text_of(f))
+        except Exception:
+            continue
+        for step in (doc or {}).get("steps", []) or []:
+            for clause in (step.get("gate", {}) or {}).get("all_of", []) or []:
+                if not isinstance(clause, dict):
+                    continue
+                val = clause.get("program_exit_zero")
+                if isinstance(val, dict):
+                    val = val.get("command")
+                if isinstance(val, str) and val.strip():
+                    out.add(val.split()[0].removesuffix(".py"))
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -310,6 +372,13 @@ def main(argv: list[str] | None = None) -> int:
     report = audit()
 
     print(f"program_reachability_check: scanned {report['programs_total']} program(s)")
+    # The tier line is the denominator this verdict is about. A PASS that does
+    # not say WHERE its programs are reached cannot be told apart from a PASS
+    # that counted everything as reached by a doc line.
+    t = report.get("tiers") or {}
+    print("  reached at: "
+          + ", ".join(f"{k}={t[k]}" for k in sorted(t) if k != "unreached")
+          + (f"  |  unreached={t['unreached']}" if t.get("unreached") else ""))
     if not report["unreachable"]:
         print("[PASS] every program is reachable from at least one Python "
               "import / YAML command / shell-or-md reference")
