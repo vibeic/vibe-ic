@@ -13635,14 +13635,59 @@ def _dedupe_typo_against_canonical(ports):
         # Drop only when this port name is edit-distance 1 from a
         # canonical that is ALSO present (so we don't drop a real
         # `vbg` because `vdd` happens to be present elsewhere).
+        #
+        # AND the edit must LOOK like a typo. Edit-distance 1 alone deleted
+        # `sclk` — the SPI clock, one of the commonest port names there is —
+        # because it is one insertion away from `clk`, and `clk` is in a
+        # canonical set of six. Every SPI device has both. Measured on a
+        # 4-channel PWM with an SPI interface: L1.pin_table carried all seven
+        # pins, L9.top_ports carried six, and `spec_conformance_check` then
+        # blamed the RTL with "[ERROR] port-extra: RTL port 'sclk' is not
+        # declared in the spec" — a blocking gate failing a CORRECT design
+        # over a port the spec dropped.
         is_typo = any(
-            _levenshtein(nm, canon) == 1
+            _levenshtein(nm, canon) == 1 and _edit_looks_like_a_typo(nm, canon)
             for canon in canonical_present
         )
         if is_typo:
             continue
         out.append(p)
     return out
+
+
+def _edit_looks_like_a_typo(name: str, canon: str) -> bool:
+    """Does the single edit between *name* and *canon* have the shape of a
+    MISTAKE rather than of a deliberately different port?
+
+    THE CASE THIS FUNCTION WAS BUILT FROM, and the one it must keep catching:
+    `iid_bus` beside `id_bus` — an inserted character that DUPLICATES its
+    neighbour. That is what a slipped keystroke produces, and it is what the
+    v1.6.87 fix was written for.
+
+    THE CASE IT MUST STOP CATCHING: `sclk` beside `clk` — an inserted character
+    that duplicates nothing. `s`, `m`, `p`, `h`, `x` prefixed onto a clock is
+    not a typo, it is how the industry names a second clock domain, and the
+    same shape covers `nreset` beside `reset`, `wclk`/`rclk` on a FIFO, and any
+    other deliberately-prefixed sibling.
+
+    So: an INSERTION is a typo only when the inserted character repeats the one
+    beside it. A SUBSTITUTION or a DELETION keeps the old behaviour — those are
+    the classic slips and no naming convention produces them.
+
+    Both arguments are already lowercase and edit-distance 1 apart; this
+    function only classifies the edit, it does not re-measure it."""
+    if len(name) == len(canon):
+        return True          # substitution — a slipped key
+    if len(name) < len(canon):
+        return True          # deletion — a dropped key
+    # Insertion: find the inserted position by walking the common prefix.
+    i = 0
+    while i < len(canon) and name[i] == canon[i]:
+        i += 1
+    inserted = name[i]
+    before = name[i - 1] if i > 0 else ""
+    after = name[i + 1] if i + 1 < len(name) else ""
+    return inserted == before or inserted == after
 
 
 def _canon_port_name(name):
