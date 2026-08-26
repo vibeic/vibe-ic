@@ -87,9 +87,27 @@ def _read_manifest(path: Path) -> List[Dict[str, Any]]:
     return out
 
 
+def _inconclusive(manifest_entries: List[Dict[str, Any]], step: str) -> int:
+    """How many entries for `step` the manifest recorded as INCONCLUSIVE.
+
+    The manifest is three-state (PASS / FAIL / INCONCLUSIVE — see
+    mcp-eda/src/lib/manifest_metrics.mjs). Only PASS links a chain here; an
+    INCONCLUSIVE entry counts for nothing, exactly like no entry at all. It is
+    worth naming separately in the message, though: "the tool never ran" and
+    "the tool ran and we could not prove it" send an operator to different
+    places.
+    """
+    return sum(1 for e in manifest_entries
+               if e.get("step") == step and e.get("status") == "INCONCLUSIVE")
+
+
 def audit(manifest_entries: List[Dict[str, Any]]) -> List[Finding]:
     findings: List[Finding] = []
 
+    # NOTE (three-state manifest): every membership test below is a POSITIVE
+    # match on "PASS". Do not rewrite any of them as `!= "FAIL"` — an
+    # INCONCLUSIVE entry would then link the attestation chain, which is the
+    # exact false-evidence this program exists to prevent.
     compiles = [e for e in manifest_entries
                 if e.get("step") == "fpga_compile" and e.get("status") == "PASS"]
     programs = [e for e in manifest_entries
@@ -99,19 +117,28 @@ def audit(manifest_entries: List[Dict[str, Any]]) -> List[Finding]:
                 and e.get("status") == "PASS"]
 
     if not compiles:
+        n = _inconclusive(manifest_entries, "fpga_compile")
+        extra = (f" ({n} `fpga_compile` entr{'y is' if n == 1 else 'ies are'} "
+                 f"INCONCLUSIVE — the tool ran but the metrics that prove it "
+                 f"did the work were absent, so it cannot link the chain.)"
+                 if n else "")
         findings.append(Finding(
             "ERROR", "missing_compile_pass",
             "No `fpga_compile` PASS entry in the manifest. Hardware-attestation "
-            "claims require this session to have actually compiled a bitstream.",
+            "claims require this session to have actually compiled a bitstream."
+            + extra,
         ))
         return findings
 
     if not programs:
+        n = _inconclusive(manifest_entries, "fpga_program")
+        extra = (f" ({n} `fpga_program` entr{'y is' if n == 1 else 'ies are'} "
+                 f"INCONCLUSIVE — unproven is not burned.)" if n else "")
         findings.append(Finding(
             "ERROR", "missing_program_pass",
             "Compile PASS exists but no `fpga_program` PASS — the bitstream was "
             "never burned to a board this session. Any rig PASS observed is from "
-            "a prior session and must NOT be cited as evidence.",
+            "a prior session and must NOT be cited as evidence." + extra,
         ))
         return findings
 

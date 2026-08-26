@@ -183,6 +183,11 @@ The plugin contract makes this impossible if you follow this rule:
      - artefact-hash mismatch (the SOF on the board ≠ the SOF you
        compiled)
      - connect_test PASS that predates the `fpga_program` step
+     - a step whose manifest entry is `INCONCLUSIVE` (the tool ran, but
+       the metrics that prove it did the work were absent). The manifest
+       `status` field is three-state — `PASS` / `FAIL` / `INCONCLUSIVE` —
+       and only `PASS` links the attestation chain. Never read
+       `status != "FAIL"` as a pass.
 
 A "PASS from connect_test alone" without a session-matched compile +
 program is **NOT acceptance** and the supervisor will reject it.

@@ -272,7 +272,19 @@ After configuration, Claude Code gains access to these EDA tools:
 
 Every tool writes a result manifest (`latest_results.jsonl` +
 `latest_results.yml`) with timestamp, status, and key metrics after each
-PASS, so reviewers never pick up stale logs.
+run, so reviewers never pick up stale logs.
+
+**`status` is three-state — `PASS` / `FAIL` / `INCONCLUSIVE`.** A manifest
+may record `PASS` only when the metrics that prove the work happened are
+present; if they are absent the entry is recorded as `INCONCLUSIVE`, with
+`missing_metrics` naming exactly which ones and `inconclusive_reason`
+explaining it. This is not a failure — the design may be perfectly fine and
+nobody measured it — and it is not a pass either. The per-step declaration
+of which metrics are required lives in `src/lib/manifest_metrics.mjs`.
+
+If you read this manifest from your own tooling, test `status == "PASS"`.
+Testing `status != "FAIL"` reads `INCONCLUSIVE` as a pass, which is the
+defect the third state exists to prevent.
 
 ### 3d. PDK Selection
 

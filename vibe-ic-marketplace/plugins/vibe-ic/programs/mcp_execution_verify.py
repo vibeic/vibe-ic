@@ -25,6 +25,19 @@ What it catches:
   2. FOUND_FAIL — a required step ran but reported status FAIL
   3. STALE — a required step entry is older than --max-age-hours
   4. MANIFEST_MISSING — the manifest file itself does not exist
+  5. FOUND_INCONCLUSIVE — a required step ran, the tool reported success, but
+     the metrics that prove the work happened were absent, so the manifest
+     recorded INCONCLUSIVE instead of PASS (see mcp-eda/src/lib/
+     manifest_metrics.mjs). An INCONCLUSIVE step is NOT a pass: this program
+     will not report verdict PASS for it and will not exit 0. It is also NOT a
+     failure — the step may well have been fine and nobody measured it — so it
+     is counted and reported under its own name rather than folded into
+     FOUND_FAIL, and the overall verdict becomes INCONCLUSIVE when every
+     shortfall is of this kind.
+
+The manifest carries three states — PASS / FAIL / INCONCLUSIVE — and so does
+this program's verdict. Any reader that tests `verdict != "FAIL"` to mean
+"passed" is wrong: test `verdict == "PASS"`, or use the exit code.
 
 Usage:
     python3 mcp_execution_verify.py \
@@ -35,7 +48,11 @@ Usage:
 
 Exit codes:
     0 = all required steps found with PASS status and within age limit
-    1 = one or more steps missing, FAIL, or stale
+    1 = one or more steps missing, FAIL, INCONCLUSIVE, or stale
+
+    Only verdict PASS exits 0. INCONCLUSIVE exits 1 exactly as FAIL does — the
+    distinction is in the report, so a reader can tell "this is broken" from
+    "nobody measured this", but neither of them is permission to proceed.
 
 Generality: works for ANY MCP EDA Server manifest.
 No external tool dependencies — pure Python.
@@ -69,7 +86,9 @@ KNOWN_STEPS = [
 @dataclass
 class StepResult:
     step: str
-    status: str          # FOUND_PASS, FOUND_FAIL, NOT_FOUND, STALE
+    # FOUND_PASS, FOUND_FAIL, FOUND_INCONCLUSIVE, NOT_FOUND, STALE.
+    # Only FOUND_PASS is a pass.
+    status: str
     timestamp: Optional[str]
     tool: Optional[str]
     age_hours: Optional[float]
@@ -203,6 +222,20 @@ def verify_steps(
                 age_hours=round(age_hours, 1),
                 raw_entry=latest_entry,
             ))
+        elif entry_status == "INCONCLUSIVE":
+            # The tool ran and did not fail, but the manifest could not record
+            # PASS because the metrics that prove the work happened were
+            # absent. Reported under its own name — not folded into
+            # FOUND_FAIL, which would claim the design is bad when what we
+            # actually know is that it was never measured.
+            results.append(StepResult(
+                step=req_step,
+                status="FOUND_INCONCLUSIVE",
+                timestamp=ts_str,
+                tool=tool,
+                age_hours=round(age_hours, 1),
+                raw_entry=latest_entry,
+            ))
         elif age_hours > max_age_hours:
             results.append(StepResult(
                 step=req_step,
@@ -246,10 +279,21 @@ def build_report(
     """Build the output JSON report."""
     found_pass = sum(1 for r in step_results if r.status == "FOUND_PASS")
     found_fail = sum(1 for r in step_results if r.status == "FOUND_FAIL")
+    found_inconclusive = sum(
+        1 for r in step_results if r.status == "FOUND_INCONCLUSIVE")
     not_found = sum(1 for r in step_results if r.status == "NOT_FOUND")
     stale = sum(1 for r in step_results if r.status == "STALE")
 
-    verdict = "PASS" if found_pass == len(required_steps) else "FAIL"
+    # Three-state verdict. PASS requires every required step to be FOUND_PASS —
+    # an INCONCLUSIVE step can never earn one. When the ONLY thing standing
+    # between us and a pass is a step nobody measured, say that, rather than
+    # calling the design bad.
+    if found_pass == len(required_steps):
+        verdict = "PASS"
+    elif found_fail or not_found or stale:
+        verdict = "FAIL"
+    else:
+        verdict = "INCONCLUSIVE"
 
     return {
         "program": "mcp_execution_verify",
@@ -270,6 +314,7 @@ def build_report(
             "total_required": len(required_steps),
             "found_pass": found_pass,
             "found_fail": found_fail,
+            "found_inconclusive": found_inconclusive,
             "not_found": not_found,
             "stale": stale,
             "verdict": verdict,
@@ -290,7 +335,8 @@ def main(argv: list = None) -> int:
     )
     parser.add_argument(
         "--require-steps", required=True,
-        help="Comma-separated list of step names that must be present and PASS",
+        help="Comma-separated list of step names that must be present and PASS "
+             "(a step whose manifest entry is INCONCLUSIVE does not count)",
     )
     parser.add_argument(
         "--max-age-hours", type=float, default=168.0,
@@ -318,6 +364,7 @@ def main(argv: list = None) -> int:
         out_file.write_text(report_json)
 
     print(report_json)
+    # Only PASS exits 0. INCONCLUSIVE is not a pass.
     return 0 if report["summary"]["verdict"] == "PASS" else 1
 
 
