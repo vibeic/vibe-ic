@@ -6557,6 +6557,21 @@ steps:
         # `root` positionally (`nargs="?"`), so `--root` would be
         # `unrecognized arguments` -> rc 3 on every arm.
         - advisory_program_exit_zero: "every_required_metric_key_has_a_producer ."
+        # AND THE SAME QUESTION ONE LAYER OUT. The clause above asks whether a
+        # required METRIC has a producer. This one asks whether a declared
+        # closed-loop EDGE has one — whether the step it falls back to can even
+        # SEE the quantity its trigger names.
+        #
+        # `EXECUTABLE = 0` over 18 DECLARED_ONLY edges reads like a backlog and
+        # is not. Measured on the shipped flow: REACHABLE=0, UNREACHABLE=2,
+        # UNSTATED=19. Both edges that name a metric are unreachable for the
+        # same reason — no producer at the fallback step reads it — so
+        # re-entering the step would reproduce what it produced before, and the
+        # loop would be inert by construction.
+        #
+        # Reading that number as a wiring backlog cost three separate attempts
+        # to close the area edge in one session. This clause is the second.
+        - advisory_program_exit_zero: "closed_loop_metric_reaches_its_producer . --json reports/phase3/closed_loop_metric_reach.json"
     # 0.5ic writes the router files this step's condition reads, the template
     # the operator's arm is run against, and the declaration our arm compares
     # the layout to.
