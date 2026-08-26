@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """spec_conformance_check.py — Spec↔RTL contract-conformance gate.
 
+ENFORCEMENT: advisory
+
+The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
+audit.declared_intent` reads. This gate is wired at flow step 2 as an
+`advisory_program_exit_zero` clause, and the choice is a measurement rather
+than caution: run over the five project trees carrying BOTH an L9 and an RTL
+directory it reads 1 PASS / 4 FAIL, and neither failure mode is "the RTL is
+wrong" — one is a `--top` that defaults to the first module found, the other is
+an L9 that predates the port-width repair shipped beside this declaration.
+Blocking today would redden four of five designs over their spec's age.
+
+The step-2 clause carries the full measurement and the condition that would
+promote this to `program_exit_zero`. Until then this runs, prints and cannot
+deny the step its PASS tier — and it says so here, because until a gate states
+its intent where the audit reads, "wired where it cannot block" and "nobody
+decided" are the same record.
+
 The Phase-1→Phase-2 hand-off declares a *contract*: the interface (ports +
 widths + directions), the reset semantics (synchronous vs asynchronous,
 active-high vs active-low), and the output latency (registered vs

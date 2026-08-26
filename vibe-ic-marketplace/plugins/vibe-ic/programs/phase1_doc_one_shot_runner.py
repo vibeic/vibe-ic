@@ -2533,11 +2533,32 @@ def _rst_list_table_port_columns(header: List[str]) -> Optional[Dict[str, int]]:
 # noun: e.g. `Top-level (FPGA bare-board) ports:`. The v1.6.255
 # regex required prefix-then-noun adjacency and missed any
 # heading with an interjection.
+# 2026-08-26 — THE SAME OPTIONAL PREFIX ITS SIBLING ALREADY CARRIES.
+# `_RE_DIRECTIONAL_PORT_HEADING` (below, same file) opens on `## Inputs` and
+# `**Outputs**` because it allows a bullet or ATX-heading prefix and paired
+# emphasis. This one did not, so two regexes in ONE file disagreed about what a
+# heading is: a spec writing `Pins:` had its ports read, and the same spec
+# writing `## Pins` — the commonest markdown form there is — had none.
+#
+# Measured on identical bullet text under each heading form:
+#     'Pins:'   -> _l1_bullet_port_extract = 7 ports
+#     '## Pins' -> _l1_bullet_port_extract = 0 ports
+# and directly on the old regex: `Pins:` True, `Top-level ports:` True,
+# `## Pins` False, `## Ports` False, `## Signals` False, `## Interface` False.
+#
+# The consequence is not a missing field. An empty L1.pin_table empties
+# L9.top_ports, and every downstream producer then reports a PASS over nothing:
+# `sdc_gen` emitted an SDC with the note "no I/O ports classified — the emitted
+# SDC constrains NO input or output path" and still returned PASS.
+#
+# The prefix is COPIED VERBATIM from the sibling rather than re-invented,
+# because a second dialect is the defect, not the cure.
 _RE_L1_BULLET_PORT_HEADING = re.compile(
-    r"(?im)^\s*"
+    r"(?im)^\s*(?:[-*+]\s+|#{1,6}\s+)?\*{0,2}_{0,2}"
     r"(?:top[-_ ]?level\s+|external\s+|chip[-_ ]?level\s+|module\s+)?"
     r"(?:\([^)\n]{0,80}\)\s+)?"
-    r"(?:ports?|signals?|pins?|i/?o\s+ports?|interface)\s*[:.]?\s*$"
+    r"(?:ports?|signals?|pins?|i/?o\s+ports?|interface)"
+    r"\*{0,2}_{0,2}\s*[:.]?\s*$"
 )
 _RE_L1_BULLET_ITEM = re.compile(
     r"(?m)^\s*[-*+]\s+`?(?P<name>[a-zA-Z_][a-zA-Z0-9_]{0,40})`?"
@@ -13635,14 +13656,59 @@ def _dedupe_typo_against_canonical(ports):
         # Drop only when this port name is edit-distance 1 from a
         # canonical that is ALSO present (so we don't drop a real
         # `vbg` because `vdd` happens to be present elsewhere).
+        #
+        # AND the edit must LOOK like a typo. Edit-distance 1 alone deleted
+        # `sclk` — the SPI clock, one of the commonest port names there is —
+        # because it is one insertion away from `clk`, and `clk` is in a
+        # canonical set of six. Every SPI device has both. Measured on a
+        # 4-channel PWM with an SPI interface: L1.pin_table carried all seven
+        # pins, L9.top_ports carried six, and `spec_conformance_check` then
+        # blamed the RTL with "[ERROR] port-extra: RTL port 'sclk' is not
+        # declared in the spec" — a blocking gate failing a CORRECT design
+        # over a port the spec dropped.
         is_typo = any(
-            _levenshtein(nm, canon) == 1
+            _levenshtein(nm, canon) == 1 and _edit_looks_like_a_typo(nm, canon)
             for canon in canonical_present
         )
         if is_typo:
             continue
         out.append(p)
     return out
+
+
+def _edit_looks_like_a_typo(name: str, canon: str) -> bool:
+    """Does the single edit between *name* and *canon* have the shape of a
+    MISTAKE rather than of a deliberately different port?
+
+    THE CASE THIS FUNCTION WAS BUILT FROM, and the one it must keep catching:
+    `iid_bus` beside `id_bus` — an inserted character that DUPLICATES its
+    neighbour. That is what a slipped keystroke produces, and it is what the
+    v1.6.87 fix was written for.
+
+    THE CASE IT MUST STOP CATCHING: `sclk` beside `clk` — an inserted character
+    that duplicates nothing. `s`, `m`, `p`, `h`, `x` prefixed onto a clock is
+    not a typo, it is how the industry names a second clock domain, and the
+    same shape covers `nreset` beside `reset`, `wclk`/`rclk` on a FIFO, and any
+    other deliberately-prefixed sibling.
+
+    So: an INSERTION is a typo only when the inserted character repeats the one
+    beside it. A SUBSTITUTION or a DELETION keeps the old behaviour — those are
+    the classic slips and no naming convention produces them.
+
+    Both arguments are already lowercase and edit-distance 1 apart; this
+    function only classifies the edit, it does not re-measure it."""
+    if len(name) == len(canon):
+        return True          # substitution — a slipped key
+    if len(name) < len(canon):
+        return True          # deletion — a dropped key
+    # Insertion: find the inserted position by walking the common prefix.
+    i = 0
+    while i < len(canon) and name[i] == canon[i]:
+        i += 1
+    inserted = name[i]
+    before = name[i - 1] if i > 0 else ""
+    after = name[i + 1] if i + 1 < len(name) else ""
+    return inserted == before or inserted == after
 
 
 def _canon_port_name(name):

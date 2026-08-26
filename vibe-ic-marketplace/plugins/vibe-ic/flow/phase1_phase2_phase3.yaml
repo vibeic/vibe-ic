@@ -619,6 +619,31 @@ steps:
         # writing provenance these begin firing with no further change.
         - advisory_program_exit_zero: "phase1_provenance_presence_check phase1/generated_docs"
         - advisory_program_exit_zero: "input_docs_coverage_check ."
+        # WHAT THE COVERAGE NUMBER ABOVE IS EARNED BY. The runner prints
+        # "Coverage (overall): 100.0%" and `extraction_patterns.json` says in
+        # its own header that it is the denominator. A literal is credited when
+        # its verbatim string appears anywhere in the L*.json payload — and
+        # several L fields carry the input PROSE unchanged (`L2.frs_sections`,
+        # `L8.auto_discovered_literals`, `extraction_evidence`). A literal
+        # sitting in one of those was copied, not extracted, and still counts.
+        #
+        # Measured on a 4-channel PWM written as a plain-English spec: 35
+        # denominator, 100.0% reported, and EIGHT credited only by a
+        # verbatim-prose field — four invented trim constants plus `25 MHz`,
+        # `98 kHz`, `760 Hz`, `3.3 V`. Structured-only: 27/35 = 77.1%.
+        #
+        # `25 MHz` is the one that matters. The same run emitted
+        # `L8.clock_mhz = 10.0` — the SPI clock, from the same sentence — so
+        # the coverage metric certified as extracted the very number the
+        # extractor got wrong.
+        #
+        # ADVISORY because the structured-only figure is lower than the
+        # published one on EVERY project by construction, so refusing on it
+        # would redden every tree at once over debt it did not create.
+        # Measured across three: 77.1%, 86.2%, and 100.0% on the arm fed a
+        # structured YAML — so it discriminates rather than always complaining.
+        # Promote it when the two figures agree.
+        - advisory_program_exit_zero: "extraction_credited_by_prose_only_check . --json reports/phase1/extraction_credited_by_prose_only.json"
         # ADVISORY, and `--strict` is load-bearing: without it every WARN exits
         # 0 and the gate cannot fail at all — a blocking gate that cannot fail
         # is a fake gate, so it is wired strict AND advisory rather than
@@ -1164,6 +1189,71 @@ steps:
         # `step_internal_fail_bubble_up_check` reads as an unacknowledged
         # step-internal FAIL. See the cascade recorded at Step 36.
         - advisory_program_exit_zero: "l9_submodule_conformance_check ."
+        # THE RTL WAS NEVER COMPARED TO THE SPEC. `spec_conformance_check`
+        # exists, has existed, and appeared NOWHERE in this flow — measured on
+        # 2026-08-26 by driving a 4-channel PWM with an SPI register interface
+        # from `/vibe-ic-phase1` through `design_one_shot_runner`: the program
+        # ran ZERO times, and the only other caller of it,
+        # `phase2_verify_aggregate.py`, is likewise absent from this yaml. The
+        # runner names it in two COMMENTS and calls it in neither.
+        #
+        # WHAT THAT COST, measured rather than argued. Two spec-violating
+        # mutations were made to a correct RTL — the ID register changed from
+        # the 0x2A that L4 declares to 0x2B, and the duty-shadow register
+        # dropped so a mid-period write takes effect immediately, violating the
+        # glitch-free-update requirement L2 states in as many words. Both
+        # mutants produced gate verdicts IDENTICAL to the clean design across
+        # all 26 steps that ran. Nothing in the flow could tell them apart.
+        #
+        # ADVISORY AND NOT BLOCKING, and the reason is a measurement, not
+        # caution. Run over the five project trees in this account that carry
+        # BOTH an L9 and an RTL directory: 1 PASS, 4 FAIL. Neither failure mode
+        # is "the RTL is wrong" — `ibex_e2e_v1272` reports spec ports=47 vs rtl
+        # ports=4 because no `--top` is supplied and the gate takes the first
+        # module it finds, and `subservient_509r4verify` reports three
+        # `RTL=8 vs spec=1` width mismatches because its L9 predates the
+        # width-loss repair in this same change. Wiring it blocking today would
+        # redden four of five designs over their SPEC's age and over an
+        # argument this clause does not pass.
+        #
+        # WHAT THIS CLAUSE DOES NOT DO, stated here because the measurement
+        # above invites the wrong conclusion. It compares PORTS — names,
+        # directions, widths, reset polarity. Run against both mutants it
+        # returns rc=0 on each, because neither is a port defect: one is a
+        # register CONSTANT and one is a sequential BEHAVIOUR. Closing those
+        # needs a functional testbench, and on this IC class all three TB
+        # producers declined — `full_stack_tb_gen` emitted a connectivity-only
+        # skeleton ("0 L3 opcodes driven"), `reference_tb` WAIVED on
+        # `half_duplex_bus=False`, and `l10_unit_tb_gen` skipped on "L10 carries
+        # 0 case(s)". That gap is NOT closed by this change and is not claimed
+        # to be.
+        #
+        # ALSO NOT CLOSED: this clause is executed by `flow_compliance_check`,
+        # which reads this file. `design_one_shot_runner` walks its own step
+        # sequence and does not, so a `/vibe-ic-all` run still does not invoke
+        # it — measured, 0 occurrences in the runner's log against
+        # `GATE_RAN spec_conformance_check rc=0 PASS` in the compliance run.
+        # The two paths are separate and only one of them reads this yaml.
+        #
+        # WHAT WOULD PROMOTE IT TO BLOCKING, so the next person does not have
+        # to re-derive it: a `--top` that carries the runner's own top-name
+        # rather than defaulting, and a re-measurement over the same five trees
+        # after their L9s are regenerated. When that reads 5 of 5, this becomes
+        # `program_exit_zero`.
+        #
+        # The `--json` sink is deliberately NOT in `required_outputs`:
+        # `required_outputs` is UNCONDITIONAL and this clause is conditional on
+        # an L9 existing, so declaring it would demand the file from a project
+        # whose gate never ran. Steps 6 and 7 carry the same note for the same
+        # reason.
+        - advisory_program_exit_zero:
+            command: "spec_conformance_check --rtl-dir phase2/stage1/rtl --spec phase1/generated_docs/L9_INTEGRATION_SPEC.json --json reports/phase2/gates/spec_conformance.json"
+            condition_files_exist:
+              - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+            absent_condition_reason: >-
+              no L9 integration spec was emitted, so there is no declared port
+              contract to compare the RTL against; the comparison is not
+              skipped for convenience, it has no left-hand side
         # CAN THIS INTERFACE BE BONDED OUT AT ALL (vibe-ic#1347).
         #
         # WHY HERE. The measured failure this program exists to end is an

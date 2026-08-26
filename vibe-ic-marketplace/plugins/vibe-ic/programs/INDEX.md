@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1213
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1213)
+- **Total programs (excluding helpers / shims):** 1214
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1214)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1204 |
+| `any` | 1205 |
 
 ## Alphabetical listing
 
@@ -360,6 +360,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `explicit_argument_outranks_the_environment_pointer_census` | any | — | An environment pointer that overrules a location the caller NAMED. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json. |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
+| `extraction_credited_by_prose_only_check` | any | — | how much of the Phase-1 coverage number is earned by a field that merely COPIED the input? |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
 | `extraction_input_capability_check` | any | — | precondition gate on the EXTRACTION INPUTS, so "the tool could not verify" is never reported as "the design is wrong" (or, worse, as noth... |
 | `fastercap_extract` | any | — | Real 3D field-solved coupling extraction via FasterCap on the routed geometry. |
@@ -1285,7 +1286,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1204 programs)
+### `any` (1205 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1617,6 +1618,7 @@ _(no programs in this group)_
 - `explicit_argument_outranks_the_environment_pointer_census` — An environment pointer that overrules a location the caller NAMED.
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json.  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
+- `extraction_credited_by_prose_only_check` — how much of the Phase-1 coverage number is earned by a field that merely COPIED the input?
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
 - `extraction_input_capability_check` — precondition gate on the EXTRACTION INPUTS, so "the tool could not verify" is never reported as "the design is wrong" (or, worse, as noth...
 - `fastercap_extract` — Real 3D field-solved coupling extraction via FasterCap on the routed geometry.

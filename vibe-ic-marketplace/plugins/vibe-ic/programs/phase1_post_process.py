@@ -232,7 +232,112 @@ def scrub_l_doc(obj: Any, l_doc_name: str,
     # (which carries no opcodes key at all). General / sentinel-based —
     # no protocol name in the predicate.
     log.extend(_drop_scrubbed_opcodes(obj, l_doc_name))
+    log.extend(_drop_echoed_direction_pin_duplicates(obj, l_doc_name))
     return log
+
+
+#: A pin entry that says nothing except its own direction.
+#:
+#: MEASURED SHAPE, not a guess. A prose spec that writes "SPI data in", "SPI
+#: data out" and "the four PWM outputs" yields, beside the seven real pins, two
+#: extra entries:
+#:
+#:     {"name": "SPI", "mode": "input",  "function": "input",  "rtl_name": "spi"}
+#:     {"name": "PWM", "mode": "output", "function": "output", "rtl_name": "pwm"}
+#:
+#: Neither carries a `width`, `msb` or `lsb`. Their `function` — the field that
+#: is supposed to say what the pin DOES — is nothing but their own `mode`, the
+#: direction word echoed back. `PWM` also duplicates the real `pwm` bus
+#: case-insensitively, and that duplicate is the one with the consequence:
+#: `spec_conformance_check` reads the width-less entry, defaults its width to 1
+#: and reports
+#:
+#:     [ERROR] port-width-mismatch: port 'pwm' width RTL=4 vs spec=1
+#:
+#: on a design that is CORRECT. A blocking gate returning a false ERROR is the
+#: mirror of the vacuous-PASS defect this tree has a gate family for, and it is
+#: just as expensive: it blocks work that should land.
+#:
+#: WHAT IS DROPPED IS ONLY THE DUPLICATE. An echoed-direction entry that
+#: duplicates nothing (`SPI` here) is LEFT IN PLACE and counted below, because
+#: dropping it asserts that no real pin is ever named after its bus, and that is
+#: a claim about naming conventions this predicate cannot support. The duplicate
+#: needs no such claim: a same-named sibling already carries the width, so the
+#: echoed entry is strictly less informative than the row it shadows.
+_PIN_LIST_KEYS = ("pin_table", "top_ports", "ports", "top_module_pins")
+
+
+def _is_echoed_direction_pin(entry: Any) -> bool:
+    """True when a pin entry carries no width and its `function` is nothing
+    but its own `mode` — the direction word echoed back as a description."""
+    if not isinstance(entry, dict):
+        return False
+    if any(k in entry for k in ("width", "msb", "lsb")):
+        return False
+    mode = str(entry.get("mode") or entry.get("direction") or "").strip().lower()
+    if not mode:
+        return False
+    fn = str(entry.get("function") or "").strip().lower()
+    desc = str(entry.get("description") or "").strip().lower()
+    # `description` is allowed to be absent; when present it must ALSO be the
+    # bare direction, or the entry is carrying real information and stays.
+    return fn == mode and desc in ("", mode)
+
+
+def _drop_echoed_direction_pin_duplicates(obj: Any,
+                                          l_doc_name: str) -> List["ScrubLog"]:
+    """Remove a width-less, direction-echoing pin entry when a same-named
+    sibling (case-insensitively) carries a real width. General: fires on any
+    dict holding one of `_PIN_LIST_KEYS`; a no-op otherwise."""
+    out: List[ScrubLog] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in _PIN_LIST_KEYS:
+            pins = node.get(key)
+            if not isinstance(pins, list) or len(pins) < 2:
+                continue
+            widthed = {
+                str(e.get("name", "")).strip().lower()
+                for e in pins
+                if isinstance(e, dict)
+                and e.get("name")
+                and any(k in e for k in ("width", "msb", "lsb"))
+            }
+            kept, dropped = [], []
+            for e in pins:
+                nm = (str(e.get("name", "")).strip().lower()
+                      if isinstance(e, dict) else "")
+                if nm and nm in widthed and _is_echoed_direction_pin(e):
+                    dropped.append(str(e.get("name")))
+                else:
+                    kept.append(e)
+            if dropped:
+                node[key] = kept
+                out.append(ScrubLog(
+                    l_doc=l_doc_name,
+                    pattern_name="echoed_direction_pin_duplicate",
+                    path=key,
+                    old_value=f"{len(pins)} entr(y/ies)",
+                    new_value=f"{len(kept)} entr(y/ies)",
+                    why=(f"dropped {len(dropped)} pin entr(y/ies) "
+                         f"{dropped} that carried no width and whose "
+                         f"`function` was only their own direction, while a "
+                         f"same-named sibling carries a real width; the "
+                         f"width-less row shadows the real one and makes "
+                         f"spec_conformance_check report a false "
+                         f"port-width-mismatch"),
+                ))
+        for v in node.values():
+            visit(v)
+
+    visit(obj)
+    return out
 
 
 # Opcode entries whose hex was scrubbed to this sentinel are dropped.
