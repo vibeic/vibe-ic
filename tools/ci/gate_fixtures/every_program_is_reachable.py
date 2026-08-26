@@ -69,14 +69,13 @@ def _tree(work: Path, runner_body: str) -> Path:
         "    gate:\n"
         "      all_of:\n"
         '        - program_exit_zero: "runner_x ."\n')
-    # The auditor resolves PLUGIN from its own location, so it ships with the
-    # subject rather than being pointed at from outside.
-    tools = root / "vibe-ic-marketplace" / "tools"
-    tools.mkdir(parents=True)
-    real = (Path(__file__).resolve().parents[3]
-            / "vibe-ic-marketplace" / "tools"
-            / "program_reachability_check.py")
-    (tools / "program_reachability_check.py").write_text(real.read_text())
+    # NO COPY OF THE AUDITOR SHIPS WITH THE SUBJECT ANY MORE. It used to,
+    # because the program derived its tree from `__file__` and the only way to
+    # audit a subject was to run the subject's copy. That is the same coupling
+    # that made the BASE arm of an A/B run the base tree's slow code and never
+    # finish. With `--root` the gate runs the RUNTIME's program against this
+    # tree, so the fixture supplies only the INPUT — which is what a fixture
+    # subject is for.
     F.git_commit(root)
     return root
 

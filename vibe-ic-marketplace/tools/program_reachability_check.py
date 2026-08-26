@@ -35,9 +35,40 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+#: The tree under audit. Module-level because 22 call sites read it, and
+#: rebindable because WHICH CODE RUNS and WHICH TREE IT JUDGES are two
+#: different questions.
+#:
+#: THEY WERE ONE QUESTION UNTIL 2026-08-27, AND IT COST A LANDING. This file
+#: derived its tree from `__file__` and took no argument, so the hygiene gate
+#: had no way to say "run THIS copy against THAT tree" and was declared as
+#:
+#:     run "every program is reachable" "$ROOT" python3 \
+#:         "$ROOT/vibe-ic-marketplace/tools/program_reachability_check.py" --strict
+#:
+#: `$ROOT` is the SUBJECT (`VIBEIC_SUBJECT_ROOT`), not the runtime. So on the
+#: BASE arm of an A/B verification the gate ran the BASE tree's copy — the one
+#: without the indexing rewrite, which does not finish in ten minutes. Measured
+#: on 8HD-7: five of them at 5000-6200 s each, load average 292, sshd unable to
+#: emit a banner. The base arm never completed, so no differential existed, so
+#: the change carrying the fix could not land — the repair was trapped inside
+#: the verification it was repairing.
+#:
+#: With `--root` the gate names the runtime's program and the subject's tree
+#: SEPARATELY, which is what every other gate in that lane already does through
+#: `$PG` + `"$ROOT"`, and both arms then run the fast code.
 ROOT = Path(__file__).resolve().parents[2]  # AI_IC_design/
 PLUGIN = ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
 PROGRAMS = PLUGIN / "programs"
+
+
+def _bind_root(root: Path) -> None:
+    """Point this audit at *root* instead of at its own location."""
+    global ROOT, PLUGIN, PROGRAMS
+    ROOT = Path(root).resolve()
+    PLUGIN = ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+    PROGRAMS = PLUGIN / "programs"
+    _TEXT_CACHE.clear()
 
 
 def _list_programs() -> list[Path]:
@@ -363,11 +394,23 @@ def _flow_blocking_stems() -> set:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
+    p.add_argument("--root", type=Path, default=None,
+                   help=("audit this tree instead of the one this file lives "
+                         "in — lets a gate run the RUNTIME's copy against the "
+                         "SUBJECT's tree, which is what an A/B verification "
+                         "needs and what `$ROOT` alone cannot express"))
     p.add_argument("--json", type=Path, default=None,
                    help="Write the full audit report as JSON.")
     p.add_argument("--strict", action="store_true",
                    help="Exit 1 if any POTENTIALLY_UNREACHABLE program found.")
     args = p.parse_args(argv)
+
+    if args.root is not None:
+        if not args.root.is_dir():
+            print(f"ERROR: --root is not a directory: {args.root}",
+                  file=sys.stderr)
+            return 2
+        _bind_root(args.root)
 
     report = audit()
 

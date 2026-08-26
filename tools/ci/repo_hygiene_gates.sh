@@ -879,12 +879,25 @@ run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check
 # returns 0, which is a gate that cannot fail — the exact defect this lane
 # exists to catch, and one it would have committed by declaring the bare form.
 #
-# DECLARED THROUGH `$ROOT`, NOT `$PG`, on purpose: this auditor resolves the
-# tree it audits from ITS OWN file location, so it must be the copy that ships
-# with the subject. `$PG` stays pinned at the real programs directory and would
-# make the gate audit the real tree no matter which subject it was handed —
-# which is how a mutation fixture silently measures the wrong thing.
-run "every program is reachable"        "$ROOT" python3 "$ROOT/vibe-ic-marketplace/tools/program_reachability_check.py" --strict
+# THE PROGRAM COMES FROM THE RUNTIME, THE TREE FROM THE SUBJECT, and getting
+# that backwards cost a landing.
+#
+# This was first declared as `python3 "$ROOT/.../program_reachability_check.py"`
+# because the auditor derived its tree from `__file__` and took no argument —
+# so naming the subject's copy was the only way to audit the subject's tree.
+# `$ROOT` is `VIBEIC_SUBJECT_ROOT`, so on the BASE arm of an A/B verification
+# that ran the BASE tree's copy: the one without the indexing rewrite, which
+# does not finish in ten minutes. Measured on 8HD-7 — five of them at
+# 5000-6200 s each, load average 292, sshd unable to emit a banner. The base
+# arm never completed, so no differential existed, so the change carrying the
+# fix could not land. The repair was trapped inside the verification it was
+# repairing.
+#
+# `--root` splits the two questions, so this now reads like every other gate in
+# this lane: the RUNTIME's program, the SUBJECT's tree. A mutation fixture is
+# still measured correctly, because `--root "$ROOT"` is exactly the
+# substitution the fixture engine performs.
+run "every program is reachable"        "$ROOT" python3 "$RUNTIME_ROOT/vibe-ic-marketplace/tools/program_reachability_check.py" --root "$ROOT" --strict
 # vibe-ic#712 — a prose extractor that reads a value out of a sentence without
 # asking whether the sentence DENIES it publishes a denied value as a
 # declaration. Twice in one day, in two fields, and each fix grew its OWN copy

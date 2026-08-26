@@ -170,3 +170,65 @@ def test_an_optional_clause_is_counted_conservatively():
     src = inspect.getsource(R._flow_blocking_stems)
     assert 'clause.get("program_exit_zero")' in src
     assert "optional_program_exit_zero" not in src.split('"""')[2]
+
+
+# ── which code runs vs which tree it judges ─────────────────────────────────
+def test_the_audit_can_be_pointed_at_another_tree():
+    """WHICH CODE RUNS and WHICH TREE IT JUDGES are two different questions,
+    and until 2026-08-27 this file could not tell them apart: it derived its
+    tree from `__file__` and took no argument.
+
+    That forced the hygiene gate to name the SUBJECT's copy of the program —
+    `$ROOT/.../program_reachability_check.py` — because that was the only way
+    to audit the subject's tree. `$ROOT` is `VIBEIC_SUBJECT_ROOT`, so on the
+    BASE arm of an A/B verification the gate ran the BASE tree's copy: the one
+    without the indexing rewrite, which does not finish in ten minutes.
+    Measured on the gatekeeper host — five of them at 5000-6200 s each, load
+    average 292, sshd unable to emit a banner. The base arm never completed, so
+    no differential existed, so the change carrying the fix could not land. The
+    repair was trapped inside the verification it was repairing."""
+    R = _mod()
+    import inspect
+    assert "--root" in inspect.getsource(R.main)
+    assert callable(getattr(R, "_bind_root", None))
+
+
+def test_binding_a_root_moves_every_derived_path(tmp_path):
+    """All three module-level paths move together, or the audit reads one
+    tree's programs against another tree's flow."""
+    R = _mod()
+    before = (R.ROOT, R.PLUGIN, R.PROGRAMS)
+    try:
+        R._bind_root(tmp_path)
+        assert R.ROOT == tmp_path.resolve()
+        assert R.PLUGIN == R.ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+        assert R.PROGRAMS == R.PLUGIN / "programs"
+    finally:
+        R.ROOT, R.PLUGIN, R.PROGRAMS = before
+
+
+def test_rebinding_clears_the_text_cache(tmp_path):
+    """The cache is keyed by path string, so a stale entry from the previous
+    tree would be a correct answer to the wrong question."""
+    R = _mod()
+    before = (R.ROOT, R.PLUGIN, R.PROGRAMS)
+    try:
+        R._TEXT_CACHE["/sentinel"] = "stale"
+        R._bind_root(tmp_path)
+        assert "/sentinel" not in R._TEXT_CACHE
+    finally:
+        R.ROOT, R.PLUGIN, R.PROGRAMS = before
+        R._TEXT_CACHE.clear()
+
+
+def test_the_gate_runs_the_runtime_program_against_the_subject_tree():
+    """Pinned against the declaration itself. Every other gate in that lane
+    reads `$PG`-rooted code with a `"$ROOT"` subject; this one has to spell the
+    runtime path out because it lives under tools/, not programs/ — but the
+    split is the same, and reverting it re-creates the hang."""
+    lane = (_TOOLS.parents[1] / "tools" / "ci" / "repo_hygiene_gates.sh")
+    line = [l for l in lane.read_text(errors="replace").splitlines()
+            if l.startswith('run "every program is reachable"')]
+    assert len(line) == 1, line
+    assert "$RUNTIME_ROOT/vibe-ic-marketplace/tools/" in line[0], line[0]
+    assert '--root "$ROOT"' in line[0], line[0]
