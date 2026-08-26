@@ -54,12 +54,17 @@ def _is_helper(name: str) -> bool:
     return name.startswith("_")
 
 
-def _python_files(skip: Path) -> list[Path]:
-    """All .py under the plugin tree except `skip` (the program being checked)."""
+def _python_files(skip) -> list[Path]:
+    """All .py under the plugin tree except `skip` (the program being checked).
+
+    `skip=None` returns the WHOLE corpus; `audit` takes it once and excludes
+    each program from its own row by identity, which is the same exclusion done
+    once instead of 1291 times."""
     out = []
+    _skip = skip.resolve() if skip is not None else None
     for p in PLUGIN.rglob("*.py"):
         # don't count a program's references to itself
-        if p.resolve() == skip.resolve():
+        if _skip is not None and p.resolve() == _skip:
             continue
         # don't count files inside __pycache__
         if "__pycache__" in p.parts:
@@ -76,6 +81,25 @@ def _yaml_files() -> list[Path]:
 
 
 def _shell_and_md_files() -> list[Path]:
+    """Every shell / markdown venue that can invoke a program.
+
+    THE SCOPE USED TO STOP AT `PLUGIN`, AND THAT IS WHERE THE WIRING ISN'T.
+    `PLUGIN.rglob("*.sh")` cannot see `tools/ci/repo_hygiene_gates.sh`, which
+    lives at REPO ROOT — and that file is where the landing lane declares its
+    gates, executed by `tools/gatekeeper-land.sh`. Measured on the campaign that
+    took the orphan count 163 -> 0: **28 of its 30 shell closures landed in that
+    one file**, so this auditor was structurally blind to the venue that carried
+    most of the real wiring.
+
+    The symptom it produced is a false ORPHAN, not a false pass, which is why it
+    survived: `gatekeeper_prepare_landing` is invoked from
+    `tools/gatekeeper-land.sh` and its only referrers INSIDE PLUGIN are
+    `INDEX.md` and four of its own tests. An auditor that reports a wired
+    program as unreachable teaches its reader to discount it.
+
+    Repo root is derived from PLUGIN rather than from this file's own location,
+    so a synthetic tree with no `tools/` simply contributes nothing.
+    """
     out: list[Path] = []
     if (PLUGIN / "hooks").is_dir():
         for p in (PLUGIN / "hooks").rglob("*"):
@@ -84,7 +108,61 @@ def _shell_and_md_files() -> list[Path]:
     out.extend(PLUGIN.rglob("*.sh"))
     if (PLUGIN / "commands").is_dir():
         out.extend((PLUGIN / "commands").rglob("*.md"))
-    return out
+    # The repo-root shell venues: tools/ci/*.sh (the landing lane's gate
+    # declarations) and tools/*.sh (the lane runners that execute them).
+    for parent in PLUGIN.parents:
+        tools = parent / "tools"
+        if (tools / "ci").is_dir() or (tools / "gatekeeper-land.sh").is_file():
+            out.extend(sorted(tools.rglob("*.sh")))
+            break
+    seen, uniq = set(), []
+    for f in out:
+        r = f.resolve()
+        if r not in seen:
+            seen.add(r)
+            uniq.append(f)
+    return uniq
+
+
+#: One read per file for the whole run, instead of one per (program, file).
+#:
+#: WHY THIS IS A CORRECTNESS FIX AND NOT A TUNING. This auditor is the ONLY
+#: instrument in the tree that scans all 1291 programs, and it re-read every
+#: candidate file once per program: roughly 1291 x |files| opens. It does not
+#: finish in ten minutes on this repo, which is why nothing ever wired it — a
+#: check nobody can afford to run is a check nobody runs, and the tree's orphan
+#: count went 163 -> 0 without it ever being consulted. Cached, the same
+#: measurement takes seconds.
+#:
+#: The predicates below are BYTE-IDENTICAL to what they replaced; only the
+#: source of `text` changed. A file that cannot be read still contributes
+#: nothing, exactly as before.
+_TEXT_CACHE: dict = {}
+
+#: An identifier token. Every program stem is one (asserted in `audit`),
+#: so "stem in tokens(text)" is exactly the `\\b<stem>\\b` match it replaced.
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: The SAME line-anchored import shapes `_grep_python_import` matched,
+#: captured once per file rather than re-matched once per program.
+#: `glob("*_protocol_synth.py")` — a dispatcher that resolves modules by SHAPE.
+#: Matching the pattern IS the wiring; the name appears nowhere.
+_GLOB_DISPATCH_RE = re.compile(r"""glob\(\s*["']([^"'\n]*\*[^"'\n]*\.py)["']""")
+
+_IMPORT_RE = re.compile(
+    r"^\s*(?:from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import\b"
+    r"|import\s+([A-Za-z_][A-Za-z0-9_]*)\b)", re.MULTILINE)
+
+
+
+def _text_of(f: Path) -> str:
+    key = str(f)
+    if key not in _TEXT_CACHE:
+        try:
+            _TEXT_CACHE[key] = f.read_text(errors="replace")
+        except OSError:
+            _TEXT_CACHE[key] = ""
+    return _TEXT_CACHE[key]
 
 
 def _grep_python_import(stem: str, files: Iterable[Path]) -> list[Path]:
@@ -94,30 +172,14 @@ def _grep_python_import(stem: str, files: Iterable[Path]) -> list[Path]:
         rf"import\s+{re.escape(stem)}\b)",
         re.MULTILINE,
     )
-    hits = []
-    for f in files:
-        try:
-            text = f.read_text(errors="replace")
-        except OSError:
-            continue
-        if pat.search(text):
-            hits.append(f)
-    return hits
+    return [f for f in files if pat.search(_text_of(f))]
 
 
 def _grep_word(stem: str, files: Iterable[Path]) -> list[Path]:
     """Whole-word match of stem (used for YAML/shell — covers
     `command: foo` and `tools/foo.py`)."""
     pat = re.compile(rf"\b{re.escape(stem)}\b")
-    hits = []
-    for f in files:
-        try:
-            text = f.read_text(errors="replace")
-        except OSError:
-            continue
-        if pat.search(text):
-            hits.append(f)
-    return hits
+    return [f for f in files if pat.search(_text_of(f))]
 
 
 def audit() -> dict:
@@ -125,21 +187,73 @@ def audit() -> dict:
     yaml_files = _yaml_files()
     shell_files = _shell_and_md_files()
 
+    # ONE PASS OVER THE CORPUS, NOT ONE PER PROGRAM.
+    #
+    # `_python_files(p)` re-walked `PLUGIN.rglob("*.py")` inside the loop, once
+    # per program, and `_grep_word` then ran a fresh regex over every one of
+    # them: ~1291 directory walks and ~5 million regex searches. It does not
+    # finish in ten minutes on this repo, and that is why nothing ever wired it
+    # — a check nobody can afford to run is a check nobody runs, and the tree's
+    # orphan count went 163 -> 0 without this instrument ever being consulted.
+    #
+    # THE PREDICATE IS UNCHANGED. `\b<stem>\b` over a text is exactly "stem is
+    # one of the text's identifier tokens" when the stem is identifier-shaped,
+    # and all 1291 are (asserted below, so a future non-identifier name breaks
+    # the run rather than silently changing the ruler). Imports are collected
+    # with the SAME line-anchored regex, applied once per file instead of once
+    # per (file, program).
+    for _p in programs:
+        assert _IDENT_RE.fullmatch(_p.stem), (
+            f"{_p.stem!r} is not identifier-shaped, so token membership is no "
+            f"longer equivalent to the `\\b...\\b` match this replaced")
+
+    all_py = _python_files(None)
+    py_tokens = {f: set(_IDENT_RE.findall(_text_of(f))) for f in all_py}
+    py_imports = {f: {n for m in _IMPORT_RE.findall(_text_of(f))
+                     for n in m if n} for f in all_py}
+    # THE FIFTH VENUE: A DISPATCHER THAT GLOBS.
+    #
+    # `phase1_doc_one_shot_runner.py:63803` walks
+    # `sorted(_here.glob("*_protocol_synth.py"))` and runs every module it
+    # finds. The module name is written NOWHERE — matching the glob IS the
+    # wiring — so a name-based scan reports all 14 of them unreachable. They
+    # are not. Before this venue existed the instrument printed
+    # `[WARN] 14 POTENTIALLY_UNREACHABLE`, every one a false positive, and a
+    # gate that always names fourteen innocents teaches its reader to discount
+    # it. That is the state it shipped in, and the reason it was never wired.
+    #
+    # Derived from the SOURCE, never hard-coded: the globs are read out of the
+    # corpus, so a new dispatcher is picked up and a retired one stops
+    # counting. Only a dispatcher that is itself reachable may confer
+    # reachability — otherwise a cluster of programs could bootstrap each
+    # other. That check is applied after the first pass, below.
+    glob_dispatch: dict = {}
+    for f in all_py:
+        for pat in _GLOB_DISPATCH_RE.findall(_text_of(f)):
+            if pat.count("*") == 1 and len(pat) > 5:
+                glob_dispatch.setdefault(pat, set()).add(f)
+
+    yaml_tokens = {f: set(_IDENT_RE.findall(_text_of(f))) for f in yaml_files}
+    shell_tokens = {f: set(_IDENT_RE.findall(_text_of(f))) for f in shell_files}
+
     rows: list[dict] = []
     for p in programs:
         stem = p.stem
         is_helper = _is_helper(stem)
-        py_files = _python_files(p)
+        self_r = p.resolve()
 
-        py_import_hits = _grep_python_import(stem, py_files)
+        py_import_hits = [f for f in all_py
+                          if f.resolve() != self_r and stem in py_imports[f]]
         # registry / dispatcher mention: any whole-word appearance in a
         # peer Python file. Catches `_STRUCTURAL_RTL_GATES = ("foo_check", ...)`
         # tuples and dynamic dispatch tables that don't `import foo_check`.
-        py_word_hits = (
-            _grep_word(stem, py_files) if not is_helper else []
-        )
-        yaml_hits = _grep_word(stem, yaml_files) if not is_helper else []
-        shell_hits = _grep_word(stem, shell_files) if not is_helper else []
+        py_word_hits = ([f for f in all_py
+                         if f.resolve() != self_r and stem in py_tokens[f]]
+                        if not is_helper else [])
+        yaml_hits = ([f for f in yaml_files if stem in yaml_tokens[f]]
+                     if not is_helper else [])
+        shell_hits = ([f for f in shell_files if stem in shell_tokens[f]]
+                      if not is_helper else [])
 
         # de-duplicate: word_hits is a superset of import_hits; subtract.
         py_word_only = [f for f in py_word_hits if f not in py_import_hits]
@@ -157,6 +271,24 @@ def audit() -> dict:
             "yaml_command_hits": [str(f.relative_to(ROOT)) for f in yaml_hits],
             "shell_or_md_hits": [str(f.relative_to(ROOT)) for f in shell_hits],
         })
+
+    # A dispatcher confers reachability only when something reaches the
+    # DISPATCHER. Checked here, against the rows just computed, so a cluster of
+    # mutually-globbing modules cannot bootstrap itself into "wired".
+    import fnmatch
+    reached_names = {r["name"] for r in rows if r["status"] == "REACHABLE"}
+    live_globs = {pat for pat, owners in glob_dispatch.items()
+                  if any(o.stem in reached_names for o in owners)}
+    for r in rows:
+        if r["status"] != "POTENTIALLY_UNREACHABLE":
+            continue
+        hit = next((pat for pat in live_globs
+                    if fnmatch.fnmatch(r["name"] + ".py", pat)), None)
+        if hit:
+            r["status"] = "REACHABLE"
+            r["glob_dispatch_hits"] = sorted(
+                str(o.relative_to(ROOT)) + f' glob("{hit}")'
+                for o in glob_dispatch[hit] if o.stem in reached_names)
 
     unreachable = [r for r in rows if r["status"] == "POTENTIALLY_UNREACHABLE"]
     return {
