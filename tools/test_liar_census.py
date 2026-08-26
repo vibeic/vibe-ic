@@ -2234,7 +2234,44 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # `by_kind` moves 115 -> 116 `program_exit_zero` with `advisory` 37 and
     # `optional` 29 unchanged; `unswept` and `unrecognised` are empty on all
     # three trees.
-    assert pop["swept"] == pop["declared"] == 182, pop
+    #
+    # 182 -> 217, A GROW OF 35 WITH NOTHING REMOVED. RE-DERIVED the way every
+    # block above derives its own, but with `population_delta` -- the function
+    # the block above installed for exactly this -- over the flow YAML BLOB at
+    # each commit, CLAUSE SETS diffed rather than counts compared:
+    #
+    #   pin @fe27b28b7 (main)  declared=182 swept=182 unswept=0 unrecognised=0
+    #   HEAD                   declared=217 swept=217 unswept=0 unrecognised=0
+    #   population_delta       before=182 after=217 added=35 removed=0
+    #                          shrank=False
+    #
+    # THE SWEEP WAS NEVER WHAT WAS BROKEN, and this is the first round where
+    # that had to be CHECKED rather than assumed. The change under this literal
+    # wires 86 previously-orphaned programs back into the flow, so "the census
+    # newly sees 35 things it did not see before" is also the shape a MISSED
+    # SWEEP would have -- a declaration the parser cannot read is counted in
+    # `declared` and absent from `swept`. It is not that: `swept == declared`
+    # holds on BOTH trees, and `unswept` and `unrecognised` are empty on both,
+    # so every one of the 35 is parsed, swept and probed. NARROWING the census
+    # to make this literal true again would be the exact failure this test
+    # exists to catch, and is not what moved.
+    #
+    # The REMOVED set is EMPTY, so this authorises no shrink and the open
+    # question two blocks above -- how a DELIBERATE shrink is authorised --
+    # stays open and stays the flow owner's.
+    #
+    # `by_kind` moves `advisory_program_exit_zero` 37 -> 72 with
+    # `program_exit_zero` 116 and `optional_program_exit_zero` 29 UNCHANGED --
+    # the whole delta is advisory -- and `non_program` stays
+    # `{json_field_true: 1}`.
+    #
+    # WHAT DID NOT MOVE, measured because "the instrument changed" is the other
+    # way a population jumps and a comment cannot tell the two apart: over
+    # `fe27b28b7..HEAD`, `tools/liar_census.py` and this file carry ZERO
+    # changed lines. The only file in that diff the census reads is the flow
+    # YAML itself, +718/-1. The census did not start counting differently; the
+    # flow got bigger.
+    assert pop["swept"] == pop["declared"] == 217, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 
