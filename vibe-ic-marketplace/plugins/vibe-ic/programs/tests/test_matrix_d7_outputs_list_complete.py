@@ -195,6 +195,7 @@ a promotion lands on is chosen by W2's own cascade.
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import json
 import os
@@ -1090,6 +1091,153 @@ def test_w4_exemption_is_exercised_on_a_mutated_flow(tmp_path, condition,
     assert {f.path for f in G.findings_for(step) if f.rule == G.W4} == set(paths)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# THE CONSUMER ORACLE'S OPTION-DEFAULT RULE, CONTROLLED BOTH WAYS
+#
+# `_gate_consumers` mines a gate program's SOURCE for path literals, and a
+# literal the program can only reach when it was NOT told where to look was
+# mined as a read regardless of what the flow's own clause said. The rule that
+# drops it (`option_default_literals`) subtracts edges, so it needs the
+# sharper of the two controls: not "does it drop the one I meant" but "does it
+# stop dropping the moment the command line stops selecting against it".
+# ══════════════════════════════════════════════════════════════════════
+_STEP37_PROGRAM = "reported_figure_artifact_backing_check"
+_STEP37_DEFAULT = "reports/final_summary.md"
+_STEP34_PROGRAM = "metal_fill_emit"
+_STEP34_DEFAULT = "reports/phase3/cmp_fill_emit.json"
+
+
+def test_the_option_default_rule_is_keyed_on_the_FLAG_not_the_literal():
+    """The same SHAPE, two steps, two answers — decided by the command line.
+
+    Both programs park a path in a module constant reached only when a CLI
+    option is absent. Step 37 passes ``--report``, so its program can never
+    reach ``_DEFAULT_REPORTS``; step 34 passes ``--json`` and NO ``--report``,
+    so ``metal_fill_emit``'s ``--report`` fallback IS reached and the edge
+    stands. A rule keyed on the literal, or on "it looks like a default",
+    would give these two the same answer and one of them would be wrong.
+
+    This is also the correction to the withdrawn 34/d7 waiver, asserted rather
+    than described: that entry called ``_REPORT_REL`` "the FALLBACK the
+    emitter writes to when no --json is supplied", and ``main`` passes
+    ``ns.report`` — not ``ns.json_out`` — into the function that reads it.
+    """
+    d37 = G.option_default_literals(_STEP37_PROGRAM)
+    assert d37.get(_STEP37_DEFAULT) == frozenset({"--report"}), (
+        f"{_STEP37_PROGRAM} no longer reaches {_STEP37_DEFAULT} only when "
+        f"--report is absent: {d37.get(_STEP37_DEFAULT)}")
+    assert "--report" in G.gate_supplied_flags("37").get(_STEP37_PROGRAM, ()), (
+        "step 37 stopped passing --report; re-derive this control")
+    assert "37" not in G._gate_consumers().get(_STEP37_DEFAULT, frozenset()), (
+        f"step 37's gate is recorded as reading {_STEP37_DEFAULT}, which its "
+        f"own clause forecloses")
+
+    d34 = G.option_default_literals(_STEP34_PROGRAM)
+    assert d34.get(_STEP34_DEFAULT) == frozenset({"--report"}), (
+        f"{_STEP34_PROGRAM}'s {_STEP34_DEFAULT} fallback is keyed on "
+        f"{d34.get(_STEP34_DEFAULT)}, not on --report")
+    supplied34 = G.gate_supplied_flags("34").get(_STEP34_PROGRAM, frozenset())
+    assert "--json" in supplied34 and "--report" not in supplied34, (
+        f"step 34's invocation of {_STEP34_PROGRAM} changed: {sorted(supplied34)}")
+    assert "34" in G._gate_consumers().get(_STEP34_DEFAULT, frozenset()), (
+        f"the edge for {_STEP34_DEFAULT} was dropped at step 34, whose clause "
+        f"supplies no --report — the rule stopped being per-flag")
+
+
+def test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag(
+        tmp_path):
+    """THE FORWARD CONTROL, and the reason the rule cannot hide a real read.
+
+    Strip ``--report FINAL_REPORT.md`` from step 37's clause and nothing else:
+    the default becomes reachable, the consumer edge comes back, and W2
+    charges the step exactly as it did before the rule existed. A rule that
+    kept the edge dropped here would be one that had blinded the oracle
+    instead of correcting it.
+    """
+    target = "reported_figure_artifact_backing_check . --report FINAL_REPORT.md"
+
+    def edit(doc):
+        hit = 0
+        for step in doc["steps"]:
+            if F.normalize_id(step.get("id")) != "37":
+                continue
+            for clause in step.get("gate", {}).get("all_of", []):
+                for key, value in list(clause.items()):
+                    if isinstance(value, str) and value.strip() == target:
+                        clause[key] = _STEP37_PROGRAM + " ."
+                        hit += 1
+        assert hit == 1, f"the clause this control edits was not found: {hit}"
+
+    path = _mutated_flow(tmp_path, "step37_without_report.yaml", edit)
+    with _SwappedFlow(path):
+        supplied = G.gate_supplied_flags("37").get(_STEP37_PROGRAM, frozenset())
+        assert "--report" not in supplied, sorted(supplied)
+        assert "37" in G._gate_consumers().get(_STEP37_DEFAULT, frozenset()), (
+            f"with --report gone, {_STEP37_DEFAULT} must be mined as a read "
+            f"of step 37's gate again")
+        assert _STEP37_DEFAULT in {f.path for f in G.findings_for("37")}, (
+            "W2 no longer charges the step for a default it really can reach")
+    assert _STEP37_DEFAULT not in {f.path for f in G.findings_for("37")}
+
+
+def _fake_program(monkeypatch, name: str, source: str) -> None:
+    """Grade *source* as if it were ``programs/<name>.py``.
+
+    An in-memory tree, because the alternative — writing a file into
+    ``programs/`` — would change what every other module in this shared
+    worktree is measuring while it runs.
+    """
+    tree = ast.parse(source)
+    real = G._tree
+    monkeypatch.setattr(G, "_tree", lambda p: tree if p == name else real(p))
+    G.option_default_literals.cache_clear()
+
+
+_EXCLUSIVITY_PROBE = """
+import argparse
+
+
+_ONLY_A_FALLBACK = "reports/probe/fallback_only.json"
+_READ_REGARDLESS = "reports/probe/read_regardless.json"
+
+
+def check(project, out):
+    chosen = out if out else project / _ONLY_A_FALLBACK
+    always = project / _READ_REGARDLESS
+    return chosen, always
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("project_dir", nargs="?", default=".")
+    ap.add_argument("--json", dest="out", default=None)
+    args = ap.parse_args(argv)
+    return check(args.project_dir, args.out)
+"""
+
+
+def test_a_literal_read_outside_the_fallback_is_never_called_a_default(
+        monkeypatch):
+    """EXCLUSIVITY, which is the whole safety of the rule.
+
+    One program, two constants, one option. The first is reachable only in the
+    ``else`` of a test on the option, so ``--json`` forecloses it. The second
+    is read on every path, so no flag can foreclose it and it must not appear
+    here at all — otherwise a gate program that both defaults to a path AND
+    reads it unconditionally would lose a real edge.
+    """
+    _fake_program(monkeypatch, "_d7_exclusivity_probe", _EXCLUSIVITY_PROBE)
+    found = G.option_default_literals("_d7_exclusivity_probe")
+    assert found.get("reports/probe/fallback_only.json") == frozenset({"--json"}), found
+    assert "reports/probe/read_regardless.json" not in found, (
+        "a path the program reads on every branch was reported as an option "
+        "default; the exclusivity check is not holding")
+    # The probe name matches no `programs/*.py`, so the memo entry it leaves
+    # behind can never answer for a real program; clearing it anyway keeps the
+    # next reader from having to check that.
+    G.option_default_literals.cache_clear()
+
+
 def test_unattributable_findings_are_surfaced_not_dropped():
     """Artefacts real enough to name but not chargeable to one step stay visible.
 
@@ -1760,9 +1908,8 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: also recorded PRODUCED_BY_RUN in ``matrix_d3_output_manifest.json``,
 #: because the yaml half alone is a HALF FIX that relocates the red into
 #: dimension 3 rather than removing it (measured: d7 6 -> 1, d3 6 -> 10).
-#: Step 34 is WAIVED instead, on the measured fact that nothing reads it: its
-#: apparent consumer is ``metal_fill_emit``'s own default-output constant,
-#: counted as a read by :func:`matrix_d7_artifact_graph._gate_consumers`.
+#: Step 34 was WAIVED instead. That waiver has since been WITHDRAWN and its
+#: reasoning was wrong; see the withdrawal note in ``matrix_63x8.waivers``.
 #:
 #: The pin therefore names a population whose every promotion has a
 #: disposition. It is BOOKKEEPING, deliberately last, and it cannot be used as
@@ -1770,9 +1917,48 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: :func:`test_d7_the_write_record_population_is_named_root_by_root` asserts
 #: both halves of the invariant so that a pin naming a root which contributes
 #: nothing is as loud as a population that grew quietly.
+#:
+#: MOVED 2 ROOTS -> 1 ON 2026-08-26, AND THE PIN FIRED FIRST. It reddened by
+#: NAME ("the set of run roots whose write record decides this dimension
+#: changed"), which is the event it exists for, and the cause is in the corpus
+#: rather than in this repository: ``benchmark-data`` commit ``bcf2f94``
+#: ("withdraw all four published cells") removed
+#: ``ic/spm/v1.9.96_gf180mcuD/reports/write_ledger.json``, and ``88621a5``
+#: ("restore spm/v1.10.18_sky130A as a SPECIMEN") brought back only the other
+#: one. :func:`matrix_d7_write_record.record_roots` reads
+#: ``git ls-tree -r HEAD`` in the tree that HOLDS the root, so the population
+#: is a property of THAT commit, and on ``88621a5`` exactly one path under it
+#: ends in ``reports/write_ledger.json``. A root that stopped being published
+#: is not a root this dimension may keep claiming to consult.
+#:
+#: RE-MEASURED, not inherited — on ``c43fe4057`` with the pointer bound at
+#: ``benchmark-data`` @ ``88621a5``:
+#:
+#:     v1.10.18_sky130A   captured 2026-08-09T11:11:08Z
+#:                        399 candidates, 143 refused (absent 143, 0-byte 0,
+#:                        symlinked 0, untracked 0)
+#:
+#: 143, where the 2026-08-15 measurement above recorded 144: a record is a
+#: claim about the past and one more of its residual paths is re-verifiable
+#: today, which is the refusal working, not drifting.
+#:
+#: The A/B against a forced-empty ``observed_writes()`` over all 68 steps now
+#: leaves **3** promotions on **1** step, with **0** findings lost — the one
+#: direction this binding may never move:
+#:
+#:     step 23  reports/phase3/sta_mcorner_ocv.rpt         WAIVED
+#:     step 23  reports/phase3/sta_spef_multicorner.rpt    WAIVED
+#:     step 23  reports/phase3/sta_spef_based.rpt          WAIVED
+#:
+#: All three are named, individually and by their PDK condition, in the 23/d7
+#: waiver's own reason — so the whole promoted population is disposed and the
+#: pin is bookkeeping again. The four promotions that leave the table
+#: (D1, 24, 27 DECLARED; 34 WAIVED) leave it because the root that carried
+#: them is no longer published, NOT because anything about their disposition
+#: changed: each remains declared in ``flow/phase1_phase2_phase3.yaml`` and
+#: would be promoted again the day that root comes back.
 RECORD_BOUND_ROOTS: Tuple[str, ...] = (
     "benchmark-data/ic/spm/v1.10.18_sky130A",
-    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
 )
 
 

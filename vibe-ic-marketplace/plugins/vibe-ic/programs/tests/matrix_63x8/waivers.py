@@ -1105,105 +1105,32 @@ WAIVERS: Tuple[Waiver, ...] = (
             "MISSING (5 of 8); the other three are FAIL before and after."
         ),
     ),
-    Waiver(
-        step_id="34",
-        dim=7,
-        reason=(
-            "W2 charges reports/phase3/cmp_fill_emit.json as produced, "
-            "gate-read and undeclared, and the READ half is an artefact of "
-            "the consumer oracle rather than a fact about the flow. "
-            "_gate_consumers builds {path: steps whose gate reads it} by "
-            "mining every gate program's SOURCE for path literals, so a "
-            "program that names its OWN DEFAULT OUTPUT in a module constant "
-            "is recorded as a consumer of that output. metal_fill_emit is "
-            "step 34's gate program and _REPORT_REL is exactly that "
-            "constant: it is the FALLBACK the emitter writes to when no "
-            "--json is supplied. Nothing in the repository reads the path. "
-            "The flow's only gate invocation of the program passes an "
-            "explicit --json reports/phase2/gates/cmp_fill_emit.json, which "
-            "is a DIFFERENT file and is the one step 34's gate actually "
-            "consumes. Declaring the phase3 path would also assert an "
-            "UNCONDITIONAL production the flow itself denies: the runner "
-            "half returns before invoking the emitter when there is no GDS "
-            "to fill and when the density config declares no layers, and the "
-            "emitter DISCLOSED_SKIPs when no KLayout runner is reachable, so "
-            "an honest run of any of those branches would report MISSING. "
-            "That is the same objection the dimension's own module docstring "
-            "already sustains against declaring the DFT skip sentinels. "
-            "Closing this needs the CONSUMER oracle taught to tell a gate "
-            "program's own default-output constant from a path it reads — "
-            "not a declaration, and not a change to W2's rule."
-        ),
-        evidence=(
-            "producer default programs/metal_fill_emit.py:82 "
-            "(_REPORT_REL = \"reports/phase3/cmp_fill_emit.json\") applied at "
-            "programs/metal_fill_emit.py:133 and "
-            "programs/metal_fill_emit.py:319 as "
-            "`rep = Path(report) if report else (project / _REPORT_REL)`, so "
-            "the constant is reached only when --json is absent; the runner "
-            "invocation that reaches it is "
-            "programs/phase3_one_shot_runner.py::`\"--cell\", top, "
-            "\"--in-place\"],` — the last argv element, so the whole argv is "
-            "visible and carries no --json — guarded by the two early returns, "
-            "programs/phase3_one_shot_runner.py::`return False, "
-            "\"metal_fill_density config has no layers\"` and the "
-            "`return False, \"no GDS to fill\"` on the line directly above "
-            "it. (That second guard is written identically at two places in "
-            "the file, so it cannot carry a content anchor of its own; the "
-            "unique guard beside it carries the citation, and the pair is "
-            "read there. BOTH of these were line numbers until 2026-08-19, "
-            "when a change 7000 lines higher up moved them by forty-one and "
-            "`validate()` reported both unresolvable — the third and fourth "
-            "citations in this one waiver to rot exactly as the note below "
-            "predicts.) The competing path the gate really reads is "
-            "flow/phase1_phase2_phase3.yaml::\"metal_fill_emit . "
-            "--verify-only --json reports/phase2/gates/cmp_fill_emit.json\" "
-            "(a CONTENT anchor, converted from the line-number form it "
-            "carried at first writing — that line number was correct when "
-            "written and had drifted by forty lines a day later, which is the "
-            "rot the content grammar exists to end). The oracle rule that "
-            "conflates the two is "
-            "programs/tests/matrix_d7_artifact_graph.py::"
-            "`for lit in program_literals(prog)` (the mining loop of "
-            "_gate_consumers). "
-            # vibe-ic#1289/#1290 — CONTENT anchors, not line numbers. BOTH of
-            # the citations above were written by line and BOTH had rotted by
-            # 2026-08-15, in the two different ways this notation exists to
-            # end. The yaml citation named 4242 and the flow grew 40 lines
-            # above it, so 4242 now reads a comment and `validate()` reported
-            # the citation unresolvable — a HARD red on
-            # test_waivers_meet_the_registry_standard. The oracle citation
-            # named 1074-1085, which held exactly that loop when it was
-            # written (9167b162e) and now holds the body of a DIFFERENT
-            # function, `flow_consumers`; `_gate_consumers` has moved to 1184
-            # and its `for lit in program_literals(prog)` to 1190. That
-            # citation still RESOLVED — `flow_consumers` calls
-            # `gate_input_paths`, a token this waiver also names in
-            # `gate_input_paths("34")` — so it went on READING as evidence
-            # while pointing at unrelated code, which is the worse of the two
-            # failures because nothing reports it.
-            # Historical numbers above carry no leading colon on purpose: a
-            # bare `:NNNN` inherits the last-named file and would be graded as
-            # a live citation.
-            #
-            # The remaining `path:line` citations in this entry are NOT
-            # converted, and the reason is measured rather than editorial: a
-            # content anchor must resolve to exactly ONE line, and
-            # `rep = Path(report) if report else (project / _REPORT_REL)`
-            # occurs twice in metal_fill_emit.py (at 133 and 319 — the pair is
-            # the point of the claim) while "no GDS to fill" occurs twice in
-            # phase3_one_shot_runner.py. Both would be refused as AMBIGUOUS by
-            # this registry's own rule, so the line form is the only form
-            # available there.
-            "MEASURED 2026-08-14 on the rebased tree: "
-            "`grep -rn cmp_fill_emit flow/ programs/*.py` names "
-            "reports/phase3/cmp_fill_emit.json in metal_fill_emit.py alone, "
-            "and matrix_d7_artifact_graph.gate_input_paths(\"34\") contains "
-            "no cmp_fill_emit entry at all — only "
-            "input/pdk/bridge/cmp_fill_targets.json and "
-            "signoff/cmp_fill_targets.json, which are different artefacts."
-        ),
-    ),
+    # ── WITHDRAWN 2026-08-26: 34/d7, registered 2026-08-15 (`9167b162`,
+    # vibe-ic#1215) over `reports/phase3/cmp_fill_emit.json`. A waiver must
+    # name a step that is CURRENTLY failing and this one had stopped:
+    # `matrix_d7_artifact_graph.findings_for("34")` is `()` — MEASURED on
+    # c43fe4057 AND on its base fe27b28b7, so the cell had already healed
+    # before the batch that surfaced the XPASS. It reddened
+    # `test_waivers_meet_the_registry_standard` ("waivers whose step has no
+    # findings — remove them") and XPASS(strict)ed step 34's own cell.
+    # Withdrawing it puts 34/d7 back to ENFORCED; see
+    # `matrix_mutation_ledger.LEDGER_CELLS_NOT_ENFORCED`, which predicted
+    # exactly this move in exactly this direction.
+    #
+    # WHY THE CELL IS EMPTY, stated because the withdrawn entry's own
+    # reasoning was WRONG about it and a reader should not inherit the error.
+    # The entry argued the READ half was spurious — "_REPORT_REL is the
+    # FALLBACK the emitter writes to when no --json is supplied". It is the
+    # fallback for `--report`, not for `--json`: `metal_fill_emit.main` calls
+    # `verify_only(project, ns.report)`, and step 34's clause passes `--json`
+    # and no `--report`, so that fallback IS reached and the gate genuinely
+    # reads the path. What is missing is the PRODUCER half:
+    # `writers_of("reports/phase3/cmp_fill_emit.json")` is empty because the
+    # write destination is an `IfExp` this module's AST walk cannot resolve,
+    # and no admissible write record observes the path either — so W2 drops
+    # it for want of a producer, not for want of a reader. That is a
+    # RESOLUTION LIMIT already stated in `matrix_d7_artifact_graph`, and it
+    # is why no declaration and no new waiver is the right answer here.
 )
 
 

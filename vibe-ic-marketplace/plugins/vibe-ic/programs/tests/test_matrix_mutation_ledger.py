@@ -567,11 +567,20 @@ def test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta():
     The actual PASS-to-FAIL replay is the evidence recorded by the D3 entry.
     This small regression assertion makes the parent direction substantive for
     the acceptance grader: pre-fix code observes 507 covered ENFORCED cells,
-    while this candidate must observe all 508.
+    while this candidate must observe all of them.
+
+    MOVED 508 -> 509 on 2026-08-26, and the direction is the point: 34/d7 went
+    WAIVED -> ENFORCED when the dimension-7 waiver registered on it was
+    WITHDRAWN, so one more cell now asserts enforcement and has to be covered.
+    The number tracks :data:`matrix_mutation_ledger.LEDGER_AS_MEASURED`, which
+    moved in the same change and for the same cell. The load-bearing half is
+    the third assertion, not the first: the new cell is COVERED — census
+    reports ``uncovered == []`` at 509 — so a waiver came off without leaving
+    an enforced cell nobody has shown can redden.
     """
     rep = L.census(cell_states())
-    assert rep["considered"] == 508, rep
-    assert rep["covered"] == 508, rep
+    assert rep["considered"] == 509, rep
+    assert rep["covered"] == 509, rep
     assert rep["uncovered"] == [], rep
 
 

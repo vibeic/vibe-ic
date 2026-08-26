@@ -2031,7 +2031,13 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 # leave the grid; the cross-layer gate, output and fallback remain inside the
 # already-measured Step-2 cells. Each historical applies_to list above drops
 # exactly that deleted id, so its arithmetic count drops by one as well.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 508)
+# MOVED 508 -> 509 on 2026-08-26. ONE cell went the other way for once: 34/d7,
+# WAIVED -> ENFORCED, because the dimension-7 waiver registered on it was
+# WITHDRAWN. 68 x 8 = 544 cells, 35 of them not ENFORCED (one fewer than the
+# 36 below the previous value counted), 544 - 35 = 509. This is the direction
+# the note on the 479 -> 478 move said this pin would move in if the waiver
+# ever came off, and it named the cell in advance; both halves held.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 509)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -2151,8 +2157,12 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # ── dimension 7 ───────────────────────────────────────────────────
     ("7", 7, "WAIVED"),
     ("23", 7, "WAIVED"),
-    # 34/d7: ENFORCED -> WAIVED on 2026-08-15 (`9167b162`, #1215), the -1 above.
-    ("34", 7, "WAIVED"),
+    # 34/d7: WAIVED -> ENFORCED on 2026-08-26, the +1 above, and the pin
+    # reddened in the other direction exactly as the note predicted. The
+    # waiver was withdrawn because its step had stopped failing:
+    # `matrix_d7_artifact_graph.findings_for("34")` is `()` on c43fe4057 and
+    # on its base fe27b28b7 alike. A withdrawn waiver is a TIGHTENING; the
+    # cell is enforced again, on the live analyser, with nothing exempting it.
     ("FS1", 7, "WAIVED"),
     ("M1", 7, "WAIVED"),
     ("P0", 7, "NA"),

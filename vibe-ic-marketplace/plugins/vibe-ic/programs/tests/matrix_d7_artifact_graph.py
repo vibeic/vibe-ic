@@ -110,6 +110,19 @@ of them fires.
     (``analog_block_list.json``) would be charged to all thirteen analog and
     mixed-signal steps at once.
 
+    THE READ HALF IS PER-INVOCATION, NOT PER-PROGRAM. Mining a gate program's
+    source finds every path it *could* name, including one it can reach only
+    when a CLI option was ABSENT — and the step's own clause is right there
+    saying the option was supplied. :func:`option_default_literals` names that
+    class and :func:`_gate_consumers` drops those edges, per FLAG and per
+    STEP: ``metal_fill_emit``'s ``--report`` fallback stays an edge at step 34,
+    whose clause passes ``--json`` and no ``--report``, while
+    ``reported_figure_artifact_backing_check``'s ``--report`` fallback is
+    dropped at step 37, whose clause passes one. MEASURED when the rule
+    landed: 451 consumer edges -> 446, five dropped, none added, and exactly
+    one finding changed (step 37's ``reports/final_summary.md``, an artefact
+    the RUNNER writes and no gate reads).
+
 ``W3  gate_required_file_undeclared``  — LOAD_BEARING
     Step S's gate asserts a file exists (``files_exist`` clause, or a
     ``json_field_true`` file). If NO step's ``required_outputs`` names that
@@ -691,6 +704,313 @@ def program_literals(basename: str) -> FrozenSet[str]:
     return frozenset(_collect_path_literals(tree)) if tree is not None else frozenset()
 
 
+# ──────────────────────────────────────────────────────────────────────
+# The consumer oracle's one false-positive class: a CLI option's DEFAULT
+#
+# `_gate_consumers` mines a gate program's SOURCE for path literals because a
+# gate reads plenty of files the yaml never names. The cost is that a literal
+# the program can only reach when it was NOT told where to look is mined as a
+# read anyway — and the flow's own clause is right there, saying it WAS told.
+# Two live shapes, both `<value> if <option> else <this literal>`:
+#
+#   reported_figure_artifact_backing_check
+#       `_DEFAULT_REPORTS` (holding "reports/final_summary.md") is consulted
+#       only in the `else:` of `if reports:`, and `reports` is `main`'s
+#       `[Path(r) for r in args.report] if args.report else None`. Step 37's
+#       clause passes `--report FINAL_REPORT.md`, so the branch that names
+#       final_summary.md cannot be entered by that invocation.
+#
+#   metal_fill_emit
+#       `_REPORT_REL` is the `--report` fallback in the same shape. Step 34's
+#       clause passes `--json` and NOT `--report`, so that fallback IS
+#       reachable there and this rule leaves the edge alone. The rule is
+#       per-FLAG for exactly that reason: a default is foreclosed by the
+#       option that selects against it, and by no other.
+#
+# NARROW BY CONSTRUCTION. A literal is dropped only when EVERY mention of it
+# in the program lies in such a fallback branch, and only for the step whose
+# every clause invoking that program supplies the flag. Anything less
+# certain keeps the edge, because a missed read is this dimension's whole
+# subject and a spurious one is only noise.
+# ──────────────────────────────────────────────────────────────────────
+_ARGS_NAMESPACES = ("args", "ns", "opts", "options")
+
+
+def _is_none(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def _option_flags(tree: ast.AST) -> Dict[str, FrozenSet[str]]:
+    """``{argparse dest: {flag spellings}}`` for every OPTION *tree* declares.
+
+    Positionals carry no flag and are skipped: nothing on a command line can
+    select against them, so they can never foreclose a default.
+    """
+    acc: Dict[str, Set[str]] = {}
+    for n in ast.walk(tree):
+        if not (
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "add_argument"
+        ):
+            continue
+        flags = [s for s in (_const_str(a) for a in n.args)
+                 if s and s.startswith("-")]
+        if not flags:
+            continue
+        dest: Optional[str] = None
+        for kw in n.keywords:
+            if kw.arg == "dest":
+                dest = _const_str(kw.value)
+        if dest is None:
+            longs = [f for f in flags if f.startswith("--")]
+            dest = _arg_dest(longs[0] if longs else flags[0])
+        if dest:
+            acc.setdefault(dest, set()).update(flags)
+    return {k: frozenset(v) for k, v in acc.items()}
+
+
+def _truth_subject(
+    test: ast.AST, dests: Dict[str, FrozenSet[str]], guards: Dict[str, str]
+) -> Optional[Tuple[str, bool]]:
+    """``(dest, sense)`` — WHICH option a boolean test is about.
+
+    ``sense`` is ``True`` when the tested expression is TRUTHY exactly when
+    the option was supplied, so the ELSE side is the fallback. ``None`` for
+    any test this module cannot read as a question about one option, which
+    keeps the branch out of the fallback set entirely.
+    """
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        sub = _truth_subject(test.operand, dests, guards)
+        return None if sub is None else (sub[0], not sub[1])
+    if (isinstance(test, ast.Compare) and len(test.ops) == 1
+            and _is_none(test.comparators[0])):
+        sub = _truth_subject(test.left, dests, guards)
+        if sub is None:
+            return None
+        if isinstance(test.ops[0], ast.Is):        # `x is None`
+            return (sub[0], not sub[1])
+        if isinstance(test.ops[0], ast.IsNot):     # `x is not None`
+            return sub
+        return None
+    if (isinstance(test, ast.Attribute)
+            and isinstance(test.value, ast.Name)
+            and test.value.id in _ARGS_NAMESPACES
+            and test.attr in dests):
+        return (test.attr, True)
+    if isinstance(test, ast.Name) and test.id in guards:
+        return (guards[test.id], True)
+    return None
+
+
+def _fallback_regions(
+    node: ast.AST, dests: Dict[str, FrozenSet[str]], guards: Dict[str, str]
+) -> List[Tuple[str, List[ast.AST]]]:
+    """``((dest, [subtrees reached only when the option was ABSENT]), ...)``."""
+    out: List[Tuple[str, List[ast.AST]]] = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.If):
+            found = _truth_subject(sub.test, dests, guards)
+            if found is not None:
+                out.append((found[0],
+                            list(sub.orelse if found[1] else sub.body)))
+        elif isinstance(sub, ast.IfExp):
+            found = _truth_subject(sub.test, dests, guards)
+            if found is not None:
+                out.append((found[0],
+                            [sub.orelse if found[1] else sub.body]))
+    return out
+
+
+def _forwarded_dest(
+    node: ast.AST, dests: Dict[str, FrozenSet[str]]
+) -> Optional[str]:
+    """The option an argument expression carries through FALSY-PRESERVING.
+
+    ``args.report`` and ``[Path(r) for r in args.report] if args.report else
+    None`` both do: the receiving parameter is falsy exactly when the option
+    was absent, so a fallback keyed on the parameter is keyed on the option.
+    Anything else returns ``None`` — a transformation that can invent a truthy
+    value out of an absent option would break that equivalence.
+    """
+    if (isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in _ARGS_NAMESPACES
+            and node.attr in dests):
+        return node.attr
+    if isinstance(node, ast.IfExp) and _is_none(node.orelse):
+        found = _truth_subject(node.test, dests, {})
+        if found is not None and found[1]:
+            return found[0]
+    return None
+
+
+def _param_guards(
+    tree: ast.AST, dests: Dict[str, FrozenSet[str]]
+) -> Dict[str, Dict[str, str]]:
+    """``{function: {parameter: dest}}`` for options forwarded into a helper.
+
+    Both live shapes put the fallback in a helper (``check``, ``verify_only``)
+    and the argparse namespace in ``main``, so a rule that stopped at
+    ``args.<dest>`` would see neither.
+    """
+    funcs = {
+        f.name: f for f in ast.walk(tree)
+        if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    acc: Dict[str, Dict[str, str]] = {}
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)):
+            continue
+        fn = funcs.get(n.func.id)
+        if fn is None:
+            continue
+        positional = ([a.arg for a in getattr(fn.args, "posonlyargs", [])]
+                      + [a.arg for a in fn.args.args])
+        for i, arg in enumerate(n.args):
+            if i >= len(positional):
+                break
+            dest = _forwarded_dest(arg, dests)
+            if dest:
+                acc.setdefault(fn.name, {})[positional[i]] = dest
+        named = set(positional) | {a.arg for a in fn.args.kwonlyargs}
+        for kw in n.keywords:
+            if kw.arg and kw.arg in named:
+                dest = _forwarded_dest(kw.value, dests)
+                if dest:
+                    acc.setdefault(fn.name, {})[kw.arg] = dest
+    return acc
+
+
+def _module_path_constants(tree: ast.AST) -> Dict[str, FrozenSet[str]]:
+    """``{module-level constant: path literals it holds}``.
+
+    Both live cases park the path in a constant, which is why the rule has to
+    follow a NAME as well as a literal.
+    """
+    acc: Dict[str, FrozenSet[str]] = {}
+    for n in getattr(tree, "body", []):
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)):
+            name, value = n.targets[0].id, n.value
+        elif (isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
+                and n.value is not None):
+            name, value = n.target.id, n.value
+        else:
+            continue
+        lits = _collect_path_literals(value)
+        if lits:
+            acc[name] = frozenset(lits)
+    return acc
+
+
+@lru_cache(maxsize=None)
+def option_default_literals(program: str) -> Dict[str, FrozenSet[str]]:
+    """``{path literal: {flags whose presence forecloses it}}``.
+
+    A literal appears here only when EVERY mention of it in *program* lies in
+    a branch reached solely because some option was absent. One mention
+    anywhere else and the literal is omitted, so this can only ever remove an
+    edge the flow's own command line contradicts.
+    """
+    tree = _tree(program)
+    if tree is None:
+        return {}
+    dests = _option_flags(tree)
+    if not dests:
+        return {}
+    consts = _module_path_constants(tree)
+    guards_by_func = _param_guards(tree, dests)
+
+    regions = _fallback_regions(tree, dests, {})
+    for fn in ast.walk(tree):
+        if (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and fn.name in guards_by_func):
+            regions += _fallback_regions(fn, dests, guards_by_func[fn.name])
+    if not regions:
+        return {}
+
+    inside: Set[int] = set()
+    lit_dests: Dict[str, Set[str]] = {}
+    const_dests: Dict[str, Set[str]] = {}
+    for dest, region in regions:
+        for node in region:
+            for sub in ast.walk(node):
+                inside.add(id(sub))
+                if (isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
+                        and sub.id in consts):
+                    const_dests.setdefault(sub.id, set()).add(dest)
+            for lit in _collect_path_literals(node):
+                lit_dests.setdefault(lit, set()).add(dest)
+
+    # A constant counts only if EVERY load of it is inside a fallback branch.
+    usable_consts = {
+        name: found for name, found in const_dests.items()
+        if all(
+            id(s) in inside for s in ast.walk(tree)
+            if isinstance(s, ast.Name) and s.id == name
+            and isinstance(s.ctx, ast.Load)
+        )
+    }
+    const_value_nodes: Set[int] = set()
+    for n in getattr(tree, "body", []):
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and n.targets[0].id in usable_consts):
+            value = n.value
+        elif (isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
+                and n.target.id in usable_consts and n.value is not None):
+            value = n.value
+        else:
+            continue
+        const_value_nodes |= {id(s) for s in ast.walk(value)}
+    for name, found in usable_consts.items():
+        for lit in consts[name]:
+            lit_dests.setdefault(lit, set()).update(found)
+
+    # EXCLUSIVITY, node by node: one mention outside a fallback branch (and
+    # outside the constant that only such branches read) and the literal is
+    # not a default at all.
+    spelled: Dict[str, List[int]] = {}
+    for sub in ast.walk(tree):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            text = sub.value.strip().lstrip("./")
+            if text in lit_dests:
+                spelled.setdefault(text, []).append(id(sub))
+
+    out: Dict[str, FrozenSet[str]] = {}
+    for lit, found in lit_dests.items():
+        nodes = spelled.get(lit, [])
+        if not nodes:
+            continue
+        if not all(i in inside or i in const_value_nodes for i in nodes):
+            continue
+        flags: Set[str] = set()
+        for dest in found:
+            flags |= set(dests.get(dest, frozenset()))
+        if flags:
+            out[lit] = frozenset(flags)
+    return out
+
+
+@lru_cache(maxsize=None)
+def gate_supplied_flags(step_id) -> Dict[str, FrozenSet[str]]:
+    """``{gate program: flags EVERY clause of this step passes it}``.
+
+    The intersection, not the union: a step that invokes one program twice
+    forecloses a default only if BOTH invocations select against it.
+    """
+    acc: Dict[str, Optional[Set[str]]] = {}
+    for clause in F.gate_clauses(step_id):
+        if clause.command is None or not clause.program:
+            continue
+        here = {tok.split("=", 1)[0] for tok in clause.command.split()[1:]
+                if tok.startswith("-")}
+        seen = acc.get(clause.program)
+        acc[clause.program] = here if seen is None else (seen & here)
+    return {k: frozenset(v) for k, v in acc.items() if v}
+
+
 @lru_cache(maxsize=None)
 def writers_of(path: str) -> FrozenSet[str]:
     """Programs that write *path*, matched on resolved literal TAIL segments.
@@ -1186,8 +1506,16 @@ def _gate_consumers() -> Dict[str, FrozenSet[str]]:
     acc: Dict[str, Set[str]] = {}
     for sid in F.step_ids():
         key = F.normalize_id(sid)
+        supplied = gate_supplied_flags(sid)
         for prog in F.gate_programs(sid):
+            defaults = option_default_literals(prog)
+            given = supplied.get(prog, frozenset())
             for lit in program_literals(prog):
+                # A default this step's own command line selects against is
+                # not a read BY THIS STEP. See option_default_literals.
+                foreclosed = defaults.get(lit)
+                if foreclosed and (foreclosed & given):
+                    continue
                 acc.setdefault(lit, set()).add(key)
         for p in gate_input_paths(sid):
             acc.setdefault(p, set()).add(key)
@@ -1480,7 +1808,8 @@ def clear_flow_caches() -> None:
 
     The AST indices (``_trees``, ``write_index``, ``literal_index``,
     ``writers_of``, ``flag_value_is_written``, ``_local_modules``,
-    ``program_literals``) are deliberately NOT cleared: they are functions of
+    ``program_literals``, ``option_default_literals``) are deliberately NOT
+    cleared: they are functions of
     ``programs/*.py``, which a yaml swap does not touch, and re-parsing the
     whole program tree per mutation would cost seconds per test for an answer
     that cannot have changed.
@@ -1503,6 +1832,7 @@ def clear_flow_caches() -> None:
         _all_declared_basenames,
         _step_condition_basenames,
         _same_dir_declarers,
+        gate_supplied_flags,
         _gate_consumers,
         _w2_population,
         findings_for,
@@ -1536,6 +1866,8 @@ __all__ = [
     "declared_entries",
     "declaring_entry",
     "program_literals",
+    "option_default_literals",
+    "gate_supplied_flags",
     "literal_index",
     "write_index",
     "writers_of",
