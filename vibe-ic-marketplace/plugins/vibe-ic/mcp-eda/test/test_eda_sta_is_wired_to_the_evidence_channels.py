@@ -82,7 +82,11 @@ def test_the_reported_success_is_the_conjunction_not_the_exit_code():
 
 def test_the_manifest_status_is_gated_on_the_conjunction():
     block = _eda_sta_block()
-    m = re.search(r'if \(staPass\) \{\s*const dir[^}]*?status: "PASS"', block, re.S)
+    # ASSEMBLY: PASS additionally requires clockConstrained, so the literal
+    # `status: "PASS"` became `status: clockConstrained ? "PASS" : ...`. That is
+    # a tightening; the gate on staPass is what this test exists to pin.
+    m = re.search(r'if \(staPass\) \{\s*const dir[^}]*?status: clockConstrained \? "PASS"',
+                  block, re.S)
     assert m, (
         'the manifest still writes status:"PASS" on something other than the '
         'conjunction. Writing PASS on the bare exit code is how bug #1 reached '
@@ -94,9 +98,9 @@ def test_wns_is_withheld_when_the_run_produced_no_evidence():
     genuinely clean result. Reporting that number on a run that failed its
     evidence checks hands the caller a fabricated timing result."""
     block = _eda_sta_block()
-    assert re.search(r"wns:\s*staPass && wnsMatch", block), (
+    assert re.search(r"wns:\s*staPass \? wns : null", block), (
         "wns is reported without regard to the evidence verdict")
-    assert re.search(r"tns:\s*staPass && tnsMatch", block)
+    assert re.search(r"tns:\s*staPass \? tns : null", block)
 
 
 def test_the_module_is_imported():

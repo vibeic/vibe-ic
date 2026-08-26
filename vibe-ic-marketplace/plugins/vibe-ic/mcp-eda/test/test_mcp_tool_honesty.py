@@ -122,6 +122,14 @@ def _eval_match(expr_decls, fixture):
     return json.loads(r.stdout)
 
 
+def _eda_sta_region(src):
+    """Just the eda_sta tool body, so an unrelated tool's line cannot satisfy
+    or violate an assertion about STA."""
+    i = src.index('"eda_sta"')
+    j = src.index('"eda_lvs"', i)
+    return src[i:j]
+
+
 def _extract(decl_start):
     """Pull a `const <name> = ...;` declaration (possibly multi-line) verbatim."""
     src = _src()
@@ -137,6 +145,23 @@ def test_sta_script_reads_a_technology():
     src = _src()
     assert "_staLefReads" in src, "eda_sta must read a technology before read_verilog"
     assert "const _staLefs = [techlefPath(cfg), celllefPath(cfg)]" in src
+    # The declaration existing is not the fix. It must be INTERPOLATED INTO the
+    # STA script, AHEAD of read_liberty/read_verilog -- deleting the
+    # interpolation restores ORD-2010 while leaving the declaration in place,
+    # and that mutation used to pass this test.
+    # Scope to the emitted STA script itself: the tool body contains other
+    # read_verilog occurrences, and comparing against those would compare the
+    # wrong two things.
+    region = _eda_sta_region(src)
+    a = region.index("const staCmd = ")
+    script = region[a:region.index("EOF`;", a)]
+    assert "${_staLefReads}" in script, \
+        "the LEF reads are declared but never interpolated into the STA script; " \
+        "that is ORD-2010 with the evidence of a fix still in the file"
+    assert script.index("${_staLefReads}") < script.index("read_verilog "), \
+        "the technology must be read BEFORE read_verilog, or ORD-2010 returns"
+    assert script.index("${_staLefReads}") < script.index("read_liberty "), \
+        "read_lef must precede read_liberty in the emitted script"
 
 
 def test_sta_script_emits_completion_and_clock_sentinels():
@@ -152,7 +177,13 @@ def test_sta_verdict_is_not_the_exit_code():
     a run that linked nothing must not be able to write a PASS manifest."""
     src = _src()
     assert "const staAnalysed = result.success && staCompleted && staErrors.length === 0;" in src
-    assert "success: staAnalysed," in src
+    # ASSEMBLY: `staAnalysed` is now ONE TERM of the verdict, ANDed with the
+    # independent metrics-file conjunction. Both must hold, so this is strictly
+    # stronger than the single-channel form this line used to pin.
+    assert "const staPass = staAnalysed && staEvidence.pass;" in src
+    assert "success: staPass," in src
+    assert "success: result.success," not in _eda_sta_region(src), \
+        "the STA verdict fell back to the bare exit code"
     assert 'status: clockConstrained ? "PASS" : "UNCONSTRAINED",' in src
 
 
@@ -177,11 +208,30 @@ def test_sta_error_regex_catches_openroad_errors():
 @pytest.mark.skipif(not NODE, reason="node not available")
 def test_sta_slack_regex_matches_real_opensta_output():
     """`report_wns` prints `wns max 0.00`. The old pattern matched no run at all."""
-    decls = _extract("const wnsMatch = ") + "\n" + _extract("const tnsMatch = ")
-    clean = _eval_match(decls, STA_OK_CLOCKED)
+    # ASSEMBLY: the inline regex was superseded by lib/sta_slack.mjs, which is
+    # anchored at both ends, accepts the bare `wns <n>` form and scientific
+    # notation, and prefers the `max` (setup) corner. Exercise the module that
+    # actually ships, on the same real captures.
+    import os
+    lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "src", "lib", "sta_slack.mjs")
+    assert os.path.exists(lib), lib
+
+    def _parse(fixture):
+        script = ("import { parseWns, parseTns } from " + json.dumps(lib) + ";\n"
+                  "const out = " + json.dumps(fixture) + ";\n"
+                  "console.log(JSON.stringify({wns: parseWns(out), tns: parseTns(out)}));")
+        r = subprocess.run([NODE, "--input-type=module", "-e", script],
+                           capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout)
+
+    clean = _parse(STA_OK_CLOCKED)
     assert clean["wns"] == 0.0 and clean["tns"] == 0.0, clean
-    bad = _eval_match(decls, STA_OK_VIOLATING)
+    bad = _parse(STA_OK_VIOLATING)
     assert bad["wns"] == -3.21 and bad["tns"] == -12.34, bad
+    # the pole that matters: no such line at all is NOT MEASURED, never zero.
+    assert _parse("nothing was analysed here") == {"wns": None, "tns": None}
 
 
 def test_sta_clockless_is_not_reported_as_zero_slack():
@@ -189,8 +239,8 @@ def test_sta_clockless_is_not_reported_as_zero_slack():
     clock. That vacuous zero must not be handed back as a timing result."""
     src = _src()
     assert "const clockConstrained = staAnalysed && clockPortFound === true;" in src
-    assert "const wns = clockConstrained && wnsMatch ? parseFloat(wnsMatch[1]) : null;" in src
-    assert "const tns = clockConstrained && tnsMatch ? parseFloat(tnsMatch[1]) : null;" in src
+    assert "const wns = clockConstrained ? parseWns(result.output) : null;" in src
+    assert "const tns = clockConstrained ? parseTns(result.output) : null;" in src
 
 
 @pytest.mark.skipif(not NODE, reason="node not available")
@@ -344,3 +394,22 @@ def test_container_tool_version_probes_run_in_the_container():
     body = src[i:src.index("_versionCache.set(name, v);", i)]
     assert "dockerExec(probe" in body, \
         "getToolVersion must run its probe inside the container"
+
+
+def test_the_verdict_does_not_borrow_evidence_a_run_never_produced():
+    """ASSEMBLY. Two evidence channels were merged onto this tool. If the script
+    never reached STA_COMPLETE it produced no timing evidence at all, so the
+    reported verdict must NOT be whatever the metrics channel happened to say --
+    the metrics file can be present and clean on a run that linked nothing.
+    Collapsing this to `staEvidence.verdict` is the mutation this pins."""
+    src = _src()
+    region = _eda_sta_region(src)
+    assert "const staVerdict = staAnalysed" in region, \
+        "the verdict is not conditioned on the script having run"
+    assert '(staErrors.length ? "FAIL" : "UNMEASURED")' in region, \
+        "a run that produced no evidence must report FAIL or UNMEASURED, " \
+        "never a verdict inherited from the other channel"
+    assert "const staVerdict = staEvidence.verdict;" not in region
+    # and the verdict that is written and returned must be that one.
+    assert "status: staVerdict," in region
+    assert "sta_verdict: staVerdict," in region
