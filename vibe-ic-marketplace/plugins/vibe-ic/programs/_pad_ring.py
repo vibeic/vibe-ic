@@ -654,6 +654,96 @@ def discover_io_site_declarations(pdk_root: Optional[str] = None,
     return found
 
 
+#: `set ::env(<VAR>) "<value>"` in a PDK TECH-view config, with Tcl's
+#: backslash line continuation. A COMMENTED line is not a declaration, so the
+#: pattern is anchored to the start of the line with only whitespace before
+#: `set` — upstream's own file carries five commented `set ::env(PAD_*)` lines
+#: and reading one of them would put a variable into a config the PDK
+#: deliberately left unset.
+_PAD_ENV_RE = re.compile(
+    r"^[ \t]*set[ \t]+::env\((?P<var>PAD_[A-Z_0-9]+)\)[ \t]+"
+    r"\"(?P<value>(?:[^\"\\]|\\.)*)\"",
+    re.M | re.S)
+
+
+#: A Tcl substitution — `$name`, `$::env(...)`, or a `[...]` command. MEASURED
+#: in the pinned image: one open PDK writes its corner master as
+#: `"$::env(PAD_CELL_LIBRARY)__cor"`. That string is not a cell name; only Tcl
+#: knows what it becomes. Copying it into a config would put a master no
+#: library carries into an artefact that reads like a real one, so a value
+#: carrying a substitution is NOT a literal declaration and this parser does
+#: not return one — see `parse_pad_env_unresolved`, which returns exactly those
+#: so the omission is reportable instead of silent.
+_TCL_SUBST_RE = re.compile(r"[$\[]")
+
+
+def _pad_env_matches(text: str):
+    for m in _PAD_ENV_RE.finditer(text):
+        # Tcl's line continuation inside a quoted string: backslash-newline
+        # plus the run of whitespace that follows it is one separator.
+        value = re.sub(r"\\\s*\n\s*", " ", m.group("value")).strip()
+        yield m.group("var"), value, text.count("\n", 0, m.start()) + 1
+
+
+def parse_pad_env_declarations(text: str) -> Dict[str, Tuple[str, int]]:
+    """`{variable: (value, line number)}` for every `set ::env(PAD_*)` a PDK
+    TECH-view config declares as a LITERAL string.
+
+    The line number is carried so a value can be cited to the file and line
+    that states it rather than asserted. A variable this file does not declare
+    is ABSENT from the mapping — there is no default here; a `dict create`
+    form (upstream's own spelling for a table, not a scalar) declares no scalar
+    and is not returned; and neither is a value carrying a Tcl substitution.
+    """
+    return {var: (value, line) for var, value, line in _pad_env_matches(text)
+            if not _TCL_SUBST_RE.search(value)}
+
+
+def parse_pad_env_unresolved(text: str) -> Dict[str, Tuple[str, int]]:
+    """The declarations `parse_pad_env_declarations` LEFT OUT because their
+    value carries a Tcl substitution this program cannot expand.
+
+    Returned so a caller can say "the PDK declares this variable in terms I
+    cannot resolve" instead of the variable simply going missing. An unread
+    declaration and an absent one are different facts.
+    """
+    return {var: (value, line) for var, value, line in _pad_env_matches(text)
+            if _TCL_SUBST_RE.search(value)}
+
+
+def discover_io_library_configs(pdk_root: Optional[str] = None,
+                                pdk: Optional[str] = None) -> List[Path]:
+    """Locate every PDK TECH-view config that DECLARES a pad variable.
+
+    The sibling of `discover_io_site_declarations`, and it differs in exactly
+    one way: that one returns files declaring a SITE, this one returns files
+    declaring ANY `PAD_*` scalar, because a distribution may state the
+    orientation convention and the corner master in a file that declares no
+    fake site. Same tree resolution and same `io` token on the library
+    directory; a tree that declares nothing yields an empty list.
+    """
+    found: List[Path] = []
+    for tree in _pdk_trees(pdk_root, pdk):
+        tech = tree / _LIBS_TECH
+        if not tech.is_dir():
+            continue
+        for flow in sorted(p for p in tech.iterdir() if p.is_dir()):
+            for lib in sorted(p for p in flow.iterdir() if p.is_dir()):
+                if _IO_LIB_TOKEN not in lib.name.lower():
+                    continue
+                cfg = lib / _SITE_DECL_FILE
+                if not cfg.is_file():
+                    continue
+                try:
+                    text = cfg.read_text(errors="replace")
+                except OSError:
+                    continue
+                if (parse_pad_env_declarations(text)
+                        or parse_pad_env_unresolved(text)):
+                    found.append(cfg)
+    return found
+
+
 #: A site the PDK's TECH view declares is CLASS PAD. Not a preference:
 #: MEASURED by driving `make_fake_io_site` and dumping the database — see this
 #: module's header. Named so the constant carries the reason.

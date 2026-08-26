@@ -20430,8 +20430,14 @@ def step_pad_ring_gen(project: Path, container: Optional[str] = None,
         return StepResult("pad_ring_gen", "FAIL", time.time() - t0, str(exc))
     pdk_args = (["--pdk-root", str(pdk_root), "--pdk", str(pdk_tree)]
                 if pdk_root and pdk_tree else [])
+    # `pad_assignment_gen` takes the SAME pdk arguments as the two programs
+    # after it. It needs them because a design document may DELEGATE the IO
+    # cell library to the PDK, and a delegated variable is read out of that
+    # library's own config or is not answered at all. Passing no PDK here used
+    # to make every delegated variable unanswerable while `pad_ring_gen`, two
+    # lines later, was reading the same tree.
     specs = [
-        ("pad_assignment_gen.py", []),
+        ("pad_assignment_gen.py", pdk_args),
         ("pad_ring_gen.py", pdk_args),
         ("pad_ring_check.py", pdk_args),
     ]

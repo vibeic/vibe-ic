@@ -33,6 +33,43 @@ decides — `_tapeout_declaration.py` says so where it derives the 18 questions,
 naming `pad_ring_gen` as the `consumer` of every one of the 8. The consumer
 was never wired to the answers. This program is that wiring and nothing more.
 
+THE THIRD SOURCE — WHAT THE DESIGN ALREADY WROTE DOWN
+=====================================================
+MEASURED on the self-tape-out re-run: this program reported NOT_ASKED with
+0 of 8 answered, step 15.5ic refused, PnR would not route, and 17 steps
+stayed blocked with no layout, no DRC, no LVS and no post-layout equivalence
+check. THE DESIGN WAS NOT SILENT. Its external-interface document carries a
+`Physical Pad Placement` section partitioning EVERY top-level port across the
+four die edges, one pad per bus bit, and its product-metadata document states
+that the pad count is deliberately unpinned BECAUSE it follows from that port
+list. Nothing read either. So a third source is added below the other two:
+
+    the design's own       `input/docs` / `phase1/input_doc` / generated docs
+    L-DOCUMENTS            (`_l_doc_pad_placement`)
+    the IO library those   the PDK TECH-view config the documents DELEGATE the
+    documents delegate to  IO cell library to (`_pad_ring.parse_pad_env_
+                           declarations`), read only when a document says so
+
+and it is the LOWEST of the three, so a slot file and a hand-written
+declaration both keep the behaviour they had.
+
+WHAT THE DESIGN'S DOCUMENTS DO NOT ANSWER, AND WHY IT IS NOT FILLED IN
+=====================================================================
+`PAD_SOUTH`/`PAD_EAST`/`PAD_NORTH`/`PAD_WEST` and `SIGNAL_MAP` are lists of
+NETLIST INSTANCES — upstream resolves each against the block. A document
+partitions PORTS, and the derived partition is carried in the report under
+`design_pad_partition` so a reader sees exactly what the design DID answer.
+It is NOT written into the config: naming instances that the netlist does not
+contain would be inventing the one thing this step exists to refuse to invent.
+Those two questions therefore stay OWED, and the step keeps refusing.
+
+AND THE NEAR MISS, REFUSED ON PURPOSE
+=====================================
+The pad-placement section states a minimum distance BETWEEN PADS on one side.
+`PAD_EDGE_SPACING` is the distance FROM THE DIE EDGE TO THE IO ROW. Different
+lengths, same unit. `_l_doc_pad_placement` parses the first, carries it as
+`min_pad_distance_um`, and nothing maps it to the second.
+
 TWO SOURCES, AND WHICH ONE WINS
 ===============================
     operator slot file    `input/submission_template/slots/*.yaml`
@@ -112,6 +149,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from _atomic_artefact import write_json as atomic_write_json
 
+import _l_doc_pad_placement as LDOC
 import _pad_ring as PR
 import _submission_template as ST
 import _tapeout_declaration as TD
@@ -200,7 +238,10 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
             "slot_files_unreadable": [],
             "declaration": None,
             "declaration_unreadable": None,
+            "design_documents": [],
+            "design_documents_unreadable": [],
         },
+        "design": None,
         "questions_total": len(_2B_KEYS),
         "questions_answered": 0,
         "questions_unanswered": sorted(_2B_KEYS),
@@ -296,6 +337,118 @@ def read_declaration(project: Path) -> Tuple[Optional[Dict[str, Any]],
     return doc, None
 
 
+#: The variables a PDK IO-library config may DECLARE, and which question each
+#: answers. Every one is a property of the IO CELL LIBRARY, which is what a
+#: design document delegates when it says the IO cells are the PDK's. The four
+#: per-side lists and `SIGNAL_MAP` are deliberately NOT here: they are netlist
+#: instances, and no PDK declares this design's instances.
+PDK_DELEGATED_VARS: Tuple[str, ...] = (
+    "PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_EDGE_SPACING",
+    "PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL", "PAD_ROTATION_CORNER",
+    "PAD_CORNER", "PAD_FILLERS",
+)
+
+#: Variables upstream spells as one whitespace-separated string and this
+#: flow's config contract spells as a list. Splitting on whitespace is a
+#: TRANSCRIPTION of one file format into another; no element is added, dropped
+#: or reordered, and an empty declaration stays empty rather than becoming a
+#: default.
+PDK_LIST_VARS: Tuple[str, ...] = ("PAD_FILLERS",)
+
+
+def read_design_documents(project: Path, pdk_root: Optional[str],
+                          pdk: Optional[str]
+                          ) -> Tuple[Dict[str, Dict[str, Any]],
+                                     Dict[str, Any]]:
+    """(by_var, record) — what the DESIGN'S OWN DOCUMENTS answer.
+
+    `by_var` carries only variables a document, or the IO library a document
+    DELEGATES to, actually states. `record` is everything a reader needs to
+    check that against the documents by hand: which files were scanned, which
+    section was read, the per-side PORT partition derived from it, and every
+    file and line a delegated value came from.
+
+    THE GATE, STATED ONCE: when no document states a pad placement, this
+    function contributes NOTHING — not the partition and not the delegated
+    library either, because a design that says nothing about its pad ring has
+    delegated nothing about it. A reader that always finds an answer is a
+    defaulter, and a defaulted pad ring is invented geometry.
+    """
+    record: Dict[str, Any] = {
+        "documents_scanned": [],
+        "documents_unreadable": [],
+        "placement": None,
+        "parameter_defaults": {},
+        "pad_partition_by_side": None,
+        "pad_partition_total": None,
+        "pad_partition_unresolved": [],
+        "pdk_io_library_configs": [],
+        "pdk_declarations": {},
+        "pdk_declarations_unresolved": [],
+        "pdk_declaration_conflicts": [],
+    }
+    by_var: Dict[str, Dict[str, Any]] = {}
+
+    placement, params, unreadable, scanned = LDOC.read_project_placement(project)
+    record["documents_scanned"] = scanned
+    record["documents_unreadable"] = unreadable
+    record["parameter_defaults"] = dict(params)
+    if placement is None:
+        return by_var, record
+    record["placement"] = placement.as_dict()
+
+    ports, unresolved = LDOC.expand_side_ports(placement, params)
+    record["pad_partition_unresolved"] = unresolved
+    if not unresolved:
+        record["pad_partition_by_side"] = {s: list(v) for s, v in ports.items()}
+        record["pad_partition_total"] = sum(len(v) for v in ports.values())
+
+    if not placement.delegates_io_library_to_pdk:
+        return by_var, record
+
+    declared: Dict[str, Dict[str, Any]] = {}
+    for cfg in PR.discover_io_library_configs(pdk_root, pdk):
+        try:
+            text = cfg.read_text(errors="replace")
+        except OSError as exc:
+            record["documents_unreadable"].append(
+                {"file": str(cfg), "reason": str(exc)})
+            continue
+        record["pdk_io_library_configs"].append(str(cfg))
+        for var, (value, line) in PR.parse_pad_env_unresolved(text).items():
+            if var in PDK_DELEGATED_VARS:
+                # The library DOES declare it, in terms only Tcl can expand.
+                # Recorded so the variable is reported as unread rather than
+                # as absent, and left unanswered either way.
+                record["pdk_declarations_unresolved"].append(
+                    {"variable": var, "source": f"{cfg}:{line}", "raw": value})
+        for var, (value, line) in PR.parse_pad_env_declarations(text).items():
+            if var not in PDK_DELEGATED_VARS:
+                continue
+            prior = declared.get(var)
+            if prior is not None and prior["raw"] != value:
+                # Two IO libraries in one tree declaring one variable two
+                # ways: which one this run uses is not something this program
+                # can decide, and picking by directory order would decide it
+                # silently.
+                record["pdk_declaration_conflicts"].append(
+                    {"variable": var, "first": prior["source"],
+                     "first_value": prior["raw"],
+                     "second": f"{cfg}:{line}", "second_value": value})
+                continue
+            declared[var] = {"raw": value, "source": f"{cfg}:{line}"}
+
+    for var, rec in declared.items():
+        value: Any = rec["raw"]
+        if var in PDK_LIST_VARS:
+            value = [tok for tok in rec["raw"].split() if tok]
+        by_var[var] = {"value": value,
+                       "source": f"pdk io library {rec['source']}"}
+        record["pdk_declarations"][var] = {"value": value,
+                                           "source": rec["source"]}
+    return by_var, record
+
+
 # --------------------------------------------------------------------------- #
 # the merge
 # --------------------------------------------------------------------------- #
@@ -324,13 +477,23 @@ def _mapping_answer(value: Any, pairs: Tuple[Tuple[str, str], ...],
 
 
 def compose(slot_vars: Dict[str, Dict[str, Any]],
-            declaration: Optional[Dict[str, Any]]
+            declaration: Optional[Dict[str, Any]],
+            design_vars: Optional[Dict[str, Dict[str, Any]]] = None
             ) -> Tuple[Dict[str, Any], Dict[str, str], List[str], List[str]]:
     """(config, provenance, answered_questions, owed).
 
-    Nothing is derived. Every value in `config` came verbatim from a slot file
-    or from the declaration, and `provenance` says which for every variable.
+    Nothing is invented. Every value in `config` came verbatim from a slot
+    file, from the declaration, or from a document the design itself wrote
+    (or the IO library that document delegates to), and `provenance` says
+    which for every variable.
+
+    PRECEDENCE, highest first: the operator's slot, the design's own tape-out
+    declaration, the design's documents. The documents are LAST on purpose —
+    a tree that already carries either of the other two behaves exactly as it
+    did before this source existed.
     """
+    design_vars = design_vars or {}
+    from_design: set = set()
     config: Dict[str, Any] = {}
     provenance: Dict[str, str] = {}
     answered: List[str] = []
@@ -370,8 +533,23 @@ def compose(slot_vars: Dict[str, Dict[str, Any]],
             elif var in declared_here:
                 config[var] = declared_here[var]
                 provenance[var] = f"declaration answer {question}"
+            elif var in design_vars:
+                config[var] = design_vars[var]["value"]
+                provenance[var] = design_vars[var]["source"]
+                from_design.add(var)
             else:
                 owed.append(f"{var} (declaration question {question})")
+
+        # A question the DESIGN'S DOCUMENTS answered counts as answered only
+        # when EVERY variable behind it resolved. A source that states four of
+        # a question's five variables has not answered it, and counting it
+        # would make the report claim more was known than is. The declaration
+        # keeps its own rule above — a declaration somebody STARTED and left
+        # must stay distinguishable from one nobody was asked.
+        if (question not in answered
+                and any(v in from_design for v in variables)
+                and all(v in config for v in variables)):
+            answered.append(question)
     return config, provenance, answered, owed
 
 
@@ -383,6 +561,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help=f"report destination (default {REPORT_REL})")
     ap.add_argument("--out", default=None,
                     help=f"config destination (default {PR.ASSIGNMENT_REL})")
+    ap.add_argument("--pdk-root", default=None,
+                    help="PDK root; only read when a design document DELEGATES "
+                         "the IO cell library to the PDK. Absent means the "
+                         "delegated variables stay unanswered, never defaulted.")
+    ap.add_argument("--pdk", default=None, help="PDK tree name under --pdk-root")
     args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
@@ -396,7 +579,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     slot_vars, slot_unreadable, unsided, slot_files = read_slot_pad_lists(project)
     declaration, decl_why = read_declaration(project)
-    config, provenance, answered, owed = compose(slot_vars, declaration)
+    design_vars, design = read_design_documents(project, args.pdk_root, args.pdk)
+    config, provenance, answered, owed = compose(slot_vars, declaration,
+                                                 design_vars)
 
     sources = {
         "slot_files": slot_files,
@@ -405,8 +590,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "declaration": (TD.DECLARATION_REL
                         if declaration is not None else None),
         "declaration_unreadable": decl_why,
+        "design_documents": design["documents_scanned"],
+        "design_documents_unreadable": design["documents_unreadable"],
     }
     common = dict(sources=sources,
+                  design=design,
                   questions_answered=len(answered),
                   questions_unanswered=sorted(set(_2B_KEYS) - set(answered)),
                   provenance=provenance)
@@ -444,6 +632,32 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"than absent: {decl_why}",
             [_finding("ERROR", "DECLARATION_UNREADABLE", decl_why)], 1)
 
+    if design["documents_unreadable"]:
+        named = "; ".join(f"{u['file']} ({u['reason']})"
+                          for u in design["documents_unreadable"])
+        return _emit(
+            "REFUSE",
+            f"{len(design['documents_unreadable'])} design input document(s) "
+            f"could not be read or state something this program will not "
+            f"interpret, so what the design says about its pad ring is "
+            f"UNKNOWN rather than absent: {named}",
+            [_finding("ERROR", "DESIGN_DOCUMENT_UNREADABLE", named)], 1)
+
+    if design["pdk_declaration_conflicts"]:
+        named = "; ".join(
+            f"{c['variable']}: {c['first']}={c['first_value']!r} vs "
+            f"{c['second']}={c['second_value']!r}"
+            for c in design["pdk_declaration_conflicts"])
+        return _emit(
+            "REFUSE",
+            f"the design's documents delegate the IO cell library to the PDK "
+            f"and the PDK tree declares the same pad variable two different "
+            f"ways in two IO libraries. Nothing here can say which library "
+            f"this run uses, and choosing by directory order would choose it "
+            f"silently: {named}",
+            [_finding("ERROR", "PDK_IO_LIBRARY_DECLARATION_CONFLICT", named)],
+            1)
+
     if unsided:
         named = "; ".join(f"{u['file']} key {u['key']} ({u['count']} pad(s))"
                           for u in unsided)
@@ -471,7 +685,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             [_finding("ERROR", "SLOT_PAD_LIST_CONFLICT", named)], 1)
 
     # ── nobody was asked ───────────────────────────────────────────────────
-    if not answered and not slot_vars:
+    if not answered and not slot_vars and not design_vars:
         reason = (
             f"NOT_ASKED: no source answers any of the "
             f"{len(_2B_KEYS)} questions of declaration section "
@@ -500,7 +714,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     #   design whatever the operator published.
     if owed:
         named = "; ".join(owed)
-        if answered:
+        if answered and design_vars:
+            started = (f"section {TD.SECTION_PAD_RING} is now "
+                       f"{len(answered)} of {len(_2B_KEYS)} answered, "
+                       f"{len(design_vars)} variable(s) of it read out of the "
+                       f"design's own documents and the IO cell library those "
+                       f"documents delegate to")
+            note = ""
+            if design.get("pad_partition_by_side"):
+                sides = design["pad_partition_by_side"]
+                note = (
+                    f" THE DESIGN DID ANSWER THE PARTITION: "
+                    f"{design['pad_partition_total']} pads, "
+                    + ", ".join(f"{k} {len(v)}" for k, v in sorted(sides.items()))
+                    + f", from {design['placement']['source']} section "
+                    f"{design['placement']['heading']!r}. What is still owed "
+                    f"is not a design statement: the four side lists and "
+                    f"SIGNAL_MAP name NETLIST INSTANCES, upstream resolves "
+                    f"each against the block, and no document can name an "
+                    f"instance the netlist does not contain. The partition is "
+                    f"in this report under `design.pad_partition_by_side`; it "
+                    f"is NOT written into the config, because writing "
+                    f"instance names for pads that do not exist would put "
+                    f"invented geometry into an artefact.")
+        elif answered:
             started = (f"declaration section {TD.SECTION_PAD_RING} was STARTED "
                        f"({len(answered)} of {len(_2B_KEYS)} question(s) "
                        f"answered)")
