@@ -113,3 +113,39 @@ def test_an_unrelated_port_is_untouched():
     """`vbg` beside `vdd` is edit-distance 2 and was never in scope; pinned so
     a future widening of the predicate has to notice it."""
     assert _dedupe(["vdd", "vbg"]) == ["vdd", "vbg"]
+
+
+# ── 3. two regexes in one file disagreeing about what a heading is ───────────
+def _heading_re():
+    import phase1_doc_one_shot_runner as R
+    return R._RE_L1_BULLET_PORT_HEADING
+
+
+def test_an_ATX_heading_opens_a_port_block():
+    """`_RE_DIRECTIONAL_PORT_HEADING` in the SAME file already opens on
+    `## Inputs`; this one began `(?im)^\\s*` and never matched a markdown
+    heading. So a spec writing `Pins:` had its ports read and the same spec
+    writing `## Pins` — the commonest form there is — had none. Measured on
+    identical bullet text under each heading, end to end through
+    `phase1_one_shot_runner`: `Pins:` gave 4 pins and `## Pins` gave 0; both
+    give 4 now."""
+    rx = _heading_re()
+    for form in ("## Pins", "## Ports", "## Signals", "## Interface",
+                 "### I/O ports", "**Pins**"):
+        assert rx.search(form), form
+
+
+def test_the_plain_forms_still_open_one():
+    """The prefix is optional; nothing that worked may stop working."""
+    rx = _heading_re()
+    for form in ("Pins:", "Ports:", "Top-level ports:",
+                 "Top-level (FPGA bare-board) ports:"):
+        assert rx.search(form), form
+
+
+def test_a_documentation_section_still_does_not():
+    """The heading must still name a port list and nothing else — the arm that
+    accepted any trailing words harvested feature lists as phantom ports."""
+    rx = _heading_re()
+    for form in ("Output format:", "Pin assignment notes", "Some other heading"):
+        assert not rx.search(form), form
