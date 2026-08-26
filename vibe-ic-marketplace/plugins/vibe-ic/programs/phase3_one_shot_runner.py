@@ -11289,7 +11289,14 @@ def _signoff_regen(artifact: Path, *layouts: Path) -> bool:
 
 
 def step_synth(project: Path, top: str, pdk: PdkConfig,
-               container: str) -> StepResult:
+               container: str,
+               period_relax: float = 1.0) -> StepResult:
+    """Synthesise, and compare the result against the die the design declares.
+
+    `period_relax` is the ONE knob the area loop turns. At its default of 1.0
+    every yosys command below is byte-identical to what it was, so a run that
+    never overflows its die cannot tell this parameter exists.
+    """
     t0 = time.time()
     all_rtl = sorted((_pl.rtl_dir(project)).glob("*.sv")) + \
               sorted((_pl.rtl_dir(project)).glob("*.v"))
@@ -11453,6 +11460,11 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     except Exception:
         pass
     _period_ps = _sdc_period_ps(project)
+    # THE AREA LOOP'S ACTUATION. Relaxing the ABC timing target is what makes
+    # ABC pick smaller, slower cells; at the default 1.0 this is a no-op and
+    # `_period_ps` is exactly what the SDC says.
+    if period_relax != 1.0 and _period_ps:
+        _period_ps = int(round(_period_ps * period_relax))
     # v1.5.x — SYNTHESIS don't-use + timing-driven ABC (chip/PDK-AGNOSTIC).
     # (1) Feed the PDK's OWN synth_excluded.cells (librelane) to abc + dfflibmap
     #     so DATA logic is never mapped onto clock / delay / low-power-isolation
@@ -11942,6 +11954,55 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         else:
             _atail = ((_acp.stdout or "") + (_acp.stderr or "")).strip()[-600:]
             if _acp.returncode == 1:
+                # ── THE AREA LOOP, step 9 -> 1 ──────────────────────────────
+                #
+                # The flow has declared this edge since the closed-loop census
+                # existed, and NOTHING re-entered: `closed_loop_executable_
+                # coverage_check` read EXECUTABLE=0 over 18 DECLARED_ONLY edges
+                # because every one of them stopped here, at a verdict.
+                #
+                # This edge is the one that needs no candidate-rewrite executor.
+                # The comparator exists, this runner already spawns it, and its
+                # trigger already blocks — what was missing was only the
+                # re-entry. So: re-synthesise ONCE with the ABC timing target
+                # relaxed, re-measure, and adopt the result only if it is both
+                # smaller and inside the budget.
+                #
+                # BOUNDED AT ONE, and `period_relax != 1.0` is what stops the
+                # recursion: the retry cannot re-enter itself, so there is no
+                # counter to leak and no `--max-eco` to tune.
+                _area_retry = None
+                if period_relax == 1.0:
+                    _budget = _area_budget_um2(project)
+                    _before = _synth_chip_area(project)
+                    _synth_evidence.append(
+                        f"area over budget at period_relax=1.0: "
+                        f"chip_area={_before} budget={_budget}")
+                    _area_retry = step_synth(
+                        project, top, pdk, container,
+                        period_relax=AREA_RETRY_PERIOD_RELAX)
+                    _after = _synth_chip_area(project)
+                    if area_retry_is_worth_adopting(_before, _after, _budget):
+                        # ADOPTED. The retry's artefacts are already on disk in
+                        # place of the first attempt's — re-running synthesis
+                        # overwrites them — so adoption is the absence of a
+                        # revert, and the returned StepResult is the retry's.
+                        _area_retry.evidence.append(
+                            f"AREA LOOP ADOPTED: {_before} -> {_after} um2, "
+                            f"budget {_budget}, at "
+                            f"period_relax={AREA_RETRY_PERIOD_RELAX}")
+                        return _area_retry
+                    # NOT ADOPTED. Unlike the ECO, re-synthesis has already
+                    # overwritten the first netlist, so declining to adopt
+                    # cannot be done by leaving files alone — it is done by
+                    # REFUSING THE VERDICT. The step stays FAIL and says what
+                    # the retry measured, so nobody reads a relaxed-timing
+                    # netlist as a repair that worked.
+                    _atail = (f"{_atail} AREA LOOP RAN AND DID NOT REPAIR: "
+                              f"chip_area {_before} -> {_after} um2 against a "
+                              f"budget of {_budget} at "
+                              f"period_relax={AREA_RETRY_PERIOD_RELAX}; the "
+                              f"relaxed-timing netlist is NOT adopted as a fix")
                 return StepResult(
                     "synth", "FAIL", time.time() - t0,
                     f"netlist={netlist.name} cells={cell_count} "
@@ -11950,7 +12011,9 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                     f"be placed at any utilisation. {_atail}",
                     _synth_evidence,
                     extras={"synth_frontend": synth_frontend,
-                            "area_budget_rc": 1})
+                            "area_budget_rc": 1,
+                            "area_loop_ran": _area_retry is not None,
+                            "area_loop_adopted": False})
             _area_verdict = (" area_budget=ok" if _acp.returncode == 0
                              else f" area_budget=INCOMPLETE(rc={_acp.returncode})")
     return StepResult("synth", "PASS", time.time() - t0,
@@ -35527,6 +35590,101 @@ def _post_route_tns_zero(sta_rpt: Path) -> bool:
 #: regression. `1e-9` is one picosecond — below any real repair effect and
 #: above float noise on nanosecond quantities.
 ECO_REGRESSION_EPSILON_NS = 1e-9
+
+
+#: How far the ABC timing target is relaxed on the one area retry.
+#:
+#: WHY RELAXING TIMING IS THE RIGHT KNOB, and why it is the ONLY one turned.
+#: `abc -D <period_ps>` is a timing target: the tighter it is, the larger and
+#: faster the cells ABC picks. A design that overflows its declared die is
+#: asking for the other end of that trade, and this is the one parameter in the
+#: synthesis command that moves area without touching the design's meaning.
+#: Flattening, don't-use sets and the arithmetic pre-pass all change WHAT is
+#: synthesised; this changes only how hard ABC works to make it fast.
+#:
+#: 1.5x is a starting point, not a tuned constant, and it is deliberately a
+#: SINGLE step rather than a search: this repository has no candidate-rewrite
+#: executor and a search would need one. One bounded retry either fits or
+#: reports honestly that it did not.
+AREA_RETRY_PERIOD_RELAX = 1.5
+
+
+def _area_budget_um2(project: Path):
+    """The die area the design DECLARES, in um2, or None.
+
+    Delegates to `area_total_vs_budget_check.read_ceiling` rather than parsing
+    `L19.die_area_budget_um` again. The comparator that decides the trigger and
+    the loop that answers it must read the SAME number from the SAME place — a
+    second parser is a second answer, and the loop would then be repairing
+    against a budget the gate does not use.
+    """
+    try:
+        import area_total_vs_budget_check as _a      # noqa: PLC0415
+        ceiling = _a.read_ceiling(project)[0]
+    except Exception:                                 # noqa: BLE001
+        return None
+    return ceiling if isinstance(ceiling, (int, float)) else None
+
+
+def _synth_chip_area(project: Path):
+    """The synthesised cell area this run last wrote, in um2, or None.
+
+    Same delegation, same reason. `read_areas` returns every area artefact it
+    found; the loop wants the one figure the comparator would have judged, so
+    it takes the first — which is the order the comparator itself uses.
+    """
+    try:
+        import area_total_vs_budget_check as _a      # noqa: PLC0415
+        rows = _a.read_areas(project)
+    except Exception:                                 # noqa: BLE001
+        return None
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        # THE FIGURE AND ITS UNIT TRAVEL TOGETHER — `read_areas` says so in its
+        # own docstring and carries `unit_established: False` rather than
+        # dropping an unlabelled figure. Comparing two areas whose units were
+        # never established would produce a ratio with no meaning, so an
+        # unestablished row is skipped here rather than silently trusted.
+        if not row.get("unit_established"):
+            continue
+        v = row.get("chip_area")
+        if isinstance(v, (int, float)):
+            return v
+    return None
+
+
+def area_retry_is_worth_adopting(area_before, area_after, budget) -> bool:
+    """Should the area-relaxed re-synthesis REPLACE the first netlist?
+
+    THE SAME SHAPE AS `eco_result_is_a_regression`, AND FOR THE SAME REASON.
+    A repair step is the one place where "it ran without erroring" and "it
+    helped" are DIFFERENT questions, and the ECO learned that the expensive
+    way: an ECO that made setup 12x worse was written down as applied and its
+    artefacts adopted over the better pre-ECO ones, because the before and
+    after sat adjacent in a record and were never SUBTRACTED.
+
+    So the retry is adopted only when it is BOTH smaller than the first attempt
+    AND inside the budget. Both halves are load-bearing:
+
+      * smaller alone is not enough — a retry that shaves 2% off a netlist that
+        overflows by 40% has not repaired anything, and adopting it would trade
+        the design's timing target for a fit it did not achieve;
+      * inside-budget alone is not enough either, because a retry that somehow
+        came back LARGER and still fit would mean the first attempt fit too,
+        and the trigger was wrong rather than the netlist.
+
+    A missing figure on either side is NOT an improvement. "We could not
+    compare" and "it got better" are different facts, and treating the first as
+    the second adopts a result nobody measured.
+    """
+    if not isinstance(area_before, (int, float)):
+        return False
+    if not isinstance(area_after, (int, float)):
+        return False
+    if not isinstance(budget, (int, float)) or budget <= 0:
+        return False
+    return area_after < area_before and area_after <= budget
 
 
 def eco_result_is_a_regression(delta_ns, delta_is_comparable: bool) -> bool:
