@@ -619,6 +619,31 @@ steps:
         # writing provenance these begin firing with no further change.
         - advisory_program_exit_zero: "phase1_provenance_presence_check phase1/generated_docs"
         - advisory_program_exit_zero: "input_docs_coverage_check ."
+        # WHAT THE COVERAGE NUMBER ABOVE IS EARNED BY. The runner prints
+        # "Coverage (overall): 100.0%" and `extraction_patterns.json` says in
+        # its own header that it is the denominator. A literal is credited when
+        # its verbatim string appears anywhere in the L*.json payload — and
+        # several L fields carry the input PROSE unchanged (`L2.frs_sections`,
+        # `L8.auto_discovered_literals`, `extraction_evidence`). A literal
+        # sitting in one of those was copied, not extracted, and still counts.
+        #
+        # Measured on a 4-channel PWM written as a plain-English spec: 35
+        # denominator, 100.0% reported, and EIGHT credited only by a
+        # verbatim-prose field — four invented trim constants plus `25 MHz`,
+        # `98 kHz`, `760 Hz`, `3.3 V`. Structured-only: 27/35 = 77.1%.
+        #
+        # `25 MHz` is the one that matters. The same run emitted
+        # `L8.clock_mhz = 10.0` — the SPI clock, from the same sentence — so
+        # the coverage metric certified as extracted the very number the
+        # extractor got wrong.
+        #
+        # ADVISORY because the structured-only figure is lower than the
+        # published one on EVERY project by construction, so refusing on it
+        # would redden every tree at once over debt it did not create.
+        # Measured across three: 77.1%, 86.2%, and 100.0% on the arm fed a
+        # structured YAML — so it discriminates rather than always complaining.
+        # Promote it when the two figures agree.
+        - advisory_program_exit_zero: "extraction_credited_by_prose_only_check . --json reports/phase1/extraction_credited_by_prose_only.json"
         # ADVISORY, and `--strict` is load-bearing: without it every WARN exits
         # 0 and the gate cannot fail at all — a blocking gate that cannot fail
         # is a fake gate, so it is wired strict AND advisory rather than
