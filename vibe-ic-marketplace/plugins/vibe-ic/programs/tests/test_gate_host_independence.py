@@ -94,9 +94,10 @@ def _counter_repo(tmp_path: Path, *, ignore_dat: bool, name: str = "r") -> Path:
     a gate whose verdict is a function of what is lying on this disk rather
     than of what the commit carries.
 
-    A SCRIPT FILE, not `python3 -c "..."`: the expander splits on whitespace
-    exactly as the real gates need, so a quoted argument containing spaces
-    would be a fixture artefact rather than a property of the subject.
+    A SCRIPT FILE, not `python3 -c "..."`: this fixture is about a gate that
+    reads the disk, and an inline program would put the subject in the argv.
+    Quoted arguments containing spaces are a real property of the declarations
+    (`--marker "RULE 0"`) and are covered by their own tests below.
     """
     r = _repo_with(tmp_path, 'run "counter" "$ROOT" python3 counter.py\n',
                    name=name)
@@ -1136,3 +1137,110 @@ def test_an_unset_pointer_leaves_the_vocabulary_unchanged(monkeypatch,
     monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", "   ")
     assert G._compare_roots(tmp_path / "a", tmp_path / "b") == (
         tmp_path / "a", tmp_path / "b")
+
+
+# --------------------------------------------------------------------------
+# THE ARGV IS RECONSTRUCTED THE WAY THE SHELL BUILDS IT, AND NORMALISED WITH
+# THE RULER THE PRODUCER USED
+#
+# Both were measured on 58514abe8, isolated, 3 runs of 3: three declared gates
+# reported `CHECKOUT_ATTESTATION_WRONG_COMMAND` while both sides held the
+# identical command. Two of them carry a quoted multi-word argument; the third
+# is the first probed gate to combine cwd `$PLUGIN` with an absolute `$PG/`
+# path. Neither declaration is wrong — the probe's reconstruction was.
+# --------------------------------------------------------------------------
+def _attest_the_dispatcher_way(path: Path, label: str, output: str,
+                               argv: list, root: Path, wd: Path) -> None:
+    """Arm A exactly as `_gate_dispatch.sh` writes it: `--root ROOT --root wd`."""
+    A.append_private_jsonl(path, A.process_attestation(
+        label, output, 0, argv, roots=(root, wd)))
+
+
+def test_a_quoted_multiword_argument_stays_ONE_argument(tmp_path):
+    r = _repo_with(
+        tmp_path,
+        'run "marked" "$ROOT" python3 marked.py --marker "RULE 0"\n',
+        untracked=True)
+    (r / "marked.py").write_text("print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "-C", str(r), "add", "marked.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "marked"], check=True)
+
+    real = ["python3", "marked.py", "--marker", "RULE 0"]
+    assert G._expand('python3 marked.py --marker "RULE 0"', r) == real, (
+        "the reconstruction split a quoted argument the shell keeps whole")
+
+    att = tmp_path / "outer.jsonl"
+    _attest_the_dispatcher_way(att, "marked", "[PASS] 1 item examined\n",
+                               real, r, r)
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "PASS", res.findings
+
+
+def test_a_RECORD_FOR_A_DIFFERENT_COMMAND_IS_STILL_REFUSED(tmp_path):
+    """The control for the test above: the check must still be able to say no."""
+    r = _repo_with(
+        tmp_path,
+        'run "marked" "$ROOT" python3 marked.py --marker "RULE 0"\n',
+        untracked=True)
+    (r / "marked.py").write_text("print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "-C", str(r), "add", "marked.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "marked"], check=True)
+
+    att = tmp_path / "outer.jsonl"
+    _attest_the_dispatcher_way(
+        att, "marked", "[PASS] 1 item examined\n",
+        ["python3", "marked.py", "--marker", "RULE 0", "--and-one-more"], r, r)
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "FAIL", res
+    assert [f["kind"] for f in res.findings] == [
+        "CHECKOUT_ATTESTATION_WRONG_COMMAND"], res.findings
+
+
+def _plugin_scoped_repo(tmp_path: Path) -> Path:
+    r = tmp_path / "p"
+    plug = r / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+    (plug / "programs").mkdir(parents=True)
+    (r / "tools" / "ci").mkdir(parents=True)
+    (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        'run "plugin-scoped" "$PLUGIN" python3 "$PG/subject_check.py"\n')
+    (plug / "programs" / "subject_check.py").write_text(
+        "print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(r), "config", k, v], check=True)
+    subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "base"], check=True)
+    (r / "stray.txt").write_text("x\n")
+    return r
+
+
+def test_a_PLUGIN_scoped_gates_absolute_argv_is_not_a_wrong_command(tmp_path):
+    r = _plugin_scoped_repo(tmp_path)
+    plug = r / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+    real = ["python3", str(plug / "programs" / "subject_check.py")]
+    assert G._expand('python3 "$PG/subject_check.py"', r) == real
+
+    # NOT VACUOUS: the two vocabularies really do disagree about these bytes,
+    # which is the whole defect. `<TREE>/programs/x.py` against
+    # `<TREE>/vibe-ic-marketplace/plugins/vibe-ic/programs/x.py`.
+    assert (A.argv_sha256(real, roots=(r, plug))
+            != A.argv_sha256(real, roots=(r,))), (
+        "fixture no longer exercises the two-ruler case")
+
+    att = tmp_path / "outer.jsonl"
+    _attest_the_dispatcher_way(att, "plugin-scoped",
+                               "[PASS] 1 item examined\n", real, r, plug)
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "PASS", res.findings
+
+
+def test_a_declaration_the_shell_cannot_split_is_NAMED_not_a_crash(tmp_path):
+    r = _repo_with(tmp_path, 'run "ragged" "$ROOT" python3 ragged.py --m "x\n',
+                   untracked=True)
+    (r / "ragged.py").write_text("print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "-C", str(r), "add", "ragged.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "ragged"], check=True)
+
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "FAIL", res
+    assert [f["kind"] for f in res.findings] == ["GATE_UNRUNNABLE"], res.findings

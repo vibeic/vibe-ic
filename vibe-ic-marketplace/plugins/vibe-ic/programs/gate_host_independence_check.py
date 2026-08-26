@@ -121,6 +121,7 @@ import concurrent.futures
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -311,16 +312,36 @@ def inert_exclusions(script: Path) -> List[Tuple[int, str]]:
 
 
 def _expand(cmd: str, root: Path) -> List[str]:
-    c = cmd.replace('"$PG/', str(root / "vibe-ic-marketplace" / "plugins" /
-                                 "vibe-ic" / "programs") + "/")
-    c = c.replace('"$ROOT/', str(root) + "/").replace('"', "")
-    c = c.replace("$PLUGIN", str(root / "vibe-ic-marketplace" / "plugins" /
-                                 "vibe-ic"))
-    c = c.replace("$ROOT", str(root))
-    return c.split()
+    """The argv THE SHELL BUILDS from this declaration, quoting included.
+
+    SPLITTING ON WHITESPACE IS NOT WHAT THE SHELL DOES, and the difference is
+    not cosmetic: this argv is hashed and compared against the record the
+    dispatcher wrote from the REAL process, so a declaration carrying a quoted
+    argument with a space in it reconstructed here as two words is reported as
+    `CHECKOUT_ATTESTATION_WRONG_COMMAND` — the probe accusing the declaration
+    of a mismatch it invented itself — and, on the fresh arm, is RUN wrong.
+
+    MEASURED 2026-08-26 on 58514abe8, isolated and reproduced 3/3:
+
+        run "benchmark doctrine sections kept" "$PLUGIN" python3 \
+            "$PG/skill_doc_section_present_check.py" \
+            --doc skills/open-benchmark-methodology/SKILL.md \
+            --marker "RULE 0" --marker "GENERAL-CORE / THIN-ADAPTER"
+
+    became `--marker RULE 0 --marker GENERAL-CORE / THIN-ADAPTER` — seven words
+    where the shell passes four arguments. `shlex.split` is the shell's own
+    rule, so the quotes are now honoured instead of deleted.
+    """
+    c = (cmd.replace("$PG", str(root / "vibe-ic-marketplace" / "plugins" /
+                                "vibe-ic" / "programs"))
+            .replace("$PLUGIN", str(root / "vibe-ic-marketplace" / "plugins" /
+                                    "vibe-ic"))
+            .replace("$ROOT", str(root)))
+    return shlex.split(c)
 
 
-def _compare_roots(repo_root: Path, wt: Path) -> Tuple[Path, ...]:
+def _compare_roots(repo_root: Path, wt: Path,
+                   wd: Optional[Path] = None) -> Tuple[Path, ...]:
     """Every path that must become `<TREE>` before two arms are compared.
 
     THE ROOT SET IS HALF OF THE COMPARISON, AND THE TWO SIDES USED DIFFERENT
@@ -357,6 +378,20 @@ def _compare_roots(repo_root: Path, wt: Path) -> Tuple[Path, ...]:
     fixes and a suppression would hide.
     """
     roots = [repo_root, wt]
+    # AND THE THIRD ROOT THE PRODUCER USED. `_gate_dispatch.sh` normalises
+    # against `--root "${ROOT:-$wd}" --root "$wd"`, and `$wd` is `$PLUGIN` for
+    # every gate declared to run inside the plugin. `_replace_roots` takes the
+    # LONGEST match, so the dispatcher turns an absolute plugin path into
+    # `<TREE>/programs/x.py` while a root set of only (repo_root, wt) turns the
+    # same bytes into `<TREE>/vibe-ic-marketplace/plugins/vibe-ic/programs/x.py`
+    # — a difference in the RULER, reported as a difference in the SUBJECT.
+    #
+    # MEASURED 2026-08-26 on 58514abe8: `lessons corpus consistency`, the first
+    # probed gate to combine cwd `$PLUGIN` with an absolute `$PG/` argv, was
+    # reported CHECKOUT_ATTESTATION_WRONG_COMMAND on 3 of 3 isolated runs while
+    # both sides held the identical argv.
+    if wd is not None:
+        roots.append(wd)
     corpus = os.environ.get("VIBE_IC_BENCHMARK_DATA", "").strip()
     if corpus:
         roots.append(Path(corpus))
@@ -384,11 +419,18 @@ def _verdict_line(out: str) -> str:
 
 
 def _completed_attestation(label: str, proc: subprocess.CompletedProcess,
-                           argv: List[str], repo_root: Path, wt: Path) -> Dict:
-    """The structured verdict a host comparison consumes."""
+                           argv: List[str], repo_root: Path, wt: Path,
+                           wd: Optional[Path] = None) -> Dict:
+    """The structured verdict a host comparison consumes.
+
+    `wd` is THIS ARM'S working directory, so each arm normalises its own
+    `$PLUGIN` prefix exactly as the dispatcher normalised Arm A's — one
+    vocabulary on both sides, which is the whole precondition of comparing
+    them.
+    """
     return process_attestation(
         label, (proc.stdout or "") + (proc.stderr or ""), proc.returncode,
-        argv, roots=_compare_roots(repo_root, wt))
+        argv, roots=_compare_roots(repo_root, wt, wd))
 
 
 def _run_gate(argv: List[str], cwd: Path,
@@ -818,8 +860,20 @@ def audit(repo_root: Path, timeout: int = 600,
             # still alive to undo the write is THIS ONE, the one that sent it.
             before_dirty = _checkout_dirty_paths(repo_root)
             drive_exc: Optional[BaseException] = None
-            argv_a = _expand(cmd, repo_root)
-            argv_b = _expand(cmd, wt)
+            # A DECLARATION THE SHELL'S OWN SPLITTER CANNOT READ is not a
+            # pass and not a traceback: it gets the state a gate that cannot
+            # be driven already has, so the label stays named in the report.
+            try:
+                argv_a = _expand(cmd, repo_root)
+                argv_b = _expand(cmd, wt)
+            except ValueError as exc:
+                findings.append({
+                    "gate": label, "kind": "GATE_UNRUNNABLE",
+                    "detail": f"its declaration does not split into shell "
+                              f"words, so the argv it really runs is unknown: "
+                              f"{type(exc).__name__}: {str(exc)[:160]}",
+                    "checkout": "-", "worktree": "-"})
+                continue
             rec_a: Optional[Dict] = None
             rec_b: Optional[Dict] = None
             if checkout_records is not None:
@@ -834,7 +888,8 @@ def audit(repo_root: Path, timeout: int = 600,
                                    "nothing trustworthy to compare it with"),
                         "checkout": "NORECORD", "worktree": "NOT RUN"})
                     continue
-                expected_argv = argv_sha256(argv_a, roots=_compare_roots(repo_root, wt))
+                expected_argv = argv_sha256(
+                    argv_a, roots=_compare_roots(repo_root, wt, ca))
                 if rec_a.get("argv_sha256") != expected_argv:
                     findings.append({
                         "gate": label,
@@ -849,10 +904,10 @@ def audit(repo_root: Path, timeout: int = 600,
                 if rec_a is None:
                     a = _run_gate(argv_a, ca, timeout)
                     rec_a = _completed_attestation(
-                        label, a, argv_a, repo_root, wt)
+                        label, a, argv_a, repo_root, wt, ca)
                 b = _run_gate(argv_b, cb, timeout)
                 rec_b = _completed_attestation(
-                    label, b, argv_b, repo_root, wt)
+                    label, b, argv_b, repo_root, wt, cb)
             except (OSError, subprocess.SubprocessError) as exc:
                 drive_exc = exc
             # ALWAYS, not only on the exception path. A gate that writes into
@@ -962,9 +1017,9 @@ def audit(repo_root: Path, timeout: int = 600,
                         "worktree": _attestation_summary(rec_b)})
                     continue
                 rec_a2 = _completed_attestation(
-                    label, a2, argv_a, repo_root, wt)
+                    label, a2, argv_a, repo_root, wt, ca)
                 rec_b2 = _completed_attestation(
-                    label, b2, argv_b, repo_root, wt)
+                    label, b2, argv_b, repo_root, wt, cb)
                 va2, vb2 = rec_a2["verdict_line"], rec_b2["verdict_line"]
                 round2_differs = (
                     rec_a2["semantic_sha256"] != rec_b2["semantic_sha256"])
