@@ -222,6 +222,52 @@ STEP_NAME_TO_ID: Dict[str, Any] = {
 }
 
 
+def _normalise_step_id(step_id: Any) -> Any:
+    """The canonical form of a waiver's ``id``.
+
+    ``True == 1`` in Python, so a bool must never be allowed to match an int
+    id; and a digit STRING names the same step as the int, because the two
+    dialects have both been observed writing it. Anything else is returned
+    unchanged (``"A5"`` is an id in its own right)."""
+    if step_id is None or isinstance(step_id, bool):
+        return None
+    if isinstance(step_id, str):
+        text = step_id.strip()
+        if not text:
+            return None
+        return int(text) if text.isdigit() else text
+    return step_id
+
+
+def step_names_for_id(step_id: Any) -> Tuple[str, ...]:
+    """Every role name that resolves to ``step_id``, in declaration order.
+
+    THE INVERSE OF A MANY-TO-ONE MAP IS A SET, and this returns all of it.
+    Step 31 is ``drc`` AND ``lvs`` AND ``erc`` AND ``physical_verification``;
+    a caller handed only the first would consult one report step and read the
+    other three as "no evidence".
+
+    Empty tuple when no role name maps to the id — including for ``None`` and
+    for a bool. "This id names no step I know" is a REPORTABLE silence, never
+    a guess, exactly as :func:`resolve_step_name` returns None rather than a
+    default.
+
+    WHY IT EXISTS. ``waived_steps`` entries identify their step by canonical
+    flow step ID and carry no name (that is the shape both waiver synthesisers
+    in ``flow_compliance_check`` emit), while ``waiver_staleness`` — the
+    false-clean guard that refuses a waiver whose excused step actually ran —
+    asked only for a NAME. Measured on the withdrawn spm publish run, both of
+    its ENV_UNAVAILABLE cap-gap waivers answered ``condition unevaluable`` and
+    were honoured unconditionally. The vocabulary that maps the two spellings
+    already lived here; only its inverse was missing."""
+    wanted = _normalise_step_id(step_id)
+    if wanted is None:
+        return ()
+    return tuple(name for name, sid in STEP_NAME_TO_ID.items()
+                 if not isinstance(sid, bool) and sid == wanted
+                 and type(sid) is type(wanted))
+
+
 def resolve_step_name(name: Any) -> Optional[Any]:
     """The canonical flow step id for a runner-local role name, or None when
     the name is not a recognised role. None means "this waiver does not name a

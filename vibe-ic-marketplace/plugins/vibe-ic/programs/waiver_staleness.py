@@ -33,12 +33,27 @@ from a different run even when the step-status evidence is missing.
 The evidence is the flow's own phase-report `steps[] {name, status}` — a
 STRUCTURAL property of the run, never a chip-class literal. No design name, no
 chip id, no problem id appears anywhere in this module.
+
+WHICH STEP A WAIVER NAMES. Both spellings are read, never one. The ``waivers``
+dialect writes a role NAME (``{"step": "lvs"}``); the ``waived_steps`` dialect —
+the one BOTH auto-synthesisers in ``flow_compliance_check`` emit — writes only
+the canonical flow step ID (``{"id": 6}``). Asking for a name alone made every
+auto-generated waiver answer "condition unevaluable" and be honoured
+unconditionally, i.e. the guard was disarmed for exactly the class it exists
+for. ``_waiver_entries.step_names_for_id`` resolves the id through the one
+shared vocabulary; that map is many-to-one, so an id contributes EVERY role
+name and the positive-evidence rule above applies across all of them.
 """
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _waiver_entries as _we  # noqa: E402  (after sys.path bootstrap)
 
 _PROGRAM = "waiver_staleness"
 
@@ -170,7 +185,11 @@ def current_run_id(project: Path) -> Optional[str]:
 # ---------------------------------------------------------------------------
 def waiver_step_name(entry: Dict[str, Any]) -> str:
     """The step name an entry excuses — `step`, else `step_name`, else the
-    stamped condition's step. Empty string when the entry names no step."""
+    stamped condition's step. Empty string when the entry names no step.
+
+    NAME ONLY. An entry that identifies its step by `id` answers "" here and is
+    resolved by `waiver_step_names`; this function stays the literal reader so
+    an explicit spelling always wins over a resolved one."""
     for key in ("step", "step_name"):
         v = entry.get(key)
         if isinstance(v, str) and v.strip():
@@ -181,6 +200,34 @@ def waiver_step_name(entry: Dict[str, Any]) -> str:
         if isinstance(v, str) and v.strip():
             return v.strip()
     return ""
+
+
+def waiver_step_names(entry: Dict[str, Any]) -> List[str]:
+    """EVERY step this entry excuses, as report-step role names.
+
+    The written name first when there is one, then every role name the entry's
+    canonical flow step `id` resolves to. Both spellings are read, never one:
+    the flow's two waiver synthesisers emit `{"id": 6, ...}` with no name at
+    all, and asking only for a name made the guard below answer "condition
+    unevaluable" for the entire auto-generated waiver class — the class most
+    likely to be carried into a later run, which is the only situation this
+    module exists for.
+
+    The id map is MANY-TO-ONE (31 is drc/lvs/erc/physical_verification), so an
+    id contributes ALL of its role names and the caller's existing rule —
+    POSITIVE execution evidence anywhere is decisive — applies across them. An
+    id no role name maps to contributes nothing, so an unidentifiable entry
+    stays honestly unevaluable rather than being matched by a guess."""
+    if not isinstance(entry, dict):
+        return []
+    names: List[str] = []
+    written = waiver_step_name(entry)
+    if written:
+        names.append(written)
+    for candidate in _we.step_names_for_id(entry.get("id")):
+        if candidate not in names:
+            names.append(candidate)
+    return names
 
 
 def is_env_unavailable(entry: Dict[str, Any]) -> bool:
@@ -200,7 +247,11 @@ def stamp(entry: Dict[str, Any], project: Path,
     if not is_env_unavailable(entry):
         return entry
     out = dict(entry)
-    step = step_name or waiver_step_name(out)
+    # The RESOLVED name, not just the written one: an id-only entry used to be
+    # stamped `"step": ""`, which is the shape a reviewer reads as "this waiver
+    # names nothing" and the shape the consumer below could not evaluate.
+    resolved = waiver_step_names(out)
+    step = step_name or (resolved[0] if resolved else "")
     out["_waiver_condition"] = {
         "kind": CONDITION_STEP_DID_NOT_EXECUTE,
         "step": step,
@@ -227,23 +278,32 @@ def condition_holds(entry: Dict[str, Any], project: Path
         return True, "not a waiver entry"
     if not is_env_unavailable(entry):
         return True, "not an ENV_UNAVAILABLE waiver — no run-condition attached"
-    step = waiver_step_name(entry)
-    if not step:
-        return True, "ENV_UNAVAILABLE waiver names no step — condition unevaluable"
-    ran = step_executed(project, step)
-    if ran is True:
-        status = step_execution_status(project, step)
-        cond = entry.get("_waiver_condition")
-        issued = (cond or {}).get("run_id") if isinstance(cond, dict) else None
-        return False, (
-            f"STALE WAIVER REFUSED: step '{step}' actually EXECUTED in this run "
-            f"(status={status!r}), so the ENV_UNAVAILABLE condition "
-            f"'{CONDITION_STEP_DID_NOT_EXECUTE}' no longer holds"
-            + (f" (waiver issued under run {issued!r})" if issued else "")
-            + ". The step's real verdict stands — a failure is NOT excused.")
-    if ran is False:
-        return True, f"step '{step}' still reports a did-not-run status — condition holds"
-    return True, f"no execution evidence for step '{step}' — condition assumed to hold"
+    steps = waiver_step_names(entry)
+    if not steps:
+        return True, ("ENV_UNAVAILABLE waiver names no step and carries no "
+                      "resolvable step id — condition unevaluable")
+    did_not_run: Optional[str] = None
+    for step in steps:
+        ran = step_executed(project, step)
+        if ran is True:
+            status = step_execution_status(project, step)
+            cond = entry.get("_waiver_condition")
+            issued = ((cond or {}).get("run_id")
+                      if isinstance(cond, dict) else None)
+            return False, (
+                f"STALE WAIVER REFUSED: step '{step}' actually EXECUTED in this "
+                f"run (status={status!r}), so the ENV_UNAVAILABLE condition "
+                f"'{CONDITION_STEP_DID_NOT_EXECUTE}' no longer holds"
+                + (f" (waiver issued under run {issued!r})" if issued else "")
+                + ". The step's real verdict stands — a failure is NOT excused.")
+        if ran is False and did_not_run is None:
+            did_not_run = step
+    if did_not_run is not None:
+        return True, (f"step '{did_not_run}' still reports a did-not-run "
+                      f"status — condition holds")
+    return True, (f"no execution evidence for step(s) "
+                  f"{', '.join(repr(s) for s in steps)} — condition assumed "
+                  f"to hold")
 
 
 def filter_honorable(entries: List[Dict[str, Any]], project: Path
