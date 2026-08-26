@@ -69,6 +69,8 @@ import {
 import { antennaRepairTcl } from "./lib/pnr_antenna.mjs";
 import { threadCountTcl } from "./lib/pnr_threads.mjs";
 import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
+import { gateManifestEntry } from "./lib/manifest_metrics.mjs";
+import { parseWns, parseTns } from "./lib/sta_slack.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -115,10 +117,19 @@ function _edaOpenroadThreadsToken() {
 
 // Helper: write result manifest (P0 improvement)
 // After each PASS, records the latest result so reviewers never pick up stale logs
+//
+// A manifest may record `status:"PASS"` only when the metrics that prove the
+// work happened are present. `gateManifestEntry` (src/lib/manifest_metrics.mjs)
+// holds the per-step declaration of what those metrics are; a PASS whose
+// required metrics are absent is rewritten to INCONCLUSIVE here, naming the
+// metrics that are missing. INCONCLUSIVE is neither a pass nor a failure: it
+// says we did not measure this. Every call site goes through this function, so
+// the rule cannot be forgotten at a new one — a step with no declaration is
+// simply not gated. Returns the entry as it was actually recorded.
 function writeManifest(workDir, entry) {
   const manifest = {
     timestamp: new Date().toISOString(),
-    ...entry,
+    ...gateManifestEntry(entry),
   };
   const manifestJson = JSON.stringify(manifest, null, 2);
   // Append to latest_results.jsonl (one JSON per line, newest last)
@@ -129,6 +140,7 @@ function writeManifest(workDir, entry) {
     .join("\\n");
   const ymlCmd = `echo -e '${ymlLines}\\n---' >> ${workDir}/latest_results.yml`;
   dockerExec(`${appendCmd} && ${ymlCmd}`, 5000);
+  return manifest;
 }
 
 // Helper: SHA-256 of a host-side file (used for provenance hashing)
@@ -1861,13 +1873,14 @@ EOF`;
     const result = dockerExec(staCmd);
     const durationStaMs = Date.now() - t0sta;
 
-    // MEASURED: OpenSTA's `report_wns` prints `wns max 0.00` - a KEYWORD sits
-    // between the label and the number. The previous `/wns\s+([\d.-]+)/i` needed
-    // a digit immediately after the label, so it matched NEITHER a clean run
-    // (`wns max 0.00`) NOR a violating one (`wns max -3.21`). This tool has
-    // never reported a slack number; `wns` and `tns` were null on every path.
-    const wnsMatch = result.output.match(/^wns\s+\w+\s+(-?[\d.]+)/mi);
-    const tnsMatch = result.output.match(/^tns\s+\w+\s+(-?[\d.]+)/mi);
+    // MEASURED: OpenSTA prints `wns max 0.00`. The old /wns\s+([\d.-]+)/
+    // required a digit straight after the label, so it matched NEITHER a clean
+    // run (`wns max 0.00`) NOR a violating one (`wns max -3.21`): it returned
+    // null for the clean run, the violating run and the run that linked
+    // nothing alike, and all three wrote byte-identical manifests. The slack
+    // numbers are read below by parseWns/parseTns (lib/sta_slack.mjs), which
+    // return null when the tool printed no such line — null means NOT
+    // MEASURED, and writeManifest records that as INCONCLUSIVE.
 
     // Did the script actually reach the end? OpenROAD exits 0 even when every
     // command in the heredoc failed, so the exit code cannot answer this.
@@ -1883,8 +1896,8 @@ EOF`;
     const clockConstrained = staAnalysed && clockPortFound === true;
 
     // Slack is only meaningful when a real clock constrained a linked design.
-    const wns = clockConstrained && wnsMatch ? parseFloat(wnsMatch[1]) : null;
-    const tns = clockConstrained && tnsMatch ? parseFloat(tnsMatch[1]) : null;
+    const wns = clockConstrained ? parseWns(result.output) : null;
+    const tns = clockConstrained ? parseTns(result.output) : null;
 
     const staWarnings = [];
     if (!staAnalysed) {
@@ -3565,11 +3578,13 @@ exit
         120000
       );
 
-      const wnsMatch = result.output.match(/wns\s+([\d.-]+)/i);
-      const tnsMatch = result.output.match(/tns\s+([\d.-]+)/i);
       const done = result.output.includes(`MCORNER_${corner.name}_DONE`);
-      const wns = wnsMatch ? parseFloat(wnsMatch[1]) : null;
-      const tns = tnsMatch ? parseFloat(tnsMatch[1]) : null;
+      // Same parse as eda_sta — see src/lib/sta_slack.mjs. A corner whose wns
+      // is null was not measured; `timing_met` stays null and the manifest
+      // gate records the step INCONCLUSIVE rather than letting a corner
+      // nobody measured pass by not being `false`.
+      const wns = parseWns(result.output);
+      const tns = parseTns(result.output);
       const met = wns !== null ? wns >= 0 : null;
 
       if (met === false) overall_pass = false;
