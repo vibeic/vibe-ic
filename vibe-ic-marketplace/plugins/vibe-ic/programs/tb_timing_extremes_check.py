@@ -14,7 +14,8 @@ Concrete failure mode this would have caught:
 
 The gate scans TB SystemVerilog/Verilog files for `host_idle(N)` /
 `#NUS` / `host_low(N)` style calls and verifies each L2 ranged class
-(ibt_us, BIT0/BIT1/BR/IBT pulse_classes from L2_TIMING_WAVEFORM.json)
+(ranged `timing_windows[]` from L8_TIMING_WAVEFORM.json, and
+legacy ibt_us / pulse_classes from L2_TIMING_WAVEFORM.json)
 has at least one TB call near both [min, max] (within 10% tolerance).
 
 Severity: WARNING. Use `--strict` to upgrade.
@@ -39,6 +40,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from gate_utils import read_text
 import _path_layout as _pl
@@ -113,8 +115,59 @@ def _extract_delay_ns(tb_files: list[Path]) -> list[int]:
     return delays
 
 
+# Multipliers onto microseconds for the unit suffixes the timing-waveform
+# layer actually emits (`max_ns`, `max_us`, `max_ms`, ...).
+_UNIT_TO_US: dict[str, float] = {
+    "s": 1_000_000.0,
+    "ms": 1_000.0,
+    "us": 1.0,
+    "ns": 0.001,
+    "ps": 0.000_001,
+}
+
+
+def _bound_us(entry: dict, prefix: str) -> Optional[float]:
+    """First `<prefix>_<unit>` bound present in `entry`, converted to us.
+
+    Units are tried coarsest-first. Accepts every suffix in `_UNIT_TO_US`, so
+    a window that states its minimum in ns and its maximum in us still pairs
+    up into one range.
+    """
+    for unit, mult in _UNIT_TO_US.items():
+        val = entry.get(f"{prefix}_{unit}")
+        if isinstance(val, bool):
+            continue
+        if isinstance(val, (int, float)):
+            return float(val) * mult
+    return None
+
+
 def _l2_ranges(project: Path) -> dict[str, tuple[float, float]]:
-    """Return dict of timing-class -> (min_us, max_us)."""
+    """Return dict of timing-class -> (min_us, max_us).
+
+    TWO SOURCES, AND ONLY ONE OF THEM IS EVER WRITTEN
+    =================================================
+    This function used to read `L2_TIMING_WAVEFORM.json` and nothing else.
+    NO PROGRAM IN THIS PLUGIN HAS EVER WRITTEN THAT FILE. The timing-waveform
+    layer is emitted as `L8_TIMING_WAVEFORM.json` — by every `*_protocol_synth`
+    emitter and by `phase1_doc_one_shot_runner`. Measured over the published
+    benchmark corpus: `L2_TIMING_WAVEFORM.json` occurs 0 times, and
+    `L8_TIMING_WAVEFORM.json` occurs 175 times.
+
+    So `_l2_ranges` returned `{}` on EVERY real run, `inspect` short-circuited
+    at "no L2 timing ranges to verify", and the gate returned PASS
+    unconditionally — including under `--strict`. A consumer reading a path no
+    producer fills does not report a missing input; it reports nothing at all,
+    which is indistinguishable from a clean bill of health. The gate has never
+    once been able to say no. The only reason its own suite stayed green is
+    that every fixture in it writes `L2_TIMING_WAVEFORM.json` by hand.
+
+    The legacy path is KEPT rather than swapped: this is a union of sources, so
+    nothing that used to be measurable stops being measurable. What is added is
+    the live layer, in the schema the live layer actually uses — `timing_windows[]`
+    entries carrying BOTH a `min_<unit>` and a `max_<unit>`. A window with only
+    one bound is not a range and is not reported as one.
+    """
     out: dict[str, tuple[float, float]] = {}
     for cand in (
         _pl.generated_docs_dir(project) / "L2_TIMING_WAVEFORM.json",
@@ -136,6 +189,31 @@ def _l2_ranges(project: Path) -> dict[str, tuple[float, float]]:
                 hi = pc.get("max_us")
                 if name and isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
                     out[name] = (float(lo), float(hi))
+
+    # The layer the flow actually emits.
+    for cand in (
+        _pl.generated_docs_dir(project) / "L8_TIMING_WAVEFORM.json",
+        project / "input" / "docs" / "L8_TIMING_WAVEFORM.json",
+    ):
+        if not cand.exists():
+            continue
+        try:
+            data = json.loads(cand.read_text())
+        except Exception:
+            continue
+        for idx, win in enumerate(data.get("timing_windows", []) or []):
+            if not isinstance(win, dict):
+                continue
+            lo = _bound_us(win, "min")
+            hi = _bound_us(win, "max")
+            if lo is None or hi is None or hi <= lo:
+                continue
+            name = win.get("name")
+            key = str(name) if isinstance(name, str) and name.strip() \
+                else f"timing_windows[{idx}]"
+            # A class already named by the legacy layer wins: an explicit
+            # pulse_class is the more specific statement of the same range.
+            out.setdefault(key, (lo, hi))
     return out
 
 
