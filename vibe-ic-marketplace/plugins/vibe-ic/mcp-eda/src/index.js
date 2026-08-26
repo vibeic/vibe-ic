@@ -71,6 +71,7 @@ import { threadCountTcl } from "./lib/pnr_threads.mjs";
 import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
 import { gateManifestEntry } from "./lib/manifest_metrics.mjs";
 import { parseWns, parseTns } from "./lib/sta_slack.mjs";
+import { evaluateStaEvidence, staEvidenceTcl, STA_EVIDENCE_TERMS } from "./lib/sta_evidence.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -1855,11 +1856,20 @@ server.tool(
     const _staLefs = [techlefPath(cfg), celllefPath(cfg)]
       .filter(pth => typeof pth === "string" && pth.length > 0 && !pth.includes("null/"));
     const _staLefReads = _staLefs.map(pth => `read_lef ${pth}`).join("\n");
-    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'EOF'
+
+    // ── STA evidence channels (see src/lib/sta_evidence.mjs for the measurements) ──
+    // The metrics JSON is a SECOND, independent channel next to the exit code.
+    // It is written into the netlist's own directory and DELETED FIRST: a
+    // metrics file left behind by an earlier run would otherwise satisfy the
+    // "file present" term with numbers from a different design.
+    const staDir = (netlist.substring(0, netlist.lastIndexOf("/")) || "/tmp");
+    const staMetricsFile = `${staDir}/sta_metrics.json`;
+    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && rm -f ${staMetricsFile} && openroad -threads ${_edaOpenroadThreadsToken()} -metrics ${staMetricsFile} -exit << 'EOF'
 ${_staLefReads}
 read_liberty ${libPath(cfg)}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
+${staEvidenceTcl()}
 create_clock -name clk -period ${clock_period_ns} [get_ports ${clock_port}]
 puts "STA_CLOCK_PORT_FOUND=[llength [get_ports -quiet ${clock_port}]]"
 report_checks -path_delay max -format full
@@ -1913,7 +1923,47 @@ EOF`;
         + `would be a vacuous 0.00. wns/tns are null, not zero.`);
     }
 
-    if (staAnalysed) {
+    // Read the metrics file back. The sentinel distinguishes an ABSENT file
+    // from an EMPTY one — `cat ... || true` cannot, and conflating them is
+    // exactly the mistake this channel exists to prevent. Measured: the file
+    // IS absent after a SIGKILL (rc=137) and after an unwritable-path run
+    // (rc=1, UTL-0010), so absent must mean UNMEASURED, never "zero errors".
+    const mRead = dockerExec(
+      `if [ -f ${staMetricsFile} ]; then echo __STA_METRICS_PRESENT__; cat ${staMetricsFile}; else echo __STA_METRICS_ABSENT__; fi`,
+      15000);
+    const mOut = mRead.output || "";
+    const staMetricsPresent = mOut.includes("__STA_METRICS_PRESENT__");
+    const staMetricsRaw = staMetricsPresent
+      ? mOut.slice(mOut.indexOf("__STA_METRICS_PRESENT__") + "__STA_METRICS_PRESENT__".length)
+      : null;
+
+    // THE CONJUNCTION. `result.success` (the exit code) is ONE term, not the
+    // verdict. Measured on openroad 26Q3-1797-g1c09d62b96: a file script that
+    // aborts gives rc=1 with flow__errors__count=0, while the stdin form gives
+    // rc=0 with flow__errors__count=4 — the two terms are wrong in OPPOSITE
+    // directions on the same broken input, so neither may stand alone. Do not
+    // reduce this to `result.success`, and do not reduce it to the metrics.
+    const staEvidence = evaluateStaEvidence({
+      exitCode: result.success ? 0 : 1,
+      metricsFileExists: staMetricsPresent,
+      metricsRaw: staMetricsRaw,
+    });
+
+    // ASSEMBLY NOTE. Two independently measured channels landed on this tool in
+    // the same night and they catch DIFFERENT failures: `staAnalysed` reads the
+    // end-of-script sentinel and the [ERROR ...] lines, `staEvidence.pass` reads
+    // the metrics JSON and the port count. A pass requires BOTH. This is an AND
+    // on purpose — reducing it to either term restores a hole that was measured
+    // open.
+    const staPass = staAnalysed && staEvidence.pass;
+
+    // A run that never reached the end of the script has produced no evidence at
+    // all, so it may not borrow the metrics channel's verdict.
+    const staVerdict = staAnalysed
+      ? staEvidence.verdict
+      : (staErrors.length ? "FAIL" : "UNMEASURED");
+
+    if (staPass) {
       const dir = netlist.substring(0, netlist.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "sta",
@@ -1923,6 +1973,20 @@ EOF`;
         clock_port_found: clockPortFound,
         wns,
         tns,
+        evidence_terms: STA_EVIDENCE_TERMS,
+      });
+    } else {
+      const dir = netlist.substring(0, netlist.lastIndexOf("/"));
+      writeManifest(dir || "/tmp", {
+        step: "sta",
+        status: staVerdict,   // FAIL, or UNMEASURED when no evidence was produced
+        tool: "OpenSTA",
+        clock_port_found: clockPortFound,
+        wns: null,
+        tns: null,
+        failed_terms: staEvidence.failedTerms,
+        reasons: staEvidence.reasons,
+        warnings: staWarnings.length ? staWarnings : undefined,
       });
     }
 
@@ -1938,7 +2002,7 @@ EOF`;
       argv: ["openroad", "-exit", `sta ${top_module} clk=${clock_period_ns}ns`],
       inputs: { [netlist]: sha256File(netlist.replace("/work/", projSta + "/")) },
       outputs: {},
-      exitCode: staAnalysed ? 0 : 1,
+      exitCode: staPass ? 0 : 1,
       durationMs: durationStaMs,
       stdoutTail: result.output || "",
       stderrTail: result.error || "",
@@ -1949,12 +2013,21 @@ EOF`;
         {
           type: "text",
           text: JSON.stringify({
-            success: staAnalysed,
+            success: staPass,
             timing_analysed: staAnalysed,
             clock_constrained: clockConstrained,
             clock_port_found: clockPortFound,
-            wns,
-            tns,
+            exit_code_ok: result.success,   // ONE term of the AND, never the verdict
+            sta_verdict: staVerdict,
+            sta_evidence: {
+              terms: staEvidence.terms,
+              failed_terms: staEvidence.failedTerms,
+              reasons: staEvidence.reasons,
+              metrics: staEvidence.metrics,
+              metrics_file: staMetricsFile,
+            },
+            wns: staPass ? wns : null,
+            tns: staPass ? tns : null,
             warnings: staWarnings.length ? staWarnings : undefined,
             errors: staErrors.length ? staErrors.slice(0, 10) : undefined,
             report: result.output.slice(-3000),
