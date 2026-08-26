@@ -23,9 +23,10 @@ Pins, in the order the gate can be wrong:
   * FALSIFIABILITY against the real tree: inject an offender, the shipped gate
     goes rc 1 and names it; remove it, rc 0.
 
-Every bound in this file is `_T`, which the last test asserts is inside the
-ceiling the gate itself computes — a test file that policed the corpus while
-breaking the rule would be its own counter-example.
+Every bound in this file is `_T` (a synthetic tmp_path tree) or `_T_TREE` (the
+real repository tree), and the last test asserts BOTH are inside the ceiling the
+gate itself computes — a test file that policed the corpus while breaking the
+rule would be its own counter-example.
 """
 import json
 import re
@@ -44,10 +45,46 @@ import ci_harness_timeout_ceiling_check as C          # noqa: E402
 _PROG = _PROGRAMS / "ci_harness_timeout_ceiling_check.py"
 _LAND = _PROGRAMS.parents[3] / "tools" / "gatekeeper-land.sh"
 
-#: Inner bound for every subprocess this file launches. The gate under test is
-#: a pure parse over a handful of files and measures in well under a second, so
-#: 30 s is ~100x headroom and half the ceiling the gate itself publishes.
+#: Inner bound for a launch over a SYNTHETIC tree — a `tmp_path` checkout with a
+#: workflow file and a handful of test modules. Those are a pure parse over a few
+#: files and measure in well under a second, so 30 s is ~100x headroom and half
+#: the ceiling the gate itself publishes.
 _T = 30
+
+#: Inner bound for a launch over the REAL repository tree, which is a different
+#: population and now a much larger one. MEASURED rather than rounded, on
+#: c43fe4057 in the shipped container image, 32 cores:
+#:
+#:   uncontended, 3 runs   16.87 / 17.09 / 16.82 s   (before the two fixes below)
+#:   uncontended, 3 runs   13.75 / 13.53 / 13.70 s   (after)
+#:   8 concurrent copies   worst 15.10 s  (after) — the landing lane's own
+#:                         concurrency, read from the failing run's
+#:                         `FALLBACK_RESOURCE_CAP ... requested=8 selected=8`
+#:   32 concurrent copies  worst 43.75 s  (after) — 4x the lane's concurrency,
+#:                         standing in for the whole-host load that made a
+#:                         nominally-8-job lane exceed 30 s at v1.11.91
+#:
+#: WHY THE NUMBER MOVED, and which half of it is legitimate. v1.11.91 wired
+#: `wall_clock_bound_standing_in_for_a_verdict` into this gate, so every run now
+#: also sweeps 4405 modules that no run of it used to touch. Two parts:
+#:
+#:   * 3.3 s of that was AVOIDABLE and is gone — the sweep built a full parent
+#:     map (a second `ast.walk`) for all 1777 process-spawning modules when 5 of
+#:     them contain a comparison for it to answer about. Fixed in the sweep; the
+#:     findings and the denominators it publishes are byte-identical.
+#:   * the rest is HONEST WORK. Parsing 4405 modules costs 5.9 s and there is no
+#:     cheaper way to know a module parses, which is what the census publishes as
+#:     its denominator. Narrowing what the sweep looks at would un-wire what
+#:     v1.11.91 wired, so it is not on the table.
+#:
+#: 60 s is not a safety margin chosen by feel: it is the CEILING this gate itself
+#: computes and publishes on this tree (`180 s harness // 3`), and
+#: `test_this_files_own_bounds_are_inside_the_ceiling` fails if any bound in this
+#: file exceeds it. So it is simultaneously the largest bound this file is
+#: permitted to declare and 1.37x the worst contended measurement above. A bound
+#: that needed more than this would have to be answered by making the gate
+#: faster, not by a larger number.
+_T_TREE = 60
 
 
 def _workflow(tmp_path: Path, *commands: str) -> Path:
@@ -750,7 +787,7 @@ def test_each_root_prints_its_own_file_count(tmp_path):
         pytest.skip("no .github/workflows in reach")
     out = tmp_path / "r.json"
     subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
-                   capture_output=True, text=True, timeout=_T)
+                   capture_output=True, text=True, timeout=_T_TREE)
     doc = json.loads(out.read_text())
     assert len(doc["roots"]) == 2
     assert sum(r["files"] for r in doc["roots"]) == doc["files"]
@@ -1049,7 +1086,7 @@ def test_the_shipped_tree_is_clean(tmp_path):
     if root is None:
         pytest.skip("no .github/workflows in reach")
     proc = subprocess.run([sys.executable, str(_PROG), str(root)],
-                          capture_output=True, text=True, timeout=_T)
+                          capture_output=True, text=True, timeout=_T_TREE)
     assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
     assert "[PASS]" in proc.stdout
 
@@ -1074,7 +1111,7 @@ def test_an_injected_offender_makes_the_shipped_program_fail(tmp_path):
                       encoding="utf-8")
     red = subprocess.run(
         [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True, timeout=_T_TREE)
     assert red.returncode == 1, red.stdout[-4000:]
     assert victim.name in red.stdout and "timeout=900" in red.stdout
     assert "[FAIL]" in red.stdout
@@ -1082,7 +1119,7 @@ def test_an_injected_offender_makes_the_shipped_program_fail(tmp_path):
     victim.unlink()
     green = subprocess.run(
         [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True, timeout=_T_TREE)
     assert green.returncode == 0, green.stdout[-4000:]
 
 
@@ -1104,7 +1141,7 @@ def test_an_injected_offender_SPELLED_AS_A_PARAMETER_also_fails(tmp_path):
         victim.write_text(body, encoding="utf-8")
         p = subprocess.run(
             [sys.executable, str(_PROG), str(root), "--tests-root",
-             str(tmp_path)], capture_output=True, text=True, timeout=_T)
+             str(tmp_path)], capture_output=True, text=True, timeout=_T_TREE)
         victim.unlink()
         return p
 
@@ -1132,7 +1169,7 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
     out = tmp_path / "r.json"
     proc = subprocess.run(
         [sys.executable, str(_PROG), str(root), "--json", str(out)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True, timeout=_T_TREE)
     assert proc.returncode == 0, proc.stdout[-4000:]
     doc = json.loads(out.read_text())
     assert doc["passed"] is True and doc["findings"] == []
@@ -1251,7 +1288,7 @@ def test_the_advisory_residual_does_not_grow_unreviewed(tmp_path):
         pytest.skip("no repo root in reach")
     out = tmp_path / "r.json"
     subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
-                   capture_output=True, text=True, timeout=_T)
+                   capture_output=True, text=True, timeout=_T_TREE)
     doc = json.loads(out.read_text())
     unresolved = doc["unresolved_above_ceiling"]
     if doc.get("mode") == "semantic_progress":
@@ -1283,7 +1320,7 @@ def test_a_recorded_advisory_that_stopped_existing_is_deleted(tmp_path):
         pytest.skip("no repo root in reach")
     out = tmp_path / "r.json"
     subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
-                   capture_output=True, text=True, timeout=_T)
+                   capture_output=True, text=True, timeout=_T_TREE)
     doc = json.loads(out.read_text())
     if doc.get("mode") == "semantic_progress":
         assert doc["unresolved_above_ceiling"] == []
@@ -1336,6 +1373,10 @@ def test_this_files_own_bounds_are_inside_the_ceiling():
         pytest.skip("no .github/workflows in reach")
     ceiling = C.inner_timeout_ceiling(root)
     assert _T <= ceiling, (_T, ceiling)
+    # The whole-tree bound is the one that could drift, so it is asserted by
+    # name as well as by the source scan below: it was raised from 30 to the
+    # ceiling on a measurement (see `_T_TREE`), and the ceiling is the wall.
+    assert _T_TREE <= ceiling, (_T_TREE, ceiling)
     findings, unresolved, sites = C.scan_source(
         Path(__file__).read_text(), Path(__file__).name, ceiling)
     assert sites, "no bound was READ — has the scan stopped working?"

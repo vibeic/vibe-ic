@@ -1699,6 +1699,48 @@ def _dispatch_candidates(src: str) -> "set[str]":
     return out
 
 
+#: A program stem the candidate regexes above can capture: `\b(\w+)\.py\b`
+#: and `\b(\w+)\s*\.\s*(?:main|check|audit)\s*\(` both capture a bare word,
+#: so for a stem that IS a bare word "the candidate pass found it" and "the
+#: deciding predicate would match it" are the same statement. Anything else is
+#: outside what a candidate pass can see and is handed to the predicate.
+_WORD_STEM_RE = re.compile(r"\A\w+\Z")
+
+
+def _suite_candidates(src: str) -> "set[str]":
+    r"""Every `<stem>.py` token a shell or markdown venue names, in ONE pass.
+
+    The mirror of `_dispatch_candidates` for `_invoked_by_suite`, whose single
+    rule is `\b<stem>\.py\b` over a venue with its comment lines already
+    removed. `\b(\w+)\.py\b` captures the SAME token: if `\b<stem>\.py\b`
+    matches at some offset then the character before `<stem>` is a non-word one,
+    so the greedy `\w+` starting there captures exactly `<stem>` and nothing
+    longer — which is why `barfoo.py` yields `barfoo` and never `foo`, exactly
+    as the per-stem search refuses it.
+    """
+    return set(_DOT_PY_RE.findall(src))
+
+
+def _named_in(names: "set[str]", src: str, stem: str, decide) -> bool:
+    """`decide(src, stem)`, not asked when one pass has already ruled it out.
+
+    ONE PASS PER VENUE, NOT ONE PASS PER STEM. `audit` asks four venues about
+    every program in the directory, and each question used to be a regex search
+    over the whole venue: 1290 stems x a 949 KB skill corpus is the shape this
+    file's own `dispatch_candidates` note already measured as "does not finish
+    in a usable time", reintroduced for the venues added since. MEASURED at
+    c43fe4057 on this tree: 15.66 s for the skill venue, 3.93 s for the
+    repo-gate runner, 1.98 s for the shell suite.
+
+    The DECIDER is unchanged — it is still `decide` that says yes. This only
+    stops asking it about stems no candidate pass found, and a stem the
+    candidate regexes cannot capture is always asked.
+    """
+    if _WORD_STEM_RE.match(stem) and stem not in names:
+        return False
+    return decide(src, stem)
+
+
 
 def audit(flow: Path, programs: Path) -> dict:
     clauses = clauses_in_flow(flow)
@@ -1714,12 +1756,16 @@ def audit(flow: Path, programs: Path) -> dict:
         if c["gate"]:
             slots.setdefault(c["gate"], set()).add(c["slot"])
     src = runner_source(programs)
+    src_names = _dispatch_candidates(src)
     mods = runner_modules(programs)
     rows = []
     for g in gates:
         # #884 — ENFORCED is decided by `gate_wiring`, which follows the exit
         # status; `_invoked` only skips the parse for gates no runner names.
-        wiring = gate_wiring(mods, g) if _invoked(src, g) else NOT_INVOKED
+        stem_g = g[:-3] if g.endswith(".py") else g
+        wiring = (gate_wiring(mods, g)
+                  if _named_in(src_names, src, stem_g, _invoked)
+                  else NOT_INVOKED)
         rows.append({
             "gate": g,
             "enforcement": ("ENFORCED" if wiring == BLOCKING_WIRING
@@ -1768,6 +1814,10 @@ def audit(flow: Path, programs: Path) -> dict:
     src_ci = repo_gate_source(programs)
     src_gate_runner = repo_gate_runner_source(programs)
     src_skill = skill_doc_source(programs)
+    # The candidate pass for each venue, computed ONCE — see `_named_in`.
+    ci_names = _suite_candidates(src_ci)
+    skill_names = _suite_candidates(src_skill)
+    gate_runner_names = _dispatch_candidates(src_gate_runner)
     # The fourth venue. Seeded by the flow definition ONLY, so the closure
     # cannot be bootstrapped by a cluster of programs nothing else names.
     dispatched = dispatched_by_reachable_gates(
@@ -1779,13 +1829,13 @@ def audit(flow: Path, programs: Path) -> dict:
             continue
         if stem in dispatched:
             continue
-        if _invoked_by_suite(src_ci, stem):
+        if _named_in(ci_names, src_ci, stem, _invoked_by_suite):
             continue
         # The fifth venue — see `skill_doc_source`. Matched with the SAME
         # predicate as the shell suite, so "a skill names it" means a skill
         # gave a runnable `programs/<name>.py` path, not that the name appears
         # somewhere in prose.
-        if _invoked_by_suite(src_skill, stem):
+        if _named_in(skill_names, src_skill, stem, _invoked_by_suite):
             continue
         # A venue does not get to exempt ITSELF. #886 measured this exact
         # hazard from the other direction: widening the population made the
@@ -1793,7 +1843,8 @@ def audit(flow: Path, programs: Path) -> dict:
         # orphan. `gatekeeper_review.py` names its own path in string literals,
         # so without this guard the suite runner would be its own proof of
         # being wired — which is not a proof of anything.
-        if f.name not in _REPO_GATE_RUNNERS and _invoked(src_gate_runner, stem):
+        if f.name not in _REPO_GATE_RUNNERS and _named_in(
+                gate_runner_names, src_gate_runner, stem, _invoked):
             continue
         intent = declared_intent(programs, stem)
         if intent:

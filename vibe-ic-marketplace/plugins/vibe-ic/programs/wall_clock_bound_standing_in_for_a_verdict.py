@@ -224,8 +224,22 @@ def scan(root: Path, floor: float) -> Tuple[List[dict], Dict[str, int]]:
             if not any(tok in text for tok in _SPAWN_TOKENS):
                 continue
             spawning += 1
-            pm = _parents(tree)
-            rel = p.relative_to(root).as_posix()
+            # THE PARENT MAP IS BUILT ONLY IF SOMETHING WILL ASK IT A QUESTION.
+            #
+            # `_parents` is a SECOND full `ast.walk` of the module, and it used
+            # to run for every process-spawning module before anything had
+            # established there was a comparison for it to answer about.
+            # MEASURED on this tree at c43fe4057: 1777 modules spawn, and 5 of
+            # them contain a single comparison of a sub-floor constant against
+            # an elapsed expression. So 1772 parent maps were built, walked and
+            # thrown away — 3.3 s of the sweep's 11.4 s, for no answer.
+            #
+            # The candidate comparisons are collected in the walk that was
+            # already happening and the map is built only when that list is
+            # non-empty. `_controlled_branch` is still the decider and its
+            # input is unchanged, so the findings and the denominators are
+            # identical; only the number of times the map is built moved.
+            candidates = []
             for n in ast.walk(tree):
                 if not isinstance(n, ast.Compare):
                     continue
@@ -243,6 +257,12 @@ def scan(root: Path, floor: float) -> Tuple[List[dict], Dict[str, int]]:
                         break
                 if bound is None:
                     continue
+                candidates.append((n, bound, bound_index))
+            if not candidates:
+                continue
+            pm = _parents(tree)
+            rel = p.relative_to(root).as_posix()
+            for n, bound, bound_index in candidates:
                 branch, negated = _controlled_branch(pm, n)
                 if branch is None:
                     continue
