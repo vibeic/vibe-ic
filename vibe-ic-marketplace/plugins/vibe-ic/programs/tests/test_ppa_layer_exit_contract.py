@@ -79,45 +79,35 @@ def test_the_program_set_is_not_empty():
 
 
 # ---------------------------------------------------------------------------
-# CROSS-OWNERSHIP PINS
+# THE CROSS-OWNERSHIP PINS, AND WHY THERE ARE NONE LEFT
 # ---------------------------------------------------------------------------
-# `docs/PPA_INTERFACES.md` §6: each lane owns its files exclusively, and a
-# change needed in someone else's file is written down rather than made. These
-# three defects are real, measured on `e36d81c0a`, and the one-line fix is in a
-# file this branch does not own. They are pinned `xfail(strict=True)`, so the
-# moment the owning lane lands its fix this file goes RED and the pin has to be
-# removed -- a pin that could stay after the bug is gone is a second bug.
+# Three programs used to be pinned `xfail(strict=True)` here because their
+# one-line fix sat in a file this branch did not own:
 #
-#   ppa_search_run.py         search lane        exits 2 on an unknown flag
-#   ppa_feasibility_check.py  feasibility lane   exits 3 on --help
-#   ppa_pareto_check.py       feasibility lane   exits 3 on --help
+#   ppa_search_run.py         search lane        exited 2 on an unknown flag
+#   ppa_feasibility_check.py  feasibility lane   exited 3 on --help
+#   ppa_pareto_check.py       feasibility lane   exited 3 on --help
 #
-# The fix in all three is `_ppa/cli_exit.parse_or_refuse`, which ships in this
-# branch and which the two feasibility programs' own hand-rolled
-# `except SystemExit: return RC_BAD_INVOCATION` is the buggy half of.
-_XFAIL_UNKNOWN_FLAG = {"ppa_search_run.py"}
-_XFAIL_HELP = {"ppa_feasibility_check.py", "ppa_pareto_check.py"}
-
-
-def _pin(prog, owned_by, what):
-    return pytest.mark.xfail(
-        strict=True,
-        reason=f"cross-ownership: {prog} {what}; the file belongs to the "
-               f"{owned_by} lane (PPA_INTERFACES §6) and is handed to the "
-               f"lander in RESULT.md rather than edited here. This pin is "
-               f"strict: it goes red the moment the fix lands.")
+# All three were the same defect: each program did its own argv->rc mapping
+# instead of going through `_ppa/cli_exit.parse_or_refuse`, the one seam that
+# tells `--help` (SystemExit(0)) from a usage error (SystemExit(2)) by READING
+# THE CODE rather than catching the type. The two feasibility programs caught
+# SystemExit bare and returned 3 for both; the search program caught neither
+# and inherited argparse's 2 for both.
+#
+# The fix landed: all three now call `parse_or_refuse`. The pins are gone with
+# it -- a pin that could stay after the bug is gone is a second bug -- so the
+# arms below are unconditional for every program in the set, which is the only
+# state in which this file measures a LAYER property.
 
 
 # ---------------------------------------------------------------------------
 # BAD INVOKE  ->  rc=3
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("prog", PPA_PROGRAMS)
-def test_unknown_flag_is_bad_invocation_not_undetermined(prog, request):
+def test_unknown_flag_is_bad_invocation_not_undetermined(prog):
     """§1: a bad invocation is 3. argparse's default 2 means UNDETERMINED here,
     and a caller that skips on 2 would swallow the typo silently."""
-    if prog in _XFAIL_UNKNOWN_FLAG:
-        request.node.add_marker(_pin(prog, "search",
-                                     "exits 2 on an unknown flag"))
     r = _run([prog, "--this-flag-does-not-exist"])
     assert r.returncode == 3, (
         f"{prog} exited {r.returncode} on an unknown flag; PPA_INTERFACES §1 "
@@ -139,15 +129,13 @@ def test_bad_invocation_is_never_a_finding_about_silicon(prog):
 # --help  ->  rc=0
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("prog", PPA_PROGRAMS)
-def test_help_is_not_a_bad_invocation(prog, request):
+def test_help_is_not_a_bad_invocation(prog):
     """The mirror of the arm above, and the trap its obvious fix walks into.
 
     `--help` raises SystemExit(0). A bare `except SystemExit: return 3` turns
     asking a program what its flags are into a bad invocation. Both shipped
     fixes did exactly that.
     """
-    if prog in _XFAIL_HELP:
-        request.node.add_marker(_pin(prog, "feasibility", "exits 3 on --help"))
     r = _run([prog, "--help"])
     assert r.returncode == 0, (
         f"{prog} exited {r.returncode} on --help. argparse exits 0 there; a "

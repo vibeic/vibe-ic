@@ -86,6 +86,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import _atomic_artefact  # noqa: E402
 import _ppa_corpus as corpus_seam  # noqa: E402  one seam for all corpora
 from _ppa import canonical_json as cj  # noqa: E402
+from _ppa import cli_exit  # noqa: E402  PPA_INTERFACES §1: one argv->rc seam
 from _ppa import delivery_path as dpath  # noqa: E402
 from _ppa import feasibility as feas  # noqa: E402
 from _ppa import pareto as par  # noqa: E402
@@ -339,12 +340,15 @@ def main(argv=None) -> int:
                          "ABSENT design-for-ECO declaration means. Without it "
                          "no route is established and the ECO axis says so "
                          "rather than assuming either answer.")
-    try:
-        args = ap.parse_args(argv)
-    except SystemExit:
-        # argparse exits 2 on a usage error; the contract says a bad invocation
-        # is 3, and 2 there would be indistinguishable from "not checked".
-        return feas.RC_BAD_INVOCATION
+    args, rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        # argparse exited on its own. `parse_or_refuse` reads exc.code rather
+        # than catching the type: `--help` is SystemExit(0) and stays rc=0
+        # (argparse already printed the usage text), while a usage error is
+        # SystemExit(2) and becomes rc=3. Catching SystemExit bare -- which is
+        # what stood here -- turned asking this program for its flags into a
+        # BAD INVOCATION. PPA_INTERFACES §1.
+        return rc
 
     if args.corpus is not None:
         if args.candidates is not None:

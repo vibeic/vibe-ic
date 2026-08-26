@@ -405,20 +405,12 @@ def test_bad_invocation_help_exits_0_on_the_search_space(tmp_path):
     assert r.returncode == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PRE-EXISTING, and NOT this branch's to fix. "
-           "`ppa_feasibility_check.py --help` exits 3 instead of 0 -- asking a "
-           "program what its flags are is not a bad invocation. It is measured "
-           "on origin/main, its one-line fix is `_ppa/cli_exit.parse_or_refuse` "
-           "(which this CLI does not use for its own parse), and "
-           "`test_ppa_layer_exit_contract._XFAIL_HELP` already pins it "
-           "strict=True under a stated contract: the fix and the pin's removal "
-           "land together, by the lane that owns them. Fixing it here would "
-           "turn that file red and leave someone else's pin to clean up. This "
-           "arm exists so that a suite which ADDED a flag to that CLI says the "
-           "defect out loud instead of quietly asserting around it.")
 def test_bad_invocation_help_is_0_on_the_feasibility_cli_too(tmp_path):
+    """`ppa_feasibility_check.py` used to exit 3 here: its own hand-rolled
+    `except SystemExit: return RC_BAD_INVOCATION` could not tell `--help`
+    (SystemExit(0)) from a usage error (SystemExit(2)). It now parses through
+    `_ppa/cli_exit.parse_or_refuse`, which reads the code, so this arm is
+    unconditional and the xfail that stood here is gone with the defect."""
     r = subprocess.run([sys.executable, str(CHECK), "--help"],
                        capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0

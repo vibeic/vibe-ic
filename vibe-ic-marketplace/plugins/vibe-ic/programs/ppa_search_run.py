@@ -85,6 +85,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 from _ppa import canonical_json as cj  # noqa: E402
+from _ppa import cli_exit  # noqa: E402  PPA_INTERFACES §1: one argv->rc seam
 from _ppa import delivery_path as dpath  # noqa: E402
 from _ppa import feasibility as feas  # noqa: E402
 from _ppa import search as S  # noqa: E402
@@ -523,7 +524,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "it no route is established and this search makes no "
                          "ECO-readiness finding.")
     ap.add_argument("--json", default=None, help="write the JSON report here")
-    args = ap.parse_args(argv)
+    args, rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        # A bare `ap.parse_args` inherits argparse's own rc=2 for a usage
+        # error, and §1 spends 2 on UNDETERMINED -- a flow gate that reads 2 as
+        # "nothing to check here" would carry a misspelled flag through green.
+        # `parse_or_refuse` maps SystemExit(2) to rc=3 and leaves `--help`
+        # (SystemExit(0)) at rc=0.
+        return rc
 
     if args.verify and args.space:
         print("give a space to build OR --verify a manifest, not both",
