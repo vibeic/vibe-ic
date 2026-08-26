@@ -35,8 +35,12 @@ MEASURED ON `e36d81c0a` (v1.11.33), BEFORE THIS BRANCH
 
     ppa_search_run.py '{}'                                        rc=0
         invented "budget 1 trial(s) / 1 full-PnR: proposed 1, ran 0" over a
-        document declaring no lever at all, and exited 0. Search lane's
-        file; pinned below and handed to the lander.
+        document declaring no lever at all, and exited 0. FIXED: before a
+        candidate is proposed the CLI now REFUSES (rc=2) a space that names
+        no population -- no lever searchable and none recorded as
+        unsearchable -- and publishes no manifest. A space that merely
+        proposes no VALUE still names its levers and stays a PASS. Mutation
+        arm + positive control at the foot of this file.
 
 WHY THIS IS A SEPARATE FILE FROM THE EXIT CONTRACT
 ==================================================
@@ -120,25 +124,12 @@ def _cases(tmp_path):
     ]
 
 
-_XFAIL = {
-    "ppa_search_run.py": (
-        "search lane: `ppa_search_run.py` on a space declaring no lever "
-        "invents `budget 1 trial(s), proposed 1` and exits 0. "
-        "`_ppa/search.py` and `ppa_search_run.py` belong to the search lane "
-        "(PPA_INTERFACES §6); handed to the lander in RESULT.md. Strict: "
-        "goes red the moment the fix lands."),
-}
-
-
 @pytest.mark.parametrize("idx", range(8))
-def test_a_present_but_empty_population_is_never_a_pass(idx, tmp_path, request):
+def test_a_present_but_empty_population_is_never_a_pass(idx, tmp_path):
     """rc=0 over an empty population is the defect this codebase exists to
     prevent, and it is invisible: the report is well-formed and says nothing
     was wrong, because nothing was looked at."""
     prog, argv, what = _cases(tmp_path)[idx]
-    if prog in _XFAIL:
-        request.node.add_marker(pytest.mark.xfail(strict=True,
-                                                  reason=_XFAIL[prog]))
     r = _run([prog, *argv])
     assert r.returncode != 0, (
         f"{prog} exited 0 over {what}. Nothing was examined and the run "
@@ -214,6 +205,46 @@ def test_mutation_predict_aggregate_still_estimates_a_real_count():
     r = _run(["ppa_predict_aggregate.py", "--cell-count", "262"])
     assert r.returncode == 0, r.stderr[:400]
     assert "ESTIMATED" in r.stdout
+
+
+def test_mutation_search_run_space_with_no_searchable_lever(tmp_path):
+    """MUTATION ARM. Delete the `if not values and not lever_notes` guard from
+    `ppa_search_run.build` and this goes red: the run publishes
+    `proposed 1, ran 0` over a document that names no lever at all and exits
+    0. The guard's line is NOT `values is empty` -- a space that proposes no
+    value still names every lever it could not enumerate, and
+    `test_ppa_pnr_search_space` pins that degrade as a PASS."""
+    sp = _w(tmp_path / "s.json", {})
+    r = _run(["ppa_search_run.py", sp, "--json", str(tmp_path / "m.json")])
+    assert r.returncode == 2, r.stdout[:400]
+    assert "names no population" in r.stderr, r.stderr[:400]
+    assert "proposed 1" not in (r.stdout + r.stderr), (
+        "the fabricated budget sentence was printed anyway; the refusal must "
+        "produce no trial count at all")
+    assert not (tmp_path / "m.json").exists() or \
+        "candidates" not in json.loads(
+            (tmp_path / "m.json").read_text(encoding="utf-8")), \
+        "no manifest may be left on disk for the next stage to read"
+
+
+def test_mutation_search_run_still_searches_a_real_space(tmp_path):
+    """Positive control for the guard above -- without it, an unconditional
+    `return 2` would also make the arm green and every real search would be
+    refused. A space with one enumerable lever must still produce its manifest
+    and its real counts."""
+    sp = _w(tmp_path / "real.json",
+            {"program": "crosslayer_search_space",
+             "levers": [{"lever": "state_encoding", "admitted": True,
+                         "status": "FREE", "domain": "binary | gray"}]})
+    out = tmp_path / "real_manifest.json"
+    r = _run(["ppa_search_run.py", sp, "--json", str(out)])
+    assert r.returncode == 0, f"stderr: {r.stderr[:400]}"
+    assert "budget 1 trial(s)" in r.stdout, r.stdout[:400]
+    man = json.loads(out.read_text(encoding="utf-8"))
+    assert len(man["candidates"]) == 2, \
+        "both points of a two-value lever must still be published"
+    assert [c["knobs"]["state_encoding"] for c in man["candidates"]] == \
+        ["binary", "gray"]
 
 
 if __name__ == "__main__":

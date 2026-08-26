@@ -53,6 +53,16 @@ Two rules now hold that shut:
   * `--verify` REFUSES a manifest whose published reason names a condition the
     tree it is audited on contradicts (`STUB_REASON_CONTRADICTED_BY_TREE`).
 
+A SPACE THAT NAMES NO POPULATION IS NOT A SEARCH
+================================================
+A space that PROPOSES NO VALUE still names its levers: each one it could not
+enumerate is published in `lever_notes`, the manifest says which lever it did
+not vary, and that is a first-class result. A space that names NO LEVER AT ALL
+-- an empty document, or one whose levers the space admitted none of -- is a
+different thing: it is UNDETERMINED (rc=2) and no manifest is published,
+because the alternative is `proposed 1, ran 0` over a baseline point nobody
+proposed, carrying nothing that would tell a reader nothing was looked at.
+
 BUDGET = 1 IS A FIRST-CLASS RUN
 ===============================
 No flag is required to get a bundle. `--max-trials` defaults to 1 and a
@@ -241,6 +251,60 @@ def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
 
     space_digest = cj.digest_of(space)
     values, lever_notes = S.values_from_space(space, explicit)
+
+    # THE POPULATION, CHECKED BEFORE A CANDIDATE IS INVENTED.
+    #
+    # `S.propose({})` answers an empty value set with the baseline point --
+    # the right answer to the question the library is asked. What was wrong is
+    # this CLI turning that one point into a published `proposed 1, ran 0`
+    # over a document that named NOTHING: no lever varied, and no lever named
+    # as unvaried either. Zero examined and one examined then read identically
+    # downstream, which is the vacuous pass this layer exists to stop.
+    #
+    # The line is the one the space layer already draws: a space that PROPOSES
+    # NO VALUE is not a space with NO LEVERS. The first degrades honestly --
+    # every lever it could not enumerate is published in `lever_notes`, and
+    # `test_a_space_with_no_values_is_read_as_not_enumerable_not_as_empty`
+    # pins that. The second accounts for nothing at all, and that is this
+    # guard's population: no searchable value AND no note saying why.
+    #
+    # UNDETERMINED (rc=2), not REFUSED (rc=1): a document with nothing in it
+    # is not a finding about any design. And nothing is published -- returning
+    # the manifest beside the marker would leave the fabricated point on disk
+    # for the next stage to read as a result.
+    if not values and not lever_notes:
+        levers = space.get("levers")
+        declared = [lv.get("lever") for lv in levers
+                    if isinstance(lv, dict) and lv.get("lever")] \
+            if isinstance(levers, list) else []
+        lines.append(f"{MARK_CANNOT_CHECK} this search space names no "
+                     f"population: not one lever is searchable, and not one "
+                     f"is recorded as unsearchable either. Nothing was "
+                     f"searched and nothing is claimed.")
+        if declared:
+            lines.append(
+                f"  {len(declared)} lever(s) appear in the document "
+                f"({', '.join(sorted(declared))}) and the space admitted none "
+                f"of them, so this manifest would carry no account of any of "
+                f"them. The space decides what may be searched; re-emit it "
+                f"admitting a lever.")
+        else:
+            lines.append("  The document was read and parsed; it declares no "
+                         "lever at all.")
+        # No trial count is printed here, not even inside the explanation:
+        # a reader grepping this stream for what the budget bought must find
+        # nothing, and a number in a refusal is still a number on the wire.
+        lines.append("  No manifest is published. One built from here would "
+                     "carry a budget sentence and a candidate for a baseline "
+                     "point no caller proposed, with nothing in it to tell a "
+                     "reader that nothing was looked at.")
+        return RC_UNDETERMINED, {
+            "program": PROGRAM,
+            "undetermined": ("the search space names no population: no lever "
+                             "is searchable and none is recorded as "
+                             "unsearchable"),
+            "levers_in_document": len(declared),
+        }, lines
 
     trials: Dict[str, Dict[str, Any]] = {}
     if trials_path is not None:
