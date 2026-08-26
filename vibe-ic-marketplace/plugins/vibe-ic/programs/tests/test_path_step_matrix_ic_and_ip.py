@@ -939,16 +939,24 @@ def _producer_channels() -> dict:
 #: EITHER direction — a producer wired up, or a wired one lost — arrives as a
 #: red cell naming which.
 WIRED_PRODUCERS = {
+    # 2026-08-26 — THE LAST TWO ARRIVED. `phase1_one_shot_runner` now
+    # dispatches step 0.5ic's two producers before its mode branch, so the
+    # step that decides the route can produce its own declared outputs. The
+    # xfail that recorded their absence is deleted in the same change and the
+    # test it guarded now has to pass for real.
+    ("0.5ic", "submission_template_ingest"),
+    ("0.5ic", "tapeout_declaration_gen"),
     ("15.5ic", "pad_assignment_gen"),
     ("15.5ic", "pad_ring_gen"),
     ("26.5ic", "die_finishing_gen"),
     ("37.5ic", "tapeout_docs_gen"),
     ("37.5ip", "digital_hardmacro_gen"),
 }
-UNWIRED_PRODUCERS = {
-    ("0.5ic", "submission_template_ingest"),
-    ("0.5ic", "tapeout_declaration_gen"),
-}
+#: EMPTY, and it stays a name rather than being deleted: the assertion below
+#: reads `WIRED_PRODUCERS | UNWIRED_PRODUCERS` as the whole declared
+#: population, so a producer that goes dark has somewhere to be recorded and
+#: the two directions stay distinguishable.
+UNWIRED_PRODUCERS: set = set()
 
 
 def test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be():
@@ -965,52 +973,53 @@ def test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be():
         {"now wired": sorted(wired), "was": sorted(WIRED_PRODUCERS)})
 
 
-def test_the_two_producers_of_the_router_file_are_the_unwired_ones(tmp_path):
-    """WHY THE THREE MATTER, and why one of them matters most.
+def test_the_two_producers_of_the_router_file_are_dispatched(tmp_path):
+    """WHY THESE TWO MATTER MOST, and what changed about them.
 
     Step 0.5ic's two programs are the ONLY things in this flow that write a
     router file: `tapeout_declaration_gen` writes `SELF_TAPEOUT.txt` and
     `submission_template_ingest` writes `NO_TEMPLATE.txt` or ingests
     `slots/*.yaml`. Every other path step conditions on one of those files.
 
-    Both are unwired. So no run of this flow reaches a router file by running
-    it, which puts every design in the `no_router_file` class of this matrix —
-    the row where 15.5ic, 26.5ic, 37.5ic and 37.5ip ALL report
-    SKIPPED-CONDITION. That is the same silent skip the chip-path work landed
-    to close, one layer up: the condition was repaired and the thing that
-    satisfies it was never dispatched.
+    Both used to be unwired, and the consequence was measured: no run of this
+    flow reached a router file by RUNNING one, so every design fell into the
+    `no_router_file` class of this matrix — the row where 15.5ic, 26.5ic,
+    37.5ic and 37.5ip ALL report SKIPPED-CONDITION — and step 0.5ic itself
+    reported MISSING for every design forever. `phase1_one_shot_runner` now
+    dispatches both.
 
-    This test PASSES. It is the evidence for the expectation below, and it
-    goes red the moment either producer acquires an invoker — which is the
-    moment somebody should re-read the xfail.
+    THE SECOND HALF OF THIS TEST IS UNCHANGED AND STILL PASSES, and that is
+    deliberate. Dispatching a producer does not hand a design a route: a tree
+    with no router file still skips all four path steps. What moved is WHOSE
+    silence that now is — the design's, which did not declare, rather than the
+    flow's, which could not ask.
     """
-    unwired = {p for (_s, p), v in _producer_channels().items() if not v}
-    assert {"submission_template_ingest", "tapeout_declaration_gen"} <= unwired
+    channels = _producer_channels()
+    for prog in ("submission_template_ingest", "tapeout_declaration_gen"):
+        assert channels[("0.5ic", prog)], (
+            "step 0.5ic's producer is reachable through no channel again",
+            prog, channels)
 
-    # And the consequence, driven rather than argued: a project that ran
-    # everything this flow can dispatch still has no router file.
+    # And the consequence, driven rather than argued: a tree that carries no
+    # router file selects no path step, whatever ran.
     proj = _no_router(tmp_path / "proj", PDK_WITH_SHUTTLE)
     for sid in ("15.5ic", "26.5ic", "37.5ic", "37.5ip"):
         assert _state(proj, sid) == SKIPPED, sid
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "MEASURED GAP. Two programs a path step DECLARES under `programs:` are "
-    "invoked by nothing in the shipped tree: `submission_template_ingest` and "
-    "`tapeout_declaration_gen` (step 0.5ic). `pad_ring_gen` is no longer in "
-    "this residual: step 15.5ic invokes it at the floorplan-to-route seam. "
-    "Measured by AST over every `programs/*.py` — string constants and "
-    "imports, docstrings excluded — plus the flow's own gate clauses as the "
-    "second channel. The other five producers are invoked: three by "
-    "`phase3_one_shot_runner` and two as their own step's gate clause. "
-    "Dimension 1 of the 63x8 matrix does not cover this: it asks whether the "
-    "GATE is wired and answers by running `_evaluate_gate`, and all five path "
-    "steps pass it. NOT FIXED HERE ON PURPOSE: wiring a producer into a "
-    "one-shot runner changes what a real run does and blocks on, which the "
-    "repo's own gates call the flow owner's call, and the "
-    "`flow-change-acceptance` standard for it (bidirectional negative "
-    "control, corpus sweep, BLOCKING-vs-ADVISORY declaration) is more than a "
-    "test branch should decide. See RESULT.md, REQUESTS TO THE LANDER."))
+# THE XFAIL THAT STOOD HERE IS GONE, and its deletion is the fix landing.
+# It recorded a MEASURED GAP: two programs step 0.5ic declares under
+# `programs:` that nothing in the shipped tree could execute
+# (`submission_template_ingest`, `tapeout_declaration_gen`), and its own text
+# said what that cost — "a step whose producer nothing dispatches cannot
+# satisfy its own required_outputs; it reports MISSING for every design
+# forever, and every reader charges that to the design". It also said what
+# fixing it would take: a bidirectional control and a flow-owner decision on
+# what a real run blocks on. `phase1_one_shot_runner` now dispatches both,
+# before its mode branch and on every path, and it is wired so that it makes
+# the step RUN without being able to make it PASS — the declaration is still
+# the design's to write. So the assertion below is no longer an expectation;
+# it is a requirement, and it is enforced in the ordinary direction.
 def test_no_path_step_declares_a_producer_that_nothing_can_invoke():
     unwired = {k for k, v in _producer_channels().items() if not v}
     assert not unwired, (

@@ -1210,9 +1210,13 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: As the block below already says: being here is the DISCLOSURE, not
 #: permission. Wiring any of the three means inventing a dispatch branch, which
 #: is a flow change and not a pin repair.
+#: 2026-08-26 — TWO ENTRIES REMOVED, in the direction this pin calls good
+#: news. `phase1_one_shot_runner` now dispatches step 0.5ic's two producers
+#: (`submission_template_ingest`, `tapeout_declaration_gen`) before its mode
+#: branch, so both are reachable through channel C. The forward/reverse
+#: control below is the same one `pad_ring_gen` got when it left this pin:
+#: dispatch, and only dispatch, is what keeps them out.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
-    ("0.5ic", "submission_template_ingest"),
-    ("0.5ic", "tapeout_declaration_gen"),
     ("2", "crosslayer_rewrite_equivalence"),
     ("2", "crosslayer_search_space"),
     ("6", "debug_first_pass"),
@@ -1268,6 +1272,22 @@ def test_probe_declared_programs_array_orphans_are_pinned():
         f"Newly wired: {sorted(set(ORPHAN_DECLARED_PROGRAMS) - set(measured))} "
         f"— good news; remove it from the pin in the same change."
     )
+
+
+def test_step_0_5ic_producers_left_the_orphan_pin_only_because_a_runner_dispatches_them():
+    """Forward/reverse control for the two 2026-08-26 pin removals.
+
+    The pin can only be read as "these got wired" if removing the dispatch
+    channel puts them straight back. Both directions are driven here, so a pin
+    edit that was not backed by real wiring reddens.
+    """
+    invoked = runner_invoked()
+    for prog in ("submission_template_ingest", "tapeout_declaration_gen"):
+        pair = ("0.5ic", prog)
+        assert pair not in ORPHAN_DECLARED_PROGRAMS
+        assert prog in invoked, runners_invoking(prog)
+        assert pair not in _declared_program_orphans(invoked)
+        assert pair in _declared_program_orphans(invoked - {prog})
 
 
 def test_pad_ring_left_the_orphan_pin_only_because_the_runner_dispatches_it():

@@ -920,3 +920,161 @@ def test_two_routers_at_once_exit_ONE_a_refusal_and_never_TWO_a_skip(tmp_path):
         assert TDC.RULE_ROUTER_CONTRADICTION in rep.read_text(), (
             f"the refusal for {a}+{b} must be the NAMED rule, not a bare "
             f"non-zero exit")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# THE STEP IS DISPATCHED, AND DISPATCHING IT DOES NOT BUY A PASS
+#
+# Until 2026-08-26 nothing in the shipped tree could execute either of step
+# 0.5ic's two producers. The step therefore reported MISSING for every design
+# ever run, and a real SPM run carried 42 blockers of which the step's own
+# absence was the declared root. `phase1_one_shot_runner` now dispatches both,
+# before its mode branch and on every path.
+#
+# The three tests below are the two directions of that change plus the one
+# thing it must NOT have done. A wiring that made the step pass by itself would
+# be a route this flow picked on a design's behalf — a default wearing a
+# declaration's clothes, which is what step 0.5ic exists to refuse.
+# ══════════════════════════════════════════════════════════════════════════
+_REAL_REASON = (
+    "This design targets no shuttle operator; it is a self tape-out. No "
+    "operator project template exists to stage, so there is no slot geometry, "
+    "no operator fixtures and no per-slot pad list for this step to ingest.")
+
+
+def _drive_step_0_5ic(project: Path) -> int:
+    """Run the SHIPPED runner entry, not a re-implementation of it."""
+    import phase1_one_shot_runner as R
+    return R._run_step_0_5ic(project)
+
+
+def _step_0_5ic_verdicts(project: Path):
+    """(rc, rc) of the step's OWN two gate clauses, as the flow declares them."""
+    import tapeout_declaration_check as TDC
+    rc1 = CHK.main([str(project), "--json",
+                    str(project / ST.REPORT_REL)])
+    import _tapeout_declaration as TD
+    rc2 = TDC.main([str(project), "--json", str(project / TD.REPORT_REL)])
+    return rc1, rc2
+
+
+def _answers(project: Path, doc) -> None:
+    path = project / ST.DESIGN_ANSWERS_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2) + "\n")
+
+
+def test_a_declared_self_tapeout_is_produced_by_the_flow_and_passes(tmp_path):
+    """The POSITIVE direction: a die that declares itself gets its route.
+
+    Both producers run in the order the flow declares them, the ingest's own
+    `NO_TEMPLATE.txt` is retired by its sibling because a die must not select
+    the IP terminal, and exactly one router file is left on disk.
+    """
+    import _tapeout_declaration as TD
+    proj = tmp_path / "declared"
+    proj.mkdir()
+    _answers(proj, {"operator_template": {"absent_reason": _REAL_REASON},
+                    "answers": {"deliverable": TD.DELIVERABLE_DIE}})
+
+    assert _drive_step_0_5ic(proj) == 0
+    assert (proj / TD.SELF_TAPEOUT_REL).is_file()
+    assert not (proj / ST.NO_TEMPLATE_REL).exists(), (
+        "the IP terminal's router survived beside a die's — the step's output "
+        "would select two delivery paths at once")
+    assert (proj / ST.REPORT_REL).is_file()
+    assert (proj / TD.DECLARATION_REL).is_file()
+
+    rc1, rc2 = _step_0_5ic_verdicts(proj)
+    assert (rc1, rc2) == (0, 0)
+    doc = json.loads((proj / ST.REPORT_REL).read_text())
+    assert doc["check"]["verdict"] == ST.VERDICT_NOT_APPLICABLE, (
+        "an absent template that was BOUGHT reads NOT_APPLICABLE, never PASS")
+
+
+def test_dispatching_the_producers_cannot_buy_a_pass_on_its_own(tmp_path):
+    """THE CONTROL, and it is the one that matters.
+
+    A project where the flow ran everything it can dispatch and the DESIGN
+    declared nothing must still FAIL step 0.5ic, and must fail it by the named
+    rule — not by an exit code with no sentence attached. If the wiring made
+    the step green on its own it would be a waiver with a different filename.
+    """
+    proj = tmp_path / "undeclared"
+    proj.mkdir()
+    assert _drive_step_0_5ic(proj) == 0, (
+        "the producers must RUN for a design that declared nothing — a step "
+        "that produced no record is indistinguishable from one that never ran")
+
+    rc1, _rc2 = _step_0_5ic_verdicts(proj)
+    assert rc1 == 1, (
+        "wiring the producers made step 0.5ic pass for a design that stated no "
+        "reason for its absent template")
+    doc = json.loads((proj / ST.REPORT_REL).read_text())
+    assert [r["rule"] for r in doc["check"]["refusals"]] == \
+        ["NO_TEMPLATE_WITHOUT_REASON"]
+
+
+@pytest.mark.parametrize("reason,why", [
+    ("", "an empty reason"),
+    ("no operator", "a reason below the floor"),
+])
+def test_a_reason_that_is_not_a_reason_still_fails(tmp_path, reason, why):
+    """Between the two arms above: the declaration exists and is not enough."""
+    import _tapeout_declaration as TD
+    proj = tmp_path / "thin"
+    proj.mkdir()
+    _answers(proj, {"operator_template": {"absent_reason": reason},
+                    "answers": {"deliverable": TD.DELIVERABLE_DIE}})
+    assert _drive_step_0_5ic(proj) == 0
+    rc1, _rc2 = _step_0_5ic_verdicts(proj)
+    assert rc1 == 1, why
+    doc = json.loads((proj / ST.REPORT_REL).read_text())
+    assert [r["rule"] for r in doc["check"]["refusals"]] == \
+        ["NO_TEMPLATE_WITHOUT_REASON"]
+    # AND THE ROUTER IS STILL WRITTEN, which is not a contradiction and is
+    # worth pinning so nobody "fixes" it. Which route a design is on is decided
+    # by its `deliverable` answer alone; whether its absent template was BOUGHT
+    # is a different question, and `submission_template_check` is the thing
+    # that answers it. This gate's own docstring says as much — "THIS GATE'S
+    # OWN FAIL DOES NOT STOP EITHER PATH FROM BEING SELECTED". The step-level
+    # verdict is what refuses here, and it does.
+    assert (proj / TD.SELF_TAPEOUT_REL).is_file()
+
+
+def test_a_design_with_an_operator_template_must_still_supply_its_slot(tmp_path):
+    """The OPERATOR's answer wins, and self-tape-out is not an escape from it.
+
+    A design that stages a real template cannot reach the self-tape-out route
+    by declaring `deliverable=DIE`: `_tapeout_declaration.route_of` gives the
+    operator priority, no `SELF_TAPEOUT.txt` is written, and the step refuses
+    because no slot was DECLARED. Declaring the slot is what clears it — the
+    positive control, so "refused" cannot be read as "refuses everything".
+    """
+    import _tapeout_declaration as TD
+    staged = tmp_path / "tmpl" / "slots"
+    staged.mkdir(parents=True)
+    (staged / "s1.yaml").write_text(SLOT_A)
+
+    proj = tmp_path / "shuttle"
+    proj.mkdir()
+    _answers(proj, {"operator_template": {"path": str(staged.parent),
+                                          "absent_reason": _REAL_REASON},
+                    "answers": {"deliverable": TD.DELIVERABLE_DIE}})
+    assert _drive_step_0_5ic(proj) == 0
+    assert not (proj / TD.SELF_TAPEOUT_REL).exists(), (
+        "a design carrying an operator's slot files was routed to the "
+        "self-tape-out terminal on its own say-so")
+    rc1, _rc2 = _step_0_5ic_verdicts(proj)
+    assert rc1 == 1
+    doc = json.loads((proj / ST.REPORT_REL).read_text())
+    assert [r["rule"] for r in doc["check"]["refusals"]] == ["SLOT_NOT_DECLARED"]
+
+    # POSITIVE CONTROL — the same tree with the slot declared.
+    _answers(proj, {"operator_template": {"path": str(staged.parent),
+                                          "slot": "s1",
+                                          "absent_reason": _REAL_REASON},
+                    "answers": {"deliverable": TD.DELIVERABLE_DIE}})
+    assert _drive_step_0_5ic(proj) == 0
+    rc1, rc2 = _step_0_5ic_verdicts(proj)
+    assert (rc1, rc2) == (0, 0)

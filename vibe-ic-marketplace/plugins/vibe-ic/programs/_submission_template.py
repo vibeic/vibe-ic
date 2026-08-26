@@ -81,6 +81,30 @@ NO_TEMPLATE_REL = "input/submission_template/NO_TEMPLATE.txt"
 #: nothing -- see `declares_no_template` below.
 NO_DECLARATION_REL = "input/submission_template/NO_DECLARATION.txt"
 
+#: THE TWO THINGS THIS STEP NEEDS THAT ONLY THE DESIGN CAN SAY, and where a
+#: runner-driven run reads them from. Named HERE, beside the paths the two
+#: producers and the two judges already share, for the reason this module
+#: exists at all: a path spelled in a runner and again in a producer is two
+#: spellings that drift.
+#:
+#: `STAGED_TEMPLATE_REL` is the directory a design stages the operator's
+#: published template into. A runner ALWAYS searches it, so `lookup.searched`
+#: always names a real place and NOT_ATTEMPTED — "nobody looked" — stops being
+#: reachable from a driven run. That is a narrowing, not a collapse: the three
+#: states are unchanged and a direct invocation can still produce all three.
+#:
+#: `DESIGN_ANSWERS_REL` is the design's OWN side of step 0.5ic: where its
+#: operator template really is (when not staged in the default place), which
+#: slot it declares, why an absent template is a genuine not-applicable for it,
+#: and its answers to `_tapeout_declaration`'s 18 questions. NOTHING in this
+#: file is inferred by any program: a design that stages no answers gets an
+#: absent template with NO stated reason and an entirely NOT_DETERMINED
+#: declaration, which is a step 0.5ic that FAILS -- honestly, naming what the
+#: design did not say. Wiring the producers makes the step RUN; only the
+#: design's own declaration can make it pass.
+STAGED_TEMPLATE_REL = "input/submission_template_source"
+DESIGN_ANSWERS_REL = "input/step_0_5ic_answers.json"
+
 # Written as the first line of every NO_TEMPLATE.txt this step emits, so a
 # re-ingest can retire its OWN stale marker and will not touch a file some
 # other hand put there.

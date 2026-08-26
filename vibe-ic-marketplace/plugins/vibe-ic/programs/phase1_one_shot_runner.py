@@ -47,6 +47,11 @@ import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch si
 # THE L-document write chokepoint — records the producing release on the
 # L1 / L4 / L8 documents this runner back-fills from a prompt.
 import l_doc_generator_stamp as _stamp
+# Step 0.5ic's shared path vocabulary — the SAME module its two producers
+# and its two judges read, so a runner cannot dispatch against a path the
+# producer does not write to.
+import _submission_template as _ST
+import _tapeout_declaration as _TD
 
 # Phase 1 owns the doc-extraction track. The ~47k-line
 # doc-extraction implementation lives in `phase1_doc_one_shot_runner.py`.
@@ -552,6 +557,161 @@ def _run_expert_track(project: Path) -> int:
     return 0
 
 
+# ── Step 0.5ic — the route declaration (both input modes) ──────────
+#
+# WHY THIS IS WIRED, AND WHAT WIRING IT DOES NOT BUY.
+#
+# Step 0.5ic declares two programs and, until this branch, NOTHING in the
+# shipped tree could execute either of them. Measured, not argued:
+# `test_matrix_d1_wiring.ORPHAN_DECLARED_PROGRAMS` pinned both as reachable
+# through none of the three channels, and
+# `test_path_step_matrix_ic_and_ip` carried a strict xfail saying a step whose
+# producer nothing dispatches "reports MISSING for every design forever, and
+# every reader charges that to the design". That is exactly what happened: a
+# real run reported 0.5ic MISSING / declared-artefact-absent, and 36 further
+# steps inherited it as `derived-from-upstream`. One step nobody could run
+# voided a whole flow.
+#
+# WIRED HERE rather than in `phase1_doc_one_shot_runner` for the reason the
+# expert track above gives: this dispatcher is the one entry point that covers
+# BOTH input modes, and `flow_gate_enforcement_audit` inspects THIS file.
+#
+# RUN BEFORE THE MODE BRANCH, and unconditionally. Step 0.5ic's `blocks_on` is
+# empty and it takes no input from D1 — which delivery route a design is on is
+# a property of the DESIGN, not of its documents — so gating it behind a D1
+# that refused would leave the route unstated for exactly the runs that most
+# need to say so.
+#
+# NOTHING IS INFERRED, AND THAT IS THE POINT. The two producers are handed the
+# design's own staged answers and nothing else. A design that staged none gets
+# a template searched-for-and-absent with NO reason stated and an entirely
+# NOT_DETERMINED declaration; step 0.5ic's own gate then FAILS it with
+# NO_TEMPLATE_WITHOUT_REASON, naming what the design did not say. Wiring the
+# producers makes the step RUN. It cannot make it PASS, and it must not: a
+# route this runner picked on a design's behalf would be a default wearing a
+# declaration's clothes.
+
+_STEP_0_5IC_INGEST = "submission_template_ingest.py"
+_STEP_0_5IC_DECLARE = "tapeout_declaration_gen.py"
+
+
+def _step_0_5ic_answers(project: Path
+                        ) -> "Tuple[Optional[Path], Optional[Dict[str, Any]], Optional[str]]":
+    """(path, document, why-not) for the design's own step-0.5ic answers.
+
+    An ABSENT file is not an error — it is a design that has not answered, and
+    the producers record that faithfully. An UNREADABLE one IS an error: a
+    design that tried to answer and could not be read must never be reported as
+    a design that said nothing.
+    """
+    path = project / _ST.DESIGN_ANSWERS_REL
+    if not path.is_file():
+        return None, None, None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as exc:
+        return path, None, f"{path} could not be read as JSON: {exc}"
+    if not isinstance(doc, dict):
+        return path, None, (f"{path}'s top level is {type(doc).__name__}, "
+                            f"not a mapping")
+    return path, doc, None
+
+
+def _run_step_0_5ic(project: Path) -> int:
+    """Run step 0.5ic's two producers, in the order the flow declares them.
+
+    `submission_template_ingest` records what the OPERATOR published;
+    `tapeout_declaration_gen` records what the DESIGN declares about itself and
+    retires the marker the first one wrote when the design is a die doing its
+    own tape-out. The order is load-bearing and is the flow's own.
+
+    EXECUTION is not advisory: a producer that could not run, or that wrote no
+    report, FAILs Phase 1 — a step whose record is missing is indistinguishable
+    from a step that never ran, which is the whole defect this step exists to
+    refuse. The VERDICT on those records is not taken here; it belongs to the
+    step's own two gate clauses, which `flow_compliance_check` evaluates.
+    """
+    answers_path, answers, err = _step_0_5ic_answers(project)
+    if err is not None:
+        print(f"      ERROR: the design's step-0.5ic answers could not be "
+              f"read ({err}) — an unreadable answer is not the same fact as "
+              f"no answer, and must not be recorded as one", file=sys.stderr)
+        return 1
+
+    template, slot, reason = None, None, None
+    if answers:
+        operator = answers.get("operator_template")
+        if isinstance(operator, dict):
+            template = operator.get("path")
+            slot = operator.get("slot")
+            reason = operator.get("absent_reason")
+    # THE SEARCH ALWAYS HAPPENS. A driven run looks in the place a design
+    # stages an operator template even when nothing is there, so the record
+    # names a path that was searched instead of recording that nobody looked.
+    root = Path(template) if template else Path(_ST.STAGED_TEMPLATE_REL)
+    if not root.is_absolute():
+        root = project / root
+
+    # Clear both records FIRST, so "the record exists" can only mean THIS run
+    # wrote it. A stale record from an earlier run is exactly how a producer
+    # that died would still look like one that ran.
+    records = [project / _ST.REPORT_REL, project / _TD.REPORT_REL]
+    for record in records:
+        try:
+            record.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"      ERROR: cannot clear the previous step-0.5ic record "
+                  f"at {record} ({exc}) — its freshness could not be "
+                  f"established", file=sys.stderr)
+            return 1
+
+    ingest = [sys.executable, str(PROGRAMS_DIR / _STEP_0_5IC_INGEST),
+              str(project), "--template", str(root)]
+    if isinstance(slot, str) and slot.strip():
+        ingest += ["--slot", slot.strip()]
+    if isinstance(reason, str) and reason.strip():
+        ingest += ["--no-template-reason", reason.strip()]
+    declare = [sys.executable, str(PROGRAMS_DIR / _STEP_0_5IC_DECLARE),
+               str(project)]
+    if answers_path is not None:
+        declare += ["--answers", str(answers_path)]
+
+    for argv in (ingest, declare):
+        name = Path(argv[1]).name
+        try:
+            cp = subprocess.run(argv, capture_output=True, text=True,
+                                timeout=600, check=False)
+        except subprocess.TimeoutExpired:
+            print(f"      ERROR: {name} timed out — a timeout is not a "
+                  f"verdict, and an undispatched producer cannot pass",
+                  file=sys.stderr)
+            return 1
+        for line in (cp.stdout or "").strip().splitlines():
+            print(f"      {line}")
+        if cp.returncode != 0:
+            print(f"      {name} FAILED to complete (rc={cp.returncode}): "
+                  f"{(cp.stderr or '').strip().splitlines()[-1:] or ['(no detail)']}",
+                  file=sys.stderr)
+            return 1
+
+    for record in records:
+        if not record.is_file():
+            print(f"      ERROR: step 0.5ic wrote no record at {record} — a "
+                  f"step that produced nothing is indistinguishable from one "
+                  f"that never ran", file=sys.stderr)
+            return 1
+        try:
+            json.loads(record.read_text(errors="replace"))
+        except (OSError, ValueError) as exc:
+            print(f"      ERROR: the step-0.5ic record at {record} does not "
+                  f"parse ({exc}) — unreadable evidence is not evidence",
+                  file=sys.stderr)
+            return 1
+    return 0
+
+
 def run_phase1_second_track(project: Path, rc_in: int) -> int:
     """The second track, run after the L-docs exist. Returns the exit code
     Phase 1 should report: a track that did not run overrides a clean backend
@@ -585,6 +745,13 @@ def main() -> int:
     _lock = _runner_lock.acquire_or_reenter(project, "phase1_one_shot_runner")
     if _lock is None:
         return 3
+
+    # STEP 0.5ic — the route declaration. Dispatched before the mode branch
+    # and on every path, because 0.5ic `blocks_on: []` and takes no input from
+    # D1: which delivery route a design is on is a property of the DESIGN, not
+    # of its documents.
+    print("[phase1] step 0.5ic — submission template + tape-out declaration ...")
+    rc_route = _run_step_0_5ic(project)
 
     # Resolve mode. When auto-detect finds no input, fall through to
     # prompt mode so step_ingest_render emits a SKIP status (verdict
@@ -652,9 +819,10 @@ def main() -> int:
         # A, the vendor-document front door) without a steps tree.
         summary["steps_view"] = _pl.emit_steps_view(
             project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
+        summary["step_0_5ic"] = "ran" if rc_route == 0 else "FAILED to run"
         (reports / "phase1_one_shot.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-        return rc
+        return max(rc, rc_route)
 
     # Prompt mode: original phase1_engine path
     plan: List[StepResult] = []
@@ -688,6 +856,7 @@ def main() -> int:
         "steps": [asdict(s) for s in plan],
         "verdict": _aggregate_verdict(plan),
         "second_track": "not run — D1 was REFUSED" if _refused else "ran",
+        "step_0_5ic": "ran" if rc_route == 0 else "FAILED to run",
     }
     if _refused:
         summary["preflight_ledger"] = _spf.LEDGER_REL
@@ -704,7 +873,7 @@ def main() -> int:
     print(f"verdict: {summary['verdict']}")
     for s in plan:
         print(f"  {s.status:6} {s.name:24} {s.detail[:120]}")
-    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second)
+    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second, rc_route)
 
 
 if __name__ == "__main__":
