@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -62,29 +63,96 @@ class Finding:
 
 
 _STRUCTURAL_TOKENS = (
-    re.compile(r"deck_mode\s*[:=]\s*[\"']?structural_only", re.IGNORECASE),
+    # The closing quote of a JSON KEY sits between the name and the colon:
+    # `"deck_mode": "structural_only"`. Without it in the pattern the token
+    # matched only the bare `deck_mode: structural_only` prose form, so a
+    # report that recorded the fallback in JSON and NOTHING else went
+    # undetected — measured here as a manifest carrying only that one field.
+    re.compile(r"deck_mode[\"']?\s*[:=]\s*[\"']?structural_only",
+               re.IGNORECASE),
     re.compile(r"STRUCTURAL_PASS", re.IGNORECASE),
     re.compile(r"structural-only", re.IGNORECASE),
     re.compile(r"produced\s+0\s+enforceable\s+rules", re.IGNORECASE),
 )
 
 
+#: Filenames that carry KLayout DRC evidence, as ONE predicate.
+#:
+#: THE DEFECT THIS REPLACES (measured on run-spm-publish, sky130A, 23 GB):
+#: the previous discovery globbed five literal shapes — ``**/manifest.json``,
+#: ``**/klayout_*.json``, ``**/drc_*.log``, ``**/*.lyrdb`` and
+#: ``reports/drc_*.json``. Those are the names the ``eda_drc_klayout`` MCP tool
+#: writes (``writeManifest`` → ``manifest.json``). They are NOT the names the
+#: phase3 runner's ``step_drc`` writes, and ``step_drc`` is what a full flow
+#: actually runs: it emits ``reports/phase3/drc_signoff.rpt`` (a KLayout
+#: report-database whose ``<generator>`` names ``sky130A.lydrc``) beside
+#: ``reports/phase3/drc_signoff.json`` (which records ``producer: klayout`` and
+#: ``is_signoff_deck: true``). MEASURED over that whole run: zero files matched
+#: any of the five globs, so the gate returned its "no KLayout DRC artefacts
+#: found" skip — the SAME answer it gives a project that never ran physical
+#: verification at all. A gate that cannot tell "no DRC ran" from "a signoff
+#: DRC ran and passed" is not silent about nothing; it is silent about
+#: everything, including the structural-only fallback it exists to catch, the
+#: moment that fallback is recorded under the runner's names.
+#:
+#: The two producers are enumerated here together, so adding a third is a
+#: change to this one pattern rather than a sixth glob somewhere.
+_DRC_ARTEFACT_NAME = re.compile(
+    r"^(?:"
+    r"manifest\.json"              # eda_drc_klayout writeManifest
+    r"|klayout_[^/]*\.json"        # eda_drc_klayout side reports
+    r"|drc_[^/]*\.(?:json|log|rpt|xml)"   # runner step_drc + drc_* logs
+    r"|[^/]*\.drc\.(?:rpt|log|xml)"      # routed.drc.rpt and friends
+    r"|[^/]*\.lyrdb"               # KLayout report database
+    r")$",
+    re.IGNORECASE,
+)
+
+#: Positive evidence that a REAL rule deck was executed, not the fallback.
+#:
+#: Recorded so the PASS says which deck answered rather than "no forbidden
+#: token appeared in these bytes". Absence of this evidence never turns a PASS
+#: into a FAIL here — the gate's single failure mode is unchanged — but it is
+#: reported, because "found artefacts, none names a deck" and "found artefacts,
+#: one names sky130A.lydrc" are different states and used to print the same
+#: sentence.
+_DECK_ATTEST_TOKENS = (
+    re.compile(r"[\w./-]+\.lydrc\b", re.IGNORECASE),
+    re.compile(r"[\"']?is_signoff_deck[\"']?\s*[:=]\s*true", re.IGNORECASE),
+    re.compile(r"<generator>\s*drc:\s*script\s*=", re.IGNORECASE),
+)
+
+
 def _find_drc_artefacts(project: Path) -> list[Path]:
+    """Every KLayout DRC artefact under ``project``, from ONE walk.
+
+    One walk rather than N globs: the previous form re-walked the whole tree
+    once per pattern, and widening it to the runner's names would have made
+    that eight walks of a multi-gigabyte run root. The set of names it accepts
+    is a strict superset of the five globs it replaces.
+    """
     out: list[Path] = []
-    candidates = [
-        "**/manifest.json",
-        "**/klayout_*.json",
-        "**/drc_*.log",
-        "**/*.lyrdb",
-        "reports/drc_*.json",
-    ]
     seen: set[Path] = set()
-    for pat in candidates:
-        for f in project.glob(pat):
-            if f.is_file() and f not in seen:
-                seen.add(f)
-                out.append(f)
+    for root, _dirs, files in os.walk(project):
+        base = Path(root)
+        for name in sorted(files):
+            if not _DRC_ARTEFACT_NAME.match(name):
+                continue
+            f = base / name
+            if f in seen or not f.is_file():
+                continue
+            seen.add(f)
+            out.append(f)
     return out
+
+
+def _deck_attestation(text: str) -> str:
+    """The deck this artefact says ran, or "" when it names none."""
+    for pat in _DECK_ATTEST_TOKENS:
+        m = pat.search(text)
+        if m:
+            return m.group(0)
+    return ""
 
 
 def _is_structural_evidence(text: str) -> bool:
@@ -121,6 +189,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
     summary: dict = {
         "drc_artefacts_found": [],
         "structural_evidence": [],
+        "deck_attested": [],
         "waiver_rationale": "",
         "skipped_reason": "",
     }
@@ -138,6 +207,11 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
         text = _read(a)
         if _is_structural_evidence(text):
             structural_files.append(a)
+            continue
+        deck = _deck_attestation(text)
+        if deck:
+            summary["deck_attested"].append(
+                {"file": str(a.relative_to(project)), "deck": deck})
     summary["structural_evidence"] = [
         str(p.relative_to(project)) for p in structural_files
     ]
@@ -199,9 +273,16 @@ def main() -> int:
         if evid:
             print(f"  [PASS] {len(evid)} structural-only run(s) covered "
                   f"by waiver K01_klayout_structural_only_drc")
+        elif summary["deck_attested"]:
+            decks = sorted({d["deck"] for d in summary["deck_attested"]})
+            print(f"  [PASS] {len(summary['drc_artefacts_found'])} "
+                  f"DRC artefact(s); real rule deck attested by "
+                  f"{len(summary['deck_attested'])} of them: "
+                  f"{', '.join(decks)}")
         else:
             print(f"  [PASS] {len(summary['drc_artefacts_found'])} "
-                  f"DRC artefact(s) used real (non-structural) deck")
+                  f"DRC artefact(s), none in structural-only fallback mode "
+                  f"(no artefact names the deck that ran)")
         return 0
     for f in findings:
         loc = f" ({f.file})" if f.file else ""
