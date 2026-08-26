@@ -213,15 +213,16 @@
     },
     "mcp_eda.cocotb": {
       "description": "MCP eda_cocotb — sibling .py staging, PYTHONPATH, etc. (the CVDP harness_library lesson)",
-      "bucket_A_program": "mcp-eda/src/tools/cocotb.js",
+      "bucket_A_program": "mcp-eda/src/index.js",
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "mcp_eda.lint": {
-      "bucket_A_program": "mcp-eda/src/tools/lint.js",
+      "bucket_A_program": "mcp-eda/src/index.js",
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "mcp_eda.synth": {
-      "bucket_A_program": "mcp-eda/src/tools/synth.js",
+      "bucket_A_program": "mcp-eda/src/index.js",
+   "bucket_A_note": "The MCP server is a SINGLE module: every eda_* tool is registered in mcp-eda/src/index.js. These three routes named mcp-eda/src/tools/{synth,lint,cocotb}.js, which have NEVER existed in this repository at any commit, so every MCP-EDA capture was routed to a file nobody could open and enhancement_emit.py wrote a rule sketch telling the reader to merge into it. The path check that should have caught this exempted every mcp-eda/ route on the false premise that mcp-eda is a sibling package; it ships inside the plugin. Shared helpers live in mcp-eda/src/lib/*.mjs.",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "mixed_signal.M_top_merge": {
