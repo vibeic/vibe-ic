@@ -6881,6 +6881,28 @@ def _p0_audit_gate_records(records: List[Dict[str, Any]]
             for r in records if r["verdict"] == "FAIL"]
 
 
+# The gate's own account of WHY it had nothing to check. `[SKIP] ` and a
+# repetition of the gate's own name are the house prefix on these lines; they
+# carry no information beside a record that already has a `name` and a verdict,
+# and repeating them makes the operator line unreadable. Strip only those two,
+# never the reason itself, and fall back to the raw line if stripping would
+# leave nothing — an empty message is how a genuinely silent gate is recorded,
+# and a normalising step must not manufacture one.
+_P0_SKIP_MARKER = re.compile(r"^\[(?:skip|n/?a|vacuous|info)\]\s*", re.I)
+
+
+def _p0_skip_reason_from_output(gate_name: str, stdout: str,
+                                stderr: str) -> str:
+    """First line of the gate's output, minus the marker and its own name."""
+    raw = (stdout.strip() or stderr.strip()).split("\n")[0].strip()
+    if not raw:
+        return ""
+    line = _P0_SKIP_MARKER.sub("", raw, count=1).strip()
+    if line.lower().startswith(gate_name.lower()):
+        line = line[len(gate_name):].lstrip(" :\u2014-").strip()
+    return (line or raw)[:200]
+
+
 def _p0_skip_entry(record: Dict[str, Any]) -> str:
     """The skip-bucket payload for a SKIP or NOT_INVOCABLE record.
 
@@ -6889,8 +6911,10 @@ def _p0_skip_entry(record: Dict[str, Any]) -> str:
 
       * NOT_INVOCABLE -> the #492 disclosure entry, whose text and every
         downstream recogniser live together in `_gate_invocation`;
-      * an input-missing SKIP -> the bare gate name (the gate looked, found
-        nothing to check, and said so with exit code 2);
+      * an input-missing SKIP -> ``<gate> (SKIP: <why>)`` where the gate
+        stated a reason, and the bare gate name where it exited 2 in silence.
+        The reason is the gate's OWN first line: this projection never invents
+        one, so a silent gate still reads exactly as it did before;
       * every other SKIP -> ``<gate> (SKIP: <why>)`` — class-not-applicable,
         analog-track-deferred, no-backing-program.
 
@@ -6901,7 +6925,8 @@ def _p0_skip_entry(record: Dict[str, Any]) -> str:
     if record["verdict"] == "NOT_INVOCABLE":
         return _gate_invocation.format_not_invocable_entry(
             record["name"], record["message"])
-    if record["evidence"].get("skip_kind") == "input-missing":
+    if (record["evidence"].get("skip_kind") == "input-missing"
+            and not record["message"].strip()):
         return record["name"]
     return f"{record['name']} (SKIP: {record['message']})"
 
@@ -7243,7 +7268,24 @@ def _run_structural_rtl_gates(project: Path,
                 # all: the verdict field says NOT_INVOCABLE.
                 return _p0_gate_record(gate_name, "NOT_INVOCABLE", _why,
                                        {"exit_code": 2})
-            return _p0_gate_record(gate_name, "SKIP", "",
+            # The gate has ALREADY said why it had nothing to check, on its
+            # own stdout ("no opcode override doc found", "no ADDR-limit
+            # conflict", "single-clock topology"). Recording an empty message
+            # here threw that away, and `_p0_skip_entry` then rendered the
+            # skip as the bare gate name. Measured on the spm run at
+            # v1.11.93: 39 of 246 registered gates reached the report as a
+            # name and nothing else.
+            #
+            # A bare name cannot be triaged. "This design legitimately has no
+            # such layer" and "a producer never emitted the document this gate
+            # reads" are OPPOSITE findings — one is a property of the design,
+            # the other a program defect owed a fix — and both rendered
+            # identically. Carry the callee's own first line, exactly as the
+            # rc-1 and NOT_INVOCABLE arms already do; the VERDICT is
+            # unchanged, only what the record is able to say about it.
+            _skip_line = _p0_skip_reason_from_output(
+                gate_name, r.stdout, r.stderr)
+            return _p0_gate_record(gate_name, "SKIP", _skip_line,
                                    {"exit_code": 2,
                                     "skip_kind": "input-missing"})
         elif r.returncode == 1:

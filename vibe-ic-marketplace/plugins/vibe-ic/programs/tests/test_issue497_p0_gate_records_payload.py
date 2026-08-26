@@ -84,7 +84,13 @@ def _buckets_from_records(records):
         elif v == "NOT_INVOCABLE":
             skips.append(_gi.format_not_invocable_entry(name, msg))
         elif v == "SKIP":
-            skips.append(name if ev.get("skip_kind") == "input-missing"
+            # An input-missing skip renders as the bare gate name ONLY when
+            # the gate exited 2 in silence. Where it stated a reason, that
+            # reason travels beside the name exactly as every other skip
+            # kind's does — a bare name cannot distinguish "this design has
+            # no such layer" from "a producer never wrote the input".
+            skips.append(name if (ev.get("skip_kind") == "input-missing"
+                                  and not msg.strip())
                          else f"{name} (SKIP: {msg})")
         elif v == "WAIVED":
             waived.append(name)
