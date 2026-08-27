@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "b58c10cdd345ef4be1b4c54943f567fdf0ac7060c84af754e37e731c465a1c77"
+    "0db85d8d209370f4e59729a6feaaa93a9d46dc9de5f3d26cac2addb17ddd54cb"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -483,7 +483,7 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "aa79ad108498364cf24ad166dd030a9b5de3fffbee0336071a7a00dad3af6e77"
+    "6a4b8f1fe97d115b6ae7ea64040c645aa083bd7895e2916c23aba0741d1baf94"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
