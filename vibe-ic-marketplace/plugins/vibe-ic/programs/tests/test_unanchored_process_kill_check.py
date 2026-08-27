@@ -270,3 +270,62 @@ def test_the_mcp_eda_test_tree_is_scanned_and_clean():
         pytest.skip("mcp-eda sub-project not present")
     assert any(p.suffix == ".py" for p in mcp.rglob("*.py")), "nothing scanned"
     assert GATE.scan_tree(mcp) == {}
+
+
+# ── AND SOMETHING OTHER THAN THIS FILE HAS TO RUN IT ─────────────────────────
+#
+# MEASURED 2026-08-28. Every assertion above proves the DETECTOR. None of them
+# proved that anything points it at the shipped tree, and nothing did:
+# `checker_execution_wiring_audit` — itself a blocking hygiene gate — reported
+#
+#     [FAIL] 1 checker(s) that NOTHING but their own test runs — a fixture the
+#            author wrote proves the logic, never the artefacts:
+#              unanchored_process_kill_check.py
+#
+# and exited 1 on `main` at ae5cc4dbf. A checker only its own test runs is the
+# weakest runner class there is: the fixtures below can never regress, because
+# they are frozen strings in this file, while the tree they are a proxy for
+# changes every day. The gate is now dispatched from `repo_hygiene_gates.sh`,
+# and these two tests are what keeps that true — deleting the `run` line would
+# otherwise only be visible in the audit's own output.
+_HYGIENE = PROG.parents[3] / "tools" / "ci" / "repo_hygiene_gates.sh"
+
+
+def test_the_gate_is_dispatched_from_the_hygiene_set():
+    if not _HYGIENE.is_file():
+        pytest.skip(f"hygiene gate script not present at {_HYGIENE}")
+    src = _HYGIENE.read_text()
+    line = [ln for ln in src.splitlines()
+            if ln.startswith("run ") and "unanchored_process_kill_check.py" in ln]
+    assert len(line) == 1, (
+        "unanchored_process_kill_check is not dispatched by a `run` line in "
+        "repo_hygiene_gates.sh — it is back to being a checker that only its "
+        "own test runs, which is what `checker_execution_wiring_audit` blocks "
+        f"on. Matching lines: {line}")
+    # `$ROOT`, not `$PLUGIN`: the checker's own docstring records that a real
+    # pattern kill lived under `mcp-eda/test`, outside the plugin's programs/.
+    assert '--root "$ROOT"' in line[0], (
+        f"the gate is wired to a narrower scope than the defect it is for: "
+        f"{line[0]}")
+    # `run`, not `run_tolerating_uncheckable`: this gate has no input it can
+    # fail to resolve — it walks source that is always there — so an rc-2
+    # tolerance would only hide a crash.
+    assert not line[0].startswith("run_tolerating_uncheckable"), line[0]
+
+
+def test_the_gate_passes_on_the_tree_it_was_just_wired_to():
+    """Wiring a RED gate turns "unverified" into "blocking", which is a
+    different repair. This asserts the state that made the wiring safe, and it
+    states its denominator: a guard that passes over an empty population
+    certifies nothing."""
+    root = PROG.parents[3]
+    if not (root / "tools" / "ci").is_dir():
+        pytest.skip(f"not a full repo checkout at {root}")
+    examined = [p for p in GATE.iter_python_files(root)
+                if any(b in p.read_text(errors="replace") for b in GATE.BANNED)]
+    assert len(examined) >= 5, (
+        f"only {len(examined)} file(s) under {root} carry a banned primitive "
+        f"at all — the population this gate examines has collapsed, so a PASS "
+        f"from it would certify nothing: {[p.name for p in examined]}")
+    assert GATE.scan_tree(root) == {}, (
+        "the shipped tree trips the gate that is now wired to block on it")

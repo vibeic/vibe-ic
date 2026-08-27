@@ -98,6 +98,30 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # rather than merely discouraged. Wired here because a source guard that only
 # its own test runs has never run on anything that shipped.
 run "OpenSTA error-abort left armed" "$ROOT" python3 "$PG/sta_continue_on_error_guard.py" "$ROOT"
+# Its exact twin one incident over, and wired for the identical reason the
+# comment above gives: `checker_execution_wiring_audit` named
+# `unanchored_process_kill_check` as THE checker that nothing but its own test
+# ran — "a fixture the author wrote proves the logic, never the artefacts" —
+# and that audit has been RED on main for exactly this one name.
+#
+# The subject is SHIPPED SOURCE, so this surface and not the flow: it parses
+# every `*.py` under the root and asks whether a process is chosen for
+# signalling by matching a command line. `$ROOT` and not `$PLUGIN` on purpose —
+# the checker's own docstring records that a real pattern kill lived under
+# `mcp-eda/test`, and scoping this to the plugin would put a directory-naming
+# accident in charge of whether a site is examined.
+#
+# MEASURED BEFORE WIRING, so this adds a gate that PASSES rather than a new red
+# (#1253: wiring a red gate turns "unverified" into "blocking", which is a
+# different repair and not this one). At ae5cc4dbf, root scope: 1712 python
+# files walked, 6 carrying `pkill`/`killall` at all and therefore AST-examined,
+# 0 invocations, rc=0 in 0.6 s. The denominator is stated because a guard that
+# passes over an empty population certifies nothing: the six are
+# `_docker_watchdog`, `_watchdog`, `loop_watchdog_compliance_check`,
+# `phase3_one_shot_runner`, the checker itself, and one `mcp-eda/test` module —
+# i.e. every file that carried the defect this gate was written for, now
+# examined on every run instead of never.
+run "no pattern-based process kill" "$ROOT" python3 "$PG/unanchored_process_kill_check.py" --root "$ROOT"
 # vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
 # READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
