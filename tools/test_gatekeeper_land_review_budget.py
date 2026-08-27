@@ -261,3 +261,79 @@ def test_the_function_is_not_silently_treated_as_a_missing_command(tmp_path):
     assert "command not found" not in out, out
     assert "127" not in out, out
     assert failed == 0, out
+
+
+# --- THE SHAPE THE REVIEW IS TOLD ABOUT ------------------------------------
+#
+# `cheap:landing-shape` counts the range into `GK_RANGE_N` and, above one, runs
+# `landing_is_one_commit_check.py --batch` and passes. The review runs that
+# SAME checker again through `gatekeeper_review.one_commit_gate`. While this
+# invocation forwarded nothing, one caller called the tree a valid batch and
+# the other called it an illegal landing, in one gate run about one tree.
+#
+# A protected-path ceremony landing is structurally at least three commits, so
+# the un-forwarded form had no passing case: it refused every batch, always.
+#
+# Driven through the REAL extracted function against a stub that records the
+# argv it was handed, so what is asserted is the WIRING and not the presence of
+# a string somewhere in the file.
+
+def _review_argv(tmp_path, range_n=None):
+    """Return the argv the real function hands `gatekeeper_review.py`."""
+    programs = tmp_path / "programs"
+    programs.mkdir(exist_ok=True)
+    argv_file = tmp_path / "argv.txt"
+    (programs / "gatekeeper_review.py").write_text(textwrap.dedent(f"""
+        import sys
+        open({str(argv_file)!r}, "w").write("\\n".join(sys.argv[1:]))
+        print("VERDICT: MERGE_OK")
+        sys.exit(0)
+        """), encoding="utf-8")
+    script = tmp_path / "drive_argv.sh"
+    # Unset rather than empty when `range_n is None`: that is the state the
+    # other drivers in this file leave it in, and `set -u` is the point.
+    range_line = "" if range_n is None else f'GK_RANGE_N="{range_n}"\n'
+    script.write_text(
+        "set -u\n"
+        f'PROGRAMS="{programs}"\nROOT="{tmp_path}"\nBASE="origin/main"\n'
+        f'GK_REVIEW_RECORD="{tmp_path}/review-hygiene.json"\n'
+        'GK_REVIEW_BUDGET_S="240"\n'
+        + range_line
+        + _extract("run_gatekeeper_review")
+        + 'run_gatekeeper_review; echo "RC=$?"\n',
+        encoding="utf-8")
+    r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                       timeout=60)
+    m = re.search(r"RC=(-?\d+)", r.stdout)
+    rc = int(m.group(1)) if m else None
+    argv = (argv_file.read_text(encoding="utf-8").splitlines()
+            if argv_file.exists() else [])
+    return rc, argv, r.stdout + r.stderr
+
+
+def test_a_batch_range_forwards_the_batch_flag_to_the_review(tmp_path):
+    """THE DEFECT, at the seam where it lived."""
+    rc, argv, out = _review_argv(tmp_path, range_n=3)
+    assert rc == 0, out
+    assert "--batch" in argv, (
+        "the landing-shape gate already counted this range as a batch and "
+        "passed it that way; the review runs the same checker and was told "
+        f"nothing, so it can only ever refuse. argv={argv}\n{out}")
+
+
+def test_a_one_commit_range_does_not_claim_to_be_a_batch(tmp_path):
+    """The flag is OPT-IN and asks a different, stronger question. A single
+    landing that opted into it would be asserting a shape nobody checked."""
+    rc, argv, out = _review_argv(tmp_path, range_n=1)
+    assert rc == 0, out
+    assert "--batch" not in argv, f"argv={argv}\n{out}"
+
+
+def test_an_uncounted_range_claims_nothing_and_does_not_die_under_set_u(
+        tmp_path):
+    """`GK_RANGE_N` unset is the shape every other driver in this file leaves,
+    and a bare dereference under `set -u` kills the function before the case
+    statement — the failure `${LANE_DIR:-}` was already fixed for once."""
+    rc, argv, out = _review_argv(tmp_path, range_n=None)
+    assert rc == 0, out
+    assert "--batch" not in argv, f"argv={argv}\n{out}"
