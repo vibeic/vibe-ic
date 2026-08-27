@@ -1,0 +1,37 @@
+LANDED fix/j1764-absent-is-not-empty (2a31f897ce) as 88809e6bf [v1.12.5]
+
+DIVERGENCE FROM THE BRIEF'S NUMBERS, MEASURED not assumed. Brief said 5 files
+1752+/111-; this landed 10 files 627+/15- (4 content + 6 version). The branch sat
+101 commits behind and main had already landed part of it:
+  - repo_hygiene_parallel.py: ALL 28 added lines already on main -> merge is a
+    no-op there, so this landing touches NO protected path and needed no
+    PREPARE/ACTIVATE pair (unlike the reachability branch).
+  - findings doc: 712 of 1021 added lines already on main; 309 genuinely new.
+  - test_gate_concurrency.sh +79 is an APPEND (case 21) to a file main already
+    carries at 529 lines -- I first misread that numstat row as a file addition.
+
+THE MISTAKE I MADE AND CAUGHT. Both conflicts were comment hunks where the
+branch text is a superset correcting an overstatement. I resolved them with
+, which takes the WHOLE branch blob, not just
+the conflicted hunk -- and that silently reverted main's #1770 repair: main had
+fixed the empty-population exemption hazard and re-pinned
+test_a_population_refusal_cannot_buy_an_uncheckable_exemption from the repaired
+side (exempt_until is None, not_checked_unexempted == [_EMPTY_LABEL]), while the
+branch still pins the unrepaired direction (exempt_until == '2099-01-01').
+Caught because that test went RED on my tree while PASSING on clean main.
+Re-resolved hunk-by-hunk; the repair is intact (grep 'REPAIRED (vibe-ic#1770)'
+== 1) and the deletion count fell 19 -> 8. Nothing was weakened to land this.
+
+RAN (whole modules):
+  test_routed_def_corpus_dispatch.py + tools/ci/test_dispatch_shell_harnesses.py
+    -> 28 passed, rc=0
+  bash tools/ci/test_gate_concurrency.sh -> 36 passed, 0 failed, rc=0
+  gen_program_inventory --check / marketplace_version_sync_check /
+  plugin_version_prose_sync_check / version_bump_monotonic_check /
+  content_pinned_authority / ci_harness_timeout_ceiling_check -> all rc=0
+  0 files still state the previous version.
+
+NO reds carried by this landing: every module run was green on the pushed tree.
+
+NOT RUN: the full suite. No base arm, no differential, no set-difference claim
+-- that machinery was deleted at v1.12.1.
