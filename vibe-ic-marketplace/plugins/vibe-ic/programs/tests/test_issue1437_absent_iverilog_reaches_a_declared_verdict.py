@@ -329,6 +329,40 @@ def test_scan_is_not_vacuous():
 
 
 # ── the same property, on the subject that replaced the deleted pipeline ─────
+#
+# THE PREMISE THESE TWO TESTS CARRIED, AND WHICH HALF OF IT DIED
+# ---------------------------------------------------------------
+# Both asserted `emit_would_be_blocked(...) == []` when the checker could not
+# run, under the heading "on any tool or IO error, return [] rather than
+# manufacture a block". Two claims were welded together there:
+#
+#   (a) DO NOT FABRICATE A FINDING ABOUT THE DESIGN. A block invented by a
+#       checker that never looked demotes work that is actually correct, with
+#       the authority of an examination that did not happen. STILL TRUE, still
+#       asserted below, and now asserted more precisely: the assertion is that
+#       no EMIT-BLOCKING RULE NAME is produced, which is the thing a downstream
+#       reader acts on, rather than that the container happens to be empty.
+#
+#   (b) `[]` IS THE RIGHT WAY TO SAY IT. FALSE, and measured false. `[]` is not
+#       a neutral container: it is the value `_refusals` reads as ACCEPT. So the
+#       old shape did not merely decline to fabricate a block — it fabricated a
+#       CLEAN BILL, and did so in the permissive direction, where the cost is a
+#       wrong emit shipped rather than a correct one waived to the AI backup.
+#       Measured on this tree before the repair: with `timeout=0`, a pure-rotate
+#       emit answering a shifter spec — the exact emit `test_pure_rotate_emit_is_
+#       gate_blocked` exists to catch — came back `[]`, byte-identical to the
+#       genuinely clean AND-gate emit. "The checker broke" and "the tree is
+#       clean" were one observable.
+#
+# So (a) is kept and strengthened, (b) is replaced by the repo's own convention
+# for this exact situation: `_gate_dispatch.sh` gives "I could not look" its own
+# NOT_CHECKED state rather than folding it into PASS. The marker is
+# `deterministic_emit_chain.NOT_MEASURED`, which is never a rule name.
+def _no_rule_name_was_fabricated(look, blocking_rules):
+    """The (a) half, stated once so both arms below assert the same thing."""
+    return look.rules == () and not (set(look.rules) & set(blocking_rules))
+
+
 def test_the_conformance_gate_claims_nothing_when_its_checker_cannot_run():
     """THE FABRICATED-FINDING ARM, re-homed.
 
@@ -337,13 +371,16 @@ def test_the_conformance_gate_claims_nothing_when_its_checker_cannot_run():
     compiler that never ran. Deleting that module deleted that particular risk,
     but not the shape of it: `deterministic_emit_chain.emit_would_be_blocked`
     shells out to `spec_conformance_check` and must, on any tool or IO error,
-    return [] rather than manufacture a block.
+    claim NOTHING ABOUT THE DESIGN.
 
     The asymmetry is why it matters: a fabricated BLOCK demotes work that is
     actually correct, and it does so with the authority of a checker that never
-    looked at anything.
+    looked at anything. The opposite fabrication — a clean bill from the same
+    checker that never looked — is the one this arm used to require.
     """
     import deterministic_emit_chain as C
+    import spec_conformance_check as _scc
+    blocking = set(_scc.EMIT_BLOCKING_CONFORMANCE_RULES)
     clean = ("module TopModule(input a, input b, output out);\n"
              "  assign out = a & b;\nendmodule\n")
 
@@ -357,16 +394,35 @@ def test_the_conformance_gate_claims_nothing_when_its_checker_cannot_run():
 
     builtins.__import__ = _no_checker
     try:
-        assert C.emit_would_be_blocked("Assign out to a AND b.", clean) == [], (
-            "a block was claimed by a checker that could not be loaded")
+        look = C.emit_block_report("Assign out to a AND b.", clean)
+        listed = C.emit_would_be_blocked("Assign out to a AND b.", clean)
+        refusals = C._refusals("Assign out to a AND b.", clean, None, True)
     finally:
         builtins.__import__ = real_import
+
+    # (a) nothing about the DESIGN was claimed — no rule name was invented.
+    assert _no_rule_name_was_fabricated(look, blocking), (
+        f"a block was claimed by a checker that could not be loaded: {look}")
+    assert not (set(listed) & blocking), (
+        f"a rule name reached the list form from a checker that never ran: "
+        f"{listed}")
+
+    # (b) and the absence is DECLARED rather than dressed as a clean bill.
+    assert look.measured is False, (
+        "an unimportable checker was reported as a completed measurement")
+    assert "spec_conformance_check" in look.why_not, look.why_not
+    assert listed and listed[0].startswith(C.NOT_MEASURED), listed
+    assert refusals, (
+        "the caller ACCEPTED an emit no checker examined — this is the "
+        "fail-open direction the three-state look exists to close")
 
 
 def test_an_absent_tool_never_turns_a_clean_emit_into_a_block():
     """The subprocess arm: the checker imports but the tool behind it is gone."""
     import deterministic_emit_chain as C
+    import spec_conformance_check as _scc
     import subprocess as _sp
+    blocking = set(_scc.EMIT_BLOCKING_CONFORMANCE_RULES)
     clean = ("module TopModule(input a, input b, output out);\n"
              "  assign out = a & b;\nendmodule\n")
     real_run = _sp.run
@@ -376,6 +432,74 @@ def test_an_absent_tool_never_turns_a_clean_emit_into_a_block():
 
     _sp.run = _absent
     try:
-        assert C.emit_would_be_blocked("Assign out to a AND b.", clean) == []
+        look = C.emit_block_report("Assign out to a AND b.", clean)
+        listed = C.emit_would_be_blocked("Assign out to a AND b.", clean)
     finally:
         _sp.run = real_run
+
+    assert _no_rule_name_was_fabricated(look, blocking), look
+    assert not (set(listed) & blocking), listed
+    assert look.measured is False, "an absent tool was reported as a measurement"
+    assert "FileNotFoundError" in look.why_not, look.why_not
+
+
+def test_a_clean_look_and_a_failed_look_are_not_the_same_value():
+    """THE DEFECT ITSELF, as a test: the two used to be `[]` and `[]`.
+
+    Stated on the pair rather than on either one, because the failure was never
+    visible in a single call — each looked perfectly reasonable alone. It is the
+    EQUALITY of the two that was the bug, so the equality is what is asserted
+    against.
+    """
+    import deterministic_emit_chain as C
+    clean_spec, clean_rtl = ("Assign out to a AND b.",
+                             "module TopModule(input a, input b, output out);\n"
+                             "  assign out = a & b;\nendmodule\n")
+    # A KNOWN-BAD emit, so the arm cannot be satisfied by an emit that is
+    # actually fine: a pure rotate answering a shifter spec is the emit
+    # `test_pure_rotate_emit_is_gate_blocked` pins as gate-blocked.
+    bad_spec = ("Build a 4-bit logical right shifter. The vacated MSB is "
+                "filled with 0 each clock.")
+    bad_rtl = ("module TopModule(input clk, input [3:0] d, output reg [3:0] q);\n"
+               "  always @(posedge clk) q <= {q[0], q[3:1]};\nendmodule\n")
+
+    # STATED FIRST, AND ONLY THROUGH THE PRE-EXISTING API, ON PURPOSE. Against
+    # the code before the repair this is the assertion that fails, with the
+    # defect as its message. If the arms below came first the whole test would
+    # die on `AttributeError: no attribute emit_block_report`, which proves the
+    # new function is absent and says nothing about the behaviour that was
+    # wrong. `timeout=0` is a real way for the spawn to reach no verdict, and
+    # it is applied to the emit the gate WOULD have refused — so a fail-open
+    # answer is not merely imprecise, it accepts an emit known to be wrong.
+    assert C.emit_would_be_blocked(clean_spec, clean_rtl) != \
+        C.emit_would_be_blocked(bad_spec, bad_rtl, timeout=0), (
+        "a clean look and a look that never happened produce the same value; "
+        "this is the fail-open defect, and it is invisible in either call alone")
+
+    measured_clean = C.emit_block_report(clean_spec, clean_rtl)
+    assert measured_clean.measured is True and measured_clean.rules == ()
+    could_not_look = C.emit_block_report(bad_spec, bad_rtl, timeout=0)
+    assert could_not_look.measured is False, (
+        "a spawn that timed out was reported as a completed measurement")
+
+    # And the caller acts on the difference, which is the half that matters:
+    # the clean emit is ACCEPTED and the unexamined one is REFUSED. `_refusals`
+    # takes no timeout, so the spawn is broken the way the arms above break it.
+    assert C._refusals(clean_spec, clean_rtl, None, True) == [], (
+        "a genuinely clean emit must still be accepted — a check that refuses "
+        "everything is not a check")
+    import subprocess as _sp
+    real_run = _sp.run
+    _sp.run = lambda *a, **k: (_ for _ in ()).throw(
+        FileNotFoundError("simulated: the checker binary is gone"))
+    try:
+        refused = C._refusals(bad_spec, bad_rtl, None, True)
+        refused_clean = C._refusals(clean_spec, clean_rtl, None, True)
+    finally:
+        _sp.run = real_run
+    assert refused and refused[0].startswith(C.NOT_MEASURED), refused
+    # Deliberately also on the CLEAN emit: the refusal is a statement about the
+    # LOOK, not about the RTL. A version that refused only the bad emit would be
+    # reading a verdict it never obtained.
+    assert refused_clean and refused_clean[0].startswith(C.NOT_MEASURED), \
+        refused_clean

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, NamedTuple, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -60,7 +60,17 @@ def _supplemental(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optio
 
 
 def _bridged_ports(prompt: str):
-    """(ins, outs) for the emitters that take an interface, [] when unreadable.
+    """(ins, outs) for the emitters that take an interface, or None.
+
+    NONE IS "COULD NOT LOOK", `([], [])` IS "LOOKED AND THERE ARE NO PORTS".
+    Both used to be `([], [])`, and the two are not the same event. `([], [])`
+    is the honest answer for prose that states no ports; it is a LIE when the
+    bridge or the parser was unavailable, and it is not an inert lie, because
+    `_general` passes the result straight into `general_synth` — so a prompt
+    whose ports could not be read produced an emit built as though it had none.
+    That emit is then a candidate the chain can ACCEPT. A `None` here makes the
+    interface-taking emitters SKIP instead, which waives to the AI backup: the
+    outcome the module's own contract calls the honest one.
 
     RTLLM-dialect prose states its ports as `Input ports:` / `Output ports:`
     description blocks, which `port_parser` (bullet/ANSI-header dialect) reads as
@@ -80,11 +90,11 @@ def _bridged_ports(prompt: str):
         import prose_port_block_read as _bridge          # noqa: PLC0415
         import port_parser as _pp                        # noqa: PLC0415
     except ImportError:
-        return [], []
+        return None
     try:
         ins, outs = _pp.parse_ports(_bridge.bridge_prompt(prompt))
-    except Exception:
-        return [], []
+    except Exception:                                    # noqa: BLE001
+        return None
     return ins or [], outs or []
 
 
@@ -124,7 +134,10 @@ def _arith_ext(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional
         import arith_ext_synth as _ax                    # noqa: PLC0415
     except ImportError:
         return None, None
-    ins, outs = _bridged_ports(prompt)
+    bridged = _bridged_ports(prompt)
+    if bridged is None:                 # could not read the ports: SKIP, never
+        return None, None               # synthesise an interface from silence
+    ins, outs = bridged
     if not (ins and outs):
         return None, None
     return None, _ax.synth(prompt, ins, outs, top)
@@ -147,7 +160,10 @@ def _general(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional[s
         import general_synth as _gs                      # noqa: PLC0415
     except ImportError:
         return None, None
-    ins, outs = _bridged_ports(prompt)
+    bridged = _bridged_ports(prompt)
+    if bridged is None:                 # see `_bridged_ports`: an unread
+        return None, None               # interface is not an empty one
+    ins, outs = bridged
     return None, _gs.synth(prompt, ins, outs, top)
 
 
@@ -198,9 +214,15 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
     for name, fn in EMITTERS:
         try:
             kind, rtl = fn(prompt_text, ifc_text, top)
-        except Exception:
+        except Exception as exc:                       # noqa: BLE001
             # An emitter that raises must not take the chain down; the next one
-            # and ultimately the AI backup are the designed fallbacks.
+            # and ultimately the AI backup are the designed fallbacks. But a
+            # BARE `continue` made "this emitter crashed" and "this emitter
+            # declined" the same observable, so a chain with three broken
+            # emitters produced the same waive as a chain that simply did not
+            # recognise the prompt — the distinction `rejected` exists to carry.
+            rejected.append((name, [f"emitter raised "
+                                    f"({type(exc).__name__}): {exc}"]))
             continue
         if not rtl:
             continue
@@ -273,6 +295,18 @@ def _refusals(prompt_text: str, rtl: str,
     live emits on both VerilogEval corpora, so wiring it buys no accuracy today;
     it costs ~0.07 s per emit and makes the claim the docstring already made
     true. The accuracy is in rule 1.
+
+    RULE 2 CAN ALSO FAIL TO RUN, AND THAT IS A THIRD OUTCOME. It used to be
+    folded into the second: `emit_would_be_blocked` returned `[]` on an absent
+    checker, an unwritten report, an unparseable report and a timeout alike, so
+    "the gate examined this RTL and refused nothing" and "nothing examined this
+    RTL" arrived here as the same empty list — and this function reads an empty
+    list as ACCEPT. The failure direction was therefore PERMISSIVE: the one
+    state in which the chain knows least was the state in which it stood behind
+    the emit hardest. A NOT-MEASURED look is now a refusal, so the emit is
+    discarded and the chain moves to the next emitter exactly as it does for a
+    gate-blocked one, and `try_emit_ex` reports the reason instead of a bare
+    handover.
     """
     if verify is not None:
         try:
@@ -280,7 +314,128 @@ def _refusals(prompt_text: str, rtl: str,
                 return ["verify: candidate failed the caller's oracle"]
         except Exception as exc:                       # noqa: BLE001
             return [f"verify raised ({type(exc).__name__}): treated as a failure"]
-    return list(emit_would_be_blocked(prompt_text, rtl)) if check else []
+    if not check:
+        return []
+    look = emit_block_report(prompt_text, rtl)
+    if not look.measured:
+        return [f"{NOT_MEASURED}: {look.why_not} — an emit that nothing "
+                f"examined is not an emit this chain will stand behind"]
+    return list(look.rules)
+
+
+NOT_MEASURED = "conformance-not-measured"
+"""The marker a NOT-MEASURED look carries. NEVER a conformance rule name.
+
+It has to be distinguishable from both of the other two answers and it must not
+be mistakable for one. A rule name would be a FABRICATED FINDING — a claim about
+the RTL that no checker made — which is the failure `#1437` names as worse than
+the traceback it replaced ("turning an absent compiler into a finding about the
+design"). This marker makes the opposite claim: that nothing was examined.
+"""
+
+
+class ConformanceLook(NamedTuple):
+    """What a look at the conformance gate ACTUALLY produced. Three states.
+
+    `measured` is the load-bearing field. `rules` is meaningful only when it is
+    True; `why_not` is populated only when it is False. Reading `rules` without
+    reading `measured` reproduces the exact defect this type exists to end —
+    an empty tuple then means "clean" whether or not anything looked.
+    """
+    measured: bool
+    rules: Tuple[str, ...]
+    why_not: str
+
+
+def emit_block_report(prompt_text: str, rtl: str,
+                      timeout: int = 60) -> ConformanceLook:
+    """MEASURED + the rules tripped, or NOT MEASURED + why nothing was examined.
+
+    THE PRIMITIVE, AND WHY IT REPLACED A BARE LIST. Every error path in this
+    function used to `return []`, and `[]` is also the answer for RTL the gate
+    read and cleared. So an absent `spec_conformance_check`, a checker that
+    wrote no report, a report that would not parse, and a spawn that timed out
+    were all INDISTINGUISHABLE from a clean bill of health — and indistinguishable
+    in the PERMISSIVE direction, because `_refusals` accepts an empty list.
+    "The checker broke" and "the tree is clean" were one observable.
+
+    That is the same defect the landing gate states as a rule (rc=2 "could not
+    measure" must never reach the stamp as "I measured and it was clean") and
+    the same one `_gate_dispatch.sh` encodes as a distinct NOT_CHECKED state
+    rather than folding it into PASS. This module was on the wrong side of both.
+
+    WHAT THE OLD BEHAVIOUR WAS PROTECTING, AND HOW THAT IS KEPT. The docstring's
+    stated reason was "a missing checker must never manufacture a block and
+    demote a real solve" — do not invent a FINDING ABOUT THE DESIGN out of a
+    tool failure. That invariant is kept exactly: this never puts a rule name in
+    `rules` that no checker produced. What it stops doing is inventing a CLEAN
+    BILL out of the same tool failure, which was the other half of the same
+    mistake and the dangerous half, because acceptance is the permissive
+    direction and a demoted solve is merely a waive to the AI backup.
+
+    A caller that genuinely wants the old fail-open behaviour still has one
+    line for it — `look.measured or not look.rules` — but it now has to write
+    that line, and a reader can see it.
+    """
+    if not (rtl or "").strip():
+        return ConformanceLook(False, (), "no RTL was supplied to examine")
+    if not (prompt_text or "").strip():
+        return ConformanceLook(
+            False, (), "no spec text was supplied, so no rule could be applied")
+    try:
+        from spec_conformance_check import (                # noqa: PLC0415
+            EMIT_BLOCKING_CONFORMANCE_RULES as _BLOCK)
+    except Exception as exc:                                # noqa: BLE001
+        return ConformanceLook(
+            False, (), f"spec_conformance_check is not importable "
+                       f"({type(exc).__name__}): {exc}")
+    import json as _json                                    # noqa: PLC0415
+    import subprocess as _sp                                # noqa: PLC0415
+    import tempfile as _tf                                  # noqa: PLC0415
+    with _tf.TemporaryDirectory() as td:
+        tdp = Path(td)
+        (tdp / "TopModule.sv").write_text(rtl)
+        spec = tdp / "spec.txt"
+        spec.write_text(prompt_text)
+        outj = tdp / "conf.json"
+        try:
+            # ADVISORY spawn: the checker's verdict is read from `--json`, never
+            # from its exit code — a rule that FIRED and a checker that DIED
+            # both leave a non-zero status, so the status cannot separate them.
+            # The report can: it exists and parses, or it does not.
+            proc = _sp.run(
+                [sys.executable, str(_HERE / "spec_conformance_check.py"),
+                 "--rtl-dir", str(tdp), "--spec", str(spec),
+                 "--top", "TopModule", "--json", str(outj)],
+                capture_output=True, text=True, timeout=timeout)
+        except Exception as exc:                            # noqa: BLE001
+            # TimeoutExpired, FileNotFoundError, OSError — the checker never
+            # reached a verdict, which is not a verdict of "clean".
+            return ConformanceLook(
+                False, (), f"the conformance checker could not be run "
+                           f"({type(exc).__name__}): {exc}")
+        if not outj.is_file():
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            return ConformanceLook(
+                False, (), f"the conformance checker wrote no --json report "
+                           f"(rc={proc.returncode})"
+                           + (f": {tail[-1][:160]}" if tail else ""))
+        try:
+            # The checker writes a LIST of finding dicts. (Read off the working
+            # implementation rather than guessed — the guessed shape,
+            # `data.get("findings")`, raised AttributeError on the first call.)
+            findings = _json.loads(outj.read_text(errors="replace"))
+        except Exception as exc:                            # noqa: BLE001
+            return ConformanceLook(
+                False, (), f"the conformance report did not parse "
+                           f"({type(exc).__name__}): {exc}")
+    if not isinstance(findings, list):
+        return ConformanceLook(
+            False, (), f"the conformance report is a {type(findings).__name__}, "
+                       f"not the list of findings this reads")
+    return ConformanceLook(True, tuple(sorted(
+        {f.get("rule") for f in findings
+         if isinstance(f, dict) and f.get("rule") in _BLOCK})), "")
 
 
 def emit_would_be_blocked(prompt_text: str, rtl: str,
@@ -302,46 +457,18 @@ def emit_would_be_blocked(prompt_text: str, rtl: str,
     content, reachable only by importing a benchmark's pipeline. It takes prompt
     TEXT rather than a problem object so nothing about it is dataset-shaped.
 
-    On any tool or IO error it returns [] — a missing checker must never
-    manufacture a block and demote a real solve.
+    ON A FAILURE TO LOOK IT RETURNS A NOT-MEASURED MARKER, NOT `[]`. `[]` is
+    reserved for "the gate ran and refused nothing", which is what the sentence
+    above promises a caller. Ask `emit_block_report` when you want the three
+    states apart without string-matching; this shape exists for the callers and
+    tests that ask "which rules?", and for them a NOT-MEASURED entry is the
+    honest answer to a question nothing answered. The marker is `NOT_MEASURED`
+    and is never a conformance rule name.
     """
-    if not (rtl or "").strip() or not (prompt_text or "").strip():
-        return []
-    try:
-        from spec_conformance_check import (                # noqa: PLC0415
-            EMIT_BLOCKING_CONFORMANCE_RULES as _BLOCK)
-    except Exception:
-        return []
-    import json as _json                                    # noqa: PLC0415
-    import subprocess as _sp                                # noqa: PLC0415
-    import tempfile as _tf                                  # noqa: PLC0415
-    with _tf.TemporaryDirectory() as td:
-        tdp = Path(td)
-        (tdp / "TopModule.sv").write_text(rtl)
-        spec = tdp / "spec.txt"
-        spec.write_text(prompt_text)
-        outj = tdp / "conf.json"
-        try:
-            # ADVISORY spawn: the checker's verdict is read from `--json`, never
-            # from its exit code, and a checker that could not run must not
-            # manufacture a block — a missing tool would otherwise demote a real
-            # solve. `[]` is the honest answer to "which rules did it trip" when
-            # nothing examined the RTL, and the caller treats [] as "not refused".
-            # ADVISORY — verdict read from --json, not from the exit status.
-            _sp.run([sys.executable, str(_HERE / "spec_conformance_check.py"),
-                     "--rtl-dir", str(tdp), "--spec", str(spec),
-                     "--top", "TopModule", "--json", str(outj)],
-                    capture_output=True, text=True, timeout=timeout)
-            if not outj.is_file():
-                return []
-            # The checker writes a LIST of finding dicts. (Read off the working
-            # implementation rather than guessed — the guessed shape,
-            # `data.get("findings")`, raised AttributeError on the first call.)
-            findings = _json.loads(outj.read_text(errors="replace"))
-        except Exception:
-            return []
-    return sorted({f.get("rule") for f in findings
-                   if isinstance(f, dict) and f.get("rule") in _BLOCK})
+    look = emit_block_report(prompt_text, rtl, timeout=timeout)
+    if not look.measured:
+        return [f"{NOT_MEASURED}: {look.why_not}"]
+    return list(look.rules)
 
 
 def which_emitters() -> List[str]:
