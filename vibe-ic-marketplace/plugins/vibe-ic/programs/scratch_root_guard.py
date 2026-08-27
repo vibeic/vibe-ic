@@ -60,6 +60,32 @@ fine; an operator who exports `TMPDIR` into a checkout silently converts 46
 honest passes into 46 failures that then get published as main's redness. Grep
 `tools/` on 75776dbbb: no `--basetemp`, no `TMPDIR`, nowhere.
 
+THE THIRD WAY A SCRATCH ROOT MANUFACTURES FAILURES
+===================================================
+A root can be outside every repository AND outside the account home and still
+falsify the run, because six tests in this suite do not merely WRITE under
+`tmp_path` — they hand `tmp_path` to a gate that CLASSIFIES it:
+
+    programs/project_outputs_in_tree_check.py
+        _VOLATILE_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/")
+
+Those four prefixes are the whole of what that gate calls external storage. A
+subject built anywhere else is not "external" to it, so the gate PASSes where
+the test requires it to FAIL, and the failure names the fixture rather than the
+root. MEASURED on ae5cc4dbfc3f (tree 954bc27704cb), one pytest invocation each,
+ONLY `TMPDIR` different:
+
+    TMPDIR under /var/tmp      6 failed -> 0    (25 passed)
+    TMPDIR outside all four    6 failed         (19 passed)
+
+    programs/tests/test_issue146_collect_external_outputs.py        4
+    programs/tests/test_project_outputs_in_tree_check.py            2
+
+That is the same shape as the first condition and it costs the same half hour:
+an operator exported `TMPDIR=/work/tmp` into a container and six honest passes
+were published as main's redness. pytest's own default lands in `/tmp` and is
+fine.
+
 THE SECOND WAY A SCRATCH ROOT MANUFACTURES FAILURES
 ===================================================
 "Manufactures failures" is this file's own word for what it refuses, and until
@@ -101,8 +127,9 @@ WHAT THIS GUARD DOES
 Three things, and deliberately not a fourth:
 
   DECLARES  every run prints the scratch root it used, whether that root is
-            inside a git work tree, AND whether it is under the host account
-            home — naming that home. A count is only re-derivable if the run
+            inside a git work tree, whether it is under the host account
+            home — naming that home — AND whether it is under a volatile root,
+            naming the prefixes. A count is only re-derivable if the run
             that produced it says what it ran under; #1446's five
             irreconcilable numbers are what a suite whose verdict depends on
             an unrecorded environment variable looks like from outside. The
@@ -136,6 +163,17 @@ BLOCKING, and asymmetrically so, because the two conditions do different harm:
                      and a warning printed beside 46 red tests is a warning
                      nobody reads. That is not hypothetical — it is what
                      happened, and a count was published off the back of it.
+
+  NOT VOLATILE       BLOCKING IN THE CLI PREFLIGHT ONLY; DECLARED, NEVER
+                     BLOCKING, IN THE PYTEST HOOK, and the arithmetic is why.
+                     Every root under a real account home is outside all four
+                     volatile prefixes, so a blocking hook would refuse every
+                     under-home session — a shape the row below pins as
+                     supported. Six of ~3200 tests are falsified by such a
+                     root; refusing the other 3194 to catch six would be this
+                     guard causing the harm it exists to prevent. The LANDING
+                     is what publishes a count and the landing asks the
+                     preflight, so that is where the block is.
 
   UNDER THE HOME     BLOCKING IN THE CLI PREFLIGHT ONLY; DECLARED, NEVER
                      BLOCKING, IN THE PYTEST HOOK. A pytest session whose
@@ -204,7 +242,8 @@ EXIT CODES (the CLI preflight)
 ==============================
     0  PASS           the root is outside every condition checked, or a
                       condition did not apply here and said so
-    1  a FINDING about the root — inside a work tree, or under the account home
+    1  a FINDING about the root — inside a work tree, under the account home,
+                      or outside every volatile root
     2  UNDETERMINED / NOT CHECKED, naming what could not be determined
     3  bad invocation
 
@@ -233,6 +272,7 @@ chip-AGNOSTIC: pure harness/environment structure; no IC, PDK or vendor literal.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import pwd
 import subprocess
@@ -382,6 +422,68 @@ def home_state(root: Path) -> Tuple[str, Optional[Path], Optional[str]]:
     return INSIDE, home, None
 
 
+#: The gate whose classification this condition predicts.  Read from the gate
+#: rather than copied, for the reason the module docstring gives about `$HOME`:
+#: a guard that asks its question differently from the thing it predicts will
+#: confidently answer about a different subject.  A second copy of four string
+#: literals is exactly the drift this repo keeps measuring.
+_VOLATILE_AUTHORITY = "project_outputs_in_tree_check.py"
+
+
+def volatile_prefixes() -> Tuple[Optional[Tuple[str, ...]], Optional[str]]:
+    """(the gate's own volatile prefixes, None) — or (None, why not).
+
+    Loaded BY PATH from the sibling program, so the answer does not depend on
+    `sys.path`, on the working directory, or on this file having been imported
+    as a package member.  A failure here is UNKNOWN and says so; it is never a
+    silently empty tuple, which would make every root look non-volatile and
+    refuse every session.
+    """
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_scratch_root_guard_volatile_authority",
+            Path(__file__).resolve().with_name(_VOLATILE_AUTHORITY))
+        if spec is None or spec.loader is None:
+            return None, f"{_VOLATILE_AUTHORITY} could not be loaded"
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        prefixes = tuple(getattr(module, "_VOLATILE_PREFIXES"))
+    except Exception as exc:                       # noqa: BLE001 — reported, not raised
+        return None, (f"cannot read the volatile-prefix authority "
+                      f"{_VOLATILE_AUTHORITY}: {exc}")
+    if not prefixes or not all(isinstance(x, str) and x.startswith("/")
+                               for x in prefixes):
+        return None, (f"{_VOLATILE_AUTHORITY} declares no usable volatile "
+                      f"prefix: {prefixes!r}")
+    return prefixes, None
+
+
+def volatile_state(root: Path
+                   ) -> Tuple[str, Optional[Tuple[str, ...]], Optional[str]]:
+    """(INSIDE | OUTSIDE | UNKNOWN, the prefixes or None, reason when UNKNOWN).
+
+    THE POLARITY IS INVERTED HERE AND THAT IS DELIBERATE.  `INSIDE` means the
+    root IS under one of the gate's volatile prefixes, which is the GOOD answer;
+    `OUTSIDE` is the finding.  The three state names are reused rather than a
+    fourth vocabulary invented, because a reader who has just read the other two
+    conditions should not have to learn new words to read this one — and the
+    declaration and the refusal below both say which way round it is, in words.
+
+    Containment is a PREFIX test on the resolved path, matching the gate, which
+    does `str(path).startswith(prefix)` on strings ending in `/`.  The root
+    itself (`/tmp`, with no trailing slash) counts as inside: a scratch root AT
+    a volatile prefix is the pytest default.
+    """
+    prefixes, why = volatile_prefixes()
+    if prefixes is None:
+        return UNKNOWN, None, why
+    text = str(root)
+    for prefix in prefixes:
+        if text == prefix.rstrip("/") or text.startswith(prefix):
+            return INSIDE, prefixes, None
+    return OUTSIDE, prefixes, None
+
+
 def classify(config) -> Tuple[Path, Optional[str], bool, str]:
     """(scratch root, enclosing work tree or None, allowance in force, state).
 
@@ -453,6 +555,37 @@ accept the mount; it would buy a green preflight and the identical NORECORD
 ten minutes later."""
 
 
+_VOLATILE_REFUSAL = """\
+the scratch root is NOT under a volatile root, and six tests in this suite
+measure their own subject by that fact.
+
+    scratch root     : {root}
+    volatile roots   : {prefixes}
+
+`programs/project_outputs_in_tree_check.py` calls a path external storage iff
+it starts with one of those four prefixes and nothing else. Six tests build
+their subject at `tmp_path` and require the gate to FIND it:
+
+    programs/tests/test_issue146_collect_external_outputs.py        4
+    programs/tests/test_project_outputs_in_tree_check.py            2
+
+From a root outside all four the gate PASSes instead, and each of the six
+reports its own fixture as the defect. The cause appears in none of them.
+
+FIX: put the scratch root under a volatile root. pytest's own default already
+is — the usual cause is an exported TMPDIR.
+
+    env -u TMPDIR pytest ...
+    TMPDIR=/var/tmp/<something> pytest ...
+    pytest --basetemp=/tmp/<something> ...
+
+There is NO waiver for this one, for the reason the account-home condition has
+none: waiving it would not change what the gate matches, so the flag would buy
+a green preflight and the identical six failures a minute later. Every host
+that can run this suite has a writable /tmp — it is where pytest puts
+`tmp_path` when nobody interferes."""
+
+
 def pytest_addoption(parser):
     parser.addoption(
         _FLAG, action="store_true", default=False,
@@ -506,10 +639,31 @@ def home_declaration(root: Path, verdict=None) -> str:
             f"({why}); there is no host home to expose from here")
 
 
+def volatile_declaration(root: Path, verdict=None) -> str:
+    """The third line every run states: is this root one the gates can see.
+
+    Printed in all three states and naming the prefixes in each, for the reason
+    the home line is: a run that refused on one of three conditions and named
+    none of them sends the next reader back to the half hour this file exists
+    to stop anyone spending again.
+    """
+    state, prefixes, why = verdict if verdict is not None else volatile_state(root)
+    shown = ", ".join(prefixes) if prefixes else "(unknown)"
+    if state == INSIDE:
+        return (f"scratch_root_guard: {root} — under a volatile root "
+                f"({shown})")
+    if state == OUTSIDE:
+        return (f"scratch_root_guard: {root} — NOT under a volatile root "
+                f"({shown}) [the external-storage gate cannot see a subject "
+                f"built here]")
+    return (f"scratch_root_guard: {root} — volatile root NOT CHECKED ({why})")
+
+
 def pytest_report_header(config):
     """The verbose header. Not sufficient on its own — see `pytest_configure`."""
     verdict = classify(config)
-    return [declaration(config, verdict), home_declaration(verdict[0])]
+    return [declaration(config, verdict), home_declaration(verdict[0]),
+            volatile_declaration(verdict[0])]
 
 
 def pytest_configure(config):
@@ -539,6 +693,23 @@ def pytest_configure(config):
     # pytest session under the account home is measurable; it is the hermetic
     # lane that breaks, and the hermetic lane asks the preflight CLI below.
     print("[INFO] " + home_declaration(root))
+    # DECLARED, NOT BLOCKING, here — and for the same reason the home condition
+    # is: EVERY root under a real account home is outside all four volatile
+    # prefixes, so refusing in the hook would refuse every under-home session,
+    # which this file already pins as a supported and measurable shape
+    # (`test_the_hook_does_not_refuse_a_measurable_run_under_the_account_home`).
+    # Six of ~3200 tests are falsified by such a root; the other 3194 are
+    # measured correctly, and taking them all down to catch six is the harm
+    # this guard is supposed to prevent, not cause.
+    #
+    # The BLOCK is in the preflight CLI instead, which is where the harm lands:
+    # `gatekeeper-land.sh:872` asks it before the arms, and a LANDING is what
+    # publishes a count. The declaration below is what stops the six from being
+    # causeless — it names the root and what cannot see it, on the third line of
+    # every session, before any result.
+    vol_state, vol_prefixes, _vol_why = volatile_state(root)
+    print("[INFO] " + volatile_declaration(
+        root, verdict=(vol_state, vol_prefixes, _vol_why)))
     if top is not None and not allowed:
         raise pytest.UsageError(
             "scratch_root_guard: " + _REFUSAL.format(
@@ -562,13 +733,13 @@ def _main(argv=None) -> int:
     "its own unit test proves the logic works on a fixture the author wrote. It
     proves nothing about production artefacts, because it never sees one."
 
-    It asks BOTH conditions, because both of them make a lane produce something
-    other than a measurement, and a preflight that answers one of two is a
-    preflight the next reader still has to debug behind.
+    It asks ALL THREE conditions, because each of them makes a lane produce
+    something other than a measurement, and a preflight that answers two of
+    three is a preflight the next reader still has to debug behind.
 
     rc 0  PASS — outside every condition that could be checked
-    rc 1  a FINDING about the root — INSIDE a work tree, or UNDER the host
-          account home
+    rc 1  a FINDING about the root — INSIDE a work tree, UNDER the host
+          account home, or OUTSIDE every volatile root
     rc 2  UNDETERMINED / NOT CHECKED, naming what could not be determined
     rc 3  bad invocation
 
@@ -624,12 +795,15 @@ def _main(argv=None) -> int:
 
     tree, top, tree_why = work_tree_state(root)
     home, home_dir, home_why = home_state(root)
+    vol, vol_prefixes, vol_why = volatile_state(root)
     allowed = a.allow or os.environ.get(_ENV_ALLOW, "") not in ("", "0")
 
     # Both lines print in every outcome. The reader must be able to tell which
     # condition fired without re-running anything.
     print("[INFO] " + declaration(None, verdict=(root, top, allowed, tree)))
     print("[INFO] " + home_declaration(root, verdict=(home, home_dir, home_why)))
+    print("[INFO] " + volatile_declaration(
+        root, verdict=(vol, vol_prefixes, vol_why)))
 
     finding = False
     if tree == INSIDE:
@@ -644,12 +818,17 @@ def _main(argv=None) -> int:
         print("[FAIL] scratch_root_guard: " + _HOME_REFUSAL.format(
             root=root, home=home_dir))
         finding = True
+    if vol == OUTSIDE:
+        print("[FAIL] scratch_root_guard: " + _VOLATILE_REFUSAL.format(
+            root=root, prefixes=", ".join(vol_prefixes or ())))
+        finding = True
     if finding:
         return RC_FINDING
 
     unchecked = [w for w in (tree_why if tree == UNKNOWN else None,
                              home_why if (home == UNKNOWN and
-                                          a.require_home_check) else None) if w]
+                                          a.require_home_check) else None,
+                             vol_why if vol == UNKNOWN else None) if w]
     if unchecked:
         for w in unchecked:
             print(f"[NOT CHECKED] scratch_root_guard: {w}")

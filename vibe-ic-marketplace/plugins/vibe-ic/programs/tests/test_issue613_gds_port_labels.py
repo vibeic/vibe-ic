@@ -122,6 +122,33 @@ def build_gds(top: str, top_labels, child_labels=("A", "B")) -> bytes:
             + _rec(0x0400))
 
 
+def _seed_layout(path):
+    """A REAL input layout, because :func:`restore` opens one.
+
+    The tests below used to hand `restore` a GDS path that DOES NOT EXIST and
+    lean on the run stopping at the `pya`-absent disclosure before it looked.
+    That premise is false wherever KLayout is installed — which is the pinned
+    landing image `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2...` (`pya` at
+    /usr/local/lib/python3.12/dist-packages/pya/__init__.py) and the fleet
+    hosts alike — and there the call reached `pya.Layout().read()` and died with
+    `RuntimeError: Unable to open file ... (errno=2)`: a defect of the fixture,
+    which proves nothing about the subject in either direction.
+
+    Where KLayout IS present the seed is written BY KLayout, so it is valid by
+    construction and no hand-rolled GDSII byte string can drift from what the
+    reader accepts. Where it is absent `restore` returns the disclosed rc 3
+    before opening anything, so these bytes are never read.
+    """
+    try:
+        import pya
+    except Exception:                        # noqa: BLE001 — absence is a state
+        path.write_bytes(b"")
+        return
+    layout = pya.Layout()
+    layout.create_cell("chip")
+    layout.write(str(path))
+
+
 def _def(design: str, pins, layer="Metal2", declared=None):
     n = declared if declared is not None else len(pins)
     recs = "".join(
@@ -257,14 +284,30 @@ def test_restore_refuses_when_no_pin_layer_resolves(tmp_path, capsys):
     assert not (tmp_path / "out.gds").exists(), "the GDS was rewritten anyway"
 
 
-def test_the_refusal_does_not_fire_when_the_names_resolve(tmp_path):
-    """THE ACCEPT CASE — and it must get past the refusal to the pya-absent
-    disclosure (rc 3), not stop at rc 4."""
+def test_the_refusal_does_not_fire_when_the_names_resolve(tmp_path, capsys):
+    """THE ACCEPT CASE. A DEF whose pin layer names RESOLVE must get PAST the
+    DEF-level refusal and go on to do the work.
+
+    THE PREMISE THIS TEST SHIPPED WITH WAS FALSE, and the correction is the
+    input, not the claim. It asserted the run reached "the pya-absent
+    disclosure (rc 3)" — a statement about the HOST, not about the DEF — and it
+    arranged for that by naming a GDS that does not exist. Everywhere KLayout
+    is installed the run got as far as `pya.Layout().read()` and raised instead,
+    so the assertion below was never evaluated at all. See `_seed_layout`.
+
+    The invariant is unchanged and now actually reached: rc 4 is the refusal,
+    `Metal2` resolves through `metal_index`, so rc 4 is not what comes back and
+    the REFUSED line is not printed. Where KLayout is present the call runs to
+    completion; where it is not it stops at the disclosure. Neither is 4, which
+    is the whole claim, and the claim is now measured in both."""
     dp = tmp_path / "x.def"
     dp.write_text(_def("chip", ["a"], layer="Metal2"), encoding="utf-8")
-    rc = PWR.restore(str(tmp_path / "in.gds"), str(dp),
-                     str(tmp_path / "out.gds"))
+    gds_in = tmp_path / "in.gds"
+    _seed_layout(gds_in)
+    rc = PWR.restore(str(gds_in), str(dp), str(tmp_path / "out.gds"))
+    err = capsys.readouterr().err
     assert rc != 4, "a resolvable Metal<n> name was refused"
+    assert "REFUSED" not in err, err
 
 
 # ── the census: per structure, by name, paired by the design's own name ─────

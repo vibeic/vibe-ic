@@ -66,12 +66,22 @@ def _mini_tree(tmp_path: Path) -> Path:
     The guard is COPIED rather than imported from the plugin so the spawned
     session needs nothing on its path but this directory — the arms then differ
     only in `--basetemp`, which is the whole point of the comparison.
+
+    `project_outputs_in_tree_check.py` travels with it because the guard reads
+    the volatile prefixes OUT OF that gate rather than holding a copy. Without
+    it the third condition answers UNKNOWN in every mini session — which is not
+    a refusal — so both volatile arms below would run to completion and prove
+    nothing. Measured: the refusal arm passed its `--basetemp` and still
+    reported `1 passed`.
     """
     root = tmp_path / "mini"
     root.mkdir()
     src = Path(G.__file__).resolve()
     (root / "scratch_root_guard.py").write_text(src.read_text(encoding="utf-8"),
                                                 encoding="utf-8")
+    authority = src.with_name("project_outputs_in_tree_check.py")
+    (root / authority.name).write_text(authority.read_text(encoding="utf-8"),
+                                       encoding="utf-8")
     (root / "conftest.py").write_text(_MINI_CONFTEST, encoding="utf-8")
     (root / "test_mini.py").write_text(_MINI_TEST, encoding="utf-8")
     return root
@@ -690,3 +700,113 @@ def test_a_finding_beats_an_unchecked_condition(tmp_path, monkeypatch):
         assert G._main(["--scratch-root", str(d)]) == G.RC_FINDING
     finally:
         d.rmdir()
+
+
+# ── the third condition: a root the external-storage gate cannot see ────────
+#
+# A NOTIONAL PATH IS USED ON PURPOSE. Every writable directory this suite can
+# reach is either under a volatile root (which is the answer being excluded) or
+# inside a work tree / under the account home (which are the OTHER two
+# conditions, and would decide the run before this one is reached). The
+# condition is a pure function of the resolved path, `_nearest_existing` walks
+# up to `/` for the git question, and `resolve_scratch_root` does not require
+# the path to exist — so a path that is nobody's directory asks exactly this
+# condition and nothing else.
+_NOT_VOLATILE = "/vibeic-scratch-root-guard-not-a-volatile-root"
+
+
+def test_the_volatile_prefixes_are_the_gates_own_and_not_a_copy():
+    """The guard must ask the question the way the thing it predicts asks it.
+
+    Four string literals are exactly the kind of thing that gets duplicated and
+    then drifts, and a drifted copy would make this guard refuse roots the gate
+    is perfectly happy with — or, worse, pass roots it cannot see."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_gate_for_prefix_identity",
+        Path(G.__file__).resolve().with_name("project_outputs_in_tree_check.py"))
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    prefixes, why = G.volatile_prefixes()
+    assert why is None, why
+    assert prefixes == tuple(gate._VOLATILE_PREFIXES)
+
+
+def test_volatile_state_tells_the_three_answers_apart():
+    assert G.volatile_state(Path("/tmp/x"))[0] == G.INSIDE
+    assert G.volatile_state(Path("/var/tmp"))[0] == G.INSIDE      # the root itself
+    assert G.volatile_state(Path("/dev/shm/x"))[0] == G.INSIDE
+    assert G.volatile_state(Path("/run/x"))[0] == G.INSIDE
+    assert G.volatile_state(Path(_NOT_VOLATILE))[0] == G.OUTSIDE
+    # NOT a substring match on the tail: `/var/tmpfoo` is not `/var/tmp/`.
+    assert G.volatile_state(Path("/var/tmpfoo"))[0] == G.OUTSIDE
+
+
+def test_a_root_outside_every_volatile_root_is_a_finding():
+    r = _cli("--scratch-root", _NOT_VOLATILE)
+    assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
+    assert "NOT under a volatile root" in r.stdout
+    assert _NOT_VOLATILE in r.stdout
+
+
+def test_the_volatile_finding_names_what_it_costs_and_where_to_look():
+    """A refusal that does not name the six tests it is standing in for sends
+    the reader to find them one at a time, which is the half hour this whole
+    file exists to stop anyone spending."""
+    r = _cli("--scratch-root", _NOT_VOLATILE)
+    assert "project_outputs_in_tree_check.py" in r.stdout
+    assert "test_issue146_collect_external_outputs.py" in r.stdout
+    assert "test_project_outputs_in_tree_check.py" in r.stdout
+    for prefix in G.volatile_prefixes()[0]:
+        assert prefix in r.stdout
+
+
+def test_a_root_under_a_volatile_root_is_not_a_finding(tmp_path):
+    """The negative control. A guard that refuses every root is a ban."""
+    d = _outside(tmp_path)
+    assert G.volatile_state(d)[0] == G.INSIDE, (
+        f"this test's own scratch root {d} is not under a volatile root — the "
+        f"arms above would not mean what they say")
+    r = _cli("--scratch-root", str(d))
+    assert r.returncode == G.RC_PASS, r.stdout + r.stderr
+    assert "NOT under a volatile root" not in r.stdout
+
+
+def test_the_volatile_condition_is_declared_on_a_passing_run(tmp_path):
+    r = _cli("--scratch-root", str(_outside(tmp_path)))
+    assert "under a volatile root" in r.stdout
+
+
+def test_the_volatile_finding_has_no_waiver():
+    """`--allow` waives the WORK-TREE refusal only. Waiving this one would not
+    change what the gate matches, so it would buy a green preflight and the
+    identical six failures a minute later."""
+    r = _cli("--scratch-root", _NOT_VOLATILE, "--allow",
+             env_extra={"VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO": "1"})
+    assert r.returncode == G.RC_FINDING, r.stdout + r.stderr
+    assert "NOT under a volatile root" in r.stdout
+
+
+def test_the_pytest_hook_declares_but_does_not_refuse_a_non_volatile_root(
+        tmp_path):
+    """The asymmetry, asserted rather than argued.
+
+    Every root under a real account home is outside all four volatile prefixes,
+    so a blocking hook would refuse every under-home session — which
+    `test_the_hook_does_not_refuse_a_measurable_run_under_the_account_home`
+    pins as supported, and which is true: six of ~3200 tests are falsified by
+    such a root and the rest are measured correctly. So the hook DECLARES, in a
+    line that names the root and what cannot see it, and the preflight CLI
+    (which is what a landing asks, and a landing is what publishes a count) is
+    the half that refuses."""
+    root = _mini_tree(tmp_path)
+    r = _run_pytest(root, Path(_NOT_VOLATILE) / "bt")
+    assert "NOT under a volatile root" in r.stdout + r.stderr, r.stdout + r.stderr
+    assert _cli("--scratch-root", _NOT_VOLATILE).returncode == G.RC_FINDING
+
+
+def test_the_pytest_hook_declares_the_volatile_condition(tmp_path):
+    root = _mini_tree(tmp_path)
+    r = _run_pytest(root, _outside(tmp_path) / "bt")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "under a volatile root" in r.stdout

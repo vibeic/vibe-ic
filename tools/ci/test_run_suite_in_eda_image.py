@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""`tools/ci/run_suite_in_eda_image.sh` — the harness that makes the container
+engine reachable where the suite runs.
+
+WHAT THIS FILE REFUSES
+======================
+1. **A remapped bind.** The harness hands the HOST daemon paths that were
+   composed inside the container, so a path that is not identical on both sides
+   is not an error — Docker creates an empty directory and mounts that. Measured
+   on this harness with the socket already working: the CLI ran, the arm reached
+   container creation, and the daemon answered `bind source path does not exist:
+   /tmp/vibeic-hermetic-dsz78fvv/progress-plan.json`.
+2. **The sandbox being handed the socket.** The harness is the OUTER
+   environment; the hermetic arms it lets the suite launch are the sandbox, and
+   an arm runs unreviewed candidate code. Giving one the host daemon is the
+   removal of the gate, not a repair of it.
+3. **A scratch root the external-storage gate cannot see** — the falsifying root
+   that turns six honest passes into six failures naming their own fixtures.
+4. **An absent engine reported as anything other than a refusal.** "I could not
+   look" is not a test verdict, and a `which("docker")` skip in the suite would
+   delete the landing gate's only end-to-end proof.
+"""
+from __future__ import annotations
+
+import importlib.util
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+_CI = Path(__file__).resolve().parent
+_REPO = _CI.parents[1]
+_HARNESS = _CI / "run_suite_in_eda_image.sh"
+_RUNNER = _CI / "hermetic_candidate_runner.py"
+_GATE = (_REPO / "vibe-ic-marketplace/plugins/vibe-ic/programs"
+         / "project_outputs_in_tree_check.py")
+_BOUND = 60
+
+#: A path that is nobody's directory. The volatile rule is a fact about a
+#: string, and the harness asks it before it creates anything or starts
+#: anything, so a notional path drives exactly that rule and nothing else.
+_NOT_VOLATILE = "/vibeic-run-suite-not-a-volatile-root"
+
+
+def _binds() -> list[tuple[str, str]]:
+    """Every `-v HOST:CONTAINER[:opts]` the harness DECLARES, as pairs.
+
+    Comment lines are excluded on purpose: this file's own prose shows a
+    `docker run -v A:B` to explain the trap, and a scanner that read its own
+    example would report the explanation as the defect.
+    """
+    pairs = []
+    for line in _HARNESS.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        # Only a line whose first token is `-v` — `grep -v` takes the same
+        # flag and its argument is a pattern, not a mount.
+        for raw in re.findall(r'(?:^|\(\s*)-v\s+"?([^"\s]+)"?',
+                              line.strip()):
+            parts = raw.split(":")
+            if len(parts) < 2:
+                continue
+            pairs.append((parts[0], parts[1]))
+    assert pairs, "no bind mounts found — this test would prove nothing"
+    return pairs
+
+
+def _run(*args, env_extra=None, timeout=_BOUND):
+    import os
+    env = dict(os.environ)
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run([str(_HARNESS), *args], capture_output=True,
+                          text=True, timeout=timeout, env=env, cwd=str(_REPO))
+
+
+def test_every_bind_is_at_its_own_path():
+    """THE IDENTICAL-PATH RULE. A remap does not fail loudly; it silently mounts
+    an empty directory the host daemon invents."""
+    offenders = [(h, c) for h, c in _binds()
+                 if h != c and c != "/etc/passwd"]
+    assert not offenders, offenders
+
+
+def test_the_only_remap_is_the_passwd_overlay_and_it_is_named():
+    """The one exception is a FILE the container needs at a fixed path, and it
+    is never a bind SOURCE handed back to the daemon."""
+    remaps = [(h, c) for h, c in _binds() if h != c]
+    assert [c for _h, c in remaps] == ["/etc/passwd"], remaps
+
+
+def test_the_runners_hardcoded_transport_directory_is_shared():
+    """`/tmp` is shared because the runner hardcodes it, not because it is
+    conventional. If the runner ever moves that directory this test fails and
+    the harness gets updated — rather than the arms silently NORECORDing."""
+    runner = _RUNNER.read_text(encoding="utf-8")
+    assert 'prefix="vibeic-hermetic-", dir="/tmp"' in runner, (
+        "the runner no longer puts its private transport directory in /tmp; "
+        "the harness shares /tmp for exactly that reason and must follow it")
+    assert ("/tmp", "/tmp") in _binds()
+
+
+def test_the_hermetic_arm_is_never_given_the_socket():
+    """LOAD-BEARING, and the reason this repair is not a weakening. The arm runs
+    UNREVIEWED candidate code under `--network none`, a read-only rootfs,
+    `--cap-drop ALL` and uid 65534. A daemon socket there is root on the machine
+    that is judging the candidate, including on the tree under test."""
+    runner = _RUNNER.read_text(encoding="utf-8")
+    # The runner does not merely omit the socket — it REFUSES a candidate that
+    # has one, by inspecting the container Docker actually created. Asserting
+    # the refusal rather than the absence is the difference between "nobody
+    # added it" and "it cannot be added".
+    assert 'raise Refusal("candidate inspection exposes docker.sock")' in runner
+    assert 'raise ValueError("receipt exposes docker.sock")' in runner
+    # And the harness never puts a socket anywhere but its own argument list.
+    harness_socket_binds = [c for h, c in _binds() if "docker.sock" in h + c]
+    assert all(h == c for h, c in _binds() if "docker.sock" in h + c), \
+        harness_socket_binds
+
+
+def test_a_scratch_root_the_gate_cannot_see_is_refused():
+    r = _run("--no-engine", "--scratch", _NOT_VOLATILE, "--", "-q", "x.py")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "not under a volatile root" in r.stderr, r.stderr
+
+
+def test_the_refusal_names_the_prefixes_the_gate_actually_matches():
+    """A harness that names its own list rather than the gate's would drift, and
+    a drifted list refuses roots the gate is happy with."""
+    spec = importlib.util.spec_from_file_location("_gate_for_prefixes", _GATE)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    r = _run("--no-engine", "--scratch", _NOT_VOLATILE, "--", "-q", "x.py")
+    for prefix in gate._VOLATILE_PREFIXES:
+        assert prefix.rstrip("/") in r.stderr, (prefix, r.stderr)
+    assert "test_issue146_collect_external_outputs.py" in r.stderr
+    assert "test_project_outputs_in_tree_check.py" in r.stderr
+
+
+def test_a_volatile_scratch_root_is_not_refused_for_that_reason():
+    """THE NEGATIVE CONTROL. A rule that refuses every root is a ban, not a
+    rule. The engine is deliberately named as absent so the run stops right
+    after the scratch question with no daemon involved."""
+    r = _run("--scratch", "/var/tmp/vibeic-harness-selftest", "--", "-q", "x.py",
+             env_extra={"VIBEIC_SUITE_DOCKER_BIN": "/no/such/docker"})
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "not under a volatile root" not in r.stderr, r.stderr
+    assert "not an executable file" in r.stderr, r.stderr
+
+
+def test_an_engine_that_is_named_and_absent_is_a_refusal_not_a_skip():
+    r = _run("--scratch", "/var/tmp/vibeic-harness-selftest", "--", "-q", "x.py",
+             env_extra={"VIBEIC_SUITE_DOCKER_BIN": "/no/such/docker"})
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "REFUSED" in r.stderr
+
+
+def test_no_engine_declares_itself_as_the_control_it_is():
+    """`--no-engine` exists so the 23 can be brought back on demand — a repair
+    that cannot be undone into the original failure was not measured. It must
+    never read as an ordinary operating mode."""
+    text = _HARNESS.read_text(encoding="utf-8")
+    assert "--no-engine IS A CONTROL, NOT A MODE" in text
+    assert "a green result would mean the control stopped checking" in text
+
+
+def test_the_pinned_image_is_a_digest_and_matches_the_landing_preflight():
+    """A floating tag is how a host ends up with a runtime nobody pinned."""
+    text = _HARNESS.read_text(encoding="utf-8")
+    m = re.search(r'IMAGE_DEFAULT="([^"]+)"', text)
+    assert m, "the harness declares no default image"
+    assert "@sha256:" in m.group(1), m.group(1)
+    preflight = (_REPO / "vibe-ic-marketplace/plugins/vibe-ic/programs"
+                 / "landing_pytest_runtime_preflight.py").read_text(
+                     encoding="utf-8")
+    digest = m.group(1).split("@sha256:")[1]
+    assert digest in preflight, (
+        "the harness and the landing runtime preflight name different images")
+
+
+if __name__ == "__main__":
+    sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-q", __file__]))

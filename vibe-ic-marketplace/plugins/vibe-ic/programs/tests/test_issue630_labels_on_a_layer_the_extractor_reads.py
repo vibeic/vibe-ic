@@ -154,18 +154,57 @@ def test_the_klayout_contract_layer_is_kept():
     assert "tc.shapes(ly.layer(*_pdk_ld)).insert(pya.Text(name, _tr))" in code
 
 
+def _seed_layout(path):
+    """A REAL input layout, because :func:`restore` opens one — see the long
+    note in `test_no_pdk_layer_is_disclosed_not_silent`."""
+    try:
+        import pya
+    except Exception:                        # noqa: BLE001 — absence is a state
+        path.write_bytes(b"")
+        return
+    layout = pya.Layout()
+    layout.create_cell("c")
+    layout.write(str(path))
+
+
 def test_no_pdk_layer_is_disclosed_not_silent(tmp_path, capsys):
-    """A run that wrote NO extractor-readable label must say so — that is the
-    state #630 measured, and it looked identical to success."""
+    """A run that wrote NO extractor-readable label must SAY SO — that is the
+    state #630 measured, and it looked identical to success.
+
+    THE PREMISE THIS TEST SHIPPED WITH WAS FALSE, AND IT MADE THE TEST VACUOUS.
+    It handed `restore` a GDS that does not exist and asserted `rc == 3` — which
+    is the "'pya' not available. DISCLOSED." exit, a DIFFERENT disclosure from
+    the one this test is named for. So on a host WITHOUT KLayout it passed
+    without the `NO PDK PORT-LABEL LAYER` sentence ever being produced, and on
+    a host WITH it — the pinned landing image and every host in this fleet — the
+    call reached `pya.Layout().read()` on a missing file and raised
+    `RuntimeError: Unable to open file ... (errno=2)`. Measured 2026-08-27 on
+    both. Either way the note that makes the state visible was never read, and
+    deleting the `_pdk_note` branch outright would not have turned this red.
+
+    The correction is the input. With a real layout the run reaches the write,
+    and the assertion is the sentence itself. The invariant is stated once for
+    both worlds and is non-vacuous in each: the run NEVER reports having
+    restored labels without naming which layer they can be read from. Where
+    KLayout is present that is the #630 note beside the `restored:` line; where
+    it is absent nothing was written and the run must say that instead of
+    claiming a restore."""
     dp = tmp_path / "x.def"
     dp.write_text("DESIGN c ;\nUNITS DISTANCE MICRONS 1000 ;\nPINS 1 ;\n"
                   "    - a + LAYER Metal2 ( -70 -70 ) ( 70 70 )\n"
                   "      + PLACED ( 1000 2000 ) N ;\nEND PINS\nEND DESIGN\n",
                   encoding="utf-8")
-    # No pya here, so this stops at the disclosed rc 3 — the point is that the
-    # PDK-layer decision is made from the DEF and the tech, before any layout.
-    rc = R.restore(str(tmp_path / "in.gds"), str(dp), str(tmp_path / "o.gds"))
-    assert rc == 3
+    gds_in = tmp_path / "in.gds"
+    _seed_layout(gds_in)
+    rc = R.restore(str(gds_in), str(dp), str(tmp_path / "o.gds"))
+    out = capsys.readouterr()
+    assert rc in (0, 3), (rc, out.out, out.err)
+    if rc == 0:
+        assert "restored:" in out.out, out.out
+        assert "NO PDK PORT-LABEL LAYER" in out.out, out.out
+    else:
+        assert "'pya' not available" in out.err, out.err
+        assert "restored:" not in out.out, out.out
 
 
 # ── the gate REPORTS readability and does not fail on it ───────────────────
