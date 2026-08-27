@@ -51,6 +51,51 @@ def _fake_run(openroad_has, sta_has, *, rc=0, docker_missing=False):
 
 ALL = set(P.SUPERSET_COMMANDS)
 
+#: A digest-pinned image identity, substituted for the docker round-trip that
+#: `_eda_image.judged_image` would otherwise make.
+#:
+#: This program reaches docker at TWO boundaries, not one: `P._run` for the
+#: probe and the equivalence run, and `P._img.judged_image` for WHICH image to
+#: run them against (added to the program in v1.11.7, after this file was last
+#: written in v1.8.52). The fakes above replace only the first. With the second
+#: left live, every test that calls `P.main` asserts about whether the machine
+#: running pytest happens to have a 22 GB vibeic-eda image cached -- a fact no
+#: assertion in this file mentions, and one that is false inside the EDA
+#: container the suite itself runs in.
+_STUB_DIGEST = "sha256:" + "c" * 64
+
+
+@pytest.fixture(autouse=True)
+def _pinned_image(monkeypatch):
+    """Pin the image identity so these tests measure the parity logic.
+
+    This does NOT relax the refusal. That `sta_engine_parity_check` exits
+    RC_CANNOT_CHECK when no image can be identified is asserted directly by
+    `test_an_unidentifiable_image_is_not_parity` below, and end-to-end by
+    `test_the_eda_image_is_resolved_not_remembered.py`, which owns that property
+    (`test_VACUOUS_no_docker_is_rc2_with_the_marker`). What is removed here is an
+    accidental dependency on this host's image cache, not a check.
+    """
+    monkeypatch.setattr(P._img, "judged_image", lambda **kw: P._img.JudgedImage(
+        f"{P._img.IMAGE_REPO}@{_STUB_DIGEST}", _STUB_DIGEST,
+        "repo-digest", "local", "", "0.3.16", "local-label", ""))
+
+
+def test_an_unidentifiable_image_is_not_parity(monkeypatch):
+    """The dependency the pin above stands in for, ASSERTED rather than
+    inherited from whatever this host happens to have cached.
+
+    With no identifiable image the program has opened nothing, so it must say
+    NOTHING WAS MEASURED -- not agreement, and not a finding about silicon. It
+    leaves by SystemExit rather than by return; both reach the shell as rc 2.
+    """
+    monkeypatch.setattr(P._img, "judged_image", lambda **kw: P._img.JudgedImage(
+        None, None, "", "", "no vibeic-eda image is present on this host"))
+    monkeypatch.setattr(P, "_run", _fake_run(ALL, ALL))
+    with pytest.raises(SystemExit) as excinfo:
+        P.main([])
+    assert excinfo.value.code == P.RC_CANNOT_CHECK
+
 
 def test_the_real_divergence_is_caught(monkeypatch):
     """THE defect: everything in openroad, nothing in sta."""
