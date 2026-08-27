@@ -1,0 +1,16 @@
+LANDING v1.12.4 — lane-code-reds-0827 (6ff6b5448), replayed onto 8bd79875e (3 rebases).
+SKIPPED: landing gate + pre-push hook (--no-verify), owner waiver. Full suite NOT run.
+IMAGE lane NOT measured by me — host lane only.
+RAN INSTEAD: 10 affected modules whole -> 180 passed, 13 skipped, 1 failed.
+FALSIFIED: removed _declare_the_host_root from test_main_pass -> RED 'BLOCKED on
+host mount root (basis: project_dir_fallback)'. Reverted.
+RED CARRIED ONTO MAIN, not caused by this branch:
+  test_issue1241_vendored_attribution_wired.py::test_the_audit_returns_a_clean_verdict
+  checker_execution_wiring_audit names 3 unwired checkers: attestation_preflight_check.py,
+  generated_test_list_min_guard.py, landing_noop_verdict_check.py. The third was
+  modified by c4e59efa7 and is wired nowhere. Another lane's slice.
+HARNESS ARTEFACT: my first run reddened test_a_real_verdict_is_not_mistaken_for_a_crash
+because my TMPDIR was 91 chars; that test's new guard correctly refused. Re-run at
+TMPDIR=/var/tmp/jl4 -> green. All figures above are from the corrected frame.
+PROTECTED: tools/ci/repo_hygiene_gates.sh touched (backtick->quote fix; exemption date
+2027-02-28 UNCHANGED). ci_harness_timeout_ceiling_check exit 0. gatekeeper-land.sh NOT touched.
