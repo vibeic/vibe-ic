@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "f9f176413f7d1e278c02d205bc02744799838137cab9f3e7c5901c3eee2425de"
+    "b58c10cdd345ef4be1b4c54943f567fdf0ac7060c84af754e37e731c465a1c77"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -458,10 +458,32 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # driver, same `--stall-after`, same `--aggregate-check`, same no-ceiling
 # contract, same write guard, same junit, same lanes.
 #
+# RE-PINNED 2026-08-28, for the REMOVAL OF THE TWO-ARM DIFFERENTIAL. TWO of the
+# four faces moved and the other two were VERIFIED, not assumed — the check
+# slices all four every run, and it reported no error for the three lane bodies
+# (`lanes sliced=3`) or for the semantic driver, which is the check itself
+# saying they are byte-identical.
+#
+# WHAT MOVED: `tools/gatekeeper-land.sh` lost the `--differential` case, which
+# re-exec'd `tools/gatekeeper-land-differential.sh` (deleted in the same
+# commit), and gained an explanatory refusal in its place; the failure path's
+# closing advice stopped naming that flag. Both edits sit ahead of the final
+# `lane_emit_window`, so the whole-file digest AND the entry-to-final-pytest
+# execution prefix moved together. That pairing is the expected signature of an
+# edit in the argument parser — a whole-file move with a STILL-MATCHING prefix
+# would mean the edit was after the last lane, and would be the surprising one.
+#
+# NOTHING ABOUT SUPERVISION MOVED: same three populations, same driver, same
+# `--stall-after`, same `--aggregate-check`, same no-ceiling contract, same
+# write guard, same junit. The removed flag `exec`'d a different script before
+# any lane started, so it was never inside a supervised population.
+#
+# Both digests below were read back out of this check's own error text on the
+# tree being shipped, never hand-transcribed, and the check then exits 0.
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "6118f25ccad0388d8c95c821c2fadc539b1d8209db8f2d2c93eeab0a5f3a9f65"
+    "aa79ad108498364cf24ad166dd030a9b5de3fffbee0336071a7a00dad3af6e77"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver

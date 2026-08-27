@@ -234,8 +234,8 @@ def test_claim_work_passes_when_the_lane_really_carries_something(tmp_path):
 
 
 def test_claim_work_refuses_a_landing_whose_bytes_are_already_there(tmp_path):
-    """THE ANCESTRY TRAP. `gatekeeper-land-differential.sh` refuses a landing
-    when `BASE_SHA = HEAD_SHA`, which is ancestry. A branch squash-landed and
+    """THE ANCESTRY TRAP. `gatekeeper-land-differential.sh` (REMOVED
+    2026-08-28) refused a landing when `BASE_SHA = HEAD_SHA`, which is ancestry. A branch squash-landed and
     then rebased has a DIFFERENT HEAD and IDENTICAL bytes, and an hour of gates
     then runs over a landing with nothing in it."""
     repo = _repo(tmp_path)

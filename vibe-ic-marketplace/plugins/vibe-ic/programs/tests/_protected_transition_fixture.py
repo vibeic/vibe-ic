@@ -50,8 +50,10 @@ MANIFEST_REL = "tools/ci/protected_landing_transition.json"
 VALIDATOR_REL = "tools/ci/protected_landing_transition.py"
 
 #: The authority files a synthetic tree must carry as the REAL programs rather
-#: than as placeholders. `gatekeeper-land-differential.sh` EXECUTES the
-#: validator out of the repository under test and `read_protected_transition_
+#: than as placeholders. `gatekeeper-verify-merge.sh` EXECUTES the
+#: validator out of the repository under test (as the removed
+#: `gatekeeper-land-differential.sh` also did until 2026-08-28) and
+#: `read_protected_transition_
 #: receipt` loads it from beside the verdict, and the validator in turn imports
 #: the worktree attester from beside itself. A placeholder for either would
 #: make the receipt unbuildable rather than the tuple unmeasured.

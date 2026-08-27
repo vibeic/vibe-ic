@@ -58,10 +58,12 @@ WHAT IT CANNOT SEE, AND HOW MUCH THAT COSTS TODAY
 Only the stub in THIS module. That scope was measured rather than assumed:
 of the seven test modules in the repository that name `GATEKEEPER_VERIFY_ARM`
 or the hermetic runner, exactly one other passes environment dicts to a
-subprocess -- `tools/test_gatekeeper_land_differential.py` -- and it runs
-`tools/gatekeeper-land-differential.sh` as a HOST subprocess, with no container
-between the variable and the reader, so its switches arrive and the class
-cannot occur there. The remaining five construct the runner's `--env` list
+subprocess -- `tools/test_gatekeeper_land_differential_removed.py` -- and it
+runs `tools/gatekeeper-land.sh` and `tools/git-hooks/pre-push` as HOST
+subprocesses, with no container between the variable and the reader, so its
+switches arrive and the class cannot occur there. (Before 2026-08-28 that module
+was `test_gatekeeper_land_differential.py` and the subprocess it ran was the
+two-arm driver; the driver was removed, the reasoning is unchanged.) The remaining five construct the runner's `--env` list
 explicitly, which is the boundary itself rather than something crossing it
 unexamined.
 

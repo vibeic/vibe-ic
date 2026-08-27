@@ -111,37 +111,68 @@ PREPARE=0
 # that opts IN — a fast path nobody switches on is a fast path nobody has.
 LANE_WIDTH=4
 [ "${GATEKEEPER_LANDING_SERIAL:-0}" = "1" ] && LANE_WIDTH=1
-# --differential (the LANDING GATE, as opposed to the LANDING ARM)
-# ===============================================================
+# THIS GATE JUDGES ABSOLUTELY, AND THAT COSTS SOMETHING REAL
+# ==========================================================
 # Everything below this line judges ABSOLUTELY: "did anything fail", with no
-# reference to what the base tree already does. That is the RIGHT semantics for
-# one ARM of a differential and the WRONG semantics for the whole gate, and the
-# difference is not academic — measured 2026-08-17, `origin/main` (f6b0e77dd)
-# FAILS ITS OWN GATES here (`repo tools tests` 9 red, `repo hygiene gates` 1 of
-# 80), so no stamp is written for main's own tip and `pre-push` refuses it. A
-# commit that FIXES those reds is refused by the same rule. Five rounds, ~2.5
-# hours of gate wall clock, zero landings.
+# reference to what the base tree already does. The cost is not academic —
+# measured 2026-08-17, `origin/main` (f6b0e77dd) FAILS ITS OWN GATES here
+# (`repo tools tests` 9 red, `repo hygiene gates` 1 of 80), so no stamp is
+# written for main's own tip and `pre-push` refuses it. A commit that FIXES
+# those reds is refused by the same rule. Five rounds, ~2.5 hours of gate wall
+# clock, zero landings.
 #
-# REGRESSION means: did THIS change break something that used to work. Asking
-# that needs a second arm at the base, and the second arm is what
-# `tools/gatekeeper-land-differential.sh` adds — using this same script, twice,
-# and `landing_merge_verdict.py` as the single judge, which is exactly what
-# `tools/gatekeeper-verify-merge.sh` has done on the merge path since #1019.
+# That fact is still true and this comment stays because of it. What changed is
+# the ANSWER this file used to give.
 #
-# It is a separate file rather than a branch inside this one because the
-# differential RUNS this script (twice, concurrently, in throwaway worktrees);
-# a flag handled here would recurse.
+# THE TWO-ARM DIFFERENTIAL WAS REMOVED 2026-08-28 (owner instruction)
+# ==================================================================
+# `tools/gatekeeper-land-differential.sh` ran this same script TWICE — once on
+# the candidate, once on pristine main in a throwaway worktree — and diffed the
+# two red sets to answer "is this regression mine". It is gone, and telling
+# people not to run it was tried first and did not work: while the code existed,
+# someone ran it again.
+#
+# WHY, measured, not asserted:
+#   * ~3.5 hours per arm. Three landings on 2026-08-27 spent 6h, 4h and 2h in
+#     it and not one of them landed anything.
+#   * It reported the ENVIRONMENT as the diff. Arms placed on two hosts
+#     returned 2 new / 89 cleared, and 82 of the 89 were one family that is red
+#     where docker is unreachable and green where it is not.
+#   * A "fast" variant compared a harness red set against a standalone probe
+#     and invented a new red that existed under NEITHER mode.
+#
+# A wrong answer that takes seven hours is worse than no answer, because it is
+# believed. So: this gate asks the ABSOLUTE question, it says so when it
+# refuses, and the remedy is stated at the bottom of this file — fix the named
+# red, or land it and record the pre-existing reds in the commit message.
+#
+# NOT the merge path. `tools/gatekeeper-verify-merge.sh` (#1019) has its own
+# arms and its own judge and is untouched by this removal.
 for _arg in "$@"; do
   case "$_arg" in
     --cheap-only) CHEAP_ONLY=1 ;;
     --prepare)    PREPARE=1 ;;
     --serial)     LANE_WIDTH=1 ;;
     --differential)
-      _diff="$(git rev-parse --show-toplevel)/tools/gatekeeper-land-differential.sh"
-      [ -f "$_diff" ] || { echo "gatekeeper-land: no $_diff" >&2; exit 2; }
-      _rest=()
-      for _a in "$@"; do [ "$_a" = "--differential" ] || _rest+=("$_a"); done
-      exec bash "$_diff" "${_rest[@]+"${_rest[@]}"}"
+      # REFUSED BY NAME, WITH THE REASON. The generic "unknown argument" below
+      # would be true and useless: a reader who typed this flag learned it from
+      # a runbook, a commit message or a colleague, and needs to know it was
+      # taken away deliberately and what to do instead. A removal that leaves
+      # no trace teaches the next reader nothing.
+      echo "gatekeeper-land: --differential was REMOVED 2026-08-28 (owner)." >&2
+      echo "    The two-arm differential cost ~3.5h PER ARM and reported" >&2
+      echo "    environment differences as regressions: arms on two hosts" >&2
+      echo "    returned 2 new / 89 cleared, of which 82 were one family that" >&2
+      echo "    is red where docker is unreachable and green where it is not." >&2
+      echo "" >&2
+      echo "    This gate judges ABSOLUTELY — any red refuses, pre-existing or" >&2
+      echo "    not. Instead of re-measuring the base:" >&2
+      echo "      * fix the red this run names, or" >&2
+      echo "      * land it and record the pre-existing reds, by name, in the" >&2
+      echo "        commit message and 'git notes --ref=landing'." >&2
+      echo "" >&2
+      echo "    The MERGE path is unaffected: tools/gatekeeper-verify-merge.sh" >&2
+      exit 2
       ;;
     *) echo "gatekeeper-land: unknown argument '$_arg'" >&2; exit 2 ;;
   esac
@@ -1815,9 +1846,13 @@ elif [ "$FAILED" -eq 0 ]; then
   # one — the milestone would be let off by a subset run, which is the single
   # thing the policy forbids. LINE 1 STAYS THE COMMIT AND ONLY THE COMMIT, so
   # both existing readers (this hook's `head -1`, and an older hook that reads
-  # the whole file and fails closed) keep working, and the key=value tail is the
-  # convention `gatekeeper-land-differential.sh` already writes (`base=`,
-  # `tier=`, `host=`).
+  # the whole file and fails closed) keep working, and the key=value tail is a
+  # convention with a live READER and, since 2026-08-28, no writer in this repo:
+  # `gatekeeper-land-differential.sh` wrote `base=`, `tier=`, `host=` and it was
+  # removed. `pre-push` still parses `base=` ON PURPOSE — a stamp written before
+  # the removal can still be sitting in somebody's `.git` dir, and the safe
+  # direction is for the hook to keep applying the staleness rule to it rather
+  # than to start ignoring a tail it no longer expects.
   # WRITTEN AS A REDIRECT AND THEN AN APPEND, not as a `{ ... } >` block.
   # `test_v1916_the_tree_must_not_move_under_the_gates` locates the stamp write
   # by searching the script for `git rev-parse HEAD > "<path>gatekeeper-stamp"`,
@@ -1841,9 +1876,20 @@ else
   # that "did I break it" is a DIFFERENT question and that this repo can ask it.
   if [ "${GATEKEEPER_VERIFY_ARM:-}" = "" ]; then
     echo "    This run judged ABSOLUTELY — any red refuses, pre-existing or not."
-    echo "    For the REGRESSION question (did THIS change break something that"
-    echo "    used to work), which measures the base as well and reports what it"
-    echo "    inherits by name:  tools/gatekeeper-land.sh --differential"
+    echo "    So a red above may be YOURS or may be one main already carries."
+    echo "    There is no second arm to ask: the two-arm differential was"
+    echo "    removed 2026-08-28 (it cost ~3.5h per arm and reported"
+    echo "    environment differences as regressions). Do this instead:"
+    echo "      * FIX the red named above — that is the answer whenever the"
+    echo "        red is in a path this change touched; or"
+    echo "      * establish it is pre-existing by running THAT ONE GATE alone"
+    echo "        on an unmodified checkout of the base, which costs minutes"
+    echo "        rather than hours because it measures one thing; then LAND"
+    echo "        and record those reds BY NAME in the commit message and in"
+    echo "        'git notes --ref=landing', so the next reader inherits the"
+    echo "        list instead of re-deriving it."
+    echo "    A green that hides a known red is the failure this repo pays for"
+    echo "    most: say what was red, and say you landed anyway."
   fi
 fi
 exit "$FAILED"

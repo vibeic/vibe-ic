@@ -199,8 +199,10 @@ to detect.
                           PERFORMED — nothing is left to disagree with it. The
                           forge's `refs/pull/<n>/merge` still cross-checks it
                           whenever the forge merged this same base.
-    TIER `direct-push`    the DIRECT-PUSH path (`git push origin main`), driven
-                          by `tools/gatekeeper-land-differential.sh`. There is
+    TIER `direct-push`    the DIRECT-PUSH path (`git push origin main`). Its
+                          driver `tools/gatekeeper-land-differential.sh` was
+                          REMOVED 2026-08-28; the TIER is kept because it names
+                          a real shape a caller may still declare. There is
                           no PR, no forge merge and no squash: the commit being
                           pushed IS the commit that lands and its tree IS the
                           tree that lands, so squash-vs-rebase is NOT

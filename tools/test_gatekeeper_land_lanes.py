@@ -567,9 +567,11 @@ if __name__ == "__main__":  # pragma: no cover
 # that died before its own print contributes NOTHING for the differential to
 # see, and the landing is absorbed as "no new failure".
 #
-# On the direct-push path there is no second backstop to catch it:
-# `gatekeeper-land-differential.sh` launches both gate arms without
-# `VIBEIC_LANDING_PROGRESS`, so the journal is off.
+# On the direct-push path there was no second backstop to catch it:
+# `gatekeeper-land-differential.sh` launched both gate arms without
+# `VIBEIC_LANDING_PROGRESS`, so the journal was off. That driver was REMOVED
+# 2026-08-28; the hazard is recorded here because `landing_merge_verdict.py`
+# still subtracts BY PRINTED LABEL on the merge path, where it is still live.
 
 _KILL_ONE_STAGE = r"""
 lane_run_window
@@ -617,9 +619,10 @@ def test_a_killed_stage_inside_a_live_lane_is_still_labelled(scheduler, work):
 # stage that died is one it reads as "this branch broke no gate".
 #
 # `--candidate-gate-rc 1` and `--require-composite-gate-record` are passed
-# exactly as `gatekeeper-land-differential.sh` passes them, so the composite
-# record check is satisfied and the only thing left to decide the gate tier is
-# the labels. Both arms' test reports are GREEN on purpose: if this refuses, it
+# exactly as `gatekeeper-land-differential.sh` passed them before it was removed
+# (2026-08-28) and as `gatekeeper-verify-merge.sh` passes them today, so the
+# composite record check is satisfied and the only thing left to decide the gate
+# tier is the labels. Both arms' test reports are GREEN on purpose: if this refuses, it
 # refuses for the killed stage and for nothing else.
 
 _PLUGIN_REL = "vibe-ic-marketplace/plugins/vibe-ic"

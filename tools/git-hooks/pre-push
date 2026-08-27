@@ -361,30 +361,41 @@ if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
   STAMP="$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   HEAD_SHA="$(git rev-parse HEAD)"
   # LINE 1 IS THE COMMIT, AND ONLY THE COMMIT. `gatekeeper-land.sh` writes a
-  # one-line stamp; `gatekeeper-land-differential.sh` writes the same first line
-  # and then `base=`, `tier=`, `host=`. Reading line 1 keeps BOTH writers valid
-  # here, and the direction of the incompatibility is the safe one: an OLDER
-  # hook, which reads the whole file, sees a mismatch and REFUSES a differential
-  # stamp rather than accepting it blind.
+  # one-line stamp. `gatekeeper-land-differential.sh` used to write the same
+  # first line and then `base=`, `tier=`, `host=`; it was REMOVED 2026-08-28, so
+  # nothing in this repo writes the tail any more. Reading line 1 still keeps
+  # both shapes valid here, and the tail parsing below is KEPT deliberately: a
+  # stamp written before the removal can still be on disk, and a hook that
+  # silently stopped applying the staleness rule to it would be the unsafe
+  # direction of this change.
   if [ ! -f "$STAMP" ]; then
     echo "pre-push: FAILED — the full suites have not been run for this commit" >&2
-    echo "    run: tools/gatekeeper-land.sh --differential" >&2
+    echo "    run: tools/gatekeeper-land.sh" >&2
     FAILED=1
   elif [ "$(head -1 "$STAMP")" != "$HEAD_SHA" ]; then
     echo "pre-push: FAILED — the gatekeeper stamp is for a different commit" >&2
     echo "    stamped: $(head -1 "$STAMP" | cut -c1-9)   pushing: ${HEAD_SHA:0:9}" >&2
-    echo "    re-run:  tools/gatekeeper-land.sh --differential" >&2
+    echo "    re-run:  tools/gatekeeper-land.sh" >&2
     FAILED=1
   else
     # A DIFFERENTIAL VERDICT IS ABOUT A PAIR, NOT A COMMIT.
     #
-    # `--differential` answers "does this commit break anything the BASE does
-    # not". If `main` moved between the gate and the push, that pass describes a
-    # comparison against a tree nobody is about to create — the same staleness
+    # A stamp carrying `base=` was written by the two-arm differential, which
+    # answered "does this commit break anything the BASE does not". If `main`
+    # moved between that gate and the push, the pass describes a comparison
+    # against a tree nobody is about to create — the same staleness
     # `gatekeeper-verify-merge.sh --reassert` exists to catch on the merge path,
     # and one the single-SHA stamp could not express at all. The remote tip is
     # already in hand: git hands it to this hook on stdin as `remote_sha`, which
     # `PUSH_BASE` carries out of the loop.
+    #
+    # The differential was REMOVED 2026-08-28, so nothing writes `base=` any
+    # more and this branch is unreachable for any stamp minted after that date.
+    # It is KEPT rather than deleted because an older stamp can still be on
+    # disk, and the failure direction matters: keeping it makes a stale pair
+    # verdict refuse, while deleting it would make that same stamp silently
+    # authorise a push. Refusing something obsolete is cheap; accepting it is
+    # not.
     #
     # Only checked when the stamp DECLARES a base. A plain one-line stamp is the
     # absolute tier, which claims nothing about a base and is unaffected.
@@ -449,8 +460,9 @@ if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
       echo "    verified against: ${STAMP_BASE:0:9}" >&2
       echo "    the remote is at: ${PUSH_BASE:0:9}" >&2
       echo "    Commits landed in between, so 'this breaks nothing new' was" >&2
-      echo "    decided about a different tree. Rebase and re-run:" >&2
-      echo "    tools/gatekeeper-land.sh --differential" >&2
+      echo "    decided about a different tree. That stamp predates the removal" >&2
+      echo "    of the two-arm differential (2026-08-28). Rebase and re-run:" >&2
+      echo "    tools/gatekeeper-land.sh" >&2
       FAILED=1
     fi
   fi

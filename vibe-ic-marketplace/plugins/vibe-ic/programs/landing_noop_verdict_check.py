@@ -59,9 +59,9 @@ argument rather than something a reader has to invert in their head:
     --claim noop   (default)  "nothing to land"      — a batch landing's verdict
     --claim work              "there is work here"   — a landing gate's premise
 
-`--claim work` exists because this repository already carries the weak form of
-the same mistake: `tools/gatekeeper-land-differential.sh` refuses a landing when
-`BASE_SHA = HEAD_SHA`, which is ANCESTRY. A branch that was squash-landed and
+`--claim work` exists because this repository already carried the weak form of
+the same mistake: `tools/gatekeeper-land-differential.sh` (REMOVED 2026-08-28)
+refused a landing when `BASE_SHA = HEAD_SHA`, which is ANCESTRY. A branch that was squash-landed and
 then rebased has a different HEAD and identical bytes, and an hour of gates runs
 over a landing with nothing in it.
 
