@@ -53,6 +53,7 @@ _PROGRAMS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, _PROGRAMS)
 
 import task_nature_route as tnr  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 _BODY = """  module widget (
@@ -267,9 +268,7 @@ def test_a_declared_nature_is_still_confirmed():
 # smaller number to a larger one", a pure BUILD-THIS spec. One of one hints was
 # false. After the repair the same sweep hits 0, which is the correct answer for
 # a population that contains no optimization task.
-_VE_HUMAN = os.environ.get(
-    "VIBEIC_VE_HUMAN_DIR",
-    "/home/reyerchu/_extbench/verilog-eval/dataset_code-complete-iccad2023")
+_VE_HUMAN = corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")
 
 # Real spec-generation prose that merely uses the word. Each states the
 # comparison about VALUES, which is what a specification does.
@@ -334,12 +333,11 @@ def test_the_real_corpus_prompt_that_was_misrouted():
     Skipped rather than asserted-over-nothing when the corpus is absent: a
     green from a file that was never opened is the vacuous pass this repo
     refuses everywhere else."""
-    p = os.path.join(_VE_HUMAN, "Prob042_vector4_prompt.txt")
-    if not os.path.isfile(p):
-        pytest.skip(f"VerilogEval-Human dataset absent at {_VE_HUMAN}; set "
-                    "$VIBEIC_VE_HUMAN_DIR to the dataset directory")
-    with open(p, errors="replace") as fh:
-        prompt = fh.read()
+    p = _VE_HUMAN / "Prob042_vector4_prompt.txt"
+    if not p.is_file():
+        pytest.skip("VerilogEval-Human dataset absent; set $VIBEIC_CORPUS_ROOT "
+                    "to the external benchmark corpus root")
+    prompt = p.read_text(errors="replace")
     assert "smaller" in prompt, (
         "the fixture no longer contains the word this test is about — it is "
         "the wrong prompt, not a passing one")

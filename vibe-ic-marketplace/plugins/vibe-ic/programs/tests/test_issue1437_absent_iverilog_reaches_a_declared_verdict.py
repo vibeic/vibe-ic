@@ -503,3 +503,16 @@ def test_a_clean_look_and_a_failed_look_are_not_the_same_value():
     # reading a verdict it never obtained.
     assert refused_clean and refused_clean[0].startswith(C.NOT_MEASURED), \
         refused_clean
+
+
+def test_the_not_measured_marker_can_never_be_a_rule_name():
+    """The marker's whole job is to be distinguishable from a rule. A rule of
+    that name entering the canonical set would make it indistinguishable again,
+    silently and in the permissive direction — the caller would read a real
+    finding as a not-measured refusal, or vice versa."""
+    import deterministic_emit_chain as C
+    import spec_conformance_check as _scc
+    assert C.NOT_MEASURED not in set(_scc.EMIT_BLOCKING_CONFORMANCE_RULES), (
+        f"{C.NOT_MEASURED!r} is now also a conformance rule name; rename one "
+        f"of the two — the marker exists to be unmistakable for a finding")
+    assert C.NOT_MEASURED not in set(getattr(_scc, "CONFORMANCE_RULES", ()) or ())

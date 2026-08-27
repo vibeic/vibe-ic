@@ -658,8 +658,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     out = json.dumps(v, indent=2, ensure_ascii=False)
     print(out)
     if a.json:
+        # THE WRITE WAS DEDENTED OUT OF ITS OWN `if`. The import stayed inside
+        # it, so every invocation WITHOUT `--json` — the documented default,
+        # and the only form `--list-entries` aside that a person types — died
+        # on `UnboundLocalError: local variable '_atomic' referenced before
+        # assignment` after printing the verdict it had already computed.
+        # Present since the file's first commit (fe27b28b7, v1.11.90), so the
+        # CLI has never worked; the module's importers never noticed because
+        # they call `route_task`, not `main`.
         import _atomic_artefact as _atomic  # noqa: PLC0415
-    _atomic.write_text(Path(a.json), out + "\n")
+        _atomic.write_text(Path(a.json), out + "\n")
     return 0
 
 
