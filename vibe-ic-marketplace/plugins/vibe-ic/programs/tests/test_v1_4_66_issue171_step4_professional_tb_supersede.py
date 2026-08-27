@@ -160,6 +160,12 @@ def _step4():
             " OR phase2/stage1/sim/pass.flag"
             " OR phase2/stage1/sim_professional/**/results.xml",
             "reports/phase2/coverage/coverage_actual.json",
+            # ONE PRODUCER PER PATH (v1.11.92, `e314f1923d`). The line/toggle/
+            # branch MEASUREMENT moved off `coverage_actual.json` — which the
+            # functional-verdict producer owns — onto its own path, and the yaml
+            # declares both. The mirror had only the first, so the pin below was
+            # RED on main: it is the drift detector working, not a stale rule.
+            "reports/phase2/coverage/coverage_verilator.json",
         ],
         "gate": {"all_of": [dict(_sim_gate())]},
     }
@@ -183,7 +189,15 @@ def test_check_step_step4_passes_on_professional_tb(tmp_path):
     (_pro_dir(tmp_path) / "results.xml").write_text(_JUNIT_PASS)
     cov = tmp_path / "reports" / "phase2" / "coverage"
     cov.mkdir(parents=True)
+    # BOTH declared coverage outputs — the functional verdict and, since
+    # v1.11.92 split the paths, the measurement. Existence is all Step 4's
+    # `required_outputs` ask of them here; this file's subject is whether a real
+    # professional-TB PASS supersedes the ABSENT canonical sim files, and the
+    # coverage artefacts are present only so the step reaches its gate instead
+    # of short-circuiting on MISSING. Writing one and not the other made the
+    # step MISSING and put this file's subject out of reach.
     (cov / "coverage_actual.json").write_text("{}")
+    (cov / "coverage_verilator.json").write_text("{}")
     res = FCC.check_step(tmp_path, _step4(), waivers={})
     assert res.status == "PASS", (res.status, res.reasons)
 
@@ -193,6 +207,14 @@ def test_check_step_step4_fails_without_professional_tb(tmp_path):
     FAILs exactly as before (coverage present so it reaches the gate)."""
     cov = tmp_path / "reports" / "phase2" / "coverage"
     cov.mkdir(parents=True)
+    # BOTH declared coverage outputs — the functional verdict and, since
+    # v1.11.92 split the paths, the measurement. Existence is all Step 4's
+    # `required_outputs` ask of them here; this file's subject is whether a real
+    # professional-TB PASS supersedes the ABSENT canonical sim files, and the
+    # coverage artefacts are present only so the step reaches its gate instead
+    # of short-circuiting on MISSING. Writing one and not the other made the
+    # step MISSING and put this file's subject out of reach.
     (cov / "coverage_actual.json").write_text("{}")
+    (cov / "coverage_verilator.json").write_text("{}")
     res = FCC.check_step(tmp_path, _step4(), waivers={})
     assert res.status == "FAIL", (res.status, res.reasons)

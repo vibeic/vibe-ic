@@ -697,11 +697,43 @@ def _shipped_step4_flow(tmp_path: Path) -> Path:
     return path
 
 
+#: The coverage measurement Step 4 declares, in the shape its producer writes.
+#:
+#: 2026-08-27 — ONE PRODUCER PER PATH (v1.11.92, `e314f1923d`). Until that
+#: commit `reports/phase2/coverage/coverage_actual.json` carried two different
+#: payloads: the FUNCTIONAL-verification verdict written by
+#: `design_one_shot_runner.step_emit_phase2_manifests`, and the line/toggle/
+#: branch MEASUREMENT written by `verilator_coverage_measure`. v1.11.92 split
+#: them — the verdict keeps `coverage_actual.json`, the measurement moves to
+#: `coverage_verilator.json` — and re-pointed the Step-4 clause and the step's
+#: `required_outputs` at the new path.
+#:
+#: This fixture wrote only the OLD combined shape, so after the split it modelled
+#: a tree whose simulation ran and whose coverage was NEVER measured. The gate
+#: read that correctly: with no measurement and no Verilator on the host it
+#: returns rc=3, the named capability gap, and the step resolves to
+#: WAIVED-DEFERRED. That is the gate doing its job, not a tier defect — but it is
+#: a different tree from the one these two tests are about, and it hides their
+#: subject behind an unrelated word.
+#:
+#: Both paths are now written in the shapes their real producers write, so the
+#: fixture is again "the sim ran and its coverage was measured" and the clause
+#: with nothing to look at is once more `professional_tb_check` alone. MEASURED:
+#: writing only the measurement, or writing both, produce a byte-identical
+#: `reasons` list — correcting the functional payload moves nothing in this
+#: step's verdict, which is why it is safe to correct it here.
+_COVERAGE_TOTALS = {
+    "line":   {"covered": 74, "total": 76, "pct": 97.37},
+    "toggle": {"covered": 27, "total": 29, "pct": 93.10},
+    "branch": {"covered": 19, "total": 20, "pct": 95.00}}
+
+
 def _project_where_the_sim_ran(tmp_path: Path, ran: bool) -> Path:
     """Step 4's own declared inputs, and nothing else.
 
     `ran=True`  — results.xml + pass.flag on disk, a testbench that really
-                  instantiates the unit, a coverage artefact with real counts.
+                  instantiates the unit, the functional verdict on its path and
+                  the coverage measurement on its own (see `_COVERAGE_TOTALS`).
                   `professional_tb_check` is then the ONE clause with nothing
                   to look at, and it says NOT_APPLICABLE in its own report.
     `ran=False` — none of it. Every clause has nothing to look at.
@@ -719,12 +751,23 @@ def _project_where_the_sim_ran(tmp_path: Path, ran: bool) -> Path:
             'tests="1" failures="0"><testcase name="count"/></testsuite>'
             '</testsuites>\n')
         (sim / "pass.flag").write_text("PASS\n")
+        # The FUNCTIONAL verdict, on the producer that owns this path.
         (p / "reports/phase2/coverage/coverage_actual.json").write_text(
             json.dumps({
-                "totals": {
-                    "line":   {"covered": 74, "total": 76, "pct": 97.37},
-                    "toggle": {"covered": 27, "total": 29, "pct": 93.10},
-                    "branch": {"covered": 19, "total": 20, "pct": 95.00}},
+                "verdict": "PASS",
+                "verification_track": "testbench",
+                "evidence": ["phase2/stage1/sim/results.xml"],
+                "scenarios_covered": ["count"]}, indent=1) + "\n")
+        # The MEASUREMENT, on its own path, with the coverage.dat backlink
+        # `verilator_coverage_measure.artefact_looks_tool_generated` resolves.
+        dat = sim / "cov_build" / "coverage.dat"
+        dat.parent.mkdir(parents=True, exist_ok=True)
+        dat.write_text("# verilator coverage\n")
+        (p / "reports/phase2/coverage/coverage_verilator.json").write_text(
+            json.dumps({
+                "tool": "verilator",
+                "coverage_dat": str(dat),
+                "totals": _COVERAGE_TOTALS,
                 "per_file": {"phase2/stage1/sim/dut.v": {
                     "line": {"covered": 74, "total": 76, "pct": 97.37}}},
                 "format_detected": "verilator_dat"}, indent=1) + "\n")
