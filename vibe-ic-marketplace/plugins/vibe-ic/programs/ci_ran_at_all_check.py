@@ -68,6 +68,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 RC_PASS, RC_FAIL, RC_NOT_CHECKED = 0, 1, 2
 
 #: Workflow names that do NOT constitute "CI ran". A repo can have automation
@@ -109,8 +112,8 @@ def _repo_slug(repo_dir: Path) -> Optional[str]:
                       "-q", ".nameWithOwner"])
     if rc == 0 and out.strip():
         return out.strip()
-    r = subprocess.run(["git", "-C", str(repo_dir), "remote", "get-url", "origin"],
-                       capture_output=True, text=True, timeout=30)
+    r = _pr.run(["git", "-C", str(repo_dir), "remote", "get-url", "origin"],
+                capture_output=True, text=True)
     if r.returncode != 0:
         return None
     url = r.stdout.strip()
@@ -121,8 +124,8 @@ def _repo_slug(repo_dir: Path) -> Optional[str]:
 
 
 def _head_sha(repo_dir: Path, rev: str) -> Optional[str]:
-    r = subprocess.run(["git", "-C", str(repo_dir), "rev-parse", rev],
-                       capture_output=True, text=True, timeout=30)
+    r = _pr.run(["git", "-C", str(repo_dir), "rev-parse", rev],
+                capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
 
 
@@ -263,4 +266,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

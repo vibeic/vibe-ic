@@ -251,6 +251,9 @@ import _corpus_location as _cloc
 import _gate_denominator as _gd
 import _record_adjudication as _ra
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 _HERE = Path(__file__).resolve().parent
 
 GATE = "published_record_staleness_check"
@@ -478,9 +481,9 @@ def _target_deliberately_untracked(root: Path, p: Path) -> bool:
                                                os.readlink(p)))
     except (OSError, ValueError):
         return False
-    return subprocess.run(
+    return _pr.run(
         ["git", "-C", str(root), "check-ignore", "-q", "--", target],
-        capture_output=True, timeout=60).returncode == 0
+        capture_output=True).returncode == 0
 
 
 def discover(root: Path) -> Discovery:
@@ -1253,4 +1256,6 @@ def _write_baseline(bl_path: Path, now: List[str], prev: Optional[List[str]],
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

@@ -112,6 +112,9 @@ from typing import Optional, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
 from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 # The landing harness runs at --timeout=180 --timeout-method=thread; an inner
 # bound above that turns one hung regenerator into a lost SESSION.
 SUBPROCESS_TIMEOUT_S = 60
@@ -237,11 +240,11 @@ def decide(
 
 # ─── the git surface ────────────────────────────────────────────────
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         ("git", "-C", str(root)) + args,
         capture_output=True,
         text=True,
-        timeout=SUBPROCESS_TIMEOUT_S,
+        
     )
 
 
@@ -439,4 +442,6 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

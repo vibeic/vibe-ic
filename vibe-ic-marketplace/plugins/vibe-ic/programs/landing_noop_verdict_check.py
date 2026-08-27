@@ -97,6 +97,9 @@ import _atomic_artefact as _atomic
 import _gate_usage_exit as _usage
 import _vacuous_exit as _vac
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 TOOL = "landing_noop_verdict_check"
 
 #: Per-path verdicts. IDENTICAL is the only one a no-op claim survives.
@@ -117,8 +120,8 @@ class Refused(Exception):
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, timeout=300)
+    return _pr.run(["git", "-C", str(repo), *args],
+                   capture_output=True, text=True)
 
 
 def resolve(repo: Path, ref: str, what: str) -> str:
@@ -288,4 +291,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

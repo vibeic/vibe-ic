@@ -164,6 +164,9 @@ from gate_process_attestation import (                    # noqa: E402
     argv_sha256, load_jsonl, normalise_line, process_attestation)
 from hygiene_shard_plan import load_profile, plan          # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 #: Scratch prefix.  UNCHANGED from the leaking version on purpose — the reaper
 #: keys on it, so the directories a pre-fix build already left behind are the
 #: first thing a fixed run cleans up.
@@ -562,8 +565,8 @@ def _unregister_worktree(scratch: Path) -> None:
     wt = scratch / "wt"
     if not wt.exists():
         return
-    r = subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
-                        str(wt)], capture_output=True, text=True, timeout=120)
+    r = _pr.run_best_effort(["git", "-C", str(wt), "worktree", "remove", "--force",
+                             str(wt)], capture_output=True, text=True)
     if r.returncode == 0:
         return
     # A worktree git considers LOCKED refuses a single `--force`. Measured: a
@@ -572,10 +575,10 @@ def _unregister_worktree(scratch: Path) -> None:
     # retry; if that still fails the directory is removed anyway and the
     # registration is dropped by the `prune` the caller runs — never left
     # standing because one git subcommand was fussy.
-    subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
-                   capture_output=True, text=True, timeout=120)
-    subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
-                    str(wt)], capture_output=True, text=True, timeout=120)
+    _pr.run_best_effort(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
+                        capture_output=True, text=True)
+    _pr.run_best_effort(["git", "-C", str(wt), "worktree", "remove", "--force",
+                         str(wt)], capture_output=True, text=True)
 
 
 def _release_scratch(res, repo_root: Path) -> None:
@@ -588,8 +591,8 @@ def _release_scratch(res, repo_root: Path) -> None:
     res.release()
     # Only ever removes registrations whose DIRECTORY is gone, so a worktree a
     # concurrent agent is sitting in cannot be pruned by this.
-    subprocess.run(["git", "-C", str(repo_root), "worktree", "prune"],
-                   capture_output=True, text=True, timeout=120)
+    _pr.run_best_effort(["git", "-C", str(repo_root), "worktree", "prune"],
+                        capture_output=True, text=True)
 
 
 def _setup(verdict: str, kind: str, detail: str, dirt: Optional[Dirt],
@@ -667,8 +670,8 @@ def sweep_abandoned_scratch(repo_root: Path,
         # `prune` after the removals, not instead of them: it drops the
         # registrations whose directories this sweep has just deleted, and by
         # construction cannot touch one whose directory still exists.
-        subprocess.run(["git", "-C", str(repo_root), "worktree", "prune"],
-                       capture_output=True, text=True, timeout=120)
+        _pr.run_best_effort(["git", "-C", str(repo_root), "worktree", "prune"],
+                            capture_output=True, text=True)
     return {"reaped": rep.reaped, "live_peers": rep.live,
             "peer_probe_pids": peers,
             "vanished_under_the_sweep": rep.vanished,
@@ -902,9 +905,9 @@ def _repair_checkout(repo_root: Path, before: Dict[str, str],
             refused.append(f"{path} (written AGAIN after the drive ended, so "
                            f"this process is not its only writer)")
             continue
-        r = subprocess.run(
+        r = _pr.run_best_effort(
             ["git", "-C", str(repo_root), "checkout", "--", path],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True)
         if r.returncode == 0 and path not in _checkout_dirty_paths(repo_root):
             repaired.append(path)
         else:

@@ -104,6 +104,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 #: The paths whose contents reach a user. A modification here at land time is
 #: either work that belongs in the batch or work that does not belong in the
 #: repo; both need an answer before the push.
@@ -131,8 +134,8 @@ RC_OK, RC_DIRTY, RC_CANNOT_MEASURE = 0, 1, 2
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, timeout=120)
+    return _pr.run(["git", "-C", str(repo), *args],
+                   capture_output=True, text=True)
 
 
 def modified_tracked(repo: Path, paths=SHIPPED_PATHS):
@@ -279,4 +282,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

@@ -83,6 +83,9 @@ import _atomic_artefact as _atomic
 import _gate_usage_exit as _usage
 import _vacuous_exit as _vac
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 TOOL = "doc_table_row_placement_check"
 
 #: A GFM delimiter row: cells of dashes, optionally colon-aligned. A single
@@ -143,8 +146,8 @@ def tracked_markdown(repo: Path) -> Optional[List[Path]]:
     not something this repository publishes, and walking the filesystem would
     pull in vendored trees and agent worktrees that no landing touches.
     """
-    r = subprocess.run(["git", "-C", str(repo), "ls-files", "-z", "*.md"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run(["git", "-C", str(repo), "ls-files", "-z", "*.md"],
+                capture_output=True, text=True)
     if r.returncode != 0:
         return None
     return [repo / p for p in r.stdout.split("\0") if p]
@@ -235,4 +238,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

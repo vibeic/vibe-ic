@@ -147,6 +147,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import _crash_safe_scratch as _scratch
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 RC_OK = 0
 RC_UNPINNED = 1
 RC_UNDETERMINED = 2
@@ -909,8 +912,8 @@ _HEAD_BLIND: List[str] = []
 
 
 def _git_show_head(repo: Path, rel: str) -> str:
-    p = subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{rel}"],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run(["git", "-C", str(repo), "show", f"HEAD:{rel}"],
+                capture_output=True, text=True)
     if p.returncode != 0:
         raise ValueError((p.stderr or "").strip().splitlines()[-1:][0]
                          if (p.stderr or "").strip() else "git show failed")
@@ -1222,17 +1225,17 @@ def _unregister_parallel_worktree(scratch: Path) -> None:
     wt = scratch / "wt"
     if not wt.exists():
         return
-    subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
-                   capture_output=True, text=True, timeout=120)
-    subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
-                    str(wt)], capture_output=True, text=True, timeout=120)
+    _pr.run_best_effort(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
+                        capture_output=True, text=True)
+    _pr.run_best_effort(["git", "-C", str(wt), "worktree", "remove", "--force",
+                         str(wt)], capture_output=True, text=True)
 
 
 def _release_parallel_worktree(res: Any, repo: Path) -> None:
     _unregister_parallel_worktree(res.path)
     res.release()
-    subprocess.run(["git", "-C", str(repo), "worktree", "prune"],
-                   capture_output=True, text=True, timeout=120)
+    _pr.run_best_effort(["git", "-C", str(repo), "worktree", "prune"],
+                        capture_output=True, text=True)
 
 
 def verify_pins_parallel(
@@ -1621,4 +1624,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -104,6 +104,9 @@ from typing import Dict, List
 
 import _corpus_location as _corpus       # sibling program, one seam for all
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 _DEFAULT_ROOT_REL = "benchmark-data"
 
 #: Where a caller may point us at a clone of the published corpus.
@@ -236,9 +239,9 @@ def main(argv=None) -> int:
         # `tracked_symlink_target_present_check.py` already refuses this via
         # `_git_toplevel()`. Handed the same directory the two gates disagreed;
         # they no longer do.
-        _probe = subprocess.run(
+        _probe = _pr.run(
             ["git", "-C", env_tree, "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         if _probe.returncode != 0 or not _probe.stdout.strip():
             print(f"UNDETERMINED: {CORPUS_ENV}={env_tree} exists but is not a git "
                   f"checkout, and this gate reads git's INDEX — a loose directory "
@@ -299,4 +302,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

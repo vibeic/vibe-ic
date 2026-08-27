@@ -66,6 +66,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 MANIFEST_NAME = "RUN_MANIFEST.json"
 
 #: Verdict spellings that occur in the corpus, normalised to three outcomes. A
@@ -299,8 +302,8 @@ def changed_run_dirs(tree: Path, base: str) -> Optional[List[Path]]:
     import subprocess
     # 30 s, measured at 0.00 s over the real `benchmark-data` tree. Kept under
     # the 60 s inner ceiling for the same reason as the test above.
-    r = subprocess.run(["git", "diff", "--name-only", f"{base}...HEAD", "--",
-                        str(tree)], capture_output=True, text=True, timeout=30)
+    r = _pr.run(["git", "diff", "--name-only", f"{base}...HEAD", "--",
+                 str(tree)], capture_output=True, text=True)
     if r.returncode != 0:
         return None
     seen: Dict[str, Path] = {}
@@ -414,4 +417,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

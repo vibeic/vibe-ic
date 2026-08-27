@@ -147,6 +147,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 RC_OK, RC_FINDING, RC_NOTHING = 0, 1, 2
 
 DIR = Path(__file__).resolve().parent
@@ -160,8 +163,8 @@ CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
 
 
 def _repo_root(start: Path) -> Path:
-    r = subprocess.run(["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run(["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True)
     return Path(r.stdout.strip()) if r.returncode == 0 else start
 
 
@@ -173,8 +176,8 @@ def _git_toplevel(start: Path):
     to be sayable, because everything below asks git's INDEX and a loose
     directory has none to ask.
     """
-    r = subprocess.run(["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run(["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True)
     out = r.stdout.strip()
     return Path(out) if r.returncode == 0 and out else None
 
@@ -186,8 +189,8 @@ def tracked_symlinks(root: Path, subdir: str) -> Tuple[List[str], str]:
     depend on the filesystem having materialised it — which is the very
     condition under test.
     """
-    r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "--", subdir],
-                       capture_output=True, text=True, timeout=180)
+    r = _pr.run(["git", "-C", str(root), "ls-files", "-s", "--", subdir],
+                capture_output=True, text=True)
     if r.returncode != 0:
         return [], f"git ls-files failed: {r.stderr.strip()[:160]}"
     out = []
@@ -205,8 +208,8 @@ def tracked_path_count(root: Path, subdir: str) -> Tuple[int, str]:
     corpus is here and holds no pointers". Asked of the INDEX for the same
     reason as above: it must not depend on what this checkout materialised.
     """
-    r = subprocess.run(["git", "-C", str(root), "ls-files", "--", subdir],
-                       capture_output=True, text=True, timeout=180)
+    r = _pr.run(["git", "-C", str(root), "ls-files", "--", subdir],
+                capture_output=True, text=True)
     if r.returncode != 0:
         return 0, f"git ls-files failed: {r.stderr.strip()[:160]}"
     return len([ln for ln in r.stdout.splitlines() if ln.strip()]), ""
@@ -221,8 +224,8 @@ def broken(root: Path, rels: List[str]) -> List[dict]:
     rather than on a commit, which is the thing #555 is about.
     """
     tracked = set()
-    r = subprocess.run(["git", "-C", str(root), "ls-files"],
-                       capture_output=True, text=True, timeout=180)
+    r = _pr.run(["git", "-C", str(root), "ls-files"],
+                capture_output=True, text=True)
     if r.returncode == 0:
         tracked = set(r.stdout.splitlines())
 
@@ -274,9 +277,9 @@ def _is_ignored(root: Path, rel: str) -> bool:
     nested ignore files and precedence. Reimplementing the matching would be a
     second copy of git's rules, and those two would disagree.
     """
-    return subprocess.run(
+    return _pr.run(
         ["git", "-C", str(root), "check-ignore", "-q", "--", rel],
-        capture_output=True, timeout=60).returncode == 0
+        capture_output=True).returncode == 0
 
 
 def _load_register(path: Path) -> Optional[List[str]]:
@@ -500,4 +503,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

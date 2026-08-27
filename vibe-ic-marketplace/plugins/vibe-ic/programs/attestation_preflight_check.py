@@ -95,6 +95,9 @@ import _atomic_artefact as _atomic
 import _gate_usage_exit as _usage
 import _vacuous_exit as _vac
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 TOOL = "attestation_preflight_check"
 
 #: The environment variable a CHILD inherits. `python3 -B` sets
@@ -135,10 +138,10 @@ def tracked_drift(repo: Path, roots: List[Path]) -> Optional[List[str]]:
     None means git did not answer, which is not the same as clean and is
     reported as its own refusal rather than folded into a pass.
     """
-    r = subprocess.run(
+    r = _pr.run(
         ["git", "-C", str(repo), "status", "--porcelain", "--",
          *[str(p) for p in roots]],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True)
     if r.returncode != 0:
         return None
     return [line for line in r.stdout.splitlines()
@@ -146,10 +149,10 @@ def tracked_drift(repo: Path, roots: List[Path]) -> Optional[List[str]]:
 
 
 def untracked(repo: Path, roots: List[Path]) -> List[str]:
-    r = subprocess.run(
+    r = _pr.run(
         ["git", "-C", str(repo), "status", "--porcelain", "--",
          *[str(p) for p in roots]],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True)
     if r.returncode != 0:
         return []
     return [line[3:] for line in r.stdout.splitlines()
@@ -175,9 +178,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _usage.usage_error(
             TOOL, "no ROOT given; the set of paths an attestation re-derives is "
                   "a property of that attestation and is never guessed here")
-    top = subprocess.run(["git", "-C", str(args.repo), "rev-parse",
-                          "--show-toplevel"],
-                         capture_output=True, text=True, timeout=120)
+    top = _pr.run(["git", "-C", str(args.repo), "rev-parse",
+                   "--show-toplevel"],
+                  capture_output=True, text=True)
     if top.returncode != 0 or not top.stdout.strip():
         return _usage.usage_error(
             TOOL, f"--repo {args.repo} is not a git repository, so the tracked "
@@ -283,4 +286,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the commit: reach the stamp as rc 2
+    # (this gate's 'could not measure'), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))
