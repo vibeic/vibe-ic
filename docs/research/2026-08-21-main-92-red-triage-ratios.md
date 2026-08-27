@@ -1,9 +1,10 @@
 ### the 57 non-1.6x IDs — red ratio per lane, pass 1 + interleaved repeats
 
-### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host.
+### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          55
+  BOTH          47
+  CLEARED        8
   FLAKY         2
 
 bucket        image    host     id
@@ -50,17 +51,46 @@ BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_clean_t
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_declared_non_counts_are_still_present[and all 56 EDA/device tools]
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_stated_counts_in_the_documents_match_the_tree
 BOTH          5/5      5/5      test_step_metrics_coverage.py::test_declared_coverage_matches_the_tree
-BOTH          5/5      5/5      test_v0_2_77_lvs_reachable.py::test_lvs_fails_on_real_mismatch
-BOTH          5/5      5/5      test_v0_2_77_lvs_reachable.py::test_lvs_runs_and_passes_on_match
 BOTH          5/5      5/5      test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_is_deferred_not_counted_without_coverage
 BOTH          5/5      5/5      test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_lifts_step4_out_of_skipped_condition
-BOTH          5/5      5/5      test_v0_2_97_issue477_lvs_incomplete.py::test_clean_complete_lvs_still_passes
-BOTH          5/5      5/5      test_v0_2_97_issue477_lvs_incomplete.py::test_real_mismatch_still_fails_as_conclusive
-BOTH          5/5      5/5      test_v0_2_97_issue477_lvs_incomplete.py::test_small_ext2spice_error_count_is_warning_not_fail
-BOTH          5/5      5/5      test_v0_2_97_issue477_lvs_incomplete.py::test_truncated_verdict_less_report_is_incomplete_fail
-BOTH          5/5      5/5      test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_pin_fail_is_conclusive_mismatch_not_incomplete
-BOTH          5/5      5/5      test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_truncated_still_incomplete
 BOTH          5/5      5/5      test_v0_3_5_issue502_503_cascade_attribution.py::test_ordering_ancestry_is_two_orders_of_magnitude_wider
 BOTH          5/5      5/5      test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_passed_the_empty_predicate_lists
 BOTH          5/5      5/5      test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_passes_the_same_empty_corpus_silently
 BOTH          5/5      5/5      test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_was_silent_on_the_advisory_slot
+
+### CLEARED — re-measured GREEN in both lanes at a named later sha
+
+Not a re-bucketing of the old observation: a new measurement, stated with the sha it
+was taken at. The original ratio is kept in the row so the history is not erased.
+
+cleared_at   was(image/host)  now(image/host)  id
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_77_lvs_reachable.py::test_lvs_fails_on_real_mismatch
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_77_lvs_reachable.py::test_lvs_runs_and_passes_on_match
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_clean_complete_lvs_still_passes
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_real_mismatch_still_fails_as_conclusive
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_small_ext2spice_error_count_is_warning_not_fail
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_truncated_verdict_less_report_is_incomplete_fail
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_pin_fail_is_conclusive_mismatch_not_incomplete
+ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_truncated_still_incomplete
+
+All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
+modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
+`FEEDBACK_OUT` — an extraction whose error channel was never dumped, which real Magic
+always dumps (0 bytes when `feedback count` is 0). `step_lvs`'s pre-netgen gate
+`magic_illegal_overlap_check` refused it, correctly, as `EXTRACTION_FEEDBACK_ABSENT`:
+an absent file is not a measured zero. Every one of the eight died at that abort
+before netgen was ever reached. `d3dce649b` (v1.11.43) repaired the stub in all three
+modules; no assertion was weakened, no case deleted, no skipif added, no tolerance
+widened. Both directions are shown in
+`docs/research/2026-08-27-lvs-family-remeasured-at-v1-11-96.md`: removing that same
+`FEEDBACK_OUT` write again at `ae5cc4dbf` sends the two `test_v0_2_77` IDs straight
+back to RED with the same finding, and leaves the module's three non-extraction tests
+green.
+
+ADJACENT, MEASURED BUT NOT MOVED — the four `test_extraction_input_blocked_verdict.py`
+IDs still listed BOTH above carry the same `FEEDBACK_OUT` stub repair from the same
+commit. Measured at `ae5cc4dbf`, whole module, both lanes: host 51 passed / 2 skipped,
+image 51 passed / 2 skipped; the four named IDs 4 passed in each. They are green and
+they belong in CLEARED, but they are another slice's to move, and two agents editing
+the same rows is how a ledger stops being one. Whoever owns them can move them on this
+evidence or their own.
