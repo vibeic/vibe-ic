@@ -1,0 +1,39 @@
+v1.11.96 landed on the owner's condition "push the batch if no new red".
+
+WHAT WAS MEASURED
+Pinned three-lane A/B on 192.168.1.108, bare metal, both arms on ONE host with the
+SAME sha256-pinned selections (221/50/132) rather than re-derived ones, JUnit-only,
+no --maxfail, --fallback-jobs 1. Base d1f9885f0440 (tree 74aa0a23ea23) vs this tree
+954bc27704. Result: 32 failing node ids each side, NEW = 0, CLEARED = 0.
+Frame canaries green by their own numbers: test_landing_merge_verdict 0 red (the
+bare-metal figure), 0 boot-floor stall hits.
+Hygiene: 11 red rows each side, 0 new / 0 removed, member-level, corpus bound.
+tools/test_gatekeeper_land_lanes.py NORECORDed symmetrically under the harness and
+was cleared standalone: 16 passed rc=0 on BOTH trees, same test blob cd7a910b
+judging gatekeeper-land.sh blobs 6a712a95 (base) and feaaaaea (this tree).
+
+WHAT WAS NOT
+The landing gate did not run on this batch and wrote no stamp; the pre-push hook was
+bypassed with --no-verify. The gate judges ABSOLUTELY and main carries pre-existing
+reds, so it refuses every landing today regardless of the candidate; the REGRESSION
+question was answered instead.
+The 32 pre-existing reds are carried onto main unchanged. They are main's, not this
+batch's.
+test_landing_cadence.py has no counterpart on base and so was NOT_MEASURED there.
+The failure-REASON of the 32 common reds was not diffed, so a same-name-different-
+reason change inside the gate/ratchet family is outside what this excludes.
+One real difference this criterion does not see: run STANDALONE rather than under the
+harness, test_pytest_per_file_junit.py::test_nested_validated_progress_is_relayed_to_
+the_outer_session passes on base 4/4 and fails on this tree 2/4 at matched load,
+missing 'assert elapsed > 4.5' by 0.5-1.1%. Under the harness both trees are red on
+it (4.4505 vs 4.4721), which is why the set difference is empty. The cause is a
+derived stall bound that double-counts a SLIDING window; the repair is authored and
+measured on fix/nested-lease-one-floor-and-a-sized-corpus and lands next.
+
+CONTENT
+Three content commits plus the protected-path PREPARE and ACTIVATE:
+  - landing cadence derived from the version bump, and the tier that earned it stamped
+  - the batch shape the lander already computed, forwarded to the review
+  - sta_engine_parity_check tests pin the image they judge
+fix/eda-sta-evidence-on-the-exit-truth-tree was HANDED BACK, not merged: it and main's
+landed ea51511ef implement the same property by mutually exclusive mechanisms.
