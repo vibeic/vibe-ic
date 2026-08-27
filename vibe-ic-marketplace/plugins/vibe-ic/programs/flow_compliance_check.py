@@ -3378,11 +3378,50 @@ def output_snippet(stdout: str, stderr: str) -> str:
 
     Extracted from the call site so the width is one named constant rather
     than a literal repeated wherever someone needs to reason about what the
-    consumer kept. Behaviour is unchanged: the last
-    :data:`_OUTPUT_SNIPPET_CHARS` characters of each stream.
+    consumer kept: the last :data:`_OUTPUT_SNIPPET_CHARS` characters of each
+    stream, GROWN BACKWARD to the start of the line the cut landed in.
+
+    WHY THE GROWTH. A fixed character offset cuts mid-token, and the first
+    thing a reader sees is then a fragment of the gate's own verdict. Measured
+    on `_pytest_verdict_helper`, whose finding is `verdict: FAIL`::
+
+        AIL
+          [ERROR] corner set incomplete under /tmp/.../p
+          ValueError: corner name 'ss' is not in the PVT matrix
+
+    The finding survived the cut and was unreadable anyway, and
+    `test_a_real_verdict_is_not_mistaken_for_a_crash` refuses exactly that.
+    This module already knew the hazard from the other side —
+    `_TRACEBACK_FRAME_TRUNCATED_RE` exists because "on a deep checkout a
+    fixed-offset cut takes the ``File "`` prefix with it and leaves only the
+    tail" — and mended the DETECTOR each time rather than the cut.
+
+    IT GROWS, NEVER SHRINKS, and that is the load-bearing half. Dropping the
+    partial first line would have been the shorter fix and it is wrong: a
+    truncated traceback FRAME line is exactly such a partial line, and deleting
+    it would take a crash's only evidence with it — `looks_like_python_traceback`
+    would start answering False where it answers True today. A superset can
+    only help every consumer; a subset silently removes evidence.
+
+    Bounded: the grown line may not itself exceed the budget, so a single
+    enormous line falls back to the plain tail and the width stays bounded by
+    ``2 * _OUTPUT_SNIPPET_CHARS`` per stream.
     """
     n = _OUTPUT_SNIPPET_CHARS
-    return ((stdout or "")[-n:] + "\n" + (stderr or "")[-n:]).strip()
+
+    def _tail(stream: str) -> str:
+        text = stream or ""
+        if len(text) <= n:
+            return text
+        cut = len(text) - n
+        if text[cut - 1] == "\n":          # the cut already sits on a boundary
+            return text[cut:]
+        start = text.rfind("\n", 0, cut) + 1
+        if cut - start > n:                # that one line is wider than the
+            return text[cut:]              # budget; keep the old behaviour
+        return text[start:]
+
+    return (_tail(stdout) + "\n" + _tail(stderr)).strip()
 
 
 def looks_like_python_traceback(text: str) -> bool:
