@@ -225,9 +225,17 @@ def test_run_supervised_hung_is_stalled():
     res = W.run_supervised(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         stall_grace_s=1.0, poll_s=0.2, hard_ceiling_s=60.0)
-    assert res.outcome == "stalled"
+    # THE STALL KILL, NOT THE CEILING KILL. `outcome` is the primitive's own
+    # name for which of its three kills fired, and separating them is exactly
+    # what `elapsed_s < 6.0` was doing by hand — the subject sleeps 60 s and the
+    # ceiling is 60 s, so "it ended early" and "it ended by the STALL path" are
+    # the same statement, and only one of them survives a loaded host.
+    assert res.outcome == "stalled", res.err
+    assert res.outcome != "ceiling", (
+        f"the hard ceiling stopped it, not the stall grace "
+        f"(observed {res.elapsed_s:.1f}s) — a silent job was carried all the "
+        f"way to the backstop")
     assert res.rc == W.RC_STALLED
-    assert res.elapsed_s < 6.0
     assert "WATCHDOG_STALLED" in res.err
 
 

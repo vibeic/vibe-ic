@@ -100,15 +100,56 @@ def _make_flat_netlist(n_cells: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_reset_dependency_check_pattern_b_large_netlist_under_10s(tmp_path):
-    """Pattern B with 3k cells must complete in < 10 seconds (vs >300s before
-    the O(N) rewrite).  Chip-AGNOSTIC: only checks runtime, not verdict."""
-    rtl = tmp_path / "top.v"
-    rtl.write_text(_make_flat_netlist(3_000))
-    t0 = time.monotonic()
-    rdc.audit_file(rtl, tmp_path)
-    elapsed = time.monotonic() - t0
-    assert elapsed < 10.0, f"Pattern B took {elapsed:.2f}s on 3k cells (limit 10s)"
+def _cost_ratio_within(fn, small, big, factor, floor, attempts=3):
+    """(ok, small_cost, big_cost) — best-of-N, but only spend the extra runs
+    when the first one FAILS.
+
+    A correct implementation pays ONE measurement of each size. A scheduling
+    blip — the only way a correct implementation can miss — gets two more
+    chances, and the MINIMUM is kept because a scheduler can make a run slower
+    and never faster. A genuinely quadratic implementation is not run six times
+    before anyone is told.
+    """
+    best_small = best_big = float("inf")
+    for _ in range(attempts):
+        t0 = time.perf_counter()
+        fn(small)
+        best_small = min(best_small, time.perf_counter() - t0)
+        t0 = time.perf_counter()
+        fn(big)
+        best_big = min(best_big, time.perf_counter() - t0)
+        if best_big <= max(best_small * factor, floor):
+            return True, best_small, best_big
+    return False, best_small, best_big
+
+
+def test_reset_dependency_check_pattern_b_is_linear_not_quadratic(tmp_path):
+    """Pattern B is O(N), which is what the rewrite was for (>300s before it).
+
+    ASSERTED AS A SCALING RATIO, NOT A STOPWATCH. `elapsed < 10.0` on 3k cells
+    was a statement about this host as much as about the algorithm: it goes red
+    on a busy machine with the rewrite in place, and it would pass on a fast one
+    with a quadratic implementation of a smaller netlist. The property is the
+    SHAPE of the curve, so both points are measured here, in this run, on this
+    host — whatever else the machine is doing scales them together.
+
+    6x the cells costs ~6x linear and ~36x quadratic. The 15x gate below sits
+    between them with room on both sides; the pre-rewrite form was ~30x the
+    budget, far outside it. The absolute floor keeps timer noise on a small
+    baseline from deciding anything. Chip-AGNOSTIC: no verdict is checked.
+    """
+    def _netlist(cells: int):
+        rtl = tmp_path / f"top_{cells}.v"
+        rtl.write_text(_make_flat_netlist(cells))
+        return rtl
+
+    ok, small, large = _cost_ratio_within(
+        lambda p: rdc.audit_file(p, tmp_path),
+        _netlist(500), _netlist(3_000), factor=15.0, floor=0.5)
+    assert ok, (
+        f"Pattern B cost {large:.2f}s on 3000 cells against {small:.2f}s on 500 "
+        f"— {large / small:.1f}x for a 6x netlist. Linear is ~6x and quadratic "
+        f"~36x, so the O(N) rewrite has been lost")
 
 
 def test_reset_dependency_check_still_detects_real_cycle(tmp_path):

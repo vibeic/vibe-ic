@@ -590,8 +590,12 @@ def test_a_driven_program_that_overruns_is_STOPPED(tmp_path):
     t0 = time.monotonic()
     rc, _out, err = gk._run_program(_sleeper(tmp_path, 30), [], timeout=1.0)
     elapsed = time.monotonic() - t0
-    assert elapsed < 15, elapsed
-    assert "1208" in err, err
+    # THE BOUND FIRED. That is what `1208` in the error text means, and it is
+    # the same statement `elapsed < 15` was making with a stopwatch — except
+    # this one cannot be flipped by another tenant on the host. The 30 s sleeper
+    # is what makes it non-vacuous: without the bound there is no `1208` to find.
+    assert "1208" in err, (err, f"observed {elapsed:.1f}s")
+    assert rc != 0, (rc, "a program that was STOPPED reported success")
 
 
 def test_an_overrun_is_NEVER_reported_as_a_clean_result(tmp_path):

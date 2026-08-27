@@ -67,9 +67,16 @@ def test_the_sweep_stops_at_its_budget(tmp_path):
     elapsed = time.monotonic() - t0
 
     assert res.truncated, "a 20s sweep inside a 3s budget was not truncated"
-    assert elapsed < 20, (
-        f"the budget did not bound the loop: {elapsed:.1f}s for a 3s budget")
     assert res.probed < res.declared, (res.probed, res.declared)
+    # THE BOUND FIRED, READ FROM THE RECORD IT WRITES rather than from a
+    # stopwatch. `audit_ci` names every gate the budget stopped and WHY, so the
+    # loop being cut short is a fact in `not_driven`, not an inference from how
+    # long the call took on this host.
+    why = [w for _label, w in res.not_driven]
+    assert any("aggregate budget" in w for w in why), why
+    assert len(res.not_driven) > 0, (
+        f"nothing was recorded as not-driven, so the truncation flag has "
+        f"nothing behind it (observed {elapsed:.1f}s)")
 
 
 def test_a_truncated_sweep_is_NOT_CHECKED_and_never_PASS(tmp_path):
@@ -164,7 +171,19 @@ def test_one_slow_gate_cannot_outlive_the_budget(tmp_path):
     t0 = time.monotonic()
     res = G.audit_ci(root, timeout=60, budget=3.0)
     elapsed = time.monotonic() - t0
-    assert elapsed < 15, (
-        f"one gate ran {elapsed:.1f}s against a 3s budget — the per-gate "
-        f"timeout is not clamped to the remaining budget")
+    # THE CLAMP, ASSERTED WHERE IT IS OBSERVABLE. `_probe` distinguishes its
+    # two budget outcomes in the reason it records: a gate stopped BEFORE it was
+    # launched says "exhausted before this gate was launched", and a gate whose
+    # per-gate timeout was CUT DOWN to the remaining budget says "ran out while
+    # this gate was running". Only the second can happen when the clamp works,
+    # and with one gate declared there is nothing else it could be.
+    #
+    # Without the clamp the single 30 s gate runs its full per-gate `timeout=60`
+    # and comes back "unrunnable", not "budget" — so this assertion fails for
+    # the exact defect the stopwatch was aimed at, and passes on a loaded host.
+    assert res.truncated, res
+    why = [w for _label, w in res.not_driven]
+    assert any("ran out while this gate was running" in w for w in why), (
+        f"the per-gate timeout was not clamped to the remaining budget: {why} "
+        f"(observed {elapsed:.1f}s)")
     assert res.probed <= res.declared

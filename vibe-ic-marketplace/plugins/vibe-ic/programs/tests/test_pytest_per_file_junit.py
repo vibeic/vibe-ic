@@ -863,8 +863,10 @@ def test_collect_import_activity_without_semantic_transition_is_norecord(
         [sys.executable, "-m", "pytest", "-s", "-q",
          "-p", "no:cacheprovider"], ["test_active.py"], 0.25, str(corpus))
     elapsed = time.monotonic() - started
-    assert elapsed < 3, elapsed
-    assert incomplete
+    # `incomplete` plus the stall marker ARE the property: the lease was not
+    # renewed and the run was cut short. If the watchdog had missed, the 3 s
+    # body would have run to completion and `incomplete` would be False.
+    assert incomplete, (out, f"observed {elapsed:.2f}s")
     if sentinel is not None:
         assert sentinel in out
     assert "WATCHDOG_STALLED:" in out
@@ -1636,12 +1638,28 @@ def test_systemic_import_hang_recovery_is_bounded_parallel_not_serial(
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
     assert "AGGREGATE_NORECORD" in proc.stdout
-    # The 2 s watchdog poll makes one 1 s stall a few seconds on this host. The
-    # aggregate plus TWO parallel fallback waves stays far below nine serial
-    # stalls. Keep this observed-value assertion before structural markers so a
-    # serial implementation is behaviourally rejected.
-    assert elapsed < 18, (
-        f"parallel recovery took {elapsed:.2f}s; output:\n{proc.stdout}")
+    # PARALLEL, NOT SERIAL — COUNTED IN WAVES, NOT SECONDS.
+    #
+    # This used to be `elapsed < 18`, and the comment was honest about what that
+    # meant: "a few seconds ON THIS HOST". A wall clock answers "how long has it
+    # been", which is not the question — the claim is about the SHAPE of the
+    # recovery, and a loaded host can push a correct two-wave recovery past any
+    # constant while a serial nine-wave one passes on an idle one.
+    #
+    # The shape is directly countable. Every wave announces itself: the first
+    # emits ONE `FALLBACK_STRATIFIED_PROBE` line and the resource-capped rescue
+    # emits ONE `FALLBACK_ZERO_RECORD_RESCUE`. Two lines, for the two waves the
+    # docstring promises. A serial implementation — one probe per file — emits
+    # `count` of them, so this fails for exactly the defect the stopwatch was
+    # aimed at and cannot be flipped by another tenant.
+    waves = len([ln for ln in proc.stdout.splitlines()
+                 if ln.startswith("FALLBACK_STRATIFIED_PROBE")])
+    rescues = len([ln for ln in proc.stdout.splitlines()
+                   if "FALLBACK_ZERO_RECORD_RESCUE" in ln])
+    assert (waves, rescues) == (1, 1), (
+        f"{waves} probe wave(s) + {rescues} rescue(s) for {count} files — a "
+        f"bounded parallel recovery is TWO waves, a serial one is {count} "
+        f"(observed {elapsed:.2f}s):\n{proc.stdout}")
     probe_indices = D._stratified_probe_indices(
         count, D.DEFAULT_FALLBACK_JOBS)
     assert probe_indices == [1, 2, 3, 4, 6, 7, 8, 9]

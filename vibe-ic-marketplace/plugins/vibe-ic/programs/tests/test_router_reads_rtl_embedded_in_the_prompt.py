@@ -46,6 +46,7 @@ prompts are minimal synthetic shapes that reproduce the structure.
 """
 import os
 import sys
+import time
 
 import pytest
 
@@ -101,6 +102,29 @@ def test_prompt_embeds_rtl_is_not_fooled_by_the_interface_stub():
     assert tnr.prompt_embeds_rtl("Describe a module that adds two numbers.") is False
 
 
+def _cost_ratio_within(fn, small, big, factor, floor, attempts=3):
+    """(ok, small_cost, big_cost) — best-of-N, but only spend the extra runs
+    when the first one FAILS.
+
+    A correct implementation pays ONE measurement of each size. A scheduling
+    blip — the only way a correct implementation can miss — gets two more
+    chances, and the MINIMUM is kept because a scheduler can make a run slower
+    and never faster. A genuinely quadratic implementation is not run six times
+    before anyone is told.
+    """
+    best_small = best_big = float("inf")
+    for _ in range(attempts):
+        t0 = time.perf_counter()
+        fn(small)
+        best_small = min(best_small, time.perf_counter() - t0)
+        t0 = time.perf_counter()
+        fn(big)
+        best_big = min(best_big, time.perf_counter() - t0)
+        if best_big <= max(best_small * factor, floor):
+            return True, best_small, best_big
+    return False, best_small, best_big
+
+
 def test_the_detector_cannot_be_made_to_hang_on_a_hostile_prompt():
     """LINEARITY, pinned by a budget with 300x headroom rather than a stopwatch.
 
@@ -112,24 +136,37 @@ def test_the_detector_cannot_be_made_to_hang_on_a_hostile_prompt():
     takes a prompt string from whoever is calling it, so that is a hang in the
     front door.
 
-    The split form answers the same question with two linear searches and does
-    the same input in ~5 ms. The 2-second budget below is ~370x the linear cost
-    and ~1/6 of the quadratic one, so it is decided by the SHAPE of the code and
-    not by how loaded the machine is."""
+    The split form answers the same question with two linear searches.
+
+    HOW THIS IS ASSERTED, AND WHY NOT WITH A STOPWATCH. The claim is about the
+    SHAPE of the cost curve, so it is measured as a RATIO between two inputs of
+    known relative size, both run on THIS host inside THIS test. Whatever the
+    machine is doing scales both measurements together and cancels; an absolute
+    second-count does not have that property, and the previous `elapsed < 2.0`
+    was a bound on how busy the host was as much as on the code.
+
+    Quartering the input is the discriminator. Linear costs ~4x. Quadratic costs
+    ~16x. The backtracking form measured 12.7 SECONDS against ~5 ms, so it is
+    orders of magnitude past either. The 8x gate below sits between 4 and 16
+    with room on both sides, and the small absolute floor keeps timer noise on a
+    sub-millisecond baseline from deciding anything."""
     import time
+
     hostile = "\n".join("module m%d (a);" % i + " x" * 200 for i in range(3000))
     assert len(hostile) > 1_000_000
 
     for text in (hostile,                       # no endmodule at all
                  "endmodule\n" + hostile,       # endmodule before every header
                  "module x (a" + "y" * 200_000):  # a header with no semicolon
-        start = time.perf_counter()
         assert tnr.prompt_embeds_rtl(text) is False
-        elapsed = time.perf_counter() - start
-        assert elapsed < 2.0, (
-            f"prompt_embeds_rtl took {elapsed:.1f}s on a {len(text)} char "
-            f"prompt — it is backtracking, and the router accepts prompt text "
-            f"from its caller")
+        quarter = text[: len(text) // 4]
+        ok, base, full = _cost_ratio_within(
+            tnr.prompt_embeds_rtl, quarter, text, factor=8.0, floor=0.10)
+        assert ok, (
+            f"prompt_embeds_rtl cost {full * 1000:.1f} ms on {len(text)} chars "
+            f"against {base * 1000:.1f} ms on {len(quarter)} — {full / base:.1f}x "
+            f"for a 4x input. Linear is ~4x and quadratic ~16x, so this is "
+            f"backtracking, and the router accepts prompt text from its caller")
 
 
 # ── 2. the plural blind spot in the debug hint ───────────────────────────────

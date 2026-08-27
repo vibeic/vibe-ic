@@ -627,8 +627,13 @@ def test_live_collection_chatty_import_without_events_fails_closed(
         _collect_items_from_paths((path,), tmp_path)
     elapsed = time.monotonic() - started
     message = str(caught.value)
-    assert elapsed < 3, elapsed
-    assert "WATCHDOG_STALLED:" in message
+    # THE WATCHDOG FIRED, AND FIRED FIRST. `WATCHDOG_STALLED:` is emitted by
+    # nothing else, and it can only be in this message if the collection was cut
+    # short — had the watchdog missed, the 3 s chatterer would have finished and
+    # `_collect_items_from_paths` would have SUCCEEDED, so `pytest.raises` above
+    # would already have failed. The stopwatch restated that, and could go red
+    # on a loaded host while the watchdog had worked perfectly.
+    assert "WATCHDOG_STALLED:" in message, (message, f"observed {elapsed:.2f}s")
     assert "COLLECT_CHATTER" in message
 
 
@@ -2007,8 +2012,13 @@ def test_nested_outcome_chatty_import_without_pytest_events_fails_closed(
         _run_one_module_outcome(path, tmp_path)
     elapsed = time.monotonic() - started
     message = str(caught.value)
-    assert elapsed < 6, elapsed
-    assert "WATCHDOG_STALLED:" in message
+    # Same correction as `test_live_collection_chatty_import_without_events_
+    # fails_closed`, and this is the assertion the census author flagged: it is
+    # self-demonstrating — red when the machine is busy, green when it is idle,
+    # about code that did not change between the two runs. The property is that
+    # the stall watchdog fired rather than the chatterer finishing, and
+    # `WATCHDOG_STALLED:` is the only thing that says so.
+    assert "WATCHDOG_STALLED:" in message, (message, f"observed {elapsed:.2f}s")
     assert "validated pytest lifecycle progress" in message
     assert "CHATTY_SENTINEL" in message
 
