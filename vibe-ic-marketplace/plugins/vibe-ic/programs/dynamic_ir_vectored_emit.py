@@ -585,7 +585,24 @@ def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
             ["docker", "exec", container, "bash", "-lc", cmd],
             capture_output=True, text=True, timeout=1800)
         log = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+    except subprocess.TimeoutExpired as e:
+        # SEPARATED FROM THE TOOL-ERROR ARM, because "openroad run failed" is a
+        # sentence about the RUN and it is false here: openroad did not fail, it
+        # did not finish. The two were caught together, so a bound firing on a
+        # large die published the same status word as a missing binary and the
+        # same reason as a solver error, and the reader of this report had no
+        # way to separate "the analysis says something" from "there was no
+        # analysis". The payload is what survives — this program's caller in
+        # phase3 does not read the rc at all, only whether the file exists.
+        payload = {"status": "NOT_MEASURED",
+                   "dynamic_ir_report_emitted": False,
+                   "reason": (f"the openroad transient run did not finish "
+                              f"within its bound ({e}). NOT MEASURED: this is "
+                              f"a fact about this host, not a finding about "
+                              f"the design's IR drop.")}
+        out_json.write_text(json.dumps(payload, indent=2) + "\n")
+        return 2, payload
+    except (FileNotFoundError, OSError) as e:
         payload = {"status": "ERROR_TOOL", "dynamic_ir_report_emitted": False,
                    "reason": f"openroad run failed: {e}"}
         out_json.write_text(json.dumps(payload, indent=2) + "\n")

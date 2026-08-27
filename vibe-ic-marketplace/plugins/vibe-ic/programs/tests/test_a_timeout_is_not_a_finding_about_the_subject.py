@@ -260,3 +260,82 @@ def test_these_four_would_have_answered_wrongly_before_the_fix():
     assert FA._resolve_repo_root.__doc__ and \
         "why-not" in FA._resolve_repo_root.__doc__
     assert getattr(FA, "_GIT_UNUSABLE_RC", None) == 127
+
+
+# ── dynamic_ir_vectored_emit ────────────────────────────────────────────────
+#
+# The fifth handler, and the one where the payload is the whole product: this
+# program's caller in `phase3_one_shot_runner` does not read its rc at all
+# (`check=False`, the return value discarded) and only asks whether the JSON
+# file exists. So what the FILE says is what the flow believes.
+#
+# It caught `TimeoutExpired` in the same `except` as `FileNotFoundError` and
+# `OSError` and wrote `status: ERROR_TOOL, reason: "openroad run failed: ..."`.
+# For a missing binary that sentence is true. For a bound firing on a large die
+# it is false twice over — openroad did not fail, and it did not say anything
+# about the design's IR drop.
+
+import ast                                       # noqa: E402
+import dynamic_ir_vectored_emit as DIE           # noqa: E402
+import dynamic_ir_drop_check as DIC              # noqa: E402
+
+
+def _handlers_in(func_name: str, module) -> list[set[str]]:
+    """The exception NAMES caught by each `except` clause inside `func_name`.
+
+    Read from the AST rather than by grepping the source: the question is which
+    exceptions share a handler, and that is a structural fact about the tree,
+    not about how the line happens to be wrapped.
+    """
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == func_name)
+    out = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.ExceptHandler) and node.type is not None:
+            # BOTH node kinds. `subprocess.TimeoutExpired` is an Attribute
+            # whose only Name is `subprocess`; collecting Names alone made this
+            # helper answer "no TimeoutExpired handler anywhere", which would
+            # have made the shared-handler check pass over an empty set.
+            names = {n.id for n in ast.walk(node.type) if isinstance(n, ast.Name)}
+            names |= {n.attr for n in ast.walk(node.type)
+                      if isinstance(n, ast.Attribute)}
+            out.append(names)
+    return out
+
+
+def test_the_bound_firing_no_longer_shares_a_handler_with_a_missing_binary():
+    """THE FIX, asserted structurally. While they shared an `except`, they could
+    not say different things — one payload was written for both."""
+    handlers = _handlers_in("emit", DIE)
+    shared = [h for h in handlers
+              if "TimeoutExpired" in h and (h & {"OSError", "FileNotFoundError"})]
+    assert shared == [], (
+        f"a bound firing is still caught together with a tool error, so both "
+        f"still publish the same reason: {shared}")
+    assert any("TimeoutExpired" in h for h in handlers), (
+        "the timeout handler has gone entirely — that is a deletion, not a fix")
+
+
+def test_a_not_measured_payload_reaches_the_consumer_as_an_honest_skip():
+    """THE HALF THAT MUST NOT MOVE. `dynamic_ir_drop_check` must still treat the
+    report as a skip and must NOT read a droop number out of it. It keys on
+    `dynamic_ir_report_emitted is False`, which the new payload still carries."""
+    payload = {"status": "NOT_MEASURED",
+               "dynamic_ir_report_emitted": False,
+               "reason": ("the openroad transient run did not finish within its "
+                          "bound. NOT MEASURED: this is a fact about this host, "
+                          "not a finding about the design's IR drop.")}
+    why = DIC._is_honest_skip(payload)
+    assert why is not None, "the not-measured report stopped reading as a skip"
+    assert "NOT MEASURED" in why, why
+    assert "openroad run failed" not in why, (
+        "the consumer is still being told the tool failed")
+
+
+def test_a_real_tool_error_still_says_the_tool_failed():
+    """NON-VACUITY: the ERROR_TOOL arm still exists and still means what it did."""
+    payload = {"status": "ERROR_TOOL", "dynamic_ir_report_emitted": False,
+               "reason": "openroad run failed: [Errno 2] No such file"}
+    why = DIC._is_honest_skip(payload)
+    assert why is not None and "openroad run failed" in why, why
