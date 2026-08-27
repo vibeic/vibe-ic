@@ -480,6 +480,31 @@ run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_che
 # to the roll-up instead of folding "I could not look" into "I looked".
 uncheckable_until 2026-11-30 "rc 2 here is NOT a missing prerequisite: it means NO caller passes a login shell any more, i.e. either the hazard is gone or the detector stopped matching the call sites, and the checker says neither is a PASS"
 run_tolerating_uncheckable "container login-banner parses" "$ROOT" python3 "$PG/container_login_banner_parse_check.py"
+# THE THIRD SIBLING of the two gates above, and the one that had no runner at
+# all. `unanchored_process_kill_check` forbids shipped code from choosing a
+# victim process by matching a command line: two runs of the same tool carry
+# the SAME argv, so a pattern cannot tell this job's process from a stranger's,
+# and on this fleet every run execs into one shared long-lived container where
+# the stranger is the LIKELY match rather than the unlikely one.
+#
+# WIRED HERE BECAUSE NOTHING RAN IT. Measured on ae5cc4db: it was the single
+# entry in BOTH `checker_execution_wiring_audit`'s "nothing but their own test
+# runs" set AND `gate_is_wired_check`'s newly-unwired set -- one unwired checker
+# reddening two gates at once. Its population is this plugin's own `programs/`
+# tree, which is a repo-wide invariant needing no PR context: the thing this
+# script is for.
+#
+# BLOCKING, and it can afford to be. MEASURED on ae5cc4db over the shipped
+# programs/ tree: rc 0, no pattern-based kill in executable code, so unlike
+# "container exec deadlines" above there is no pre-existing pile to bless and
+# no reason to run advisory.
+#
+# `--root "$PG"` NAMES THE INPUT rather than letting the checker default to its
+# own location. A gate whose input is fixed to where it lives cannot be shown
+# to fail -- `gate_mutation_fixtures.invoke` redirects $ROOT and nothing else --
+# and naming the input is what keeps the CAN-FAIL direction reachable, the same
+# reasoning as "closed-loop executable census" below.
+run "no pattern-based process kill" "$ROOT" python3 "$PG/unanchored_process_kill_check.py" --root "$PG"
 # vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
 # still be visible to the gate that needs it. Every downgrade moves a
 # condition out of the error-matching sets BY CONSTRUCTION, so the

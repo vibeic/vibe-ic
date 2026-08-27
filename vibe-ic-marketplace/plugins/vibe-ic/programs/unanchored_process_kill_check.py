@@ -241,10 +241,34 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     root = Path(args.root).resolve()
+    examined = sum(1 for _ in iter_python_files(root))
     found = scan_tree(root)
+
+    # A ZERO POPULATION REFUSES (rc 2), and does not pass.
+    #
+    # Measured the day this gate was wired into `repo_hygiene_gates.sh`:
+    # `gate_discloses_denominator_check` drives every rc-0 gate against an
+    # EMPTY tree, and this one answered the identical "no pattern-based
+    # process kill" sentence it answers over the real programs/ tree. A reader
+    # -- and the roll-up -- could not tell "I looked at 1298 modules and found
+    # none" from "I looked at nothing". rc 2 is this repo's code for a verdict
+    # that could not be reached, which is exactly the state an empty scan root
+    # leaves this gate in.
+    if not examined:
+        print("NOT CHECKED unanchored_process_kill_check: 0 python file(s) "
+              "under %s -- the scan root holds nothing to examine, so this is "
+              "an EMPTY POPULATION and NOT a clean one. Nothing is claimed "
+              "about any process-kill call site." % root)
+        return 2
+
+    # THE COUNT IS ON THE PASS LINE, not only in the failure path. A gate that
+    # states its denominator only when it finds something publishes a bare
+    # "PASS" for every clean run, which is the one output a shrinking corpus
+    # cannot be seen through.
     if not found:
         print("PASS unanchored_process_kill_check: no pattern-based process "
-              "kill in executable code under %s" % root)
+              "kill in executable code under %s (%d python file(s) examined)"
+              % (root, examined))
         return 0
 
     print("FAIL unanchored_process_kill_check: a process is being selected "

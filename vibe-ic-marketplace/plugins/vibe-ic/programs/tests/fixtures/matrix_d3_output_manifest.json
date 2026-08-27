@@ -283,6 +283,9 @@
           "alternative": "reports/phase2/coverage/coverage_actual.json",
           "path": "reports/phase2/coverage/coverage_actual.json",
           "size_bytes": 525
+        },
+        "reports/phase2/coverage/coverage_verilator.json": {
+          "status": "UNPROVEN"
         }
       }
     },
