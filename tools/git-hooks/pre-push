@@ -388,6 +388,60 @@ if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
     #
     # Only checked when the stamp DECLARES a base. A plain one-line stamp is the
     # absolute tier, which claims nothing about a base and is unaffected.
+    # A MILESTONE MAY NOT BE SATISFIED BY A STAMP EARNED AT PATCH CADENCE.
+    #
+    # The stamp proves the suites ran against this commit. It did not, until
+    # now, say WHICH TIER of suites — so a FULL x.y.0 milestone was satisfiable
+    # by a stamp bought with the 101-file TARGETED subset, and the one-way rule
+    # in `gatekeeper_review.test_cadence_gate` ("a FULL cadence cannot be
+    # satisfied by a subset") stopped at the review and never reached the push.
+    #
+    # THE DIRECTION IS ONE-WAY AND STAYS THAT WAY:
+    #   required FULL     + stamp FULL       -> allowed
+    #   required FULL     + stamp TARGETED   -> REFUSED (this block)
+    #   required TARGETED + stamp FULL       -> allowed; running MORE than the
+    #                                           tier demands is never a defect,
+    #                                           and refusing it would punish
+    #                                           someone for being thorough.
+    #
+    # AN ABSENT `cadence=` LINE READS AS THE WEAKER TIER, never the stronger. A
+    # stamp written before this line existed cannot know what it ran, and the
+    # safe reading of "unknown" is the one that cannot let a milestone through.
+    # The required cadence is derived HERE, from the commit being pushed, by the
+    # same program the landing used — not read from the stamp, which is the
+    # artefact under suspicion.
+    STAMP_CADENCE="$(sed -n 's/^cadence=//p' "$STAMP" | tail -1)"
+    [ -n "$STAMP_CADENCE" ] || STAMP_CADENCE="TARGETED"
+    # POSITIVE IDENTIFICATION, not a default. `--milestone-check` answers
+    # yes|no|unknown, and only "yes" refuses here. The strict "assume FULL when
+    # in doubt" default lives on the LANDING side, where it costs time and
+    # nothing else; applying it HERE would refuse every push from any checkout
+    # where this program cannot run -- including the synthetic repos the hook's
+    # own tests drive -- and a hook that refuses everything gets bypassed.
+    # The milestone hole stays closed regardless, because the landing MINTS the
+    # stamp and defaults an unreadable tree to FULL: an x.y.0 tree cannot
+    # acquire a TARGETED stamp unless this program ran and said TARGETED for it.
+    # `|| true`, AND A GUARD, BECAUSE THIS FILE RUNS UNDER `set -e`.
+    # Without them a checkout that has no `landing_cadence.py` — every synthetic
+    # repo the hook's own tests build, and any tree older than this change —
+    # exits 2 from `python3 <missing file>`, `pipefail` promotes it to the
+    # substitution's status, and `set -e` ABORTS THE HOOK. Measured: three
+    # differential hook tests came back "pre-push: ABORTED — the hook itself
+    # failed", which refuses the push while asserting nothing about the commit.
+    # An empty answer here is not "yes", so it changes no verdict.
+    IS_MILESTONE=""
+    if [ -f "$PROGRAMS/landing_cadence.py" ]; then
+      IS_MILESTONE="$(python3 "$PROGRAMS/landing_cadence.py" --milestone-check \
+          --repo "$REPO_ROOT" --base "${PUSH_BASE:-origin/main}" --head "$HEAD_SHA" \
+          2>/dev/null | sed -n 's/^LANDING_MILESTONE=//p' || true)"
+    fi
+    if [ "$IS_MILESTONE" = "yes" ] && [ "$STAMP_CADENCE" != "FULL" ]; then
+      echo "pre-push: FAILED — this is an x.y.0 MILESTONE and the stamp was earned at ${STAMP_CADENCE} cadence" >&2
+      echo "    A milestone runs the WHOLE programs/tests tree; a patch runs the" >&2
+      echo "    diff-derived subset. The subset cannot certify the milestone." >&2
+      echo "    re-run:  tools/gatekeeper-land.sh" >&2
+      FAILED=1
+    fi
     STAMP_BASE="$(sed -n 's/^base=//p' "$STAMP" | tail -1)"
     if [ -n "$STAMP_BASE" ] && [ -n "${PUSH_BASE:-}" ] \
        && [ "$PUSH_BASE" != "origin/main" ] && [ "$STAMP_BASE" != "$PUSH_BASE" ]; then
