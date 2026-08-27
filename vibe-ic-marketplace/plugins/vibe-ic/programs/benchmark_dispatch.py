@@ -15,9 +15,12 @@ Usage:
     python3 benchmark_dispatch.py --list                         # list all known benchmarks
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys
+import argparse, hashlib, json, os, subprocess, sys
 import re
 from pathlib import Path
+
+from _atomic_artefact import write_json as _atomic_write_json
+from _atomic_artefact import write_text as _atomic_write_text
 
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
@@ -139,17 +142,18 @@ def cmd_show(bench: str):
         print("  Then run skill `benchmark-verify` for the six-pillar verification.")
     elif shape == "B":
         bi = HARNESS / "blind_instructions_shape_b.md"
-        scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
         print(f"  1. Clone dataset: git clone {e['dataset']['repo']} <DATASET>")
-        print(f"  2. Set up run dir:")
-        print(f"     python3 {Path(__file__).name} {bench} --setup --dataset <DATASET> --run <RUNDIR>")
-        print(f"  3. Drive batches per blind instructions: {bi}")
-        print(f"     For each design: vibe_ic_one_shot_runner.py <project> --skip-phase3 --skip-analog --skip-hardware")
-        exp = Path(__file__).resolve().parent / "shape_b_sample_export.py"
-        print(f"  3b. Export each sample (DETERMINISTIC sole emit path, #678 — "
-              f"never hand-copy a single module):")
-        print(f"      python3 {exp} --project <project> --leaf <leaf> --samples <RUNDIR>/samples [--module <name>]")
-        print(f"  4. Score: python3 {scorer} --bench {bench} --dataset <DATASET> --run <RUNDIR>")
+        print("  2. Solve through the general PROGRAM rail:")
+        print(f"     python3 {Path(__file__).name} {bench} --solve "
+              "--dataset <DATASET> --run <RUNDIR>")
+        print(f"  3. Complete blind AI worklists per: {bi}")
+        print("     needs_ai_backup.jsonl authors WAIVED candidates; "
+              "needs_ai_review.jsonl independently reviews every candidate.")
+        print(f"  4. Converge both rails: python3 {Path(__file__).name} {bench} "
+              "--resume --dataset <DATASET> --run <RUNDIR>")
+        print(f"  5. Score only after dual_track_acceptance.json is COMPLETE: "
+              f"python3 {Path(__file__).name} {bench} --score "
+              "--dataset <DATASET> --run <RUNDIR>")
     elif shape == "C":
         bi = HARNESS / "blind_instructions_shape_c.md"
         scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
@@ -489,6 +493,436 @@ def capture_goldens(run_p: Path, bench: str, ai_model: str,
             "sample_not_found": unreachable}
 
 
+# A candidate is not accepted merely because the program emitted it. The
+# program rail and a blind AI semantic-review rail must independently agree.
+_REVIEW_TASK_SCHEMA = "vibeic.benchmark.ai_review_task.v1"
+_AI_REVIEW_SCHEMA = "vibeic.benchmark.ai_review.v1"
+_ACCEPTANCE_SCHEMA = "vibeic.benchmark.dual_track_acceptance.v1"
+_REVIEW_WORKLIST = "needs_ai_review.jsonl"
+_BACKUP_WORKLIST = "needs_ai_backup.jsonl"
+_REPAIR_WORKLIST = "needs_ai_repair.jsonl"
+_ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
+_ACCEPTANCE_REPORT = "dual_track_acceptance.json"
+
+
+def _safe_problem_id(problem_id: str) -> str:
+    return re.sub(r"[^-\w.]", "_", str(problem_id))
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+
+
+def _rtl_files(project: Path) -> list[Path]:
+    rtl_dir = Path(project) / "phase2" / "stage1" / "rtl"
+    return sorted(list(rtl_dir.glob("*.sv")) + list(rtl_dir.glob("*.v")))
+
+
+def _candidate_text(paths: list[Path]) -> str:
+    return "\n".join(Path(p).read_text(errors="replace") for p in paths)
+
+
+def _make_ai_review_task(problem_id: str, project: Path, got: dict,
+                         routing: dict, runner_rc: int, run_p: Path,
+                         candidate_origin: str) -> dict:
+    """Build the hash-bound, oracle-free handoff for one AI review."""
+    project, run_p = Path(project).resolve(), Path(run_p).resolve()
+    prompt = project / "input" / "phase1_prompt.md"
+    paths = _rtl_files(project)
+    completion = str(got.get("completion") or "")
+    if not prompt.is_file() or not paths or not got.get("ok") or not completion:
+        raise ValueError("cannot request AI review without prompt + gated RTL")
+    safe = _safe_problem_id(problem_id)
+    return {
+        "schema": _REVIEW_TASK_SCHEMA,
+        "id": str(problem_id),
+        "project": str(project),
+        "candidate_origin": candidate_origin,
+        "prompt_path": str(prompt),
+        "rtl_paths": [str(p.resolve()) for p in paths],
+        "prompt_sha256": _sha256_text(prompt.read_text(errors="replace")),
+        "rtl_sha256": _sha256_text(completion),
+        "program_routing": {
+            "nature": routing.get("nature"),
+            "route": routing.get("route"),
+            "source": routing.get("source"),
+            "needs_ai_parse": routing.get("needs_ai_parse"),
+        },
+        "program_verification": {
+            "actor": "vibe_ic_one_shot_runner",
+            "rtl_gen": got.get("rtl_gen"),
+            "runner_rc": int(runner_rc),
+        },
+        "review_path": str((run_p / "ai_reviews" / f"{safe}.json").resolve()),
+        "response_path": str((run_p / "responses" / f"{safe}.json").resolve()),
+        "review_requirements": {
+            "schema": _AI_REVIEW_SCHEMA,
+            "blind_inputs_only": ["prompt_path", "rtl_paths"],
+            "routing_verdicts": ["AGREE", "OVERRIDE_PROGRAM"],
+            "override_rule": (
+                "OVERRIDE_PROGRAM is allowed when the AI supplies prompt-bound "
+                "evidence or a detailed interpretation and names the program "
+                "limitation; AI semantic judgment is authoritative"),
+            "semantic_verdicts": ["PASS", "FAIL"],
+            "semantic_fail_action": (
+                "author corrected RTL, return it through PROGRAM gates, then "
+                "perform a fresh hash-bound AI review"),
+            "reviewer_kind": "AI",
+            "reviewer_model_required": True,
+            "oracle_accessed": False,
+        },
+    }
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not Path(path).is_file():
+        return []
+    rows = []
+    for lineno, raw in enumerate(Path(path).read_text(errors="replace").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{lineno}: invalid JSON: {exc}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}:{lineno}: row is not an object")
+        rows.append(row)
+    return rows
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    text = "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                   for r in rows)
+    _atomic_write_text(path, text)
+
+
+def _current_task_material(task: dict) -> tuple[str | None, str | None,
+                                                 list[str], list[str]]:
+    """Current prompt/RTL hashes plus exact current/stated RTL path sets."""
+    prompt = Path(str(task.get("prompt_path") or ""))
+    project = Path(str(task.get("project") or ""))
+    stated = sorted(str(Path(p).resolve()) for p in task.get("rtl_paths") or [])
+    current_paths = [str(p.resolve()) for p in _rtl_files(project)]
+    prompt_hash = (_sha256_text(prompt.read_text(errors="replace"))
+                   if prompt.is_file() else None)
+    try:
+        rtl_hash = _sha256_text(_candidate_text([Path(p) for p in current_paths])) \
+            if current_paths else None
+    except OSError:
+        rtl_hash = None
+    return prompt_hash, rtl_hash, stated, current_paths
+
+
+def _validate_ai_review(task: dict) -> dict:
+    """Validate a hash-bound review, including evidence-backed AI override.
+
+    AI is the semantic authority, but authority is not an unexplained token.
+    It may override the program route when it cites prompt text or provides a
+    detailed interpretation and identifies the deterministic limitation.  A
+    valid semantic FAIL is a real ``REPAIR_REQUIRED`` decision, not a malformed
+    review and not a permanent convergence failure.
+    """
+    review_path = Path(str(task.get("review_path") or ""))
+    if not review_path.is_file():
+        return {"status": "PENDING", "review_path": str(review_path),
+                "reasons": ["AI review file is absent"]}
+    try:
+        review = json.loads(review_path.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "REJECTED", "review_path": str(review_path),
+                "reasons": [f"AI review is unreadable: {type(exc).__name__}: {exc}"]}
+    reasons: list[str] = []
+    if not isinstance(review, dict):
+        reasons.append("AI review is not a JSON object")
+        review = {}
+    if review.get("schema") != _AI_REVIEW_SCHEMA:
+        reasons.append(f"schema must be {_AI_REVIEW_SCHEMA!r}")
+    if str(review.get("id")) != str(task.get("id")):
+        reasons.append("review id does not match the task")
+
+    prompt_hash, rtl_hash, stated, current = _current_task_material(task)
+    if stated != current:
+        reasons.append("current RTL file set differs from the reviewed task")
+    if prompt_hash != task.get("prompt_sha256"):
+        reasons.append("prompt changed after the review task was issued")
+    if rtl_hash != task.get("rtl_sha256"):
+        reasons.append("RTL changed after the review task was issued")
+    if review.get("prompt_sha256") != task.get("prompt_sha256"):
+        reasons.append("review prompt_sha256 is stale or wrong")
+    if review.get("rtl_sha256") != task.get("rtl_sha256"):
+        reasons.append("review rtl_sha256 is stale or wrong")
+
+    reviewer = review.get("reviewer") or {}
+    if reviewer.get("kind") != "AI":
+        reasons.append("reviewer.kind must be AI")
+    model = str(reviewer.get("model") or "").strip()
+    if not model or model.lower() in {"unknown", "unspecified", "n/a"}:
+        reasons.append("reviewer.model must name the AI model")
+
+    blind = review.get("blind") or {}
+    if blind.get("oracle_accessed") is not False:
+        reasons.append("blind.oracle_accessed must be false")
+
+    prompt_path = Path(str(task.get("prompt_path") or ""))
+    prompt_text = (prompt_path.read_text(errors="replace")
+                   if prompt_path.is_file() else "")
+    normalized_prompt = re.sub(r"\s+", " ", prompt_text).strip()
+
+    def _verified_prompt_evidence(items) -> list[dict]:
+        verified = []
+        if not isinstance(items, list):
+            return verified
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            excerpt = re.sub(
+                r"\s+", " ", str(item.get("excerpt") or "")).strip()
+            supports = str(item.get("supports") or "").strip()
+            if (len(excerpt) >= 8 and excerpt in normalized_prompt
+                    and len(supports) >= 12):
+                verified.append({"excerpt": excerpt, "supports": supports})
+        return verified
+
+    routing = review.get("routing") or {}
+    expected_nature = (task.get("program_routing") or {}).get("nature")
+    routing_verdict = routing.get("verdict")
+    override = review.get("override") or {}
+    evidence = override.get("prompt_evidence") or []
+    verified_evidence = []
+    if routing_verdict == "AGREE":
+        if routing.get("ai_nature") != expected_nature:
+            reasons.append("AI route marked AGREE but does not match program route")
+    elif routing_verdict == "OVERRIDE_PROGRAM":
+        if not isinstance(evidence, list):
+            reasons.append("override.prompt_evidence must be a list")
+            evidence = []
+        verified_evidence = _verified_prompt_evidence(evidence)
+        explanation = str(override.get("explanation") or "").strip()
+        if not verified_evidence and len(explanation) < 160:
+            reasons.append("OVERRIDE_PROGRAM needs prompt-bound evidence or a "
+                           "detailed explanation of at least 160 characters")
+        if len(str(override.get("program_limitation") or "").strip()) < 16:
+            reasons.append("OVERRIDE_PROGRAM must identify the program limitation")
+        proposed = override.get("proposed_program_enhancement")
+        if proposed is not None:
+            if not isinstance(proposed, dict):
+                reasons.append("proposed_program_enhancement must be an object")
+            elif (len(str(proposed.get("component") or "").strip()) < 3
+                  or len(str(proposed.get("proposal") or "").strip()) < 16
+                  or len(str(proposed.get("regression_fixture") or "").strip()) < 8):
+                reasons.append("proposed_program_enhancement must name a component, "
+                               "concrete proposal, and regression fixture")
+    else:
+        reasons.append("AI routing verdict must be AGREE or OVERRIDE_PROGRAM")
+
+    semantic = review.get("semantic_review") or {}
+    semantic_verdict = semantic.get("verdict")
+    findings = semantic.get("findings")
+    semantic_evidence = semantic.get("prompt_evidence") or []
+    verified_semantic_evidence = _verified_prompt_evidence(semantic_evidence)
+    if semantic_verdict not in {"PASS", "FAIL"}:
+        reasons.append("AI semantic_review verdict must be PASS or FAIL")
+    if not isinstance(findings, list):
+        reasons.append("semantic_review.findings must be a list")
+        findings = []
+    if semantic_verdict == "FAIL" and not findings:
+        reasons.append("semantic FAIL must name at least one actionable finding")
+    rationale = str(semantic.get("rationale") or "").strip()
+    if len(rationale) < 16:
+        reasons.append("semantic_review.rationale must state the review basis")
+    if (semantic_verdict == "FAIL" and not verified_semantic_evidence
+            and not verified_evidence and len(rationale) < 160):
+        reasons.append("semantic FAIL needs prompt-bound evidence or a detailed "
+                       "rationale of at least 160 characters")
+    if reasons:
+        status = "REJECTED"
+        decision_reasons = reasons
+    elif semantic_verdict == "FAIL":
+        status = "REPAIR_REQUIRED"
+        decision_reasons = ["AI semantic authority rejected the current RTL; "
+                            "repair, re-run PROGRAM gates, and review the new hash"]
+    else:
+        status = "ACCEPTED"
+        decision_reasons = []
+    return {"status": status,
+            "review_path": str(review_path), "reasons": reasons,
+            "decision_reasons": decision_reasons,
+            "reviewer_model": model or None,
+            "routing_verdict": routing_verdict,
+            "ai_nature": routing.get("ai_nature"),
+            "semantic_verdict": semantic_verdict,
+            "semantic_findings": len(findings),
+            "semantic_findings_detail": findings,
+            "semantic_rationale": rationale,
+            "verified_semantic_prompt_evidence": verified_semantic_evidence,
+            "override": ({**override, "verified_prompt_evidence": verified_evidence}
+                         if routing_verdict == "OVERRIDE_PROGRAM" else None)}
+
+
+def _attach_ai_review_attribution(result: dict, verdict: dict) -> None:
+    """Put the second rail's WHO/HOW into this problem's four-phase record."""
+    phases = result.get("phases") or {}
+    result["phases"] = phases
+    status = verdict.get("status")
+    model = verdict.get("reviewer_model")
+    phases.setdefault("phase1_routing", {}).update({
+        "ai_decided_routing_review": {
+            "actor": model or "AI_PENDING",
+            "mechanism": "AI",
+            "authority": "FINAL_SEMANTIC_AUTHORITY",
+            "status": status,
+            "verdict": verdict.get("routing_verdict"),
+            "nature": verdict.get("ai_nature"),
+            "how": "blind prompt parse, hash-bound to prompt_sha256",
+            "override_basis": verdict.get("override"),
+        },
+    })
+    phases.setdefault("phase3_verifying", {}).update({
+        "ai_semantic_review": {
+            "actor": model or "AI_PENDING",
+            "mechanism": "AI",
+            "status": status,
+            "verdict": verdict.get("semantic_verdict"),
+            "findings": verdict.get("semantic_findings"),
+            "how": "blind prompt-versus-RTL review, hash-bound to rtl_sha256",
+        },
+    })
+    if status == "REPAIR_REQUIRED":
+        phases.setdefault("phase4_debugging", {})[
+            "ai_semantic_repair_handoff"] = {
+                "actor": model, "mechanism": "AI",
+                "status": status,
+                "findings": verdict.get("semantic_findings_detail"),
+                "how": ("AI explains the spec mismatch; corrected RTL must "
+                        "return through PROGRAM gates and a fresh AI review"),
+                "physical_eco": False,
+            }
+    result["dual_track_review"] = {
+        k: verdict.get(k) for k in (
+            "status", "reviewer_model", "routing_verdict", "ai_nature",
+            "semantic_verdict", "semantic_findings", "override")
+    }
+
+
+def _program_enhancement_candidate(task: dict, result: dict,
+                                   verdict: dict) -> dict:
+    """A durable, non-blocking follow-up when AI exposes program rigidity."""
+    override = verdict.get("override") or {}
+    return {
+        "schema": "vibeic.benchmark.program_enhancement_candidate.v1",
+        "id": str(task.get("id")),
+        "project": task.get("project"),
+        "prompt_sha256": task.get("prompt_sha256"),
+        "rtl_sha256": task.get("rtl_sha256"),
+        "review_path": task.get("review_path"),
+        "program_routing": task.get("program_routing"),
+        "ai_routing": {
+            "verdict": verdict.get("routing_verdict"),
+            "nature": verdict.get("ai_nature"),
+        },
+        "semantic_verdict": verdict.get("semantic_verdict"),
+        "semantic_findings": verdict.get("semantic_findings_detail"),
+        "semantic_rationale": verdict.get("semantic_rationale"),
+        "verified_semantic_prompt_evidence":
+            verdict.get("verified_semantic_prompt_evidence") or [],
+        "verified_prompt_evidence": override.get("verified_prompt_evidence") or [],
+        "ai_explanation": override.get("explanation"),
+        "program_limitation": override.get("program_limitation"),
+        "proposed_program_enhancement":
+            override.get("proposed_program_enhancement"),
+        "candidate_origin": result.get("candidate_origin"),
+        "status": "OPEN_PROGRAM_ENHANCEMENT",
+        "blocking_acceptance": False,
+        "why_non_blocking": (
+            "AI supplied an auditable semantic decision; improve the reusable "
+            "program without trapping this benchmark item in permanent disagreement"),
+    }
+
+
+def _four_phase_rollup(fpa, results: list[dict]) -> dict:
+    """General attribution plus benchmark dual-track counts and actors."""
+    out = fpa.summarize(results)
+
+    def counts(values) -> dict:
+        result: dict[str, int] = {}
+        for value in values:
+            key = str(value)
+            result[key] = result.get(key, 0) + 1
+        return result
+
+    reviews = [r.get("dual_track_review") or {} for r in results]
+    out["phase1_ai_review_status"] = counts(
+        v.get("status") or "PENDING" for v in reviews)
+    out["phase1_ai_review_models"] = counts(
+        v.get("reviewer_model") or "PENDING" for v in reviews)
+    out["phase2_candidate_origin"] = counts(
+        r.get("candidate_origin", "NONE") for r in results)
+    out["phase3_ai_semantic_verdict"] = counts(
+        v.get("semantic_verdict") or "PENDING" for v in reviews)
+    out["phase4_ai_repair_required"] = counts(
+        bool(r.get("ai_repair_required")) for r in results)
+    return out
+
+
+def _require_dual_track_acceptance(run_p: Path) -> None:
+    """Hard-block scoring of a solve-run until both rails accepted every id."""
+    run_p = Path(run_p).resolve()
+    solve_p = run_p / "solve_report.json"
+    if not solve_p.is_file():
+        return                         # historical/manual runs keep old policy
+    try:
+        solve = json.loads(solve_p.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return                         # the clean-room gate reports this later
+    policy = solve.get("acceptance_policy") or {}
+    if policy.get("required") is not True:
+        return
+    acc_p = run_p / _ACCEPTANCE_REPORT
+    if not acc_p.is_file():
+        raise SystemExit("dual-track acceptance BLOCKED: no acceptance report; "
+                         "run --resume after completing needs_ai_review.jsonl")
+    try:
+        acceptance = json.loads(acc_p.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"dual-track acceptance BLOCKED: unreadable {acc_p}: {exc}")
+    if (acceptance.get("schema") != _ACCEPTANCE_SCHEMA
+            or acceptance.get("status") != "COMPLETE"):
+        raise SystemExit("dual-track acceptance BLOCKED: acceptance status is "
+                         f"{acceptance.get('status', 'INVALID')}, not COMPLETE")
+
+    tasks = _read_jsonl(run_p / _REVIEW_WORKLIST)
+    expected = [str(r.get("id")) for r in solve.get("results") or []]
+    by_id = {str(t.get("id")): t for t in tasks}
+    if len(by_id) != len(tasks) or sorted(by_id) != sorted(expected):
+        raise SystemExit("dual-track acceptance BLOCKED: review worklist ids do "
+                         "not exactly match solve_report results")
+    accepted_ids = [str(pid) for pid in acceptance.get("accepted_ids") or []]
+    if (sorted(accepted_ids) != sorted(expected)
+            or acceptance.get("accepted") != len(expected)
+            or acceptance.get("total") != len(expected)):
+        raise SystemExit("dual-track acceptance BLOCKED: COMPLETE report does "
+                         "not account for every solve_report result")
+    failures = []
+    for pid in expected:
+        task = by_id[pid]
+        verdict = _validate_ai_review(task)
+        if verdict["status"] != "ACCEPTED":
+            failures.append(f"{pid}: " + "; ".join(verdict["reasons"]))
+            continue
+        response = Path(str(task.get("response_path") or ""))
+        try:
+            payload = json.loads(response.read_text(errors="replace"))
+        except (OSError, json.JSONDecodeError) as exc:
+            failures.append(f"{pid}: accepted response unreadable: {exc}")
+            continue
+        if _sha256_text(str(payload.get("completion") or "")) != task.get("rtl_sha256"):
+            failures.append(f"{pid}: response bytes do not match reviewed RTL")
+    if failures:
+        raise SystemExit("dual-track acceptance BLOCKED:\n  "
+                         + "\n  ".join(failures))
+
+
 def cmd_score(bench: str, run: str, dataset: str | None,
               allow_ungated: bool = False, allow_direct_agent: bool = False,
               capture_golden: bool = False, ai_model: str | None = None,
@@ -497,6 +931,7 @@ def cmd_score(bench: str, run: str, dataset: str | None,
     if e["shape"] not in ("B", "C"):
         raise SystemExit(f"--score only handles Shape B + C here. Shape {e['shape']} → use score_cocotb_mcp.py / benchmark-verify skill.")
     run_p = Path(run).resolve()
+    _require_dual_track_acceptance(run_p)
     # Front-door Vibe-IC entry gate (owner directive 2026-06-28): refuse to
     # score a run that did not enter through the Vibe-IC plugin.  Direct-agent
     # authoring / patching followed by a host-scorer invocation measures
@@ -701,6 +1136,7 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
     import subprocess                                    # noqa: PLC0415
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import benchmark_io_adapter as bio                    # noqa: PLC0415
+    import flow_phase_attribution as fpa                  # noqa: PLC0415
     import task_nature_route as tnr                       # noqa: PLC0415
 
     try:
@@ -720,7 +1156,7 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
     (run_p / "responses").mkdir(parents=True, exist_ok=True)
     runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
 
-    results, backlog, n = [], [], 0
+    results, backlog, review_tasks, n = [], [], [], 0
     for prob in bio.problems(fmt, ds):
         if limit and n >= limit:
             break
@@ -768,29 +1204,56 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         rc = subprocess.run(argv, capture_output=True, text=True).returncode
         got = bio.collect(fmt, pid, proj)
         waive = _rtl_gen_waive(proj)
-        results.append({"id": pid, "nature": nature, "entry": entry,
-                        "evidence": ev, "exit": exit_step, "rc": rc,
-                        "ok": got.get("ok"), "staged": staged["prompt_chars"],
-                        "completeness": completeness,
-                        "awaiting_ai": bool(waive and not got.get("ok"))})
-        state = ("rtl" if got.get("ok")
+        phases = fpa.attribute(
+            proj, routing=verdict, entry=entry, evidence=ev,
+            exit_step=exit_step, rtl_present=rtl_present,
+            artefact_collected=bool(got.get("ok")))
+        result = {"id": pid, "nature": nature, "entry": entry,
+                  "evidence": ev, "exit": exit_step, "rc": rc,
+                  "ok": bool(got.get("ok")),
+                  "candidate_ready": bool(got.get("ok")),
+                  "accepted": False,
+                  "staged": staged["prompt_chars"],
+                  "completeness": completeness,
+                  "routing_verdict": verdict,
+                  "phases": phases,
+                  "candidate_origin": ("PROGRAM" if got.get("ok") else
+                                       ("AI_BACKUP_PENDING" if waive else
+                                        "NONE")),
+                  "dual_track_review": {"status": "PENDING"},
+                  "ai_repair_required": False,
+                  "awaiting_ai_review": bool(got.get("ok")),
+                  "awaiting_ai_backup": bool(waive and not got.get("ok")),
+                  "awaiting_ai": bool(got.get("ok")
+                                      or (waive and not got.get("ok")))}
+        state = ("candidate->AI-review" if got.get("ok")
                  else ("WAIVE->AI" if waive else "no-rtl"))
         print(f"  {pid:44s} {nature:22s} entry={str(entry):3s} "
               f"exit={str(exit_step):4s} rc={rc} {state}")
         if got.get("ok"):
-            safe_pid = re.sub(r"[^-\w.]", "_", pid)
-            (run_p / "responses" / f"{safe_pid}.json"
-             ).write_text(json.dumps(got, indent=1))
+            task = _make_ai_review_task(
+                pid, proj, got, verdict, rc, run_p, "PROGRAM")
+            review_tasks.append(task)
+            result["review_task"] = task["review_path"]
+            # This is the consumer the route attribution previously said did
+            # not exist. The review must independently classify the same prompt.
+            p1 = (phases.get("phase1_routing") or {})
+            p1["needs_ai_parse_consumed_by"] = (
+                f"blind AI dual-track review at {task['review_path']}")
         elif waive:
             backlog.append({
+                "schema": "vibeic.benchmark.ai_backup_task.v1",
                 "id": pid, "project": str(proj),
                 "skill": waive.get("fallback_skill"),
                 "write_rtl_to": str(proj / "phase2" / "stage1" / "rtl"),
                 "read_docs_from": str(proj / "phase1" / "generated_docs"),
+                "read_prompt_from": str(proj / "input" / "phase1_prompt.md"),
                 "runner_said": waive.get("detail", "")[:600],
+                "review_required_after_regating": True,
                 "resume_with": (f"benchmark_dispatch.py {bench} --resume "
                                 f"--dataset {ds} --run {run_p}"),
             })
+        results.append(result)
 
     if backlog:
         # THE HAND-OFF. A program cannot call a language model, so the honest
@@ -800,54 +1263,92 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         # runner's OWN tree (phase2/stage1/rtl/) and `--resume` re-invokes the
         # runner so ITS gates fire on that RTL. That is the runner's designed
         # AI-backup, not a bypass of it: nothing here writes a scoring artefact.
-        bl = run_p / "needs_ai_backup.jsonl"
-        bl.write_text("\n".join(json.dumps(b) for b in backlog) + "\n")
+        bl = run_p / _BACKUP_WORKLIST
+        _write_jsonl(bl, backlog)
         print(f"\n{len(backlog)} problem(s) WAIVED to an AI skill -> {bl}")
         print(f"  author RTL into each project's phase2/stage1/rtl/, then:")
         print(f"    python3 {Path(__file__).name} {bench} --resume "
               f"--dataset {ds} --run {run_p}")
+    else:
+        _write_jsonl(run_p / _BACKUP_WORKLIST, [])
+
+    _write_jsonl(run_p / _REVIEW_WORKLIST, review_tasks)
+    if review_tasks:
+        print(f"\n{len(review_tasks)} program candidate(s) require blind AI "
+              f"semantic review -> {run_p / _REVIEW_WORKLIST}")
+        print("  write each schema-bound review to its review_path, then run --resume")
     # The completeness roll-up carries its own denominator: "3 SPEC_ABSENT" out
     # of an unstated population is the shape this repo refuses everywhere else.
     comp_counts: dict = {}
     for r in results:
         comp_counts[r.get("completeness", "?")] = comp_counts.get(r.get("completeness", "?"), 0) + 1
-    (run_p / "solve_report.json").write_text(json.dumps(
-        {"bench": bench, "format": fmt, "dataset": str(ds),
-         "solved": sum(1 for r in results if r["ok"]), "total": len(results),
-         "completeness_counts": comp_counts,
-         "completeness_assessed_of": f"{sum(comp_counts.get(k, 0) for k in comp_counts if not k.startswith(('UNAVAILABLE', 'NOT_ADAPTED')))} of {len(results)}",
-         "results": results}, indent=2))
+    solve_report = {
+        "bench": bench, "format": fmt, "dataset": str(ds),
+        "solved": sum(1 for r in results if r["ok"]),
+        "accepted": 0, "total": len(results),
+        "acceptance_policy": {
+            "required": True,
+            "rule": ("PROGRAM gates PASS AND blind AI semantic PASS; AI route "
+                     "may AGREE or evidence-backed OVERRIDE_PROGRAM"),
+            "semantic_authority": "AI",
+            "program_disagreement": (
+                "repair and re-gate candidate; preserve a non-blocking reusable "
+                "program-enhancement candidate rather than deadlock"),
+            "review_task_schema": _REVIEW_TASK_SCHEMA,
+            "review_schema": _AI_REVIEW_SCHEMA,
+            "score_gate": _ACCEPTANCE_REPORT,
+        },
+        "completeness_counts": comp_counts,
+        "completeness_assessed_of":
+            f"{sum(comp_counts.get(k, 0) for k in comp_counts if not k.startswith(('UNAVAILABLE', 'NOT_ADAPTED')))} of {len(results)}",
+        "four_phase_summary": _four_phase_rollup(fpa, results),
+        "results": results,
+    }
+    _atomic_write_json(run_p / "solve_report.json", solve_report)
+    _atomic_write_json(run_p / _ACCEPTANCE_REPORT, {
+        "schema": _ACCEPTANCE_SCHEMA, "status": "PENDING",
+        "accepted": 0, "total": len(results), "accepted_ids": [],
+    })
     ok = sum(1 for r in results if r["ok"])
     waiting = sum(1 for r in results if r.get("awaiting_ai"))
-    print(f"\n{ok}/{len(results)} produced an artefact"
-          + (f", {waiting} awaiting AI-backup" if waiting else "")
+    print(f"\n{ok}/{len(results)} produced a gated candidate; 0 accepted"
+          + (f", {waiting} awaiting an AI rail" if waiting else "")
           + f" -> {run_p}/solve_report.json")
-    if results and ok == len(results):
-        return 0
-    # 2 = handed off, not failed. A run that correctly reached the WAIVE and
-    # emitted its work-list did its half; reporting that as a failure would
-    # make the dual track look broken every time it works as designed.
-    return 2 if waiting and waiting + ok == len(results) else 1
+    # 2 = handed off, not failed. Even when every PROGRAM candidate exists, no
+    # response is accepted until the independent AI rail agrees.
+    return 2 if results and waiting == len(results) else 1
 
 
 def cmd_resume(bench: str, dataset: str, run: str) -> int:
-    """Re-invoke the runner on every project the AI has since authored into.
+    """Advance AI backup/review work and publish only dual-track acceptances.
 
-    The dual track is program-first THEN AI-backup THEN the runner's gates. A
-    run that stopped after the AI wrote a file has completed two of those three:
-    the RTL exists but nothing has linted it, elaborated it, or checked it
-    against the spec. `--resume` is what makes the third happen, and a project
-    whose rtl/ is still empty is reported as still-waiting rather than quietly
-    skipped.
+    There are two distinct AI jobs.  A runner WAIVE asks AI backup to author a
+    candidate, which is then returned through the PROGRAM gates.  Every gated
+    candidate, including a program-authored one, separately requires a blind
+    AI route + semantic review.  Only a hash-bound PASS on both rails writes a
+    scorer response.  A changed candidate is re-gated and receives a fresh
+    review task; a changed prompt is never legitimised by refresh.
     """
     import subprocess                                    # noqa: PLC0415
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import benchmark_io_adapter as bio                    # noqa: PLC0415
+    import flow_phase_attribution as fpa                  # noqa: PLC0415
 
-    run_p = Path(run)
-    bl = run_p / "needs_ai_backup.jsonl"
-    if not bl.is_file():
-        print(f"ERROR: no work-list at {bl} — run --solve first", file=sys.stderr)
+    run_p = Path(run).resolve()
+    solve_p = run_p / "solve_report.json"
+    if not solve_p.is_file():
+        print(f"ERROR: no solve report at {solve_p} — run --solve first",
+              file=sys.stderr)
+        return 2
+    try:
+        solve = json.loads(solve_p.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR: unreadable solve report {solve_p}: {exc}",
+              file=sys.stderr)
+        return 2
+    if (solve.get("acceptance_policy") or {}).get("required") is not True:
+        print("ERROR: this solve predates the dual-track acceptance policy; "
+              "start a fresh --solve run", file=sys.stderr)
         return 2
     fmt = _BENCH_FORMAT.get(bench)
     if fmt is None:
@@ -855,34 +1356,269 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         return 2
     runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
 
-    done = still = 0
-    for line in bl.read_text(errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        item = json.loads(line)
-        proj = Path(item["project"])
-        rtl_dir = proj / "phase2" / "stage1" / "rtl"
-        authored = rtl_dir.is_dir() and (list(rtl_dir.glob("*.sv"))
-                                         + list(rtl_dir.glob("*.v")))
-        if not authored:
-            still += 1
-            print(f"  {item['id']:44s} still empty — the AI has not authored yet")
-            continue
+    try:
+        backup = _read_jsonl(run_p / _BACKUP_WORKLIST)
+        review_tasks = _read_jsonl(run_p / _REVIEW_WORKLIST)
+        prior_enhancements = _read_jsonl(run_p / _ENHANCEMENT_WORKLIST)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    results = solve.get("results") or []
+    result_by_id = {str(r.get("id")): r for r in results}
+    task_by_id = {str(t.get("id")): t for t in review_tasks}
+    if len(result_by_id) != len(results) or len(task_by_id) != len(review_tasks):
+        print("ERROR: duplicate problem id in solve report or review worklist",
+              file=sys.stderr)
+        return 2
+
+    def _run_and_collect(pid: str, proj: Path) -> tuple[int, dict]:
         rc = subprocess.run(
             [sys.executable, str(runner), str(proj), "--skip-analog",
              "--skip-hardware", "--skip-phase3"],
             capture_output=True, text=True).returncode
-        got = bio.collect(fmt, item["id"], proj)
+        return rc, bio.collect(fmt, pid, proj)
+
+    def _refresh_result(result: dict, proj: Path, rc: int, got: dict) -> None:
+        routing = result.get("routing_verdict") or {}
+        rtl_input = proj / "input" / "rtl"
+        phases = fpa.attribute(
+            proj, routing=routing, entry=result.get("entry"),
+            evidence=result.get("evidence"), exit_step=result.get("exit"),
+            rtl_present=rtl_input.is_dir() and any(rtl_input.glob("*")),
+            artefact_collected=bool(got.get("ok")))
+        result.update({
+            "rc": rc,
+            "ok": bool(got.get("ok")),
+            "candidate_ready": bool(got.get("ok")),
+            "accepted": False,
+            "phases": phases,
+            "awaiting_ai_backup": False,
+            "awaiting_ai_review": bool(got.get("ok")),
+            "awaiting_ai": bool(got.get("ok")),
+        })
+
+    repairs: list[dict] = []
+    remaining_backup: list[dict] = []
+    refreshed: set[str] = set()
+    enhancement_by_key = {
+        (str(row.get("id")), str(row.get("prompt_sha256")),
+         str(row.get("rtl_sha256")), str(row.get("semantic_verdict"))): row
+        for row in prior_enhancements
+    }
+
+    # Rail 2a: AI authored after a deterministic WAIVE.  It still has to pass
+    # the exact same runner and then enters the independent review rail.
+    for item in backup:
+        pid = str(item.get("id"))
+        result = result_by_id.get(pid)
+        proj = Path(str(item.get("project") or ""))
+        if result is None:
+            repairs.append({"id": pid, "status": "INVALID_HANDOFF",
+                            "reasons": ["backup id is absent from solve_report"]})
+            continue
+        rtl_dir = proj / "phase2" / "stage1" / "rtl"
+        authored = rtl_dir.is_dir() and (list(rtl_dir.glob("*.sv"))
+                                         + list(rtl_dir.glob("*.v")))
+        if not authored:
+            remaining_backup.append(item)
+            result.update({"accepted": False, "awaiting_ai_backup": True,
+                           "awaiting_ai_review": False, "awaiting_ai": True})
+            print(f"  {pid:44s} AI backup still has no authored RTL")
+            continue
+        rc, got = _run_and_collect(pid, proj)
+        _refresh_result(result, proj, rc, got)
         if got.get("ok"):
-            safe_item_id = re.sub(r"[^-\w.]", "_", str(item["id"]))
-            (run_p / "responses" / f"{safe_item_id}.json"
-             ).write_text(json.dumps(got, indent=1))
-            done += 1
-        print(f"  {item['id']:44s} re-gated rc={rc} "
-              f"{'kept' if got.get('ok') else 'no rtl after gates'}")
-    print(f"\n{done} re-gated, {still} still awaiting the AI")
-    return 0 if still == 0 else 2
+            task = _make_ai_review_task(
+                pid, proj, got, result.get("routing_verdict") or {}, rc,
+                run_p, "AI_BACKUP")
+            task_by_id[pid] = task
+            result["review_task"] = task["review_path"]
+            result["candidate_origin"] = "AI_BACKUP"
+            result["ai_repair_required"] = False
+            refreshed.add(pid)
+            print(f"  {pid:44s} AI backup re-gated; fresh AI review required")
+        else:
+            # Keep the original backup handoff live: after the AI repairs the
+            # rejected files, the next --resume must know to re-run the gates.
+            remaining_backup.append(item)
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "id": pid, "project": str(proj),
+                "status": "PROGRAM_GATES_REJECTED_AI_BACKUP",
+                "reasons": [str(got.get("reason") or "runner rejected RTL")],
+                "write_rtl_to": str(rtl_dir),
+                "resume_with": (f"benchmark_dispatch.py {bench} --resume "
+                                f"--dataset {dataset} --run {run_p}"),
+            })
+            result.update({"awaiting_ai_backup": True,
+                           "awaiting_ai_review": False,
+                           "awaiting_ai": True,
+                           "ai_repair_required": True})
+            print(f"  {pid:44s} AI backup rejected by PROGRAM gates (rc={rc})")
+
+    # Rail 2b: an AI repair changes candidate bytes.  Re-run program gates and
+    # replace the old hash-bound task.  The prompt itself is immutable input;
+    # refreshing its hash would turn prompt tampering into accepted evidence.
+    for pid, task in list(task_by_id.items()):
+        if pid in refreshed:
+            continue
+        result = result_by_id.get(pid)
+        if result is None:
+            repairs.append({"id": pid, "status": "INVALID_REVIEW_TASK",
+                            "reasons": ["review id is absent from solve_report"]})
+            continue
+        prompt_hash, rtl_hash, stated, current = _current_task_material(task)
+        if prompt_hash != task.get("prompt_sha256"):
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "id": pid, "project": task.get("project"),
+                "status": "PROMPT_CHANGED",
+                "reasons": ["restore the original prompt; it cannot be refreshed"],
+            })
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": False})
+            continue
+        if stated == current and rtl_hash == task.get("rtl_sha256"):
+            continue
+        proj = Path(str(task.get("project") or ""))
+        rc, got = _run_and_collect(pid, proj)
+        _refresh_result(result, proj, rc, got)
+        if got.get("ok"):
+            new_task = _make_ai_review_task(
+                pid, proj, got, result.get("routing_verdict") or {}, rc,
+                run_p, "AI_REPAIR")
+            task_by_id[pid] = new_task
+            result["review_task"] = new_task["review_path"]
+            result["candidate_origin"] = "AI_REPAIR"
+            result["ai_repair_required"] = False
+            print(f"  {pid:44s} changed RTL re-gated; fresh AI review required")
+        else:
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "id": pid, "project": str(proj),
+                "status": "PROGRAM_GATES_REJECTED_AI_REPAIR",
+                "reasons": [str(got.get("reason") or "runner rejected RTL")],
+                "write_rtl_to": str(proj / "phase2" / "stage1" / "rtl"),
+            })
+            result["ai_repair_required"] = True
+            print(f"  {pid:44s} changed RTL rejected by PROGRAM gates (rc={rc})")
+
+    accepted_ids: list[str] = []
+    review_outcomes: list[dict] = []
+    for pid, result in result_by_id.items():
+        task = task_by_id.get(pid)
+        if task is None:
+            result["accepted"] = False
+            continue
+        verdict = _validate_ai_review(task)
+        _attach_ai_review_attribution(result, verdict)
+        review_outcomes.append({"id": pid, **verdict})
+        if (verdict["status"] == "REPAIR_REQUIRED"
+                or (verdict["status"] == "ACCEPTED"
+                    and verdict.get("routing_verdict") == "OVERRIDE_PROGRAM")):
+            enhancement = _program_enhancement_candidate(task, result, verdict)
+            enhancement_by_key[(
+                pid, str(task.get("prompt_sha256")),
+                str(task.get("rtl_sha256")),
+                str(verdict.get("semantic_verdict")),
+            )] = enhancement
+        if verdict["status"] != "ACCEPTED":
+            needs_repair = verdict["status"] == "REPAIR_REQUIRED"
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": not needs_repair,
+                           "ai_repair_required": needs_repair})
+            if needs_repair:
+                result["ai_repair_required"] = True
+                repairs.append({
+                    "schema": "vibeic.benchmark.ai_repair_task.v1",
+                    "id": pid, "project": task.get("project"),
+                    "status": "AI_SEMANTIC_REPAIR_REQUIRED",
+                    "reasons": (verdict.get("decision_reasons") or [])
+                               + [str(v) for v in
+                                  verdict.get("semantic_findings_detail") or []],
+                    "review_path": task.get("review_path"),
+                    "reviewed_rtl_sha256": task.get("rtl_sha256"),
+                    "verified_prompt_evidence":
+                        (verdict.get("override") or {}).get(
+                            "verified_prompt_evidence") or [],
+                    "verified_semantic_prompt_evidence":
+                        verdict.get("verified_semantic_prompt_evidence") or [],
+                    "write_rtl_to": str(
+                        Path(str(task.get("project"))) /
+                        "phase2" / "stage1" / "rtl"),
+                    "required_next": (
+                        "author corrected RTL, run --resume for PROGRAM gates, "
+                        "then submit a fresh AI review for the new hash"),
+                })
+            continue
+        got = bio.collect(fmt, pid, Path(str(task.get("project") or "")))
+        if (not got.get("ok")
+                or _sha256_text(str(got.get("completion") or ""))
+                != task.get("rtl_sha256")):
+            reasons = ["current PROGRAM-gated completion does not match the "
+                       "AI-reviewed RTL hash"]
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "id": pid, "project": task.get("project"),
+                "status": "ACCEPTED_REVIEW_MATERIAL_MISMATCH",
+                "reasons": reasons,
+            })
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": True,
+                           "ai_repair_required": True})
+            continue
+        _atomic_write_json(Path(task["response_path"]), got)
+        accepted_ids.append(pid)
+        result.update({"accepted": True, "awaiting_ai": False,
+                       "awaiting_ai_backup": False,
+                       "awaiting_ai_review": False,
+                       "ai_repair_required": False,
+                       "reviewer_model": verdict.get("reviewer_model")})
+        route_note = ("AI OVERRIDE_PROGRAM" if
+                      verdict.get("routing_verdict") == "OVERRIDE_PROGRAM"
+                      else "AI AGREE")
+        print(f"  {pid:44s} ACCEPTED by PROGRAM gates + {route_note}")
+
+    ordered_tasks = [task_by_id[pid] for pid in result_by_id
+                     if pid in task_by_id]
+    _write_jsonl(run_p / _BACKUP_WORKLIST, remaining_backup)
+    _write_jsonl(run_p / _REVIEW_WORKLIST, ordered_tasks)
+    _write_jsonl(run_p / _REPAIR_WORKLIST, repairs)
+    enhancements = sorted(enhancement_by_key.values(),
+                          key=lambda row: (str(row.get("id")),
+                                           str(row.get("rtl_sha256"))))
+    _write_jsonl(run_p / _ENHANCEMENT_WORKLIST, enhancements)
+
+    total = len(results)
+    complete = (total > 0 and len(accepted_ids) == total
+                and len(ordered_tasks) == total and not remaining_backup
+                and not repairs)
+    solve.update({
+        "solved": sum(1 for r in results if r.get("candidate_ready")),
+        "accepted": len(accepted_ids),
+        "four_phase_summary": _four_phase_rollup(fpa, results),
+        "results": results,
+    })
+    _atomic_write_json(solve_p, solve)
+    acceptance = {
+        "schema": _ACCEPTANCE_SCHEMA,
+        "status": "COMPLETE" if complete else "PENDING",
+        "accepted": len(accepted_ids), "total": total,
+        "accepted_ids": accepted_ids,
+        "review_outcomes": review_outcomes,
+        "pending_backup": len(remaining_backup),
+        "pending_repair": len(repairs),
+        "pending_review": sum(1 for o in review_outcomes
+                              if o.get("status") in {"PENDING", "REJECTED"}),
+        "program_enhancement_candidates": len(enhancements),
+    }
+    _atomic_write_json(run_p / _ACCEPTANCE_REPORT, acceptance)
+    print(f"\n{len(accepted_ids)}/{total} dual-track accepted; status "
+          f"{acceptance['status']} -> {run_p / _ACCEPTANCE_REPORT}")
+    if complete:
+        return 0
+    return 2 if (remaining_backup or repairs or ordered_tasks) else 1
 
 
 def main():
@@ -910,14 +1646,19 @@ def main():
                          "the thing RULE 0 forbids. Each problem is staged by "
                          "the thin IO adapter, routed by task_nature_route to an "
                          "entry step and an evidence class, and run through "
-                         "vibe_ic_one_shot_runner. No benchmark-specific solver "
-                         "is involved.")
+                         "vibe_ic_one_shot_runner. Every PROGRAM candidate is "
+                         "hash-bound to a mandatory blind AI route + semantic "
+                         "review before it can be scored. AI may issue an "
+                         "evidence-backed OVERRIDE_PROGRAM and is the final "
+                         "semantic authority. No benchmark-specific solver is "
+                         "involved.")
     ap.add_argument("--resume", action="store_true",
-                    help="After the AI has authored RTL into the projects named "
-                         "by needs_ai_backup.jsonl, RE-INVOKE the runner on each "
-                         "so ITS gates fire on that RTL. This is the second half "
-                         "of the dual track — RTL that never went back through "
-                         "the runner has been authored, not gated.")
+                    help="Advance needs_ai_backup.jsonl, needs_ai_review.jsonl, "
+                         "and needs_ai_repair.jsonl. AI-authored/modified RTL is "
+                         "re-gated; only a current hash-bound blind AI route + "
+                         "semantic PASS writes a scoreable response. Semantic "
+                         "FAIL becomes a finite repair/re-gate/review loop; "
+                         "repeat until dual_track_acceptance.json is COMPLETE.")
     ap.add_argument("--limit", type=int, default=0,
                     help="with --solve: stop after N problems (0 = all)")
     ap.add_argument("--dataset", help="dataset path on disk")

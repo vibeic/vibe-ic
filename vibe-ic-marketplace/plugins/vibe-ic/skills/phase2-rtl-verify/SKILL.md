@@ -81,7 +81,8 @@ AI does NOT eyeball PASS-line counts — it only reviews any case the gates list
 
 ## When to escalate
 
-- Find any Wave-34 violation → invoke `rtl-repair` skill for ECO loop
+- Find any Wave-34 violation → invoke `rtl-repair` for the bounded RTL
+  repair/retry loop (not a physical/metal ECO)
 - Find L9 contract mismatch → re-run phase2 after patching aid_class_rtl_gen template
 - Find dead RTL → call out to user, may be intentional or may reveal regression
 
@@ -107,4 +108,3 @@ tool invocations.
 **Your task is not complete until the audit returns PASS.** If it fails,
 re-read the listed missing elements, patch your output, and re-run the
 audit.
-

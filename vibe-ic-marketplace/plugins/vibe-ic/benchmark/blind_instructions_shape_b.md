@@ -152,8 +152,10 @@ at the score front door.
      with: `chip_top_gate_wrapper_gen` (auto-emits the chip_top wrapper if
      L9.top_module != your authored top), `rtl_hygiene_lint --fix` (enforces
      power-up determinism on reset-less registered outputs — v0.1.24 lesson),
-     `eda_lint`, `eda_synth`, `spec_conformance_check`, `eco_loop` (up to 3
-     retries on `reference_tb` FAIL), `full_stack_tb_gen`, `final_audit`.
+     `eda_lint`, `eda_synth`, `spec_conformance_check`, the bounded
+     deterministic RTL repair/retry loop (legacy internal `eco_loop` marker;
+     up to 3 retries on `reference_tb` FAIL; **not** a physical/metal ECO),
+     `full_stack_tb_gen`, `final_audit`.
      These gates are what make Shape B more valuable than direct-agent
      authoring (Shape C with MCP only).
 
@@ -164,11 +166,46 @@ at the score front door.
      port name typo). Do NOT peek at the hidden testbench.
    - Re-run the runner. ONE retry max.
 
+   **5c. Mandatory blind AI review after either 5a or a PROGRAM emit:**
+   - `benchmark_dispatch.py --solve` writes one hash-bound task per gated
+     candidate to `<RUNDIR>/needs_ai_review.jsonl`. A PROGRAM PASS is a
+     candidate, not acceptance.
+   - The reviewing AI may read only the task's `prompt_path` and `rtl_paths`;
+     it must not read the hidden testbench, reference solution, scorer result,
+     or any oracle. It independently classifies the task route and checks RTL
+     semantics against the prompt.
+   - Write the review to the task's `review_path` using schema
+     `vibeic.benchmark.ai_review.v1`, the task's exact `id`,
+     `prompt_sha256`, and `rtl_sha256`, a real
+     `reviewer={"kind":"AI","model":"<model>"}`,
+     `blind={"oracle_accessed":false}`,
+     `routing={"verdict":"AGREE","ai_nature":"<program nature>"}`, and
+     `semantic_review={"verdict":"PASS","findings":[],"rationale":"..."}`.
+   - **AI is the final semantic authority; disagreement is not deadlock.** To
+     overrule a deterministic route, use `routing.verdict=OVERRIDE_PROGRAM`
+     and add `override.program_limitation` plus either prompt-bound
+     `prompt_evidence=[{"excerpt":"...","supports":"..."}]` or a detailed
+     `override.explanation`. A concrete `proposed_program_enhancement`
+     (`component`, `proposal`, `regression_fixture`) is encouraged and retained.
+   - If the current RTL is wrong, return
+     `semantic_review.verdict=FAIL` with at least one actionable finding and a
+     rationale. Because this overrules the Program candidate, also provide
+     prompt-bound `semantic_review.prompt_evidence`, or a detailed rationale of
+     at least 160 characters. `--resume` records `REPAIR_REQUIRED` in
+     `needs_ai_repair.jsonl`; the AI repairs the RTL, PROGRAM gates re-run, and
+     a fresh AI review judges the new hash. Valid disagreements also persist in
+     `program_enhancement_candidates.jsonl` so the reusable deterministic path
+     can be improved without making this item wait forever.
+   - Run `benchmark_dispatch.py <bench> --resume --dataset <DATASET> --run
+     <RUNDIR>`. Scoring is blocked until `dual_track_acceptance.json` says
+     `COMPLETE` for every problem.
+
 6. The benchmark NUMBER measures what the runner pipeline (incl. you in the
    spec-to-rtl role per 5a) produces. The 2026-05-28 wrong-shape RTLLM 37/50
    was direct-agent authoring with MCP only — phase1 / chip_top / hygiene fix /
-   eco_loop / conformance ALL skipped. Shape B done correctly invokes the AI
-   for authoring AS PART OF the runner pipeline, with all those gates firing.
+   RTL repair/retry loop / conformance ALL skipped. Shape B done correctly
+   invokes the AI for authoring AS PART OF the runner pipeline, with all those
+   gates firing, then requires a second blind AI semantic-review rail.
 
 ## Final report (compact table)
 Per `<leaf>`: module name | runner verdict | sample emitted (y/n) | any close-loop

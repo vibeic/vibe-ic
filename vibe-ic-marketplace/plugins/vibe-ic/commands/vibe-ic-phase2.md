@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase2
-description: Run Phase 2 (L1-L27 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via design_one_shot_runner. AI-monitored + close-loop ECO.
+description: Run Phase 2 (L1-L27 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via design_one_shot_runner. AI-monitored + bounded RTL repair/retry.
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
@@ -25,10 +25,10 @@ After the run completes, the AI must:
 1. Read `<project>/reports/phase23_one_shot.json`, find the verdict and per-step status
 2. For every FAIL step:
    - **`rtl_gen`** FAIL → check `aid_class_rtl_gen.py` stderr; usually L8/L9 fields missing → return to `/phase1` to fill in
-   - **`reference_tb`** FAIL → iverilog parse / sim error; ECO loop (runner auto-retries up to 3 times); if ECO exhausted, modify `aid_class_rtl_gen.py` template
+   - **`reference_tb`** FAIL → iverilog parse / sim error; bounded RTL repair/retry loop (legacy `--max-eco` option name; not physical ECO; runner auto-retries up to 3 times); if exhausted, modify `aid_class_rtl_gen.py` template
    - **`fpga_compile`** FAIL → check `fpga/compile.log`; common: QSF init_file SEARCH_PATH, SystemVerilog patterns Quartus does not accept → fix RTL template / qsf_gen
    - **`fpga_burn`** FAIL → parse `error_code` and `failed_gates` (pre-burn structural-gate audit); close-loop each gate (call `programs/<gate>.py` to capture detail → patch RTL/L doc → re-run)
-   - **`md905_verify`** FAIL → `<unparsed>` = driver did not see frame; first verify the SOF was burned in + <half-duplex-tester> connected to PIN_V10; if `expected ≠ observed` it is a real hardware bug, requires RTL ECO
+   - **`md905_verify`** FAIL → `<unparsed>` = driver did not see frame; first verify the SOF was burned in + <half-duplex-tester> connected to PIN_V10; if `expected ≠ observed` it is a real hardware bug and requires an RTL repair (not a metal-layer ECO)
 3. All PASS → hint: `/phase3`
 
 **Helper skills:** `spec-to-rtl` / `cdc-check` / `rtl-review` / `formal-verify` / `bringup-plan`

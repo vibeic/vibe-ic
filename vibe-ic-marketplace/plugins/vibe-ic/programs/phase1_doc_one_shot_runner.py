@@ -43776,17 +43776,18 @@ _RE_DOC_TOP_MODULE_INTRO_PHRASE = re.compile(
 # large family of prompt-only specs (CVDP nonagentic, VerilogEval-style):
 #   (1) a "Module Name:" label — a Markdown/AsciiDoc heading or a bold/plain
 #       line — whose value is the identifier, either on the SAME line
-#       (`Module Name: foo`) or, when it sits on the NEXT line, wrapped in
-#       backticks/quotes (the idiomatic way authors write the exact RTL name):
+#       (`Module Name: foo`) or as one isolated identifier on the NEXT line,
+#       optionally wrapped in backticks/quotes:
 #           ### Module Name:
-#           `qam16_mapper_interpolated`
+#           qam16_mapper_interpolated
 #   (2) an inline ``module `<name>` `` reference in running prose:
 #           **Specifications for module `priority_encoder_8x3` :**
 #           implement the module `spi_master` ...
 # Both are HIGH-confidence explicit-naming intent, so they rank just BELOW a
 # real `module (...) ;` declaration and ABOVE the low-confidence heading /
 # intro-phrase heuristics. Every hit still passes
-# `_is_valid_top_module_candidate` (rejects params/steps/section headings).
+# `_is_valid_explicit_module_name_candidate` (rejects params/steps/section
+# headings without rejecting exact alphabetic identifiers such as RAM/ROM).
 # Chip-AGNOSTIC: pure documentation-convention anchors; no chip literal.
 _RE_DOC_TOP_MODULE_NAME_LABEL = re.compile(
     r"(?im)^\s*#{0,6}\s*\**\s*(?:top[-_\s]+)?module\s+name\s*\**\s*"
@@ -43795,9 +43796,13 @@ _RE_DOC_TOP_MODULE_NAME_LABEL = re.compile(
     # "Module Name is chosen by ..." never matches). Value optionally quoted.
     r"[:=][ \t]*[`'\"*]{0,2}(?P<n1>[A-Za-z_][A-Za-z0-9_]{1,39})[`'\"*]{0,2}[ \t]*$"
     # next-line value — the colon is OPTIONAL (covers a bare `## Module Name`
-    # heading whose value is a backtick-wrapped identifier on the line below);
-    # the backtick wrapping is the disambiguator so a prose paragraph is safe.
-    r"|[:=]?[ \t]*\n\s*[`'\"](?P<n2>[A-Za-z_][A-Za-z0-9_]{1,39})\s*[`'\"]"
+    # heading). Quoted and bare values are both allowed, but the bare form must
+    # consume the WHOLE immediately-following line, so a prose paragraph with
+    # two words cannot become an identifier.
+    r"|[:=]?[ \t]*\r?\n[ \t]*(?:"
+    r"[`'\"](?P<n2>[A-Za-z_][A-Za-z0-9_]{1,39})[ \t]*[`'\"]"
+    r"|(?P<n3>[A-Za-z_][A-Za-z0-9_]{1,39})"
+    r")[ \t]*$"
     r")"
 )
 _RE_DOC_TOP_MODULE_INLINE_BACKTICK = re.compile(
@@ -43819,12 +43824,12 @@ def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]
         if not text:
             continue
         for m in _RE_DOC_TOP_MODULE_NAME_LABEL.finditer(text):
-            nm = (m.group("n1") or m.group("n2") or "").strip()
-            if nm and _is_valid_top_module_candidate(nm):
+            nm = (m.group("n1") or m.group("n2") or m.group("n3") or "").strip()
+            if nm and _is_valid_explicit_module_name_candidate(nm):
                 label_counts[nm] = label_counts.get(nm, 0) + 1
         for m in _RE_DOC_TOP_MODULE_INLINE_BACKTICK.finditer(text):
             nm = (m.group("name") or "").strip()
-            if nm and _is_valid_top_module_candidate(nm):
+            if nm and _is_valid_explicit_module_name_candidate(nm):
                 inline_counts[nm] = inline_counts.get(nm, 0) + 1
     # The explicit "Module Name:" label is the stronger intent; prefer it.
     for counts in (label_counts, inline_counts):
@@ -43868,7 +43873,8 @@ def _doc_real_module_decl_name(extracted: Dict[str, str]) -> Optional[str]:
             continue
         for m in _RE_DOC_TOP_MODULE_REAL_DECL.finditer(text):
             nm = (m.group("name") or "").strip()
-            if nm.lower() in ("endmodule",) or not _is_valid_top_module_candidate(nm):
+            if (nm.lower() in ("endmodule",)
+                    or not _is_valid_explicit_module_name_candidate(nm)):
                 continue
             body = m.group("body") or ""
             has_params = bool(m.group("params"))
@@ -44085,6 +44091,39 @@ def _v1_6_568_rtl_anchor_score(name: str, context: str) -> int:
     return score
 
 
+def _is_valid_explicit_module_name_candidate(nm: str) -> bool:
+    """Validate an identifier stated by a grammar-level, explicit name source.
+
+    A real ``module NAME (...)`` declaration and an exact ``Module Name:``
+    field do not need the structural-shape heuristic used for loose prose.
+    Reject the same known parameter/heading/tool tokens, but preserve the
+    identifier's exact case even when it is purely alphabetic (``RAM``,
+    ``ROM``, ``LFSR``, ``LIFObuffer``). This is intentionally narrower in
+    *where* it is called rather than looser everywhere.
+
+    Chip-AGNOSTIC: Verilog identifier grammar plus documentation shapes only.
+    """
+    if not isinstance(nm, str):
+        return False
+    s = nm.strip()
+    if len(s) < 2 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{1,39}", s):
+        return False
+    low = s.lower()
+    if low in _DOC_TOP_MODULE_STOP_TOKENS:
+        return False
+    if (re.fullmatch(r"[A-Z][A-Z0-9_]*", s)
+            and ("_" in s or any(c.isdigit() for c in s))):
+        return False
+    if re.fullmatch(r"(?i)step[_\-]?\d+", s):
+        return False
+    segs = s.split("_")
+    if len(segs) >= 2 and all(seg[:1].isupper() for seg in segs if seg):
+        return False
+    if _v1_6_568_is_build_tool_token(s):
+        return False
+    return True
+
+
 def _is_valid_top_module_candidate(nm: str) -> bool:
     """v1.6.274 — for #139 ORGANIC. Reject English heading nouns /
     structural participles / single-syllable common words that the
@@ -44112,14 +44151,10 @@ def _is_valid_top_module_candidate(nm: str) -> bool:
 
     Chip-AGNOSTIC.
     """
-    if not isinstance(nm, str):
+    if not _is_valid_explicit_module_name_candidate(nm):
         return False
     s = nm.strip()
-    if len(s) < 3:
-        return False
     low = s.lower()
-    if low in _DOC_TOP_MODULE_STOP_TOKENS:
-        return False
     # ORGANIC-20260703 (runner-l9-topmodule-misextraction, P1) — reject a
     # SCREAMING_SNAKE_CASE / all-caps constant-style identifier
     # (`DATA_WIDTH`, `CLOCK_HZ`, `POLY_LENGTH`): that is the universal Verilog
@@ -44127,14 +44162,9 @@ def _is_valid_top_module_candidate(nm: str) -> bool:
     # module name. Matches only when the token is entirely upper-case letters +
     # digits + underscores AND carries an underscore or a digit (so a bare
     # acronym like `JTAG`/`SPI` module wrapper is still allowed). Chip-AGNOSTIC.
-    if (re.fullmatch(r"[A-Z][A-Z0-9_]*", s)
-            and ("_" in s or any(c.isdigit() for c in s))):
-        return False
     # ORGANIC-20260703 — reject a prose ALGORITHM-STEP header token
     # (`Step_9`, `Step9`, `Step_2`): a spec's numbered step heading, never a
     # module name. Chip-AGNOSTIC: pure English-doc structural shape.
-    if re.fullmatch(r"(?i)step[_\-]?\d+", s):
-        return False
     # ORGANIC-20260703 — reject a Title_Case_Snake prose SECTION-HEADING token
     # (`Data_Latency`, `Interface_Signals`, `Register_Map`): 2+ underscore
     # segments EACH starting with an upper-case letter is the shape of a
@@ -44143,13 +44173,6 @@ def _is_valid_top_module_candidate(nm: str) -> bool:
     # lower_snake (`coffee_machine`) or CamelCase-without-underscore (`FooCore`).
     # A real `module <name>(...)` declaration outranks this fallback anyway.
     # Chip-AGNOSTIC: pure naming-convention shape, no chip literal.
-    _segs = s.split("_")
-    if len(_segs) >= 2 and all(seg[:1].isupper() for seg in _segs if seg):
-        return False
-    # v1.6.568 — for #387 P3 ORGANIC. Build-tool / language / OS /
-    # crypto deny-list. Segment-aware (catches `JAVA_JDK_8`).
-    if _v1_6_568_is_build_tool_token(s):
-        return False
     # Structural shape filter.
     has_under_or_digit = ("_" in s) or any(c.isdigit() for c in s)
     has_canon_suffix = any(low.endswith(suf)

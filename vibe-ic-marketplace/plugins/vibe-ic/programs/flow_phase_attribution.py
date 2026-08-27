@@ -14,9 +14,10 @@ This module answers, for one project directory:
                          or the AI skill the runner WAIVED to. Plus the
                          emitters the chain REFUSED.
     phase 3  verifying   WHICH gates actually ran and what each of them said.
-    phase 4  debugging   WHETHER a repair or close-loop fired, what triggered
-                         it, whether the repair action was a PROGRAM or an AI
-                         HANDOFF, and whether the rtl_gen verdict changed.
+    phase 4  debugging   WHETHER an RTL repair or retry fired, what triggered
+                         it, whether the action was a PROGRAM or an AI HANDOFF,
+                         and whether the rtl_gen verdict changed.  This is not
+                         a physical-design / metal-layer ECO.
 
 WHY THIS FILE EXISTS SEPARATELY FROM ANY BENCHMARK (GENERAL-CORE / THIN-ADAPTER)
 ===============================================================================
@@ -32,7 +33,7 @@ or whether a repair fired, while a benchmark run of the SAME flow could.
 Measured on a plain 4-to-1 multiplexer project (no dataset, no harness,
 `vibe_ic_one_shot_runner.py --skip-analog --skip-hardware --skip-phase3`):
 `reports/orchestrator/phase2_one_shot.json` recorded rtl_gen BLOCKED, then an
-`eco_loop_iter` marker, then rtl_gen PASS with
+the legacy internal `eco_loop_iter` marker, then rtl_gen PASS with
 `extras.deterministic_generator="multiplexer"`, with sdc_gen / reference_tb /
 final_audit / lec_equivalence FAILing. Every fact the four-phase attribution
 reports was already on disk and NOTHING read it.
@@ -121,11 +122,11 @@ _STATUS_FAILING = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED")
 # under. Each value says what the marker IS, so the report explains itself.
 _REPAIR_MARKERS = {
     "eco_loop_iter":
-        "the ECO close-loop marker design_one_shot_runner appends when the "
-        "reference-TB step FAILs, before re-running rtl_gen",
+        "legacy internal marker: the bounded deterministic RTL repair/retry "
+        "loop before re-running rtl_gen; NOT a physical/metal ECO",
     "eco_loop_remediation":
-        "the hint-driven Phase-1 regeneration the ECO loop attempts once "
-        "before it declares the loop inert",
+        "legacy internal marker: hint-driven Phase-1 regeneration attempted "
+        "once by the RTL repair/retry loop; NOT a physical/metal ECO",
 }
 _REPAIR_EXTRA_KEY = "gate_directed_repairs"
 
@@ -246,8 +247,9 @@ def phase1_routing(verdict: Optional[Dict[str, Any]], entry: Any, evidence: Any,
         "source": verdict.get("source"),
         "needs_ai_parse": verdict.get("needs_ai_parse"),
         "needs_ai_parse_consumed_by":
-            "NOTHING — no step in the runner acts on it; recorded here as "
-            "disclosure, not as a decision",
+            "NOTHING in a standalone runner invocation — a benchmark "
+            "dispatcher may attach a blind AI dual-track review; recorded "
+            "here as disclosure, not as a decision",
         "warning": verdict.get("warning"),
         "rtl_present_at_input": rtl_present,
         "entry_step": entry,
@@ -441,12 +443,13 @@ def phase3_verifying(rep: Optional[Dict[str, Any]],
 
 def phase4_debugging(rep: Optional[Dict[str, Any]],
                      why: Optional[str]) -> Dict[str, Any]:
-    """WHETHER anything repaired, what triggered it, and whether it mattered.
+    """WHETHER RTL was repaired/retried, its trigger, and whether it mattered.
 
-    Recorded NOWHERE before. The evidence was always in the step list — the ECO
-    markers, and the `gate_directed_repairs` extras — and no consumer read it,
-    so a design that was BLOCKED, close-looped and then emitted looked exactly
-    like a design that emitted first time.
+    Recorded NOWHERE before. The evidence was always in the step list — legacy
+    internal `eco_loop_*` markers and `gate_directed_repairs` extras — and no
+    consumer read it, so a design that was BLOCKED, retried and then emitted
+    looked exactly like a design that emitted first time.  The legacy marker
+    name is compatibility data; none of these events is a physical/metal ECO.
 
     Mechanism is read off the step the runner recorded IMMEDIATELY AFTER the
     marker (that is the repair action the loop actually took), never assumed
@@ -460,6 +463,14 @@ def phase4_debugging(rep: Optional[Dict[str, Any]],
         name = str(s.get("name"))
         ex = s.get("extras") or {}
         if name in _REPAIR_MARKERS:
+            prev = steps[i - 1] if i else None
+            prev_status = str(prev.get("status")) if prev else "UNKNOWN"
+            if prev_status in _STATUS_NOT_ATTEMPTED:
+                event_kind = "RTL_RETRY"
+            elif prev_status in _STATUS_FAILING:
+                event_kind = "RTL_REPAIR"
+            else:
+                event_kind = "RTL_REPAIR_OR_RETRY"
             nxt = steps[i + 1] if i + 1 < len(steps) else None
             nxt_ex = (nxt.get("extras") or {}) if nxt else {}
             if nxt is None:
@@ -490,6 +501,10 @@ def phase4_debugging(rep: Optional[Dict[str, Any]],
                 "step": name,
                 "status": str(s.get("status")),
                 "what_it_is": _REPAIR_MARKERS[name],
+                "event_kind": event_kind,
+                "physical_eco": False,
+                "terminology": ("RTL repair/retry; legacy internal eco_loop "
+                                "marker only, not a physical/metal ECO"),
                 "triggered_by": ({"step": str(steps[i - 1].get("name")),
                                   "status": str(steps[i - 1].get("status"))}
                                  if i else
@@ -511,6 +526,9 @@ def phase4_debugging(rep: Optional[Dict[str, Any]],
                 "what_it_is": f"the step recorded extras.{_REPAIR_EXTRA_KEY}, "
                               f"the record gate_directed_rtl_repair writes "
                               f"when it applies a deterministic repair",
+                "event_kind": "RTL_REPAIR",
+                "physical_eco": False,
+                "terminology": "deterministic RTL repair, not physical ECO",
                 "triggered_by": {"step": name,
                                  "status": str(s.get("status")),
                                  "note": "the repair is recorded on the "
@@ -556,7 +574,15 @@ def phase4_debugging(rep: Optional[Dict[str, Any]],
                    "basis": "rtl_gen status recorded before the first repair "
                             "marker vs the last rtl_gen status recorded",
                    "before": before, "after": last_rtl}
-    return {"attributed": True, "fired": True, "verdict": "REPAIRED",
+    event_kinds = {e.get("event_kind") for e in events}
+    if event_kinds == {"RTL_RETRY"}:
+        phase_verdict = "RETRIED"
+    elif event_kinds <= {"RTL_REPAIR"}:
+        phase_verdict = "REPAIRED"
+    else:
+        phase_verdict = "REPAIRED_AND_RETRIED"
+    return {"attributed": True, "fired": True, "verdict": phase_verdict,
+            "physical_eco": False,
             "events": events, "verdict_change": changed}
 
 
@@ -647,7 +673,7 @@ def summarize(attributions: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
             for g in p3.get("failed") or []:
                 bump(p3_failed, g)
         if p4r.get("attributed"):
-            bump(p4, "REPAIRED" if p4r.get("fired") else "NONE")
+            bump(p4, p4r.get("verdict") if p4r.get("fired") else "NONE")
     return {
         "designs": n,
         "phase1_nature": p1_nature,
@@ -697,7 +723,7 @@ def render(att: Dict[str, Any]) -> str:
         lines.append(f"  phase 4 debugging : UNKNOWN — {p4.get('reason')}")
     elif p4.get("fired"):
         lines.append(
-            f"  phase 4 debugging : REPAIRED — "
+            f"  phase 4 debugging : {p4.get('verdict')} — "
             + ", ".join(f"{e['step']}({e['mechanism']})"
                         for e in p4.get("events") or [])
             + f"; verdict change {p4.get('verdict_change')}")

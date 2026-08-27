@@ -45,7 +45,7 @@ cannot promote an unrelated call by itself.
 
 | step | fallback | class | why |
 |---|---|---|---|
-| `4` | 1 | REMEASURED | `design_one_shot_runner.main` re-runs `step_rtl_gen` on a reference-TB failure and re-runs the testbench. Bounded by `--max-eco`; stops on byte-identical RTL with `FAIL_ECO_INERT`. |
+| `4` | 1 | REMEASURED | `design_one_shot_runner.main` re-runs `step_rtl_gen` on a reference-TB failure and re-runs the testbench. This is bounded RTL repair/retry, **not** a physical/metal ECO; the legacy compatibility names are `--max-eco` and `FAIL_ECO_INERT`. |
 | `23` | 32 | REMEASURED | the ECO auto-trigger in `phase3_one_shot_runner.step_canonicalize_artefacts`: `_run_eco_repair` then `_measure_posteco_mcorner_ocv`. |
 | `32` | 32 | REMEASURED | the same actuator; step 32 is where it runs. |
 | `2` | 1 | DECLARED_ONLY | cross-layer fidelity now belongs to Step 2. Its judge rejects a bad candidate, but PRE/POST runtime spies both measured zero re-entry into `step_rtl_gen`; rejection must not be reported as an executable fallback. |

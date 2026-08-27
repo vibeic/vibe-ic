@@ -872,6 +872,28 @@ def _dia_up_down(prompt, ins, outs, top):
 
 
 # --- (5) frequency dividers ------------------------------------------------- #
+def _declared_counter_width(prompt: str) -> int | None:
+    """Return a counter width the specification states explicitly.
+
+    The width belongs to the legal parameter domain, not merely to the default
+    parameter value. For example, RTLLM's even divider defaults NUM_DIV to 6
+    but says a *4-bit counter* supports even values 2..32. Deriving three bits
+    from the default makes legal overrides 18..32 overflow.
+    """
+    text = prompt or ""
+    patterns = (
+        r"\b(?:with\s+the\s+|uses?\s+(?:a\s+)?)?(\d+)\s*[- ]\s*bit\s+counter\b",
+        r"\bcounter\b[^.\n]{0,48}?\b(?:is|width(?:\s+is)?|of)\s+(\d+)\s*bits?\b",
+    )
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            width = int(m.group(1))
+            if 1 <= width <= 4096:
+                return width
+    return None
+
+
 def _dia_freq_div(prompt, ins, outs, top):
     """Frequency divider family. PARSE the divide structure from prose; SKIP when a
     divide value is not stated. Three sub-shapes:
@@ -1015,7 +1037,9 @@ def _dia_freq_div(prompt, ins, outs, top):
         )
         return _emit(top, ports, body)
     # EVEN integer divider with a STATED value: cnt to NUM_DIV/2-1 then toggle.
-    cw = max(2, N.bit_length())
+    # An explicitly declared counter width describes the supported parameter
+    # range and therefore outranks a width inferred from the default NUM_DIV.
+    cw = _declared_counter_width(prompt) or max(2, N.bit_length())
     body = (
         f"  parameter NUM_DIV = {N};\n"
         f"  reg [{cw-1}:0] cnt;\n"
