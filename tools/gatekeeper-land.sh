@@ -1618,6 +1618,75 @@ lane_audit() {
 # `tools/ci/_gate_dispatch.sh` buffers and replays one level down), and
 # `landing_completion_record.py:200`'s fixed-order refusal and `:261`'s
 # complete-population refusal are met by construction.
+# ── WHICH TREE DID THE TWO COUNTS MEASURE? ────────────────────────────────
+#
+# MEASURED 2026-08-28. The `batch96-landing-v1-11-96` gate reported 225 targeted
+# and 133 unselectable; an independent reproduction on the same declared base
+# got 221 and 132, and no base in that history yields 225. It cost a night to
+# find out why, and the reason is that NEITHER COUNT MEASURES A COMMIT:
+#
+#   landing_unselectable_pytest_corpus.tracked_test_files   `git ls-files`
+#       -> the INDEX. A staged file counts; a commit is never consulted.
+#   ci_targeted_test_select._git_changed_files              `git diff <base>`
+#       -> the UNION of `<base>..HEAD` and base-vs-WORKING-TREE. The second has
+#          no commit on its right-hand side, and it is there deliberately: the
+#          merge queue stages a squash, so `<base>..HEAD` is empty and without
+#          the union the answer was the smoke floor.
+#
+# Both are right for their own job and both describe THIS TREE, which on a
+# landing is precisely the tree where "index" and "commit" differ most. What
+# was missing is one sentence saying so, and the numbers were read for weeks as
+# properties of the candidate. Reproduced with the commit tree held byte-
+# identical to main's: uncommitted work in one directory moved the census
+# 132 -> 133 and the targeted selection 221 -> 225. See
+# docs/research/2026-08-28-both-landing-counts-read-the-index-not-the-commit.md
+#
+# `gate_host_independence_check` already refuses this exact state for its own
+# question (`DIRTY_CHECKOUT: ... N TRACKED path(s) modified/staged`). This is
+# the same disclosure for the two counts, and it is a DISCLOSURE and not a
+# refusal: a landing legitimately runs on a staged squash, so refusing here
+# would refuse the normal case. It states the denominator; it decides nothing.
+#
+# TRACKED PATHS ONLY, which is what `--porcelain -uno` means. An untracked
+# scratch file changes neither count -- `ls-files` does not list it and
+# `git diff` does not report it -- so counting it here would raise an alarm
+# about a state that moves no number.
+landing_measured_tree_disclosure() {
+  local out rc dirty
+  # THE EXIT STATUS IS CAPTURED, NOT INFERRED FROM THE OUTPUT. Written first as
+  # `git status … | grep -c ''`, which maps a FAILED git to an empty stream and
+  # so to a count of 0 — "I could not look" arriving as "the tree is clean",
+  # which is the substitution this whole disclosure exists against. Caught by
+  # the not-a-repository arm of `tools/test_landing_measured_tree_disclosure.py`
+  # on its first run.
+  out="$(git -C "$ROOT" status --porcelain -uno 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "  REPORT  measured tree: UNDETERMINED — \`git status\` did not answer"
+    echo "          under $ROOT, so the two counts below cannot be attributed"
+    echo "          to any commit. This is NOT a clean tree."
+    return 0
+  fi
+  if [ -z "$out" ]; then dirty=0
+  else dirty="$(printf '%s\n' "$out" | grep -c '' || true)"; fi
+  case "$dirty" in
+    ''|*[!0-9]*)
+      echo "  REPORT  measured tree: UNDETERMINED — the modified-path count did"
+      echo "          not come back as a number, so the two counts below cannot"
+      echo "          be attributed to any commit. This is NOT a clean tree."
+      return 0 ;;
+    0)
+      printf '  REPORT  measured tree: clean at %s — the targeted selection and the\n' \
+        "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo UNREADABLE)"
+      echo "          unselectable census below describe that commit."
+      return 0 ;;
+  esac
+  printf '  REPORT  measured tree: %s TRACKED path(s) differ from HEAD (staged or\n' "$dirty"
+  echo "          modified). The targeted selection reads the working tree and the"
+  echo "          unselectable census reads the index, so the two counts below"
+  echo "          describe THIS TREE and not any commit. Landing on a staged"
+  echo "          squash is normal and this is a disclosure, not a refusal."
+}
+
 lane_run_window() {
   local skipped="${GATEKEEPER_SKIP_TARGETED_TESTS:-0}"
   local others=0
@@ -1697,6 +1766,7 @@ lane_window_saw_a_write() {
     >/dev/null 2>&1 || return 0
   return 1
 }
+landing_measured_tree_disclosure
 lane_run_window
 if [ "$LANE_WIDTH" -gt 1 ]; then
   for _lane in $LANE_LAUNCHED; do lane_join "$_lane"; done
