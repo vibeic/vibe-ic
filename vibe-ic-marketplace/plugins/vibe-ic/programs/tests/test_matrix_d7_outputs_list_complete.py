@@ -1145,7 +1145,7 @@ def test_the_option_default_rule_is_keyed_on_the_FLAG_not_the_literal():
 
 
 def test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag(
-        tmp_path):
+        tmp_path, monkeypatch):
     """THE FORWARD CONTROL, and the reason the rule cannot hide a real read.
 
     Strip ``--report FINAL_REPORT.md`` from step 37's clause and nothing else:
@@ -1153,6 +1153,54 @@ def test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag(
     charges the step exactly as it did before the rule existed. A rule that
     kept the edge dropped here would be one that had blinded the oracle
     instead of correcting it.
+
+    THE PRODUCER HALF IS PLANTED, AND IT HAS TO BE — the premise that died.
+    ====================================================================
+    W2 is produced AND consumed AND undeclared. This control is about the
+    CONSUMER leg: ``option_default_literals`` drops the edge per FLAG and per
+    STEP, and the question is whether it can stop dropping. The PRODUCER leg
+    is a different oracle entirely, and for this one path it answers only
+    where a run record is readable:
+
+      * the AST oracle does not resolve it. ``final_report_generate`` writes
+        ``out_path.write_text(md)`` where ``out_path`` is an ``IfExp`` over
+        ``_pl.report_path(project, "final_summary.md")`` — a helper call whose
+        return the resolver does not follow, which is
+        :data:`RESOLUTION_LIMITS` entry 1 in the ordinary way. MEASURED on
+        this tree: ``writers_of("reports/final_summary.md")`` is ``()``.
+      * the RECORD oracle is silent in this checkout, because every root that
+        carries a ``reports/write_ledger.json`` is a PUBLISHED CELL and those
+        moved to vibeic/benchmark-data. MEASURED: ``R.record_roots()`` is
+        ``()`` here.
+
+    So on a corpus-free checkout ``_w2_population`` dropped the path at
+    ``if not producers: continue`` BEFORE the consumer leg was ever consulted,
+    and the third assertion failed while the rule it names was working — the
+    two assertions above it passed then and pass now. Measured at
+    ``a974ed55c~1``, the byte-identical tree from before the consumer rule
+    existed, ``findings_for("37")`` is ALREADY ``()`` and
+    ``writers_of("reports/final_summary.md")`` is ALREADY ``()``: the phrase
+    "as it did before the rule existed" was never true without a record. The
+    control was landed green where one was readable and is red everywhere
+    else, which is the corpus-shaped failure vibe-ic#1357 named — except that
+    here it reddened rather than skipped, and a d7 red is not contained: it
+    takes the whole nested outcome run of ``test_matrix_63x8_coverage`` to
+    NORECORD and with it five ids across coverage and census_freshness.
+
+    The invariant is KEPT, not weakened, and it is strictly sharper. The
+    producer is planted with the module's own idiom — ``_plant_record`` runs
+    the REAL ``step_write_ledger`` emitter over a committed probe run, the
+    same way ``test_d7_a_run_record_promotes_a_write_the_ast_cannot_see``
+    does — and it plants a TRUE fact: ``final_report_generate`` really does
+    write ``reports/final_summary.md``, which is why every gate that reads it
+    reads a file that exists. With the producer leg held fixed and visible,
+    BOTH directions become live for the first time:
+
+      FORWARD  --report gone  -> the edge returns AND W2 charges step 37.
+      REVERSE  --report back  -> no finding, on the SAME producer. Before this
+               change the reverse compared an empty set against an empty set
+               and would have passed against a rule that had blinded the
+               oracle completely, which is the one thing it exists to refuse.
     """
     target = "reported_figure_artifact_backing_check . --report FINAL_REPORT.md"
 
@@ -1169,15 +1217,49 @@ def test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag(
         assert hit == 1, f"the clause this control edits was not found: {hit}"
 
     path = _mutated_flow(tmp_path, "step37_without_report.yaml", edit)
-    with _SwappedFlow(path):
-        supplied = G.gate_supplied_flags("37").get(_STEP37_PROGRAM, frozenset())
-        assert "--report" not in supplied, sorted(supplied)
-        assert "37" in G._gate_consumers().get(_STEP37_DEFAULT, frozenset()), (
-            f"with --report gone, {_STEP37_DEFAULT} must be mined as a read "
-            f"of step 37's gate again")
-        assert _STEP37_DEFAULT in {f.path for f in G.findings_for("37")}, (
-            "W2 no longer charges the step for a default it really can reach")
-    assert _STEP37_DEFAULT not in {f.path for f in G.findings_for("37")}
+    try:
+        with _probe_run_root("d7_step37_report_") as (probe, commit):
+            doc = _plant_record(probe, commit, _STEP37_DEFAULT)
+            assert any(r.get("rel") == _STEP37_DEFAULT
+                       for r in doc["residual"]["written_never_declared"]), (
+                f"the real emitter did not report {_STEP37_DEFAULT} in its "
+                f"written_never_declared residual, so the producer leg is not "
+                f"planted and this control would measure the drop instead of "
+                f"the rule: "
+                f"{doc['residual']['written_never_declared'][:5]}")
+            _bind(monkeypatch, probe)
+            assert R.observed_producers_of(_STEP37_DEFAULT), (
+                f"the record does not observe {_STEP37_DEFAULT!r}; the reader "
+                f"refused it — {R.binding_notes()}")
+
+            with _SwappedFlow(path):
+                supplied = G.gate_supplied_flags("37").get(
+                    _STEP37_PROGRAM, frozenset())
+                assert "--report" not in supplied, sorted(supplied)
+                assert "37" in G._gate_consumers().get(
+                        _STEP37_DEFAULT, frozenset()), (
+                    f"with --report gone, {_STEP37_DEFAULT} must be mined as "
+                    f"a read of step 37's gate again")
+                assert _STEP37_DEFAULT in {
+                        f.path for f in G.findings_for("37")}, (
+                    "W2 no longer charges the step for a default it really "
+                    "can reach")
+
+            # REVERSE, on the SAME planted producer: the real yaml supplies
+            # --report, the edge is foreclosed, and there is no finding. The
+            # producer leg is identical in both directions, so this compares
+            # the RULE against itself rather than one empty set against
+            # another.
+            assert "--report" in G.gate_supplied_flags("37").get(
+                _STEP37_PROGRAM, frozenset()), (
+                "step 37 stopped passing --report; re-derive this control")
+            assert _STEP37_DEFAULT not in {
+                f.path for f in G.findings_for("37")}, (
+                f"{_STEP37_DEFAULT} is charged to step 37 on the REAL yaml, "
+                f"whose own clause supplies --report and forecloses the "
+                f"default; the per-flag drop is not holding")
+    finally:
+        _unbind()
 
 
 def _fake_program(monkeypatch, name: str, source: str) -> None:
