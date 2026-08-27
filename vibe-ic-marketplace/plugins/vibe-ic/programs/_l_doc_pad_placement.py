@@ -64,6 +64,39 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# THE POLARITY OF THE SENTENCE A VALUE IS READ OUT OF (vibe-ic#712).
+#
+# Everything this module reads is a design's own ENGLISH document, which is
+# precisely where denial is spellable and gets spelled — the two defects that
+# opened #712 (`pdk_target` "This block is NOT targeted at <PDK>", and
+# `die_area_budget_um` "REMOVED, not translated") were both read out of exactly
+# this kind of file. `prose_polarity_consulted_check` flagged both functions
+# below and it was right: each takes text out of a document and writes it into
+# a declared field, and neither asked whether the document was denying it.
+#
+# ONE VOCABULARY, IMPORTED, NEVER RE-SPELLED. `_prose_polarity`'s header names
+# the failure a private copy causes ("three private copies of it is how the
+# divergence happened"), and both names below are CALLED — an import whose only
+# consumer is the test asserting the import is the "a call that can never fire
+# is a green light rather than a check" shape this repo already names.
+#
+# THE REACH IS THE LINE, AND THAT IS THIS INPUT'S OWN SHAPE, NOT A SECOND COPY
+# OF "WHERE DOES A SENTENCE END". A markdown table ROW is a self-contained
+# record — `floorplan_contract` measured that same rule for the same reason,
+# "otherwise an unrelated cell in a neighbouring row would veto a valid die" —
+# so the row predicates ask `is_denied` about the ROW. The one value here that
+# is genuinely prose, the stated minimum distance, is scoped by the house
+# `sentence_scope` with `extra_breaks=("\n",)`: this document wraps its prose a
+# line at a time, and a bare newline is a record break in a table.
+#
+# WHICH DIRECTION EACH GUARD FAILS, STATED. Retracting a value nothing denied
+# is the SILENT direction (`_prose_polarity`: "the extractor reports less than
+# it read and no gate goes red"), so every predicate here is bracket-blind by
+# default — `is_denied` blanks bracketed spans — and none of them widens past
+# the record it is asked about.
+from _prose_polarity import is_denied as _is_denied
+from _prose_polarity import sentence_scope as _sentence_scope
+
 #: Where a project keeps design input documents, in the order
 #: `phase3_one_shot_runner._l9_declared_die_area` already scans them, plus the
 #: converted mirror phase1 lands beside its generated docs.
@@ -201,7 +234,13 @@ def parse_pad_placement(text: str, source: str) -> Optional[PadPlacement]:
     design whose pad ring is empty are different facts and only one of them
     can be checked.
     """
+    # A line that DENIES the delegation states the opposite of one that makes
+    # it — "the I/O cells are NOT taken from the PDK" carries both tokens and
+    # is not a delegation. The line is already this predicate's whole record
+    # ("Both tokens required, on one line"), so the polarity question is asked
+    # of the same line and of nothing wider.
     delegates = any(_IO_TOKEN_RE.search(ln) and _PDK_TOKEN_RE.search(ln)
+                    and _is_denied(ln) is None
                     for ln in text.splitlines())
     for title, body in _sections(text):
         if not (_PAD_TOKEN_RE.search(title)
@@ -214,6 +253,13 @@ def parse_pad_placement(text: str, source: str) -> Optional[PadPlacement]:
                 continue
             side = _side_of(cells[0])
             if side is None:
+                continue
+            # A ROW THAT DENIES ITSELF DECLARES NOTHING. "| N | `a`, `b` | not
+            # bonded on this revision |" prints a partition the design has
+            # withdrawn, and publishing it puts real-looking signals on an edge
+            # the document says they are not on. Asked of the ROW, because the
+            # row is the record: a denial in a NEIGHBOURING row is that row's.
+            if _is_denied(line) is not None:
                 continue
             signals = [t.strip() for t in _TICKED_RE.findall(cells[1])]
             signals = [s for s in signals if s]
@@ -229,6 +275,28 @@ def parse_pad_placement(text: str, source: str) -> Optional[PadPlacement]:
         if not side_signals:
             continue
         md = _MIN_DISTANCE_RE.search(body)
+        # The one PROSE value in this section, so it gets the house prose
+        # reach rather than a row. `extra_breaks=("\n",)` keeps that reach
+        # from crossing out of one line into an unrelated table row.
+        #
+        # WHAT THIS REACH DOES NOT CATCH, STATED RATHER THAN IMPLIED, and
+        # pinned by `test_the_min_distance_denial_reach_is_the_sentence`:
+        # a denial written as the NEXT FULL SENTENCE ("... is the harness
+        # figure. It has NO meaning here.") is out of scope. `sentence_scope`
+        # breaks on ". " in both directions, by design. `floorplan_contract`
+        # widens to the PARAGRAPH for exactly that case and this deliberately
+        # does not, because that function's own measurement says why: a
+        # paragraph reach "would over-trigger on a markdown TABLE, where an
+        # unrelated row ('| Status | not final |') sits in the same block" —
+        # and the block this searches IS a pad table. A same-clause denial and
+        # a semicolon-joined one are both in reach (";" joins clauses into one
+        # sentence, which `_prose_polarity` pins deliberately), and those are
+        # the phrasings that share the statement rather than follow it.
+        if md is not None:
+            lo, hi = _sentence_scope(body, md.start(), md.end(),
+                                     extra_breaks=("\n",))
+            if _is_denied(body[lo:hi]) is not None:
+                md = None
         return PadPlacement(
             source=source, heading=title, side_signals=side_signals,
             min_pad_distance_um=float(md.group("v")) if md else None,
@@ -254,6 +322,12 @@ def parse_parameter_defaults(text: str) -> Dict[str, int]:
     for line in body.splitlines():
         cells = _cells(line)
         if not cells or len(cells) < _PARAM_ROW_MIN_CELLS:
+            continue
+        # SAME RULE, SAME REASON as the pad rows above. A row reading
+        # "| `N` | 8 | illustrative, not the default |" resolves a bus width
+        # from a number its own row withdraws, and `resolve_bits` then expands
+        # a port into bits the design never declared.
+        if _is_denied(line) is not None:
             continue
         names = _TICKED_RE.findall(cells[0])
         if len(names) != 1:

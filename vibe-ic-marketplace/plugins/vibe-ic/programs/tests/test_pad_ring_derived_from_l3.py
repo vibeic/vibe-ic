@@ -290,6 +290,120 @@ def test_control_an_unresolvable_bus_expression_is_not_guessed():
     assert LDOC.resolve_bits("WIDTH*2:0", {"WIDTH": 4}) is None
 
 
+# --------------------------------------------------------------------------- #
+# POLARITY — a document that DENIES a value must not have it published
+# (vibe-ic#712). Every test below is a PAIR: the denied text and the same text
+# with the denial removed. A one-sided test here would pass against a function
+# that returns nothing at all, which is the other way this can be wrong —
+# `_prose_polarity` names it: "Retracting a value nothing denied is SILENT:
+# the extractor reports less than it read and no gate goes red."
+# --------------------------------------------------------------------------- #
+#: The shape both halves of every pair below are cut from. One pad table, one
+#: delegation sentence, one stated minimum distance.
+_POLARITY_DOC = ("## Physical Pad Placement\n\n"
+                 "The I/O cell library is provided by the PDK.\n\n"
+                 "| Side | Signals |\n|---|---|\n"
+                 "| North (N) | `a`, `b` |\n"
+                 "| South (S) | `c` |\n\n"
+                 "min_distance = 5.0 um between pads on one side.\n")
+
+
+def test_the_unmutated_polarity_document_is_read_in_full():
+    """LOCK 1 for every pair below: an already-empty read proves nothing, so
+    the base text must publish all three values before a test may claim a
+    denial removed one."""
+    got = LDOC.parse_pad_placement(_POLARITY_DOC, "d.md")
+    assert got is not None
+    assert got.side_signals == {"N": ["a", "b"], "S": ["c"]}
+    assert got.min_pad_distance_um == 5.0
+    assert got.delegates_io_library_to_pdk is True
+
+
+def test_a_pad_row_its_own_document_denies_is_not_a_partition():
+    """A row the design has withdrawn puts real-looking signals on an edge the
+    document says they are not on. The reach is the ROW: the denied row goes,
+    and its NEIGHBOUR — which denies nothing — stays."""
+    denied = _POLARITY_DOC.replace(
+        "| North (N) | `a`, `b` |",
+        "| North (N) | `a`, `b` | not bonded on this revision |")
+    got = LDOC.parse_pad_placement(denied, "d.md")
+    assert got is not None, "the section still exists; only one row was denied"
+    assert got.side_signals == {"S": ["c"]}
+
+
+def test_a_denied_delegation_sentence_does_not_delegate():
+    """"the I/O cells are NOT taken from the PDK" carries both tokens the
+    delegation predicate looks for and states the opposite of a delegation.
+    This is the #706 shape in this module's own field."""
+    denied = _POLARITY_DOC.replace(
+        "The I/O cell library is provided by the PDK.",
+        "The I/O cell library is NOT provided by the PDK.")
+    assert LDOC.parse_pad_placement(
+        denied, "d.md").delegates_io_library_to_pdk is False
+
+
+def test_the_min_distance_denial_reach_is_the_sentence():
+    """Both directions AND the stated limit of the reach, in one place, so the
+    limit cannot rot into a silent surprise.
+
+    IN REACH  a denial sharing the clause, and one joined by a semicolon —
+              ";" joins two clauses into ONE sentence and `_prose_polarity`
+              pins that deliberately.
+    OUT OF    a denial written as the NEXT full sentence. `floorplan_contract`
+    REACH     widens to the paragraph for that case; this does not, because
+              the block searched here IS a pad table and a paragraph reach
+              would let an unrelated row veto a real figure. Asserted, not
+              left to be discovered.
+    NOT A     an unrelated neighbouring row, and a bracketed qualifier
+    DENIAL    ("(not including the scribe)") — the over-trigger direction,
+              which fails silently and so is pinned here too.
+    """
+    def _md(sentence):
+        doc = _POLARITY_DOC.replace(
+            "min_distance = 5.0 um between pads on one side.\n", sentence)
+        return LDOC.parse_pad_placement(doc, "d.md").min_pad_distance_um
+
+    assert _md("min_distance = 5.0 um is NOT a constraint for this block.\n") is None
+    assert _md("min_distance = 5.0 um is the harness figure; "
+               "it has NO meaning here.\n") is None
+    assert _md("min_distance = 5.0 um is REMOVED, not translated.\n") is None
+
+    assert _md("min_distance = 5.0 um is the harness figure. "
+               "It has NO meaning here.\n") == 5.0
+    assert _md("min_distance = 5.0 um between pads.\n\n"
+               "| Status | not final |\n") == 5.0
+    assert _md("min_distance = 5.0 um (not including the scribe) "
+               "between pads.\n") == 5.0
+
+
+def test_a_parameter_row_its_own_document_denies_states_no_default():
+    """A withdrawn default resolves a bus width the design never declared, and
+    `resolve_bits` then expands a port into bits nothing stated. The pair: the
+    denied row drops, the row beside it survives."""
+    doc = ("## Parameters\n\n| Parameter | Default |\n|---|---|\n"
+           "| `WIDTH` | 8 |\n| `DEPTH` | 4 |\n")
+    assert LDOC.parse_parameter_defaults(doc) == {"WIDTH": 8, "DEPTH": 4}
+    denied = doc.replace("| `DEPTH` | 4 |",
+                         "| `DEPTH` | 4 | illustrative, not the default |")
+    assert LDOC.parse_parameter_defaults(denied) == {"WIDTH": 8}
+
+
+def test_the_denial_vocabulary_is_the_shared_one_and_not_a_fourth_copy():
+    """vibe-ic#712's whole point: "three private copies of it is how the
+    divergence happened". This module must consult `_prose_polarity`, not
+    re-spell the words that mean no — and the names it imports must be the
+    ones it CALLS, so the import cannot decay into a green light."""
+    import _prose_polarity as PP
+    src = (Path(LDOC.__file__)).read_text(encoding="utf-8")
+    assert "from _prose_polarity import" in src
+    assert LDOC._is_denied is PP.is_denied
+    assert LDOC._sentence_scope is PP.sentence_scope
+    for word in ("not", "no", "removed"):
+        assert PP.NEGATION_RE.search(word), (
+            f"{word!r} is honoured by the tests above but is not in the "
+            f"shared vocabulary — the copies have diverged")
+
+
 def test_control_a_document_that_assigns_one_side_twice_is_refused():
     text = ("## Physical Pad Placement\n\n"
             "| Side | Signals |\n|---|---|\n"
