@@ -3,14 +3,13 @@
 ### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          34
-  CLEARED       21
+  BOTH          32
+  CLEARED       23
   FLAKY         2
 
 bucket        image    host     id
 FLAKY         4/13     13/13    test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged
 FLAKY         1/10     0/10     test_matrix_63x8_coverage.py::test_live_collection_relays_finite_semantic_progress_past_old_bound
-BOTH          5/5      5/5      test_flow_compliance_check_gate.py::test_a_real_verdict_is_not_mistaken_for_a_crash
 BOTH          5/5      5/5      test_flow_manifest_declaration_parity.py::test_every_declared_path_has_a_manifest_entry
 BOTH          5/5      5/5      test_flow_manifest_declaration_parity.py::test_the_population_is_the_whole_flow_and_is_not_empty
 BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_no_declared_report_is_written_through_open_w
@@ -18,7 +17,6 @@ BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_n
 BOTH          5/5      5/5      test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds
 BOTH          5/5      5/5      test_issue306_register_paydown.py::test_306_shipped_tree_is_green_against_its_register
 BOTH          5/5      5/5      test_issue490_drc_report_check_argv.py::test_the_docstring_does_not_claim_an_enforcement_tier_it_lacks
-BOTH          5/5      5/5      test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_census_block_is_fresh
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_published_total_equals_the_live_census
 BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved
@@ -78,6 +76,8 @@ ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matchi
 628ca251f    5/5 5/5 RED     0/2 0/2 GREEN  test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_was_silent_on_the_advisory_slot
 5d1b82988    5/5 5/5 RED     0/1 0/1 GREEN  test_matrix_d7_outputs_list_complete.py::test_d7_required_outputs_list_is_complete[step31]
 5d1b82988    5/5 5/5 RED     0/1 0/1 GREEN  test_matrix_mutation_ledger.py::test_every_enforced_cell_carries_a_named_mutation[step0.5ic]
+51c0db4b7    5/5 5/5 RED     0/1 0/1 GREEN  test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships
+51c0db4b7    5/5 5/5 RED     0/1 0/1 GREEN  test_flow_compliance_check_gate.py::test_a_real_verdict_is_not_mistaken_for_a_crash
 
 All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
 modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
@@ -177,3 +177,79 @@ silences both, is a falsification. The same trap caught the shrink ID: `_run_aud
 passes `--write-baseline`, so a mutation on the read/compare path never executes, and
 `_json_report_signals_vacuous` is documented as NOT WIRED INTO THE STEP TIER. A mutation
 that lands in a dead arm is indistinguishable from a guard that does not work.
+
+
+### the prose-polarity / evidence-snippet slice — 2 IDs, cleared at `51c0db4b7`
+
+```
+subject   51c0db4b7  (the candidate tip; the table edit and the version bump
+                      are the commit that carries this section, and neither
+                      touches code)
+control   243f7e731  (v1.12.11) — live main immediately before this landing
+host      8HD-8 (192.168.1.114)
+image     ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2 — the digest BOTH
+          tools/ci/protected_landing_transition.json and
+          tools/ci/run_suite_in_eda_image.sh pin, entrypoint bypassed
+env       PYTHONDONTWRITEBYTECODE=1 · TMPDIR=/var/tmp/jl, outside the account
+          home and on the repository's own filesystem ·
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 in the image lane ·
+          VIBEIC_CORPUS_ROOT unset · one `python3 -m pytest` per lane, both
+          modules in one invocation, serial, no xdist
+```
+
+Whole modules, never a `-k` selection. ONE observation per lane per tree, and
+the `now` ratios say `0/1` rather than borrowing a repeat count these runs do
+not have.
+
+```
+                        host              image
+control 243f7e731       1 failed, 70 p    1 failed, 70 p
+subject 51c0db4b7       71 passed         71 passed
+```
+
+**The control is exact.** At `243f7e731` the failing set is
+`test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
+and nothing else — not a superset, not a subset — in BOTH lanes. The harness
+demonstrably still produces this red, so the original `5/5 5/5` was a true
+measurement of its own subject, and the green is not a collection hole: 71
+collected and 0 skipped in all four runs.
+
+**`test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
+— cleared BY this landing.** `prose_polarity_consulted_check` named two
+functions in `programs/_l_doc_pad_placement.py`. Each takes a value out of a
+design's own ENGLISH document and writes it into a declared field, and neither
+asked whether the document was DENYING what it read — the shape vibe-ic#712
+opened on (`pdk_target` "This block is NOT targeted at <PDK>",
+`die_area_budget_um` "REMOVED, not translated"), both read out of exactly this
+kind of file. The repair IMPORTS `_prose_polarity`'s `is_denied` and
+`sentence_scope` rather than re-spelling them — that module's own header records
+that "three private copies of it is how the divergence happened" — and both
+names are CALLED, not merely imported, because an import whose only consumer is
+the test asserting the import is a green light rather than a check. The reach is
+the record the value sits in: a markdown table ROW for the row predicates, and
+the house `sentence_scope` with `extra_breaks=("\n",)` for the one genuinely
+prose value, because this document wraps a line at a time and a bare newline is
+a record break in a table. No assertion was weakened, no case deleted, no
+`skipif` added, no tolerance widened.
+
+**`test_flow_compliance_check_gate.py::test_a_real_verdict_is_not_mistaken_for_a_crash`
+— cleared EARLIER, and recorded here rather than left saying something false.**
+This row was NOT cleared by this landing and the entry says so: at the control
+`243f7e731`, before any commit of this branch, it is already among the 70
+passing in both lanes. It was repaired by `a4db289d9` (v1.12.4), which
+CONSTRUCTS the shallow arm's project instead of hoping the host's temp root is
+short enough. The red was `2 * len(project) + 156 <= 300` failing — a statement
+about `TMPDIR`, not about the crash detector the test owns — and that commit
+asserts the premise so it cannot rot back into a confusing red. Nobody moved the
+row when the repair landed. A row that is green in both lanes and still sits in
+BOTH overstates the criterion in the direction that makes the board look worse,
+which is no better than understating it.
+
+What this branch carries for that module is adjacent and is NOT the clearance:
+`output_snippet` now grows its cut BACKWARD to a line boundary, so a verdict is
+not served as a fragment (`AIL` where `verdict: FAIL` was cut). It GROWS and
+never shrinks — dropping the partial first line was the shorter fix and would
+have taken a truncated traceback FRAME line with it, which is a crash's only
+evidence — and over 4000 random stdout/stderr pairs every line the old snippet
+carried is still carried, with crash detection never downgrading. The width
+stays bounded: a line wider than the budget falls back to the plain tail.
