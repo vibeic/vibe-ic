@@ -38,6 +38,7 @@ if [ ! -d "$PLUGIN_ROOT/programs" ]; then
 fi
 
 PROGRAMS="$PLUGIN_ROOT/programs"
+# Gates that take the plugin root as a POSITIONAL argument.
 GATES=(
     "emitter_failure_mode_check"
     "literal_verdict_keyword_check"
@@ -45,6 +46,28 @@ GATES=(
     "changelog_metric_reproducibility_check"
     "changelog_command_reproducibility_check"
     "self_audit_doc_claim_consistency_check"
+)
+
+# Gates that take it as `--root`. A SECOND LIST rather than a rewritten CLI:
+# the alternative was to give `unanchored_process_kill_check.py` a positional
+# root so it could join the array above, and changing a shipped gate's
+# interface to fit its runner is the tail wagging the dog — the runner is what
+# has to accommodate, and one more `for` loop is the whole cost.
+#
+# WHY THIS FILE AND NOT `repo_hygiene_gates.sh`: both are machine runners the
+# wiring audit counts, and this one is the stated home for exactly this class —
+# its own header says it "runs the plugin-source-auditing gates against the
+# vibe-ic plugin tree itself", which is what a pure source scan is. It is also
+# not in the protected-landing tuple, so wiring here does not need a
+# PREPARE/ACTIVATE pair to reach main.
+GATES_ROOT_FLAG=(
+    # vibe-ic#381: no shipped code may choose which process to KILL by matching
+    # a command line. Landed by ea51511ef1 (v1.11.95) WITHOUT a runner, which
+    # is what `checker_execution_wiring_audit` reports: "1 checker(s) that
+    # NOTHING but their own test runs". Measured GREEN over `$PLUGIN_ROOT`
+    # before being wired here (#1253: wiring a RED gate turns "unverified" into
+    # "blocking", which is a different change and not this one).
+    "unanchored_process_kill_check"
 )
 
 fail=0
@@ -59,8 +82,19 @@ for gate in "${GATES[@]}"; do
     fi
 done
 
+for gate in "${GATES_ROOT_FLAG[@]}"; do
+    echo "=== $gate ==="
+    if python3 "$PROGRAMS/${gate}.py" --root "$PLUGIN_ROOT"; then
+        echo
+    else
+        rc=$?
+        echo "  -> FAIL (rc=$rc)"
+        fail=$((fail + 1))
+    fi
+done
+
 if [ "$fail" -gt 0 ]; then
-    echo "==> $fail of ${#GATES[@]} gate(s) FAILed"
+    echo "==> $fail of $(( ${#GATES[@]} + ${#GATES_ROOT_FLAG[@]} )) gate(s) FAILed"
     exit 1
 fi
-echo "==> all ${#GATES[@]} self-audit gates PASS"
+echo "==> all $(( ${#GATES[@]} + ${#GATES_ROOT_FLAG[@]} )) self-audit gates PASS"
