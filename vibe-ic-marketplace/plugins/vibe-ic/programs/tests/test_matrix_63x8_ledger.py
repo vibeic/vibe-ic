@@ -803,8 +803,30 @@ def test_output_entries_classify_into_the_four_kinds():
     # `test_flow_manifest_declaration_parity`) and step 4's pinned fixture in
     # `test_v1_4_66_issue171_step4_professional_tb_supersede` still listed the
     # pre-split shape. All four move together in this change.
-    assert sum(seen.values()) == 165, seen
-    assert seen[F.FILE] == 123
+    # 2026-08-28: 165 -> 166, FILE 123 -> 124, ONE entry with ONE owner.
+    #
+    #   +1  step 31 `reports/phase3/perc_sweep.json`, declared by `2ffa7a594`
+    #       [v1.12.10] to close the dimension-7 finding
+    #       W1:gate_output_read_elsewhere. `8bd79875e` [v1.12.3] had given step
+    #       31 an `advisory_program_exit_zero` clause running
+    #       `perc_corpus_sweep . --report reports/phase3/perc_sweep.json`, and
+    #       the clause directly below it runs `sweep_reach_check --report` on
+    #       the same path -- a gate-designated output read by something other
+    #       than its own writer, which is exactly W1, and no step named it.
+    #
+    # MEASURED, by diffing the (step, entry) SET between `72a558fdb` (v1.12.9,
+    # the last sha at which this pin was green) and this tree: exactly that one
+    # path was added, none removed. It is a plain FILE -- no wildcard, no
+    # `" OR "` -- so GLOB (18) and ANY_OF (24) are untouched, which is what makes
+    # the attribution checkable rather than asserted.
+    #
+    # The declaring commit did not carry its derived figures either: the same
+    # entry moves `figure:required_output_entries` 165 -> 166 in TWO files at
+    # THREE sites and `figure:required_outputs_file` 123 -> 124, and
+    # `gen_matrix_63x8_census.py --check-figures` was red on all of them. Those
+    # anchors move in the same change as this pin.
+    assert sum(seen.values()) == 166, seen
+    assert seen[F.FILE] == 124
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
