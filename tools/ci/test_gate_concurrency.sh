@@ -525,5 +525,84 @@ else
      long for a reason nobody printed is its own defect" "$(cat "$T/cwpar.err")"
 fi
 
+# ── 21. THE TWO ZERO-POPULATION STATES ARE TWO ROWS, IN BOTH ARMS ───────────
+#    THE CASE THIS HARNESS WAS MISSING, and it was missing in the same shape as
+#    the defect it now guards. Case 19 drives `gate_dispatch_over ... true` — a
+#    producer that exits 0 having printed nothing, i.e. A CORPUS THAT WAS READ
+#    AND HOLDS NONE. That is one of the dispatcher's two zero-population states
+#    and until now it was the only one this file had ever seen. The other — a
+#    producer that resolved no corpus at all and exits `GATE_DISPATCH_ABSENT_RC`
+#    — reached `_gate_dispatch.sh` for the first time in vibe-ic#1764 and no
+#    case here drove it, so the paired guard for this file was blind to half of
+#    what the file decides.
+#
+#    WHY IT BELONGS IN THE CONCURRENCY HARNESS SPECIFICALLY. Both rows are
+#    synthesised at DECLARATION time by `gate_dispatch_over`, which is exactly
+#    the moment case 19 exists to police: it speaks while earlier gates are
+#    still running. A second synthetic row is a second chance for the buffering
+#    to attach a verdict to the wrong corpus, and "0 items" reads identically on
+#    both rows, so a swap between them would be invisible in the counts.
+#
+#    RED WITHOUT THE FIX, and the honest reading of that red. Measured on
+#    `origin/main` with `_gate_dispatch.sh` and `routed_def_corpus.py` reverted
+#    to `81cd5321b`: the absent corpus records `expansion PRODUCER_FAILED` and
+#    NO GATE ROW AT ALL — one corpus, zero verdicts — so this case fails there.
+#    It fails because the state did not exist to be recorded, not because the
+#    old dispatcher mis-recorded it: rc 3 meant nothing to it. This is a pin on
+#    the new invariant, not evidence of an old defect, and §10 of the #1764
+#    record draws the same distinction about its pytest sibling.
+cat > "$T/twostate.sh" <<'EOF'
+set -euo pipefail
+. "${HERE:?}/_gate_dispatch.sh"
+gate_dispatch_init "$@"
+_body() { run "per-item ($1)" "$PWD" true; }
+run "slow-before-the-corpora" "$PWD" bash -c 'sleep 1; echo "SLOW body"; exit 1'
+gate_dispatch_over "a toy corpus read and holding none" _body true
+gate_dispatch_over "a toy corpus that could not be found" _body bash -c 'exit 3'
+gate_dispatch_finish
+EOF
+drive twoseq 1 "$T/twostate.sh"
+drive twopar 4 "$T/twostate.sh"
+
+expansions() { python3 - "$1" <<'PYX'
+import json, sys
+for c in json.load(open(sys.argv[1]))["corpora"]:
+    print(f'{c["name"]}\t{c["items"]}\t{c.get("expansion")}')
+PYX
+}
+
+WANT_TWO=$(printf 'a toy corpus read and holding none\t0\tEXPANDED\na toy corpus that could not be found\t0\tNO_CORPUS')
+for arm in twoseq twopar; do
+  got="$(expansions "$T/$arm.json")"
+  if [ "$got" = "$WANT_TWO" ]; then
+    ok "[$arm] a READ-EMPTY corpus and an ABSENT one keep separate expansion states"
+  else
+    bad "[$arm] the two zero-population states did not stay apart — an absent
+     corpus wearing the read-empty row claims a measurement nobody took
+     (vibe-ic#1764)" "$got"
+  fi
+  rows=$(pairs "$T/$arm.json" | grep -c 'corpus "a toy corpus' || true)
+  if [ "$rows" -eq 2 ]; then
+    ok "[$arm] each of the two corpora carries its own verdict row"
+  else
+    bad "[$arm] expected one verdict row per corpus, got $rows — a corpus with
+     no verdict at all is worse than a corpus with a wrong one" \
+        "$(pairs "$T/$arm.json")"
+  fi
+done
+
+if diff <(pairs "$T/twoseq.json") <(pairs "$T/twopar.json") > "$T/two.diff" 2>&1; then
+  ok "the two synthetic corpus rows are recorded identically under concurrency"
+else
+  bad "the read-empty and the absent row differ between arms — a
+     declaration-time verdict landed on the wrong corpus" "$(cat "$T/two.diff")"
+fi
+if diff <(norm "$T/twoseq.err") <(norm "$T/twopar.err") > "$T/twoerr.diff" 2>&1; then
+  ok "both corpus notes keep their declared place in stderr under concurrency"
+else
+  bad "a corpus note jumped over a running gate's diagnostics" \
+      "$(cat "$T/twoerr.diff")"
+fi
+
 printf '\n  %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

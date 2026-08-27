@@ -831,9 +831,11 @@ interesting one is not the obvious one:
 2. Without that SHA the predicate refuses on `benchmark_data_sha` equality
    anyway (the record carries `null`).
 
-**So this ships as a regression pin, not as a fix, and it is not red on
-`81cd5321b`.**  Calling it a fix would repeat exactly the overstatement the top
-of this file already corrected once.  What
+**So this ships as a regression pin, not as a fix.**  Calling it a fix would
+repeat exactly the overstatement the top of this file already corrected once.
+An earlier revision of this paragraph went on to say *"and it is not red on
+`81cd5321b`"*; that sentence is wrong about the **outcome** and right only about
+the **proof**, and §10 replaces it with the measurement.  What
 `test_the_landing_transition_authorizer_never_accepts_an_unopened_corpus` pins
 is that the predicate keeps refusing an unopened corpus **without leaning on
 guard 1** — on the record itself, not on the pointer binding being right, which
@@ -976,3 +978,413 @@ only change to a shipped program is docstring and comment text in
 `repo_hygiene_parallel.py`, and everything else is this file and
 `test_routed_def_corpus_dispatch.py`.  The fix these sections adjudicate is
 already on `main`; what the branch adds is the record and the pins.
+
+## 10. Re-measured on `origin/main` at v1.11.70 — and the red is 8, not 7
+
+Everything above was measured while this branch sat on `a4caccefe` (v1.11.69).
+`main` has moved to `ae78abb28` (v1.11.70), so the branch was **merged forward**
+rather than left to age, and every load-bearing number was taken again on the
+merged head.  A record measured against a `main` that no longer exists is a
+record about the past.
+
+**The three production files did not move.**  `git diff a4caccefe origin/main --
+tools/ci/routed_def_corpus.py tools/ci/_gate_dispatch.sh
+vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py` is
+**empty**, so the sections above measure the same bytes `main` carries today.
+The merge itself was clean and touched neither of this branch's two files.
+
+**Green on the merged head**, `PYTHONDONTWRITEBYTECODE=1`, no cache provider:
+
+    test_routed_def_corpus_dispatch + test_corpus_location
+      + test_routed_def_corpus_is_reachable_by_publishing   44 passed
+    test_repo_hygiene_parallel                              42 passed
+                                                            -- 86 passed
+
+**Red without the fix, re-derived at the merged head.**  Same revert as §6 —
+`tools/ci/routed_def_corpus.py` and `tools/ci/_gate_dispatch.sh` to
+`81cd5321b`, `repo_hygiene_parallel.py` to `24a097287^`, **every test kept**,
+nothing relaxed and no baseline written:
+
+    8 failed, 78 passed in 40.24s
+
+    FAILED test_an_unconfigured_moved_corpus_is_explicit_no_corpus
+    FAILED test_the_absent_exit_code_is_one_number_in_two_languages
+    FAILED test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict
+    FAILED test_the_dispatcher_gives_absent_and_empty_different_rows
+    FAILED test_a_corpus_that_was_read_and_holds_none_says_so
+    FAILED test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND
+    FAILED test_an_absent_corpus_does_not_close_the_hygiene_dag_green
+    FAILED test_the_landing_transition_authorizer_never_accepts_an_unopened_corpus
+
+The first seven are §6's set, unchanged, ID for ID.  **The eighth is new, and it
+is the one this section exists to be honest about.**
+
+### The eighth failure is not an eighth proof
+
+§7 said of `test_the_landing_transition_authorizer_never_accepts_an_unopened_
+corpus` that it *"is not red on `81cd5321b`"*.  Measured, it **is** red under the
+revert — and it fails at its own fixture, not at its assertion:
+
+    assert a_row["expansion"] == "NO_CORPUS", a_row
+    AssertionError: {'name': 'published cells carrying a routed DEF',
+                     'items': 0, 'gates': 0, 'expansion': 'PRODUCER_FAILED'}
+    assert 'PRODUCER_FAILED' == 'NO_CORPUS'
+
+Without the fix the dispatcher has **no `NO_CORPUS` state**, so the record the
+test needs cannot be built; the rc-3 stub is read as a failed producer instead.
+That is a fixture that depends on the fix, not evidence that the fix repaired
+anything here.  The authorizer bytes the test polices are byte-identical before
+and after, and they refused an unopened corpus then too, by guard 1 and by the
+`null` `benchmark_data_sha`.
+
+So the two claims are separated rather than averaged:
+
+* **The red's ID list is 8.**  Reporting 7 while running a suite that fails 8
+  would be reporting a count that does not match the run, which is the failure
+  mode §6 built its whole ID-not-total discipline against.
+* **The fix's evidence is 7.**  The eighth is a regression pin whose subject did
+  not exist before the fix, and counting it as proof would inflate the red the
+  same way §"How far that reaches" inflated the reach.
+
+The earlier sentence collapsed those two into one, in the same direction the top
+of this file already corrected once.  Both the record and the comment above the
+test now say which is which.
+
+### The one thing the merge did not change
+
+`test_the_dispatcher_gives_absent_and_empty_different_rows` and
+`test_a_corpus_that_was_read_and_holds_none_says_so` still assert that the
+read-empty row is rc 2, `NOT_CHECKED`, `exempt_until: None`, and still says
+*"corpus … is EMPTY — nothing was checked over it"*.  The #1763 row is byte-for-
+byte what it was, for the reason #1763 gave: every published cell was withdrawn
+on 2026-08-20, so the population really is 0 and nothing was checked over it.
+Neither state is a pass on `main` today and neither becomes one here.
+
+### The two states run by hand at the merged head, not only through pytest
+
+The pins above go through the shipped `_gate_dispatch.sh`; this is the producer
+alone, two commands, so the pair can be reproduced without the harness.  State B
+is a real git checkout carrying `ic/` with **0** files matching
+`*/*/phase3/stage3/pnr/routed.def` — the shape of the #1763 population.  A loose
+directory would not do: over a tree git does not index, the producer answers rc 2
+UNDETERMINED, which is a third state again.
+
+    A  env -u VIBE_IC_BENCHMARK_DATA … routed_def_corpus.py --repo <repo>
+       -> rc 3
+       NO_CORPUS: nothing at <repo>/benchmark-data/ic and VIBE_IC_BENCHMARK_DATA
+       is unset. … NOTHING WAS SCANNED, 0 routed DEF(s) were examined …
+       NOT FOUND (rc 3): no corpus was resolved, so no index was opened and
+       0 routed DEF(s) is the ABSENCE of a measurement, not a measurement of
+       zero. The line above names what was looked for.
+
+    B  VIBE_IC_BENCHMARK_DATA=<checkout> … routed_def_corpus.py --repo <repo>
+       -> rc 0
+       MEASURED EMPTY: git's index at <checkout> was read under 'ic' and it
+       publishes no */*/phase3/stage3/pnr/routed.def. This IS a measurement --
+       the corpus was opened and the population is 0 -- and it is NOT the same
+       state as a corpus that could not be found (rc 3).
+       … This is an EMPTY POPULATION, not a clean one …
+
+Different rc, different sentence, and each names the thing that makes it that
+state: A names the two places it looked, B names the index it read and the
+pattern it read for.  That is the whole of vibe-ic#1764, checkable in two lines.
+
+**Pre-existing reds, named so they are not mistaken for this branch's.**
+`tools/ci/test_phase_b_activated_parity.py` fails
+`test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture` and
+`test_the_move_is_exactly_the_paths_the_two_states_disagree_on` — the same two
+IDs, on a **pristine detached worktree of `origin/main`** and on this branch.
+It is the only file under `tools/` that names `routed_def_corpus` at all, the
+branch leaves `tools/` byte-identical to `origin/main`, and the comparison is by
+ID rather than by count.
+
+## 11. Re-derived at `384236ba9` by a session that inherited none of the above
+
+A fourth pass, run against the same brief with no memory of §§1–10, on
+`origin/main` = `ae78abb28` and on this branch head.  Every number below was
+taken by this session, on detached worktrees, `PYTHONDONTWRITEBYTECODE=1`, no
+cache provider.  Where it agrees with a section above it is a second
+measurement of the same thing and is worth exactly that; where it does not, the
+disagreement is the point of writing it down.
+
+### The producer, by hand, on `origin/main`
+
+Not on the branch — on `main`, because that is where the fix lives and a record
+that only measures its own branch cannot say the shipped repository is fixed.
+
+    A  env -u VIBE_IC_BENCHMARK_DATA -u VIBEIC_BENCHMARK_DATA_CHECKOUT \
+         -u GATEKEEPER_BENCHMARK_DATA_SHA \
+         python3 tools/ci/routed_def_corpus.py --repo <wt-main>
+       -> rc 3, stdout 0 lines
+       NO_CORPUS: nothing at <wt-main>/benchmark-data/ic and
+       VIBE_IC_BENCHMARK_DATA is unset. …
+       NOT FOUND (rc 3): no corpus was resolved, so no index was opened …
+
+    B  VIBE_IC_BENCHMARK_DATA=<git checkout carrying ic/, 0 routed DEF> \
+         python3 tools/ci/routed_def_corpus.py --repo <wt-main>
+       -> rc 0, stdout 0 lines
+       MEASURED EMPTY: git's index at <checkout> was read under 'ic' and it
+       publishes no */*/phase3/stage3/pnr/routed.def. …
+
+State B's corpus was built as a real `git init` + `git add` + `git commit`
+carrying `ic/somecell/v1/README.md` and nothing matching the routed-DEF
+pattern, so `git ls-files` returns exactly one path and none of them is a
+member.  Same conclusion as §10 by a different fixture.
+
+### The dispatcher, end to end, by hand
+
+Not through pytest: a `gates.sh` sourcing the shipped `tools/ci/_gate_dispatch.sh`,
+`gate_dispatch_over` over the real producer, `gate_dispatch_finish`, summary read
+back out of the JSON the dispatcher itself wrote.
+
+    state  producer  `expansion`  gate row                    gate state   finish rc
+    A      rc 3      NO_CORPUS    corpus "…" was NOT FOUND    NOT_CHECKED  2
+                                    — nothing was opened to check
+    B      rc 0      EXPANDED     corpus "…" is EMPTY         NOT_CHECKED  2
+                                    — nothing was checked over it
+
+and the roll-up line differs too — A says *"was NOT FOUND — its producer resolved
+no corpus, so NOTHING WAS OPENED … This is not the same state as a corpus that
+was read and holds 0 item(s)"*, B says *"expanded over 0 item(s)"*.  Different
+verdict, different row, different sentence, **same severity**: both block, and
+`gate_dispatch_finish` refuses on both.  That is the ruling in §"The ruling"
+observed rather than asserted.
+
+### The #1763 row, checked as bytes and not as prose
+
+`git show 81cd5321b:tools/ci/_gate_dispatch.sh` (the commit before the fix) and
+`git show 384236ba9:tools/ci/_gate_dispatch.sh` both carry
+`corpus \"$corpus\" is EMPTY — nothing was checked over it` at the dispatch site
+and at the legacy-label site — the same string, moved only by the lines the fix
+inserted above it (1273/1286 → 1306/1333).  The brief's one prohibition holds.
+
+### Who reads the producer's rc — the consumer sweep, done again
+
+`grep -rl routed_def_corpus` over the whole tree, minus tests and findings,
+returns 11 files.  Exactly **one** of them executes the program:
+`tools/ci/repo_hygiene_gates.sh:850`, and it does so through `gate_dispatch_over`,
+which is the code that learned rc 3.  The other ten name it in prose, in a
+protected-path tuple (`tools/ci/protected_landing_transition.py:71`), or in a
+docstring.  So there is no second rc consumer that could read the new code as a
+failure, which is the way a new exit code usually goes wrong.
+
+### Corpus sweep, widened to 44 files and run on BOTH trees
+
+§2's selector took 37 files.  This one takes every test file naming
+`repo_hygiene_parallel`, `routed_def_corpus`, `_gate_dispatch`,
+`_corpus_location` or `gate_dispatch_over` — **44 files** — and runs the same
+set on `origin/main` and on this branch so the comparison is by ID, not by count:
+
+    origin/main   7 failed, 1006 passed, 6 skipped, 1 xfailed in 671.79s
+    this branch   7 failed, 1007 passed, 6 skipped, 1 xfailed in 676.14s
+
+Six of the seven IDs are shared.  **The two that are not are both explained, and
+neither is this branch's:**
+
+* **Branch only** — `test_gate_red_since_check.py::test_cli_exits_0_for_the_
+  same_history_inside_the_bound`.  It is **topology, not content.**  The test
+  synthesises a ledger row `since HEAD~5` and asserts the age is inside
+  `MAX_BOUND_COMMITS = 500`.  On `origin/main`, `HEAD~5..HEAD` spans **22**
+  commits.  On this 32-commit branch, `HEAD~5` is `f281405fa`, on the far side
+  of the `c73f8d543` merge of `origin/main`, and the same expression spans
+  **678** — so the row expires and the CLI exits 1.  Both
+  `gate_red_since_check.py` and its test are **byte-identical** between the two
+  trees (`diff -q`, no output).  PROVEN rather than argued: this branch's three
+  files were replayed as ONE commit on `origin/main` in a throwaway worktree —
+  identical content, main-shaped history, `HEAD~5..HEAD` = 16 — and the test
+  **passes**.  It is a property of a long-lived branch that carries a merge, it
+  is deterministic on both trees, and it is not something this change can fix
+  from inside the branch.
+* **`main` only** — `test_gate_process_attestation.py::test_real_dispatch_
+  writes_owner_only_records_into_its_summary`.  Red in `main`'s sweep, green in
+  the branch's, which is the wrong direction for a regression.  Re-run in
+  isolation **3× on each tree: 6/6 passed.**  The intermittent §"the attestation
+  flake" already named, observed once more.
+
+So on the sweep this branch adds **no red of its own**, and the one red only it
+shows is the branch's shape rather than the branch's change.
+
+## 12. The `tools/` gap had a floor under it: three harnesses no runner invokes
+
+§2b closed the gap "`tools/` sits outside every *pytest* selector" by running the
+whole `tools/` suite.  Under that floor there is another one, and it is the more
+serious of the two.
+
+### What pytest cannot collect
+
+`_gate_dispatch.sh` — one of the two files this fix changed — has three
+dedicated paired-guard harnesses, **813 lines** of them:
+
+    tools/ci/test_gate_scope.sh          10 assertions   #P3, change-aware selection
+    tools/ci/test_gate_scope_pairing.sh   6 assertions   vibe-ic#1729
+    tools/ci/test_gate_concurrency.sh    30 assertions   #P4, the record and the rc
+
+They are `.sh`, so **pytest cannot collect them**, and `grep` across the repo
+finds them referenced only by each other and by `_gate_dispatch.sh`'s own
+comments — **no CI job, no runner, no wrapper invokes any of them**.  So the
+file's own paired guards had never been run against this fix by any sweep, this
+record's included.  §2b's "whole `tools/` suite" meant the 49 python files.
+
+**Run, all three, on `origin/main` and on the same tree with
+`_gate_dispatch.sh` and `routed_def_corpus.py` reverted to `81cd5321b`:**
+
+    test_gate_scope.sh           10 passed 0 failed   |  10 passed 0 failed
+    test_gate_scope_pairing.sh    6 passed 0 failed   |   6 passed 0 failed
+    test_gate_concurrency.sh     30 passed 0 failed   |  30 passed 0 failed
+
+**46/46 green on both arms — and identical, which is the finding.**  The fix
+regressed nothing here; it is also *invisible* here, and a reader who saw "46
+green" beside this change would be reading coverage that does not exist.
+
+### The pytest `tools/` suite, with the control the record never had
+
+§2b compared the branch against pristine `main` — **both arms carry the fix**,
+so it answers "did the branch regress `tools/`" and not "did the fix".  Same
+tree, only the fix's two files reverted, at the CURRENT head (§2b's numbers were
+taken at `a4caccefe`):
+
+    origin/main ae78abb28, fix present     21 failed, 864 passed, 6 skipped
+    same tree,  fix reverted to 81cd5321b  21 failed, 864 passed, 6 skipped
+
+**Identical ID for ID** (`diff` of the two sorted `FAILED` lists is empty).  The
+21 are pre-existing on `main` and none of them is this fix's.
+
+### Case 21, and why this harness had to grow one
+
+Case 19 drives `gate_dispatch_over ... true` — a producer that exits 0 having
+printed nothing.  That is **state B and only state B**.  The harness that exists
+to guard `_gate_dispatch.sh` had never driven a producer that resolves no corpus,
+so it knew one of the two states — the same shape as the defect this issue is
+about, one level down.
+
+Case 21 declares both corpora in one run, behind a slow gate so the
+declaration-time buffering is under load, and asserts in **both** the JOBS=1 and
+JOBS=4 arms that they keep separate `expansion` states and that **each carries
+its own verdict row**.
+
+**The red, measured, not asserted** — same harness, dispatcher reverted to
+`81cd5321b`:
+
+    with the fix      36 passed, 0 failed   rc 0
+    fix reverted      32 passed, 4 failed   rc 1
+
+and the reverted arm's failure is worth quoting, because it is not the failure
+the issue predicted:
+
+    a toy corpus that could not be found   0   PRODUCER_FAILED
+    expected one verdict row per corpus, got 1
+
+The absent corpus does not merely borrow the empty row there — with rc 3
+meaning nothing to the old dispatcher it falls out of both branches and gets
+**a corpus row with no gate row at all: one corpus, zero verdicts.**  That is a
+harsher state than the one #1764 described, and it is reachable only by a
+producer using the exit code the fix introduced, so it was never live.  Stated
+as measured: this is a pin on the new invariant, **not** evidence of an old
+defect, the same distinction §10 draws about the pytest sibling.
+
+### One correction to this record
+
+§10 said *"the branch leaves `tools/` byte-identical to `origin/main`"*.  That
+was true when written and **is no longer true**: this branch now carries
+`tools/ci/test_gate_concurrency.sh` +79 lines.  The sentence it was supporting —
+that the two `test_phase_b_activated_parity` reds are pre-existing rather than
+this branch's — still holds and is re-measured above by ID against both arms.
+
+## 13. The wire: the `.sh` guards now reach the gate that was built to run them
+
+§12 found the harnesses and ran them by hand.  Running a guard by hand once is
+not wiring it, and this record would otherwise close with the same shape it
+spent twelve sections objecting to: a measurement taken, and no mechanism that
+takes it again.  Case 21 in particular was a guard added to a harness nothing
+invokes — enforcement on paper.
+
+### The gate already existed and the pattern excluded them
+
+`tools/gatekeeper-land.sh:run_repo_tools_pytest` exists for exactly this
+population and refuses a vacuous pass over it in its own words:
+
+    mapfile -t files < <(cd "$ROOT" && find tools \
+        \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
+
+**`.py` only.**  A harness named `test_*.sh` is excluded BY THE DISCOVERY
+PATTERN at the one landing gate whose job is repo-level tests under `tools/`.
+`trusted_test_selection.py` does not reach them either — it is `.py`-only
+(`path.endswith(".py")`, line 446) and `programs/tests/`-scoped (line 462).
+So the omission was not an oversight in one runner; there was no runner in the
+repository that could see them.
+
+### `tools/ci/test_dispatch_shell_harnesses.py`
+
+A `.py` file under `tools/`, so the landing gate's own `find` discovers it —
+verified by running that exact command, which now returns it — and so does any
+`pytest tools/` sweep.  It drives the three harnesses and reads their tally:
+
+* rc **and** the `N passed, M failed` line, because a harness that exits 0
+  having asserted nothing is the vacuous pass this repository refuses
+  everywhere else; `passed > 0` is asserted separately.
+* **the driven list is derived from the tree, not written down.**
+  `test_every_shell_harness_under_tools_is_collected` compares `HARNESSES`
+  against `tools/**/test_*.sh`.  A hand-maintained list would reproduce the
+  defect one harness later.
+* a pin that `test_gate_concurrency.sh` still mentions `GATE_DISPATCH_ABSENT_RC`,
+  `NO_CORPUS` and `exit 3`, so case 21 cannot be dropped while this file goes on
+  reporting the harness green.
+
+**Not a rewrite, deliberately.**  What the 46 assertions assert *is* shell —
+`_gate_dispatch.sh` sourced, its functions called, its stderr buffering under
+`GATEKEEPER_HYGIENE_JOBS`.  A python reimplementation would be a second
+definition of the same property, free to drift from the first.  The harnesses
+stay the authority; this file only makes them run.
+
+### Measured
+
+    the wrapper, fix present                          5 passed in 43.3s
+    the wrapper, dispatcher reverted to 81cd5321b     1 failed, 4 passed
+        FAILED …::test_the_shell_paired_guard_passes[test_gate_concurrency.sh]
+        AssertionError: test_gate_concurrency.sh: 32 passed, 4 failed, rc=1
+
+**Every guard in it mutation-tested**, because two of them are near enough to
+each other that one could have been carrying the other:
+
+    drop a harness from the driven list          -> RED
+    add a 4th `test_*.sh` that nothing drives    -> RED
+    replace case 21's `exit 3` with `true`       -> RED
+    a harness printing "0 passed, 0 failed"      -> RED (the vacuity guard)
+    unmutated                                    -> 5 passed
+
+**The gate's own write guard**, asserted the way the gate asserts it rather than
+by eye: `suite_write_guard.py --snapshot` / `--compare` around the three
+harnesses returns `[PASS] … wrote nothing git status --porcelain would show`,
+rc 0.  They are `mktemp -d` throughout and pin `GATE_DISPATCH_CORPUS_ROOT` into
+the scratch tree, so they do not need this checkout to hold a corpus.
+
+Runtime added to the landing gate: **43s**, essentially all of it
+`test_gate_concurrency.sh`, well inside the 300s per-file stall bound
+`run_repo_tools_pytest` passes.
+
+### What this does not claim
+
+It does not claim the harnesses are good, only that they now run.  46 of their
+assertions were green on both arms in §12 — they do not distinguish this fix,
+and case 21, which does, is the one this file exists to keep alive.
+
+### The write guard, measured the way the gate measures it — and one false alarm
+
+§13 bracketed the three harnesses.  `run_repo_tools_pytest` brackets the WHOLE
+`tools/` run, so that is the shape the claim has to hold in.  On a **committed,
+clean** tree:
+
+    suite_write_guard --snapshot
+    pytest tools/ -q          21 failed, 869 passed, 6 skipped in 171.23s
+    suite_write_guard --compare
+      [PASS] … wrote nothing `git status --porcelain` would show.   rc 0
+
+**The first attempt at this measurement returned rc 1** and named
+`docs/findings/2026-08-22-absent-corpus-is-not-an-empty-one.md` — this file.
+Nothing in the suite wrote it; **I did**, appending §13 while the bracketed run
+was still in flight.  `suite_write_guard` says so itself in the finding it
+prints: *"THIS FINDING NAMES PATHS, NOT A WRITER … do not read one off the
+surrounding log."*  Recorded rather than quietly re-run, because a rc 1 from
+this guard is a landing-gate refusal and the next person to see one should know
+that an editor open on the tree is a way to manufacture it.  The re-measurement
+above is after the commit, on a tree `git status --porcelain` reports empty.

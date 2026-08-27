@@ -1028,11 +1028,23 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
 #      is a broken configuration there, not an absent corpus.
 #   2. Without that SHA the predicate refuses on `benchmark_data_sha` anyway.
 #
-# So this is a REGRESSION PIN, not a fix, and it is not red on `81cd5321b`.
-# Saying otherwise would be the same overstatement this record already corrected
-# once. What it pins is that the predicate keeps refusing an unopened corpus
-# WITHOUT leaning on guard 1 — on the record itself, not on the pointer binding
-# being right.
+# So this is a REGRESSION PIN, not a fix. It pins that the predicate keeps
+# refusing an unopened corpus WITHOUT leaning on guard 1 — on the record itself,
+# not on the pointer binding being right. Calling it a fix would be the same
+# overstatement this record already corrected once.
+#
+# WHAT IT DOES UNDER THE REVERT, MEASURED RATHER THAN ASSERTED. An earlier
+# version of this comment said flatly that it "is not red on `81cd5321b`". That
+# is wrong about the OUTCOME and right only about the PROOF, and the two are not
+# the same sentence. Re-measured at the branch head with the three production
+# files put back, this test FAILS — at its own fixture, line
+# `assert a_row["expansion"] == "NO_CORPUS"`, which gets `PRODUCER_FAILED`,
+# because without the fix the dispatcher has no NO_CORPUS state for the fixture
+# to build. The AUTHORIZER bytes this test polices are byte-identical before and
+# after the fix and refused an unopened corpus then too, so nothing here pins a
+# defect the fix repaired. It is red because its subject did not exist yet, not
+# because its subject was broken; it belongs in the red's ID list and not in the
+# fix's evidence. See §10 of the record.
 #
 # WHICH BYTES DO THAT REFUSING. Re-measured at the branch head, because the
 # first version of this comment named only one of them. There are TWO
