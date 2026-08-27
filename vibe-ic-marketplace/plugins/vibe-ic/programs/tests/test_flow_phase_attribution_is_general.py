@@ -341,6 +341,21 @@ def test_phase4_reads_the_mechanism_off_the_step_after_the_marker(tmp_path):
     assert ea["triggered_by"] == {"step": "reference_tb", "status": "FAIL"}
 
 
+def test_phase4_calls_blocked_reentry_a_retry_not_a_physical_eco(tmp_path):
+    """No prior candidate failed when rtl_gen was BLOCKED; this is retry."""
+    p = _project(tmp_path, [
+        _step("rtl_gen", "BLOCKED"),
+        _step("eco_loop_iter", "ECO_LOOP"),
+        _step("rtl_gen", "PASS", deterministic_generator="comb_gate"),
+    ], prompt=_PROMPT)
+    r = fpa.attribute(p)["phase4_debugging"]
+    assert r["verdict"] == "RETRIED"
+    assert r["physical_eco"] is False
+    assert r["events"][0]["event_kind"] == "RTL_RETRY"
+    assert r["events"][0]["physical_eco"] is False
+    assert "not a physical/metal ECO" in r["events"][0]["terminology"]
+
+
 def test_phase4_sees_a_gate_directed_repair_with_no_marker(tmp_path):
     p = _project(tmp_path, [
         _step("rtl_gen", "PASS", deterministic_generator="comb_gate"),

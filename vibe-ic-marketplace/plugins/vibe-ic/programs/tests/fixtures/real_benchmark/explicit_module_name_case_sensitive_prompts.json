@@ -1,0 +1,26 @@
+[
+  {
+    "module_name": "multi_booth_8bit",
+    "prompt": "Module name:  \n   multi_booth_8bit  \n\nDesign an 8-bit Booth multiplier."
+  },
+  {
+    "module_name": "fixed_point_subtractor",
+    "prompt": "Module name:\n    fixed_point_subtractor\n\nDesign a fixed-point subtractor."
+  },
+  {
+    "module_name": "LIFObuffer",
+    "prompt": "Module name:\n    LIFObuffer\n\nDesign a last-in-first-out buffer."
+  },
+  {
+    "module_name": "LFSR",
+    "prompt": "Module name:\n    LFSR\n\nDesign a linear-feedback shift register."
+  },
+  {
+    "module_name": "RAM",
+    "prompt": "Module name:\n    RAM\n\nDesign a synchronous memory."
+  },
+  {
+    "module_name": "ROM",
+    "prompt": "Module name:\n    ROM\n\nDesign a read-only memory."
+  }
+]
