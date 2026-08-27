@@ -736,16 +736,23 @@ def test_guard_reports_what_it_left_out(tmp_path):
 def test_guard_runs_clean_on_the_programs_directory():
     """CORPUS SWEEP, as a test.
 
-    KNOWN, DECLARED EXCEPTION -- and it is not an exclusion list:
-    `macro_obs_geometry_intersect_check.py` is the ORIGINAL measured instance
-    of this defect and is fixed by a separate open PR, not by this one. Until
-    that lands, this repository has exactly one matching site and it is a real
-    defect, so the guard is RIGHT to fire on it. Asserting `<= 1` rather than
-    `== 0` is what makes this test tell the truth in both worlds: it goes green
-    at 0 the moment that PR merges, and it fails at 2 if a new site appears.
+    THE DECLARED EXCEPTION IS GONE, AND SO IS THE ALLOWANCE IT BOUGHT.
+    `macro_obs_geometry_intersect_check.py` was the ORIGINAL measured instance
+    and this test carried `<= 1` while its fix was in flight, with the promise
+    that it "goes green at 0 the moment that PR merges". That PR has merged --
+    the file no longer appears in a sweep of this tree -- so the allowance is
+    now an empty seat that any NEW first offender could sit in unnoticed. A
+    tolerance nobody needs is indistinguishable, to the next reader, from one
+    somebody still does, and it is the tolerance that will be believed.
+
+    Measured on this tree while tightening it: the sweep is CLEAN at 4240 files
+    swept, after the one site that had taken the seat --
+    `tests/test_pad_ring_derived_from_l3.py:379`, a `dict.update` fold of the
+    IO-library configs in discovery order -- was moved onto
+    `merge_source_records`. Asserting ZERO is therefore a statement about the
+    tree, not an aspiration, and the guard fires on the FIRST new site again
+    rather than on the second.
     """
     findings = guard.sweep(PROGRAMS)
     names = sorted({f["file"] for f in findings})
-    assert len(findings) <= 1, f"a NEW per-source record merge appeared: {names}"
-    if findings:
-        assert names == ["macro_obs_geometry_intersect_check.py"], names
+    assert not findings, f"a NEW per-source record merge appeared: {names}"

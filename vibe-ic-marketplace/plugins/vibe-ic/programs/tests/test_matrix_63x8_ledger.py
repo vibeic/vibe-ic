@@ -782,8 +782,29 @@ def test_output_entries_classify_into_the_four_kinds():
     # `padring.def` does NOT gain an `OR ...SKIPPED.txt` alternative and stays a
     # plain FILE: a seal ring can legitimately not apply, a pad ring on a die
     # cannot, so a skipped pad ring must stay MISSING.
-    assert sum(seen.values()) == 164, seen
-    assert seen[F.FILE] == 122
+    # 2026-08-27: 164 -> 165, FILE 122 -> 123, ONE entry with ONE owner.
+    #
+    #   +1  step 4  `reports/phase2/coverage/coverage_verilator.json`, added by
+    #       `e314f1923` [v1.11.92] when the two writers of `coverage_actual.json`
+    #       were untangled: the FUNCTIONAL verdict keeps `coverage_actual.json`
+    #       and the line/toggle/branch MEASUREMENT moved to its own path, whose
+    #       producer is `design_one_shot_runner.step_verilator_coverage` and
+    #       whose readers are step 4's own coverage gate, `coverage_closure` and
+    #       `fpga_verification_audit --coverage`.
+    #
+    # MEASURED, by diffing the (step, entry) SET between `e314f1923~1` and this
+    # tree: exactly that one path was added, none removed. It is a plain FILE --
+    # no wildcard, no `" OR "` -- so GLOB and ANY_OF are untouched, which is what
+    # makes the attribution checkable rather than asserted.
+    #
+    # The declaring commit did not make the paired change, and this pin is one of
+    # the four places that recorded the omission: the d3 evidence manifest had no
+    # entry for the new path (`test_d3_manifest_declaration_parity`,
+    # `test_flow_manifest_declaration_parity`) and step 4's pinned fixture in
+    # `test_v1_4_66_issue171_step4_professional_tb_supersede` still listed the
+    # pre-split shape. All four move together in this change.
+    assert sum(seen.values()) == 165, seen
+    assert seen[F.FILE] == 123
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

@@ -237,11 +237,22 @@ def test_a_path_without_magic_still_refuses_end_to_end(tmp_path):
     tool is worse than the false negative it replaced, so this arm runs the
     real program with a PATH that carries neither magic nor a docker client
     and demands rc 2, the stated gap, and NO staged abstract.
+
+    THE PATH IS CONSTRUCTED, NOT ASSUMED. This arm used to name the host's own
+    "/usr/bin:/bin" and then ASSERT that neither tool was on it. That is a
+    statement about the host, not about the program: the distribution package
+    of the docker CLI installs it as "/usr/bin/docker", so on every host that
+    has one the premise assertion is what goes red, and the control this arm
+    exists to be never runs at all. An EMPTY directory carries neither tool on
+    every host, so the two premise assertions below now guard a fact this test
+    MADE true instead of one it hoped the host would supply.
     """
     project = make_project(tmp_path)
     out = tmp_path / "gen.json"
+    empty_bin = tmp_path / "no_tools_bin"
+    empty_bin.mkdir()
     env = dict(os.environ)
-    env["PATH"] = "/usr/bin:/bin"
+    env["PATH"] = str(empty_bin)
     assert shutil.which("magic", path=env["PATH"]) is None
     assert shutil.which("docker", path=env["PATH"]) is None
     cp = subprocess.run(

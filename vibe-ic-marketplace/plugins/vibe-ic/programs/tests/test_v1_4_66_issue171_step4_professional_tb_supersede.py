@@ -185,7 +185,14 @@ def test_fixture_matches_the_flow_yaml():
 def test_check_step_step4_passes_on_professional_tb(tmp_path):
     """check_step over a Step-4-shaped all_of: canonical sim/results.xml + pass.flag
     absent, coverage_actual.json present (evidence → reaches the gate), a real
-    professional_tb PASS present → PASS (not FAIL, not SKIPPED-CONDITION)."""
+    professional_tb PASS present → PASS (not FAIL, not SKIPPED-CONDITION).
+
+    BOTH coverage artefacts are written because step 4 declares both since
+    e314f1923 [v1.11.92]: coverage_actual.json is the functional verdict and
+    coverage_verilator.json is the line/toggle/branch measurement. Writing only
+    one leaves a required output MISSING, and this test would then be red for a
+    reason that has nothing to do with the professional-TB supersede it is
+    named for."""
     (_pro_dir(tmp_path) / "results.xml").write_text(_JUNIT_PASS)
     cov = tmp_path / "reports" / "phase2" / "coverage"
     cov.mkdir(parents=True)
@@ -204,7 +211,12 @@ def test_check_step_step4_passes_on_professional_tb(tmp_path):
 
 def test_check_step_step4_fails_without_professional_tb(tmp_path):
     """§4.05 no-leak end-to-end: same shape but NO professional pass → Step-4
-    FAILs exactly as before (coverage present so it reaches the gate)."""
+    FAILs exactly as before (coverage present so it reaches the gate).
+
+    Both declared coverage artefacts are present for the same reason as the
+    sibling above: the FAIL under test is the missing professional-TB pass, and
+    a FAIL bought by a missing required output would be the same word for a
+    different finding. The reason is asserted, not just the status."""
     cov = tmp_path / "reports" / "phase2" / "coverage"
     cov.mkdir(parents=True)
     # BOTH declared coverage outputs — the functional verdict and, since
@@ -218,3 +230,4 @@ def test_check_step_step4_fails_without_professional_tb(tmp_path):
     (cov / "coverage_verilator.json").write_text("{}")
     res = FCC.check_step(tmp_path, _step4(), waivers={})
     assert res.status == "FAIL", (res.status, res.reasons)
+    assert not any("required_outputs missing" in str(x) for x in res.reasons),         res.reasons

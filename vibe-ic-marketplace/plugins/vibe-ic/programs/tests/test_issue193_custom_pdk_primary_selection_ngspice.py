@@ -714,13 +714,36 @@ def test_the_sweep_result_carries_the_electing_strategy():
     AST over the result dict literal (the emitting function needs a container,
     so it cannot be called here) — the key must survive as a real dict entry,
     not merely appear somewhere in the file.
+
+    THE ANCHOR FOLLOWS ONE LEVEL OF DELEGATION, because it stopped resolving.
+    `run_block` is now a nine-line wrapper that catches `MountRootUnresolved`
+    and hands everything else to `_run_block`; the result dict moved with the
+    body. Walking the wrapper alone found ZERO dict literals, so the lib-path
+    key was "gone" and this test's own vacuity guard fired — correctly: an
+    anchor that resolves to no dict cannot say anything about the policy key
+    beside it. Re-pointing at `_run_block` by name would put the same fragility
+    one rename further away, so the entry point is resolved and then every
+    module-level function it CALLS is resolved with it. The assertions below are
+    unchanged and still demand real dict entries on the path reached from the
+    documented entry point.
     """
     src = (PROGS / "analog_real_corner_sweep.py").read_text(errors="replace")
-    fn = next((n for n in ast.walk(ast.parse(src))
-               if isinstance(n, ast.FunctionDef) and n.name == "run_block"), None)
+    tree = ast.parse(src)
+    module_fns = {n.name: n for n in tree.body
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    fn = module_fns.get("run_block")
     assert fn is not None, "run_block was renamed — re-point this check"
 
-    keys = {k.value for d in ast.walk(fn) if isinstance(d, ast.Dict)
+    anchored = [fn]
+    for call in ast.walk(fn):
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name):
+            delegate = module_fns.get(call.func.id)
+            if delegate is not None and delegate is not fn:
+                anchored.append(delegate)
+    assert len(anchored) >= 1
+
+    keys = {k.value for node in anchored
+            for d in ast.walk(node) if isinstance(d, ast.Dict)
             for k in d.keys if isinstance(k, ast.Constant)
             and isinstance(k.value, str)}
     assert "pdk_model_lib_resolved" in keys, (

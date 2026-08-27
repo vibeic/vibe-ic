@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for flow_compliance_check.py — the sole Phase 2+3 acceptance gate."""
 from __future__ import annotations
-import json, re, subprocess, sys
+import json, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 import pytest
 
@@ -1107,10 +1107,43 @@ def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
     an earlier revision of this docstring claimed "both stay FAIL", which was
     measurably false.
     """
-    from programs.flow_compliance_check import _CRASH_HINT_PREFIX
-    shallow = tmp_path / "p"
-    shallow.mkdir()
+    from programs.flow_compliance_check import (
+        _CRASH_HINT_PREFIX, _OUTPUT_SNIPPET_CHARS,
+    )
+    # THE SHALLOW ARM'S PREMISE IS CONSTRUCTED AND ASSERTED, like the deep
+    # arm's at `test_crash_is_flagged_as_a_crash_at_any_checkout_depth`.
+    #
+    # `tmp_path / "p"` is not shallow. pytest builds it as
+    # <TMPDIR>/pytest-of-<user>/pytest-<n>/<the test's own name, truncated to
+    # 30>/p, which is 63 characters BEFORE the temp root. The helper prints the
+    # project path TWICE, so the marker survives the fixed
+    # `_OUTPUT_SNIPPET_CHARS`-character TAIL only while
+    # 2 * len(project) + 156 <= 300, i.e. len(project) <= 72 -- and 63 plus any
+    # temp root of 10 characters or more is already over. MEASURED on
+    # ae5cc4dbfc, both arms failing on the same assertion:
+    #
+    #     TMPDIR=/var/tmp/t1                    project 74 chars   FAIL
+    #     TMPDIR=/var/tmp/reyer_lane_code/tmpfix project 94 chars   FAIL
+    #
+    # and the reported snippet begins mid-word, which is the fixed tail eating
+    # `verdict: FAIL` off the front. That is a statement about the host's temp
+    # root, not about the crash detector this test owns, so the arm named
+    # "shallow" is built short here instead of being hoped short, and the
+    # premise is asserted so it cannot rot back into a confusing red.
+    shallow = Path(tempfile.mkdtemp(prefix="fcc", dir=tempfile.gettempdir()))
+    assert len(str(shallow)) <= _OUTPUT_SNIPPET_CHARS // 4, (
+        f"the shallow fixture is {len(str(shallow))} chars against a "
+        f"{_OUTPUT_SNIPPET_CHARS}-char evidence window; the helper prints the "
+        f"project path twice, so no finding can survive the tail and this arm "
+        f"would fail for the host's temp root rather than for the detector")
     deep = _deep_project(tmp_path)
+    try:
+        _assert_a_real_verdict_is_not_a_crash(shallow, deep, _CRASH_HINT_PREFIX)
+    finally:
+        shutil.rmtree(shallow, ignore_errors=True)
+
+
+def _assert_a_real_verdict_is_not_a_crash(shallow, deep, _CRASH_HINT_PREFIX):
 
     for name, src, marker in (
         ("_pytest_verdict_helper", _VERDICT_HELPER_SRC, "verdict: FAIL"),

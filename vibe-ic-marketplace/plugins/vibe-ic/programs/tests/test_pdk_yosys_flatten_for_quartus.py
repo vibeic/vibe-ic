@@ -72,6 +72,33 @@ class _CP:
         self.stderr = stderr
 
 
+def _declare_the_host_root(monkeypatch, tmp_path):
+    """State the container mount pair instead of letting it be DISCOVERED.
+
+    MEASURED, and the reason every test below needed it: `_patch_subprocess`
+    installs its double on the SHARED `subprocess` module object, so it is not
+    only the yosys launch that goes through it -- `_designs_root.container_mounts`
+    reaches `docker inspect` through `subprocess.check_output`, which calls the
+    module-global `run`, and the double answers it with an empty stdout. The
+    mount table then parses as NOTHING:
+
+        real mounts  2   -> basis container_mount
+        faked mounts 0   -> basis undecided / project_dir_fallback
+
+    So `main()` BLOCKED on an unmeasurable host root and returned 2 before it
+    ever reached the behaviour under test. `test_main_pass` failed on it; the
+    arms that assert rc == 2 PASSED on it, for a refusal that has nothing to do
+    with yosys -- the same word for a different finding.
+
+    Declaring the pair through the program's own documented input (option (b) in
+    its refusal message) removes the discovery step from these tests entirely, so
+    they answer the same on a host with a running EDA container and on one
+    without.
+    """
+    monkeypatch.setenv("VIBEIC_DESIGNS_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("VIBEIC_DESIGNS_CONT_ROOT", "/foss/designs")
+
+
 def _patch_subprocess(monkeypatch, behaviors):
     """behaviors: callable(cmd) -> _CP. Records calls for inspection."""
     calls = []
@@ -86,6 +113,7 @@ def _patch_subprocess(monkeypatch, behaviors):
 
 def test_main_pass(tmp_path, monkeypatch):
     argv, out = _argv(tmp_path)
+    _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
     tmp = out.resolve().parent / ".tmp_flatten"
 
@@ -106,6 +134,7 @@ def test_main_pass(tmp_path, monkeypatch):
 
 def test_main_yosys_fail_returns_2(tmp_path, monkeypatch):
     argv, out = _argv(tmp_path)
+    _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
 
     def behavior(cmd, calls):
@@ -118,6 +147,7 @@ def test_main_yosys_fail_returns_2(tmp_path, monkeypatch):
 def test_main_yosys_error_string_returns_2(tmp_path, monkeypatch):
     """rc 0 but 'ERROR' in stdout is still a yosys failure (real guard)."""
     argv, out = _argv(tmp_path)
+    _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
 
     def behavior(cmd, calls):
@@ -130,6 +160,7 @@ def test_main_yosys_error_string_returns_2(tmp_path, monkeypatch):
 def test_main_yosys_output_missing_returns_2(tmp_path, monkeypatch):
     """yosys reports success but produces no (or a too-small) file."""
     argv, out = _argv(tmp_path)
+    _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
 
     def behavior(cmd, calls):
@@ -142,6 +173,7 @@ def test_main_yosys_output_missing_returns_2(tmp_path, monkeypatch):
 
 def test_main_harmonise_fail_returns_2(tmp_path, monkeypatch):
     argv, out = _argv(tmp_path)
+    _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
     tmp = out.resolve().parent / ".tmp_flatten"
 

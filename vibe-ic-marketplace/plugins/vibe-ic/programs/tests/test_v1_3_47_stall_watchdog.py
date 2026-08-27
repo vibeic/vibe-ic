@@ -9,6 +9,7 @@ phase3 injects into it:
   • `_pnr_hard_ceiling_s` — the retired size ESTIMATE repurposed as a HIGH
     backstop ceiling that can never wall-clock-kill a live job.
 """
+import inspect
 import sys
 from pathlib import Path
 
@@ -133,9 +134,27 @@ def test_docker_exec_with_marker_uses_watchdog(monkeypatch):
 
 def test_docker_exec_watchdog_cpu_probe_reads_container(monkeypatch):
     """The injected cpu_probe delegates to _container_cpu_seconds(container,
-    marker) — the transport glue, not the general module."""
-    monkeypatch.setattr(R, "_container_cpu_seconds",
-                        lambda c, m, timeout=15: 42.0 if m == "/p/x.tcl" else None)
+    marker) — the transport glue, not the general module.
+
+    THE DOUBLE IS CHECKED AGAINST THE REAL SIGNATURE BEFORE IT REPLACES IT.
+    `_container_cpu_seconds` gained a `pidfile=` parameter when the reap became
+    identity-anchored, and `_cpu_probe` passes it by keyword. A stand-in that
+    does not accept it does not make this test measure the glue less — it makes
+    the glue raise TypeError inside the closure, so the test fails for the
+    stand-in's shape rather than for anything about the transport. Binding the
+    parameter names first turns the next such drift into a named refusal here
+    instead of a TypeError in the code under test.
+    """
+    _real_params = set(inspect.signature(R._container_cpu_seconds).parameters)
+
+    def _cpu_double(container, marker, timeout=15, pidfile=None):
+        return 42.0 if marker == "/p/x.tcl" else None
+
+    assert set(inspect.signature(_cpu_double).parameters) >= _real_params, (
+        "the cpu-probe stand-in no longer accepts every parameter the real "
+        "_container_cpu_seconds takes: missing "
+        f"{sorted(_real_params - set(inspect.signature(_cpu_double).parameters))}")
+    monkeypatch.setattr(R, "_container_cpu_seconds", _cpu_double)
     grabbed = {}
 
     def fake_supervised(cmd, **kw):

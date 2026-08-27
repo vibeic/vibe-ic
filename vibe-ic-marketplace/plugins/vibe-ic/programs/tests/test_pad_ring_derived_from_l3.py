@@ -48,6 +48,7 @@ import pytest
 
 import _l_doc_pad_placement as LDOC
 import _pad_ring as PR
+from _source_record_merge import merge_source_records
 import pad_assignment_gen as PAG
 
 #: The tracked corpus, by the environment variable the flow already uses.
@@ -374,9 +375,18 @@ def test_the_rotation_the_library_declares_is_not_one_this_step_implements():
     report; it asserts the collision EXISTS, so it goes red the day the step
     grows the ability to honour a declared rotation and somebody forgets to
     say so."""
-    declared = {}
-    for cfg in PR.discover_io_library_configs(_PDK_ROOT, _PDK_TREE):
-        declared.update(PR.parse_pad_env_declarations(cfg.read_text()))
+    # ORDER-INDEPENDENT MERGE, not `dict.update` in discovery order. Several
+    # config files describe the same key, and an empty description of a key
+    # used to overwrite a populated one purely because
+    # `discover_io_library_configs` happened to yield it later. Which config
+    # answers this test would then depend on directory order, which is exactly
+    # what `per_source_record_merge_check` refuses. The record is
+    # `(value, line)`, so the meaning is the value.
+    declared, _conflicts = merge_source_records(
+        (PR.parse_pad_env_declarations(cfg.read_text())
+         for cfg in PR.discover_io_library_configs(_PDK_ROOT, _PDK_TREE)),
+        content=lambda rec: rec[0],
+        on_conflict="richer")
     rot = declared.get("PAD_ROTATION_HORIZONTAL")
     assert rot is not None, "the IO library declares no horizontal rotation"
     assert (PR.normalise_orient(rot[0])
