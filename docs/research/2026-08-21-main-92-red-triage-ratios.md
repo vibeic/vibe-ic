@@ -3,15 +3,13 @@
 ### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          26
-  CLEARED       29
+  BOTH          19
+  CLEARED       36
   FLAKY         2
 
 bucket        image    host     id
 FLAKY         4/13     13/13    test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged
 FLAKY         1/10     0/10     test_matrix_63x8_coverage.py::test_live_collection_relays_finite_semantic_progress_past_old_bound
-BOTH          5/5      5/5      test_flow_manifest_declaration_parity.py::test_every_declared_path_has_a_manifest_entry
-BOTH          5/5      5/5      test_flow_manifest_declaration_parity.py::test_the_population_is_the_whole_flow_and_is_not_empty
 BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_no_declared_report_is_written_through_open_w
 BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_no_new_offender_and_the_ratchet_holds
 BOTH          5/5      5/5      test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds
@@ -31,11 +29,6 @@ BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_requ
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]
-BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_check_mode_exits_zero_on_the_committed_tree
-BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_clean_tree_reports_no_failure
-BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_declared_non_counts_are_still_present[and all 56 EDA/device tools]
-BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_stated_counts_in_the_documents_match_the_tree
-BOTH          5/5      5/5      test_step_metrics_coverage.py::test_declared_coverage_matches_the_tree
 
 ### CLEARED — re-measured GREEN in both lanes at a named later sha
 
@@ -47,6 +40,15 @@ different fleet hosts, each with its own fresh `--no-local` clone, its own contr
 clone and its own constructed violations: 2+2 image runs and 3+3 host runs, whole
 modules, no `-k` selection, `VIBEIC_CORPUS_ROOT` unset. Neither pass reused an
 artefact of the other and both reached the same verdict.
+
+THAT TWO-SESSION PARAGRAPH DESCRIBES THE EIGHT `ae5cc4dbf` ROWS ONLY. Each
+clearance states how its own `now` ratio was taken, in its own block below, and
+they are not all the same shape. Two different slices cleared at `628ca251f`:
+the eleven rows reading `0/2 0/2` are the extraction / structured-vacuity / w4
+slice, and the seven reading `0/3 0/3` are the inventory / step-metrics /
+manifest-parity slice — one session, image 0/3 and host 0/3 interleaved, with a
+both-lane control at `867de4289`. Read a row's ratio with its own block, never
+with this paragraph.
 
 cleared_at   was(image/host)  now(image/host)  id
 ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_2_77_lvs_reachable.py::test_lvs_fails_on_real_mismatch
@@ -68,6 +70,13 @@ ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matchi
 628ca251f    5/5 5/5 RED     0/2 0/2 GREEN  test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_passed_the_empty_predicate_lists
 628ca251f    5/5 5/5 RED     0/2 0/2 GREEN  test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_passes_the_same_empty_corpus_silently
 628ca251f    5/5 5/5 RED     0/2 0/2 GREEN  test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_was_silent_on_the_advisory_slot
+628ca251f    5/5 5/5 RED     0/3 0/3 GREEN  test_flow_manifest_declaration_parity.py::test_every_declared_path_has_a_manifest_entry
+628ca251f    5/5 5/5 RED     0/3 0/3 GREEN  test_flow_manifest_declaration_parity.py::test_the_population_is_the_whole_flow_and_is_not_empty
+628ca251f    5/5 5/5 RED     0/3 0/3 GREEN  test_program_inventory_no_drift.py::test_check_mode_exits_zero_on_the_committed_tree
+628ca251f    5/5 5/5 RED     0/3 0/3 GREEN  test_program_inventory_no_drift.py::test_clean_tree_reports_no_failure
+628ca251f    5/5 5/5 RED     0/3 0/3 GREEN  test_program_inventory_no_drift.py::test_declared_non_counts_are_still_present[and all 56 EDA/device tools]
+628ca251f    5/5 5/5 RED     0/3 0/3 GREEN  test_program_inventory_no_drift.py::test_stated_counts_in_the_documents_match_the_tree
+628ca251f    5/5 5/5 RED     0/3 0/3 GREEN  test_step_metrics_coverage.py::test_declared_coverage_matches_the_tree
 5d1b82988    5/5 5/5 RED     0/1 0/1 GREEN  test_matrix_d7_outputs_list_complete.py::test_d7_required_outputs_list_is_complete[step31]
 5d1b82988    5/5 5/5 RED     0/1 0/1 GREEN  test_matrix_mutation_ledger.py::test_every_enforced_cell_carries_a_named_mutation[step0.5ic]
 51c0db4b7    5/5 5/5 RED     0/1 0/1 GREEN  test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships
@@ -333,3 +342,84 @@ code.** Two flags the image lane needs, neither guessable from the failure text:
   the control, giving `12 failed` there against `8 failed` on the host and under the split
   mount. A lane artefact does not care which tree it is aimed at, which is what separates
   it from a finding.
+
+
+### the inventory / step-metrics / manifest-parity slice — 7 IDs, cleared at `628ca251f`
+
+THE SEVEN INVENTORY / STEP-METRICS / MANIFEST-PARITY IDS, cleared at `628ca251f`
+(v1.12.8). One cause, stated once: **the tree grew and every declaration of its
+size was left behind.** None of the seven is a defect in the code they guard;
+each is a stated number or a declared set that stopped matching the population
+it describes.
+
+Control first, because a green whose harness cannot produce the red is not
+evidence. At the ratios table's own subject `867de4289`, whole modules, both
+lanes: **exactly these seven fail and nothing else does** — host 7 failed / 39
+passed, image 7 failed / 39 passed. The original `5/5 5/5` was a true
+measurement of its own subject, and this harness demonstrably reddens them.
+
+What the control names, id by id:
+
+| id | at `867de4289` |
+|---|---|
+| `parity::test_every_declared_path_has_a_manifest_entry` | step `37.5ic` declared `reports/phase3/docs/BRIEF_*.html` and `SIGNOFF_*.html`; neither was ever measured into the d3 manifest |
+| `parity::test_the_population_is_the_whole_flow_and_is_not_empty` | 162 declared paths vs 160 manifest entries |
+| `inventory::test_stated_counts_in_the_documents_match_the_tree` | 11 stale sites — 1208≠1211, 1135≠1138, 2644≠2648, 3885≠3894 — plus one claim site reworded to `VANISHED` |
+| `inventory::test_clean_tree_reports_no_failure` | the same list |
+| `inventory::test_check_mode_exits_zero_on_the_committed_tree` | `gen_program_inventory.py --check` exit 1, the same list |
+| `inventory::test_declared_non_counts_are_still_present[and all 56 EDA/device tools]` | that sentence did not exist in the docs yet |
+| `step_metrics::test_declared_coverage_matches_the_tree` | tree 68 gate-carrying steps, literal `GATE_CARRYING_STEPS = 62` |
+
+At `628ca251f` every one of those declarations has been re-measured by the
+landings in between: manifest parity is a strict 165 == 165 bijection over 68
+steps, all 22 bound claim sites agree, `GATE_CARRYING_STEPS` is 67 and equals
+the tree, and the not-a-count sentence is present at `README.md:365`.
+
+**Now: image 0/3, host 0/3 GREEN at `628ca251f`**, taken interleaved, whole
+modules, no `-k`, serial, no xdist, `VIBEIC_CORPUS_ROOT` unset — image lane in
+the ratios table's own `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff` with
+`--skip` first, host lane python 3.10.12 / pytest 9.1.1, each from a fresh
+standalone clone. No assertion weakened, no case deleted, no skipif added, no
+tolerance widened, no exemption added or re-dated.
+
+Constructed violations, one per guard, all still red at head: adding a single
+`required_outputs` entry to the flow yaml without re-measuring the manifest
+fails both parity IDs (`166 declared paths vs 165 manifest entries`); drifting
+one bound count by one fails all three inventory IDs, each naming `README.md:17`
+and both numbers; rewording the declared not-a-count sentence fails the
+parametrized ID; and un-declaring emitting step 34, or restoring the stale
+`GATE_CARRYING_STEPS = 62`, fails the step-metrics ID in the two directions it
+has.
+
+⚠️ **THIS FAMILY IS TIP-SENSITIVE AND WILL RE-RED. It is cleared, not immune.**
+Every one of these seven compares a written-down number or set against a
+population that changes whenever a file is added. That is not hypothetical: it
+happened one commit before this clearance. `5ecd04595b` (v1.12.7) added
+`programs/tests/test_checkout_write_attribution_needs_an_exclusive_window.py`,
+correctly re-ran the generator so `PROGRAM_INVENTORY.json` read `test_files
+2878` / `programs_tree_all_py 4243`, and touched all three READMEs — **but only
+for the version badge**, leaving the six prose sites that state those same two
+populations at 2877 / 4242. Three of these seven IDs were genuinely red on live
+main for the length of that commit, and `628ca251f` (v1.12.8) is the repair. A
+BOTH row for this family therefore means "someone added a file and did not
+re-measure", never "the guard is broken" — and the fix is always to re-run
+`python3 programs/gen_program_inventory.py` and then correct the prose sites the
+gate names by `file:line`.
+
+ONE UNBOUND SITE FOUND WHILE CLEARING THESE, and closed in the same change.
+`vibe-ic-marketplace/README.md:561` reads `← 4243 *.py at any depth (1260 top
+level)`. The `4243` is bound to `programs_tree_all_py`; the `1260` was bound to
+nothing, waived by nothing, and stale by 38 — the tree has 1298. It survived
+because `_sweep`'s unregistered-claim detector needs a population word within 34
+characters of the number and finds none in either direction (`" top level)"`
+ahead, `"*.py at any depth ("` behind), so the one gate that exists to catch a
+hand-typed count could not see this one. It was written on 2026-08-22 by a
+commit whose subject is `chore(inventory): re-derive after folding the
+two_input_selectors repair` — a re-derivation that updated the bound sites and
+left the unbound one behind, which is exactly the failure mode `_CLAIMS` exists
+to prevent. A wide probe over both bound documents for every uncovered 3-4 digit
+number found this and nothing else (the other hits are process nodes and years).
+It is now bound in `_CLAIMS` as a 23rd site, and `test_a_drifted_stated_count_is_caught`
+— which asserts EVERY bound site reddens under a deliberately wrong inventory —
+covers it: 23 sites, 23 drift lines. Restoring `1260` puts the three inventory
+IDs back to red.

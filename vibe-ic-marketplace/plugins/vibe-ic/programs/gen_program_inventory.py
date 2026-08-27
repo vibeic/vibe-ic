@@ -311,6 +311,12 @@ _CLAIMS: tuple[tuple[str, str, str], ...] = (
      r"\+ \*\*([\d,]+)\*\* under `plugins/vibe-ic/mcp-eda/test/`"),
     ("README.md", "programs_tree_all_py",
      r"← ([\d,]+) \*\.py at any depth"),
+    # SAME LINE as the claim above, second number. It was unbound and drifted
+    # 1260 -> 1298 over six days: no population word falls inside `_sweep`'s
+    # 34-char window either side of it ("top level)" ahead, "*.py at any depth ("
+    # behind), so neither _CLAIMS nor the unregistered-claim sweep could see it.
+    ("README.md", "programs_top_level",
+     r"\*\.py at any depth \(([\d,]+) top level\)"),
     ("README.md", "test_files",
      r"← ([\d,]+) test files"),
     ("plugins/vibe-ic/README.md", "programs_top_level",
