@@ -3,8 +3,8 @@
 ### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          16
-  CLEARED       39
+  BOTH          11
+  CLEARED       44
   FLAKY         2
 
 bucket        image    host     id
@@ -13,13 +13,8 @@ FLAKY         1/10     0/10     test_matrix_63x8_coverage.py::test_live_collecti
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_census_block_is_fresh
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_published_total_equals_the_live_census
 BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved
-BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_every_na_cell_asserts_a_live_precondition
 BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_no_cell_is_counted_enforced_while_its_predicate_is_red
 BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_the_enforcement_census_is_reported_for_humans
-BOTH          5/5      5/5      test_matrix_63x8_ledger.py::test_absent_from_audit_is_surfaced_not_swallowed
-BOTH          5/5      5/5      test_matrix_63x8_ledger.py::test_accessors_track_a_removed_field
-BOTH          5/5      5/5      test_matrix_63x8_ledger.py::test_every_coordinate_appears_exactly_once
-BOTH          5/5      5/5      test_matrix_63x8_ledger.py::test_output_entries_classify_into_the_four_kinds
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step15]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step17]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step19]
@@ -87,6 +82,11 @@ ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matchi
 462b66838    5/5 5/5 RED     0/1 0/1 GREEN  test_issue1082_open_w_category_closed.py::test_no_declared_report_is_written_through_open_w
 462b66838    5/5 5/5 RED     0/1 0/1 GREEN  test_issue1082_open_w_category_closed.py::test_no_new_offender_and_the_ratchet_holds
 462b66838    5/5 5/5 RED     0/1 0/1 GREEN  test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds
+72a558fdb    2/2 2/2 RED     0/3 0/4 GREEN  test_matrix_63x8_coverage.py::test_every_na_cell_asserts_a_live_precondition
+72a558fdb    5/5 5/5 RED     0/3 0/4 GREEN  test_matrix_63x8_ledger.py::test_absent_from_audit_is_surfaced_not_swallowed
+72a558fdb    5/5 5/5 RED     0/3 0/4 GREEN  test_matrix_63x8_ledger.py::test_accessors_track_a_removed_field
+72a558fdb    5/5 5/5 RED     0/3 0/4 GREEN  test_matrix_63x8_ledger.py::test_every_coordinate_appears_exactly_once
+72a558fdb    5/5 5/5 RED     0/3 0/4 GREEN  test_matrix_63x8_ledger.py::test_output_entries_classify_into_the_four_kinds
 
 All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
 modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
