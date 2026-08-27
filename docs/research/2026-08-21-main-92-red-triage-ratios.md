@@ -63,15 +63,21 @@ BOTH          5/5      5/5      test_w4_absent_condition_is_not_a_pass.py::test_
 Not a re-bucketing of the old observation: a new measurement, stated with the sha it
 was taken at. The original ratio is kept in the row so the history is not erased.
 
+The `now` ratios are the pooled observations of TWO independent sessions on two
+different fleet hosts, each with its own fresh `--no-local` clone, its own control
+clone and its own constructed violations: 2+2 image runs and 3+3 host runs, whole
+modules, no `-k` selection, `VIBEIC_CORPUS_ROOT` unset. Neither pass reused an
+artefact of the other and both reached the same verdict.
+
 cleared_at   was(image/host)  now(image/host)  id
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_77_lvs_reachable.py::test_lvs_fails_on_real_mismatch
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_77_lvs_reachable.py::test_lvs_runs_and_passes_on_match
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_clean_complete_lvs_still_passes
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_real_mismatch_still_fails_as_conclusive
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_small_ext2spice_error_count_is_warning_not_fail
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_truncated_verdict_less_report_is_incomplete_fail
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_pin_fail_is_conclusive_mismatch_not_incomplete
-ae5cc4dbf    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_truncated_still_incomplete
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_2_77_lvs_reachable.py::test_lvs_fails_on_real_mismatch
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_2_77_lvs_reachable.py::test_lvs_runs_and_passes_on_match
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_clean_complete_lvs_still_passes
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_real_mismatch_still_fails_as_conclusive
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_small_ext2spice_error_count_is_warning_not_fail
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_2_97_issue477_lvs_incomplete.py::test_truncated_verdict_less_report_is_incomplete_fail
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_pin_fail_is_conclusive_mismatch_not_incomplete
+ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matching_verdict.py::test_runner_truncated_still_incomplete
 
 All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
 modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
@@ -86,6 +92,19 @@ widened. Both directions are shown in
 `FEEDBACK_OUT` write again at `ae5cc4dbf` sends the two `test_v0_2_77` IDs straight
 back to RED with the same finding, and leaves the module's three non-extraction tests
 green.
+
+The independent second pass is in
+`docs/research/2026-08-28-lvs-family-independent-reverification.md`, and it closes
+the two holes a single-direction proof leaves. Its CONTROL run at the ratios
+table's own subject `867de4289` fails exactly these eight IDs and no others, in
+BOTH lanes — so the harness demonstrably can produce this red, and the original
+`5/5 5/5` was a true measurement of its own subject. Its constructed violation V1
+(remove the `FEEDBACK_OUT` write at head, all three modules) also fails exactly
+these eight in BOTH lanes; its constructed violation V2 feeds the gate a feedback
+dump that IS written and carries two real `Illegal overlap` records while netgen
+reports `Circuits match uniquely`, and `step_lvs` still returns FAIL /
+`LVS_EXTRACTION_ILLEGAL_OVERLAP` in both lanes. The gate therefore refuses an
+unmeasured channel AND a dirty one, and is not a check that refuses everything.
 
 ADJACENT, MEASURED BUT NOT MOVED — the four `test_extraction_input_blocked_verdict.py`
 IDs still listed BOTH above carry the same `FEEDBACK_OUT` stub repair from the same
