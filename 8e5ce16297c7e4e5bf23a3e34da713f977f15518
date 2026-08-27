@@ -1,0 +1,35 @@
+LANDING v1.12.15 — clear/inventory-declaration-parity-v1-12-6
+
+RAN: test_flow_manifest_declaration_parity.py, test_program_inventory_no_drift.py,
+test_step_metrics_coverage.py — whole modules, no -k, serial, no xdist,
+VIBEIC_CORPUS_ROOT unset, PYTHONDONTWRITEBYTECODE=1, TMPDIR=/tmp/kl/tmp.
+Result 46 passed rc 0, on the exact tree pushed (8e1396936). All seven cleared
+ids confirmed COLLECTED via an explicit --collect-only sweep before the pass was
+credited. suite_write_guard PASS. gen_program_inventory.py --check rc 0; the
+generator re-run produced no drift beyond the version bump.
+
+SKIPPED: the landing gate (tools/gatekeeper-land.sh) — owner-authorised, it
+judges ABSOLUTELY and refuses on main's pre-existing reds. No four-face re-pin
+was required: this diff touches neither tools/gatekeeper-land.sh nor
+programs/ci_harness_timeout_ceiling_check.py.
+
+NOT RUN: the pinned-image lane. /AI_IC_design does not exist on this host, so
+the image lane's mount point is absent. The clearance ratios this landing
+records (image 0/3, host 0/3 at 628ca251f) are the SLICE's own measurement,
+carried over unchanged and attributed to it — not re-taken here. What I
+re-measured here is that the three modules are green on the tree being pushed.
+
+PRE-EXISTING REDS CARRIED ONTO MAIN UNCHANGED: none observed in the three
+modules run. No red was attributed to this branch and none was suppressed.
+
+REBASED TWICE: first from 628ca251f onto 3fed9ea22, then onto dd3883f85 when
+another lane landed v1.12.14 mid-verification. The second rebase conflicted on
+vibe-ic-marketplace/README.md:561, where main had re-derived 4243 -> 4245 and
+left the unbound 1260 untouched. Resolved to main's 4245 plus the true
+top-level count, then RE-DERIVED with the generator rather than assumed:
+programs_top_level = 1298 and programs_tree_all_py = 4245 at the pushed tree.
+
+TABLE: BOTH 26 -> 19, CLEARED 29 -> 36, verified against the copy fetched back
+from origin, not the local file. Each count equals the rows actually present.
+The branch's own table edit (computed against BOTH 47) was discarded, not
+replayed.
