@@ -176,6 +176,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
+
 # ── States ──────────────────────────────────────────────────────────────────
 SUBSTANTIVE = "SUBSTANTIVE"
 VACUOUS = "VACUOUS"
@@ -762,8 +765,10 @@ def main(argv=None) -> int:
     rec = classify_flow(a.run, steps)
     if a.json:
         a.json.parent.mkdir(parents=True, exist_ok=True)
-        a.json.write_text(json.dumps(rec, indent=2, default=str) + "\n",
-                          encoding="utf-8")
+        # vibe-ic#1082: the declared destination appears under its final name
+        # only once complete, so a reader never resolves a half-written report.
+        _aa.write_text(a.json,
+                       json.dumps(rec, indent=2, default=str) + "\n")
 
     if rec["state"] == NOT_MEASURED:
         print(f"flow_output_substance: D3 NOT MEASURED over {len(steps)} steps — "

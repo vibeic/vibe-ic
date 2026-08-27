@@ -58,6 +58,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
+
 #: Fields whose CONTENT is a copy of the input rather than a structured reading
 #: of it. Named individually, never by a pattern: a field earns a place here by
 #: being demonstrably a verbatim carrier, and the list is short enough to read.
@@ -165,7 +168,9 @@ def main(argv=None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
+        # vibe-ic#1082: the declared destination appears under its final name
+        # only once complete, so a reader never resolves a half-written report.
+        _aa.write_text(out, json.dumps(rep, indent=2) + "\n")
 
     for lit in rep["prose_only"]:
         print(f"  [PROSE-ONLY] {lit!r} appears only in a field that carries the "
