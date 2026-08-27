@@ -67,6 +67,37 @@ PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
 PJSON="$PLUGIN/.claude-plugin/plugin.json"
 BASE="${GATEKEEPER_BASE:-origin/main}"
 RANGE="${BASE}..HEAD"
+# ── THE TEST CADENCE THE TREE REQUIRES (policy 2026-06-17, wired 2026-08-27) ──
+#
+# The policy is old and the implementation is old; what did not exist was the
+# WIRE. `gatekeeper_review.derive_cadence` has said this since 2026-06-17 —
+# x.y.0 MILESTONE -> FULL, x.y.Z PATCH -> TARGETED — while THIS script, the one
+# that actually runs the landing, had no cadence concept at all. Measured at
+# v1.11.94: `grep -c -i cadence tools/gatekeeper-land.sh` was 0.
+#
+# THE GAP RAN IN THE UNSAFE DIRECTION, which is the opposite of how it reads.
+# `run_pytest` called `ci_targeted_test_select.py` on EVERY bump, so a
+# MILESTONE landed on the patch tier: 101 selected files against a tree of
+# 2862. The half that was lost is nameable — `full-suite-milestone` in
+# `.github/workflows-disabled/gatekeeper-ci.yml.disabled`, gated by
+# `if: needs.cadence.outputs.level == 'milestone'`. GitHub disabled Actions at
+# the ACCOUNT level so it never ran once, and 0d66c96161 (2026-07-30, v1.8.40)
+# retired both workflows. This script inherited the TARGETED selector and
+# nothing inherited the FULL arm.
+#
+# FROM THE TREE, NEVER FROM A FLAG. There is no `--cadence` option here and
+# there must never be one: a caller-supplied cadence is a caller-supplied
+# answer. The version pair is read out of the committed manifest at BASE and at
+# HEAD, and the verdict is `derive_cadence`'s own — imported, not copied.
+#
+# EVERY FAILURE IS FULL. An empty answer here means the program could not run
+# at all, and "I could not read the version" must never arrive as "the cheap
+# tier is fine". The fallback below is therefore the STRICTER tier, so this
+# wire can only ever make a landing do more than it needed, never less.
+LANDING_CADENCE="$(python3 "$PROGRAMS/landing_cadence.py" \
+    --repo "$ROOT" --base "$BASE" --head HEAD 2>/dev/null \
+    | sed -n 's/^LANDING_CADENCE=//p' || true)"
+[ -n "$LANDING_CADENCE" ] || LANDING_CADENCE=FULL
 CHEAP_ONLY=0
 PREPARE=0
 # THE FULL TIER'S INDEPENDENT STAGES RUN AT THE SAME TIME, BY DEFAULT.
@@ -908,11 +939,42 @@ run_pytest() {
     # "refuse when the complete record is absent" rule then applies correctly.
     rm -f "$GATEKEEPER_PYTEST_JUNIT" 2>/dev/null || true
   fi
-  ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
+  # THE SELECTION IS THE CADENCE, EXPRESSED. A FULL milestone runs the whole
+  # `programs/tests` tree (pytest.ini pins it as the single testpath, so that
+  # tree IS the full suite); a TARGETED patch runs the diff-derived subset,
+  # which is exactly what this line did for every bump before the wire existed.
+  #
+  # ONE INSTRUMENT, BOTH TIERS. FULL does not get a second code path: it gets a
+  # longer selection file handed to the same per-file driver, the same aggregate
+  # session, the same write guard and the same junit. A milestone that was
+  # measured by a different instrument than a patch could not be compared with
+  # one, and the asymmetry #1417 spent a version removing would be back.
+  if [ "$LANDING_CADENCE" = "FULL" ]; then
+    ( cd "$PLUGIN" && python3 programs/landing_cadence.py \
+        --plugin-root "$PLUGIN" --emit-full-selection > "$sel" ) 2>/dev/null
+  else
+    ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
+  fi
   if [ ! -s "$sel" ]; then
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; rm -f "$sel"; return
   fi
+  # WHAT THIS RUN CAN HONESTLY CLAIM, DERIVED FROM THE SELECTION IT IS ABOUT TO
+  # EXECUTE — never from `$LANDING_CADENCE`. Reporting the full-suite string
+  # because the cadence SAYS full, while the selection is short, is precisely
+  # the false green the cadence gate exists to refuse; `--describe` compares the
+  # selection against the tree by MEMBERSHIP and only then emits the full-suite
+  # command. At FULL cadence a short selection therefore describes itself as a
+  # subset, and `full_suite_run_check` turns that into the red it should be.
+  #
+  # THROUGH A FILE, because run_pytest runs inside a lane subshell and a
+  # variable set here never reaches the main shell that calls the review — the
+  # same lesson `$LANE_DIR/targeted.norecord` records one screen down.
+  ( cd "$PLUGIN" && python3 programs/landing_cadence.py \
+      --plugin-root "$PLUGIN" --selection "$sel" --describe 2>/dev/null \
+      | sed -n 's/^LANDING_PYTEST_CMD=//p' ) > "$LANE_DIR/pytest-cmd.txt" || true
+  printf '  REPORT  cadence %s — %s file(s) selected\n' \
+    "$LANDING_CADENCE" "$(wc -l < "$sel")"
   # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
   #
   # #1047 fixed the environment of a pytest this suite SPAWNS. The same defect was
@@ -1622,9 +1684,67 @@ GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-1800}"
 GK_REVIEW_RECORD="$LANE_DIR/gatekeeper-review-hygiene.json"
 run_gatekeeper_review() {
   local out rc
+  # THE REVIEW'S CADENCE GATE ONLY WORKS IF SOMEBODY TELLS IT WHAT RAN.
+  # `test_cadence_gate` has always refused a FULL cadence whose --pytest-cmd is
+  # a subset — but this call never passed one, so on a milestone the gate took
+  # its OTHER branch and hard-failed with "FULL milestone requires a full-suite
+  # pytest command (none supplied)". A milestone landing was therefore not
+  # merely under-tested, it was IMPOSSIBLE through this script.
+  #
+  # The string comes from the file `run_pytest` wrote, which was derived from
+  # the selection it executed. When the targeted lane is skipped entirely
+  # (GATEKEEPER_SKIP_TARGETED_TESTS=1, the merge-verifier arm shape) no file
+  # exists and no claim is made — an arm that did not run the tests must not
+  # certify their cadence, and the review's own "no --pytest-cmd" branch is the
+  # correct verdict for it.
+  # `${LANE_DIR:-}`, not `$LANE_DIR`. This file runs under `set -u` and
+  # `tools/test_gatekeeper_land_review_budget.py` drives this REAL function
+  # against a stub, setting only the variables it needs; a bare dereference
+  # made every case in that file die before the case statement it exists to
+  # test. Tolerating an unset lane dir is also the honest reading: no lane dir
+  # means no lane wrote a command, which is the same "no claim" branch.
+  local cadence_arg=() cmd_file="${LANE_DIR:-}/pytest-cmd.txt"
+  if [ -n "${LANE_DIR:-}" ] && [ -s "$cmd_file" ]; then
+    cadence_arg=(--pytest-cmd "$(cat "$cmd_file")")
+  fi
+  # THE SHAPE OF THIS LANDING WAS ALREADY DECIDED, AND THE REVIEW WAS NOT TOLD.
+  # `cheap:landing-shape` above counted the range into `GK_RANGE_N` and, when it
+  # was greater than one, ran `landing_is_one_commit_check.py --batch` and
+  # PASSED. The review below runs that SAME checker a second time, through
+  # `gatekeeper_review.one_commit_gate`, and this call forwarded nothing — so one
+  # caller called the tree a valid batch and the other called it an illegal
+  # landing, inside a single gate run, about a single tree.
+  #
+  # That is not an edge case; it is every batch. A protected-path ceremony
+  # landing is structurally at least three commits — content, PREPARE, ACTIVATE —
+  # because splitting PREPARE from ACTIVATE is what makes `current` a state the
+  # repo actually had. So the un-forwarded form has no passing case at all: it
+  # can only ever refuse, and a gate that can only refuse is the one people learn
+  # to push past with `--no-verify`, which is exactly what the last push did.
+  #
+  # THE FLAG DOES NOT RELAX THE CHECK, and that is why forwarding it is not the
+  # `--hygiene-record-in` shape the owner ruled out above. That flag handed a
+  # gate a SUBSTITUTE for running itself. This one hands the checker a stricter
+  # question: batch mode additionally requires no manifest-only commit anywhere
+  # in the range, exactly one version bump, and that bump on the TIP. It is
+  # opt-in, and without it the single-landing rule is untouched.
+  #
+  # `${GK_RANGE_N:-0}`, not `$GK_RANGE_N`, for the reason given for `LANE_DIR`
+  # directly above: `tools/test_gatekeeper_land_review_budget.py` drives this
+  # REAL function against a stub and sets only the variables it needs, so a bare
+  # dereference under `set -u` would kill every case in that file. Inside the
+  # script the variable is always set, at top level, long before this function is
+  # reached. Unset means no range was counted, which is the same "not a batch"
+  # answer as a range of one.
+  local batch_arg=()
+  if [ "${GK_RANGE_N:-0}" -gt 1 ]; then
+    batch_arg=(--batch)
+  fi
   out="$(timeout -k 10 "$GK_REVIEW_BUDGET_S" \
          python3 "$PROGRAMS/gatekeeper_review.py" \
          --base "$BASE" --head HEAD --repo "$ROOT" \
+         "${cadence_arg[@]+"${cadence_arg[@]}"}" \
+         "${batch_arg[@]+"${batch_arg[@]}"}" \
          --gate-record "$GK_REVIEW_RECORD" 2>&1)"; rc=$?
   case "$rc" in
     0|1) ;;
@@ -1689,8 +1809,29 @@ elif [ "$FAILED" -eq 0 ]; then
   # the PER-WORKTREE dir (…/.git/worktrees/<name>), which is what this stamp
   # must be: two worktrees sitting at different commits must not share one, or a
   # gate run in one would authorise a push from the other.
+  # THE CADENCE IS PART OF WHAT THE STAMP CERTIFIES, or the asymmetry leaks.
+  # Without this line every stamp is interchangeable, so a TARGETED stamp earned
+  # on a patch would satisfy a later MILESTONE push exactly as well as a FULL
+  # one — the milestone would be let off by a subset run, which is the single
+  # thing the policy forbids. LINE 1 STAYS THE COMMIT AND ONLY THE COMMIT, so
+  # both existing readers (this hook's `head -1`, and an older hook that reads
+  # the whole file and fails closed) keep working, and the key=value tail is the
+  # convention `gatekeeper-land-differential.sh` already writes (`base=`,
+  # `tier=`, `host=`).
+  # WRITTEN AS A REDIRECT AND THEN AN APPEND, not as a `{ ... } >` block.
+  # `test_v1916_the_tree_must_not_move_under_the_gates` locates the stamp write
+  # by searching the script for `git rev-parse HEAD > "<path>gatekeeper-stamp"`,
+  # and uses that match's POSITION to assert the ordering rules — the
+  # fingerprint comparison happens before it, the removal after it. A brace
+  # group hides the redirect from that search, so the gate reports "nothing in
+  # the landing script writes `git rev-parse HEAD` into a gatekeeper-stamp
+  # file" and the ordering assertions lose their anchor. Writing line 1 first
+  # and appending the tail also says the invariant out loud: the commit is
+  # written alone, and everything else is a tail after it.
   git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
-  echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
+  printf 'cadence=%s\n' "$LANDING_CADENCE" \
+    >> "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) at cadence $LANDING_CADENCE ==="
 else
   rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="

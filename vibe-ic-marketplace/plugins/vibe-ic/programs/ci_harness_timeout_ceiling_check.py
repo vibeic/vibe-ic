@@ -262,7 +262,7 @@ _DRIVER_COMMAND_RE = {
 # permissive "looks command-like" fallback.
 _LANDING_LANE_SHA256 = {
     "run_pytest":
-        "1063d696b31fb72b8826c02e965a677c4974a96a68f7c0c12f9dcdf7c3458ab9",
+        "e0b1e4f3337466370e4a8d992ab48aa59bd08db4183e5149ee5d921c284114ed",
     "run_repo_tools_pytest":
         "fafa41bc22777096f5a60601f755830b5744ef57e67f92fd1391fa730834c8fd",
     "run_unselectable_pytest":
@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "7fa04a680cf72c9b43cabdf6544a68aefd165ccc08c4898e6f92d570ea6fe56f"
+    "f9f176413f7d1e278c02d205bc02744799838137cab9f3e7c5901c3eee2425de"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -407,10 +407,61 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # because a prune whose subject has vanished is a no-op that still reads as a
 # guard.
 #
+# RE-PINNED a fifth time, for the TEST-CADENCE WIRE. Three digests moved: the
+# whole file, the entry-to-final-pytest execution prefix, and `run_pytest`.
+#
+# THE WITNESS THAT NOTHING ELSE DID, and it is this file's own: of the three
+# lane bodies, `run_repo_tools_pytest` and `run_unselectable_pytest` are
+# BYTE-IDENTICAL. Only `run_pytest` moved, which is exactly the one lane the
+# edit touches. The prefix moved because `run_pytest` is defined above the
+# `lane_emit_window` anchor and because the cadence is derived near the top of
+# the script, before any lane starts.
+#
+# THE EDIT, reviewed rather than absorbed: the landing now DERIVES its required
+# test cadence from the version bump in the tree (x.y.0 MILESTONE -> FULL,
+# x.y.Z PATCH -> TARGETED) via `landing_cadence.py`, which imports
+# `gatekeeper_review.derive_cadence` rather than restating it. `run_pytest`
+# gains one branch: at FULL the selection is the whole `programs/tests` tree,
+# otherwise it is the same `ci_targeted_test_select.py` subset it has always
+# been. Nothing about SUPERVISION moved — same driver, same `--stall-after`,
+# same `--aggregate-check`, same no-ceiling contract, same write guard, same
+# junit. The stage still declares SEMANTIC PROGRESS and still carries no
+# elapsed-time bound, which is the property this file exists to hold.
+#
+# RE-PINNED a sixth time, for the BATCH FLAG THE REVIEW WAS NEVER TOLD. ONE
+# digest moved: the whole file. Not the prefix, not any lane body, not the
+# semantic driver.
+#
+# THE WITNESS THAT NOTHING ELSE DID, enumerated from this file rather than from
+# a diff, because three of four re-pinned is the same as none — this is a
+# conjunction. The edit is inside `run_gatekeeper_review`, which is defined at
+# line 1685, and the `lane_emit_window` anchor is line 1577: the execution
+# prefix ends BEFORE the edit, so it is byte-identical, and so are all three
+# lane bodies (defined at 891 / 1175 / 1278) and `pytest_per_file_junit.py`.
+# Each of the four inputs was recomputed by slicing exactly as
+# `landing_semantic_progress_contract` slices them; three came back equal.
+#
+# THE EDIT, reviewed rather than absorbed: `cheap:landing-shape` counts the
+# range and, above one commit, already runs `landing_is_one_commit_check.py
+# --batch` and passes. The review then ran the SAME checker again through
+# `gatekeeper_review.one_commit_gate` and was handed no flag, so one caller
+# called a tree a valid batch and the other called it an illegal landing inside
+# one gate run. A ceremony landing is structurally at least three commits, so
+# the un-forwarded form had no passing case at all. `run_gatekeeper_review` now
+# forwards the condition the script had already computed, as an array expanded
+# with the file's existing `"${arr[@]+...}"` guard.
+#
+# IT IS NOT A RELAXATION AND IT IS NOT A `--hygiene-record-in`. Batch mode asks
+# a STRICTER question — no manifest-only commit in the range, exactly one
+# version bump, and that bump on the TIP — and it stays opt-in, so a single
+# landing is judged exactly as before. Nothing about SUPERVISION moved: same
+# driver, same `--stall-after`, same `--aggregate-check`, same no-ceiling
+# contract, same write guard, same junit, same lanes.
+#
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "60ef785dc6bbc917989426ac260ab2ed3276d3eec4f9e04b0ae94904b0c53be8"
+    "6118f25ccad0388d8c95c821c2fadc539b1d8209db8f2d2c93eeab0a5f3a9f65"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
