@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -148,9 +149,9 @@ def _write_rtl_fixture(tmp_path, name, body):
     return p
 
 
-def _run_cli(args):
+def _run_cli(args, env=None):
     r = subprocess.run([sys.executable, str(_PROG), *args],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, env=env)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -452,19 +453,38 @@ def test_width_divider_cases_still_9_and_10(tmp_path):
 
 
 # ── MED DoS: a huge resolved --expect is rejected FAST (no sim stall) ─────────
-def test_huge_expect_rejected_fast_rc2(tmp_path):
-    """A huge resolved --expect (8*1000000) → rc 2 with a clear message, and
-    returns in well under a second (no ~120 s sim stall)."""
-    import time
+def test_huge_expect_rejected_before_any_sim_rc2(tmp_path):
+    """A huge resolved --expect (8*1000000) → rc 2, refused BEFORE simulating.
+
+    This used to close with `assert elapsed < 10.0` — the clock standing in for
+    the thing actually worth proving, that the ceiling is checked before the
+    ~120 s sim rather than after it. A stopwatch cannot tell those apart: on a
+    loaded host a correct early refusal blows the 10 s budget and the test
+    reports a DoS-guard defect that is not there, while on a fast host a sim
+    that really ran could come in under it.
+
+    So ask the question directly. The ceiling guard sits ahead of the
+    iverilog/vvp availability gate, so with NEITHER tool on PATH a guard that
+    precedes the sim still refuses with rc 2, and one that had moved after it
+    could only reach the tools-absent SKIP (rc 0) — it has nothing to simulate
+    with. The verdict is now a statement about ORDER, which is what was meant,
+    and it holds at any speed on any host."""
     rtl = _write_rtl_fixture(tmp_path, "divider.sv", _RTL_CORRECT)
-    t0 = time.monotonic()
-    rc, out, err = _run_cli(["--rtl", str(rtl), "--top", "divider",
-                             "--event", "start", "--output", "valid",
-                             "--expect", "8*1000000"])
-    elapsed = time.monotonic() - t0
+    argv = ["--rtl", str(rtl), "--top", "divider", "--event", "start",
+            "--output", "valid", "--expect", "8*1000000"]
+    rc, out, err = _run_cli(argv)
     assert rc == 2, (out, err)
     assert "exceeds the sane latency ceiling" in err, err
-    assert elapsed < 10.0, f"DoS guard slow: {elapsed:.1f}s"
+
+    # The same refusal with no simulator reachable at all.
+    bare = dict(os.environ, PATH=str(tmp_path / "empty-bin"))
+    (tmp_path / "empty-bin").mkdir(exist_ok=True)
+    rc2, out2, err2 = _run_cli(argv, env=bare)
+    assert rc2 == 2, (
+        "with no iverilog/vvp on PATH the ceiling must STILL refuse: a guard "
+        f"that ran after the sim could only reach the SKIP path. rc={rc2}\n"
+        f"{out2}\n{err2}")
+    assert "exceeds the sane latency ceiling" in err2, err2
 
 
 def test_huge_expect_via_product_rejected(tmp_path):
