@@ -197,6 +197,14 @@ def _harness(scheduler: str, work: Path, body: str = _DRIVER) -> str:
     return _HARNESS.replace("__SCHEDULER__", scheduler) + body
 
 
+# 60 s AND NOT MORE, and the number is not free. `ci_harness_timeout_ceiling_check`
+# derives a per-call ceiling from the harness bound the workflow declares --
+# `harness / CEILING_DIVISOR` -- and on this tree that is 60. Four sites below
+# used to pass `timeout=120`; every one of them was flagged, and correctly: the
+# harness kills the whole file before a 120 s inner bound can fire, so the larger
+# number was a bound that could never be reached, read by the next author as a
+# real allowance. The stubs these drive sleep 6 s and 3 s, so 60 is still 6x the
+# work; raising it again is a change to the harness bound, not to this line.
 def _run(scheduler: str, work: Path, env: dict[str, str], *,
          body: str = _DRIVER, timeout: int = 60) -> subprocess.CompletedProcess:
     script = work / "harness.sh"
@@ -304,7 +312,7 @@ def test_each_lane_reports_its_own_cost_and_not_the_barrier(scheduler, work,
     """
     proc = _run(scheduler, work,
                 {"LANE_WIDTH": default_width, "T_SEC": "6", "C_SEC": "3",
-                 "H_SEC": "0", "A_SEC": "0"}, timeout=120)
+                 "H_SEC": "0", "A_SEC": "0"})
     assert proc.returncode == 0, proc.stdout
     seen = _elapsed(proc.stdout)
     assert set(seen) == {"targeted", "corpus", "hygiene", "audit"}, proc.stdout
@@ -340,7 +348,7 @@ def test_each_lane_reports_its_own_cost_and_not_the_barrier(scheduler, work,
     serial_work.mkdir()
     proc = _run(scheduler, serial_work,
                 {"LANE_WIDTH": "1", "T_SEC": "6", "C_SEC": "3",
-                 "H_SEC": "0", "A_SEC": "0"}, timeout=120)
+                 "H_SEC": "0", "A_SEC": "0"})
     assert proc.returncode == 0, proc.stdout
     seen = _elapsed(proc.stdout)
     assert seen["targeted"] > seen["corpus"] > seen["audit"], (
@@ -373,7 +381,7 @@ def test_the_join_stamped_form_really_does_collapse_the_four_numbers(
     broken = broken.replace(step, '  lane_stamp "$name" t1\n' + step)
     proc = _run(broken, work,
                 {"LANE_WIDTH": default_width, "T_SEC": "6", "C_SEC": "3",
-                 "H_SEC": "0", "A_SEC": "0"}, timeout=120)
+                 "H_SEC": "0", "A_SEC": "0"})
     seen = _elapsed(proc.stdout)
     assert set(seen) == {"targeted", "corpus", "hygiene", "audit"}, proc.stdout
     # THE SIGNATURE: every lane reads the barrier, so the spread collapses and
@@ -397,8 +405,7 @@ def test_a_lane_that_never_finished_is_reported_as_unmeasured(scheduler, work,
     proc = _run(scheduler, work, {"LANE_WIDTH": default_width},
                 body=_DRIVER.replace(
                     "lane_report_window",
-                    'rm -f "$LANE_DIR/hygiene.t1"\nlane_report_window'),
-                timeout=120)
+                    'rm -f "$LANE_DIR/hygiene.t1"\nlane_report_window'))
     assert "lane hygiene   NO ELAPSED RECORD" in proc.stdout, proc.stdout
     assert "lane(s) unmeasured" in proc.stdout, proc.stdout
     assert "hygiene" not in _elapsed(proc.stdout), proc.stdout

@@ -10,6 +10,7 @@ The pairing is spelled out per test rather than parametrised, because the two
 arms differ by exactly the field under test and naming that field in the test
 name is the documentation.
 """
+from datetime import datetime
 import json
 import os
 import subprocess
@@ -449,11 +450,36 @@ def test_the_partition_cannot_move_the_verdict(tmp_path):
     # DATED FROM THE REPOSITORY, never typed: a row whose stated date and whose
     # anchor disagree is `misdated`, which is a different finding and would let
     # this test pass for the wrong reason.
-    head_date = subprocess.run(
-        ["git", "-C", str(ROOT), "show", "-s", "--format=%cI", "HEAD~1"],
+    #
+    # THE ANCHOR IS THE ROOT COMMIT, NOT `HEAD~1`, AND THE REASON IS A MEASURED
+    # FAILURE. Ages are counted from `since_date` TO HEAD, not to now, so with
+    # `HEAD~1` this row is expired only if the last two commits happen to be
+    # more than `max_days` apart -- 86.4 s at 0.001. A landing writes its
+    # commits seconds apart, and on one this file went green for the wrong
+    # reason: 18 s of gap, the row read as a LIVE acknowledgement, "0 NEW red"
+    # and exit 0. The root commit's gap to HEAD is the repository's whole
+    # history and cannot be arranged away by a rebase.
+    _MAX_DAYS = 0.001
+    anchor = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-list", "--max-parents=0", "HEAD"],
+        capture_output=True, text=True, timeout=60).stdout.split()[0]
+    anchor_date = subprocess.run(
+        ["git", "-C", str(ROOT), "show", "-s", "--format=%cI", anchor],
         capture_output=True, text=True, timeout=60).stdout.strip()
-    rows = [_row(gate="owned gate", since="HEAD~1", since_date=head_date,
-                 max_days=0.001)]
+    head_date = subprocess.run(
+        ["git", "-C", str(ROOT), "show", "-s", "--format=%cI", "HEAD"],
+        capture_output=True, text=True, timeout=60).stdout.strip()
+    # THE PRECONDITION IS ASSERTED, not hoped for: if the row is not older than
+    # its own bound there is nothing here to expire, and the assertions below
+    # would be measuring a live row while claiming to measure an expired one.
+    gap_days = ((datetime.fromisoformat(head_date)
+                 - datetime.fromisoformat(anchor_date)).total_seconds() / 86400)
+    assert gap_days > _MAX_DAYS, (
+        f"the anchor is only {gap_days} day(s) older than HEAD, which is not "
+        f"past max_days={_MAX_DAYS}: this test would then pass a LIVE row off "
+        f"as an expired one")
+    rows = [_row(gate="owned gate", since=anchor, since_date=anchor_date,
+                 max_days=_MAX_DAYS)]
     res = _cli(tmp_path, rec, rows)
     assert res.returncode == 1, res.stdout + res.stderr
     assert "expired" in res.stdout, res.stdout
