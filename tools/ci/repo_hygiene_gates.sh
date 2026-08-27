@@ -91,6 +91,13 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # by DIRECT PUSH, so the guard had never run on any of it. Measured when first
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
+# MEASURED 2026-08-27: with OpenSTA's error-abort turned off, a FILE script
+# whose link fails still exits rc=0 -- the exit code, which is the primary gate
+# in every project we studied, is silently disarmed and every downstream check
+# reads a clean run. The setting is therefore refused in the shipped tree
+# rather than merely discouraged. Wired here because a source guard that only
+# its own test runs has never run on anything that shipped.
+run "OpenSTA error-abort left armed" "$ROOT" python3 "$PG/sta_continue_on_error_guard.py" "$ROOT"
 # vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
 # READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one

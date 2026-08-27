@@ -153,7 +153,7 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 164<!--figure:required_output_entries-->
+* **No `program_exit_zero` form exists in `required_outputs`** — all 165<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
 ### `cells.py` — the 612<!--figure:ledger_cells-->-cell ledger

@@ -27,8 +27,14 @@ primary control.
 DESIGN — this module knows NOTHING about docker or EDA. The caller INJECTS:
   • `cpu_probe(proc) -> Optional[float]` — HOW to read the job's CPU (docker
     exec ps in-container, host /proc, …). Return None when unavailable.
-  • `kill(proc, reason)` — HOW to terminate the job tree (pkill -f marker in a
-    container, proc.kill() on the host, …).
+  • `kill(proc, reason)` — HOW to terminate the job tree. It must select its
+    victims by IDENTITY, never by matching a command line: see
+    `_docker_watchdog.kill_supervised_job` (stamped pid + /proc starttime,
+    plus the ppid-walked descendants) for the in-container case and
+    `_owned_process_supervisor` for the host case. This line used to read
+    "pkill -f marker in a container" — it described the defect as the design,
+    and both callers implemented exactly that (2026-08-27: one run's watchdog
+    SIGTERMed another run's healthy tool inside the shared container).
   • `log_path` — an external tee'd log to also watch for growth.
   • `popen_factory(cmd, **kw) -> proc` — HOW to launch (default: host
     subprocess.Popen). `proc` must expose `.wait(timeout)` and `.kill()`.
