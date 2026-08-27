@@ -12,7 +12,7 @@ DIVERGENCE FROM THE BRIEF'S NUMBERS, MEASURED not assumed. Brief said 5 files
 
 THE MISTAKE I MADE AND CAUGHT. Both conflicts were comment hunks where the
 branch text is a superset correcting an overstatement. I resolved them with
-, which takes the WHOLE branch blob, not just
+'git checkout --theirs -- <file>', which takes the WHOLE branch blob, not just
 the conflicted hunk -- and that silently reverted main's #1770 repair: main had
 fixed the empty-population exemption hazard and re-pinned
 test_a_population_refusal_cannot_buy_an_uncheckable_exemption from the repaired
