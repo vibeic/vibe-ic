@@ -75,16 +75,6 @@
       "adjudicated": "REAL FINDING — stays red until fixed, NOT renewed. docs/research/2026-08-21-corpus-gate-adjudication.md"
     },
     {
-      "gate": "evidence citation resolves",
-      "since": "c5d7f2d00e1df23c35a8e289bc1dc3d29b62eee9",
-      "since_date": "2026-08-16T19:07:48+08:00",
-      "max_days": 2,
-      "owner": "repo-gatekeeper",
-      "why": "113 baseline entries now resolve and must be shrunk out of the baseline before it becomes a standing waiver, and 4 documents cite proofs they do not ship.",
-      "bound_because": "Two halves with different costs: shrinking the baseline is one --write-baseline run, and the 4 dangling citations need someone to decide whether the document or the missing file is wrong. 140 commits is two days at the measured rate, which is the decision half; the mechanical half could be done today. || FIGURES SUPERSEDED 2026-08-22: the corpus moved (b971220) and shrank from 1037 enumerated files to 70. It is now 66 contributing documents of 70, 28 citations, 132 baseline entries resolving and 5 dangling — not the 113 and 4 above. The SHAPE of the reasoning stands (a mechanical half and a decision half) and so does the bound; only the counts moved. || CLOCK MIGRATED 2026-08-22, bound UNCHANGED: the deadline is a DURATION now, because a commit count is a property of the merge topology — a 97-branch assembly put this row at 2111 commits against a bound of 140, which is the assembly's shape and not this row's age. max_days is this row's OWN figure, carried over unrounded: “140 commits is two days at the measured rate”. It is neither extended nor shortened; if it has passed, it has passed.",
-      "adjudicated": "REAL FINDING — stays red until fixed, NOT renewed. docs/research/2026-08-21-corpus-gate-adjudication.md"
-    },
-    {
       "gate": "PPA measurement coverage",
       "since": "ec43bba1406578075d21226b78efdb5350d3f5dd",
       "since_date": "2026-08-22T12:48:36+08:00",

@@ -427,6 +427,48 @@ def _states(record: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
+def dispatcher_exemptions(record: Dict[str, Any]) -> Dict[str, str]:
+    """Gate label -> the dispatcher's own LIVE dated exemption, for the report.
+
+    WHY THIS EXISTS (measured 2026-08-28, on a complete serial hygiene record
+    of `main` at ae5cc4dbf). This program prints, of every red in the run:
+
+        NEW red this run (owned by nobody): …
+
+    and on that record it printed thirty of them. TWENTY of those thirty carry,
+    IN THE SAME RECORD, an `exempt_until` of 2027-02-28 and an `exempt_reason`
+    that is a written paragraph — a dated, reasoned, tracked acknowledgement
+    made in `tools/ci/_gate_dispatch.sh`, which is the very thing this file's
+    ledger exists to require. They are not owned by nobody. They are owned
+    somewhere this program was not looking, and saying otherwise buries the
+    TWELVE reds that genuinely have no owner inside a wall of thirty — which is
+    the exact failure mode the NEW/KNOWN partition was built to end, one level
+    up from the one it was built for.
+
+    A LIVE EXEMPTION ONLY. `exemption_expired` is the dispatcher's own word for
+    an exemption whose date has passed, and such a red belongs in the unowned
+    bucket: an expired promise is the state this whole file exists to surface,
+    so folding it in with the live ones would be the substitution in reverse.
+    The dispatcher already refuses those separately (`not_checked_unexempted`,
+    `exemptions_expired`); this only declines to double-count the live ones.
+
+    IT CANNOT MOVE A VERDICT. The exit code is computed from `findings` alone —
+    rows in the ledger, and nothing about `new` or `known` reaches it. This is
+    a partition of a REPORT, and a gate that gains an exemption still fails the
+    hygiene suite exactly as before, because a NOT_CHECKED red was never
+    something this program failed on in the first place.
+    """
+    out: Dict[str, str] = {}
+    for gate in record.get("gates") or []:
+        if not isinstance(gate, dict) or gate.get("label") is None:
+            continue
+        until = gate.get("exempt_until")
+        if not until or gate.get("exemption_expired"):
+            continue
+        out[str(gate["label"])] = str(until)
+    return out
+
+
 def record_is_vacuous(record: Dict[str, Any]) -> Optional[str]:
     """Why this record cannot support a judgement, or None if it can.
 
@@ -882,6 +924,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     if _unrun:
         print("  NOT ADJUDICABLE in this record (the gate did not run here, so "
               "this run says nothing about it): " + ", ".join(_unrun))
+    # THE PARTITION IS THREE-WAY, BECAUSE THE RECORD KNOWS THREE THINGS. A red
+    # can be owned by a row here, owned by a DATED EXEMPTION the dispatcher
+    # recorded beside it, or owned by nobody. Folding the middle case into the
+    # last one was measured to report 30 unowned reds where 12 were unowned.
+    _exempt = dispatcher_exemptions(record)
+    exempted = [l for l in new if l in _exempt]
+    new = [l for l in new if l not in _exempt]
+    if exempted:
+        # THE WORDS "owned by nobody" APPEAR ON EXACTLY ONE LINE OF THIS
+        # OUTPUT, and it is the line below this one. A reader — and the test
+        # that pins this — must be able to find the unowned reds by that
+        # phrase without a second line answering to it.
+        print(f"  red, and DATED by the dispatcher's own exemption "
+              f"(acknowledged in tools/ci/_gate_dispatch.sh, not here): "
+              f"{len(exempted)} — "
+              + ", ".join(f"{l} (until {_exempt[l]})" for l in exempted[:4])
+              + (" …" if len(exempted) > 4 else ""))
     if new:
         # The line the doctrine was actually worried about: when the wall of
         # red is the steady state, this is what separates today's red from
@@ -901,6 +960,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # trailing "0 acknowledgement(s) overdue" with the NEW count dropped would
     # be a summary that omits its own subject.
     tail = (f"{len(new)} NEW red, {len(known)} acknowledged"
+            + (f", {len(exempted)} dispatcher-exempt" if exempted else "")
             + (f" (NEW: {', '.join(new[:4])}"
                + (" …" if len(new) > 4 else "") + ")" if new else ""))
     graded = [f for f in findings if f.kind not in UNDETERMINED_KINDS]

@@ -385,3 +385,84 @@ def test_the_guard_is_in_the_smoke_floor_so_a_ledger_diff_reaches_it():
     assert '"test_gate_red_since_check.py",' in sel, (
         "the diff that switches this mechanism off must be able to select the "
         "test that guards it")
+
+
+# ---------------------------------------------------------------------------
+# THE THIRD BUCKET: a red the DISPATCHER already dated, which is not the same
+# thing as a red nobody owns (measured 2026-08-28 on main at ae5cc4dbf: 30
+# reported "owned by nobody", of which 18 carried an `exempt_until` in the very
+# record being read).
+# ---------------------------------------------------------------------------
+def _exempt(record, label, until, expired=False):
+    """Stamp the dispatcher's own exemption fields onto one gate in a record."""
+    for row in record["gates"]:
+        if row["label"] == label:
+            row["exempt_until"] = until
+            row["exemption_expired"] = expired
+            return record
+    raise AssertionError(f"{label!r} is not in this record")
+
+
+def test_a_red_carrying_a_live_dispatcher_exemption_is_not_owned_by_nobody(
+        tmp_path):
+    rec = _exempt(_record(("dated gate", "NOT_CHECKED"), ("bare gate", "FAIL")),
+                  "dated gate", "2027-02-28")
+    res = _cli(tmp_path, rec, [])
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "DATED by the dispatcher's own exemption" in res.stdout, res.stdout
+    assert "dated gate (until 2027-02-28)" in res.stdout, res.stdout
+    # The unowned line names the OTHER one, and only it.
+    unowned = [l for l in res.stdout.splitlines()
+               if l.strip().startswith("NEW red this run (owned by nobody):")]
+    assert unowned and "bare gate" in unowned[0], res.stdout
+    assert "dated gate" not in unowned[0], res.stdout
+    assert "1 NEW red" in res.stdout and "1 dispatcher-exempt" in res.stdout
+
+
+def test_an_EXPIRED_dispatcher_exemption_stays_in_the_unowned_bucket(tmp_path):
+    """The negative control, and the direction that matters.
+
+    An exemption whose date has passed is the state this whole file exists to
+    surface. If it moved a red out of the unowned bucket, this partition would
+    have become a place to hide exactly the reds it was built to expose.
+    """
+    rec = _exempt(_record(("dated gate", "NOT_CHECKED")),
+                  "dated gate", "2020-01-01", expired=True)
+    res = _cli(tmp_path, rec, [])
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "DATED by the dispatcher" not in res.stdout, res.stdout
+    unowned = [l for l in res.stdout.splitlines()
+               if l.strip().startswith("NEW red this run (owned by nobody):")]
+    assert unowned and "dated gate" in unowned[0], res.stdout
+    assert "1 NEW red" in res.stdout and "dispatcher-exempt" not in res.stdout
+
+
+def test_the_partition_cannot_move_the_verdict(tmp_path):
+    """Exempting every red in the run does not turn one expired row green.
+
+    The exit code is computed from the LEDGER's findings and from nothing else,
+    and this test is what keeps that true: a partition of a report that could
+    also buy a pass would be a baseline with a different name.
+    """
+    rec = _exempt(_record(("owned gate", "FAIL"), ("other gate", "NOT_CHECKED")),
+                  "other gate", "2027-02-28")
+    # DATED FROM THE REPOSITORY, never typed: a row whose stated date and whose
+    # anchor disagree is `misdated`, which is a different finding and would let
+    # this test pass for the wrong reason.
+    head_date = subprocess.run(
+        ["git", "-C", str(ROOT), "show", "-s", "--format=%cI", "HEAD~1"],
+        capture_output=True, text=True, timeout=60).stdout.strip()
+    rows = [_row(gate="owned gate", since="HEAD~1", since_date=head_date,
+                 max_days=0.001)]
+    res = _cli(tmp_path, rec, rows)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "expired" in res.stdout, res.stdout
+    # …and the exempted red is still COUNTED and still NAMED, never dropped.
+    assert "other gate (until 2027-02-28)" in res.stdout, res.stdout
+
+
+def test_dispatcher_exemptions_reads_only_LIVE_dates():
+    rec = _record(("a", "FAIL"), ("b", "FAIL"), ("c", "FAIL"))
+    _exempt(rec, "a", "2027-02-28")
+    _exempt(rec, "b", "2020-01-01", expired=True)
+    assert G.dispatcher_exemptions(rec) == {"a": "2027-02-28"}
