@@ -5169,6 +5169,44 @@ steps:
       # producer was contemporary with the roots that lacked the artefact and
       # the declaration was withdrawn for that reason.
       - "reports/phase3/drc_signoff.json"
+      # A SIXTH, and the newest producer on this step. The PERC corpus sweep
+      # clause re-homed onto step 31 on 2026-08-25 writes
+      # `reports/phase3/perc_sweep.json`, and the clause immediately after it —
+      # `sweep_reach_check --report reports/phase3/perc_sweep.json` — is the
+      # only thing that reads it. That is a gate-designated output with a
+      # consumer outside its own writer, the class dimension 7 charges, and no
+      # step declared it:
+      #   [W1:gate_output_read_elsewhere] 'reports/phase3/perc_sweep.json'
+      #   (written by perc_corpus_sweep; read by gate:step31)
+      # Its absence is the disease that finding names: the reader's
+      # `condition_files_exist` takes its absent branch, the reach verdict is
+      # never rendered, and no gate goes red — a reachability instrument that
+      # certified itself by not running, which is the exact vacuity the reader
+      # was added to refuse.
+      #
+      # NOT EXEMPT AS CONDITIONAL, and the distinction is the flow's own. The
+      # exemption in `matrix_d7_artifact_graph.conditional_output_targets` is
+      # earned only by an `optional_program_exit_zero` clause carrying a
+      # non-empty `condition_files_exist`. The sweep clause is
+      # `advisory_program_exit_zero` with no condition, so it runs on every
+      # project, and its writer emits the document on the `--report` flag
+      # ALONE — an empty corpus yields a rows-empty document plus the reach
+      # block, rc 2, still written. `advisory` grades the exit code, never
+      # whether the artefact appears; and the reader's condition guards the
+      # READER against a writer that crashed, it does not make the writer
+      # optional.
+      #
+      # WHAT IT COSTS, measured 2026-08-28 the way the entries above were —
+      # `find -name perc_sweep.json` over the published corpus, 10 admissible
+      # run roots: ZERO hits. The producer clause postdates every published
+      # cell, so dimension 3 records this entry UNPROVEN and reports it
+      # unevidenced on any host that offers a corpus. That changes no cell's
+      # colour, which is the honest form of the claim and not a hope: with the
+      # pointer bound, d3 step 31 is ALREADY red on
+      # `magic_illegal_overlap.json` five entries up, for this same reason. So
+      # this adds one more named line to a cell that is already saying it, and
+      # it replaces a gap that nothing said out loud at all.
+      - "reports/phase3/perc_sweep.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.

@@ -716,7 +716,20 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # NINE of the ten admissible run roots before the record was written -- the
 # per-path check this pin exists to force (#527). Its verdict is therefore LIVE
 # and it adds no fixture attestation: fixture stays at 7, as it was.
-_LIVE_ENTRY_COUNT = 134
+# 2026-08-28 (#1785): 134 -> 135. Step 31 `reports/phase3/perc_sweep.json`, the
+# sixth artefact dimension 7 charged on that step and the first since the PERC
+# sweep clause was re-homed there on 2026-08-25. It is the OTHER reading of
+# this pin's two directions: not one fewer entry decided by nothing, but one
+# MORE entry now decided — and decided UNPROVEN, because `find -name
+# perc_sweep.json` over the published corpus returns nothing in any of the ten
+# admissible run roots and the producer postdates every published cell. An
+# UNPROVEN entry is LIVE by construction (the branch re-searches every root on
+# each call), so it lands on this side of the count and not in the fixture
+# figure, which stays where it was. Same class and same arithmetic as
+# `magic_illegal_overlap.json` on the same step; the number rose because the
+# POPULATION rose, which is exactly what this equality exists to make a human
+# say out loud.
+_LIVE_ENTRY_COUNT = 135
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.

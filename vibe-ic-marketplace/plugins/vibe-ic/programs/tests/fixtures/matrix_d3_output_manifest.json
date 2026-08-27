@@ -1095,6 +1095,10 @@
           "path": "reports/phase2/gates/erc_density.json",
           "size_bytes": 1188
         },
+        "reports/phase3/perc_sweep.json": {
+          "status": "UNPROVEN",
+          "provenance_note": "declared 2026-08-28 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31 — `perc_corpus_sweep --report` writes it and the `sweep_reach_check --report` clause directly below it is the only reader, so it is load-bearing outside its own writer. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find -name perc_sweep.json` over the published corpus, 2026-08-28, returned nothing across all 10 admissible run roots, and the sweep clause that writes it was re-homed onto step 31 on 2026-08-25 — after every published cell. Same class as magic_illegal_overlap.json above, and the same consequence: the UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
+        },
         "reports/phase3/magic_illegal_overlap.json": {
           "status": "UNPROVEN",
           "provenance_note": "declared 2026-08-20 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find` over the published corpus (vibeic/benchmark-data @ 146d665) and over every in-repo root returns nothing, and magic_illegal_overlap_check postdates every published cell. The UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
