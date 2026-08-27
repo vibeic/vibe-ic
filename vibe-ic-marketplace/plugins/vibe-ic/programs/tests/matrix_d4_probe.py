@@ -522,13 +522,13 @@ def gate_declared_paths(step_id) -> Tuple[Tuple[str, str], ...]:
         # GUARD on the clause — "only bother running this if X is on disk" —
         # and it says nothing whatever about any program opening X.
         #
-        # MEASURED: step 32's declared `phase3/stage3/eco/eco_trigger_decision.json`
-        # gained a `condition_files_exist` entry so that the ECO gate clause
-        # would be REACHABLE on the no-ECO branch (a correct and needed yaml
+        # MEASURED: step 32's declared `phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json`
+        # gained a `condition_files_exist` entry so that the repair gate clause
+        # would be REACHABLE on the no-repair branch (a correct and needed yaml
         # change). With `condition_files_exist` grounding, the step-32
         # dimension-4 cell then passed on the flow file alone: restoring the
-        # ORIGINAL defective `programs/eco_loop_audit.py` — in which
-        # `grep -c eco_trigger_decision` is 0, i.e. no program reads the record
+        # ORIGINAL defective `programs/postroute_timing_repair_audit.py` — in which
+        # `grep -c postroute_timing_repair_decision` is 0, i.e. no program reads the record
         # at all — left
         # `test_d4_gate_measures_what_it_claims[step32]` GREEN (`1 passed`).
         # The cell certified a gate that does not read what it claims to

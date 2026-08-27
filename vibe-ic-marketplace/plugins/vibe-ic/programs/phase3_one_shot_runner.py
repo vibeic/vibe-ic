@@ -76,7 +76,7 @@ import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
 import magic_illegal_overlap_check as _mio  # W2.3 — magic's extraction feedback channel, gated at 0
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
-import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
+import postroute_timing_repair_decision as _repair_dec  # shared Step 32 gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
 import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
 import step_metrics as _sm  # vibe-ic#1080 — the ONE per-step metrics mechanism
@@ -6719,7 +6719,7 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     CORRECTED copy of the tech LEF (WIDTH/MINWIDTH raised to the deck value
     — NEVER lowered) under <project>/phase3/pdk_stage/ (already covered by
     the project's blanket `*.lef` gitignore — never the real PDK file, never
-    committed). Every step that reads `pdk.tech_lef` (PnR, ECO/SPEF repair,
+    committed). Every step that reads `pdk.tech_lef` (PnR, post-route/SPEF repair,
     antenna-diode discovery, …) then sees the corrected number with NO
     further wiring, since they all consume the ONE `PdkConfig.tech_lef`
     field. Chip/PDK-AGNOSTIC: no metal name or numeric value is hardcoded —
@@ -6960,7 +6960,8 @@ def _discover_supply_pin_dir_fix(project: Path, cell_lef: Optional[Path]
     `USE GROUND` PIN that LACKS a `DIRECTION` gets `DIRECTION INOUT ;` injected —
     which is the LEF-correct direction for a supply pin, so ODB stops counting it
     as a signal input and buffer insertion works. Every downstream step reading
-    `pdk.cell_lef` (PnR, CTS, ECO, antenna, LVS) inherits it with no extra wiring.
+    `pdk.cell_lef` (PnR, CTS, post-route repair, antenna, LVS) inherits it with
+    no extra wiring.
 
     chip/PDK-AGNOSTIC: keyed PURELY on `USE POWER` / `USE GROUND` + an absent
     `DIRECTION`; no cell / vendor / metal literal and no numeric value. Fail-safe
@@ -10275,15 +10276,15 @@ def _reference_flow_pnr_mapping(
     return out
 
 
-def _eco_resizer_bounds(project: Path) -> Dict[str, object]:
+def _postroute_timing_repair_resizer_bounds(project: Path) -> Dict[str, object]:
     """The step-32 resizer bounds the design DECLARED — `{}`-shaped kwargs for
-    `_build_eco_repair_tcl`, every value `None` when nothing declared one.
+    `_build_postroute_timing_repair_tcl`, every value `None` when nothing declared one.
 
     Single-sourced through `_reference_flow_pnr_mapping`: it does NOT re-read or
     re-decide anything, so the audit report and the emitted deck can never
     disagree about which knob was adopted. Never raises — a project with no
     staged reference flow, or an unreadable one, yields three `None`s and the
-    ECO deck is emitted exactly as it was before this existed.
+    repair deck is emitted exactly as it was before this existed.
     chip-AGNOSTIC."""
     try:
         m = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project))
@@ -15585,7 +15586,8 @@ def _dont_use_family_fallback_tcl() -> str:
     datapath — the TYP corner still MET (+3.85 ns) but the SS sign-off setup corner
     went VIOLATED (−0.56 ns): the single-corner-closure confounder. Excluding the
     delay family makes `buffer_ports` insert the normal `buf_1`, so the SS setup
-    path closes IN THE BASE ROUTE (0-DRC, no ECO) — measured −0.56 → +2.25 ns MET.
+    path closes IN THE BASE ROUTE (0-DRC, no post-route repair) — measured
+    −0.56 → +2.25 ns MET.
     Delay macros are ONLY legitimate for deliberate hold padding, never as
     signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal.
 
@@ -16251,7 +16253,7 @@ _DPL_ESCALATION_SITES = (5, 20, 100)
 # of raising) and prints it structurally, so `placement_legality_check` refuses
 # on the placer's own number rather than on the presence of a warning word.
 #
-# The Tcl still does not raise, deliberately and for the reason the ECO site
+# The Tcl still does not raise, deliberately and for the reason the repair site
 # already documents: aborting PnR here destroys the report the failure has to
 # appear in. The refusal moves to the gate, which is wired into step 17's
 # `all_of` and whose non-zero exit is what stops the flow.
@@ -17305,7 +17307,7 @@ def _design_signature_tcl(var: str) -> str:
     hash of "<inst name>/<master name>".
 
     Used to tell "the repair changed the design" from "the repair changed
-    nothing", so a post-route ECO never destroys and re-routes a design it did
+    nothing", so a post-route timing repair never destroys and re-routes a design it did
     not modify. Order-independent (a SUM, not a concatenation) because `getInsts`
     order is not a stable contract. A resize changes the MASTER name, an
     insertion changes the count — both move the signature.
@@ -17421,7 +17423,7 @@ def _recover_power_tcl(pct: Optional[int], marker: str, var_tag: str = "") -> st
     change, so whether recovering power costs slack on THIS flow's designs is
     unmeasured here. Defaulting it on would ship that unmeasured behaviour to
     every design at once. What makes the opt-in safe to take is step 32's own
-    closed loop: its trigger is "re-run #21-#28 after ECO", so a pass that ate
+    closed loop: its trigger is "re-run #21-#28 after post-route repair", so a pass that ate
     slack is caught by the same STA that fires the loop.
     """
     if pct is None:
@@ -17443,7 +17445,7 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
                               recover_power_pct: Optional[int] = None) -> str:
     """ORGANIC #561 (b) / #581 round-2 — the ONE post-buffered repair
     command set, shared by every TCL builder that repairs a design whose
-    earlier repair passes already inserted buffers (ECO pass-2, post-route
+    earlier repair passes already inserted buffers (post-route repair pass-2, post-route
     SPEF repair): `repair_timing -setup` + `repair_timing -hold` +
     `detailed_placement`, and NEVER `repair_design` — its repairDriver
     path segfaults (Signal 11) on some gate configs when pass-1 buffers
@@ -17471,9 +17473,9 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
     )
 
 
-# ORGANIC (spm clean-run 2026-07-11) — BOUND the ECO reroute's detailed_route.
+# ORGANIC (spm clean-run 2026-07-11) — BOUND the post-route repair reroute's detailed_route.
 # The base route (Step 21) runs an UNBOUNDED detailed_route that CONVERGES to 0
-# DRC because a routable design terminates when it hits 0. The ECO reroute is
+# DRC because a routable design terminates when it hits 0. The post-route repair reroute is
 # different: repair_timing -setup can insert dozens of buffers / upsizes chasing
 # an architecturally-UNCLOSABLE setup gap (e.g. a full-width combinational add
 # per cycle whose SS-corner critical path is >2x the clock period, WNS worse than
@@ -17481,22 +17483,23 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
 # the follow-on detailed_route NEVER reaches 0 — it plateaus at thousands of
 # Shorts and grinds its full optimization-iteration budget (~1 min/iter x 64 ~ 1 h).
 # The progress-stall watchdog does NOT kill it (it makes tiny forward progress
-# each iteration), so it burns ~1 h of wasted compute. Bounding the ECO reroute's
+# each iteration), so it burns ~1 h of wasted compute. Bounding the post-route repair reroute's
 # OPTIMIZATION iterations lets it recover what is recoverable in the front-loaded
 # early iterations (buffers get routed → SPEF/timing measurable, LEC provable)
-# without the futile tail. SAFE because eco_routed.def / <top>_eco.v is NOT the
+# without the futile tail. SAFE because timing_repaired.def / <top>_timing_repaired.v is NOT the
 # signoff route — the final GDS/DRC/LVS run on the base route (steps pnr→gds→drc→
-# lvs) BEFORE the Step-32 ECO; the ECO netlist feeds only post-ECO timing
+# lvs) BEFORE the Step-32 post-route repair; the repaired netlist feeds only
+# post-repair timing
 # measurement + post-layout LEC, both of which tolerate a DRC-dirty-but-routed
 # design. The initial route still completes (all nets routed); only the
 # violation-reduction optimization tail is capped. chip-AGNOSTIC.
-_ECO_REROUTE_MAX_DROUTE_ITERS = 8
+_POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS = 8
 
 # The SHIP-coverage reroute (signoff_spef_repair) runs a FULL detailed_route —
-# twice, plus once more inside the convergence loop — and, unlike the ECO reroute
-# (_ECO_REROUTE_MAX_DROUTE_ITERS), it was UNBOUNDED. On a die at the design's own
+# twice, plus once more inside the convergence loop — and, unlike the post-route repair reroute
+# (_POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS), it was UNBOUNDED. On a die at the design's own
 # declared utilisation the repair's added/upsized cells can push the follow-on
-# route into the same non-converging plateau the ECO comment describes, and there
+# route into the same non-converging plateau the post-route repair comment describes, and there
 # the 24 h `timeout` and the 30-min progress-stall watchdog BOTH decline to act:
 # the router keeps making tiny forward progress at 100% CPU, so it is neither
 # timed out nor judged stalled. Measured on subservient x sky130A at the
@@ -17505,13 +17508,13 @@ _ECO_REROUTE_MAX_DROUTE_ITERS = 8
 # Bounding it is SAFE by construction: when the reroute does not converge the
 # promotion gate REFUSES the repair and the BASE route ships unchanged (the
 # "no-op (base route kept)" path). A finite budget therefore costs at most the
-# repair, never the design. Generous (4x the ECO budget) because this reroute CAN
+# repair, never the design. Generous (4x the post-route repair budget) because this reroute CAN
 # be promoted and deserves a real chance. chip-AGNOSTIC.
 _SHIP_REROUTE_MAX_DROUTE_ITERS = 32
 
 
 
-#: #766 — the ECO start-point DEF, BEST FIRST.
+#: #766 — the post-route repair start-point DEF, BEST FIRST.
 #:
 #: ``<top>.def`` is the canonical SHIPPED post-route DEF: it is what
 #: `step_signoff_spef_repair` promotes the repaired route onto, what
@@ -17519,25 +17522,25 @@ _SHIP_REROUTE_MAX_DROUTE_ITERS = 32
 #: streams. ``routed.def`` is the same design under its stage name (the
 #: fallback for a run whose ``<top>.def`` staging did not happen).
 #: ``post_hold.def`` is the PRE-ROUTE, hold-fixed DEF — the honest last resort
-#: for a run that never completed a route, and the ONLY case in which the ECO
+#: for a run that never completed a route, and the ONLY case in which the post-route repair
 #: legitimately repairs something other than the shipped design.
-_ECO_START_DEF_PRECEDENCE = (
+_POSTROUTE_TIMING_REPAIR_START_DEF_PRECEDENCE = (
     ("{top}.def", "post_route_shipped"),
     ("routed.def", "post_route"),
     ("post_hold.def", "pre_route_post_hold"),
 )
 
 
-def _eco_start_point(pnr_dir: Path, top: str) -> Tuple[Optional[Path], str]:
-    """#766 — ``(def_path, basis)`` for the design the ECO must repair.
+def _repair_start_point(pnr_dir: Path, top: str) -> Tuple[Optional[Path], str]:
+    """#766 — ``(def_path, basis)`` for the design the post-route repair must repair.
 
-    The ECO's trigger number is measured on the SHIPPED post-route design, so
+    The post-route repair's trigger number is measured on the SHIPPED post-route design, so
     the repair has to start there or it is answering about a different netlist.
     Returns ``(None, "none")`` when the PnR directory holds none of them —
     absence is reported, never substituted.
     """
     pnr_dir = Path(pnr_dir)
-    for pattern, basis in _ECO_START_DEF_PRECEDENCE:
+    for pattern, basis in _POSTROUTE_TIMING_REPAIR_START_DEF_PRECEDENCE:
         cand = pnr_dir / pattern.format(top=top)
         if cand.is_file() and cand.stat().st_size > 0:
             return cand, basis
@@ -17545,34 +17548,34 @@ def _eco_start_point(pnr_dir: Path, top: str) -> Tuple[Optional[Path], str]:
 
 
 
-#: Stamped into every generated ECO deck. The value is a digest of the GENERATOR
+#: Stamped into every generated post-route repair deck. The value is a digest of the GENERATOR
 #: ITSELF, so it changes exactly when the emission logic changes and never needs
 #: to be bumped by hand.
-_ECO_DECK_STAMP = "# ECO_DECK_GENERATOR: "
+_POSTROUTE_TIMING_REPAIR_DECK_STAMP = "# POSTROUTE_TIMING_REPAIR_DECK_GENERATOR: "
 
 
-def _eco_deck_fingerprint() -> str:
-    """A digest of `_build_eco_repair_tcl`'s own source."""
+def _repair_deck_fingerprint() -> str:
+    """A digest of `_build_postroute_timing_repair_tcl`'s own source."""
     import inspect
     try:
-        src = inspect.getsource(_build_eco_repair_tcl)
+        src = inspect.getsource(_build_postroute_timing_repair_tcl)
     except (OSError, TypeError):      # frozen / exec'd — cannot fingerprint
         return ""
     return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
 
 
-def _eco_deck_is_stale(deck: Path) -> bool:
-    """Should this ECO deck be re-emitted?
+def _repair_deck_is_stale(deck: Path) -> bool:
+    """Should this post-route repair deck be re-emitted?
 
     The call site used to ask `if not deck.is_file()` — EXISTENCE standing in
-    for CURRENCY. An ECO deck is a GENERATED artefact: reusing one written by a
+    for CURRENCY. A post-route repair deck is a GENERATED artefact: reusing one written by a
     different generator re-runs the old generator's logic, whatever the plugin
     has since learned.
 
     MEASURED (sha256 x sky130A, 2026-08-05). A tree carried a deck emitted
     before #766, which starts the repair from the PRE-ROUTE DEF and never reads
     SPEF. #766 fixed that. But a re-run in place found the file present, skipped
-    the emit, and reproduced the pre-#766 answer exactly: a recorded ECO
+    the emit, and reproduced the pre-#766 answer exactly: a recorded post-route repair
     regression of -19.010 ns against a true delta of -0.40 ns, inflated ~47x,
     because the two numbers described two different netlists (only 16 of 178
     cell types matched). The fix had landed and the run could not reach it.
@@ -17583,17 +17586,17 @@ def _eco_deck_is_stale(deck: Path) -> bool:
     """
     if not deck.is_file():
         return True
-    fp = _eco_deck_fingerprint()
+    fp = _repair_deck_fingerprint()
     if not fp:
         return False        # cannot fingerprint -> keep the old behaviour
     try:
         head = deck.read_text(errors="replace")[:4096]
     except OSError:
         return True
-    return f"{_ECO_DECK_STAMP}{fp}" not in head
+    return f"{_POSTROUTE_TIMING_REPAIR_DECK_STAMP}{fp}" not in head
 
-def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
-                          liberty_c: str, pnr_dir_c: str, eco_dir_c: str,
+def _build_postroute_timing_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
+                          liberty_c: str, pnr_dir_c: str, postroute_timing_repair_dir_c: str,
                           metal_prefix: str,
                           corner_libs: Optional[Dict[str, str]] = None,
                           start_def_c: Optional[str] = None,
@@ -17604,12 +17607,12 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                           setup_max_util_pct: Optional[float] = None,
                           hold_max_util_pct: Optional[float] = None,
                           recover_power_pct: Optional[int] = None) -> str:
-    """ORGANIC #561 — generate a self-contained OpenROAD ECO timing-repair TCL
+    """ORGANIC #561 — generate a self-contained OpenROAD post-route timing-repair TCL
     that embeds the 4 proven workarounds discovered during the ibex pilot:
 
-    === #766: THE ECO MUST REPAIR THE DESIGN THAT FAILED ===================
+    === #766: THE POST-ROUTE REPAIR MUST REPAIR THE DESIGN THAT FAILED ===================
 
-    The number that FIRES this ECO is the multi-corner OCV sign-off slack, and
+    The number that FIRES this post-route repair is the multi-corner OCV sign-off slack, and
     `_emit_mcorner_ocv_sta` measures it on the SHIPPED POST-ROUTE design
     (``<pnr>/<top>_pnr.v``, which `step_signoff_spef_repair` promotes from
     ``<top>_pnr_repaired.v``) with that design's OWN extracted parasitics
@@ -17619,15 +17622,15 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     This deck used to read ``post_hold.def`` — the last PRE-route, hold-fixed
     DEF — and ``estimate_parasitics``. Those are a DIFFERENT NETLIST with
     DIFFERENT PARASITICS. MEASURED (subservient x gf180mcuD, r8): the shipped
-    netlist carries 9701 instances against the ECO start point's 9656, and
+    netlist carries 9701 instances against the post-route repair start point's 9656, and
     three instances differ in MASTER (`_3184_`/`_3186_` nor2_4 vs nor2_1,
     `place1325` clkbuf_8 vs buf_2) — every one of them a DOWNSIZE the sign-off
-    DRV repair made and the ECO's start point never had. So:
+    DRV repair made and the post-route repair's start point never had. So:
 
       * the repair answered ``RSZ-0098 No setup violations found`` while the
         design it was asked to fix read ``WNS -0.09 / TNS -0.13``, and
-      * ``eco_setup_delta_ns = -8.220`` compared TWO IMPLEMENTATIONS, not a
-        before and an after, and `eco_loop_audit` failed the step for a
+      * ``repair_setup_delta_ns = -8.220`` compared TWO IMPLEMENTATIONS, not a
+        before and an after, and `postroute_timing_repair_audit` failed the step for a
         "regression" on a run whose ``repair_timing -setup`` made ZERO changes.
 
     The parasitics term is the DOMINANT one and it is measurable on its own:
@@ -17659,33 +17662,33 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         one of its own (``DRT-1010 Unsupported non-orthogonal wire``, measured on
         this design on a 45-degree Metal2 segment OpenROAD wrote itself). The
         clear is the same one `_ship_signoff_spef_repair_tcl` uses to reroute
-        successfully FROM ``routed.def``; if a reroute still aborts, the ECO's
+        successfully FROM ``routed.def``; if a reroute still aborts, the post-route repair's
         artefacts are not the shipped ones and the abort is recorded rather than
-        swallowed (`_eco_repair_log_verdict.reroute_failed`), so the "after"
-        measurement declines to use the ECO's incomplete extraction.
+        swallowed (`_postroute_timing_repair_log_verdict.reroute_failed`), so the "after"
+        measurement declines to use the post-route repair's incomplete extraction.
 
     Finally the deck RE-EXTRACTS its own parasitics after the reroute into
-    ``<eco>/spef_corners/`` when the PDK ships captables, so the post-ECO
-    "after" is measured on parasitics that describe the ECO — not on the base
-    route's (see `_measure_posteco_mcorner_ocv`).
+    ``<postroute_timing_repair>/spef_corners/`` when the PDK ships captables, so the post-repair
+    "after" is measured on parasitics that describe the post-route repair — not on the base
+    route's (see `_measure_postrepair_mcorner_ocv`).
 
     With no post-route DEF resolvable the emission is BYTE-IDENTICAL to the
     pre-#766 one (the honest pre-route fallback: there is no shipped route to
     repair).
 
-    TAPEOUT-SIGNOFF (multi-corner ECO): when ``corner_libs`` supplies ≥2 distinct
+    TAPEOUT-SIGNOFF (multi-corner post-route repair): when ``corner_libs`` supplies ≥2 distinct
     process corners (SS/TT/FF discovered from THIS PDK — see
-    :func:`_resolve_signoff_corner_libs`) the ECO reads them ALL as OpenROAD
+    :func:`_resolve_signoff_corner_libs`) the post-route repair reads them ALL as OpenROAD
     timing corners (``define_corners`` + ``read_liberty -corner``) so
     ``repair_timing -setup`` optimizes the WORST (ss) process corner — not just
     the typical (tt) corner. This closes the other half of the single-corner-
     closure confounder: the v1.2.85 DRV constraints let ``repair_design`` fix the
-    slew explosion, but a SINGLE-CORNER (tt) ECO then runs ``repair_timing -setup``
+    slew explosion, but a SINGLE-CORNER (tt) post-route repair then runs ``repair_timing -setup``
     against tt (which a large design can already MEET) and never touches the ss
     setup violation, leaving it on the floor. Driving the repair MULTI-CORNER makes
     the resizer size/buffer/clone against the ss path delay (proven live on ibex:
-    ss setup −35.78 ns → −15.49 ns, a 20.3 ns recovery a tt-only ECO cannot make).
-    §4.05: a genuine ss floor still shows VIOLATED afterwards — the multi-corner ECO
+    ss setup −35.78 ns → −15.49 ns, a 20.3 ns recovery a tt-only post-route repair cannot make).
+    §4.05: a genuine ss floor still shows VIOLATED afterwards — the multi-corner post-route repair
     RECOVERS what is recoverable, it does NOT fabricate closure. With <2 corners
     available it degrades to the single-corner ``read_liberty`` (byte-identical to
     the pre-multi-corner emission). chip/PDK-AGNOSTIC: corner libs come from the
@@ -17706,13 +17709,13 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
           routing. Inline the _pg_net_cleanup_tcl() pass first.
       (d) DPL-0033: check_placement is asked for its VIOLATION COUNT
           (`-no_abort` returns it instead of raising) and the number is
-          recorded as `ECO_CHECK_PLACEMENT_VIOLATIONS <n>`; the flow keeps
+          recorded as `POSTROUTE_TIMING_REPAIR_CHECK_PLACEMENT_VIOLATIONS <n>`; the flow keeps
           moving and `placement_legality_check` refuses on the count.
 
     Returns a ready-to-run TCL string (not an f-string template — real {/}).
     Chip-AGNOSTIC: no design-specific magic; only standard OpenROAD APIs."""
     pg_cleanup = _pg_net_cleanup_tcl()
-    # TAPEOUT-SIGNOFF (multi-corner ECO): read every process corner the PDK
+    # TAPEOUT-SIGNOFF (multi-corner post-route repair): read every process corner the PDK
     # provides as an OpenROAD timing corner so repair_timing -setup targets the
     # WORST (ss) corner. Deterministic ss→tt→ff order (worst-setup first); any
     # non-canonical extra label is appended sorted. <2 corners ⇒ single-corner
@@ -17726,7 +17729,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     if len(_labels) >= 2:
         _corner_names = " ".join(lbl.lower() for lbl in _labels)
         liberty_block = (
-            "# TAPEOUT-SIGNOFF (multi-corner ECO): ss/tt/ff read as timing\n"
+            "# TAPEOUT-SIGNOFF (multi-corner post-route repair): ss/tt/ff read as timing\n"
             "# corners so repair_timing -setup optimizes the WORST (ss) process\n"
             "# corner, not just tt (the single-corner-closure confounder).\n"
             f"define_corners {_corner_names}\n"
@@ -17753,12 +17756,12 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "#   (a) #766: read the SHIPPED post-route DEF + ITS extracted SPEF —\n"
         "#       the same design, and the same parasitics, the trigger measured\n")
     _start_rationale = (
-        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as the ECO start-point,\n"
+        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as the post-route repair start-point,\n"
         "# as the PRIMARY design source: the netlist, placement, ROWS and TRACKS\n"
         "# all come from the DEF. post_hold.def is the last pre-route, hold-fixed\n"
         "# DEF; routed.def would carry stale GR guides that trigger RSZ-0074 abort.\n"
         if not post_route_start else
-        "# #766 — the ECO start-point is the SHIPPED POST-ROUTE DEF: the design\n"
+        "# #766 — the post-route repair start-point is the SHIPPED POST-ROUTE DEF: the design\n"
         "# the multi-corner OCV sign-off measured the violation on. The pre-route\n"
         "# post_hold.def is a DIFFERENT NETLIST (measured: 9656 vs 9701 instances,\n"
         "# 3 masters differing) so a repair run there answers about another design.\n"
@@ -17773,7 +17776,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                        "# #766 — fill-tiled post-route DEF: clear the tiling before any\n"
                        "# parasitics annotation or resize (DPL legal-site / EST-0104).\n"
                        "if {[catch {remove_fillers} _rf]} {\n"
-                       "  puts \"ECO_RMFILL_NONFATAL: $_rf\"\n"
+                       "  puts \"POSTROUTE_TIMING_REPAIR_RMFILL_NONFATAL: $_rf\"\n"
                        "}\n")
     _refill = ("" if not post_route_start else
                _build_sparse_die_aware_filler_tcl(filler_masters or []))
@@ -17794,12 +17797,12 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                 _reads.append(
                     f"if {{[catch {{read_spef -corner {_l} "
                     f"{_pick_spef(_rc_for_process.get(_l, 'nom'))}}} _rs_{_l}]}} {{\n"
-                    f"  puts \"ECO_READ_SPEF_NONFATAL {_l}: $_rs_{_l}\"\n"
+                    f"  puts \"POSTROUTE_TIMING_REPAIR_READ_SPEF_NONFATAL {_l}: $_rs_{_l}\"\n"
                     "}\n")
         else:
             _reads.append(
                 f"if {{[catch {{read_spef {_pick_spef('max')}}} _rs]}} {{\n"
-                "  puts \"ECO_READ_SPEF_NONFATAL: $_rs\"\n"
+                "  puts \"POSTROUTE_TIMING_REPAIR_READ_SPEF_NONFATAL: $_rs\"\n"
                 "}\n")
         _spef_block = (
             "\n"
@@ -17814,14 +17817,14 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
               "# parasitics so repair_design/repair_timing cannot fall back to the\n"
               "# optimistic set_wire_rc wire-load model. NONFATAL on stock builds.\n"
               "if {[catch {estimate_parasitics -detailed_routing} _pe_dr]} {\n"
-              "  puts \"ECO_EST_PARASITICS_DR_NONFATAL: $_pe_dr\"\n"
+              "  puts \"POSTROUTE_TIMING_REPAIR_EST_PARASITICS_DR_NONFATAL: $_pe_dr\"\n"
               "}\n")
     # Pass 1 parasitics: an `estimate_parasitics -placement` here would OVERWRITE
     # the annotation above with the optimistic estimate — the exact blindness
     # #766 closes. It stays only on the un-annotated (pre-route) path.
     _pass1_parasitics = (
         "if {[catch {estimate_parasitics -placement} _pe_pl]} {\n"
-        "  puts \"ECO_EST_PARASITICS_PL_NONFATAL: $_pe_pl\"\n"
+        "  puts \"POSTROUTE_TIMING_REPAIR_EST_PARASITICS_PL_NONFATAL: $_pe_pl\"\n"
         "}\n" if not _annotated else
         "# #766 — NO estimate_parasitics here: the real extracted SPEF is already\n"
         "# annotated above and re-estimating would overwrite it with the\n"
@@ -17838,50 +17841,51 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                       "# DRT-1010 abort measured on this design was raised on exactly\n"
                       "# such a wire (a 45-degree Metal2 segment OpenROAD wrote\n"
                       "# itself). PG/special nets and dont_touch nets are preserved.\n"
-                      + _spare_safe_routing_clear_tcl("ECO"))
-    # #766 (c) — the post-ECO "after" must be judged on parasitics that describe
-    # the ECO. Re-extract from the ECO's OWN route into <eco>/spef_corners/ for
-    # every captable the PDK ships; `_measure_posteco_mcorner_ocv` prefers these
+                      + _spare_safe_routing_clear_tcl(
+                          "POSTROUTE_TIMING_REPAIR"))
+    # #766 (c) — the post-repair "after" must be judged on parasitics that describe
+    # the post-route repair. Re-extract from the post-route repair's OWN route into <postroute_timing_repair>/spef_corners/ for
+    # every captable the PDK ships; `_measure_postrepair_mcorner_ocv` prefers these
     # over the base route's extraction. Empty when the PDK ships no captable
     # (then the after-measurement discloses it used the base parasitics).
     _reextract = ""
     if post_route_start and captables_c:
         _re = ["\n"
                "# #766 (c) — re-extract THIS route's parasitics: the base route's\n"
-               "# SPEF does not describe the design the ECO just produced, and\n"
+               "# SPEF does not describe the design the post-route repair just produced, and\n"
                "# judging the 'after' on it compares two different implementations.\n"
-               f"catch {{file mkdir {eco_dir_c}/spef_corners}}\n"
+               f"catch {{file mkdir {postroute_timing_repair_dir_c}/spef_corners}}\n"
                "catch {define_process_corner -ext_model_index 0 X}\n"]
         for _c in sorted(captables_c):
             _cap = captables_c[_c]
-            _sp = f"{eco_dir_c}/spef_corners/{top}.{_c}.spef"
+            _sp = f"{postroute_timing_repair_dir_c}/spef_corners/{top}.{_c}.spef"
             _re.append(
                 f"if {{[catch {{extract_parasitics -ext_model_file {_cap} "
                 f"-corner_cnt 1 -max_res 50 -coupling_threshold 0.1}} _xe]}} {{\n"
-                f"  puts \"ECO_REEXTRACT_FAIL {_c}: $_xe\"\n"
+                f"  puts \"POSTROUTE_TIMING_REPAIR_REEXTRACT_FAIL {_c}: $_xe\"\n"
                 "} else {\n"
                 f"  if {{[catch {{write_spef {_sp}}} _we]}} {{\n"
-                f"    puts \"ECO_REEXTRACT_WRITE_FAIL {_c}: $_we\"\n"
+                f"    puts \"POSTROUTE_TIMING_REPAIR_REEXTRACT_WRITE_FAIL {_c}: $_we\"\n"
                 "  } else {\n"
-                f"    puts \"ECO_REEXTRACT_WROTE {_c}\"\n"
+                f"    puts \"POSTROUTE_TIMING_REPAIR_REEXTRACT_WROTE {_c}\"\n"
                 "  }\n"
                 "}\n")
         _reextract = "".join(_re)
     return (
-        "# === ORGANIC #561: ECO timing repair TCL ===\n"
-        "# 4 OpenROAD workarounds for safe stand-alone ECO iteration:\n"
+        "# === ORGANIC #561: post-route timing repair TCL ===\n"
+        "# 4 OpenROAD workarounds for safe stand-alone post-route repair iteration:\n"
         + _start_comment +
         "#   (b) Signal-11: pass-2 repair is setup-only (no repair_design)\n"
         "#   (c) DRT-0305: PG net cleanup (zero_/one_ stubs) before global_route\n"
         "#   (d) DPL-0033: check_placement's own violation COUNT recorded\n"
-        "# Generated by phase3_one_shot_runner._build_eco_repair_tcl\n"
-        # WHICH generator, not just that there was one. `_eco_deck_is_stale`
+        "# Generated by phase3_one_shot_runner._build_postroute_timing_repair_tcl\n"
+        # WHICH generator, not just that there was one. `_repair_deck_is_stale`
         # re-emits when this digest is absent or different, so a deck written
         # before a fix cannot be silently reused after it.
-        + f"{_ECO_DECK_STAMP}{_eco_deck_fingerprint()}\n"
+        + f"{_POSTROUTE_TIMING_REPAIR_DECK_STAMP}{_repair_deck_fingerprint()}\n"
         + "# Chip-AGNOSTIC: standard OpenROAD APIs only.\n"
         "\n"
-        # G-ANTENNA-REROUTE — the ECO reroute runs its OWN detailed_route; OpenROAD
+        # G-ANTENNA-REROUTE — the post-route repair reroute runs its OWN detailed_route; OpenROAD
         # defaults to 1 thread, so without this it grinds single-threaded (the
         # bounded ~8-iteration reroute this file's own comment flags as
         # ~1 min/iter). Parallelize it the same as the main pnr.tcl session.
@@ -17891,17 +17895,17 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"{liberty_block}"
         + _start_rationale +
         "# Reading it as PRIMARY — NOT read_verilog+link_design followed by a second\n"
-        "# read_def — is what makes this ECO runnable end-to-end: link_design from\n"
+        "# read_def — is what makes this post-route repair runnable end-to-end: link_design from\n"
         "# the netlist leaves the block with no floorplan, so a later plain read_def\n"
         "# aborts ODB-0251 ('Chip already has a block'), and forcing it -incremental\n"
         "# then leaves detailed_placement/global_route aborting DPL-0027/GRT-0701\n"
         "# ('no rows' / 'missing track structure') because -incremental does not\n"
         "# carry the DEF's rows+tracks. The primary read carries them, so the\n"
-        "# repair + reroute complete; write_verilog recovers the ECO netlist from\n"
+        "# repair + reroute complete; write_verilog recovers the post-route repair netlist from\n"
         "# odb. (verified live on ibex: full repair+reroute completes.)\n"
         f"read_def {_start_def}\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
-        # THE ECO IS TRIGGERED BY A NUMBER IT CANNOT SEE.
+        # THE post-route repair IS TRIGGERED BY A NUMBER IT CANNOT SEE.
         #
         # The auto-trigger fires on the sign-off multi-corner OCV measurement,
         # and every deck that produces that measurement applies TWO things this
@@ -17913,10 +17917,10 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # MEASURED (subservient x gf180mcuD, r7/r8): the trigger fired on
         # `setup_worst_slack_ns: -0.09` and this deck answered
         #   [INFO RSZ-0098] No setup violations found      (both repair passes)
-        # in `eco_repair.log`, making ZERO setup repairs. The same netlist reads
+        # in `postroute_timing_repair.log`, making ZERO setup repairs. The same netlist reads
         # `+0.53 ns` with an ideal clock and no derate, and `-0.09 ns` with the
         # sign-off view — so `RSZ-0098` was literally correct about the wrong
-        # design. `grep -c set_timing_derate eco_timing_repair.tcl` = 0 against
+        # design. `grep -c set_timing_derate postroute_timing_repair.tcl` = 0 against
         # 3 sign-off decks that all carry it.
         #
         # A clock tree EXISTS in post_hold.def (post-CTS, hold-fixed), so an
@@ -17924,57 +17928,59 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # AFTER read_sdc so a design SDC that already sets them is not
         # contradicted (both commands are idempotent).
         + _propagated_clock_tcl(
-            reason=("the ECO start point is the SHIPPED POST-ROUTE design with "
+            reason=("the post-route repair start point is the SHIPPED POST-ROUTE design with "
                     "its extracted parasitics annotated, exactly as the "
-                    "sign-off measurement that fired this ECO"
+                    "sign-off measurement that fired this post-route repair"
                     if post_route_start else
                     "post_hold.def is POST-CTS, so the clock tree exists in "
                     "this netlist and an ideal clock cannot describe it"))
         + _flat_ocv_derate_tcl()
-        # #543 -- the ECO resizes too, and it also ran without the v1.2.86
+        # #543 -- the post-route repair resizes too, and it also ran without the v1.2.86
         # cell-pool exclusion: 1 instance of `sky130_fd_sc_hd__probe_p_8` reached
-        # the ECO netlist on the measured ibex run. THREE resizing paths existed
+        # the post-route repair netlist on the measured ibex run. THREE resizing paths existed
         # and only `pnr.tcl` carried the guard; a do-not-use list that binds on
         # one resizer and not the others is not a list, it is a coincidence.
         + _dont_use_family_fallback_tcl()
         + "\n"
         f"if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}} _swr_sig]}} {{\n"
         f"  if {{[catch {{set_wire_rc -layer {metal_prefix}1}} _swr_sig2]}} {{\n"
-        "    puts \"ECO_SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2\"\n"
+        "    puts \"POSTROUTE_TIMING_REPAIR_SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2\"\n"
         "  }\n"
         "}\n"
         f"if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{\n"
-        "  puts \"ECO_SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk\"\n"
+        "  puts \"POSTROUTE_TIMING_REPAIR_SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk\"\n"
         "}\n"
         + _remove_fillers
         + _spef_block
         + "\n"
-        "# === ECO pass 1: placement-based repair ===\n"
+        "# === post-route repair pass 1: placement-based repair ===\n"
         + _pass1_parasitics +
         # THE AREA CEILING ON WHAT FIXING TIMING MAY COST. `repair_design` and
         # `repair_timing` both accept `-max_utilization util` (measured from the
         # tool's own CLI in the pinned image); step 32 passed it never, so the
-        # ECO could buy timing with unbounded area and nothing said so. The
+        # post-route repair could buy timing with unbounded area and nothing said so. The
         # SETUP ceiling governs `repair_design` too, because that pass is the
         # setup-repair's own buffer/upsize preparation and bounding one without
         # the other leaves the ceiling reachable around the side.
         # Both are "" unless the design declared one — see `_resizer_bound_flag`.
         f"if {{[catch {{repair_design{_resizer_bound_flag(setup_max_util_pct)}}} "
         f"_rd_err]}} {{\n"
-        "  puts \"ECO_REPAIR_DESIGN_NONFATAL: $_rd_err\"\n"
+        "  puts \"POSTROUTE_TIMING_REPAIR_DESIGN_NONFATAL: $_rd_err\"\n"
         "}\n"
         f"if {{[catch {{repair_timing -setup"
         f"{_resizer_bound_flag(setup_max_util_pct)}}} _rts_err]}} {{\n"
-        "  puts \"ECO_REPAIR_TIMING_SETUP_NONFATAL: $_rts_err\"\n"
+        "  puts \"POSTROUTE_TIMING_REPAIR_SETUP_NONFATAL: $_rts_err\"\n"
         "}\n"
-        + _build_escalating_legalize_tcl("ECO_DPL", "_eco")
+        + _build_escalating_legalize_tcl(
+            "POSTROUTE_TIMING_REPAIR_DPL", "_postroute_timing_repair")
         + "\n"
-        "# ORGANIC #561 (d): DPL-0033 — check_placement after the ECO's own\n"
+        "# ORGANIC #561 (d): DPL-0033 — check_placement after the post-route repair's own\n"
         "# legalization, recorded as the tool's own VIOLATION COUNT.\n"
         "# It still does not abort PnR here — aborting destroys the report the\n"
         "# failure has to appear in — and placement_legality_check, wired into\n"
         "# step 17's `all_of`, is what refuses on the count.\n"
-        + _build_check_placement_verdict_tcl("ECO", "_ecocp")
+        + _build_check_placement_verdict_tcl(
+            "POSTROUTE_TIMING_REPAIR", "_postroute_timing_repair_cp")
         + "\n"
         "# ORGANIC #561 (c): DRT-0305 — PG net cleanup before global_route.\n"
         "# A dangling zero_/one_ constant-tie net with POWER/GROUND SigType in\n"
@@ -17984,36 +17990,36 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         + "\n"
         "global_route\n"
         "\n"
-        "# === ECO pass 2: post-GR setup-only repair ===\n"
+        "# === post-route repair pass 2: post-GR setup-only repair ===\n"
         "# ORGANIC #561 (b): Signal-11 (segfault) — pass-2 is setup-only.\n"
         "# repair_design's repairDriver segfaults on some gate configs when\n"
         "# pass-1 buffers are already present; setup-only skips the crash path.\n"
         "if {[catch {estimate_parasitics -global_routing} _pe_gr]} {\n"
-        "  puts \"ECO_EST_PARASITICS_GR_NONFATAL: $_pe_gr\"\n"
+        "  puts \"POSTROUTE_TIMING_REPAIR_EST_PARASITICS_GR_NONFATAL: $_pe_gr\"\n"
         "}\n"
         # #581 r2 — the post-buffered command set comes from the ONE shared
         # builder so this site and the SPEF-repair block cannot drift.
         + _post_buffered_repair_tcl(
-            "ECO", "_GR", "2",
+            "POSTROUTE_TIMING_REPAIR", "_GR", "2",
             setup_max_util_pct=setup_max_util_pct,
             hold_max_util_pct=hold_max_util_pct,
             recover_power_pct=recover_power_pct) +
         # Bounded reroute: -droute_end_iter caps the DRC-optimization iterations
-        # so a non-converging ECO reroute (unclosable setup gap over-buffering a
+        # so a non-converging post-route repair reroute (unclosable setup gap over-buffering a
         # small/low-util die) cannot grind its full ~64-iteration budget. The
         # initial route still completes; only the futile violation-reduction tail
         # is capped. The base signoff route (Step 21) stays UNBOUNDED/converging.
         f"if {{[catch {{detailed_route -droute_end_iter "
-        f"{_ECO_REROUTE_MAX_DROUTE_ITERS}}} _dr_err]}} {{\n"
-        "  puts \"ECO_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
+        f"{_POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS}}} _dr_err]}} {{\n"
+        "  puts \"POSTROUTE_TIMING_REPAIR_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
         "}\n"
         + _refill
         + _reextract
-        + f"write_def {eco_dir_c}/eco_routed.def\n"
-        f"write_verilog {eco_dir_c}/{top}_eco.v\n"
-        f"if {{[catch {{write_sdf{_sdf_corner_flag} {eco_dir_c}/{top}_eco.sdf}} "
+        + f"write_def {postroute_timing_repair_dir_c}/timing_repaired.def\n"
+        f"write_verilog {postroute_timing_repair_dir_c}/{top}_timing_repaired.v\n"
+        f"if {{[catch {{write_sdf{_sdf_corner_flag} {postroute_timing_repair_dir_c}/{top}_timing_repaired.sdf}} "
         "_sdf_err]} {\n"
-        "  puts \"ECO_WRITE_SDF_NONFATAL: $_sdf_err\"\n"
+        "  puts \"POSTROUTE_TIMING_REPAIR_WRITE_SDF_NONFATAL: $_sdf_err\"\n"
         "}\n"
     )
 
@@ -18440,14 +18446,14 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
     upstream OpenROAD emits nothing, so it can never reach a command it would
     segfault on).
 
-    WHY END-OF-FLOW: `repair_design`/`repair_timing -setup` INSERT ECO buffers.
+    WHY END-OF-FLOW: `repair_design`/`repair_timing -setup` INSERT buffers.
     Running them before write_def/write_verilog would ship those cells UNPLACED
     /UNROUTED into the DEF/GDS/netlist (routing-incomplete + LVS mismatch). Here
     the shipped design is already frozen on disk, so the repair modifies only the
-    in-memory netlist to MEASURE how much setup a real-parasitics ECO would
+    in-memory netlist to MEASURE how much setup a real-parasitics repair would
     recover, and reports it to a SEPARATE `sta_spef_repaired.rpt` (never the
-    authoritative sta.rpt). Realized closure (place+route the ECO cells + re-STA)
-    is the #557 ECO-bracket follow-on — on a large design that reroute grinds
+    authoritative sta.rpt). Realized closure (place+route the repair cells +
+    re-STA) is the #557 repair-bracket follow-on — on a large design that reroute grinds
     pathologically long, so it is NOT attempted in-flow.
 
     EXACT recipe (fork-openroad, proven on sha256's sign-off corner: worst slack
@@ -18476,7 +18482,7 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         "cf06074139, live in 0.2.17) ===\n"
         "# ESTIMATE-ONLY: runs AFTER all shipped artifacts + the clean sta.rpt, so\n"
         "# it never modifies routed.def/<top>.def/<top>_pnr.v. Measures how much\n"
-        "# setup a real-parasitics ECO would recover; realized closure = #557 ECO.\n"
+        "# setup a real-parasitics repair would recover; realized closure = #557 repair.\n"
         "# Flag is on estimate_parasitics, NOT repair_timing. Probe-gated (stock\n"
         "# upstream OpenROAD never reaches here → cannot segfault).\n"
         f"if {{[file exists {spef_c}]}} {{\n"
@@ -18804,7 +18810,7 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
     post-detailed-route SPEF extraction (MEASURE-ONLY).
 
     #147 — the fork setup-repair does NOT go here: this block runs BEFORE
-    `write_def routed.def` / `write_verilog`, so inserting ECO buffers here
+    `write_def routed.def` / `write_verilog`, so inserting repair buffers here
     would ship them UNPLACED/UNROUTED into the DEF/GDS/netlist (routing + LVS
     corruption). The repair is emitted SEPARATELY by
     `_postroute_repair_estimate_tcl` at the END of pnr.tcl (after every shipped
@@ -18829,10 +18835,11 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
     ALSO segfaults the same way (`catch` cannot contain a segfault, which
     kills the whole openroad process → GDS never written). Timing repair
     belongs PRE-route: the in-flow CTS-domain estimate repair passes in
-    pnr.tcl, and the #561 ECO builder (which starts from post_hold.def — a
+    pnr.tcl, and the #561 post-route timing-repair builder (which starts from
+    post_hold.def — a
     PRE-route state — so its repair_timing is safe). Post-route residual
     violations are surfaced by the SPEF-true STA and remediated via that
-    ECO path, never by repairing the already-routed design here.
+    repair path, never by repairing the already-routed design here.
 
     ORGANIC #581 round-1 — strictly SEQUENTIAL one-line `if {[catch {...}
     e]} {...}` statements (no multi-line catch inside a bracketed
@@ -18844,7 +18851,7 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "# --- ORGANIC #557/#581/#147: post-route SPEF extraction (MEASURE-ONLY) ---\n"
         "# This block runs BEFORE write_def/write_verilog, so it must NOT modify\n"
         "# the design (no repair_timing/repair_design — those would ship unrouted\n"
-        "# ECO cells). It only EXTRACTS the sign-off SPEF (feeds #527's SPEF-true\n"
+        "# repair cells). It only EXTRACTS the sign-off SPEF (feeds #527's SPEF-true\n"
         "# Step-23 STA). The fork setup-repair on this SPEF is an estimate-only\n"
         "# END-of-pnr block (_postroute_repair_estimate_tcl).\n"
         f"set _prs_tlef {tech_lef_c}\n"
@@ -19391,17 +19398,17 @@ def _emit_cts_report_if_complete(project: Path, top: str):
     cts_out.mkdir(parents=True, exist_ok=True)
     if not cts_lines:
         # ORGANIC #568 — post_cts.def exists but the openroad.log carries NO
-        # CTS signature. This is the post-ECO log-replacement shape: the
+        # CTS signature. This is the post-repair log-replacement shape: the
         # completion-time emit (this same helper, called inside step_pnr the
         # moment CTS finished) should already have made the rpt durable; if
         # we are HERE with no durable rpt, the original CTS evidence has been
-        # LOST (the log was overwritten by a later route/ECO run). Do NOT
+        # LOST (the log was overwritten by a later route/repair run). Do NOT
         # fabricate a "no-op tree" report that masks the loss — write an
         # explicit evidence-lost marker that cts_quality_check FAILs on.
         rpt.write_text(
             "# CTS sign-off report — EVIDENCE LOST (#568)\n"
             "# post_cts.def is present but the openroad.log no longer carries\n"
-            "# the CTS section (overwritten by a later route/ECO run) and no\n"
+            "# the CTS section (overwritten by a later route/repair run) and no\n"
             "# durable clock_tree report was emitted at CTS completion.\n"
             "# CTS not invoked or zero output captured in the current log.\n")
         return str(rpt)
@@ -19492,7 +19499,7 @@ def _v1_5_37a_multicorner_pnr_block(project: "Path", pdk: "PdkConfig",
     session read only tt_025C_1v80, so repair_timing -setup met TT while the
     ss_100C_1v60 sign-off saw catastrophic size-1 slew (-33.6 ns). Repairing at
     ss BEFORE detailed_route makes the upsized cells first-class PLACED cells
-    that route in the normal detailed-route pass (no post-route ECO, no
+    that route in the normal detailed-route pass (no post-route repair, no
     DRT-0073).
 
     Returns a `define_corners ...` + per-corner `read_liberty -corner ...` block,
@@ -19930,7 +19937,8 @@ puts "{_PNR_STAGE_MARKER} detailed_route"
 # `push`, not `set`: this Tcl is one session and the metrics stage is global,
 # so a bare `set` would re-label every LATER stage's metrics as routing ones.
 # The namespace stays open across EVERY route pass (the post-route SPEF /
-# antenna / ECO reroutes below are route passes) because the log parser takes
+# antenna / post-route repair reroutes below are route passes) because the log
+# parser takes
 # the LAST DRT-0199; closing it after the first pass would pin the metric while
 # the prose moved on and manufacture a disagreement on a design that converged.
 utl::push_metrics_stage "detailedroute__{{}}"
@@ -22177,7 +22185,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "yosys_keep": True,
             "openroad_dont_touch": True,
             "inserted_after_abc": True,
-            "metal_fill_eco_aware": True,
+            "metal_fill_repair_aware": True,
             "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
         }
         _aa.write_text(out_dir / "spare_cells.json",
@@ -24450,7 +24458,8 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     """Fresh-session post-route SETUP repair against the REAL max-RC SPEF at the
     SLOW (SS) sign-off corner, writing routed_repaired.def / <top>_pnr_repaired.v.
 
-    Root cause it closes (#527 estimate-vs-SPEF): the in-flow + ECO resizer
+    Root cause it closes (#527 estimate-vs-SPEF): the in-flow and post-route
+    repair resizers
     optimizes against ESTIMATED parasitics, so high-RC critical nets stay
     under-sized and the real-SPEF sign-off fails. Repairing against the parasitics
     the sign-off actually judges on (extract_parasitics -ext_model_file <max
@@ -24459,13 +24468,13 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     re-measure on the rerouted design at ss_100C_1v60 shows setup MET.
 
     detailed_route runs UNBOUNDED (like the base sign-off route) so the inserted
-    ECO buffers are realized to DRC convergence. The Python step promotes the
+    repair buffers are realized to DRC convergence. The Python step promotes the
     result ONLY if the repair reaches non-negative setup AND the reroute converges
     to 0 DRC violations; otherwise the base route is kept (fail-safe, never a
     DRC regression). chip/PDK-AGNOSTIC: standard OpenROAD APIs; corner libs +
     captable come from the active PDK."""
     mp = metal_prefix
-    # DPL-0038 re-fill: after the ECO reroute, restore the decap/fill tiling that
+    # DPL-0038 re-fill: after the repair reroute, restore the decap/fill tiling that
     # `remove_fillers` cleared so the shipped repaired route stays fill-complete
     # (density-rule + tap/well continuity preserved, identical to the base route).
     # Uses the SAME sparse-die-aware fill the base PnR uses; empty when the PDK
@@ -24503,7 +24512,7 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # parasitics or resizes. Two reasons it must be FIRST: (1) repair_design /
         # repair_timing enlarge cells and insert buffers, and a core fully tiled
         # with fillers has no legal site, so detailed_placement legalize aborts on
-        # overlaps and the whole ECO is silently dropped; (2) removing instances
+        # overlaps and the whole repair is silently dropped; (2) removing instances
         # AFTER extract_parasitics/read_spef marks the parasitics network invalid,
         # so repair_design's IncrementalParasiticsGuard aborts with
         # `EST-0104 inconsistent parasitics state` before it repairs anything.
@@ -24610,7 +24619,7 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # signal net still carries committed detailed routing. OpenROAD's
         # global_route NO-OPS on already-routed nets (regenerates 0 guides), so
         # the follow-on detailed_route aborts `DRT-0626 Guide loading failed` and
-        # the whole ECO reroute is dropped (the max-RC DRVs then never get the
+        # the whole repair reroute is dropped (the max-RC DRVs then never get the
         # repaired route). Clear the signal routing first so global_route
         # regenerates a COMPLETE guide set and the REPAIRED design is routed fresh
         # to DRC convergence. Power/ground + special nets are left intact. Proven:
@@ -24635,7 +24644,7 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # close the v1.8.43 "the repair changed something" branch
         + "}\n"
         # v1.8.43 — the promoted route gets the same min-area patch as the
-        # base route. Without it the ECO reroute ships met3 stack-transition
+        # base route. Without it the repair reroute ships met3 stack-transition
         # landings the base route did not have (measured 13 / 11 / 9 across
         # three runs) and trades a timing FAIL for a DRC FAIL.
         + _min_area_patch_tcl("SHIP_MIN_AREA")
@@ -25176,7 +25185,7 @@ def _build_dont_touch_restore_tcl() -> str:
     session marks spare cells / tie drivers dont_touch (see
     `_build_spare_protection_tcl`), but every LATER step that opens a FRESH
     `openroad -no_init` session on the written DEF — the post-route SPEF
-    repair, this wire-length escalation, any ECO pass — starts with ALL of
+    repair, this wire-length escalation, any repair pass — starts with ALL of
     that protection silently dropped, leaving `repair_design` /
     `repair_timing` / `remove_buffers` / `buffer_ports` free to resize,
     rebuffer, merge or delete structure the flow had deliberately frozen.
@@ -32215,18 +32224,18 @@ def run_at_speed_atpg_producers(project: Path, written: List[str],
                          f"{proc.returncode}) → {_ATPG_NOT_RUN_REL[step]}")
 
 
-def _eco_residual_note(project: "Path", residual: bool,
+def _repair_residual_note(project: "Path", residual: bool,
                        delta_ns: "float | None" = None) -> str:
-    """The note the ECO log publishes about a residual violation.
+    """The note the post-route repair log publishes about a residual violation.
 
-    `delta_ns` is `eco_after - eco_before` on setup WNS: positive means the ECO
+    `delta_ns` is `repair_after - repair_before` on setup WNS: positive means the post-route repair
     gained slack, negative means it LOST slack. It is optional so the older
     two-argument call sites keep working, but when it IS supplied and negative
-    it OVERRIDES every branch below — because all of them open with "ECO
+    it OVERRIDES every branch below — because all of them open with "post-route repair
     recovered what is recoverable", and that sentence is false on a run where
-    the measurement says the ECO went backwards. The note used to say it
+    the measurement says the post-route repair went backwards. The note used to say it
     anyway: the residual path was chosen on `violated_corners` alone, which is
-    equally true of an ECO that gained 8 ns and one that lost 8 ns. Same defect
+    equally true of a post-route repair that gained 8 ns and one that lost 8 ns. Same defect
     shape as the #543 fix in this very docstring — a sentence asserting
     something the record next to it contradicts.
 
@@ -32246,14 +32255,14 @@ def _eco_residual_note(project: "Path", residual: bool,
     """
     if isinstance(delta_ns, (int, float)) and delta_ns < -1e-9:
         return (
-            f"ECO REGRESSED the design: setup WNS moved {delta_ns:+.3f} ns "
-            "(after minus before). Nothing was recovered — the pre-ECO "
+            f"post-route repair REGRESSED the design: setup WNS moved {delta_ns:+.3f} ns "
+            "(after minus before). Nothing was recovered — the pre-post-route repair "
             "artefacts are the better ones and are what this run retains. Do "
             "NOT read the residual violation as a process-corner floor; the "
-            "ECO itself made the number worse, so the floor has not been "
+            "post-route repair itself made the number worse, so the floor has not been "
             "reached, let alone established.")
     if not residual:
-        return "multi-corner OCV closed after the ECO."
+        return "multi-corner OCV closed after the post-route repair."
     log = project / "phase3" / "stage3" / "pnr" / "signoff_spef_repair.log"
     try:
         parsed = _parse_ship_repair_log(log.read_text(errors="replace"))
@@ -32261,14 +32270,14 @@ def _eco_residual_note(project: "Path", residual: bool,
         parsed = None
     if parsed and parsed.get("reroute_incomplete"):
         return (
-            "ECO recovered what is recoverable, and the residual has a NAMED "
+            "post-route repair recovered what is recoverable, and the residual has a NAMED "
             f"upstream cause: the sign-off repair's reroute aborted "
             f"{parsed['reroute_incomplete']} time(s) "
             "(SHIP_REROUTE_INCOMPLETE), so the shipped route is the base route, "
             "not the repaired one. This is NOT a process-corner floor — fix the "
             "reroute and re-measure before treating the corner as unclosable.")
     return (
-        "ECO recovered what is recoverable; the corner remains VIOLATED and "
+        "post-route repair recovered what is recoverable; the corner remains VIOLATED and "
         "this record does NOT establish why (§4.05 — no fabricated closure, and "
         "no fabricated cause either). A process-corner floor is one possible "
         "explanation and is not evidenced here; check the sign-off repair log "
@@ -32863,7 +32872,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
       * phase3/stage3/cts/clock_plan.json + clock_tree.rpt
       * phase3/stage3/sim_postlayout/sdf_sim_skipped.json (honest
         SKIPPED-CONDITION self-report — NOT pass.flag; #437d)
-      * phase3/stage3/eco/no_eco_needed.flag (when post-route TNS=0)
+      * phase3/stage3/postroute_timing_repair/no_repair_needed.flag (when post-route TNS=0)
       * phase3/stage4/gds/<top>.gds (canonical alias copy, NOT symlink — rule #1)
       * reports/phase3/{power,em,ir_drop,si_crosstalk,antenna}.{rpt,json}
         (with leakage+dynamic for power; tool-attribution preserved)
@@ -32889,7 +32898,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     sta_out = _pl.sta_dir(project)
     cts_out = _pl.cts_dir(project)
     extracted_out = _pl.extracted_dir(project)
-    eco_out = _pl.eco_dir(project)
+    postroute_timing_repair_out = _pl.postroute_timing_repair_dir(project)
     gds_out = _pl.gds_dir(project)
     sim_pl_out = _pl.sim_postlayout_dir(project)
     constraints_out = _pl.constraints_dir(project)
@@ -32898,7 +32907,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     rpt_phase3 = _pl.reports_phase3_dir(project)
     rpt_audit = _pl.reports_audit_dir(project)
     fpga_final_out = _pl.fpga_final_dir(project)
-    for d in (pnr_out, sta_out, cts_out, extracted_out, eco_out,
+    for d in (pnr_out, sta_out, cts_out, extracted_out, postroute_timing_repair_out,
               gds_out, sim_pl_out, constraints_out, synth_out,
               handoff_out, rpt_phase3, rpt_audit, fpga_final_out):
         d.mkdir(parents=True, exist_ok=True)
@@ -33427,7 +33436,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 ("Multi-corner OCV sign-off: SETUP @ %s process (slow) + max-RC, "
                  "HOLD @ %s process (fast) + min-RC, flat-OCV ±5%% + recovery/"
                  "removal/MPW. Per-corner slack is REAL — a violation is SURFACED, "
-                 "not masked; close it with the DRV constraints + a timing ECO."
+                 "not masked; close it with the DRV constraints + a timing post-route repair."
                  % (setup_lbl, hold_lbl)) if multi_process else
                 "SINGLE process corner only — the active PDK exposes fewer than "
                 "two distinct ss/ff process liberties, so multi-corner OCV sign-off "
@@ -33504,7 +33513,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             notes.append(
                 "multi-corner OCV STA SURFACED a real violation at "
                 f"{'/'.join(_viol)} corner(s): setup_wns={setup_wns} "
-                f"hold_wns={hold_wns} — timing ECO required (not a plugin bug).")
+                f"hold_wns={hold_wns} — timing post-route repair required (not a plugin bug).")
 
     # --- Step 23: post-route STA report (canonical) ---------------------
     # #527 — SPEF-based is CANONICAL when available (closer to sign-off
@@ -33513,16 +33522,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # RESUME-upgrade (adversarial-review fix): a resumed project may carry a
     # STALE estimate-based alias written before the SPEF run existed; once
     # the SPEF-based report exists the alias MUST be upgraded (and a stale
-    # optimistic no-ECO flag cleared) or the old MET copy keeps shadowing a
+    # optimistic no-post-route repair flag cleared) or the old MET copy keeps shadowing a
     # VIOLATED sign-off basis.
     if (spef_sta_ok and post_route_rpt.is_file()
             and "SPEF-BASED" not in post_route_rpt.read_text(
                 errors="replace")[:400]):
         post_route_rpt.unlink()
-        _stale_flag = eco_out / "no_eco_needed.flag"
+        _stale_flag = postroute_timing_repair_out / "no_repair_needed.flag"
         if _stale_flag.is_file():
             _stale_flag.unlink()
-            notes.append("stale estimate-based no_eco_needed.flag cleared; "
+            notes.append("stale estimate-based no_repair_needed.flag cleared; "
                          "re-deriving from the SPEF basis (#527)")
     if not post_route_rpt.is_file():
         if spef_sta_ok:
@@ -33542,7 +33551,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- #527: estimate-vs-SPEF discrepancy surface ----------------------
     # When both bases parse and they disagree (sign flip OR >1 ns delta),
     # NEVER silently keep the optimistic one: write a named discrepancy
-    # artifact so triage + the Step-32 timing-ECO loop see it.
+    # artifact so triage + the Step-32 timing-post-route repair loop see it.
     if spef_sta_ok and primary_sta.is_file():
         _est = _worst_slack(primary_sta.read_text(errors="replace"))
         _spf = _worst_slack(spef_sta_rpt.read_text(errors="replace"))
@@ -33560,7 +33569,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "delta_ns": round(_delta, 4),
                     "sign_flip": _flip,
                     "canonical_basis": "spef",
-                    "action": ("timing ECO required when the SPEF basis "
+                    "action": ("timing post-route repair required when the SPEF basis "
                                "is VIOLATED — the estimate-based MET is "
                                "not a sign-off claim (#527)"),
                 }, indent=2) + "\n")
@@ -33667,11 +33676,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
 
-    # --- TAPEOUT-SIGNOFF P1: POST-LAYOUT LEC (routed/ECO == synth/RTL) ---
-    # Step 13 only proved RTL==synth. This re-proves the FINAL routed/ECO
-    # netlist (after CTS/PnR/ECO/fill) is still logically equivalent, so a
-    # tool bug / bad ECO / mis-applied spare patch that changed the routed
-    # logic is caught before tape-out. Runs AFTER ECO + fill so it sees the
+    # --- TAPEOUT-SIGNOFF P1: POST-LAYOUT LEC (routed/post-route-repaired == synth/RTL) ---
+    # Step 13 only proved RTL==synth. This re-proves the FINAL routed/post-route repair
+    # netlist (after CTS/PnR/post-route repair/fill) is still logically equivalent, so a
+    # tool bug / bad post-route repair / mis-applied spare patch that changed the routed
+    # logic is caught before tape-out. Runs AFTER post-route repair + fill so it sees the
     # final netlist. §4.05: absent routed netlist -> honest SKIP; a non-proof
     # -> UNPROVEN (never a pass).
     lec_post_json = rpt_phase3 / "lec_post_layout.json"
@@ -34220,10 +34229,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # #675-strict promoter refuses it and step 29 stays MISSING. chip-AGNOSTIC.
     refsim_pass = (project / "phase2/stage1/sim/pass.flag").is_file() or \
         (project / "phase2/stage1/sim/results.xml").is_file()
-    # #527 — the ECO decision gates on the SPEF-based report when present
+    # #527 — the post-route repair decision gates on the SPEF-based report when present
     # (sign-off-grade basis); the estimate-based pnr/sta.rpt is the fallback.
-    _sta_for_eco = spef_sta_rpt if spef_sta_ok else primary_sta
-    tns_zero = _post_route_tns_zero(_sta_for_eco)
+    _sta_for_repair = spef_sta_rpt if spef_sta_ok else primary_sta
+    tns_zero = _post_route_tns_zero(_sta_for_repair)
     skip_note = sim_pl_out / "sdf_sim_skipped.json"
     if not (sim_pl_out / "results.log").is_file() and not skip_note.is_file():
         sim_pl_out.mkdir(parents=True, exist_ok=True)
@@ -34318,178 +34327,178 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         }, indent=2) + "\n")
         written.append(str(spice_skip))
 
-    # --- Step 32b: ECO timing repair TCL (ORGANIC #561) ----------------
-    # Emit the standalone multi-corner-aware OpenROAD ECO timing-repair script
+    # --- Step 32b: post-route timing repair TCL (ORGANIC #561) ----------------
+    # Emit the standalone multi-corner-aware OpenROAD post-route timing-repair script
     # with the 4 workarounds (RSZ-0074 / Signal-11 / DRT-0305 / DPL-0033). Emit
     # it BEFORE the auto-trigger decision so a FIRING trigger has a script to run.
-    # TAPEOUT-SIGNOFF (multi-corner ECO): discover the PDK's ss/tt/ff process-
-    # corner libs so the ECO drives repair_timing -setup against the WORST (ss)
+    # TAPEOUT-SIGNOFF (multi-corner post-route repair): discover the PDK's ss/tt/ff process-
+    # corner libs so the post-route repair drives repair_timing -setup against the WORST (ss)
     # corner — not just tt. Best-effort: an empty dict (single-corner PDK /
-    # discovery failure) leaves the emitted ECO single-corner (byte-identical).
+    # discovery failure) leaves the emitted post-route repair single-corner (byte-identical).
     try:
-        _eco_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+        _repair_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
     except Exception:
-        _eco_corner_libs = {}
-    # #766 — the ECO must repair the design the trigger number was measured on,
+        _repair_corner_libs = {}
+    # #766 — the post-route repair must repair the design the trigger number was measured on,
     # with THAT design's parasitics. Resolve both here (the emitter stays pure).
-    _eco_start_def, _eco_start_basis = _eco_start_point(pnr_out, top)
-    _eco_post_route = _eco_start_basis.startswith("post_route")
-    _eco_spefs_c: Dict[str, str] = {}
-    if _eco_post_route:
+    _repair_start_def, _repair_start_basis = _repair_start_point(pnr_out, top)
+    _repair_post_route = _repair_start_basis.startswith("post_route")
+    _repair_spefs_c: Dict[str, str] = {}
+    if _repair_post_route:
         for _sp in sorted(mc_spef_dir.glob(f"{top}.*.spef")
                           if mc_spef_dir.is_dir() else []):
             _c = _sp.name[len(top) + 1:].split(".")[0]
             if _c in _SPEF_CORNERS and _sp.stat().st_size > 0:
-                _eco_spefs_c[_c] = _to_container_path(str(_sp), container)
-        if not _eco_spefs_c and spef_out.is_file() and spef_out.stat().st_size > 0:
-            _eco_spefs_c["nom"] = _to_container_path(str(spef_out), container)
+                _repair_spefs_c[_c] = _to_container_path(str(_sp), container)
+        if not _repair_spefs_c and spef_out.is_file() and spef_out.stat().st_size > 0:
+            _repair_spefs_c["nom"] = _to_container_path(str(spef_out), container)
     try:
-        _eco_captables_c = (_discover_openrcx_captables(pdk, container)
-                            if _eco_post_route else {})
+        _repair_captables_c = (_discover_openrcx_captables(pdk, container)
+                            if _repair_post_route else {})
     except Exception:
-        _eco_captables_c = {}
-    eco_tcl_path = eco_out / "eco_timing_repair.tcl"
-    if _eco_deck_is_stale(eco_tcl_path):
+        _repair_captables_c = {}
+    repair_tcl_path = postroute_timing_repair_out / "postroute_timing_repair.tcl"
+    if _repair_deck_is_stale(repair_tcl_path):
         try:
             _pnr_dir_c = _to_container_path(str(pnr_out), container)
-            _eco_dir_c = _to_container_path(str(eco_out), container)
-            eco_tcl_content = _build_eco_repair_tcl(
+            _postroute_timing_repair_dir_c = _to_container_path(str(postroute_timing_repair_out), container)
+            repair_tcl_content = _build_postroute_timing_repair_tcl(
                 top,
                 _to_container_path(str(pdk.tech_lef), container),
                 _to_container_path(str(pdk.cell_lef), container),
                 _to_container_path(str(pdk.liberty), container),
-                _pnr_dir_c, _eco_dir_c,
+                _pnr_dir_c, _postroute_timing_repair_dir_c,
                 pdk.metal_prefix,
-                corner_libs=_eco_corner_libs,
-                start_def_c=(_to_container_path(str(_eco_start_def), container)
-                             if _eco_start_def is not None else None),
-                post_route_start=_eco_post_route,
-                corner_spefs_c=_eco_spefs_c,
-                captables_c=_eco_captables_c,
+                corner_libs=_repair_corner_libs,
+                start_def_c=(_to_container_path(str(_repair_start_def), container)
+                             if _repair_start_def is not None else None),
+                post_route_start=_repair_post_route,
+                corner_spefs_c=_repair_spefs_c,
+                captables_c=_repair_captables_c,
                 filler_masters=_filler_masters_for_pdk(pdk),
                 # The step-32 area ceiling and the power-recovery move, taken
                 # from the design's OWN staged reference-flow declaration
                 # through the one ingest that already owns that vocabulary
                 # (`_ORFS_PNR_KNOB_PARAMS`). All three are None when nothing
                 # declared them, which reproduces this deck byte-for-byte.
-                **_eco_resizer_bounds(project),
+                **_postroute_timing_repair_resizer_bounds(project),
             )
-            eco_tcl_path.write_text(eco_tcl_content)
-            written.append(str(eco_tcl_path))
+            repair_tcl_path.write_text(repair_tcl_content)
+            written.append(str(repair_tcl_path))
             notes.append(
-                "emitted eco_timing_repair.tcl (#561) — start point "
-                f"{_eco_start_def.name if _eco_start_def else '<none>'} "
-                f"({_eco_start_basis}), parasitics "
-                + (",".join(sorted(_eco_spefs_c)) + " extracted SPEF"
-                   if _eco_spefs_c else "ESTIMATED (no extraction on disk)"))
-        except Exception as _eco_tcl_exc:
-            notes.append(f"eco_timing_repair.tcl emit failed: {_eco_tcl_exc}")
+                "emitted postroute_timing_repair.tcl (#561) — start point "
+                f"{_repair_start_def.name if _repair_start_def else '<none>'} "
+                f"({_repair_start_basis}), parasitics "
+                + (",".join(sorted(_repair_spefs_c)) + " extracted SPEF"
+                   if _repair_spefs_c else "ESTIMATED (no extraction on disk)"))
+        except Exception as _repair_tcl_exc:
+            notes.append(f"postroute_timing_repair.tcl emit failed: {_repair_tcl_exc}")
 
-    # --- Step 32: ECO auto-trigger (MULTI-CORNER-OCV-gated) -------------
+    # --- Step 32: post-route repair auto-trigger (MULTI-CORNER-OCV-gated) -------------
     # TAPEOUT-SIGNOFF (ibex-surfaced) — the auto-trigger now gates on the
     # MULTI-CORNER OCV sign-off (ss/ff process corners), NOT just the single-
     # corner (tt) post-route STA. A design that MEETs tt but VIOLATES ss (ibex:
-    # tt +6.02 ns MET, ss −88 ns VIOLATED) must FIRE the multi-corner-aware ECO;
-    # writing no_eco_needed.flag from tt alone left the multi-corner ECO
-    # emitted-but-dead for exactly the designs that need it. `_eco_dec.decide`
-    # is the ONE decision both no_eco_needed.flag sites (here + eco_status_gen)
+    # tt +6.02 ns MET, ss −88 ns VIOLATED) must FIRE the multi-corner-aware post-route repair;
+    # writing no_repair_needed.flag from tt alone left the multi-corner post-route repair
+    # emitted-but-dead for exactly the designs that need it. `_repair_dec.decide`
+    # is the ONE decision both no_repair_needed.flag sites (here + postroute_timing_repair_status_gen)
     # consult, so they cannot drift. §4.05: when multi-corner OCV is UNAVAILABLE
     # (single-corner PDK) we fall back to today's tt behavior (honest, no
-    # regression); we NEVER SKIP an ECO when a real multi-corner violation
+    # regression); we NEVER SKIP a post-route repair when a real multi-corner violation
     # exists, and NEVER fabricate closure (a genuine ss floor stays VIOLATED).
     # v1.7.64 (Step 32 / d5) — `project=` lets the shared decision ALSO read
     # the non-timing sign-off verdicts this same run wrote (IR drop / EM / SI /
     # LVS / ERC / antenna / density / PERC). Step 32's YAML says "if any
-    # sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE) fails, ECO
+    # sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE) fails, post-route repair
     # applies"; the decision previously read STA alone, so a hard-failed
-    # IR-drop sign-off still wrote no_eco_needed.flag. The timing-repair TCL
-    # stays gated on `timing_eco_needed`, so a non-timing failure withholds the
+    # IR-drop sign-off still wrote no_repair_needed.flag. The timing-repair TCL
+    # stays gated on `timing_repair_needed`, so a non-timing failure withholds the
     # certificate WITHOUT firing a repair that does not address it.
-    _eco_decision = _eco_dec.decide(mc_ocv_stance, tns_zero, project=project)
-    _eco_flag = eco_out / "no_eco_needed.flag"
-    if not _eco_decision["eco_needed"]:
-        # No violation at the authoritative basis → no ECO needed.
-        if not _eco_flag.is_file():
-            _eco_flag.write_text(
-                "no_eco_needed\n"
+    _repair_decision = _repair_dec.decide(mc_ocv_stance, tns_zero, project=project)
+    _no_repair_flag = postroute_timing_repair_out / "no_repair_needed.flag"
+    if not _repair_decision["repair_needed"]:
+        # No violation at the authoritative basis → no post-route repair needed.
+        if not _no_repair_flag.is_file():
+            _no_repair_flag.write_text(
+                "no_repair_needed\n"
                 "# Auto-staged by phase3_one_shot_runner.\n"
-                f"# Basis: {_eco_decision['basis']} "
-                f"(mc_ocv_available={_eco_decision['mc_ocv_available']}).\n"
+                f"# Basis: {_repair_decision['basis']} "
+                f"(mc_ocv_available={_repair_decision['mc_ocv_available']}).\n"
                 "# Reason: no setup/hold violation at the authoritative timing\n"
                 "# basis (multi-corner OCV when available, else single-corner tt),\n"
                 "# and no hard failure in the non-timing sign-off domains.\n"
-                f"# Single-corner source: {_sta_for_eco.relative_to(project)}\n"
+                f"# Single-corner source: {_sta_for_repair.relative_to(project)}\n"
             )
-            written.append(str(_eco_flag))
-        _eco_decision["action"] = "no_eco_needed_flag"
+            written.append(str(_no_repair_flag))
+        _repair_decision["action"] = "no_repair_needed_flag"
     else:
-        # A real violation exists at the authoritative basis → the ECO must FIRE.
+        # A real violation exists at the authoritative basis → the post-route repair must FIRE.
         # §4.05: never let a tt-clean flag mask a real ss violation — clear any
-        # stale optimistic no_eco_needed.flag first.
-        if _eco_flag.is_file():
-            _eco_flag.unlink()
-            notes.append("cleared stale no_eco_needed.flag — "
-                         + _eco_decision["reason"])
-        _eco_decision["eco_before"] = {
-            "setup_worst_slack_ns": _eco_decision["setup_worst_slack_ns"],
-            "hold_worst_slack_ns": _eco_decision["hold_worst_slack_ns"],
+        # stale optimistic no_repair_needed.flag first.
+        if _no_repair_flag.is_file():
+            _no_repair_flag.unlink()
+            notes.append("cleared stale no_repair_needed.flag — "
+                         + _repair_decision["reason"])
+        _repair_decision["repair_before"] = {
+            "setup_worst_slack_ns": _repair_decision["setup_worst_slack_ns"],
+            "hold_worst_slack_ns": _repair_decision["hold_worst_slack_ns"],
         }
-        if not _eco_decision["timing_eco_needed"]:
+        if not _repair_decision["timing_repair_needed"]:
             # v1.7.64 — a NON-TIMING sign-off domain failed while timing is
-            # clean. eco_timing_repair.tcl repairs timing and would not touch
+            # clean. postroute_timing_repair.tcl repairs timing and would not touch
             # the failing domain, so firing it here would be theatre; writing
-            # an eco_log.json would fabricate a repair that never happened.
-            # We withhold the "no ECO needed" certificate and stop: Step 32's
-            # gate then reports NO_ECO_ARTIFACT / FAIL, which is the honest
-            # outcome, and hands off to the eco-plan skill.
-            _eco_decision["action"] = "eco_required_non_timing"
+            # a repair_log.json would fabricate a repair that never happened.
+            # We withhold the "no post-route repair needed" certificate and stop: Step 32's
+            # gate then reports NO_REPAIR_ARTIFACT / FAIL, which is the honest
+            # outcome, and hands off to domain-specific triage.
+            _repair_decision["action"] = "repair_required_non_timing"
             notes.append(
-                "ECO REQUIRED (non-timing): " + _eco_decision["reason"]
-                + " — no_eco_needed.flag deliberately NOT written; the "
-                "timing-repair ECO does not apply, triage via the eco-plan "
-                "skill.")
-        elif _eco_decision["mc_ocv_available"] and eco_tcl_path.is_file():
-            # AUTO-TRIGGER FIRES: run the multi-corner-aware ECO.
+                "post-route repair REQUIRED (non-timing): " + _repair_decision["reason"]
+                + " — no_repair_needed.flag deliberately NOT written; the "
+                "the timing-repair pass does not apply; triage the named "
+                "sign-off domain(s).")
+        elif _repair_decision["mc_ocv_available"] and repair_tcl_path.is_file():
+            # AUTO-TRIGGER FIRES: run the multi-corner-aware post-route repair.
             notes.append(
-                "ECO auto-trigger FIRING: multi-corner OCV surfaced a real "
-                f"violation at {','.join(_eco_decision['violated_corners'])} "
-                f"(setup_wns={_eco_decision['setup_worst_slack_ns']} "
-                f"hold_wns={_eco_decision['hold_worst_slack_ns']}) — running the "
-                "multi-corner ECO (NOT writing no_eco_needed.flag).")
-            _ran = _run_eco_repair(project, top, container, eco_tcl_path, notes)
-            _eco_decision["action"] = ("eco_fired_ran" if _ran
-                                       else "eco_fired_no_netlist")
-            _eco_after = {}
+                "post-route repair auto-trigger FIRING: multi-corner OCV surfaced a real "
+                f"violation at {','.join(_repair_decision['violated_corners'])} "
+                f"(setup_wns={_repair_decision['setup_worst_slack_ns']} "
+                f"hold_wns={_repair_decision['hold_worst_slack_ns']}) — running the "
+                "multi-corner post-route repair (NOT writing no_repair_needed.flag).")
+            _ran = _run_postroute_timing_repair(project, top, container, repair_tcl_path, notes)
+            _repair_decision["action"] = ("timing_repair_ran" if _ran
+                                       else "timing_repair_no_netlist")
+            _repair_after = {}
             if _ran:
-                # Re-measure the multi-corner OCV ss/ff WNS on the ECO netlist so
+                # Re-measure the multi-corner OCV ss/ff WNS on the post-route repair netlist so
                 # the before→after recovery is surfaced (§4.05: a genuine floor
                 # stays VIOLATED — recover what is recoverable, do not fabricate).
-                _eco_after = _measure_posteco_mcorner_ocv(
-                    project, top, pdk, container, _eco_corner_libs,
+                _repair_after = _measure_postrepair_mcorner_ocv(
+                    project, top, pdk, container, _repair_corner_libs,
                     mc_spef_dir, spef_out, sta_out, notes)
-                _eco_decision["eco_after"] = _eco_after
-            # Wire the fired ECO into a schema-complete eco_log.json so the ECO
-            # step's audit (eco_loop_audit: changes + re_verified + affected_steps)
-            # reflects the REAL ECO that ran — eco_status_gen preserves it (#564).
-            _eco_residual = bool(_eco_after.get("violated_corners")) if _ran else True
+                _repair_decision["repair_after"] = _repair_after
+            # Wire the fired post-route repair into a schema-complete repair_log.json so the post-route repair
+            # step's audit (postroute_timing_repair_audit: changes + re_verified + affected_steps)
+            # reflects the REAL post-route repair that ran — postroute_timing_repair_status_gen preserves it (#564).
+            _repair_residual = bool(_repair_after.get("violated_corners")) if _ran else True
             # ── REGRESSION GUARD ────────────────────────────────────────────
-            # `eco_before` and `eco_after` were already both measured, sat
+            # `repair_before` and `repair_after` were already both measured, sat
             # adjacent in the record below, and were never SUBTRACTED. So an
-            # ECO that made timing measurably WORSE was written down as
-            # ECO_APPLIED / step status `pass`, and the artefacts it produced
-            # were adopted over the better pre-ECO ones. Measured on a real
+            # post-route repair that made timing measurably WORSE was written down as
+            # REPAIR_APPLIED / step status `pass`, and the artefacts it produced
+            # were adopted over the better pre-post-route repair ones. Measured on a real
             # cell: setup went -0.68 -> -8.92 ns (a 12x regression) and the
             # record said `pass`.
             #
             # A repair step is the one place where "it ran without erroring"
             # and "it helped" are DIFFERENT questions, and only the first was
             # being asked.
-            _eco_b = (_eco_decision.get("eco_before") or {}).get(
+            _repair_b = (_repair_decision.get("repair_before") or {}).get(
                 "setup_worst_slack_ns")
-            _eco_a = _eco_after.get("setup_worst_slack_ns")
-            _eco_delta = (_eco_a - _eco_b
-                          if isinstance(_eco_b, (int, float))
-                          and isinstance(_eco_a, (int, float)) else None)
+            _repair_a = _repair_after.get("setup_worst_slack_ns")
+            _repair_delta = (_repair_a - _repair_b
+                          if isinstance(_repair_b, (int, float))
+                          and isinstance(_repair_a, (int, float)) else None)
             # ── #766 — DID THE REPAIR EVEN SEE THE VIOLATION? ──────────────
             # The auto-trigger fires on a NEGATIVE setup slack. A repair that
             # answers `RSZ-0098 No setup violations found` to that is not a
@@ -34499,86 +34508,87 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             # passes RSZ-0098, ZERO changes — and a deck pointed at the
             # shipped post-route design with its own SPEF closed it with ONE
             # buffer. Recorded here so it is a LOUD failure downstream
-            # (eco_loop_audit ECO_BLIND_TO_VIOLATION) instead of a clean log.
-            _eco_run_log = eco_out / "eco_repair.log"
-            _eco_log_verdict = _eco_repair_log_verdict(
-                _eco_run_log.read_text(errors="replace")
-                if _eco_run_log.is_file() else "", _eco_b)
-            if _eco_log_verdict["blind_to_violation"]:
+            # (postroute_timing_repair_audit REPAIR_BLIND_TO_VIOLATION) instead of a clean log.
+            _repair_run_log = postroute_timing_repair_out / "postroute_timing_repair.log"
+            _repair_log_verdict = _postroute_timing_repair_log_verdict(
+                _repair_run_log.read_text(errors="replace")
+                if _repair_run_log.is_file() else "", _repair_b)
+            if _repair_log_verdict["blind_to_violation"]:
                 notes.append(
-                    f"ECO BLIND TO THE VIOLATION: the trigger measured setup "
-                    f"{_eco_b:+.3f} ns and the repair reported 'No setup "
+                    f"post-route repair BLIND TO THE VIOLATION: the trigger measured setup "
+                    f"{_repair_b:+.3f} ns and the repair reported 'No setup "
                     "violations found' — the repair and the measurement are "
                     "not describing the same design/parasitics/timing view "
-                    "(see eco/eco_repair.log + eco_timing_repair.tcl).")
+                    "(see postroute_timing_repair/postroute_timing_repair.log "
+                    "+ postroute_timing_repair.tcl).")
             # ── #766 — IS THE DELTA A BEFORE/AFTER AT ALL? ─────────────────
-            # `eco_before` is measured on the SHIPPED post-route design with
+            # `repair_before` is measured on the SHIPPED post-route design with
             # its extracted SPEF. The delta is only a before-and-after when the
-            # ECO started from THAT design AND the "after" was measured on the
-            # ECO's OWN re-extracted parasitics. Otherwise it compares two
+            # post-route repair started from THAT design AND the "after" was measured on the
+            # post-route repair's OWN re-extracted parasitics. Otherwise it compares two
             # implementations — which is how a run whose repair_timing made
-            # ZERO changes recorded `eco_setup_delta_ns = -8.220` and failed
+            # ZERO changes recorded `repair_setup_delta_ns = -8.220` and failed
             # for a "regression" it never made.
-            _eco_after_src = _eco_after.get("parasitics_source")
-            _eco_delta_comparable = bool(
-                _eco_post_route and _eco_after_src == "eco_reextracted")
-            _eco_delta_reason = (
+            _repair_after_src = _repair_after.get("parasitics_source")
+            _repair_delta_comparable = bool(
+                _repair_post_route and _repair_after_src == "repair_reextracted")
+            _repair_delta_reason = (
                 "before and after are the same implementation measured on its "
-                "own parasitics" if _eco_delta_comparable else
-                f"ECO start point was {_eco_start_basis!r} and the after was "
-                f"measured on {_eco_after_src!r} parasitics — the two numbers "
+                "own parasitics" if _repair_delta_comparable else
+                f"post-route repair start point was {_repair_start_basis!r} and the after was "
+                f"measured on {_repair_after_src!r} parasitics — the two numbers "
                 "describe different implementations, so their difference is "
                 "not a repair delta")
-            _eco_regressed = bool(_eco_delta is not None
-                                  and _eco_delta < -1e-9
-                                  and _eco_delta_comparable)
-            if _eco_delta is not None and _eco_delta < -1e-9 \
-                    and not _eco_delta_comparable:
+            _repair_regressed = bool(_repair_delta is not None
+                                  and _repair_delta < -1e-9
+                                  and _repair_delta_comparable)
+            if _repair_delta is not None and _repair_delta < -1e-9 \
+                    and not _repair_delta_comparable:
                 notes.append(
-                    f"ECO setup delta {_eco_delta:+.3f} ns is NOT a repair "
-                    f"delta: {_eco_delta_reason} — recorded, not charged to "
-                    "the ECO (#766 a/c).")
-            if _ran and _eco_log_verdict["blind_to_violation"]:
+                    f"post-route repair setup delta {_repair_delta:+.3f} ns is NOT a repair "
+                    f"delta: {_repair_delta_reason} — recorded, not charged to "
+                    "the post-route repair (#766 a/c).")
+            if _ran and _repair_log_verdict["blind_to_violation"]:
                 # #766 — a repair that could not SEE the violation has not
                 # repaired anything, whatever its exit status was. (A run that
-                # produced no netlist keeps its own `eco_fired_no_netlist`
+                # produced no netlist keeps its own `timing_repair_no_netlist`
                 # action — that failure is already named.)
-                _eco_decision["action"] = "eco_fired_blind_to_violation"
-            elif _eco_regressed:
-                # The ECO outputs stay on disk under their own names for
+                _repair_decision["action"] = "timing_repair_blind_to_violation"
+            elif _repair_regressed:
+                # The post-route repair outputs stay on disk under their own names for
                 # debug; they are NOT adopted as the shipped artefacts.
-                _eco_decision["action"] = "eco_fired_reverted_regression"
+                _repair_decision["action"] = "timing_repair_reverted_regression"
                 notes.append(
-                    f"ECO REVERTED: setup {_eco_b:+.3f} -> {_eco_a:+.3f} ns "
-                    f"({_eco_delta:+.3f}) is a REGRESSION; the pre-ECO "
+                    f"post-route repair REVERTED: setup {_repair_b:+.3f} -> {_repair_a:+.3f} ns "
+                    f"({_repair_delta:+.3f}) is a REGRESSION; the pre-post-route repair "
                     "artefacts are retained and this step does NOT pass.")
-            _eco_log = eco_out / "eco_log.json"
+            _repair_log = postroute_timing_repair_out / "repair_log.json"
             try:
-                _eco_log.write_text(json.dumps({
-                    "program": "phase3_one_shot_runner.eco_auto_trigger",
-                    "verdict": (("ECO_BLIND_TO_VIOLATION"
-                                 if _eco_log_verdict["blind_to_violation"]
-                                 else "ECO_REVERTED_REGRESSION" if _eco_regressed
-                                 else "ECO_APPLIED") if _ran
-                                else "ECO_ATTEMPTED"),
+                _repair_log.write_text(json.dumps({
+                    "program": "phase3_one_shot_runner.postroute_timing_repair_auto_trigger",
+                    "verdict": (("REPAIR_BLIND_TO_VIOLATION"
+                                 if _repair_log_verdict["blind_to_violation"]
+                                 else "REPAIR_REVERTED_REGRESSION" if _repair_regressed
+                                 else "REPAIR_APPLIED") if _ran
+                                else "REPAIR_ATTEMPTED"),
                     "trigger_basis": "multi_corner_ocv",
-                    "trigger_violated_corners": _eco_decision["violated_corners"],
+                    "trigger_violated_corners": _repair_decision["violated_corners"],
                     "changes": [{
                         "type": "multi_corner_repair_timing",
                         "detail": ("multi-corner-aware repair_design + "
                                    "repair_timing -setup (ss/tt/ff) + reroute via "
-                                   "eco_timing_repair.tcl; ECO netlist "
-                                   f"{top}_eco.v" + (" produced" if _ran
+                                   "postroute_timing_repair.tcl; post-route repair netlist "
+                                   f"{top}_timing_repaired.v" + (" produced" if _ran
                                                      else " NOT produced")),
-                        "corners": sorted(_eco_corner_libs),
+                        "corners": sorted(_repair_corner_libs),
                     }],
                     # re_verified is True ONLY when we genuinely re-ran the OCV
-                    # sign-off on the ECO netlist (§4.05: honest — a failed ECO
+                    # sign-off on the post-route repair netlist (§4.05: honest — a failed post-route repair
                     # run that produced no netlist is NOT re-verified).
-                    "re_verified": bool(_ran and _eco_after.get("measured")),
+                    "re_verified": bool(_ran and _repair_after.get("measured")),
                     # THE BLAST RADIUS, DERIVED FROM THE FLOW DAG — NOT TYPED.
                     # This list was `[21, 23, 24, 29, 30]` from 0a9e51577 until
-                    # v1.11.19 and nothing had ever checked it: `eco_loop_audit`
+                    # v1.11.19 and nothing had ever checked it: `postroute_timing_repair_audit`
                     # tests `"affected_steps" not in data` and nothing else, so
                     # `[]` and `[999]` both passed. The flow's own step-32
                     # trigger says a THIRD thing ("re-run #21-#28"), and step 32
@@ -34607,50 +34617,50 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     # literal equals it, so the two can no longer drift.
                     #
                     # It is a REQUIREMENT, not a receipt: this runner does not
-                    # re-run any of them, which is why the ECO netlist is not the
-                    # shipped implementation (see _ECO_REROUTE_MAX_DROUTE_ITERS).
+                    # re-run any of them, which is why the post-route repair netlist is not the
+                    # shipped implementation (see _POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS).
                     # Written in the flow's own declaration order.
                     "affected_steps": [21, 22, "DT2", "DT3", 23, 24, 25, 26,
                                        "26.5ic", 27, 28, 29, 30, 31, 33],
-                    "eco_before": _eco_decision["eco_before"],
-                    "eco_after": _eco_after,
-                    "residual_violation": _eco_residual,
-                    "eco_setup_delta_ns": _eco_delta,
-                    "eco_regressed": _eco_regressed,
-                    # #766 — WHAT the ECO repaired, and on WHICH parasitics
+                    "repair_before": _repair_decision["repair_before"],
+                    "repair_after": _repair_after,
+                    "residual_violation": _repair_residual,
+                    "repair_setup_delta_ns": _repair_delta,
+                    "repair_regressed": _repair_regressed,
+                    # #766 — WHAT the post-route repair repaired, and on WHICH parasitics
                     # both ends of the delta were measured. Without these the
                     # delta cannot be told apart from a comparison of two
                     # different implementations.
-                    "eco_start_point": (str(_eco_start_def.relative_to(project))
-                                        if _eco_start_def is not None else None),
-                    "eco_start_point_basis": _eco_start_basis,
-                    "eco_before_parasitics": (
-                        "extracted_spef_corners" if _eco_spefs_c
+                    "repair_start_point": (str(_repair_start_def.relative_to(project))
+                                        if _repair_start_def is not None else None),
+                    "repair_start_point_basis": _repair_start_basis,
+                    "repair_before_parasitics": (
+                        "extracted_spef_corners" if _repair_spefs_c
                         else "estimated"),
-                    "eco_after_parasitics": _eco_after_src,
-                    "eco_delta_comparable": _eco_delta_comparable,
-                    "eco_delta_comparable_reason": _eco_delta_reason,
-                    "eco_repair_log": _eco_log_verdict,
-                    "eco_blind_to_violation":
-                        _eco_log_verdict["blind_to_violation"],
-                    "residual_note": _eco_residual_note(
-                        project, bool(_eco_residual), _eco_delta),
+                    "repair_after_parasitics": _repair_after_src,
+                    "repair_delta_comparable": _repair_delta_comparable,
+                    "repair_delta_comparable_reason": _repair_delta_reason,
+                    "postroute_timing_repair_log": _repair_log_verdict,
+                    "repair_blind_to_violation":
+                        _repair_log_verdict["blind_to_violation"],
+                    "residual_note": _repair_residual_note(
+                        project, bool(_repair_residual), _repair_delta),
                 }, indent=2) + "\n")
-                written.append(str(_eco_log))
-            except Exception as _eco_log_exc:  # pragma: no cover — defensive
-                notes.append(f"eco_log.json emit failed: {_eco_log_exc}")
+                written.append(str(_repair_log))
+            except Exception as _repair_log_exc:  # pragma: no cover — defensive
+                notes.append(f"repair_log.json emit failed: {_repair_log_exc}")
         else:
             # Single-corner PDK / OCV unavailable → today's tt behavior (honest):
-            # a tt violation is left for the in-flow PnR repair / a manual ECO; we
-            # do NOT auto-run the standalone ECO (no regression on single-corner).
-            _eco_decision["action"] = "eco_required_single_corner_fallback"
-            notes.append("ECO required at single-corner tt basis (multi-corner "
+            # a tt violation is left for the in-flow PnR repair / a manual post-route repair; we
+            # do NOT auto-run the standalone post-route repair (no regression on single-corner).
+            _repair_decision["action"] = "repair_required_single_corner_fallback"
+            notes.append("post-route repair required at single-corner tt basis (multi-corner "
                          "OCV unavailable) — honest fallback, not auto-run.")
     # Durable disclosure of the trigger decision (§4.05 audit trail).
     try:
-        _aa.write_text(eco_out / "eco_trigger_decision.json",
-            json.dumps(_eco_decision, indent=2) + "\n")
-        written.append(str(eco_out / "eco_trigger_decision.json"))
+        _aa.write_text(postroute_timing_repair_out / "postroute_timing_repair_decision.json",
+            json.dumps(_repair_decision, indent=2) + "\n")
+        written.append(str(postroute_timing_repair_out / "postroute_timing_repair_decision.json"))
     except Exception:  # pragma: no cover — defensive
         pass
 
@@ -35538,49 +35548,52 @@ def _post_route_tns_zero(sta_rpt: Path) -> bool:
     return False
 
 
-def _run_eco_repair(project: Path, top: str, container: str,
-                    eco_tcl_path: Path, notes: List[str],
+def _run_postroute_timing_repair(project: Path, top: str, container: str,
+                    repair_tcl_path: Path, notes: List[str],
                     timeout: int = 7200) -> bool:
-    """AUTO-TRIGGER — actually RUN the emitted multi-corner-aware ECO
-    timing-repair TCL (``_build_eco_repair_tcl``) via OpenROAD, producing
-    ``eco/{top}_eco.v`` + ``eco/eco_routed.def``.
+    """AUTO-TRIGGER — actually RUN the emitted multi-corner-aware post-route repair
+    timing-repair TCL (``_build_postroute_timing_repair_tcl``) via OpenROAD, producing
+    ``postroute_timing_repair/{top}_timing_repaired.v`` plus
+    ``postroute_timing_repair/timing_repaired.def``.
 
-    This is the piece that was missing: the multi-corner ECO used to be EMITTED
+    This is the piece that was missing: the multi-corner post-route repair used to be EMITTED
     (Step 32b) but NEVER RUN, so a design that MET tt but VIOLATED ss (the exact
-    case the multi-corner ECO exists for) got ``no_eco_needed.flag`` and the ECO
+    case the multi-corner post-route repair exists for) got ``no_repair_needed.flag`` and the post-route repair
     stayed dead. When the trigger fires, this runs it.
 
-    IDEMPOTENT: if the ECO netlist already exists (a prior run / resume) it is
-    NOT re-run (the ECO reroute is a full, expensive route pass). Best-effort: a
+    IDEMPOTENT: if the post-route repair netlist already exists (a prior run / resume) it is
+    NOT re-run (the post-route repair reroute is a full, expensive route pass). Best-effort: a
     tool failure logs a note and returns False — §4.05, no fabricated closure."""
-    eco_out = _pl.eco_dir(project)
-    eco_v = eco_out / f"{top}_eco.v"
-    if eco_v.is_file() and eco_v.stat().st_size > 0:
-        notes.append(f"ECO auto-trigger: {eco_v.name} already present — "
+    postroute_timing_repair_out = _pl.postroute_timing_repair_dir(project)
+    repaired_v = postroute_timing_repair_out / f"{top}_timing_repaired.v"
+    if repaired_v.is_file() and repaired_v.stat().st_size > 0:
+        notes.append(f"post-route repair auto-trigger: {repaired_v.name} already present — "
                      "reusing (no re-run).")
         return True
-    if not eco_tcl_path.is_file():
-        notes.append("ECO auto-trigger: eco_timing_repair.tcl missing — "
+    if not repair_tcl_path.is_file():
+        notes.append("post-route repair auto-trigger: postroute_timing_repair.tcl missing — "
                      "cannot fire.")
         return False
-    eco_dir_c = _to_container_path(str(eco_out), container)
-    tcl_c = _to_container_path(str(eco_tcl_path), container)
+    postroute_timing_repair_dir_c = _to_container_path(str(postroute_timing_repair_out), container)
+    tcl_c = _to_container_path(str(repair_tcl_path), container)
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {tcl_c} 2>&1 | "
-           f"tee {eco_dir_c}/eco_repair.log")
+           f"tee {postroute_timing_repair_dir_c}/postroute_timing_repair.log")
     try:
-        _docker_exec(container, cmd, marker=tcl_c, outputs=[eco_v])
+        _docker_exec(container, cmd, marker=tcl_c, outputs=[repaired_v])
     except Exception as exc:  # pragma: no cover — tool/container failure
-        notes.append(f"ECO auto-trigger run failed: {exc}")
+        notes.append(f"post-route repair auto-trigger run failed: {exc}")
         return False
-    ok = eco_v.is_file() and eco_v.stat().st_size > 0
+    ok = repaired_v.is_file() and repaired_v.stat().st_size > 0
     if ok:
-        notes.append(f"ECO auto-trigger FIRED: multi-corner ECO ran → "
-                     f"{eco_v.name} produced (see eco/eco_repair.log).")
+        notes.append(f"post-route repair auto-trigger FIRED: multi-corner post-route repair ran → "
+                     f"{repaired_v.name} produced (see postroute_timing_repair/"
+                     "postroute_timing_repair.log).")
     else:
-        notes.append("ECO auto-trigger FIRED but produced no ECO netlist "
-                     "(see eco/eco_repair.log) — surfaced, not masked.")
+        notes.append("post-route repair auto-trigger FIRED but produced no post-route repair netlist "
+                     "(see postroute_timing_repair/postroute_timing_repair.log) "
+                     "— surfaced, not masked.")
     return ok
 
 
@@ -35592,18 +35605,18 @@ _RSZ_FOUND_SETUP_ENDPOINTS_RE = re.compile(
     r"Found\s+(\d+)\s+endpoints?\s+with\s+setup\s+violations", re.I)
 
 
-def _eco_repair_log_verdict(log_text: str,
+def _postroute_timing_repair_log_verdict(log_text: str,
                             trigger_setup_wns: Optional[float]
                             ) -> Dict[str, Any]:
     """#766 — DID THE REPAIR SEE THE VIOLATION IT WAS SENT TO FIX?
 
-    An ECO fires because a sign-off measurement found negative setup slack. If
+    A post-route repair fires because a sign-off measurement found negative setup slack. If
     the repair that runs in response reports ``RSZ-0098 No setup violations
     found`` and never reports finding any, then the two are looking at
     different designs (or different parasitics, or a different timing view) —
-    and the run has produced a CLEAN-LOOKING ECO that repaired nothing. That is
+    and the run has produced a CLEAN-LOOKING post-route repair that repaired nothing. That is
     the silent no-op, and it is exactly the shape #766 was filed for: the
-    trigger read ``setup_worst_slack_ns: -0.09`` and ``eco_repair.log`` read
+    trigger read ``setup_worst_slack_ns: -0.09`` and ``postroute_timing_repair.log`` read
     ``No setup violations found`` on both passes, while a correct deck on the
     same design closed it with ONE buffer.
 
@@ -35626,7 +35639,7 @@ def _eco_repair_log_verdict(log_text: str,
         "saw_no_setup_violations": saw_none,
         "saw_setup_violations": saw_violations,
         "setup_endpoints_found": max(endpoints) if endpoints else 0,
-        "reroute_failed": "ECO_DETAILED_ROUTE_NONFATAL" in txt,
+        "reroute_failed": "POSTROUTE_TIMING_REPAIR_DETAILED_ROUTE_NONFATAL" in txt,
         "blind_to_violation": bool(
             negative_trigger and saw_none and not saw_violations),
     }
@@ -35649,26 +35662,26 @@ def _parse_mcorner_ocv_slacks(rpt_text: str) -> Tuple[Optional[float],
     return setup_wns, hold_wns
 
 
-def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
+def _measure_postrepair_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
                                  container: str, corner_libs: Dict[str, str],
                                  mc_spef_dir: Path, nom_spef_path: Optional[Path],
                                  sta_out: Path, notes: List[str]) -> Dict[str, Any]:
-    """Re-measure the multi-corner OCV ss/ff worst slack on the ECO netlist so the
-    before→after recovery of the auto-triggered ECO is surfaced.
+    """Re-measure the multi-corner OCV ss/ff worst slack on the post-route repair netlist so the
+    before→after recovery of the auto-triggered post-route repair is surfaced.
 
     §4.05: a genuine ss floor (ibex@20 ns) STILL shows VIOLATED afterwards — the
-    multi-corner ECO RECOVERS what is recoverable, it does NOT fabricate closure.
-    Returns the post-ECO per-corner worst slack (None values / measured=False on
+    multi-corner post-route repair RECOVERS what is recoverable, it does NOT fabricate closure.
+    Returns the post-repair per-corner worst slack (None values / measured=False on
     any failure — never a fabricated MET).
 
-    #766 (c) — THE "AFTER" MUST BE MEASURED ON THE ECO'S OWN PARASITICS. This
-    used to hand `_emit_mcorner_ocv_sta` the ECO NETLIST while rediscovering the
-    SPEFs from ``mc_spef_dir`` — the BASE route's extraction. The ECO
-    independently re-routes to ``eco_routed.def`` and nothing re-extracted it,
-    so the report judged the ECO's netlist against parasitics that describe a
+    #766 (c) — THE "AFTER" MUST BE MEASURED ON THE POST-ROUTE REPAIR'S OWN PARASITICS. This
+    used to hand `_emit_mcorner_ocv_sta` the post-route repair NETLIST while rediscovering the
+    SPEFs from ``mc_spef_dir`` — the BASE route's extraction. The post-route repair
+    independently re-routes to ``timing_repaired.def`` and nothing re-extracted it,
+    so the report judged the post-route repair's netlist against parasitics that describe a
     different route, and said so in its own banner
-    (``SPEF=<top>.max.spef`` while reporting on ``<top>_eco.v``). The ECO deck
-    now re-extracts into ``<eco>/spef_corners/`` after its reroute; those are
+    (``SPEF=<top>.max.spef`` while reporting on ``<top>_timing_repaired.v``). The post-route repair deck
+    now re-extracts into ``<postroute_timing_repair>/spef_corners/`` after its reroute; those are
     PREFERRED here. ``parasitics_source`` records which set was used, so the
     before/after delta downstream knows whether it is comparing an implementation
     against ITSELF-after-repair or against a different one.
@@ -35678,19 +35691,19 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
         "violated_corners": [], "report": None, "measured": False,
         "parasitics_source": None,
     }
-    eco_dir = _pl.eco_dir(project)
-    eco_v = eco_dir / f"{top}_eco.v"
-    if not (eco_v.is_file() and eco_v.stat().st_size > 0):
+    postroute_timing_repair_dir = _pl.postroute_timing_repair_dir(project)
+    repaired_v = postroute_timing_repair_dir / f"{top}_timing_repaired.v"
+    if not (repaired_v.is_file() and repaired_v.stat().st_size > 0):
         return out
-    # #766 (c) — the ECO's OWN re-extracted parasitics when its reroute produced
+    # #766 (c) — the post-route repair's OWN re-extracted parasitics when its reroute produced
     # them; the base route's only as the disclosed fallback.
-    eco_spef_dir = eco_dir / "spef_corners"
+    repair_spef_dir = postroute_timing_repair_dir / "spef_corners"
     _reroute_failed = False
-    _eco_log_txt = ""
-    _eco_run_log = eco_dir / "eco_repair.log"
-    if _eco_run_log.is_file():
-        _eco_log_txt = _eco_run_log.read_text(errors="replace")
-        _reroute_failed = "ECO_DETAILED_ROUTE_NONFATAL" in _eco_log_txt
+    _repair_log_txt = ""
+    _repair_run_log = postroute_timing_repair_dir / "postroute_timing_repair.log"
+    if _repair_run_log.is_file():
+        _repair_log_txt = _repair_run_log.read_text(errors="replace")
+        _reroute_failed = "POSTROUTE_TIMING_REPAIR_DETAILED_ROUTE_NONFATAL" in _repair_log_txt
 
     def _discover(dirpath: Path) -> Dict[str, Path]:
         found: Dict[str, Path] = {}
@@ -35701,34 +35714,34 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
                     found[_c] = _sp
         return found
 
-    eco_spefs = _discover(eco_spef_dir)
-    if eco_spefs and not _reroute_failed:
-        ocv_corner_spefs, _nom, _src = eco_spefs, None, "eco_reextracted"
+    repair_spefs = _discover(repair_spef_dir)
+    if repair_spefs and not _reroute_failed:
+        ocv_corner_spefs, _nom, _src = repair_spefs, None, "repair_reextracted"
     else:
         ocv_corner_spefs = _discover(mc_spef_dir)
         _nom = (nom_spef_path if (nom_spef_path
                                   and Path(nom_spef_path).is_file()) else None)
-        _src = ("base_route_spef_reroute_failed" if (eco_spefs and _reroute_failed)
+        _src = ("base_route_spef_reroute_failed" if (repair_spefs and _reroute_failed)
                 else "base_route_spef")
     out["parasitics_source"] = _src
-    posteco_rpt = Path(sta_out) / "sta_mcorner_ocv_posteco.rpt"
+    postrepair_rpt = Path(sta_out) / "sta_mcorner_ocv_postrepair.rpt"
     # #766 (d) — A REPORT THAT PREDATES ITS OWN INPUTS IS NOT A MEASUREMENT OF
     # THEM. The reuse guard below is existence-only, so a
-    # `sta_mcorner_ocv_posteco.rpt` left by an EARLIER round survived into this
+    # `sta_mcorner_ocv_postrepair.rpt` left by an EARLIER round survived into this
     # one: the re-measurement was skipped and that round's number was parsed and
-    # published as this round's `eco_after`. Worse, `parasitics_source` is
+    # published as this round's `repair_after`. Worse, `parasitics_source` is
     # computed above from the inputs this call SELECTED, then recorded as fact —
-    # so the record asserted `eco_reextracted` over a number the previous round
+    # so the record asserted `repair_reextracted` over a number the previous round
     # had measured against the BASE route's SPEF. Measured on a real cell: the
     # stale report published setup -8.31 ns with `parasitics_source:
-    # eco_reextracted` and `measured: true`, where re-emitting over the same
-    # inputs measured -0.44 ns. The 23x error propagated into the ECO_REGRESSED
+    # repair_reextracted` and `measured: true`, where re-emitting over the same
+    # inputs measured -0.44 ns. The 23x error propagated into the REPAIR_REGRESSED
     # verdict (-8.220 ns reported for a real -0.350 ns delta) and into the
     # residual note calling -8.31 ns a "real timing floor".
     # Same mtime-supersession idiom the metal-fill re-run already uses.
-    if posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0:
-        _rpt_mtime = posteco_rpt.stat().st_mtime
-        _inputs = [Path(eco_v)] + [Path(p) for p in ocv_corner_spefs.values()]
+    if postrepair_rpt.is_file() and postrepair_rpt.stat().st_size > 0:
+        _rpt_mtime = postrepair_rpt.stat().st_mtime
+        _inputs = [Path(repaired_v)] + [Path(p) for p in ocv_corner_spefs.values()]
         if _nom:
             _inputs.append(Path(_nom))
         _newer = sorted({p.name for p in _inputs
@@ -35736,50 +35749,50 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
         if _newer:
             # Quarantine rather than delete, so a reader can still see the
             # superseded bytes, under a name nothing globbing `*.rpt` adopts.
-            _q = posteco_rpt.parent / (posteco_rpt.name + ".superseded")
+            _q = postrepair_rpt.parent / (postrepair_rpt.name + ".superseded")
             try:
-                posteco_rpt.replace(_q)
+                postrepair_rpt.replace(_q)
                 notes.append(
-                    "post-ECO multi-corner OCV: SUPERSEDED a stale "
-                    f"{posteco_rpt.name} that predates {', '.join(_newer)} — "
+                    "post-repair multi-corner OCV: SUPERSEDED a stale "
+                    f"{postrepair_rpt.name} that predates {', '.join(_newer)} — "
                     "it was measured on an EARLIER round's inputs, so reusing "
                     "it would publish that round's slack as this round's "
-                    f"eco_after under parasitics_source={_src}. Re-measuring.")
+                    f"repair_after under parasitics_source={_src}. Re-measuring.")
             except OSError as _qe:
                 notes.append(
-                    "post-ECO multi-corner OCV: could NOT quarantine stale "
-                    f"{posteco_rpt.name} ({_qe}) — refusing to adopt it; "
+                    "post-repair multi-corner OCV: could NOT quarantine stale "
+                    f"{postrepair_rpt.name} ({_qe}) — refusing to adopt it; "
                     "this measurement is reported as NOT measured.")
                 return out
-    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
+    if not (postrepair_rpt.is_file() and postrepair_rpt.stat().st_size > 0):
         _emit_mcorner_ocv_sta(
             project, top, pdk, container, corner_libs, ocv_corner_spefs,
-            _nom, posteco_rpt, notes, netlist_override=eco_v)
-    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
+            _nom, postrepair_rpt, notes, netlist_override=repaired_v)
+    if not (postrepair_rpt.is_file() and postrepair_rpt.stat().st_size > 0):
         return out
     setup_wns, hold_wns = _parse_mcorner_ocv_slacks(
-        posteco_rpt.read_text(errors="replace"))
+        postrepair_rpt.read_text(errors="replace"))
     viol = [n for n, v in (("setup", setup_wns), ("hold", hold_wns))
             if v is not None and v < 0]
     out.update({
         "setup_worst_slack_ns": setup_wns,
         "hold_worst_slack_ns": hold_wns,
         "violated_corners": viol,
-        "report": "phase3/stage3/sta/sta_mcorner_ocv_posteco.rpt",
+        "report": "phase3/stage3/sta/sta_mcorner_ocv_postrepair.rpt",
         "measured": True,
     })
-    if _src != "eco_reextracted":
+    if _src != "repair_reextracted":
         notes.append(
-            "post-ECO multi-corner OCV measured on the BASE route's parasitics "
-            f"({_src}) — they do not describe the ECO's own route, so the "
+            "post-repair multi-corner OCV measured on the BASE route's parasitics "
+            f"({_src}) — they do not describe the post-route repair's own route, so the "
             "before/after delta is NOT a like-for-like comparison (#766 c).")
     if viol:
         notes.append(
-            f"post-ECO multi-corner OCV: STILL VIOLATED at {'/'.join(viol)} "
+            f"post-repair multi-corner OCV: STILL VIOLATED at {'/'.join(viol)} "
             f"(setup_wns={setup_wns} hold_wns={hold_wns}) — real timing floor; "
-            "the ECO recovered what is recoverable (§4.05, no fabricated closure).")
+            "the post-route repair recovered what is recoverable (§4.05, no fabricated closure).")
     else:
-        notes.append(f"post-ECO multi-corner OCV: CLOSED "
+        notes.append(f"post-repair multi-corner OCV: CLOSED "
                      f"(setup_wns={setup_wns} hold_wns={hold_wns}).")
     return out
 
@@ -36899,7 +36912,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     REAL per-corner slack — a genuine ss violation appears as VIOLATED, NEVER
     hidden (§4.05: surface, do not mask). Rigor != closure: the rigor gate PASSes
     on a full-rigor report even when its ss slack is VIOLATED; closure is a
-    separate dimension driven by the DRV constraints + a timing ECO.
+    separate dimension driven by the DRV constraints + a timing post-route repair.
 
     §4.05 HONEST fallbacks: uses only the libs/SPEFs that actually exist. If the
     ss/ff process libs are absent it degrades to TT (the caller discloses single-
@@ -36914,7 +36927,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     _routed_netlist = netlist.is_file()
     if not netlist.is_file():
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
-    # ECO auto-trigger post-ECO re-measure passes the ECO netlist here (§4.05:
+    # The post-route timing repair re-measure passes the repaired netlist here (§4.05:
     # only when it genuinely exists — else the routed/synth netlist stands).
     if netlist_override is not None and Path(netlist_override).is_file():
         netlist = Path(netlist_override)
@@ -36979,7 +36992,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         # `POST_ROUTE` appears nowhere in the body. Under the landed precedence
         # that arm is red.
         # ONE predicate, not two: `_routed_netlist` is the landed spelling and
-        # it also carries the `netlist_override` (ECO netlist) case, so this
+        # it also carries the `netlist_override` (post-route repair netlist) case, so this
         # lane's own `_prelayout_netlist` local was dropped rather than left
         # beside it to drift.
         if not _routed_netlist:
@@ -37060,9 +37073,9 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         # is stale one second later — `provenance_output_hash_completeness_check`
         # then reports PROVENANCE_HASH_MISMATCH on the setup entry AND
         # PROVENANCE_HASH_INCONSISTENT across the pair, on every design that runs
-        # a post-ECO multi-corner OCV STA. Measured on subservient x sky130A:
-        #   entry#31 (sta, 02:00:12) sta_mcorner_ocv_posteco.rpt = 9a96e991…
-        #   entry#32 (sta, 02:00:13) sta_mcorner_ocv_posteco.rpt = cab24492…
+        # a post-repair multi-corner OCV STA. Measured on subservient x sky130A:
+        #   entry#31 (sta, 02:00:12) sta_mcorner_ocv_postrepair.rpt = 9a96e991…
+        #   entry#32 (sta, 02:00:13) sta_mcorner_ocv_postrepair.rpt = cab24492…
         # An intermediate write is not an artefact claim; the final writer owns it.
         _docker_exec(container, cmd, marker=tcl_c,
                      outputs=([] if hold_label is not None else [rpt_out]))
@@ -37253,8 +37266,8 @@ def _gate_only_supply_ports(gate_v: Path, gold_v: Path, top: str) -> List[str]:
 def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                           container: str, out_json: Path, out_rpt: Path,
                           notes: List[str]) -> str:
-    """TAPEOUT-SIGNOFF P1: re-prove the FINAL routed/ECO netlist == the synth
-    reference (or RTL) after CTS/PnR/ECO/fill. Writes lec_post_layout.json +
+    """TAPEOUT-SIGNOFF P1: re-prove the FINAL routed/post-route repair netlist == the synth
+    reference (or RTL) after CTS/PnR/post-route repair/fill. Writes lec_post_layout.json +
     .rpt. Returns the verdict string (PROVEN_EQUIVALENT / NON_EQUIVALENT /
     UNPROVEN / VACUOUS / RUN_ERROR / SKIP).
 
@@ -37266,23 +37279,23 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                      "unavailable — skipping.")
         return "SKIP"
     pnr_out = _pl.pnr_dir(project)
-    eco_out = _pl.eco_dir(project)
+    postroute_timing_repair_out = _pl.postroute_timing_repair_dir(project)
     synth_out = _pl.synth_dir(project)
-    # GATE (under test): the FINAL netlist — prefer post-ECO, else routed PnR.
+    # GATE (under test): the FINAL netlist — prefer post-repair, else routed PnR.
     gate = None
-    for cand in (eco_out / f"{top}_eco.v", pnr_out / f"{top}_pnr.v"):
+    for cand in (postroute_timing_repair_out / f"{top}_timing_repaired.v", pnr_out / f"{top}_pnr.v"):
         if cand.is_file():
             gate = cand
             break
     if gate is None:
-        # honest SKIP: no routed/ECO netlist -> design not placed-and-routed.
+        # honest SKIP: no routed/post-route repair netlist -> design not placed-and-routed.
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps({
             "tool": "yosys-equiv", "top": top, "verdict": "SKIP",
             "skipped": True,
-            "skip_reason": "no routed/ECO netlist (design not placed-and-routed)",
+            "skip_reason": "no routed/post-route repair netlist (design not placed-and-routed)",
         }, indent=2) + "\n")
-        notes.append("post-layout LEC: SKIP — no routed/ECO netlist.")
+        notes.append("post-layout LEC: SKIP — no routed/post-route repair netlist.")
         return "SKIP"
     # GOLD (reference): the netlist PnR ACTUALLY ROUTED — `pnr_input_netlist` is
     # the same measured selection the PnR step made, so the pair being proven is
@@ -37435,8 +37448,8 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         # upgrades to functional after the fork image rebuild).
         "lec_recipe": lec_recipe,
         "functional_read_liberty": functional_lib,
-        "scope": ("re-proves the FINAL routed/ECO netlist == the "
-                  f"{gold_kind} reference after CTS/PnR/ECO/fill "
+        "scope": ("re-proves the FINAL routed/post-route repair netlist == the "
+                  f"{gold_kind} reference after CTS/PnR/post-route repair/fill "
                   "(Step-13 only proved RTL==synth)."),
     }
     out_json.write_text(json.dumps(doc, indent=2) + "\n")
@@ -37444,7 +37457,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     gate_res = mod.evaluate_report(doc)
     out_rpt.parent.mkdir(parents=True, exist_ok=True)
     out_rpt.write_text(
-        "# Post-layout LEC (routed/ECO netlist == synth/RTL reference)\n"
+        "# Post-layout LEC (routed/post-route repair netlist == synth/RTL reference)\n"
         f"# gold ({gold_kind}): {gold}\n# gate (routed): {gate}\n#\n"
         f"verdict: {doc['verdict']}\n"
         f"gate_result: {gate_res['result']}\n"
@@ -37518,8 +37531,8 @@ def _lec_post_layout_refusal(project: Path) -> Optional[str]:
         return None
     findings = "; ".join(res.get("findings") or []) or "equivalence not proven"
     return (f"post-layout LEC FAILED (verdict={res.get('verdict')}): "
-            f"{findings}. The FINAL routed/ECO netlist is not a proven "
-            "logical match for the synth/RTL reference — CTS / PnR / ECO / "
+            f"{findings}. The FINAL routed/post-route repair netlist is not a proven "
+            "logical match for the synth/RTL reference — CTS / PnR / post-route repair / "
             "fill changed the logic, or the proof did not close.")
 
 
@@ -38714,7 +38727,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
             # precisely to stop the tool erroring.
             #
             # DRT-627 is `FlexPA` reporting a pin it could not reach an access point
-            # for, downgraded from the fatal DRT-0073 so a post-route ECO can
+            # for, downgraded from the fatal DRT-0073 so a post-route repair can
             # continue (vibeic/OpenROAD 8d040d56c). Without this the flow prints
             # `routing complete: YES` for a design carrying a pin the router never
             # reached.
@@ -38782,7 +38795,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     f"routing complete: {'NO' if routing_incomplete else 'YES'}\n"
                     + (f"pins left unaccessed: {pins_unaccessed} "
                        f"(DRT-627 — the router could not reach these pins; the "
-                       f"fork downgrades this from the fatal DRT-0073 so an ECO "
+                       f"fork downgrades this from the fatal DRT-0073 so a repair "
                        f"can continue, so it is NOT visible as a routing "
                        f"failure)\n" if pins_unaccessed else "")
                     + _incomplete_note)
@@ -41689,11 +41702,11 @@ def _emit_perc_signoff_memo(project: Path, top: str,
 # foundry_handoff_pack_gen MUST run BEFORE tapeout_checklist_gen — otherwise the
 # checklist snapshot (reports/audit/tapeout_checklist.json) is written before
 # the foundry files exist and records verdict=BLOCKER_MISSING for files produced
-# tens of ms later in the same run. (eco_status_gen is independent and stays
+# tens of ms later in the same run. (postroute_timing_repair_status_gen is independent and stays
 # first.) Extracted to a module constant so the order is testable and a future
 # reorder cannot silently re-break it. Each tuple = (generator, human-kind).
 _DERIVED_ARTEFACT_GENERATORS = (
-    ("eco_status_gen.py", "ECO no-op flag"),
+    ("postroute_timing_repair_status_gen.py", "post-route repair no-op flag"),
     ("foundry_handoff_pack_gen.py", "foundry handoff skeleton"),
     ("tapeout_checklist_gen.py", "tapeout checklist"),
 )

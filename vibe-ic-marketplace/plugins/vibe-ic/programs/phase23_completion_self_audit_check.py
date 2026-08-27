@@ -16,7 +16,8 @@ Why this gate exists:
   can pass every individual gate while only completing 2/34 canonical
   flow steps — because steps 14-32 (PnR canonical artefacts, SPEF,
   post-route STA, IR/EM/antenna/SI, post-layout sim, SPICE correlation,
-  ECO, power, metal fill, tapeout checklist) and step 34 (FPGA final
+  post-route timing repair, power, metal fill, tapeout checklist) and step 34
+  (FPGA final
   sign-off) were never verified.
 - This gate wraps `flow_compliance_check.py --strict` and produces a
   single PASS/FAIL with a clear `non-waived PASS = N/34` metric.

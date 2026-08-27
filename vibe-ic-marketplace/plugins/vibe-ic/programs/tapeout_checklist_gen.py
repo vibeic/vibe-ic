@@ -79,12 +79,12 @@ _CHECKLIST_ITEMS = [
     # DFT sign-off (stuck-at + at-speed transition + BSDL) — dft_signoff_check
     # is the authority (recomputes coverage vs the foundry floor).
     ("dft_signoff",        "reports/phase2/dft/coverage.json",          "advisory", "dft_signoff_check"),
-    # POST-LAYOUT LEC — the FINAL routed/ECO netlist re-proven == synth/RTL
+    # POST-LAYOUT LEC — the FINAL routed/repair netlist re-proven == synth/RTL
     # (Step-13 LEC only proved RTL==synth). lec_post_layout_check is the
     # authority (a non-proof is a FAIL, not a pass; no routed netlist → SKIP).
     ("lec_post_layout",    "reports/phase3/lec_post_layout.json",       "advisory", "lec_post_layout_check"),
     ("post_layout_sim",    "phase3/stage3/sim_postlayout/pass.flag",   "advisory", None),
-    ("eco_status",         "phase3/stage3/eco/no_eco_needed.flag",     "advisory", None),
+    ("postroute_timing_repair_status",         "phase3/stage3/postroute_timing_repair/no_repair_needed.flag",     "advisory", None),
     ("foundry_mask_spec",  "phase3/stage4/foundry_handoff/mask_spec.json", "blocker", None),
     ("foundry_wat_plan",   "phase3/stage4/foundry_handoff/wat_plan.json",  "blocker", None),
     ("foundry_corner_kit", "phase3/stage4/foundry_handoff/corner_test_vectors.json", "blocker", None),
@@ -160,7 +160,7 @@ _GATE_NOTES = {
         "real/documented-engine-limited at-speed transition record + a BSDL "
         "for a padded design.",
     "lec_post_layout_check":
-        "the FINAL routed/ECO netlist re-proven logically == synth/RTL "
+        "the FINAL routed/repair netlist re-proven logically == synth/RTL "
         "(Step-13 only proved RTL==synth) — a non-proof is a FAIL, not a pass.",
 }
 

@@ -8,7 +8,7 @@ step still reporting PASS.
 
 That is not an edge case — it is the path taken whenever an author was
 REQUIRED. The measured sequence: the deterministic generator emits
-non-compiling RTL; the ECO loop returns FAIL_ECO_INERT (byte-identical
+non-compiling RTL; the RTL repair/retry loop returns FAIL_RTL_REPAIR_INERT (byte-identical
 RTL across iterations, i.e. the repair loop cannot repair itself); an
 agent authors the design from the design documents; the next front-door
 run deletes that work.
@@ -301,11 +301,11 @@ def test_repeated_regeneration_stays_pass(tmp_path, monkeypatch):
         _end_run_and_start_new()
 
 
-def test_eco_loop_reinvocation_regenerates_within_a_run(tmp_path,
+def test_rtl_repair_retry_reinvocation_regenerates_within_a_run(tmp_path,
                                                         monkeypatch):
     """Intra-run churn is not authorship.
 
-    The ECO loop calls step_rtl_gen repeatedly inside ONE invocation. The
+    The RTL repair/retry loop calls step_rtl_gen repeatedly inside ONE invocation. The
     guard protects against edits made between runs; if it fired inside a
     run it would break the repair loop.
     """
@@ -342,8 +342,8 @@ def test_runner_emitted_files_are_not_mistaken_for_authored(tmp_path,
 # Fixture 3 - generator proven failed: the fallback must be REACHABLE.
 # ---------------------------------------------------------------------
 
-def test_fallback_reachable_on_eco_inert(monkeypatch):
-    """FAIL_ECO_INERT means the generator proved it cannot proceed.
+def test_fallback_reachable_on_rtl_repair_inert(monkeypatch):
+    """FAIL_RTL_REPAIR_INERT means the generator proved it cannot proceed.
 
     A class declaring BOTH a generator and a fallback_skill could never
     reach that fallback: dispatch consulted fallback_skill only when
@@ -352,7 +352,7 @@ def test_fallback_reachable_on_eco_inert(monkeypatch):
     """
     _install_class(monkeypatch)
 
-    note, skill = R._eco_inert_fallback(CLASS_NAME)
+    note, skill = R._rtl_repair_inert_fallback(CLASS_NAME)
 
     assert skill == "spec-to-rtl"
     assert note, ("a generator that returned byte-identical RTL must "
@@ -416,11 +416,11 @@ def test_registered_generator_is_staged_and_never_adopts_replaced_root(
     assert not (_rtl(displaced) / "gen_top.v").exists()
 
 
-def test_eco_inert_note_absent_when_class_declares_no_fallback(monkeypatch):
+def test_rtl_repair_inert_note_absent_when_class_declares_no_fallback(monkeypatch):
     """No fallback declared -> no invented handoff."""
     _install_class(monkeypatch, fallback_skill=None)
 
-    note, skill = R._eco_inert_fallback(CLASS_NAME)
+    note, skill = R._rtl_repair_inert_fallback(CLASS_NAME)
 
     assert skill is None
     assert note == ""

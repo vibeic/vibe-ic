@@ -20,10 +20,10 @@ clean_run_v1427_20260715`:
 Same thirteen files, so the two gates' summary documents come out
 BYTE-IDENTICAL — and the violation both cite is sourced from
 `phase3/stage3/sta/sta_mcorner_ocv.rpt` (setup -67.61 ns), from
-`sta_mcorner_ocv_posteco.rpt` (step 32's POST-ECO artefact) and from
+`sta_mcorner_ocv_postrepair.rpt` (step 32's POST-repair artefact) and from
 `reports/phase3/aging_sta.rpt`. Step 10's own declared report,
 `phase3/stage3/sta/pre_pnr_timing.rpt`, is clean. A pre-layout gate was being
-failed by a post-ECO artefact.
+failed by a post-repair artefact.
 
 THREE CALL SITES, not two. The two yaml clauses AND
 `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES`, whose `sta_signoff` entry
@@ -132,7 +132,7 @@ def project(tmp_path):
     """A run whose PRE-LAYOUT report is clean and whose LATER-step reports are
     not — the shape measured on the published sha256 clean runs.
 
-    `sta_mcorner_ocv_posteco.rpt` is step 32's post-ECO artefact and
+    `sta_mcorner_ocv_postrepair.rpt` is step 32's post-repair artefact and
     `aging_sta.rpt` is step 33's; neither belongs to step 10 or step 23.
     """
     p = tmp_path / "proj"
@@ -141,7 +141,7 @@ def project(tmp_path):
     (p / _STEP10_REPORT).write_text(_MET)
     (p / _STEP23_REPORT).write_text(_MET)
     (p / "phase3/stage3/sta/sta_mcorner_ocv.rpt").write_text(_VIOLATED)
-    (p / "phase3/stage3/sta/sta_mcorner_ocv_posteco.rpt").write_text(_VIOLATED)
+    (p / "phase3/stage3/sta/sta_mcorner_ocv_postrepair.rpt").write_text(_VIOLATED)
     (p / "reports/phase3/aging_sta.rpt").write_text(_VIOLATED)
     return p
 
@@ -258,7 +258,7 @@ def test_step10_scope_is_not_wide_enough_to_reach_the_post_route_reports(
         project):
     """A directory scope over `phase3/stage3/sta` would look like a fix and
     change nothing: every later-step STA artefact lives in that same
-    directory, post-ECO report included.
+    directory, post-repair report included.
 
     AMENDED. The rule was spelled `u.endswith(".rpt")` — a syntactic stand-in
     that also forbids a subdirectory holding NOTHING but the declaring step's
@@ -273,12 +273,12 @@ def test_step10_scope_is_not_wide_enough_to_reach_the_post_route_reports(
         for u in _unders(cmd):
             assert u.rstrip("/") not in banned_dirs, (
                 f"{cmd!r}: --under {u!r} is the shared STA directory. It "
-                f"holds step 10's, step 23's AND step 32's post-ECO reports, "
+                f"holds step 10's, step 23's AND step 32's post-repair reports, "
                 f"so this restores exactly the cross-step contamination the "
                 f"scope removes.")
 
     # EXECUTED, not asserted from the string. The fixture carries step 23's,
-    # step 32's (post-ECO) and step 33's (aging) artefacts; step 10's scope
+    # step 32's (post-repair) and step 33's (aging) artefacts; step 10's scope
     # must reach none of them even with a genuine per_corner/ present.
     pc = project / "phase3/stage3/sta/per_corner"
     pc.mkdir(parents=True, exist_ok=True)
@@ -296,7 +296,7 @@ def test_step10_scope_is_not_wide_enough_to_reach_the_post_route_reports(
     assert doc["summary"]["files_found"] == 3, doc["summary"]
     blob = json.dumps(doc)
     for foreign in ("post_route_timing.rpt", "sta_mcorner_ocv.rpt",
-                    "sta_mcorner_ocv_posteco.rpt", "aging_sta.rpt"):
+                    "sta_mcorner_ocv_postrepair.rpt", "aging_sta.rpt"):
         assert foreign not in blob, (
             f"step 10's scope reached {foreign!r}: {blob[:600]}")
     assert cp.returncode == 0, doc

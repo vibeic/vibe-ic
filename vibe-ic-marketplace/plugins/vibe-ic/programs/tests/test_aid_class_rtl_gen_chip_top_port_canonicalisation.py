@@ -3,7 +3,7 @@
 Closes #17 Bug A1 — chip_top SHOUTING port-name canonicalisation.
 
 Field-agent traced an iverilog `port id_bus is not a port of u_dut`
-fail across 4 ECO iterations: aid_class_rtl_gen emitted SHOUTING
+fail across 4 RTL repair retrys: aid_class_rtl_gen emitted SHOUTING
 all-caps port names (ID_BUS / V_IN / OVP / WAKE) into chip_top.sv
 but the reference_tb + de10lite_top wrapper bind to lowercase
 canonical names. Canonicalisation is chip-AGNOSTIC: lowercase +

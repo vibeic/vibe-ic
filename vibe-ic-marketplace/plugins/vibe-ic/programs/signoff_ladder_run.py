@@ -1356,13 +1356,13 @@ def check_tier_dft_signoff(project_dir: Path) -> TierResult:
 
 
 def check_tier_lec_post(project_dir: Path) -> TierResult:
-    """Post-layout LEC — the FINAL routed/ECO netlist re-proven == synth/RTL.
+    """Post-layout LEC — the FINAL routed/repaired netlist re-proven == synth/RTL.
 
     Delegates to `lec_post_layout_check.check`:
       PASS -> PASS
       FAIL -> FAIL    (non-equivalent routed logic, OR an UNPROVEN / VACUOUS /
               RUN_ERROR non-proof — §4.05: a non-proof is never a pass)
-      SKIP -> NOT_RUN (no routed/ECO netlist yet — honest not-applicable)"""
+      SKIP -> NOT_RUN (no routed/repaired netlist yet — honest not-applicable)"""
     import lec_post_layout_check as lec
     res = lec.check(project_dir.resolve())
     r = res.get("result")

@@ -152,9 +152,8 @@ at the score front door.
      with: `chip_top_gate_wrapper_gen` (auto-emits the chip_top wrapper if
      L9.top_module != your authored top), `rtl_hygiene_lint --fix` (enforces
      power-up determinism on reset-less registered outputs — v0.1.24 lesson),
-     `eda_lint`, `eda_synth`, `spec_conformance_check`, the bounded
-     deterministic RTL repair/retry loop (legacy internal `eco_loop` marker;
-     up to 3 retries on `reference_tb` FAIL; **not** a physical/metal ECO),
+     `eda_lint`, `eda_synth`, `spec_conformance_check`, `rtl_repair_retry` (up to 3
+     retries on `reference_tb` FAIL; **not** a physical/metal ECO),
      `full_stack_tb_gen`, `final_audit`.
      These gates are what make Shape B more valuable than direct-agent
      authoring (Shape C with MCP only).
@@ -203,9 +202,9 @@ at the score front door.
 6. The benchmark NUMBER measures what the runner pipeline (incl. you in the
    spec-to-rtl role per 5a) produces. The 2026-05-28 wrong-shape RTLLM 37/50
    was direct-agent authoring with MCP only — phase1 / chip_top / hygiene fix /
-   RTL repair/retry loop / conformance ALL skipped. Shape B done correctly
-   invokes the AI for authoring AS PART OF the runner pipeline, with all those
-   gates firing, then requires a second blind AI semantic-review rail.
+   rtl_repair_retry / conformance ALL skipped. Shape B done correctly invokes the AI
+   for authoring AS PART OF the runner pipeline, with all those gates firing,
+   then requires a second blind AI semantic-review rail.
 
 ## Final report (compact table)
 Per `<leaf>`: module name | runner verdict | sample emitted (y/n) | any close-loop

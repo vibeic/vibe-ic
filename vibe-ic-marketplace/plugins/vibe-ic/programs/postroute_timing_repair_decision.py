@@ -1,47 +1,47 @@
 #!/usr/bin/env python3
-"""eco_trigger_decision.py — the SHARED ECO auto-trigger decision.
+"""The shared Step 32 post-route timing-repair trigger decision.
 
 TAPEOUT-SIGNOFF gap (ibex-surfaced):
-  The ECO auto-trigger used to read ONLY the single-corner (typical / tt)
+  The trigger used to read ONLY the single-corner (typical / tt)
   post-route STA. A large design can MEET timing at the tt corner yet carry a
   huge setup violation at the SLOW (ss) process corner because slews explode
   there (ibex: tt +6.02 ns MET, ss −88 ns VIOLATED). Gating the trigger on tt
-  alone writes ``no_eco_needed.flag`` and the multi-corner-aware ECO
-  (``_build_eco_repair_tcl`` with corner_libs, ss-first) NEVER fires for exactly
-  the designs that need it — the ECO is emitted-but-dead.
+  alone writes ``no_repair_needed.flag`` and the multi-corner-aware repair
+  (``_build_postroute_timing_repair_tcl`` with corner_libs, ss-first) NEVER fires for exactly
+  the designs that need it — the repair deck is emitted but dead.
 
-This module is the ONE decision that BOTH ``no_eco_needed.flag`` sites consult:
+This module is the ONE decision that BOTH ``no_repair_needed.flag`` sites consult:
   * ``phase3_one_shot_runner.step_canonicalize_artefacts`` (the primary site,
-    which also FIRES the ECO), and
-  * ``eco_status_gen.py`` (a derived-artefact generator that runs AFTER
-    canonicalize and would otherwise re-write ``no_eco_needed.flag`` from the
+    which also FIRES the repair), and
+  * ``postroute_timing_repair_status_gen.py`` (a derived-artefact generator that runs AFTER
+    canonicalize and would otherwise re-write ``no_repair_needed.flag`` from the
     single-corner STA, clobbering the primary decision).
 Sharing the decision means the two sites cannot drift.
 
 §4.05 HONEST fallback: when multi-corner OCV sign-off is UNAVAILABLE (a
 single-corner PDK exposing no distinct ss/ff process liberties), the decision
 degrades to today's single-corner (tt) behavior — no regression and no
-fabricated multi-corner claim. And it NEVER declares no-ECO-needed when a real
+fabricated multi-corner claim. It never declares no-repair-needed when a real
 multi-corner violation exists.
 
 v1.7.64 (Step 32 / d5) — NON-TIMING SIGN-OFF FAIL-CLOSE.
   The flow YAML declares Step 32 as "If any sign-off step (STA, PV, IR Drop,
-  EM, SI, Post-Sim, SPICE) fails, ECO applies targeted netlist patches".
+  EM, SI, Post-Sim, SPICE) fails, a repair is required".
   `decide()` read STA and nothing else, so a run with a hard-failed IR-drop /
-  EM / PV sign-off still wrote `no_eco_needed.flag` and `eco_loop_audit`
+  EM / PV sign-off still wrote `no_repair_needed.flag` and `postroute_timing_repair_audit`
   short-circuited to a clean PASS. Measured: a project with
   `reports/phase3/ir_drop.json {"verdict": "FAIL"}` next to a clean STA
-  produced `verdict: PASS, artefact: no_eco_needed.flag`, rc=0.
+  produced `verdict: PASS, artefact: no_repair_needed.flag`, rc=0.
 
   The decision now ALSO reads the non-timing sign-off verdicts that the same
-  run already wrote, and REFUSES to return eco_needed=False while any of them
+  run already wrote, and REFUSES to return repair_needed=False while any of them
   reports a HARD failure. This is deliberately a fail-close, not new repair
-  capability: `timing_eco_needed` still gates the timing-repair TCL, so a
-  non-timing failure never fires `eco_timing_repair.tcl` and never fabricates
-  an `eco_log.json` — it withholds the "no ECO needed" certificate and hands
-  the step to the eco-plan skill / closed loop.
+  capability: `timing_repair_needed` still gates the timing-repair TCL, so a
+  non-timing failure never fires `postroute_timing_repair.tcl` and never fabricates
+  a ``repair_log.json``. It withholds the no-repair-needed certificate and
+  leaves the failing domain visible to the closed loop.
 
-  Conservative by construction (a false ECO demand would deadlock every run):
+  Conservative by construction (a false repair demand would deadlock every run):
   only an EXPLICIT hard-failure signal counts. A missing artefact, an
   unparseable artefact, a warning/review verdict (e.g. ERC "REVIEW"), an
   advisory screen and a measurement-only verdict all count as NOT a failure.
@@ -99,7 +99,7 @@ _NON_TIMING_SIGNOFF_ARTEFACTS = (
 # ONLY these verdict tokens are a hard failure. Deliberately excludes review /
 # advisory / measurement tiers ("REVIEW", "BENIGN-ERC", "MEASURED",
 # "ADVISORY_SCREEN_ONLY", "PASS_WITH_OPEN_ITEMS", …) — treating those as
-# failures would demand an ECO on essentially every open-source run.
+# failures would demand repair on essentially every open-source run.
 _HARD_FAIL_VERDICTS = frozenset({
     "FAIL", "FAILED", "FAILURE", "VIOLATED", "VIOLATION",
     "MISMATCH", "NO_MATCH", "NOT_CLEAN", "REJECTED", "ERROR",
@@ -194,7 +194,7 @@ def decide(stance: Union["Path", str, dict, None],
            project: Union["Path", str, None] = None,
            signoff_reports: Optional[Dict[str, Any]] = None,
            ) -> Dict[str, Any]:
-    """Return the ECO auto-trigger decision.
+    """Return the post-route timing-repair trigger decision.
 
     Args:
       stance: path to (or already-parsed dict of) ``mcorner_ocv_stance.json``.
@@ -212,33 +212,34 @@ def decide(stance: Union["Path", str, dict, None],
                         basis; unchanged by v1.7.64
       mc_ocv_available: multi-corner OCV genuinely ran (>=2 distinct process
                         corners) AND produced a report
-      timing_eco_needed:True ⇒ a TIMING violation exists; this alone may fire
-                        ``eco_timing_repair.tcl`` (v1.7.64; pre-v1.7.64 this
-                        was what ``eco_needed`` meant)
-      eco_needed:       True  ⇒ an ECO must FIRE (do NOT write no_eco_needed.flag)
-                        False ⇒ no ECO needed (no_eco_needed.flag is honest).
-                        = timing_eco_needed OR any non-timing hard failure.
+      timing_repair_needed:True ⇒ a TIMING violation exists; this alone may fire
+                        ``postroute_timing_repair.tcl`` (v1.7.64; pre-v1.7.64 this
+                        was what ``repair_needed`` meant)
+      repair_needed:       True  ⇒ a repair is required (do not write
+                        ``no_repair_needed.flag``)
+                        False ⇒ no repair is needed.
+                        = timing_repair_needed OR any non-timing hard failure.
       nontiming_failures: [{"domain","path","signal"}] hard-failed sign-off
                         domains (empty when ``project``/``signoff_reports``
                         are not supplied)
-      reason:           human-readable basis of the eco_needed value
+      reason:           human-readable basis of the repair_needed value
       violated_corners: corner(s) with a real violation (multi-corner basis only)
       setup_worst_slack_ns / hold_worst_slack_ns: the REAL per-corner worst slack
 
     Decision logic:
       * multi-corner OCV authoritative (multi_process_corner True + a report):
-        timing_eco_needed = a real violation exists at ANY signed-off corner.
-      * else (single-corner PDK / OCV unavailable): timing_eco_needed = NOT
+        timing_repair_needed = a real violation exists at ANY signed-off corner.
+      * else (single-corner PDK / OCV unavailable): timing_repair_needed = NOT
         clean at tt — today's behavior, no regression.
-      * eco_needed = timing_eco_needed OR a hard failure in any non-timing
-        sign-off domain. Step 32 may not certify "no ECO needed" over a failed
+      * repair_needed = timing_repair_needed OR a hard failure in any non-timing
+        sign-off domain. Step 32 may not certify "no post-route repair needed" over a failed
         IR-drop / EM / SI / PV sign-off (v1.7.64).
     """
     out: Dict[str, Any] = {
         "basis": "single_corner_tt",
         "mc_ocv_available": False,
-        "timing_eco_needed": not single_corner_clean,
-        "eco_needed": not single_corner_clean,
+        "timing_repair_needed": not single_corner_clean,
+        "repair_needed": not single_corner_clean,
         "violated_corners": [],
         "setup_worst_slack_ns": None,
         "hold_worst_slack_ns": None,
@@ -258,26 +259,26 @@ def decide(stance: Union["Path", str, dict, None],
             out.update({
                 "basis": "multi_corner_ocv",
                 "mc_ocv_available": True,
-                # A real ss/ff/any-corner setup/hold violation ⇒ the ECO MUST
+                # A real ss/ff/any-corner setup/hold violation means repair MUST
                 # fire, even when the single-corner tt STA is MET (the whole
                 # point of the fix).
-                "timing_eco_needed": bool(viol),
-                "eco_needed": bool(viol),
+                "timing_repair_needed": bool(viol),
+                "repair_needed": bool(viol),
                 "violated_corners": viol,
                 "setup_worst_slack_ns": s.get("setup_worst_slack_ns"),
                 "hold_worst_slack_ns": s.get("hold_worst_slack_ns"),
             })
 
     # v1.7.64 — fail-close over the non-timing sign-off domains. Purely
-    # additive: it can only turn eco_needed from False to True, never the
+    # additive: it can only turn repair_needed from False to True, never the
     # other way, so a real timing violation can never be masked.
     if project is not None or signoff_reports is not None:
         out["nontiming_failures"] = collect_non_timing_failures(
             project, signoff_reports)
     if out["nontiming_failures"]:
-        out["eco_needed"] = True
+        out["repair_needed"] = True
 
-    if out["timing_eco_needed"]:
+    if out["timing_repair_needed"]:
         out["reason"] = (
             f"timing violation at basis {out['basis']}"
             + (f" (corners: {','.join(out['violated_corners'])})"
@@ -292,7 +293,7 @@ def decide(stance: Union["Path", str, dict, None],
             "no timing violation, but non-timing sign-off failure(s): "
             + ", ".join(f"{r['domain']}({r['signal']})"
                         for r in out["nontiming_failures"])
-            + " — Step 32 may not certify 'no ECO needed' over a failed "
+            + " — Step 32 may not certify 'no repair needed' over a failed "
               "sign-off domain")
     else:
         out["reason"] = (

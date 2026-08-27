@@ -210,7 +210,7 @@ _VERSION_READING_PROGRAMS = {
     "caravel_integration_runner",
     "caravel_wrapper_emit",
     "drc_fix_planner",
-    "eco_status_gen",
+    "postroute_timing_repair_status_gen",
     # The audit artefact's own `version` field. It said "0.119.62" on all 28
     # tracked audits, across every release from 1.0.0 to 1.9.79 — #800's scan
     # never saw it because the key is `version`, which is not one of
@@ -272,7 +272,7 @@ _VERSION_READING_PROGRAMS = {
 # `caravel_wrapper_harden_driver` and `xor_layout_check` say `v1`, a FORMAT
 # generation; `_VERSION_TOKEN` does not match a bare major, so they need no
 # exemption to stay quiet, and they DO get scanned the day someone writes
-# `v1.2.3` there. `eco_status_gen` was exempted in the first draft as a
+# `v1.2.3` there. `postroute_timing_repair_status_gen` was exempted in the first draft as a
 # "program-internal tool version"; that reasoning does not survive contact —
 # `1.1.0` is version-shaped exactly like a release — so it is FIXED instead.
 _NOT_A_PLUGIN_RELEASE_CLAIM = {

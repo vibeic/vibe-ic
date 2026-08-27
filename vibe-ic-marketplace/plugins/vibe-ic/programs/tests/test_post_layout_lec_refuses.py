@@ -1,7 +1,7 @@
 """The post-layout equivalence proof was computed, written down, and ignored.
 
 `phase3_one_shot_runner._emit_lec_post_layout` runs a real Yosys equivalence
-between the FINAL routed/ECO netlist and the synth/RTL reference, and returns
+between the FINAL routed/repaired netlist and the synth/RTL reference, and returns
 the verdict. The call site assigned that return value to a local nothing read.
 The ONLY way the step could fail was the emitter RAISING, so the two outcomes
 the proof exists to catch — the routed netlist is NOT equivalent, and
@@ -89,7 +89,7 @@ def test_an_absent_artefact_raises_no_refusal(tmp_path):
 def test_an_honest_skip_raises_no_refusal(tmp_path):
     _write(tmp_path, {"tool": "yosys-equiv", "top": "top", "verdict": "SKIP",
                       "skipped": True,
-                      "skip_reason": "no routed/ECO netlist"})
+                      "skip_reason": "no routed/repaired netlist"})
     assert R._lec_post_layout_refusal(tmp_path) is None
 
 

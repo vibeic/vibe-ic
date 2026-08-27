@@ -11,7 +11,7 @@ a post-detailed-route SPEF-annotated design, killing the whole openroad
 process so GDS was never written. The block is now MEASURE-ONLY: OpenRCX
 extract → write_spef → SPEF_MEASURE_COMPLETE, with NO repair_timing /
 repair_design / reroute. The SPEF feeds #527's SPEF-true Step-23 STA;
-residual post-route timing goes via the pre-route #561 ECO path.
+residual post-route timing goes via the pre-route #561 timing-repair path.
 """
 import subprocess
 import sys
@@ -103,7 +103,7 @@ def test_postroute_repair_estimate_empty_on_stock():
 
 def test_spef_extract_block_is_measure_only_never_modifies_design():
     # The extraction block (runs BEFORE write_def) must NEVER carry a repair
-    # move — that would ship unrouted ECO cells into the DEF/GDS/netlist.
+    # move — that would ship unrouted repair cells into the DEF/GDS/netlist.
     cmds = "\n".join(ln for ln in R._post_route_spef_repair_tcl(
         "/out", "/tech.lef").splitlines() if not ln.lstrip().startswith("#"))
     assert "SPEF_MEASURE_COMPLETE" in cmds

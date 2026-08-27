@@ -13,7 +13,7 @@ Usage:
     python3 phase23_one_shot_runner.py <project_dir>
                   [--top-name chip_top]
                   [--container vibeic-eda]
-                  [--max-eco 3]
+                  [--max-rtl-repair-retries 3]
                   [--skip-hardware]                 # forwarded to phase 2
                   [--skip-phase3]                   # stop after Phase 2
                   [--skip-phase2]                   # only run Phase 3
@@ -64,7 +64,7 @@ def main() -> int:
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="vibeic-eda")
-    p.add_argument("--max-eco", type=int, default=3)
+    p.add_argument("--max-rtl-repair-retries", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--force-rtl-regen", action="store_true",
                    help="Forwarded to Phase 2: let the deterministic "
@@ -137,7 +137,7 @@ def main() -> int:
         p2_args = [str(project),
                    "--top-name", args.top_name,
                    "--container", args.container,
-                   "--max-eco", str(args.max_eco)]
+                   "--max-rtl-repair-retries", str(args.max_rtl_repair_retries)]
         if args.skip_hardware:
             p2_args.append("--skip-hardware")
         if args.force_rtl_regen:

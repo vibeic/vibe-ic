@@ -743,11 +743,11 @@ def test_declared_gate_commands_walks_nested_gate_shapes(fcc):
         {"files_exist": ["a.log", "b.flag"], "any_of": True},
         {"program_exit_zero": "post_layout_sim_check . --json out.json"},
         {"optional_program_exit_zero": {
-            "command": "eco_loop_audit . --json eco.json",
-            "condition_files_exist": ["eco_log.json"]}},
+            "command": "postroute_timing_repair_audit . --json repair.json",
+            "condition_files_exist": ["repair_log.json"]}},
     ]}
     assert fcc._declared_gate_commands(gate) == [
-        "post_layout_sim_check", "eco_loop_audit"]
+        "post_layout_sim_check", "postroute_timing_repair_audit"]
 
 
 def test_declared_gate_commands_names_programs_only(fcc):
@@ -939,7 +939,7 @@ def _touch(project: Path, rel: str, body: str = "x\n") -> Path:
     # declared, so the .rpt and the sign-off memo were verified by nobody.
     # 2026-07-28: the list gained reports/phase2/gates/perc_signoff.json — the
     # step's fourth declared output, the PERC sign-off VERDICT that
-    # `eco_trigger_decision` reads as an ECO-trigger input. The seeded set must
+    # `postroute_timing_repair_decision` reads as a repair-trigger input. The seeded set must
     # be the step's FULL required_outputs or the control assertion below
     # ("all present is not MISSING") measures the seed list, not the flow.
     (28, ["reports/phase3/perc_equivalent.json",
@@ -947,11 +947,11 @@ def _touch(project: Path, rel: str, body: str = "x\n") -> Path:
           "reports/phase3/PERC_SIGNOFF_MEMO.md",
           "reports/phase2/gates/perc_signoff.json"],
      "reports/phase3/PERC_SIGNOFF_MEMO.md"),
-    # Step 32 ECO: the trigger decision is written on EVERY branch, including
-    # the one that writes neither eco_log.json nor no_eco_needed.flag.
-    (32, ["phase3/stage3/eco/no_eco_needed.flag",
-          "phase3/stage3/eco/eco_trigger_decision.json"],
-     "phase3/stage3/eco/eco_trigger_decision.json"),
+    # Step 32 repair: the trigger decision is written on EVERY branch, including
+    # the one that writes neither repair_log.json nor no_repair_needed.flag.
+    (32, ["phase3/stage3/postroute_timing_repair/no_repair_needed.flag",
+          "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"],
+     "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
     # Step 34 metal fill: reports/density.{json,rpt} come off the same success
     # path as filled.def, and TWO gates read them (this step's and Step 31's).
     (34, ["phase3/stage3/pnr/filled.def",

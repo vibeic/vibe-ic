@@ -39,8 +39,8 @@ this program VERIFIES each citation against the tree rather than believing it.
                      not execution of the declared fallback edge.
     REMEASURED       EXECUTABLE, and the same program re-measures the metric the
                      trigger names AFTER acting — so "it ran" and "it helped"
-                     are different questions. (`eco_loop_audit` learned this the
-                     expensive way: an ECO that made setup 12x WORSE satisfied
+                     are different questions. (`postroute_timing_repair_audit` learned this the
+                     expensive way: a repair that made setup 12x WORSE satisfied
                      every structural field and was recorded `pass`.)
     ROLLBACK_PROVEN  REMEASURED, and the program can UNDO its actuation when the
                      re-measurement is worse, AND a named test proves the undo.
@@ -53,12 +53,12 @@ MEASURED AFTER FOLDING 1.6x INTO STEP 2 — the census this program prints:
       3 REMEASURED      (4 -> 1; 23 -> 32 and 32 -> 32 share one actuator)
       0 ROLLBACK_PROVEN
 
-ZERO is the load-bearing number. The step-32 ECO DOES implement a rollback —
-`eco_fired_reverted_regression`, which retains the pre-ECO artefacts — and
+ZERO is the load-bearing number. The step-32 repair DOES implement a rollback —
+`timing_repair_reverted_regression`, which retains the pre-repair artefacts — and
 
-    grep -rn 'eco_fired_reverted_regression' programs/tests/   ->  no files
+    grep -rn 'timing_repair_reverted_regression' programs/tests/   ->  no files
 
-so nothing proves it works. `test_eco_loop_audit.py` tests the AUDIT of an
+so nothing proves it works. `test_postroute_timing_repair_audit.py` tests the AUDIT of an
 already-regressed record, which is a different claim. An unproven rollback is
 exactly the thing this census exists to keep out of a success report.
 
@@ -206,7 +206,7 @@ MAX_FLOW_STATES = 256
 #: by spelling `actuation_form: re_execute` beside an unrelated call.
 STEP_EXECUTION_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
     "1": ("step_rtl_gen",),
-    "32": ("_run_eco_repair",),
+    "32": ("_run_postroute_timing_repair",),
 }
 
 #: Canonical observation/decision call for the SOURCE step.  A fallback call is
@@ -216,8 +216,8 @@ STEP_EXECUTION_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
 STEP_TRIGGER_ENTRYPOINTS: Dict[str, Tuple[str, ...]] = {
     "2": ("step_crosslayer_rewrite_fidelity",),
     "4": ("step_reference_tb",),
-    "23": ("_eco_dec.decide",),
-    "32": ("_eco_dec.decide",),
+    "23": ("_repair_dec.decide",),
+    "32": ("_repair_dec.decide",),
 }
 
 
@@ -237,8 +237,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # Step 4 (Simulation) -> step 1 (Spec-to-RTL). `design_one_shot_runner.main`
     # runs `step_reference_tb`; on FAIL it re-runs `step_rtl_gen` (that IS step
     # 1) and loops back to `step_reference_tb`, which re-measures. Bounded by
-    # `--max-eco`, and it detects a byte-identical regeneration and stops with
-    # FAIL_ECO_INERT instead of burning the counter.
+    # `--max-rtl-repair-retries`, and it detects a byte-identical regeneration and stops with
+    # FAIL_RTL_REPAIR_INERT instead of burning the counter.
     "4": {
         "class": REMEASURED,
         "actuation_form": "re_execute",
@@ -269,7 +269,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
         "not_claimed": {
             "rollback": ("the loop has no undo — a regeneration that makes the "
                          "design worse is kept; it stops on byte-identity "
-                         "(FAIL_ECO_INERT), not on a worse measurement"),
+                         "(FAIL_RTL_REPAIR_INERT), not on a worse measurement"),
         },
     },
 
@@ -280,32 +280,32 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
         "class": REMEASURED,
         "actuation_form": "re_execute",
         "why": ("phase3_one_shot_runner.step_canonicalize_artefacts fires "
-                "_run_eco_repair on a multi-corner OCV violation and re-measures "
+                "_run_postroute_timing_repair on a multi-corner OCV violation and re-measures "
                 "the same OCV views on the repaired netlist"),
         "evidence": {
             "actuate": [
                 {"kind": "fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
-                 "trigger_callee": "_eco_dec.decide",
-                 "trigger_field": "eco_needed",
+                 "trigger_callee": "_repair_dec.decide",
+                 "trigger_field": "repair_needed",
                  "trigger_value": True,
-                 "callee": "_run_eco_repair"},
+                 "callee": "_run_postroute_timing_repair"},
             ],
             "remeasure": [
                 {"kind": "remeasure_after_fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
-                 "trigger_callee": "_eco_dec.decide",
-                 "trigger_field": "eco_needed",
+                 "trigger_callee": "_repair_dec.decide",
+                 "trigger_field": "repair_needed",
                  "trigger_value": True,
-                 "actuator_callee": "_run_eco_repair",
-                 "callee": "_measure_posteco_mcorner_ocv"},
+                 "actuator_callee": "_run_postroute_timing_repair",
+                 "callee": "_measure_postrepair_mcorner_ocv"},
             ],
         },
         "not_claimed": {
-            "rollback_test": ("the runner DOES retain the pre-ECO artefacts on a "
-                              "measured regression (`eco_fired_reverted_regression`), "
+            "rollback_test": ("the runner DOES retain the pre-repair artefacts on a "
+                              "measured regression (`timing_repair_reverted_regression`), "
                               "but no test in programs/tests exercises that branch, "
                               "so the undo is unproven"),
         },
@@ -325,20 +325,20 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                 {"kind": "fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
-                 "trigger_callee": "_eco_dec.decide",
-                 "trigger_field": "eco_needed",
+                 "trigger_callee": "_repair_dec.decide",
+                 "trigger_field": "repair_needed",
                  "trigger_value": True,
-                 "callee": "_run_eco_repair"},
+                 "callee": "_run_postroute_timing_repair"},
             ],
             "remeasure": [
                 {"kind": "remeasure_after_fallback_guarded_by_trigger",
                  "file": "programs/phase3_one_shot_runner.py",
                  "caller": "step_canonicalize_artefacts",
-                 "trigger_callee": "_eco_dec.decide",
-                 "trigger_field": "eco_needed",
+                 "trigger_callee": "_repair_dec.decide",
+                 "trigger_field": "repair_needed",
                  "trigger_value": True,
-                 "actuator_callee": "_run_eco_repair",
-                 "callee": "_measure_posteco_mcorner_ocv"},
+                 "actuator_callee": "_run_postroute_timing_repair",
+                 "callee": "_measure_postrepair_mcorner_ocv"},
             ],
         },
         "not_claimed": {
@@ -1971,12 +1971,12 @@ def classify_edge(step_id: str, root: Path,
 # ─────────────────────────────────────────────────────────────────────────────
 # The claim audit.
 # ─────────────────────────────────────────────────────────────────────────────
-#: An eco_log verdict that PRESENTS the step-32 loop as having converged. The
-#: other verdicts this repo writes — ECO_ATTEMPTED, ECO_REQUIRED,
-#: ECO_BLIND_TO_VIOLATION, ECO_REVERTED_REGRESSION — are all honest non-successes
+#: A repair_log verdict that PRESENTS the step-32 loop as having converged. The
+#: other verdicts this repo writes — REPAIR_ATTEMPTED, REPAIR_REQUIRED,
+#: REPAIR_BLIND_TO_VIOLATION, REPAIR_REVERTED_REGRESSION — are all honest non-successes
 #: and are not claims.
-_ECO_SUCCESS_VERDICTS = ("ECO_APPLIED",)
-_ECO_LOG_REL = Path("phase3") / "stage3" / "eco" / "eco_log.json"
+_REPAIR_SUCCESS_VERDICTS = ("REPAIR_APPLIED",)
+_REPAIR_LOG_REL = Path("phase3") / "stage3" / "postroute_timing_repair" / "repair_log.json"
 
 
 def _claims_from_document(path: Path) -> Tuple[Optional[List[Dict[str, Any]]], str]:
@@ -2014,18 +2014,18 @@ def _claims_from_project(project: Path) -> Tuple[List[Dict[str, Any]], List[str]
     when they yield nothing, so `0 claims` can be told apart from `not looked`."""
     claims: List[Dict[str, Any]] = []
     sources: List[str] = []
-    eco_log = project / _ECO_LOG_REL
-    if eco_log.is_file():
-        sources.append(str(_ECO_LOG_REL))
+    repair_log = project / _REPAIR_LOG_REL
+    if repair_log.is_file():
+        sources.append(str(_REPAIR_LOG_REL))
         try:
-            rec = json.loads(eco_log.read_text(encoding="utf-8",
+            rec = json.loads(repair_log.read_text(encoding="utf-8",
                                                errors="replace"))
         except (OSError, ValueError):
             rec = None
-        if isinstance(rec, dict) and rec.get("verdict") in _ECO_SUCCESS_VERDICTS \
+        if isinstance(rec, dict) and rec.get("verdict") in _REPAIR_SUCCESS_VERDICTS \
                 and bool(rec.get("re_verified")):
             claims.append({
-                "step": "32", "source": str(_ECO_LOG_REL),
+                "step": "32", "source": str(_REPAIR_LOG_REL),
                 "detail": {"verdict": rec.get("verdict"),
                            "re_verified": rec.get("re_verified")}})
     return claims, sources
@@ -2102,7 +2102,7 @@ def evaluate(flow: Path, project: Optional[Path],
         rep["claim_audit"] = "NOT_CHECKED"
         rep["claim_audit_reason"] = (
             "no claim source was present (no --claims document and no "
-            f"{_ECO_LOG_REL} under the project) — zero claims were EXAMINED, "
+            f"{_REPAIR_LOG_REL} under the project) — zero claims were EXAMINED, "
             "which is not the same as zero claims being clean")
     else:
         rep["claim_audit"] = "CHECKED"

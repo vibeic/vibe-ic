@@ -1,7 +1,7 @@
 """v0.3.26 — ORGANIC #527: SPEF-based post-route STA becomes the Step-23
 canonical basis when a SPEF exists; estimate-based report_checks is fallback
 only; a sign-flip / >1ns disagreement is surfaced as a named discrepancy
-artifact; the ECO decision (no_eco_needed.flag vs eco_log.json) gates on the
+artifact; the repair decision (no_repair_needed.flag vs repair_log.json) gates on the
 SPEF-based report.
 
 Field round-4 evidence (reproduced for REAL in-container during this fix on
@@ -124,14 +124,14 @@ def test_discrepancy_artifact_on_sign_flip(tmp_path, monkeypatch):
     assert d["spef_worst_slack_ns"] == -12.27
 
 
-def test_eco_flag_gates_on_spef_not_estimate(tmp_path, monkeypatch):
-    # estimate says TNS=0 (would have written no_eco_needed.flag pre-#527);
+def test_no_repair_flag_gates_on_spef_not_estimate(tmp_path, monkeypatch):
+    # estimate says TNS=0 (would have written no_repair_needed.flag pre-#527);
     # SPEF says VIOLATED → the flag must NOT be written.
     p = _proj(tmp_path, est_text=EST_MET_TNS0)
     monkeypatch.setattr(R, "_docker_exec", _fake_docker(SPEF_VIOLATED))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
     R.step_canonicalize_artefacts(p, "chip_top", _pdk(), "x")
-    assert not (p / "phase3/stage3/eco/no_eco_needed.flag").is_file()
+    assert not (p / "phase3/stage3/postroute_timing_repair/no_repair_needed.flag").is_file()
 
 
 def test_negative_no_spef_behavior_unchanged(tmp_path, monkeypatch):
@@ -147,26 +147,26 @@ def test_negative_no_spef_behavior_unchanged(tmp_path, monkeypatch):
     assert canon.is_file()
     assert "SPEF-BASED" not in canon.read_text()
     assert "slack (MET)" in canon.read_text()
-    assert (p / "phase3/stage3/eco/no_eco_needed.flag").is_file()
+    assert (p / "phase3/stage3/postroute_timing_repair/no_repair_needed.flag").is_file()
     assert not (p / "reports/phase3/sta/spef_vs_estimate_discrepancy.json"
                 ).is_file()
 
 
 def test_spef_met_design_still_gets_flag(tmp_path, monkeypatch):
-    # a design MET on BOTH bases keeps its no-ECO flag (the SPEF basis is
-    # canonical but a clean design stays clean — no false ECO trigger).
+    # a design MET on BOTH bases keeps its no-repair flag (the SPEF basis is
+    # canonical but a clean design stays clean — no false repair trigger).
     spef_met = EST_MET + "\ntns max 0.00\nworst slack max 0.47\n"
     p = _proj(tmp_path, est_text=EST_MET_TNS0)
     monkeypatch.setattr(R, "_docker_exec", _fake_docker(spef_met))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
     R.step_canonicalize_artefacts(p, "chip_top", _pdk(), "x")
-    assert (p / "phase3/stage3/eco/no_eco_needed.flag").is_file()
-    flag = (p / "phase3/stage3/eco/no_eco_needed.flag").read_text()
+    assert (p / "phase3/stage3/postroute_timing_repair/no_repair_needed.flag").is_file()
+    flag = (p / "phase3/stage3/postroute_timing_repair/no_repair_needed.flag").read_text()
     assert "sta_spef_based.rpt" in flag  # Source line points at the SPEF rpt
 
 
-def test_eco_status_gen_prefers_spef_report(tmp_path):
-    import eco_status_gen as G
+def test_postroute_timing_repair_status_gen_prefers_spef_report(tmp_path):
+    import postroute_timing_repair_status_gen as G
     p = tmp_path
     pnr = p / "phase3/stage3/pnr"
     pnr.mkdir(parents=True)
@@ -176,9 +176,9 @@ def test_eco_status_gen_prefers_spef_report(tmp_path):
     (sta / "sta_spef_based.rpt").write_text(SPEF_VIOLATED)  # spef: VIOLATED
     rc = G.main([str(p)])
     assert rc == 0
-    eco = p / "phase3/stage3/eco"
-    assert (eco / "eco_log.json").is_file(), \
-        "SPEF-VIOLATED must drive eco_log.json even when the estimate is MET"
-    assert not (eco / "no_eco_needed.flag").is_file()
-    d = json.loads((eco / "eco_log.json").read_text())
+    repair = p / "phase3/stage3/postroute_timing_repair"
+    assert (repair / "repair_log.json").is_file(), \
+        "SPEF-VIOLATED must drive repair_log.json even when the estimate is MET"
+    assert not (repair / "no_repair_needed.flag").is_file()
+    d = json.loads((repair / "repair_log.json").read_text())
     assert "sta_spef_based" in d.get("sta_source", "")

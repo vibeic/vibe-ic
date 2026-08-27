@@ -1124,18 +1124,18 @@
     "32": {
       "verdict": "ENFORCED",
       "entries": {
-        "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag": {
+        "phase3/stage3/postroute_timing_repair/repair_log.json OR phase3/stage3/postroute_timing_repair/no_repair_needed.flag": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/subservient",
-          "alternative": "phase3/stage3/eco/eco_log.json",
-          "path": "phase3/stage3/eco/eco_log.json",
+          "alternative": "phase3/stage3/postroute_timing_repair/repair_log.json",
+          "path": "phase3/stage3/postroute_timing_repair/repair_log.json",
           "size_bytes": 370
         },
-        "phase3/stage3/eco/eco_trigger_decision.json": {
+        "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json": {
           "status": "PRODUCED_BY_RUN",
           "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
-          "alternative": "phase3/stage3/eco/eco_trigger_decision.json",
-          "path": "phase3/stage3/eco/eco_trigger_decision.json",
+          "alternative": "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json",
+          "path": "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json",
           "size_bytes": 208
         }
       }

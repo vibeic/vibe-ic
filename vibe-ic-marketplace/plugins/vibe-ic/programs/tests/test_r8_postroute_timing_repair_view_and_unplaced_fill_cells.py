@@ -26,29 +26,29 @@ CORNER_LIBS = {
 }
 
 
-def _eco_tcl(top="subservient", pnr="/run/phase3/stage3/pnr"):
-    return p3._build_eco_repair_tcl(
+def _repair_tcl(top="subservient", pnr="/run/phase3/stage3/pnr"):
+    return p3._build_postroute_timing_repair_tcl(
         top, f"{PDK}/techlef/x.tlef", f"{PDK}/lef/x.lef", CORNER_LIBS["tt"],
-        pnr, "/run/phase3/stage3/eco", "Metal", corner_libs=CORNER_LIBS)
+        pnr, "/run/phase3/stage3/postroute_timing_repair", "Metal", corner_libs=CORNER_LIBS)
 
 
 # ---------------------------------------------------------------------------
-# 1. The ECO was triggered by a number its own timing view could not contain.
+# 1. The repair was triggered by a number its own timing view could not contain.
 # ---------------------------------------------------------------------------
 
-def test_eco_deck_carries_the_same_clock_and_derate_as_the_measurement_that_fires_it():
+def test_repair_deck_carries_the_same_clock_and_derate_as_the_measurement_that_fires_it():
     """The auto-trigger fires on the multi-corner OCV sign-off number. Every deck
     that produces that number applies a flat-OCV derate and a PROPAGATED clock;
-    the ECO deck applied neither, so `repair_timing -setup` analysed a more
+    the repair deck applied neither, so `repair_timing -setup` analysed a more
     optimistic design than the one that failed and logged
     `RSZ-0098 No setup violations found` on both passes.
     """
-    tcl = _eco_tcl()
+    tcl = _repair_tcl()
     assert "set_propagated_clock [all_clocks]" in tcl, (
-        "the ECO deck reads a post-CTS DEF; an ideal clock cannot describe it")
+        "the repair deck reads a post-CTS DEF; an ideal clock cannot describe it")
     assert f"set_timing_derate -early {p3._FLAT_OCV_DERATE_EARLY}" in tcl
     assert f"set_timing_derate -late {p3._FLAT_OCV_DERATE_LATE}" in tcl, (
-        "the ECO must not analyse without the derate the trigger measured with")
+        "the repair must not analyse without the derate the trigger measured with")
 
 
 def test_the_propagated_clock_disclosure_states_why_it_applies_here():
@@ -56,7 +56,7 @@ def test_the_propagated_clock_disclosure_states_why_it_applies_here():
     and this deck annotates none — it uses `estimate_parasitics`. The reason is
     different (post_hold.def is POST-CTS), so the emitted comment must say that
     rather than assert something untrue of the deck it sits in."""
-    tcl = _eco_tcl()
+    tcl = _repair_tcl()
     assert "post_hold.def is POST-CTS" in tcl
     assert "Post-route parasitics are annotated" not in tcl
     # the default caller is untouched
@@ -66,7 +66,7 @@ def test_the_propagated_clock_disclosure_states_why_it_applies_here():
 def test_derate_and_clock_are_applied_after_the_design_sdc_is_read():
     """Order matters: both commands must land after `read_sdc` so a design SDC
     that already sets them is not contradicted."""
-    tcl = _eco_tcl()
+    tcl = _repair_tcl()
     assert tcl.index("read_sdc") < tcl.index("set_propagated_clock")
     assert tcl.index("read_sdc") < tcl.index("set_timing_derate -early")
 

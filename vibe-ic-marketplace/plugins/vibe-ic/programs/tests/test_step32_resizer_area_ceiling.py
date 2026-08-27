@@ -125,10 +125,10 @@ def test_nothing_declared_is_three_Nones_and_no_noise():
 def test_an_undeclared_ceiling_reproduces_todays_deck_byte_for_byte():
     """THE GUARD ON THE WHOLE CHANGE.
 
-    Step 32's ECO deck runs on real silicon. An undeclared run must emit what it
+    Step 32's repair deck runs on real silicon. An undeclared run must emit what it
     always emitted — not a default somebody chose.
     """
-    tcl = P._post_buffered_repair_tcl("ECO", "_GR", "2")
+    tcl = P._post_buffered_repair_tcl("repair", "_GR", "2")
     assert "-max_utilization" not in tcl
     assert "-recover_power" not in tcl
     assert "repair_timing -setup}" in tcl
@@ -136,7 +136,7 @@ def test_an_undeclared_ceiling_reproduces_todays_deck_byte_for_byte():
 
 
 def test_a_declared_ceiling_reaches_both_invocations_separately():
-    tcl = P._post_buffered_repair_tcl("ECO", "_GR", "2",
+    tcl = P._post_buffered_repair_tcl("repair", "_GR", "2",
                                       setup_max_util_pct=55.0,
                                       hold_max_util_pct=45.0)
     assert "repair_timing -setup -max_utilization 55}" in tcl
@@ -149,7 +149,7 @@ def test_a_declared_ceiling_reaches_both_invocations_separately():
 def test_recover_power_is_emitted_after_both_repairs():
     """It spends SURPLUS slack, so it must only see the slack that survived the
     setup and hold passes."""
-    tcl = P._post_buffered_repair_tcl("ECO", "_GR", "2", recover_power_pct=100)
+    tcl = P._post_buffered_repair_tcl("repair", "_GR", "2", recover_power_pct=100)
     i_setup = tcl.index("repair_timing -setup")
     i_hold = tcl.index("repair_timing -hold")
     i_rp = tcl.index("repair_timing -recover_power 100")
@@ -159,7 +159,7 @@ def test_recover_power_is_emitted_after_both_repairs():
 def test_every_emitted_repair_is_catch_wrapped():
     """A resizer that refuses is a note in the log, never a dead run — the
     convention every other repair call in this file already follows."""
-    tcl = P._post_buffered_repair_tcl("ECO", "_GR", "2", setup_max_util_pct=55.0,
+    tcl = P._post_buffered_repair_tcl("repair", "_GR", "2", setup_max_util_pct=55.0,
                                       hold_max_util_pct=45.0,
                                       recover_power_pct=100)
     for cmd in ("repair_timing -setup -max_utilization 55",
@@ -173,25 +173,25 @@ def test_a_value_the_tool_would_refuse_never_reaches_the_deck(bad):
     """Defence in depth: the ingest rejects these, and the emitter refuses them
     again. A flag OpenROAD would error on must not be constructible."""
     assert P._resizer_bound_flag(bad) == ""
-    assert P._recover_power_tcl(bad, "ECO", "2") == ""
+    assert P._recover_power_tcl(bad, "repair", "2") == ""
 
 
 def test_the_setup_ceiling_also_bounds_repair_design():
     """`repair_design` is the setup repair's own buffer/upsize preparation and
     it accepts the same flag; bounding one without the other leaves the ceiling
     reachable around the side."""
-    tcl = P._build_eco_repair_tcl(
-        "top", "/t.lef", "/c.lef", "/l.lib", "/pnr", "/eco", "met",
+    tcl = P._build_postroute_timing_repair_tcl(
+        "top", "/t.lef", "/c.lef", "/l.lib", "/pnr", "/postroute_timing_repair", "met",
         setup_max_util_pct=55.0)
     assert "repair_design -max_utilization 55" in tcl
 
 
-def test_the_eco_deck_is_unchanged_when_nothing_is_declared():
-    bounded = P._build_eco_repair_tcl(
-        "top", "/t.lef", "/c.lef", "/l.lib", "/pnr", "/eco", "met",
+def test_the_repair_deck_is_unchanged_when_nothing_is_declared():
+    bounded = P._build_postroute_timing_repair_tcl(
+        "top", "/t.lef", "/c.lef", "/l.lib", "/pnr", "/postroute_timing_repair", "met",
         setup_max_util_pct=55.0, hold_max_util_pct=45.0, recover_power_pct=100)
-    plain = P._build_eco_repair_tcl(
-        "top", "/t.lef", "/c.lef", "/l.lib", "/pnr", "/eco", "met")
+    plain = P._build_postroute_timing_repair_tcl(
+        "top", "/t.lef", "/c.lef", "/l.lib", "/pnr", "/postroute_timing_repair", "met")
     assert "-max_utilization" not in plain
     assert "-recover_power" not in plain
     assert bounded != plain
@@ -202,7 +202,7 @@ def test_the_eco_deck_is_unchanged_when_nothing_is_declared():
 # ══════════════════════════════════════════════════════════════════════
 def test_the_reader_returns_three_nones_for_a_project_with_nothing_staged(
         tmp_path):
-    b = P._eco_resizer_bounds(tmp_path)
+    b = P._postroute_timing_repair_resizer_bounds(tmp_path)
     assert set(b) == {"setup_max_util_pct", "hold_max_util_pct",
                       "recover_power_pct"}
     assert all(v is None for v in b.values())
@@ -210,15 +210,15 @@ def test_the_reader_returns_three_nones_for_a_project_with_nothing_staged(
 
 def test_the_reader_survives_an_unreadable_project(tmp_path):
     """It feeds a deck that has to be written either way; an exception here
-    would turn a missing declaration into a missing ECO."""
-    b = P._eco_resizer_bounds(tmp_path / "does-not-exist")
+    would turn a missing declaration into a missing repair."""
+    b = P._postroute_timing_repair_resizer_bounds(tmp_path / "does-not-exist")
     assert all(v is None for v in b.values())
 
 
 def test_no_process_or_vendor_token_in_the_new_code():
     src = (_HERE.parent / "phase3_one_shot_runner.py").read_text()
     for fn in ("_resizer_bound_flag", "_recover_power_tcl",
-               "_eco_resizer_bounds"):
+               "_postroute_timing_repair_resizer_bounds"):
         i = src.index(f"def {fn}(")
         body = src[i:src.index("\ndef ", i + 10)].lower()
         for tok in ("tsmc", "samsung", "globalfound", "umc", "smic"):

@@ -237,7 +237,7 @@ def test_a_missing_flow_is_a_refusal_not_a_pass(tmp_path):
 # The invariant that was measured before it was asserted
 # ══════════════════════════════════════════════════════════════════════
 def test_the_ancestor_rule_was_rejected_for_a_reason(tmp_path):
-    """Two shipped edges hand FORWARD to the ECO aggregator and are healthy.
+    """Two shipped edges hand FORWARD to the timing-repair scheduler and are healthy.
 
     If a future author 'tightens' CL-NOT-A-LOOP to require an ancestor, this
     test tells them exactly which two cells they just reddened.

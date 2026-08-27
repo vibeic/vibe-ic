@@ -279,7 +279,7 @@ The pulled IPs' SPDX identifiers are aggregated in `declaration.json.license_com
 - **No catalog matches** → fall back to original `spec-to-rtl` skill (full AI authoring from spec)
 - **All matches REJECTED at license check** → emit ERROR with rationale; user must remove that IP from catalog or accept license incompatibility
 - **rtl_files missing in source mirror** → partial pull;AI authors stubs for missing modules + logs in declaration.json.open_items
-- **AI-authored wrapper fails iverilog parse** → ECO loop (retry up to 3 iterations)
+- **AI-authored wrapper fails iverilog parse** → RTL repair/retry loop (retry up to 3 iterations)
 
 ## What this skill is NOT
 

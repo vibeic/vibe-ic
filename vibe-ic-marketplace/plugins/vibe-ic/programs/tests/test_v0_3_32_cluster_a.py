@@ -1,7 +1,7 @@
 """ORGANIC batch #541-#572 — Cluster A: canonicalize/checker surgical fixes.
 
 #552 ip-catalog token-level ISA ext (RV32MFast must not match 'F')
-#564 eco_status_gen must not clobber a schema-complete eco_log.json
+#564 postroute_timing_repair_status_gen must not clobber a schema-complete repair_log.json
 #565 pvt_matrix corner discovery falls back to the container PDK liberty dir
 #566 clock_plan generator parses create_generated_clock (derived clocks)
 #567 cts_quality_check sums every CTS-0018 line (multi-tree designs)
@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROG))
 
 import cts_quality_check as CTS          # noqa: E402
 import ip_catalog_query as IPC           # noqa: E402
-import eco_status_gen as ECO             # noqa: E402
+import postroute_timing_repair_status_gen as repair             # noqa: E402
 import phase3_one_shot_runner as P3      # noqa: E402
 
 
@@ -125,9 +125,9 @@ def test_565_corner_discovery_falls_back_to_pdk_liberty_dir(tmp_path):
     assert set(corners) >= {"SS", "TT", "FF"}
 
 
-# ── #564 — eco_status_gen must not clobber a complete eco_log.json ─────────
+# ── #564 — postroute_timing_repair_status_gen must not clobber a complete repair_log.json ─────────
 def _mk_sta(project, wns_neg):
-    # eco_status_gen discovers STA at phase3/stage3/pnr/sta.rpt (among others)
+    # postroute_timing_repair_status_gen discovers STA at phase3/stage3/pnr/sta.rpt (among others)
     pnr = project / "phase3/stage3/pnr"
     pnr.mkdir(parents=True, exist_ok=True)
     rpt = pnr / "sta.rpt"
@@ -138,22 +138,22 @@ def _mk_sta(project, wns_neg):
     return rpt
 
 
-def test_564_existing_eco_record_preserved(tmp_path, monkeypatch):
+def test_564_existing_repair_record_preserved(tmp_path, monkeypatch):
     project = tmp_path / "proj"
-    eco = project / "phase3/stage3/eco"
-    eco.mkdir(parents=True)
+    repair_dir = project / "phase3/stage3/postroute_timing_repair"
+    repair_dir.mkdir(parents=True)
     rich = {
         "program": "agent",
-        "verdict": "ECO_REQUIRED",
+        "verdict": "REPAIR_REQUIRED",
         "changes": [{"cell": "buf1", "op": "upsize"}],
         "re_verified": True,
         "affected_steps": ["sta", "route"],
     }
-    (eco / "eco_log.json").write_text(json.dumps(rich))
+    (repair_dir / "repair_log.json").write_text(json.dumps(rich))
     _mk_sta(project, wns_neg=True)
-    rc = ECO.main([str(project)])
+    rc = repair.main([str(project)])
     assert rc == 0
-    out = json.loads((eco / "eco_log.json").read_text())
+    out = json.loads((repair_dir / "repair_log.json").read_text())
     # the rich provenance survives
     assert out["changes"] == rich["changes"]
     assert out["re_verified"] is True
@@ -164,13 +164,13 @@ def test_564_existing_eco_record_preserved(tmp_path, monkeypatch):
 
 def test_564_no_existing_record_writes_minimal(tmp_path):
     project = tmp_path / "proj2"
-    eco = project / "phase3/stage3/eco"
-    eco.mkdir(parents=True)
+    repair_dir = project / "phase3/stage3/postroute_timing_repair"
+    repair_dir.mkdir(parents=True)
     _mk_sta(project, wns_neg=True)
-    rc = ECO.main([str(project)])
+    rc = repair.main([str(project)])
     assert rc == 0
-    out = json.loads((eco / "eco_log.json").read_text())
-    assert out["verdict"] == "ECO_REQUIRED"
+    out = json.loads((repair_dir / "repair_log.json").read_text())
+    assert out["verdict"] == "REPAIR_REQUIRED"
     assert "changes" not in out  # minimal shape
 
 

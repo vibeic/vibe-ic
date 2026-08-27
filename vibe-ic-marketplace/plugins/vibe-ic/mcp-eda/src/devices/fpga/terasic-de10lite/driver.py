@@ -764,7 +764,7 @@ def mode_program(args: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
                     },
                 }
 
-    # Wave 20 (v0.119.52) — pre-burn flow_compliance ECO guard.
+    # Wave 20 (v0.119.52) — pre-burn flow_compliance RTL repair guard.
     #
     # Even when rtl_precheck_gate passes, agents have historically
     # silently burned a SOF while structural-RTL gates were FAILing
@@ -871,7 +871,7 @@ def mode_program(args: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
                         f"project {project_root!r}. "
                         f"{len(failed_gates)} structural-RTL gate(s) "
                         "failing. Run flow_compliance_check.py with "
-                        "--strict-structural and converge ECO loop "
+                        "--strict-structural and converge RTL repair/retry loop "
                         "before re-attempting burn. To override "
                         "intentionally pass bypass_pre_burn_check=true."
                     )

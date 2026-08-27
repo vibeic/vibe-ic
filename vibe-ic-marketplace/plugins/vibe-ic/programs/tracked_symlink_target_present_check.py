@@ -8,8 +8,8 @@ HOST_DEPENDENT: the same commit adjudicated 225 records in a working checkout
 and 224 in a fresh worktree. Traced to one record, which turned out to be a
 SYMLINK whose target is not tracked:
 
-    ic/sha256/clean_run_v1427_.../steps/32_.../eco_log.json
-        -> ../../phase3/stage3/eco/eco_log.json     (not in git)
+    ic/sha256/clean_run_v1427_.../steps/32_.../repair_log.json
+        -> ../../phase3/stage3/postroute_timing_repair/repair_log.json     (not in git)
 
 The pointer is committed. The target exists only where someone ran the flow. So
 the corpus a gate reads is a function of what that machine happens to have done,

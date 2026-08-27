@@ -2593,7 +2593,7 @@ def test_d7_the_write_detector_sees_a_SHADOWING_atomic_write(monkeypatch):
     So the write silently vanished. MEASURED on the byte-identical pre-change
     tree: 32 such call sites across 8 programs, and 21 declared artefact paths
     that no oracle could attribute to any producer, among them
-    `eco_trigger_decision.json` — which `phase3_one_shot_runner` writes on the
+    `postroute_timing_repair_decision.json` — which `phase3_one_shot_runner` writes on the
     line above the one that appends it to `written`.
 
     This is #1265's defect recurring through the OTHER conversion route, which

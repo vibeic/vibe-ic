@@ -32,7 +32,7 @@ import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader
 
 # v1.6.85 (#17 Bug A1) — chip_top port-name canonicalisation.
 # Field-agent traced an iverilog 'port id_bus is not a port of u_dut'
-# fail across 4 ECO iterations: the generator emitted SHOUTING all-caps
+# fail across 4 RTL repair retrys: the generator emitted SHOUTING all-caps
 # port names (ID_BUS / V_IN / OVP / WAKE) into chip_top.sv but the
 # reference_tb + de10lite_top wrapper bind to lowercase canonical names.
 # Canonicalisation is chip-AGNOSTIC: lowercase + collapse whitespace +
@@ -889,7 +889,7 @@ module main_fsm (
           // v1.6.82 — CRC-validation arm.  Baseline frames are bare-BR
           // fallback (no payload), so crc_required==0 and the residue
           // check is bypassed; if a payload-carrying frame is observed
-          // (future ECO), residue must be 0 to dispatch.
+          // (future RTL enhancement), residue must be 0 to dispatch.
           state <= S_VALIDATE;
         end
         S_VALIDATE: begin
@@ -1003,7 +1003,7 @@ MAIN_FSM_SPEC_COMPLIANT = """// v0.119.78 spec-compliant — col-D 7 + 5-issue w
 // S_OTP_GOT pipeline so otp_byte_idx + otp_addr advance only after the data
 // register settles. (silences memory_read_pipeline_check)
 // CRC residue check is BYPASSED (documented waiver — host-side CRC validation is
-// deferred to a future ECO; reject path covers length/range/9-bit/pre-wake).
+// deferred to a future RTL enhancement; reject path covers length/range/9-bit/pre-wake).
 //
 // v0.119.78 — wake-state-machine outputs added:
 //   * frame_active: HIGH from BR until S_TX_DONE/S_DROP returns to S_IDLE
@@ -1245,7 +1245,7 @@ module main_fsm (
           // (GET_ID-equivalent) at frame-end.  The companion plugin
           // gate `dispatch_handler_completeness` still PASSes because
           // 0x74 has an explicit case arm in S_DISPATCH and the
-          // synthetic injection is documented above.  A future ECO
+          // synthetic injection is documented above.  A future RTL enhancement
           // (when <half-duplex-tester> firmware adds real-opcode SEND_TEST polling)
           // will let us drop this synthesis.
           if (ibt_cnt > T_FRAME_END_TICKS) begin
@@ -1315,7 +1315,7 @@ module main_fsm (
               // Frame layout: 0xE0 ADDR DATA [+CRC byte].  ADDR is
               // already range-checked at frame_ok (cmd_buf[1] < 0x80).
               // Reply 0xE1 + ACK byte (0x00 = OK) + CRC.  Actual OTP
-              // burn is no-op in MAX-10 sim/FPGA — write-channel ECO
+              // burn is no-op in MAX-10 sim/FPGA — write-channel enhancement
               // is a future task.  Acknowledge framing only.
               tx_buf[0] <= 8'hE1;
               tx_buf[1] <= 8'h00;
@@ -1355,7 +1355,7 @@ module main_fsm (
               // emits 0x77 + VID + PID + REV + AV + SN[0..5] + CRC
               // (12 bytes from OTP[0x60..0x69]); for now we emit a
               // minimal 3-byte echo (opcode + ACK + CRC) — same shape
-              // as 0xE0/0xE2 stubs.  Future ECO: extend to full OTP
+              // as 0xE0/0xE2 stubs. Future RTL enhancement: extend to full OTP
               // multi-byte read using S_OTP_STREAM state.
               tx_buf[0] <= 8'h77;
               tx_buf[1] <= 8'h00;
@@ -1585,9 +1585,9 @@ module chip_top (
   // Wave 60 — observable consumption of timing constants that the
   // wake/RX/TX FSM does not directly gate on, so they appear in the
   // synthesized design and dead_timing_constant_warn is satisfied.
-  // T_TSRS_MAX_TICKS bounds the host turnaround window (future ECO
+  // T_TSRS_MAX_TICKS bounds the host turnaround window (future RTL enhancement
   // adds spec-drift monitor); T_BIT_HIGH_TICKS bounds the bit-cell
-  // HIGH minimum (future ECO gates tx_phy on this).
+  // HIGH minimum (a future RTL enhancement gates tx_phy on this).
   // synthesis-keep observable wires — chip-AGNOSTIC dead-const probe.
   /* verilator lint_off UNUSED */
   wire [15:0] dbg_tsrs_max_ticks_probe = 16'(T_TSRS_MAX_TICKS);

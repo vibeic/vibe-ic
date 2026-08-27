@@ -1,4 +1,4 @@
-"""TAPEOUT-SIGNOFF (multi-corner ECO) — _build_eco_repair_tcl must read every
+"""TAPEOUT-SIGNOFF (multi-corner repair) — _build_postroute_timing_repair_tcl must read every
 process corner the PDK provides as an OpenROAD timing corner so
 `repair_timing -setup` optimizes the WORST (ss) process corner, not just tt.
 
@@ -8,12 +8,12 @@ Background (proven live on ibex, sky130A, 55k cells, 20 ns clock):
     placement-RC). This is the "single-corner-closure confounder": tt passes,
     ss blows up because slews explode at the slow process corner.
   * The v1.2.85 DRV constraints (set_max_transition/set_max_capacitance) let
-    repair_design fix the slew explosion — but a SINGLE-CORNER (tt) ECO then runs
+    repair_design fix the slew explosion — but a SINGLE-CORNER (tt) repair then runs
     repair_timing -setup against tt (already MET) and never touches the ss setup
-    violation. Driving the ECO MULTI-CORNER recovered 20.3 ns of ss slack
-    (−35.78 → −15.49) that a tt-only ECO cannot reach.
+    violation. Driving the repair MULTI-CORNER recovered 20.3 ns of ss slack
+    (−35.78 → −15.49) that a tt-only repair cannot reach.
 
-§4.05: the multi-corner ECO RECOVERS what is recoverable; a genuine ss floor
+§4.05: the multi-corner repair RECOVERS what is recoverable; a genuine ss floor
 still shows VIOLATED afterwards (ibex@20 ns remains a real floor — this feature
 does not fabricate closure). This test pins the EMISSION contract only.
 """
@@ -26,13 +26,13 @@ import phase3_one_shot_runner as R  # noqa: E402
 
 
 def _mc(corner_libs):
-    return R._build_eco_repair_tcl(
+    return R._build_postroute_timing_repair_tcl(
         top="chip_top",
         tech_lef_c="/pdk/tech.lef",
         cell_lef_c="/pdk/cells.lef",
         liberty_c="/pdk/tt.lib",
         pnr_dir_c="/proj/pnr",
-        eco_dir_c="/proj/eco",
+        postroute_timing_repair_dir_c="/proj/postroute_timing_repair",
         metal_prefix="met",
         corner_libs=corner_libs,
     )
@@ -91,7 +91,7 @@ def test_noncanonical_extra_corner_appended_sorted():
 
 
 def test_primary_read_def_no_link_design_command():
-    # The ECO reads post_hold.def as the PRIMARY source (netlist+placement+rows+
+    # The repair reads post_hold.def as the PRIMARY source (netlist+placement+rows+
     # tracks) — no read_verilog/link_design command (they leave the block with no
     # floorplan → ODB-0251, then DPL-0027/GRT-0701 on reroute). read_def must NOT
     # be -incremental (that does not carry rows/tracks).
@@ -114,7 +114,7 @@ def test_write_sdf_corner_flag_multicorner_only():
     assert "write_sdf -corner ss " in mc_no_tt  # first corner when no tt
     sc = _mc(None)
     assert "write_sdf -corner" not in sc  # single-corner: no flag
-    assert "write_sdf /proj/eco/chip_top_eco.sdf" in sc
+    assert "write_sdf /proj/postroute_timing_repair/chip_top_timing_repaired.sdf" in sc
 
 
 def test_emitted_tcl_is_brace_balanced_all_modes():

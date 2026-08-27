@@ -1,4 +1,4 @@
-# vibe-ic — AI-Native IC Design plugin (**v1.12.19**)
+# vibe-ic — AI-Native IC Design plugin (**v1.12.20**)
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
@@ -6,7 +6,7 @@ The plugin is no longer "compliance regexes over agent prose". It is **1298 top-
 programs** (1219 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
 79 are helper modules and shims) that run the flow, **60 skills** that back the programs up
 where judgment is genuinely required, **6 slash commands**, **9 agents**, and
-**2880 test files**. Programs decide; skills only fill the holes the programs
+**2881 test files**. Programs decide; skills only fill the holes the programs
 deliberately leave.
 
 ## ► The one front door
@@ -20,14 +20,14 @@ That single runner drives the whole chain:
 | Phase | What runs |
 |-------|-----------|
 | **Phase 1** | NL prompt *or* vendor docs → `generated_docs/L*.json` (`L1-L23` emitted; the taxonomy in `programs/l_doc_taxonomy.py` extends to `L27`, with `L26`/`L27` opt-in only) |
-| **Phase 2** (`2a` + `2b`) | RTL gen → hygiene lint → testbench gen → yosys synth → SDC/QSF → spec conformance → RTL-regeneration loop (`eco_loop` in code — it re-generates RTL, not an ECO) → final audit |
+| **Phase 2** (`2a` + `2b`) | RTL gen → hygiene lint → testbench gen → yosys synth → SDC/QSF → spec conformance → RTL repair/retry loop (`rtl_repair_retry`) → final audit |
 | **Analog** | `A1..A8` from the top-level runner; `programs/analog_one_shot_runner.py` implements the full `A1-A9` (through `A9_hw_verify`) |
 | **Phase 3** | synth → PnR → CTS → GDS → DRC / LVS / STA / IR-drop |
 
 Mixed-signal `M1-M4` is a **reporting** track (`final_report_generate.py`,
 `benchmark_verify_report.py`, `flow_dashboard*.py`), not a phase the runner schedules.
 
-Flags: `--top-name --container --max-eco --skip-phase1 --skip-analog --skip-phase3
+Flags: `--top-name --container --max-rtl-repair-retries --skip-phase1 --skip-analog --skip-phase3
 --skip-hardware --die-um --util --pdk --allow-oss-pdk-fallback --ic-name
 --dashboard[-port|-host|-full]`.
 
@@ -38,7 +38,7 @@ classes**; **2** have a deterministic generator (`aid_class_rtl_gen.py`), and **
 have `rtl_gen: null`. Of those 11, **10** carry `fallback_skill: "spec-to-rtl"` —
 `design_one_shot_runner.step_rtl_gen` returns `status="WAIVED"` with that skill name in
 `extras`, the AI authors RTL into the path the runner already computed, and the runner's
-own gates (chip-top emit, `rtl_hygiene_lint --fix`, `eda_lint`, `eda_synth`, `eco_loop`,
+own gates (chip-top emit, `rtl_hygiene_lint --fix`, `eda_lint`, `eda_synth`, `rtl_repair_retry`,
 `spec_conformance_check`, `full_stack_tb_gen`) then fire around it. `pure_analog` has
 `fallback_skill: null` — it routes to the analog track instead. A sibling path waives to
 `catalog-glue-author` when reused open-source IP matches.
@@ -229,7 +229,7 @@ plugins/vibe-ic/
 │   ├── l_doc_taxonomy.py          — L1..L27 layer definitions
 │   ├── _commercial_pdk.py         — config-driven commercial-PDK resolution
 │   ├── gds_antenna/, metal_fill/  — sub-packages
-│   └── tests/                     — 2880 test files
+│   └── tests/                     — 2881 test files
 ├── skills/                        — 60 skills, each with SKILL.md + compliance.yaml
 │   └── <skill>/tests/             — 81 per-skill compliance regression files
 ├── commands/                      — 6 slash commands + _anti_fabrication_rules.md
@@ -243,7 +243,7 @@ plugins/vibe-ic/
 
 ## Test suite
 
-**2880 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+**2881 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
 under `skills/*/tests/`.
 
 Run it the CI way — a bare `pytest` from the plugin root, exactly as

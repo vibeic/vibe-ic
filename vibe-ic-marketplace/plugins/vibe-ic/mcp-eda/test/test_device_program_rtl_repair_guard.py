@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for v0.119.52 (Wave 20) pre-burn flow_compliance ECO guard
+"""Tests for v0.119.52 (Wave 20) pre-burn flow_compliance RTL repair guard
 in device_fpga_de10lite_program.
 
 The driver's `mode_program()` calls `_run_flow_compliance_pre_burn(
@@ -28,7 +28,7 @@ assert DRIVER_PATH.exists()
 
 def _load_driver():
     spec = importlib.util.spec_from_file_location(
-        "de10lite_driver_eco_guard_test", DRIVER_PATH)
+        "de10lite_driver_rtl_repair_guard_test", DRIVER_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

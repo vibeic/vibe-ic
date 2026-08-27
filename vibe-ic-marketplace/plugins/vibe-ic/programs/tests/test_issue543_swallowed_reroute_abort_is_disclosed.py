@@ -18,7 +18,7 @@ it refused because a number was MISSING, not because the route was known broken.
 A refusal that rests on an absent marker is one log-format change away from
 becoming a promotion.
 
-Downstream, `eco_log.json` recorded the surviving violation as "a genuine
+Downstream, `repair_log.json` recorded the surviving violation as "a genuine
 process-corner floor" — a cause nobody had established, from a string literal
 that could not have said anything else.
 
@@ -112,7 +112,7 @@ def test_control_a_pre_fix_log_parses_exactly_as_it_used_to():
 
 
 def test_the_residual_note_never_asserts_a_floor_it_cannot_evidence(tmp_path):
-    note = R._eco_residual_note(tmp_path, True)
+    note = R._repair_residual_note(tmp_path, True)
     assert "genuine process-corner floor" not in note, (
         "the note still asserts a floor with no evidence for one")
     assert "not establish" in note or "NOT establish" in note
@@ -123,7 +123,7 @@ def test_the_residual_note_names_the_reroute_when_the_log_shows_one_failed(tmp_p
     pnr.mkdir(parents=True)
     (pnr / "signoff_spef_repair.log").write_text(_log(_FAILED_TAIL),
                                                  encoding="utf-8")
-    note = R._eco_residual_note(tmp_path, True)
+    note = R._repair_residual_note(tmp_path, True)
     assert "reroute aborted 4 time(s)" in note
     assert "NOT a process-corner floor" in note, (
         "a residual with a named upstream cause must say it is not a floor — "
@@ -131,8 +131,8 @@ def test_the_residual_note_names_the_reroute_when_the_log_shows_one_failed(tmp_p
 
 
 def test_a_closed_corner_says_so(tmp_path):
-    assert R._eco_residual_note(tmp_path, False) == (
-        "multi-corner OCV closed after the ECO.")
+    assert R._repair_residual_note(tmp_path, False) == (
+        "multi-corner OCV closed after the post-route repair.")
 
 
 # --- #552: repair_timing has the same catch and had no counter --------------

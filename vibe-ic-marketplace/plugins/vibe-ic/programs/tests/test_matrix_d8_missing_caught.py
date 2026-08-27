@@ -246,7 +246,7 @@ _COND_BODY = "d8 condition fixture\n"
 #
 # Measured the day it bit: after step 14's and step 32's gates were changed to
 # read `phase2/stage2/synth/netlist.v` and
-# `phase3/stage3/eco/eco_trigger_decision.json` (dimension 4 — "the gate must
+# `phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json` (dimension 4 — "the gate must
 # read what the step declares"), both dropped out of
 # `REAL_GATE_PASS_TIER_STEPS` because the seeded netlist declared no `module`
 # and the seeded decision record was not JSON.
@@ -1726,7 +1726,7 @@ CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
     #     VERDICT_SELF_REPORTS_FAIL (#433c): declared output(s) carry a
     #     machine-readable verdict saying the run FAILED — a PASS contradicted by
     #     its own evidence is not a PASS: <rel>: verdict='FAIL'
-    # naming phase3/stage3/eco/eco_log.json (32), reports/phase3/dfm_screen.json
+    # naming phase3/stage3/postroute_timing_repair/repair_log.json (32), reports/phase3/dfm_screen.json
     # (35) and phase3/stage4/foundry_handoff/mask_spec.json (38).
     #
     # 35 is worth the extra line, because reading it wrongly was one careless

@@ -24,7 +24,7 @@ WHAT IT COST, measured on a real run whose top instantiates the dropped module:
              -> no netlist.v -> dft_lec_chain SKIP -> steps 11/12/13/DT1
                 DEFERRED-BY-UPSTREAM
     iverilog Unknown module type: otp_mem ... referenced 4 times
-             -> reference_tb FAIL -> eco_loop -> FAIL_ECO_INERT
+             -> reference_tb FAIL -> rtl_repair_retry -> FAIL_RTL_REPAIR_INERT
                 (byte-identical RTL, because the RTL was never the problem)
 
 THE RULE AND WHY. Signal 2 now fires only on an UNCONDITIONAL match. This is an

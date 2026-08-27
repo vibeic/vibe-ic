@@ -101,6 +101,17 @@ def test_each_cid_has_a_named_plugin_entry(cid, entry):
     assert pe["deterministic_first"] and pe["ai_backup"] and pe["verify"]
 
 
+def test_rtl_functional_modification_does_not_route_to_physical_eco():
+    """CVDP cid004 changes RTL before any released physical boundary exists."""
+    pe = R.classify_task_nature(
+        "change this RTL to match the new specification",
+        has_context=True,
+        cid="cid004",
+    )["plugin_entry"]
+    assert pe["ai_backup"] == ["rtl-repair"]
+    assert "eco-plan" not in pe["ai_backup"]
+
+
 def test_every_referenced_program_and_skill_exists():
     """The router must point ONLY at real plugin capabilities — a `.py` token
     resolves under programs/, any other token resolves under skills/<name>/."""

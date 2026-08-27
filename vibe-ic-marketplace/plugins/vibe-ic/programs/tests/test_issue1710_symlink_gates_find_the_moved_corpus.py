@@ -116,7 +116,7 @@ def corpus_clone(tmp_path: Path) -> Path:
     _git(root, "config", "user.name", "t")
     real = root / "ic" / "spm" / "v1.9.96_pdkX" / "RESULT.json"
     real.write_text('{"verdict": "PASS"}\n')
-    (steps / "eco_log.json").symlink_to("../../../../phase3/eco/eco_log.json")
+    (steps / "repair_log.json").symlink_to("../../../../phase3/postroute_timing_repair/repair_log.json")
     (steps / "result.json").symlink_to(real)                     # ABSOLUTE
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "corpus")
@@ -309,7 +309,7 @@ def test_target_present_still_fails_on_a_dangling_pointer_in_a_supplied_corpus(
     assert rc == 1, (
         f"--corpus-may-be-absent reached a corpus that IS present and excused a "
         f"pointer at a file that exists nowhere\n{out}")
-    assert "steps/eco_log.json" in out, "the offending pointer must be named"
+    assert "steps/repair_log.json" in out, "the offending pointer must be named"
     assert "NO_CORPUS" not in out, out
 
 

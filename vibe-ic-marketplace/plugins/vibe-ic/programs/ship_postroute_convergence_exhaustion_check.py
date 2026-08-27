@@ -70,7 +70,7 @@ If the log also carries the end-of-flow `SPEF_REPAIR_WNS_AFTER` estimate, this
 program names it for what it is. That block is ESTIMATE-ONLY by construction:
 its own emitter states it runs AFTER every shipped artefact and reports to a
 SEPARATE `sta_spef_repaired.rpt`, "never the authoritative sta.rpt", measuring
-what a real-parasitics ECO WOULD recover on an in-memory netlist whose inserted
+what a real-parasitics timing repair WOULD recover on an in-memory netlist whose inserted
 cells are neither placed nor routed. It is not a closure and a run must not
 report it as one. Emitted as an advisory finding, never as the FAIL reason.
 
@@ -260,10 +260,10 @@ def audit(raw: str, bound: int = DEFAULT_BOUND
             "INFO", "estimate_is_not_closure",
             f"log carries SPEF_REPAIR_WNS_AFTER={estimate.group(1)} — this is "
             f"the end-of-flow ESTIMATE, measured on an in-memory netlist AFTER "
-            f"every shipped artefact was frozen, with the inserted ECO cells "
+            f"every shipped artefact was frozen, with the inserted repair cells "
             f"neither placed nor routed, and reported to sta_spef_repaired.rpt "
             f"(never the authoritative sta.rpt). It is what a real-parasitics "
-            f"ECO WOULD recover, not what this design ships. Do not report it "
+            f"timing repair WOULD recover, not what this design ships. Do not report it "
             f"as setup closure."))
 
     if not passes:

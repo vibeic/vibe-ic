@@ -23,7 +23,7 @@ WHERE IT IS FIXED, AND WHY
 NOT in the emitter. Both locations are load-bearing: five shipped checkers
 read the `reports/phase3/` copy (`achieved_period_recorded_check`,
 `sta_corner_record_completeness_check`, `drv_promotion_corroboration_check`,
-`post_route_signoff_corner_check`, `eco_status_gen`) and the step writes the
+`post_route_signoff_corner_check`, `postroute_timing_repair_status_gen`) and the step writes the
 `phase3/stage3/sta/` one. Dropping either breaks a consumer.
 
 NOT by content hash either. A genuine SECOND measurement that happens to agree

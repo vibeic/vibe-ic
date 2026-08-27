@@ -4,7 +4,7 @@ All four are chip-AGNOSTIC and exercised with SYNTHETIC PDK families only (no
 NDA / vendor / SKU token anywhere):
 
   #148 design_one_shot_runner: an all-analog top interface must route the
-       RTL-dependent digital steps (reference_tb / yosys_synth / the ECO loop)
+       RTL-dependent digital steps (reference_tb / yosys_synth / the RTL repair/retry loop)
        to SKIP, not FAIL on "rtl/ missing" — even for a class (data_converter)
        that carries a spec-to-rtl fallback. No-leak: a digital-interface design
        still FAILs on the absent rtl/.

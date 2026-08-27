@@ -45,8 +45,8 @@ cannot promote an unrelated call by itself.
 
 | step | fallback | class | why |
 |---|---|---|---|
-| `4` | 1 | REMEASURED | `design_one_shot_runner.main` re-runs `step_rtl_gen` on a reference-TB failure and re-runs the testbench. This is bounded RTL repair/retry, **not** a physical/metal ECO; the legacy compatibility names are `--max-eco` and `FAIL_ECO_INERT`. |
-| `23` | 32 | REMEASURED | the ECO auto-trigger in `phase3_one_shot_runner.step_canonicalize_artefacts`: `_run_eco_repair` then `_measure_posteco_mcorner_ocv`. |
+| `4` | 1 | REMEASURED | `design_one_shot_runner.main` re-runs `step_rtl_gen` on a reference-TB failure and re-runs the testbench. Bounded by `--max-rtl-repair-retries`; stops on byte-identical RTL with `FAIL_RTL_REPAIR_INERT`. |
+| `23` | 32 | REMEASURED | the post-route timing-repair trigger in `phase3_one_shot_runner.step_canonicalize_artefacts`: `_run_postroute_timing_repair` then `_measure_postrepair_mcorner_ocv`. |
 | `32` | 32 | REMEASURED | the same actuator; step 32 is where it runs. |
 | `2` | 1 | DECLARED_ONLY | cross-layer fidelity now belongs to Step 2. Its judge rejects a bad candidate, but PRE/POST runtime spies both measured zero re-entry into `step_rtl_gen`; rejection must not be reported as an executable fallback. |
 | `3`, `5`, `8`, `9`, `10`, `13`, `14`, `20`, `24`, `25`, `26`, `27`, `28`, `31`, `33`, `A7`, `A9` | — | DECLARED_ONLY | no actuator found in any runner. |
@@ -54,22 +54,22 @@ cannot promote an unrelated call by itself.
 ### The zero is the load-bearing number
 
 `ROLLBACK_PROVEN = 0`. The step-32 repair **does** implement an undo — on a
-measured setup regression it sets `eco_fired_reverted_regression` and retains the
-pre-ECO artefacts — and
+measured setup regression it sets `timing_repair_reverted_regression` and retains the
+pre-repair artefacts — and
 
 ```
-$ grep -rn 'eco_fired_reverted_regression' programs/tests/
+$ grep -rn 'timing_repair_reverted_regression' programs/tests/
 (no files)
 ```
 
-so nothing proves it works. `test_eco_loop_audit.py` tests the *audit* of an
+so nothing proves it works. `test_postroute_timing_repair_audit.py` tests the *audit* of an
 already-regressed record, which is a different claim.
 
 ### Three DECLARED_ONLY entries that are worth reading individually
 
 * **`31 -> 32`** (physical verification falls back to the repair pass) cannot be
-  taken **by design**, and the repository says so: `eco_status_gen.py:183` —
-  *"A non-timing sign-off domain FAILED; the timing-repair ECO does not apply."*
+  taken **by design**, and the repository says so: `postroute_timing_repair_status_gen.py:183` —
+  *"A non-timing sign-off domain FAILED; the timing-repair pass does not apply."*
   The auto-trigger is keyed on multi-corner OCV timing only, so a DRC or LVS
   failure can never actuate step 32.
 * **`A7 -> A3` and `A9 -> A3`.** `analog_one_shot_runner.py` contains **zero
@@ -106,10 +106,10 @@ Measured before the fix:
 | source | said |
 |---|---|
 | `phase3_one_shot_runner.py:33408` | `"affected_steps": [21, 23, 24, 29, 30]` |
-| flow step 32 `closed_loop.trigger` | `"Aggregator: re-run #21-#28 after ECO"` |
+| flow step 32 `closed_loop.trigger` | `"Aggregator: re-run #21-#28 after post-route timing repair"` |
 | flow step 32 `blocks_on` | `[23, 24, 25, 26, 27, 29, 30, 31]` |
 
-and **nothing read any of them**. `eco_loop_audit.py:335` asks
+and **nothing read any of them**. `postroute_timing_repair_audit.py:337` asks
 `if "affected_steps" not in data` and stops there, so `[]` and `[999]` were both
 clean. `git log -S` puts the literal in `0a9e51577`; no test asserted it in the
 ~300 versions since.
@@ -145,7 +145,7 @@ again. The flow's `#21-#28` prose is still wrong and is a lander request; the
 test asserts the *disagreement* and goes green the moment the prose is corrected.
 
 **`affected_steps` is a requirement, not a receipt.** The runner re-runs none of
-those steps, which is why the ECO netlist is not the shipped implementation —
+those steps, which is why the repaired netlist is not the shipped implementation —
 `step_gds` (25060) → `step_drc` (26523) → `step_lvs` (27191) all run *before*
 `step_canonicalize_artefacts` (31726), where the repair fires. The repository
 already says this in `docs/architecture/ALL_STEPS_v1.4.14.md:140`: *"NOT an ECO:

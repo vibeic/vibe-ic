@@ -134,7 +134,7 @@ python3 ${PLUGIN_PROGRAMS}/vibe_ic_one_shot_runner.py <project> \
 # Result: <project>/reports/orchestrator/vibe_ic_one_shot.json
 ```
 
-Use agents ONLY when a step inside the runner FAILs (close-loop ECO, never as the primary author).
+Use agents ONLY when a step inside the runner FAILs (closed-loop repair, never as the primary author).
 
 #### Shape B — Lightweight runner-path (substantial standalone, no silicon)
 **When**: each problem is a real design with a testbench but you don't need PnR (e.g. RTLLM,
@@ -162,7 +162,7 @@ directs: *"AI invokes skill spec-to-rtl"*. There is no actual `spec-to-rtl` skil
 the AI plays the spec-to-rtl ROLE: author RTL at `phase2/stage1/rtl/<top>.<v|sv>` using
 the L docs the runner just emitted, then RE-INVOKE the runner so its downstream gates
 (`chip_top_gate_wrapper_gen` / `rtl_hygiene_lint --fix` / lint / synth /
-`spec_conformance_check` / `eco_loop` / `full_stack_tb_gen` / `final_audit`) fire on your
+`spec_conformance_check` / `rtl_repair_retry` / `full_stack_tb_gen` / `final_audit`) fire on your
 RTL. **This is NOT bypassing the runner — it IS the runner's design.** Bypass means
 authoring with MCP only, outside the runner's pipeline (what the 2026-05-28 wrong-shape
 RTLLM 37/50 did).
@@ -1141,7 +1141,7 @@ prompts genuinely name no module → correct `chip_top` degrade).
    |---|---|---|---|
    | cid003 | spec generation | 78 | **phase1_spec_to_rtl**: `phase1_one_shot_runner`+`deterministic_rtl_dispatcher` → `spec-to-rtl` → `rtl_hygiene_lint`+`spec_conformance_check`+`phase2-rtl-verify` |
    | cid002 | completion | 94 | **completion_loop**: `cvdp_context_interface_recover`+`modify_complete_synth` → `spec-to-rtl` → `rtl_hygiene_lint`+`spec_conformance_check`+`phase2-rtl-verify` |
-   | cid004 | functional modification | 55 | **modify_loop**: `cvdp_context_interface_recover`+`modify_complete_synth` → `rtl-repair`+`eco-plan` → `equivalence-check`+`phase2-rtl-verify` |
+   | cid004 | functional modification | 55 | **modify_loop**: `cvdp_context_interface_recover`+`modify_complete_synth` → `rtl-repair` → `equivalence-check`+`phase2-rtl-verify` |
    | cid007 | optimization | 40 | **optimize_loop**: `rtl_hygiene_lint` → `rtl-review`+`synth-doctor`+`ppa-predict` → `equivalence-check`+`phase2-rtl-verify` |
    | cid016 | debug | 35 | **debug_loop**: `cvdp_context_interface_recover`+`debug_first_pass` → `rtl-repair` → `phase2-rtl-verify`+`equivalence-check`+`formal-verify` |
 

@@ -71,7 +71,7 @@
       ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
-    "phase2.eco_loop": {
+    "phase2.rtl_repair_retry": {
       "bucket_A_program": "programs/design_one_shot_runner.py",
       "bucket_B_skill_file": "skills/rtl-repair/SKILL.md"
     },

@@ -7,13 +7,13 @@ WHAT WAS MEASURED, at 867de4289 (v1.11.18)
 Three documents described the same set and no two agreed:
 
     phase3_one_shot_runner.py  "affected_steps": [21, 23, 24, 29, 30]
-    flow step 32 trigger       "Aggregator: re-run #21-#28 after ECO"
+    flow step 32 trigger       "Aggregator: re-run #21-#28 after repair"
     flow step 32 blocks_on     [23, 24, 25, 26, 27, 29, 30, 31]
 
-and nothing read any of them. `eco_loop_audit` asks `"affected_steps" not in
+and nothing read any of them. `postroute_timing_repair_audit` asks `"affected_steps" not in
 data` and stops there, so `[]` and `[999]` were both clean. `git log -S` puts the
 literal in `0a9e51577`; no test asserted it in the ~300 versions since —
-`test_eco_auto_trigger_mcorner_ocv_gate.py` and `test_eco_loop_audit.py` build
+`test_postroute_timing_repair_auto_trigger_mcorner_ocv_gate.py` and `test_postroute_timing_repair_audit.py` build
 their own fixture dicts that merely happen to carry the same numbers.
 
 THE RULE THIS FILE ENFORCES
@@ -31,7 +31,7 @@ consume its result anyway.
 The two entries the old literal omitted and that matter most:
   * 22, parasitic extraction — the repair re-extracts, which is proof it is stale;
   * 31, physical verification — the repair changes geometry AND netlist, so DRC
-    and LVS are both invalidated. Shipping an ECO without re-running LVS is the
+    and LVS are both invalidated. Shipping a repair without re-running LVS is the
     failure this file exists to make impossible to reintroduce quietly.
 
 Every assertion below is derived from the SHIPPED flow at run time, so the day

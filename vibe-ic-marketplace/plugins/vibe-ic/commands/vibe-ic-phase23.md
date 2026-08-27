@@ -1,7 +1,7 @@
 ---
 name: vibe-ic-phase23
 description: Chain /vibe-ic-phase2 → /vibe-ic-phase3 via phase23_one_shot_runner (true chained orchestrator — delegates to design_one_shot_runner.py + phase3_one_shot_runner.py, not monolithic). AI-monitored + close-loop.
-argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3] [--skip-phase2|--skip-phase3]
+argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-rtl-repair-retries 3] [--skip-phase2|--skip-phase3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
 > `/vibe-ic-phase23 <project-dir>` (e.g. `/vibe-ic-phase23 1st_benchmark_example/phase2_v0119.48-vendor`).

@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""Step 32: the audit must not describe an ECO that was never applied.
+"""Step 32: the audit must not describe a repair that was never applied.
 
 v1.7.64 made Step 32 fail-close — a HARD non-timing sign-off failure (IR drop,
-PERC, PV, EM, SI) forces ``eco_needed=True`` so the step can no longer certify
-"no ECO needed" over a failed power-integrity domain. That fix DELIBERATELY
-leaves ``timing_eco_needed=False``; its own docstring says the timing-repair
-TCL never fires and therefore "never fabricates a repaired ``eco_log.json``".
+PERC, PV, EM, SI) forces ``repair_needed=True`` so the step can no longer certify
+"no repair needed" over a failed power-integrity domain. That fix DELIBERATELY
+leaves ``timing_repair_needed=False``; its own docstring says the timing-repair
+TCL never fires and therefore "never fabricates a repaired ``repair_log.json``".
 
 So in exactly that state ``changes`` is empty and ``re_verified`` is false BY
-DESIGN — and ``eco_loop_audit`` reported both unconditionally:
+DESIGN — and ``postroute_timing_repair_audit`` reported both unconditionally:
 
-    ERROR EMPTY_CHANGES   eco_log.json 'changes' array is missing or empty
-    ERROR NOT_REVERIFIED  ECO applied but re_verified is false
+    ERROR EMPTY_CHANGES   repair_log.json 'changes' array is missing or empty
+    ERROR NOT_REVERIFIED  repair applied but re_verified is false
                           — must re-run sign-off
 
 Nothing was applied. Both probes are STRUCTURAL ("is the array populated?",
 "is the flag set?") and both are ADJACENT to the question the audit exists to
-answer: did the ECO loop do the right thing? Reported this way they assert an
-ECO that never happened and send the reader to re-run sign-off STA — the one
+answer: did the repair loop do the right thing? Reported this way they assert an
+repair that never happened and send the reader to re-run sign-off STA — the one
 action that cannot clear the step, because timing is not what failed. The
 measured cost was a full convergence round taking "re-run sign-off STA after
-the ECO" as its next action on a design carrying +6.28 ns of setup margin.
+the repair" as its next action on a design carrying +6.28 ns of setup margin.
 
-WHAT THIS CHANGE IS NOT: it is not a relaxation. The ECO is still required, the
+WHAT THIS CHANGE IS NOT: it is not a relaxation. The repair is still required, the
 design is still failing, the finding is still an ERROR, ``pass`` is still
 False and Step 32 still goes red. ``test_still_red_*`` below is the guard on
 that, and it is written to pass in BOTH directions — before the fix and after
@@ -45,11 +45,11 @@ _PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 if str(_PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS_DIR))
 
-import eco_loop_audit as ELA  # noqa: E402
-import eco_trigger_decision as ETD  # noqa: E402
+import postroute_timing_repair_audit as ELA  # noqa: E402
+import postroute_timing_repair_decision as ETD  # noqa: E402
 
-_STATUS_GEN = _PROGRAMS_DIR / "eco_status_gen.py"
-_LOOP_AUDIT = _PROGRAMS_DIR / "eco_loop_audit.py"
+_STATUS_GEN = _PROGRAMS_DIR / "postroute_timing_repair_status_gen.py"
+_LOOP_AUDIT = _PROGRAMS_DIR / "postroute_timing_repair_audit.py"
 
 _CLEAN_MCORNER_STANCE = {
     "multi_process_corner": True,
@@ -72,7 +72,7 @@ def _nontiming_project(tmp_path: Path) -> Path:
     records under audit are the ones the flow actually writes, not fixtures
     hand-shaped to match the assertion."""
     (tmp_path / "phase3/stage3/sta").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "phase3/stage3/eco").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "phase3/stage3/postroute_timing_repair").mkdir(parents=True, exist_ok=True)
     (tmp_path / "reports/phase3").mkdir(parents=True, exist_ok=True)
     (tmp_path / "reports/phase2/gates").mkdir(parents=True, exist_ok=True)
     (tmp_path / "phase3/stage3/sta/post_route_timing.rpt").write_text(
@@ -87,19 +87,19 @@ def _nontiming_project(tmp_path: Path) -> Path:
     rc, out = _run(_STATUS_GEN, tmp_path)
     assert rc == 0, out
     # The decision record is written by the runner's
-    # `step_canonicalize_artefacts` from `eco_trigger_decision.decide(...)`,
-    # not by eco_status_gen. Produce it the same way, through the REAL
+    # `step_canonicalize_artefacts` from `postroute_timing_repair_decision.decide(...)`,
+    # not by postroute_timing_repair_status_gen. Produce it the same way, through the REAL
     # decision function, so the record under audit is the one the flow writes.
     decision = ETD.decide(tmp_path / "reports/phase3/mcorner_ocv_stance.json",
                           True, project=tmp_path)
     # `action` is stamped by the runner, not by `decide`, under the runner's own
     # condition (phase3_one_shot_runner: `if not
-    # _eco_decision["timing_eco_needed"]: ... = "eco_required_non_timing"`).
+    # _repair_decision["timing_repair_needed"]: ... = "repair_required_non_timing"`).
     # Reproduced verbatim rather than hard-coded, so a change to that condition
     # upstream shows up here instead of being masked by a constant.
-    if not decision["timing_eco_needed"]:
-        decision["action"] = "eco_required_non_timing"
-    (tmp_path / "phase3/stage3/eco/eco_trigger_decision.json").write_text(
+    if not decision["timing_repair_needed"]:
+        decision["action"] = "repair_required_non_timing"
+    (tmp_path / "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json").write_text(
         json.dumps(decision))
     return tmp_path
 
@@ -111,24 +111,24 @@ def _codes(findings) -> list:
 # ===========================================================================
 # FORWARD — fails against the byte-identical pre-fix file, passes after
 # ===========================================================================
-def test_nontiming_block_is_named_not_described_as_an_applied_eco(tmp_path):
+def test_nontiming_block_is_named_not_described_as_an_applied_repair(tmp_path):
     proj = _nontiming_project(tmp_path)
 
     # Precondition: this really is the v1.7.64 fail-close state, taken from the
     # producers' own records rather than assumed.
     decision = json.loads(
-        (proj / "phase3/stage3/eco/eco_trigger_decision.json").read_text())
-    assert decision["timing_eco_needed"] is False
-    assert decision["eco_needed"] is True
-    assert decision["action"] == "eco_required_non_timing"
+        (proj / "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json").read_text())
+    assert decision["timing_repair_needed"] is False
+    assert decision["repair_needed"] is True
+    assert decision["action"] == "repair_required_non_timing"
 
     findings, stats = ELA.audit(proj)
     codes = _codes(findings)
 
-    assert "ECO_BLOCKED_ON_NONTIMING_SIGNOFF" in codes, (
+    assert "REPAIR_BLOCKED_ON_NONTIMING_SIGNOFF" in codes, (
         "the audit must name the domains that actually block this step")
     assert "NOT_REVERIFIED" not in codes, (
-        "no ECO was applied, so 'ECO applied but re_verified is false' is a "
+        "no repair was applied, so 'repair applied but re_verified is false' is a "
         "false statement about this run")
     assert "EMPTY_CHANGES" not in codes, (
         "'changes' is empty by design here — v1.7.64 forbids the timing "
@@ -165,58 +165,58 @@ def test_still_red_the_step_does_not_go_green(tmp_path):
 
 
 # ===========================================================================
-# REVERSE 2 — a genuine unapplied/unverified TIMING ECO is untouched
+# REVERSE 2 — a genuine unapplied/unverified TIMING repair is untouched
 # ===========================================================================
-def test_real_timing_eco_still_reports_empty_changes_and_not_reverified(
+def test_real_timing_repair_still_reports_empty_changes_and_not_reverified(
         tmp_path):
     """No non-timing block => every pre-existing finding fires exactly as
     before. This is the case the new branch must never swallow."""
-    (tmp_path / "phase3/stage3/eco").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "phase3/stage3/eco/eco_trigger_decision.json").write_text(
-        json.dumps({"eco_needed": True, "timing_eco_needed": True,
-                    "action": "eco_required_timing", "nontiming_failures": [],
+    (tmp_path / "phase3/stage3/postroute_timing_repair").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json").write_text(
+        json.dumps({"repair_needed": True, "timing_repair_needed": True,
+                    "action": "repair_required_timing", "nontiming_failures": [],
                     "setup_worst_slack_ns": -0.42}))
-    (tmp_path / "phase3/stage3/eco/eco_log.json").write_text(json.dumps(
-        {"verdict": "ECO_REQUIRED", "timing_eco_needed": True,
+    (tmp_path / "phase3/stage3/postroute_timing_repair/repair_log.json").write_text(json.dumps(
+        {"verdict": "REPAIR_REQUIRED", "timing_repair_needed": True,
          "changes": [], "re_verified": False}))
 
     codes = _codes(ELA.audit(tmp_path)[0])
     assert "EMPTY_CHANGES" in codes
     assert "NOT_REVERIFIED" in codes
-    assert "ECO_BLOCKED_ON_NONTIMING_SIGNOFF" not in codes
+    assert "REPAIR_BLOCKED_ON_NONTIMING_SIGNOFF" not in codes
 
 
 # ===========================================================================
 # REVERSE 3 — fail-open: a record that DOES NOT SAY SO is unchanged
 # ===========================================================================
 @pytest.mark.parametrize("decision,why", [
-    ({"eco_needed": True, "nontiming_failures": [{"domain": "ir_drop"}]},
-     "no `timing_eco_needed` and no action: a record that says nothing must "
-     "not be read as saying 'no timing ECO was needed'"),
-    ({"eco_needed": True, "timing_eco_needed": None, "action": None,
+    ({"repair_needed": True, "nontiming_failures": [{"domain": "ir_drop"}]},
+     "no `timing_repair_needed` and no action: a record that says nothing must "
+     "not be read as saying 'no timing repair was needed'"),
+    ({"repair_needed": True, "timing_repair_needed": None, "action": None,
       "nontiming_failures": [{"domain": "ir_drop"}]},
-     "an explicitly NULL timing_eco_needed is still not a False"),
-    ({"eco_needed": True, "timing_eco_needed": True, "action": None,
+     "an explicitly NULL timing_repair_needed is still not a False"),
+    ({"repair_needed": True, "timing_repair_needed": True, "action": None,
       "nontiming_failures": [{"domain": "ir_drop"}]},
-     "a TIMING ECO that also has a non-timing failure beside it is a real "
+     "a TIMING repair that also has a non-timing failure beside it is a real "
      "unapplied timing repair and must keep its findings"),
-    ({"eco_needed": True, "timing_eco_needed": False, "action":
-      "eco_required_non_timing", "nontiming_failures": []},
+    ({"repair_needed": True, "timing_repair_needed": False, "action":
+      "repair_required_non_timing", "nontiming_failures": []},
      "the action alone, with NO domain to name, cannot produce an actionable "
      "finding — so it must not displace the ones that exist"),
 ])
 def test_fail_open_records_are_byte_identical_to_before(
         tmp_path, decision, why):
-    (tmp_path / "phase3/stage3/eco").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "phase3/stage3/eco/eco_trigger_decision.json").write_text(
+    (tmp_path / "phase3/stage3/postroute_timing_repair").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json").write_text(
         json.dumps(decision))
-    (tmp_path / "phase3/stage3/eco/eco_log.json").write_text(json.dumps(
-        {"verdict": "ECO_REQUIRED", "changes": [], "re_verified": False}))
+    (tmp_path / "phase3/stage3/postroute_timing_repair/repair_log.json").write_text(json.dumps(
+        {"verdict": "REPAIR_REQUIRED", "changes": [], "re_verified": False}))
 
     codes = _codes(ELA.audit(tmp_path)[0])
     assert "EMPTY_CHANGES" in codes, why
     assert "NOT_REVERIFIED" in codes, why
-    assert "ECO_BLOCKED_ON_NONTIMING_SIGNOFF" not in codes, why
+    assert "REPAIR_BLOCKED_ON_NONTIMING_SIGNOFF" not in codes, why
 
 
 # ===========================================================================
@@ -228,14 +228,14 @@ def test_helper_returns_empty_for_absent_records():
     # a malformed nontiming_failures entry contributes no domain, and a record
     # whose ONLY entries are malformed does not qualify
     assert ELA._nontiming_block_domains(
-        {}, {"action": "eco_required_non_timing",
+        {}, {"action": "repair_required_non_timing",
              "nontiming_failures": ["ir_drop", None, 7]}) == []
 
 
 def test_helper_dedupes_domains_named_by_both_records():
     """The same domain appears in the decision AND in the log; a repeated name
     reads as two separate failures."""
-    rec = {"action": "eco_required_non_timing",
+    rec = {"action": "repair_required_non_timing",
            "nontiming_failures": [{"domain": "ir_drop"},
                                   {"domain": "ir_drop"},
                                   {"domain": "perc_signoff"}]}

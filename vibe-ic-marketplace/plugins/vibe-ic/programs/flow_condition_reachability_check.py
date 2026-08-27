@@ -196,12 +196,12 @@ ALLOWLIST: dict[tuple, str] = {
         "bug claim has nothing to schema-check. Absence is the normal case, "
         "not the failure mode — the failure mode is a malformed claim, which "
         "requires the claim to exist.",
-    ("32", "eco_loop_audit",
-     "phase3/stage3/eco/eco_log.json"):
+    ("32", "postroute_timing_repair_audit",
+     "phase3/stage3/postroute_timing_repair/repair_log.json"):
         "Step 32's required_outputs is the single any-of pattern "
-        "`eco_log.json OR no_eco_needed.flag`, so an ECO that ran and wrote no "
+        "`repair_log.json OR no_repair_needed.flag`, so a repair that ran and wrote no "
         "log leaves NEITHER and the step goes MISSING (loud). The condition's "
-        "false branch therefore coincides with an honestly declared no-ECO "
+        "false branch therefore coincides with an honestly declared no-repair "
         "run, not with a silent loss.",
     ("23", "post_route_signoff_corner_check",
      "phase3/stage3/sta/sta_spef_multicorner.rpt"):

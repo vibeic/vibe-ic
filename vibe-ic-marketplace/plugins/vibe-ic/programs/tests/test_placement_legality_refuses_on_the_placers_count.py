@@ -8,9 +8,9 @@ From the installed binary's own `info body check_placement`:
     return [dpl::check_placement_cmd $verbose $file_name $no_abort]
 
 Both `check_placement` call sites outside the legalization ladder — after
-spare-cell insertion, and after the ECO's own legalization — wrapped the
+spare-cell insertion, and after the repair's own legalization — wrapped the
 RAISING form in a `catch` and printed the tool's refusal as a warning string
-(`SPARE_CHECK_PLACEMENT_WARN: DPL-0033` / `ECO_CHECK_PLACEMENT_WARN: ...`).
+(`SPARE_CHECK_PLACEMENT_WARN: DPL-0033` / `POSTROUTE_TIMING_REPAIR_CHECK_PLACEMENT_WARN: ...`).
 Nothing read it. `placement_legality_check` read the DEF STATUS FIELD instead,
 and a status field cannot express an overlap: an illegally placed instance
 still carries `+ PLACED ( x y ) N`.
@@ -149,7 +149,7 @@ def test_the_measured_overlap_count_fails_a_token_clean_def(tmp_path):
 
 
 def test_a_single_violation_is_enough(tmp_path):
-    _mk(tmp_path, "ECO_CHECK_PLACEMENT_VIOLATIONS 1")
+    _mk(tmp_path, "POSTROUTE_TIMING_REPAIR_CHECK_PLACEMENT_VIOLATIONS 1")
     verdict, rc, rules, _ = _run(tmp_path)
     assert (verdict, rc) == ("FAIL", 1)
     assert "CHECK_PLACEMENT_VIOLATIONS" in rules
@@ -167,7 +167,7 @@ def test_the_legacy_warn_shape_still_fails(tmp_path):
 
 
 def test_the_raised_shape_fails(tmp_path):
-    _mk(tmp_path, "ECO_CHECK_PLACEMENT_RAISED: DPL-0033")
+    _mk(tmp_path, "POSTROUTE_TIMING_REPAIR_CHECK_PLACEMENT_RAISED: DPL-0033")
     verdict, rc, _rules, _s = _run(tmp_path)
     assert (verdict, rc) == ("FAIL", 1)
 
@@ -175,7 +175,7 @@ def test_the_raised_shape_fails(tmp_path):
 def test_a_clean_site_does_not_cancel_a_dirty_one(tmp_path):
     """Legalization succeeding earlier does not make a later overlap go away."""
     _mk(tmp_path, "SPARE_CHECK_PLACEMENT_VIOLATIONS 0",
-        "ECO_CHECK_PLACEMENT_VIOLATIONS 3")
+        "POSTROUTE_TIMING_REPAIR_CHECK_PLACEMENT_VIOLATIONS 3")
     verdict, rc, _rules, summary = _run(tmp_path)
     assert (verdict, rc) == ("FAIL", 1)
     assert summary["placer_legality_verdict"] == "ILLEGAL"
@@ -183,38 +183,38 @@ def test_a_clean_site_does_not_cancel_a_dirty_one(tmp_path):
 
 def test_the_record_is_found_in_any_pnr_log(tmp_path):
     _mk(tmp_path, "SPARE_CHECK_PLACEMENT_VIOLATIONS 0")
-    (tmp_path / "phase3" / "stage3" / "pnr" / "eco.log").write_text(
-        "ECO_CHECK_PLACEMENT_VIOLATIONS 7\n")
+    (tmp_path / "phase3" / "stage3" / "pnr" / "repair.log").write_text(
+        "POSTROUTE_TIMING_REPAIR_CHECK_PLACEMENT_VIOLATIONS 7\n")
     _v, rc, _rules, summary = _run(tmp_path)
     assert rc == 1
-    assert ["ECO", 7] in summary["check_placement_violations"]
+    assert ["POSTROUTE_TIMING_REPAIR", 7] in summary["check_placement_violations"]
 
 
-def test_the_eco_stages_own_log_is_scanned(tmp_path):
-    """The ECO repair is a SEPARATE OpenROAD invocation writing
-    `phase3/stage3/eco/eco_repair.log`. A `pnr/`-only scan is blind to every
-    verdict it emits, including the ECO's own legalization failure."""
+def test_the_repair_stages_own_log_is_scanned(tmp_path):
+    """The timing repair is a SEPARATE OpenROAD invocation writing
+    `phase3/stage3/postroute_timing_repair/postroute_timing_repair.log`. A `pnr/`-only scan is blind to every
+    verdict it emits, including the repair's own legalization failure."""
     _mk(tmp_path, "SPARE_CHECK_PLACEMENT_VIOLATIONS 0")
-    eco = tmp_path / "phase3" / "stage3" / "eco"
-    eco.mkdir(parents=True, exist_ok=True)
-    (eco / "eco_repair.log").write_text("ECO_CHECK_PLACEMENT_VIOLATIONS 5\n")
+    repair = tmp_path / "phase3" / "stage3" / "postroute_timing_repair"
+    repair.mkdir(parents=True, exist_ok=True)
+    (repair / "postroute_timing_repair.log").write_text("POSTROUTE_TIMING_REPAIR_CHECK_PLACEMENT_VIOLATIONS 5\n")
     verdict, rc, rules, summary = _run(tmp_path)
     assert (verdict, rc) == ("FAIL", 1)
-    assert ["ECO", 5] in summary["check_placement_violations"]
+    assert ["POSTROUTE_TIMING_REPAIR", 5] in summary["check_placement_violations"]
 
 
-def test_the_eco_stages_legalizer_failure_is_scanned(tmp_path):
+def test_the_repair_stages_legalizer_failure_is_scanned(tmp_path):
     """The same blind spot on the pre-existing marker reader: the escalating
-    legalizer runs inside the ECO script too, and its `_LEGALIZE_FAILED` was
+    legalizer runs inside the repair script too, and its `_LEGALIZE_FAILED` was
     written to a log nothing looked at."""
     _mk(tmp_path, "INITIAL_DPL_LEGALIZE_OK disp=default")
-    eco = tmp_path / "phase3" / "stage3" / "eco"
-    eco.mkdir(parents=True, exist_ok=True)
-    (eco / "eco_repair.log").write_text("ECO_DPL_LEGALIZE_FAILED\n")
+    repair = tmp_path / "phase3" / "stage3" / "postroute_timing_repair"
+    repair.mkdir(parents=True, exist_ok=True)
+    (repair / "postroute_timing_repair.log").write_text("POSTROUTE_TIMING_REPAIR_DPL_LEGALIZE_FAILED\n")
     verdict, rc, rules, summary = _run(tmp_path)
     assert (verdict, rc) == ("FAIL", 1)
     assert "LEGALIZER_REPORTED_FAILURE" in rules
-    assert summary["legalizer_failed_markers"] == ["ECO_DPL_LEGALIZE_FAILED"]
+    assert summary["legalizer_failed_markers"] == ["POSTROUTE_TIMING_REPAIR_DPL_LEGALIZE_FAILED"]
 
 
 def test_cli_exit_code_and_json_carry_the_count(tmp_path):
@@ -244,7 +244,7 @@ def test_the_runner_asks_the_tool_for_its_count(tmp_path):
 def test_the_runner_no_longer_demotes_the_verdict_to_a_warning():
     """The two call sites that printed `..._CHECK_PLACEMENT_WARN` are gone."""
     src = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
-    for site in ("SPARE", "ECO"):
+    for site in ("SPARE", "POSTROUTE_TIMING_REPAIR"):
         assert f'puts \\"{site}_CHECK_PLACEMENT_WARN' not in src, (
             f"{site} still prints the tool's refusal as a warning string")
 
@@ -253,4 +253,6 @@ def test_both_call_sites_use_the_shared_builder():
     """One builder, so the two sites cannot drift apart again."""
     src = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
     assert src.count('_build_check_placement_verdict_tcl("SPARE"') == 1
-    assert src.count('_build_check_placement_verdict_tcl("ECO"') == 1
+    assert src.count(
+        '"POSTROUTE_TIMING_REPAIR", "_postroute_timing_repair_cp"'
+    ) == 1

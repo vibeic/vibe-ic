@@ -33,7 +33,7 @@ or whether a repair fired, while a benchmark run of the SAME flow could.
 Measured on a plain 4-to-1 multiplexer project (no dataset, no harness,
 `vibe_ic_one_shot_runner.py --skip-analog --skip-hardware --skip-phase3`):
 `reports/orchestrator/phase2_one_shot.json` recorded rtl_gen BLOCKED, then an
-the legacy internal `eco_loop_iter` marker, then rtl_gen PASS with
+`rtl_repair_retry_iter` marker, then rtl_gen PASS with
 `extras.deterministic_generator="multiplexer"`, with sdc_gen / reference_tb /
 final_audit / lec_equivalence FAILing. Every fact the four-phase attribution
 reports was already on disk and NOTHING read it.
@@ -111,22 +111,22 @@ _STEP_REPORT_REASON = (
 # eleven: anything outside lands in `unclassified_status` BY NAME, the same
 # refusal-to-absorb that function makes, so a status invented tomorrow cannot
 # arrive here as a silent pass or a silent skip.
-_STATUS_RAN = frozenset({"PASS", "FAIL", "FAIL_ECO_INERT",
+_STATUS_RAN = frozenset({"PASS", "FAIL", "FAIL_RTL_REPAIR_INERT",
                          "STALE_BOARD_DETECTED", "ADVISORY"})
 _STATUS_NOT_ATTEMPTED = frozenset({"SKIP", "SKIPPED-CONDITION",
                                    "SKIPPED-BY-ENTRY", "BLOCKED", "WAIVED"})
-_STATUS_MARKER = frozenset({"ECO_LOOP"})
-_STATUS_FAILING = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED")
+_STATUS_MARKER = frozenset({"RTL_REPAIR_RETRY"})
+_STATUS_FAILING = ("FAIL", "FAIL_RTL_REPAIR_INERT", "STALE_BOARD_DETECTED")
 
 # Repair / close-loop markers the runner appends, by the name it records them
 # under. Each value says what the marker IS, so the report explains itself.
 _REPAIR_MARKERS = {
-    "eco_loop_iter":
-        "legacy internal marker: the bounded deterministic RTL repair/retry "
-        "loop before re-running rtl_gen; NOT a physical/metal ECO",
-    "eco_loop_remediation":
-        "legacy internal marker: hint-driven Phase-1 regeneration attempted "
-        "once by the RTL repair/retry loop; NOT a physical/metal ECO",
+    "rtl_repair_retry_iter":
+        "the bounded RTL repair/retry marker design_one_shot_runner appends when the "
+        "reference-TB step FAILs, before re-running rtl_gen",
+    "rtl_repair_remediation":
+        "the hint-driven Phase-1 regeneration the RTL repair/retry loop attempts once "
+        "before it declares the loop inert",
 }
 _REPAIR_EXTRA_KEY = "gate_directed_repairs"
 
@@ -285,7 +285,7 @@ def phase2_solving(rep: Optional[Dict[str, Any]], why: Optional[str],
     here; neither is re-derived by calling the chain a second time.
 
     The LAST `rtl_gen` step decides, because that is the step every artefact
-    reader looks at — the ECO loop can run `rtl_gen` more than once, and the
+    reader looks at — the RTL repair/retry loop can run `rtl_gen` more than once, and the
     attribution must name the attempt that produced what survived.
 
     `artefact_collected` is a claim about a SCORER's collector, not about the
@@ -445,11 +445,11 @@ def phase4_debugging(rep: Optional[Dict[str, Any]],
                      why: Optional[str]) -> Dict[str, Any]:
     """WHETHER RTL was repaired/retried, its trigger, and whether it mattered.
 
-    Recorded NOWHERE before. The evidence was always in the step list — legacy
-    internal `eco_loop_*` markers and `gate_directed_repairs` extras — and no
-    consumer read it, so a design that was BLOCKED, retried and then emitted
-    looked exactly like a design that emitted first time.  The legacy marker
-    name is compatibility data; none of these events is a physical/metal ECO.
+    Recorded NOWHERE before. The evidence was always in the step list — the repair
+    markers, and the `gate_directed_repairs` extras — and no consumer read it,
+    so a design that was BLOCKED, close-looped and then emitted looked exactly
+    like a design that emitted first time. None of these events is a
+    physical/metal ECO.
 
     Mechanism is read off the step the runner recorded IMMEDIATELY AFTER the
     marker (that is the repair action the loop actually took), never assumed

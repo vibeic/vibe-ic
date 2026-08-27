@@ -4,7 +4,8 @@
 WHY THIS EXISTS (vibe-ic#552)
 =============================
 The forks carry a standing doctrine: where stock aborts, we warn and continue, so
-a post-route ECO is not killed by a condition the flow can handle. `RSZ-0089`,
+a post-route timing repair is not killed by a condition the flow can handle.
+`RSZ-0089`,
 `DPL-0033`, `DRT-0305`, `DRT-627` are all instances.
 
 Every one of those downgrades moves a condition OUT of the set the flow's gates
@@ -74,7 +75,7 @@ DOWNGRADES: tuple = (
         fork="vibeic/OpenROAD 8d040d56c",
         why=("the fatal form is raised inside an OpenMP region in "
              "FlexPA::updateDirtyInsts, so it crosses the parallel boundary "
-             "and std::terminate kills the tool mid-ECO with no diagnostic"),
+             "and std::terminate kills the tool mid-repair with no diagnostic"),
         consumer="programs/phase3_one_shot_runner.py",
     ),
 )

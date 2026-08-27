@@ -55,7 +55,8 @@ CL-NOT-A-LOOP IS THE WEAKER OF TWO CANDIDATES, AND DELIBERATELY SO
 ------------------------------------------------------------------
 The obvious rule — "`fallback_to` must be a transitive `blocks_on` ANCESTOR" —
 was measured and REJECTED: it reddens two healthy cells on main. Steps 23 and 31
-both fall back FORWARD to 32, the ECO aggregator, and step 32 `blocks_on` 23 and
+both fall back FORWARD to 32, the post-route timing repair scheduler, and step
+32 `blocks_on` 23 and
 31, so those edges are legitimate hand-offs, not defects:
 
     fallback is NOT an ancestor and NOT self -> [('23','32'), ('31','32')]

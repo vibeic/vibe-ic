@@ -106,7 +106,7 @@ STEP_METHOD = {
     "29": ("equivalence", "post-layout gate-sim + SDF vs golden"),
     "30": ("metric", "post-layout SPICE critical-path correlation"),
     "31": ("clean", "PV: DRC clean + LVS clean (both, non-vacuous)"),
-    "32": ("clean", "ECO repair loop (only if PV failed)"),
+    "32": ("clean", "Post-route timing repair pass"),
     "33": ("metric", "power analysis compare"),
     "34": ("metric", "metal-fill density compare"),
     "35": ("clean", "DFM screen (CMP density + via-redundancy advisory) clean"),

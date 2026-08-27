@@ -116,10 +116,10 @@ def test_a_step_the_runner_did_not_fail_keeps_its_artefact_status(tmp_path):
 
 
 def test_a_retried_step_is_judged_by_its_final_record(tmp_path):
-    """CONTROL. The ECO loop re-dispatches rtl_gen: BLOCKED, then PASS.
+    """CONTROL. The RTL repair/retry loop re-dispatches rtl_gen: BLOCKED, then PASS.
 
     Only the LAST record is the run's answer for flow step 1. A join that
-    reacted to any failing record would report a red step 1 on every ECO run
+    reacted to any failing record would report a red step 1 on every repair run
     that recovered -- which is most of them.
     """
     _write_declared(tmp_path, _declared_outputs("1"))
