@@ -3,16 +3,13 @@
 ### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          19
-  CLEARED       36
+  BOTH          16
+  CLEARED       39
   FLAKY         2
 
 bucket        image    host     id
 FLAKY         4/13     13/13    test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged
 FLAKY         1/10     0/10     test_matrix_63x8_coverage.py::test_live_collection_relays_finite_semantic_progress_past_old_bound
-BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_no_declared_report_is_written_through_open_w
-BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_no_new_offender_and_the_ratchet_holds
-BOTH          5/5      5/5      test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_census_block_is_fresh
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_published_total_equals_the_live_census
 BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved
@@ -87,6 +84,9 @@ ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matchi
 984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_is_deferred_not_counted_without_coverage
 984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_lifts_step4_out_of_skipped_condition
 984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_3_5_issue502_503_cascade_attribution.py::test_ordering_ancestry_is_two_orders_of_magnitude_wider
+462b66838    5/5 5/5 RED     0/1 0/1 GREEN  test_issue1082_open_w_category_closed.py::test_no_declared_report_is_written_through_open_w
+462b66838    5/5 5/5 RED     0/1 0/1 GREEN  test_issue1082_open_w_category_closed.py::test_no_new_offender_and_the_ratchet_holds
+462b66838    5/5 5/5 RED     0/1 0/1 GREEN  test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds
 
 All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
 modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
@@ -423,3 +423,78 @@ It is now bound in `_CLAIMS` as a 23rd site, and `test_a_drifted_stated_count_is
 — which asserts EVERY bound site reddens under a deliberately wrong inventory —
 covers it: 23 sites, 23 drift lines. Restoring `1260` puts the three inventory
 IDs back to red.
+
+
+### the atomic-declared-report slice — 3 IDs, cleared at `462b66838`
+
+```
+subject   462b66838  (the candidate tip; the table edit and the version bump
+                      are the commit that carries this section, and neither
+                      touches code)
+control   8e5ce1629  (v1.12.15) — live main immediately before this landing
+host      8HD-a (1.34.17.159)
+image     ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2 — the digest BOTH
+          tools/ci/protected_landing_transition.json and
+          tools/ci/run_suite_in_eda_image.sh pin, entrypoint bypassed
+env       PYTHONDONTWRITEBYTECODE=1 · TMPDIR outside the account home ·
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 in the image lane ·
+          VIBEIC_CORPUS_ROOT unset · one `python3 -m pytest` per lane, all
+          four modules in one invocation, serial, no xdist
+```
+
+Whole modules, never a `-k` selection. ONE observation per lane per tree, and
+the `now` ratios say `0/1` rather than borrowing a repeat count these runs do
+not have. The image lane ran in a fresh `--no-local` clone checked out at the
+named sha, not in a worktree.
+
+The control/subject pair below was measured at `dd3883f85`/`21dd3edb9` — the
+immediately preceding main and the same two-file change cherry-picked onto it.
+Main then moved twice under this landing (v1.12.14, v1.12.15); neither touched
+either file this commit changes, and the three rows were still in BOTH at
+`8e5ce1629`, so the measurement is carried forward rather than re-run and
+re-stated at a sha it was not taken at.
+
+```
+                        host              image
+control dd3883f85       2 failed, 42 p    2 failed, 42 p
+subject 21dd3edb9       44 passed         44 passed
+```
+
+**The control is exact.** At `dd3883f85` the failing set is
+`test_issue1082_open_w_category_closed.py::test_no_new_offender_and_the_ratchet_holds`
+and `test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds`
+and nothing else — not a superset, not a subset — in BOTH lanes, and the
+failure text names the two files this branch changes, at the two line numbers
+it changes. The harness demonstrably still produces this red, so the original
+`5/5 5/5` was a true measurement of its own subject, and the green is not a
+collection hole: 44 collected and 0 skipped in all four runs.
+
+**Two rows cleared BY this landing.** `extraction_credited_by_prose_only_check`
+and `flow_output_substance` each wrote their declared `--json` destination with
+a raw `Path.write_text`, so a reader could resolve the declared name while the
+document was half written — the shape vibe-ic#1082 opened on. Both now write
+through `_atomic_artefact.write_text`, the helper the ratchet's own remedy line
+names, so the destination appears under its final name only once complete. The
+directory `mkdir` and the payload are unchanged; only the write is atomic. No
+assertion was weakened, no case deleted, no `skipif` added, no tolerance
+widened, no exemption re-dated, and no baseline written — the residual baseline
+of 514 is untouched and the ratchet closes on the two new offenders rather than
+being moved to admit them.
+
+**`test_issue1082_open_w_category_closed.py::test_no_declared_report_is_written_through_open_w`
+— NOT cleared by this landing, and the entry says so.** At the control
+`dd3883f85`, before any commit of this branch, it is already among the 42
+passing in both lanes. I did not attribute which earlier commit repaired it and
+I am not guessing one; what is measured here is that it is green in both lanes
+at both trees. It is moved because a row that is green in both lanes and still
+sits in BOTH overstates the criterion in the direction that makes the board
+look worse, which is no better than understating it.
+
+DROPPED WHOLE from this branch — `38f55456ed`, "#712: `_l_doc_pad_placement`
+reads a pad ring out of prose without its polarity". Main repaired that same
+defect a different way at `a4f6b4f335` (v1.12.12), which imports
+`_prose_polarity`'s `is_denied` and `sentence_scope` rather than re-spelling
+them, and `test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
+has been CLEARED at `51c0db4b7` since. The branch's alternative is not worth
+overwriting a landed, reviewed fix to obtain, so it is dropped whole rather
+than merged over it, and its companion test file is dropped with it.
