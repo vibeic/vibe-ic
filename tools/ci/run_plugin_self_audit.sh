@@ -63,9 +63,22 @@ GATES=(
 GATES_ROOT_FLAG=(
     # vibe-ic#381: no shipped code may choose which process to KILL by matching
     # a command line. Landed by ea51511ef1 (v1.11.95) WITHOUT a runner, which
-    # is what `checker_execution_wiring_audit` reports: "1 checker(s) that
-    # NOTHING but their own test runs". Measured GREEN over `$PLUGIN_ROOT`
-    # before being wired here (#1253: wiring a RED gate turns "unverified" into
+    # `checker_execution_wiring_audit` reported as "1 checker(s) that NOTHING
+    # but their own test runs".
+    #
+    # THAT PREMISE HAS SINCE MOVED, and this line is kept for what it adds now
+    # rather than for what it was written for. `6efe67a27` / `638505d44`
+    # dispatched the same checker from `repo_hygiene_gates.sh` at `--root
+    # "$PG"`, so the audit is already green and this is no longer its only
+    # runner. It is retained because the root is STRICTLY BROADER: `$PG` is the
+    # plugin's `programs/` tree, `$PLUGIN_ROOT` is the whole plugin, and the
+    # checker's own docstring records that a real pattern kill lived under
+    # `mcp-eda/test` -- outside `programs/` and therefore outside the hygiene
+    # dispatch. Wiring it twice costs one more scan; leaving that surface
+    # unexamined costs the defect the gate exists for.
+    #
+    # Measured GREEN over `$PLUGIN_ROOT` before being wired here, 1414 python
+    # file(s) examined, rc 0 (#1253: wiring a RED gate turns "unverified" into
     # "blocking", which is a different change and not this one).
     "unanchored_process_kill_check"
 )
