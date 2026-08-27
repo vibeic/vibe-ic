@@ -518,6 +518,233 @@ function dockerExec(cmd, timeoutMs = 300000) {
   return { success: false, output: combined, error: stderr, exitCode: r.status };
 }
 
+// ─── OpenROAD / OpenSTA script execution: FILE ARGUMENT, never stdin ───
+//
+// MEASURED 2026-08-27 in vibeic-eda@sha256:4ece6c01, openroad
+// 26Q3-1797-g1c09d62b96 and OpenSTA 2.7.0. Our `-exit` had NEVER taken effect.
+// `Main.cc:467`'s `exit_after_cmd_file` only applies when a script FILE
+// ARGUMENT is present. Every OpenROAD/OpenSTA site in this file fed Tcl through
+// a heredoc or an `echo |` pipe, so the binary fell into the REPL and
+// `tcl_readline_setup.cc:78-82` called `std::exit(EXIT_SUCCESS)` at EOF. Worse,
+// in stdin mode execution CONTINUES past a failed command, so the
+// end-of-script sentinel still prints. Measured on one failing script:
+//
+//     openroad -exit bad.tcl      -> rc=1, sentinel ABSENT,  1 error
+//     openroad -exit << EOF ...   -> rc=0, sentinel PRESENT, 6 errors   <- ours
+//     sta      -exit bad.tcl      -> rc=1, sentinel ABSENT
+//     sta      -exit < bad.tcl    -> rc=0, sentinel PRESENT             <- ours
+//
+// That is exactly why every report could fail while the tool returned
+// `success:true` and wrote a manifest `status:"PASS"`. ORFS (`flow.sh:14-15`)
+// and LibreLane (`openroad.py:509-518`) cannot have this bug because both pass
+// a file path.
+//
+// The Tcl is written to a real file INSIDE the container and that PATH is
+// passed as the argument. Writing it in-container (rather than staging it on a
+// bind mount) keeps this mount-mapping-agnostic, and the QUOTED heredoc means
+// Tcl `$var` and `[cmd]` reach the file verbatim instead of being mangled by
+// the shell-quote escaping the old `echo '...'` form required.
+//
+// EXIT CODE AND ERROR COUNT ARE EACH INDIVIDUALLY UNTRUSTWORTHY, MEASURED:
+//     openroad -exit -metrics m.json bad.tcl -> rc=1 but flow__errors__count=0
+//         (Tcl aborts at the first error so the counter never accumulates; a
+//          run that linked nothing at all still reports zero errors)
+//     the stdin form of the same script      -> rc=0 but flow__errors__count=6
+// They are therefore CONJOINED below, and neither may be read as a pass on its
+// own: errors>0 FAILS, but errors==0 PROVES NOTHING, and an ABSENT metrics
+// sidecar is UNKNOWN — never in-bounds (ORFS `sys.exit(1)`s on a missing
+// metric; LibreLane's warn-only checker is the anti-pattern, not the model).
+// What positively proves the work happened is the assertion block the caller
+// supplies (see `staAssertionTcl`), which aborts via `utl::error` and so rides
+// the now-trustworthy exit code.
+const TCL_HEREDOC_TAG = "VIBEIC_TCL_EOF";
+
+// Build the `bash -c` body that stages `tcl` to a file and runs it as an
+// ARGUMENT. `binary` is "openroad" or "sta". MEASURED: OpenSTA 2.7.0 has no
+// `-metrics` flag, so the metrics sidecar is requested for openroad only and
+// its absence is reported as UNKNOWN rather than as zero errors.
+function openroadScriptCmd({ tcl, binary = "openroad", threads = true,
+                             metrics = true, tag = "run", pathPrefix }) {
+  if (String(tcl).includes(TCL_HEREDOC_TAG)) {
+    throw new Error(
+      `generated Tcl contains the heredoc terminator ${TCL_HEREDOC_TAG}; refusing to run`);
+  }
+  const safeTag = String(tag).replace(/[^A-Za-z0-9_]/g, "").slice(0, 24) || "run";
+  const wantMetrics = metrics && binary === "openroad";
+  const prefix = pathPrefix || `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH`;
+  const threadArg = threads ? `-threads ${_edaOpenroadThreadsToken()} ` : "";
+  const metricsArg = wantMetrics ? `-metrics "$_vic_m" ` : "";
+  return [
+    prefix,
+    `_vic_s=$(mktemp /tmp/vibeic_${safeTag}_XXXXXX.tcl) || exit 97`,
+    `_vic_m="\${_vic_s%.tcl}.metrics.json"`,
+    `cat > "$_vic_s" <<'${TCL_HEREDOC_TAG}'`,
+    tcl,
+    TCL_HEREDOC_TAG,
+    // The script path is the ARGUMENT. This is the whole of item 1.
+    `${binary} ${threadArg}-exit ${metricsArg}"$_vic_s" 2>&1`,
+    `_vic_rc=$?`,
+    `printf '\\n===VIBEIC_RC=%s===\\n' "$_vic_rc"`,
+    ...(wantMetrics ? [
+      // PRESENT vs ABSENT is a DISTINCTION, not a nicety. MEASURED: the sidecar
+      // is genuinely absent after an unwritable -metrics path (rc=1, UTL-0010)
+      // and after a SIGKILL (rc=137) — and `cat` of a missing file prints
+      // exactly what an empty or unparseable one prints. The test is therefore
+      // done in-container, where the file is, and the two cases are reported
+      // separately so `evaluateStaEvidence` can call absent UNMEASURED rather
+      // than reading it as zero errors.
+      `if [ -f "$_vic_m" ]; then printf '===VIBEIC_METRICS_PRESENT===\\n'; else printf '===VIBEIC_METRICS_ABSENT===\\n'; fi`,
+      `printf '===VIBEIC_METRICS_BEGIN===\\n'`,
+      `cat "$_vic_m" 2>/dev/null`,
+      `printf '\\n===VIBEIC_METRICS_END===\\n'`,
+    ] : []),
+    `rm -f "$_vic_s" "$_vic_m"`,
+    // Re-raise so dockerExec's own `success` reflects the tool's verdict too.
+    `exit $_vic_rc`,
+  ].join("\n");
+}
+
+// Split a run's stdout into the tool log, its real exit code, and the metrics
+// sidecar. `errorCount === null` means UNKNOWN (no sidecar), never zero.
+function parseOpenroadRun(result) {
+  const raw = result.output || "";
+  const rcM = raw.match(/===VIBEIC_RC=(-?\d+)===/);
+  // Fall back to dockerExec's own view when the markers never printed (e.g.
+  // the container died, or `timeout` killed the command): that is a failure,
+  // and it must not be silently downgraded to rc 0.
+  const rc = rcM ? parseInt(rcM[1], 10)
+                 : (result.success ? 0 : (typeof result.exitCode === "number" ? result.exitCode : 1));
+  let metrics = null;
+  // Absent, empty and unparseable are three different things. Only the first
+  // is answered here; the other two are `evaluateStaEvidence`'s to judge.
+  const metricsPresent = /===VIBEIC_METRICS_PRESENT===/.test(raw);
+  let metricsRaw = null;
+  const mM = raw.match(/===VIBEIC_METRICS_BEGIN===\n([\s\S]*?)\n?===VIBEIC_METRICS_END===/);
+  if (mM) { metricsRaw = mM[1]; try { metrics = JSON.parse(mM[1]); } catch { metrics = null; } }
+  const errorCount = metrics && typeof metrics.flow__errors__count === "number"
+    ? metrics.flow__errors__count : null;
+  // Facts are deliberately emitted `key value` lines between explicit
+  // delimiters — a structured channel the Tcl opens on purpose, NOT a pattern
+  // matched against tool prose.
+  let facts = null;
+  const fM = raw.match(/===VIBEIC_STA_FACTS===\n([\s\S]*?)===VIBEIC_STA_FACTS_END===/);
+  if (fM) {
+    facts = {};
+    for (const line of fM[1].split("\n")) {
+      const m = line.trim().match(/^([a-z_]+) (.+)$/);
+      if (!m) continue;
+      const v = m[2].trim();
+      facts[m[1]] = (v === "null" || v === "") ? null : (Number.isNaN(Number(v)) ? v : Number(v));
+    }
+  }
+  const output = raw
+    .replace(/\n?===VIBEIC_RC=-?\d+===\n?/g, "\n")
+    .replace(/===VIBEIC_METRICS_(?:PRESENT|ABSENT)===\n?/g, "")
+    .replace(/===VIBEIC_METRICS_BEGIN===[\s\S]*?===VIBEIC_METRICS_END===\n?/g, "")
+    .replace(/===VIBEIC_STA_FACTS===[\s\S]*?===VIBEIC_STA_FACTS_END===\n?/g, "");
+  return { rc, ok: rc === 0, metrics, metricsPresent, metricsRaw, errorCount,
+           facts, output, raw };
+}
+
+// The conjunction. A run is trusted only when the exit code says clean AND the
+// error counter does not contradict it. UNKNOWN never upgrades a verdict.
+function openroadRunFailed({ rc, errorCount }) {
+  return rc !== 0 || (typeof errorCount === "number" && errorCount > 0);
+}
+
+// ─── The positive assertion trio, asserted INSIDE the Tcl ───
+//
+// A truthful exit code (above) proves only that no command RAISED. It cannot
+// prove that the work we asked for actually happened: OpenSTA will happily
+// link nothing, analyse zero paths, or invent a source-less clock and report a
+// perfect `wns max 0.00`, all without raising. So before ANY timing report is
+// trusted, three things are asserted positively, and each aborts via
+// `utl::error` so the failure rides the exit code instead of being scraped
+// back out of the log.
+//
+// MEASURED 2026-08-27 on three real gate-level designs in this same image —
+// this is the discrimination table the trio has to reproduce:
+//
+//   design                         linked  paths  virtual  worst slack
+//   clean flop->nand->flop @10ns      1      1       0      +8.43 ns   PASS
+//   combinational, no clk port        1      0       1      1e+30      REFUSE
+//   40-deep nand chain @0.5ns         1      1       0     -12.10 ns   VIOLATION
+//
+// The middle row is BOTH measured bugs at once: `create_clock` on a port the
+// design does not have emits only `[WARNING STA-0366] port not found` and still
+// creates a clock — and that clock is genuinely VIRTUAL, which is the direct,
+// askable truth (`is_virtual`) rather than a warning to be pattern-matched.
+// The bottom row is the control: a real violation keeps linked=1, paths=1,
+// virtual=0, so it sails through the trio and is caught on slack as before.
+// A gate that refused it would be a refusal machine, not a fix.
+//
+// `sta::network_is_linked` is dbNetwork.cc:2926-2929, the only directly
+// askable linkage truth. MEASURED: the standalone `sta` 2.7.0 binary has no
+// `utl::error`, but plain Tcl `error` aborts it with rc=1 all the same, so
+// `vibeic_fail` emits identical text from either binary.
+function staAssertionTcl({ allowUnconstrained = false } = {}) {
+  // NOTE ON THE OPT-OUT: `allowUnconstrained` relaxes ONLY the two
+  // constrainedness assertions. It can never relax `network_is_linked` — an
+  // un-linked network is never a legitimate design, so there is no caller for
+  // whom that would be a false positive. A guard that blocks legitimate work
+  // gets bypassed, and a bypassed guard is a deleted guard; so a purely
+  // combinational block, an I/O-only netlist with no `set_input_delay`, and a
+  // deliberately unconstrained smoke run all remain runnable — but the caller
+  // must ASK, and what they get back is recorded UNCONSTRAINED, never PASS.
+  const relax = allowUnconstrained;
+  return [
+    `# ── vibe-ic positive assertions (see staAssertionTcl) ──`,
+    `proc vibeic_fail {code msg} {`,
+    `  if {[llength [info commands utl::error]] > 0} {`,
+    `    utl::error STA $code $msg`,
+    `  } else {`,
+    `    error "\\[ERROR STA-$code\\] $msg"`,
+    `  }`,
+    `}`,
+    `set _vic_linked 0`,
+    `catch { set _vic_linked [sta::network_is_linked] }`,
+    `set _vic_npaths 0`,
+    `catch { set _vic_npaths [llength [find_timing_paths -path_delay max]] }`,
+    `set _vic_nclk 0`,
+    `set _vic_nvirt 0`,
+    `catch {`,
+    `  foreach _vic_c [sta::all_clocks] {`,
+    `    incr _vic_nclk`,
+    `    if {[$_vic_c is_virtual]} { incr _vic_nvirt }`,
+    `  }`,
+    `}`,
+    `set _vic_wns null`,
+    `if {$_vic_npaths > 0} { catch { set _vic_wns [expr {[sta::worst_slack_cmd max] * 1e9}] } }`,
+    // Facts are emitted BEFORE the assertions so the caller still learns WHY a
+    // run was refused when one of them aborts the script.
+    `puts "===VIBEIC_STA_FACTS==="`,
+    `puts "linked $_vic_linked"`,
+    `puts "timing_paths $_vic_npaths"`,
+    `puts "clocks $_vic_nclk"`,
+    `puts "virtual_clocks $_vic_nvirt"`,
+    `puts "worst_slack_ns $_vic_wns"`,
+    `puts "unconstrained_allowed ${relax ? 1 : 0}"`,
+    `puts "===VIBEIC_STA_FACTS_END==="`,
+    // (1) linkage — never opt-outable.
+    `if {!$_vic_linked} {`,
+    `  vibeic_fail 9001 "VIBEIC_STA_NOT_LINKED: sta::network_is_linked is false, so link_design produced no linked network and every timing report from this run is vacuous. Check that a technology (LEF) and the Liberty were read before read_verilog, and that the top module name matches the netlist."`,
+    `}`,
+    ...(relax ? [
+      `# allow_unconstrained: the two constrainedness assertions are recorded as`,
+      `# facts above instead of aborting. The caller receives UNCONSTRAINED.`,
+    ] : [
+      // (2) at least one real timing path.
+      `if {$_vic_npaths <= 0} {`,
+      `  vibeic_fail 9002 "VIBEIC_STA_NO_TIMING_PATHS: find_timing_paths -path_delay max returned 0 paths, so any slack this run reports is vacuous rather than clean. If this design is legitimately unconstrained (purely combinational, or a netlist with only I/O paths and no set_input_delay), re-run with allow_unconstrained=true and the result will be recorded as UNCONSTRAINED, never as a timing PASS."`,
+      `}`,
+      // (3) every clock real, not virtual.
+      `if {$_vic_nclk <= 0 || $_vic_nvirt > 0} {`,
+      `  vibeic_fail 9003 "VIBEIC_STA_VIRTUAL_CLOCK: $_vic_nvirt of $_vic_nclk clock(s) are virtual (no source pin). create_clock matched no real port, so report_wns would print a vacuous 'wns max 0.00' that is indistinguishable from a genuinely clean design. Name a clock port that exists on this netlist, or re-run with allow_unconstrained=true to record UNCONSTRAINED."`,
+      `}`,
+    ]),
+  ].join("\n");
+}
+
 // PDK config lookup
 function pdkConfig(pdk, customOpts) {
   const configs = {
@@ -1556,9 +1783,13 @@ ${drSnippet}
 puts "=== PNR_COMPLETE ==="
 exit`;
 
-    const pnrCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | openroad -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`;
+    // SITE 1/5 — item 1: the Tcl is a FILE ARGUMENT now, so a failed PnR
+    // command aborts the script and openroad returns non-zero, instead of
+    // running on to print `=== PNR_COMPLETE ===` from the REPL with rc 0.
+    const pnrCmd = openroadScriptCmd({ tcl: tclScript, tag: "pnr" });
     const t0pnr = Date.now();
     let result = dockerExec(pnrCmd, 600000);
+    let pnrRun = parseOpenroadRun(result);
     let durationPnrMs = Date.now() - t0pnr;
     let dr_retried = false;
     let dr_retry_reason = "";
@@ -1569,8 +1800,8 @@ exit`;
     // clkbuf/clkinv cells lack any reachable access point. Caller didn't
     // pre-set min_routing_layer? We try once with MET2 → top.
     const drFailedDRT0073 = enable_detailed_route &&
-        !result.output.includes("PNR_COMPLETE") &&
-        result.output.includes("DRT-0073");
+        !pnrRun.output.includes("PNR_COMPLETE") &&
+        pnrRun.output.includes("DRT-0073");
     if (drFailedDRT0073 && !min_routing_layer) {
       // Detect top metal from tech LEF cell-LEF-aware; fall back to MET5.
       const topProbe = dockerExec(`grep -oE '^LAYER ${mp}[0-9]+' ${techlefPath(cfg)} | sort -u | tail -1 | awk '{print $2}'`, 5000);
@@ -1579,20 +1810,27 @@ exit`;
       dr_retry_reason = `DRT-0073 access-point failure on ${mp}1 pins; auto-retry with set_routing_layers ${minMet}-${topMet}`;
       const retryRoutingLayers = `set_routing_layers -signal ${minMet}-${topMet} -clock ${minMet}-${topMet}`;
       const retryTcl = tclScript.replace(routingLayersSnippet || `make_tracks`, `make_tracks\n${retryRoutingLayers}`);
-      const retryCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${retryTcl.replace(/'/g, "'\\''")}' | openroad -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`;
+      // SITE 2/5 — item 1: same file-argument treatment for the retry.
+      const retryCmd = openroadScriptCmd({ tcl: retryTcl, tag: "pnr_retry" });
       const t0retry = Date.now();
       result = dockerExec(retryCmd, 900000);
+      pnrRun = parseOpenroadRun(result);
       durationPnrMs = Date.now() - t0retry;
       dr_retried = true;
     }
 
-    const areaMatch = result.output.match(/Design area (\d+)/);
-    const utilMatch = result.output.match(/(\d+)% utilization/);
-    const slackMatch = result.output.match(/([\d.-]+)\s+slack \((MET|VIOLATED)\)/);
-    const complete = result.output.includes("PNR_COMPLETE");
+    const areaMatch = pnrRun.output.match(/Design area (\d+)/);
+    const utilMatch = pnrRun.output.match(/(\d+)% utilization/);
+    const slackMatch = pnrRun.output.match(/([\d.-]+)\s+slack \((MET|VIOLATED)\)/);
+    // The PNR_COMPLETE sentinel is KEPT, but it is no longer load-bearing on
+    // its own. MEASURED: in the old stdin mode a fully-failed script printed
+    // its sentinel anyway, because the REPL ran on past every error. The
+    // sentinel now only corroborates a run the exit code already called clean.
+    const sentinel = pnrRun.output.includes("PNR_COMPLETE");
+    const complete = sentinel && !openroadRunFailed(pnrRun);
 
     // T1 v0.104: detect Yosys 'zero_' phantom nets that poison pdngen / detailed_route
-    const hasZeroNet = /\bzero_\b/.test(result.output);
+    const hasZeroNet = /\bzero_\b/.test(pnrRun.output);
     let zero_net_hint = undefined;
     if (hasZeroNet) {
       zero_net_hint = "Yosys produced 'zero_' nets — run `yosys_hilomap_required_check` or add `hilomap -hicell sky130_fd_sc_hd__conb_1 HI -locell sky130_fd_sc_hd__conb_1 LO` (adjust cell names for your PDK) to your Yosys script before re-synthesizing.";
@@ -1609,8 +1847,24 @@ exit`;
       dr_retry_reason: dr_retry_reason || undefined,
       zero_net_detected: hasZeroNet || undefined,
       zero_net_hint: zero_net_hint,
-      log_tail: result.output.slice(-2000),
+      // Item 1 surface: the real exit code and the corroborating error count,
+      // so a caller can see WHICH conjunct refused the run.
+      exit_code: pnrRun.rc,
+      openroad_error_count: pnrRun.errorCount,
+      sentinel_seen: sentinel,
+      log_tail: pnrRun.output.slice(-2000),
     };
+    // An exit code that disagrees with the sentinel is exactly the debt this
+    // change surfaces: a PnR that printed PNR_COMPLETE while a command inside
+    // it had already failed used to be recorded PASS.
+    const pnrWarnings = [];
+    if (sentinel && openroadRunFailed(pnrRun)) {
+      pnrWarnings.push(
+        `PnR printed PNR_COMPLETE but openroad exited ${pnrRun.rc}`
+        + (typeof pnrRun.errorCount === "number" ? ` with ${pnrRun.errorCount} error(s)` : "")
+        + `. Before 2026-08-27 the Tcl was fed on stdin, where OpenROAD ignores `
+        + `-exit and runs on past a failure, so this run would have been recorded PASS.`);
+    }
 
     if (complete) {
       const dir = output_def.substring(0, output_def.lastIndexOf("/"));
@@ -1638,12 +1892,13 @@ exit`;
       argv: ["openroad", "-exit", `pnr ${top_module} util=${utilization}`],
       inputs: { [netlist]: sha256File(netlist.replace("/work/", projPnr + "/")) },
       outputs: { [output_def]: sha256File(output_def.replace("/work/", projPnr + "/")) },
-      exitCode: complete ? 0 : 1,
+      exitCode: pnrRun.rc,
       durationMs: durationPnrMs,
-      stdoutTail: result.output || "",
+      stdoutTail: pnrRun.output || "",
       stderrTail: result.error || "",
     });
 
+    if (pnrWarnings.length) metrics.warnings = pnrWarnings;
     return { content: [{ type: "text", text: JSON.stringify(metrics) }] };
   }
 );
@@ -1787,8 +2042,9 @@ server.tool(
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
     si_mcf_project: z.string().optional().describe("Opt-in SI-aware crosstalk-DELAY STA (Miller Coupling Factor bound): pass a routed PROJECT dir (with a coupling-aware SPEF + SDC) to re-run OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0) via programs/si_mcf_sta.py, writing reports/phase3/si_mcf_sta.json. A conservative BOUND (advisory), not PrimeTime-SI's iterative coupled-waveform calc. When set, this runs instead of the single-netlist STA."),
     container: z.string().default("vibeic-eda").describe("Docker container for OpenSTA (si_mcf_project mode)"),
+    allow_unconstrained: z.boolean().default(false).describe("Deliberate opt-out for a design that legitimately has NO timing paths — a purely combinational block, a netlist with only I/O paths and no set_input_delay, or an intentionally unconstrained smoke run. Without it such a run is REFUSED (STA-9002 / STA-9003) because an unconstrained design otherwise reports a vacuous `wns max 0.00` indistinguishable from a clean one. With it the run is permitted and recorded status:\"UNCONSTRAINED\" with wns/tns null — NEVER a passing timing verdict. It does NOT relax the linkage assertion (STA-9001)."),
   },
-  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, si_mcf_project, container }) => {
+  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, si_mcf_project, container, allow_unconstrained }) => {
     try {
       if (si_mcf_project === undefined) { assertSafePath(netlist, "netlist"); assertSafeIdent(top_module, "top_module"); }
       optIdent(clock_port, "clock_port");
@@ -1856,31 +2112,27 @@ server.tool(
     const _staLefs = [techlefPath(cfg), celllefPath(cfg)]
       .filter(pth => typeof pth === "string" && pth.length > 0 && !pth.includes("null/"));
     const _staLefReads = _staLefs.map(pth => `read_lef ${pth}`).join("\n");
-
-    // ── STA evidence channels (see src/lib/sta_evidence.mjs for the measurements) ──
-    // The metrics JSON is a SECOND, independent channel next to the exit code.
-    // It is written into the netlist's own directory and DELETED FIRST: a
-    // metrics file left behind by an earlier run would otherwise satisfy the
-    // "file present" term with numbers from a different design.
-    const staDir = (netlist.substring(0, netlist.lastIndexOf("/")) || "/tmp");
-    const staMetricsFile = `${staDir}/sta_metrics.json`;
-    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && rm -f ${staMetricsFile} && openroad -threads ${_edaOpenroadThreadsToken()} -metrics ${staMetricsFile} -exit << 'EOF'
-${_staLefReads}
+    // SITE 3/5 — item 1 (file argument) + item 2 (the assertion trio). The
+    // assertions sit AFTER create_clock and BEFORE any report, so no report is
+    // ever produced from a network that is not linked or not constrained.
+    const staTcl = `${_staLefReads}
 read_liberty ${libPath(cfg)}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
 ${staEvidenceTcl()}
 create_clock -name clk -period ${clock_period_ns} [get_ports ${clock_port}]
 puts "STA_CLOCK_PORT_FOUND=[llength [get_ports -quiet ${clock_port}]]"
+${staAssertionTcl({ allowUnconstrained: allow_unconstrained })}
 report_checks -path_delay max -format full
 report_checks -path_delay min -format full
 report_tns
 report_wns
-puts "STA_COMPLETE"
-exit
-EOF`;
+puts "STA_COMPLETE"`;
+    const staCmd = openroadScriptCmd({ tcl: staTcl, tag: "sta" });
     const t0sta = Date.now();
-    const result = dockerExec(staCmd);
+    const rawStaResult = dockerExec(staCmd);
+    const staRun = parseOpenroadRun(rawStaResult);
+    const result = { ...rawStaResult, output: staRun.output };
     const durationStaMs = Date.now() - t0sta;
 
     // MEASURED: OpenSTA prints `wns max 0.00`. The old /wns\s+([\d.-]+)/
@@ -1892,85 +2144,157 @@ EOF`;
     // return null when the tool printed no such line — null means NOT
     // MEASURED, and writeManifest records that as INCONCLUSIVE.
 
-    // Did the script actually reach the end? OpenROAD exits 0 even when every
-    // command in the heredoc failed, so the exit code cannot answer this.
+    // The verdict is the CONJUNCTION of the two now-trustworthy machine
+    // signals, backed by the positive assertions. The STA_COMPLETE sentinel is
+    // retained only as corroboration: MEASURED, the old stdin form printed it
+    // even on a run in which nothing linked and every report failed.
     const staCompleted = result.output.includes("STA_COMPLETE");
+    const staFailed = openroadRunFailed(staRun);
+
+    // The bracketed OpenROAD/OpenSTA error lines. `[ERROR ORD-2010]` is
+    // bracketed with no colon, so the generic /^(?:Error|ERROR):/m pattern
+    // elsewhere in this file never matched it.
+    //
+    // DIAGNOSTIC ONLY, AND THAT IS A RULING, NOT AN OVERSIGHT. The landed
+    // main-line form conjoined `staErrors.length === 0` into the verdict. It
+    // was doing real work THERE only because the Tcl went in on stdin, which
+    // pinned the exit code to a constant 0 and left the scrape as the sole
+    // witness. MEASURED 2026-08-27, image b8ac631e48b6, openroad
+    // 26Q3-1830-g0ac0d5ba44, on the file-argument form this file now uses:
+    //
+    //   script                      mode   rc  sentinel  [ERROR] lines  flow__errors__count
+    //   read_verilog, no tech       file    1     no           1                 1
+    //   read_verilog, no tech       stdin   0    YES           3                 3
+    //   utl::error inside a catch   file    0    YES           1                 1
+    //   set x [expr {1/0}]          file    1     no           0                 0
+    //   set x [expr {1/0}]          stdin   0    YES           0                 0
+    //
+    // Row 3 is the only shape in which an [ERROR ...] line can accompany a
+    // clean exit code — and the metrics counter moves anyway, so the scrape
+    // adds nothing there. Row 4 is where the scrape is BLIND: a plain Tcl
+    // error raises no [ERROR ...] line at all, and only the exit code sees it.
+    // Row 5 is the hole the stdin form leaves wide open — rc 0, the sentinel
+    // printed, zero errors, and nothing ran. So the scrape catches nothing the
+    // conjunction misses, while conjoining a log pattern into a verdict is the
+    // thing this tool was fixed to stop doing (see eda_ir_drop, whose
+    // deliberate caught-error WARN path is broken by exactly that).
     const staErrors = (result.output.match(/^\[ERROR [A-Z]+-\d+\][^\n]*/gm) || []);
-    const staAnalysed = result.success && staCompleted && staErrors.length === 0;
 
-    // Did `create_clock` land on a port that exists? `[WARNING STA-0366] port
-    // '<p>' not found` still yields a source-less clock whose report_wns is
-    // 0.00 - a clockless design otherwise scores a perfect timing result.
-    const clockPortMatch = result.output.match(/STA_CLOCK_PORT_FOUND=(\d+)/);
-    const clockPortFound = clockPortMatch ? parseInt(clockPortMatch[1]) > 0 : null;
-    const clockConstrained = staAnalysed && clockPortFound === true;
+    // THE TWO MACHINE TERMS. `staFailed` is the file-script exit code
+    // conjoined with the `-metrics` error tally — measured wrong in OPPOSITE
+    // directions on the same input (rows 1 and 4 above), so neither may stand
+    // alone. `staCompleted` corroborates: on the stdin form it printed even on
+    // a run in which nothing linked, so it may only ever subtract.
+    const staAnalysed = !staFailed && staCompleted;
+    const facts = staRun.facts;
 
-    // Slack is only meaningful when a real clock constrained a linked design.
-    const wns = clockConstrained ? parseWns(result.output) : null;
-    const tns = clockConstrained ? parseTns(result.output) : null;
-
-    const staWarnings = [];
-    if (!staAnalysed) {
-      staWarnings.push(
-        staErrors.length
-          ? `OpenROAD reported ${staErrors.length} error(s); no timing was analysed: `
-            + staErrors.slice(0, 3).join(" | ")
-          : "the STA script did not reach STA_COMPLETE; no timing was analysed");
-    } else if (clockPortFound === false) {
-      staWarnings.push(
-        `clock_port '${clock_port}' does not exist on '${top_module}'. create_clock `
-        + `matched no port, so the design is UNCONSTRAINED and the reported slack `
-        + `would be a vacuous 0.00. wns/tns are null, not zero.`);
-    }
-
-    // Read the metrics file back. The sentinel distinguishes an ABSENT file
-    // from an EMPTY one — `cat ... || true` cannot, and conflating them is
-    // exactly the mistake this channel exists to prevent. Measured: the file
-    // IS absent after a SIGKILL (rc=137) and after an unwritable-path run
-    // (rc=1, UTL-0010), so absent must mean UNMEASURED, never "zero errors".
-    const mRead = dockerExec(
-      `if [ -f ${staMetricsFile} ]; then echo __STA_METRICS_PRESENT__; cat ${staMetricsFile}; else echo __STA_METRICS_ABSENT__; fi`,
-      15000);
-    const mOut = mRead.output || "";
-    const staMetricsPresent = mOut.includes("__STA_METRICS_PRESENT__");
-    const staMetricsRaw = staMetricsPresent
-      ? mOut.slice(mOut.indexOf("__STA_METRICS_PRESENT__") + "__STA_METRICS_PRESENT__".length)
-      : null;
-
-    // THE CONJUNCTION. `result.success` (the exit code) is ONE term, not the
-    // verdict. Measured on openroad 26Q3-1797-g1c09d62b96: a file script that
-    // aborts gives rc=1 with flow__errors__count=0, while the stdin form gives
-    // rc=0 with flow__errors__count=4 — the two terms are wrong in OPPOSITE
-    // directions on the same broken input, so neither may stand alone. Do not
-    // reduce this to `result.success`, and do not reduce it to the metrics.
+    // ── STA evidence channels (see src/lib/sta_evidence.mjs for the measurements) ──
+    // The metrics sidecar is a SECOND and THIRD independent channel next to the
+    // exit code. There is NO second read-back of it: `openroadScriptCmd` already
+    // requests `-metrics` and streams the file home between explicit delimiters.
+    // Nor is there a stale-file `rm -f`: the sidecar's path is derived from a
+    // per-run `mktemp`, so no earlier run can even name it — stronger than
+    // deleting a fixed name, because there is nothing to forget to delete.
+    // `exitCode` is the REAL process status now that the Tcl is a file argument
+    // (Main.cc:467 `exit_after_cmd_file`); before that it was always 0 and this
+    // term was worthless.
     const staEvidence = evaluateStaEvidence({
-      exitCode: result.success ? 0 : 1,
-      metricsFileExists: staMetricsPresent,
-      metricsRaw: staMetricsRaw,
+      exitCode: staRun.rc,
+      metricsFileExists: staRun.metricsPresent,
+      metricsRaw: staRun.metricsRaw,
     });
 
-    // ASSEMBLY NOTE. Two independently measured channels landed on this tool in
-    // the same night and they catch DIFFERENT failures: `staAnalysed` reads the
-    // end-of-script sentinel and the [ERROR ...] lines, `staEvidence.pass` reads
-    // the metrics JSON and the port count. A pass requires BOTH. This is an AND
-    // on purpose — reducing it to either term restores a hole that was measured
-    // open.
+    // THE CONJUNCTION. Two independently measured channels landed on this tool
+    // and they catch DIFFERENT failures: `staAnalysed` is the truthful exit code
+    // conjoined with OpenROAD's error tally plus the end-of-script sentinel;
+    // `staEvidence.pass` is the metrics sidecar's presence, its error count and
+    // the linkage-derived port count. A pass requires BOTH. This is an AND on
+    // purpose — reducing it to either term restores a hole that was measured
+    // open. Reporting dockerExec's own view of the exit status as this tool's
+    // `success` is the ORIGINAL BUG: openroad exited 0 having linked no design
+    // (ORD-2010 / STA-1570 / STA-1571) and eda_sta reported true. That literal
+    // is deliberately not spelled here — a guard forbidding it must not be
+    // satisfied or defeated by prose.
     const staPass = staAnalysed && staEvidence.pass;
 
-    // A run that never reached the end of the script has produced no evidence at
+    // A run that never reached the end of the script produced no evidence at
     // all, so it may not borrow the metrics channel's verdict.
     const staVerdict = staAnalysed
       ? staEvidence.verdict
       : (staErrors.length ? "FAIL" : "UNMEASURED");
 
+    // Which assertion refused the run, if any. These are the codes emitted by
+    // `vibeic_fail` in staAssertionTcl.
+    const assertionMatch = staRun.raw.match(/\[ERROR STA-(900[123])\]\s*([^\n]*)/);
+    const failedAssertion = assertionMatch
+      ? { code: `STA-${assertionMatch[1]}`, message: assertionMatch[2].trim() }
+      : null;
+
+    // Linkage and constrainedness now come from the design database itself
+    // (sta::network_is_linked / find_timing_paths / is_virtual), not from
+    // reading warnings out of the log.
+    const linked = facts ? facts.linked === 1 : null;
+    const timingPaths = facts ? facts.timing_paths : null;
+    const virtualClocks = facts ? facts.virtual_clocks : null;
+    const constrained = facts
+      ? (facts.timing_paths > 0 && facts.clocks > 0 && facts.virtual_clocks === 0)
+      : null;
+    const clockPortMatch = result.output.match(/STA_CLOCK_PORT_FOUND=(\d+)/);
+    const clockPortFound = clockPortMatch ? parseInt(clockPortMatch[1]) > 0 : null;
+
+    // An opted-out run that really is unconstrained is UNCONSTRAINED, never a
+    // timing verdict; a constrained run that completed is a real timing result.
+    const unconstrainedRun = staAnalysed && allow_unconstrained && constrained === false;
+    const clockConstrained = staAnalysed && constrained === true;
+
+    // Slack is only meaningful when a real clock constrained a linked design.
+    // Prefer the value the Tcl asked the timer for over a regex on its prose.
+    // The FALLBACK is lib/sta_slack.mjs, not an inline pattern: its parser is
+    // anchored to the whole line, also reads the bare `wns <n>` form and
+    // scientific notation, and returns null — NOT MEASURED — when the tool
+    // printed no such line at all. `tns` has no fact channel, so it is read
+    // there outright.
+    const factSlack = facts && typeof facts.worst_slack_ns === "number"
+      ? facts.worst_slack_ns : null;
+    const wns = clockConstrained
+      ? (factSlack !== null ? factSlack : parseWns(result.output))
+      : null;
+    const tns = clockConstrained ? parseTns(result.output) : null;
+
+    const staWarnings = [];
+    if (failedAssertion) {
+      staWarnings.push(`${failedAssertion.code}: ${failedAssertion.message}`);
+    } else if (!staAnalysed) {
+      staWarnings.push(
+        `no timing was analysed: openroad exited ${staRun.rc}`
+        + (typeof staRun.errorCount === "number" ? ` with ${staRun.errorCount} error(s)` : "")
+        + (staCompleted ? "" : "; the script did not reach STA_COMPLETE"));
+    } else if (unconstrainedRun) {
+      staWarnings.push(
+        `allow_unconstrained was set and this design has ${timingPaths} timing path(s) `
+        + `and ${virtualClocks} virtual clock(s), so it is recorded UNCONSTRAINED. `
+        + `wns/tns are null, not zero. This is NOT a passing timing verdict.`);
+    }
+
     if (staPass) {
       const dir = netlist.substring(0, netlist.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "sta",
-        // A run that linked but constrained nothing is NOT a timing PASS.
-        status: clockConstrained ? "PASS" : "UNCONSTRAINED",
+        // A run that linked but constrained nothing is NOT a timing PASS —
+        // and neither is one that analysed real paths and MISSED. MEASURED
+        // 2026-08-27: a 40-deep chain at 0.5 ns returned wns -12.10 ns and
+        // still wrote status:"PASS" here, because the manifest keyed only on
+        // whether a clock was found. The manifest is what downstream flow
+        // steps read, so the violation has to reach it. `eda_pnr` has always
+        // written TIMING_VIOLATED for a missed slack; STA was the outlier.
+        status: clockConstrained
+          ? (wns !== null && wns < 0 ? "TIMING_VIOLATED" : "PASS")
+          : "UNCONSTRAINED",
         tool: "OpenSTA",
         clock_port_found: clockPortFound,
+        linked,
+        timing_paths: timingPaths,
+        virtual_clocks: virtualClocks,
         wns,
         tns,
         evidence_terms: STA_EVIDENCE_TERMS,
@@ -1982,8 +2306,12 @@ EOF`;
         status: staVerdict,   // FAIL, or UNMEASURED when no evidence was produced
         tool: "OpenSTA",
         clock_port_found: clockPortFound,
+        linked,
+        timing_paths: timingPaths,
+        virtual_clocks: virtualClocks,
         wns: null,
         tns: null,
+        failed_assertion: failedAssertion || undefined,
         failed_terms: staEvidence.failedTerms,
         reasons: staEvidence.reasons,
         warnings: staWarnings.length ? staWarnings : undefined,
@@ -2002,7 +2330,15 @@ EOF`;
       argv: ["openroad", "-exit", `sta ${top_module} clk=${clock_period_ns}ns`],
       inputs: { [netlist]: sha256File(netlist.replace("/work/", projSta + "/")) },
       outputs: {},
-      exitCode: staPass ? 0 : 1,
+      // UNION, 2026-08-27. The real process status now that the Tcl is a file
+      // argument — AND never a 0 for a run this tool refused. The landed form
+      // was `staPass ? 0 : 1`, which existed so a reader of provenance.jsonl
+      // could not read success out of a run whose evidence conjunction failed;
+      // the exit-truth form was the raw `staRun.rc`, the only truthful process
+      // status. A non-zero rc rides through verbatim so the real code stays
+      // auditable, and a zero rc is promoted to 1 whenever the verdict is not
+      // PASS, so neither guarantee is lost.
+      exitCode: staRun.rc !== 0 ? staRun.rc : (staPass ? 0 : 1),
       durationMs: durationStaMs,
       stdoutTail: result.output || "",
       stderrTail: result.error || "",
@@ -2013,18 +2349,38 @@ EOF`;
         {
           type: "text",
           text: JSON.stringify({
+            // An UNCONSTRAINED run is a successful EXECUTION, but the timing
+            // verdict below is what a caller must gate on — it is never PASS.
+            // `staPass` is the CONJUNCTION of this tool's two independently
+            // measured channels: `staAnalysed` (the now-truthful exit code
+            // conjoined with the error tally, plus the end-of-script sentinel)
+            // AND `staEvidence.pass` (the metrics sidecar's presence, its error
+            // count, and the linkage-derived port count). Each channel catches
+            // runs the other lets through; reducing this to either term alone
+            // re-opens a measured hole.
             success: staPass,
             timing_analysed: staAnalysed,
+            timing_verdict: !staAnalysed ? "NOT_ANALYSED"
+              : !staEvidence.pass ? staVerdict
+              : (clockConstrained ? (wns !== null && wns < 0 ? "TIMING_VIOLATED" : "PASS")
+                                  : "UNCONSTRAINED"),
             clock_constrained: clockConstrained,
             clock_port_found: clockPortFound,
-            exit_code_ok: result.success,   // ONE term of the AND, never the verdict
+            network_linked: linked,
+            timing_paths: timingPaths,
+            virtual_clocks: virtualClocks,
+            allow_unconstrained: allow_unconstrained || undefined,
+            failed_assertion: failedAssertion || undefined,
+            exit_code: staRun.rc,
+            openroad_error_count: staRun.errorCount,
             sta_verdict: staVerdict,
             sta_evidence: {
               terms: staEvidence.terms,
               failed_terms: staEvidence.failedTerms,
               reasons: staEvidence.reasons,
               metrics: staEvidence.metrics,
-              metrics_file: staMetricsFile,
+              // PRESENT vs ABSENT, not "did it parse": absent is UNMEASURED.
+              metrics_present: staRun.metricsPresent,
             },
             wns: staPass ? wns : null,
             tns: staPass ? tns : null,
@@ -2822,9 +3178,13 @@ catch {
   pdngen
 }`;
 
-    const result = dockerExec(
-      `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'TCEOF'
-read_lef ${techlefPath(cfg)}
+    // SITE 4/5 — item 1. NOTE: `analyze_power_grid` is deliberately wrapped in
+    // a Tcl `catch` here, so a PSM connectivity failure is a WARN by design and
+    // still exits 0. What the file argument adds is that a failure BEFORE that
+    // catch — an unreadable LEF, a bad DEF, a missing net — now aborts with a
+    // non-zero exit instead of running on to print IR_DROP_COMPLETE from the
+    // REPL.
+    const irTcl = `read_lef ${techlefPath(cfg)}
 read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
 read_def ${def_file}
@@ -2836,14 +3196,27 @@ if {$rc} {
   puts "=== IR_DROP_WARN ==="
 } else {
   puts "=== IR_DROP_COMPLETE ==="
-}
-exit
-TCEOF`,
+}`;
+    const rawIrResult = dockerExec(
+      openroadScriptCmd({ tcl: irTcl, tag: "ir_drop" }),
       120000
     );
+    const irRun = parseOpenroadRun(rawIrResult);
+    const result = { ...rawIrResult, output: irRun.output };
 
-    const isComplete = result.output.includes("IR_DROP_COMPLETE");
-    const isWarn = result.output.includes("IR_DROP_WARN");
+    // THE CONJUNCTION DELIBERATELY DOES NOT APPLY HERE, and this is the one
+    // site where that is correct. MEASURED 2026-08-27 on a real routed DEF:
+    // the Tcl `catch` around analyze_power_grid did its job — PDN-0217 and
+    // PSM-0069 were raised, caught, and downgraded to `=== IR_DROP_WARN ===`
+    // with rc 0 — but `utl::error` still incremented flow__errors__count to 2,
+    // so conjoining the counter here turned a WORKING, intentionally-warned
+    // run into a failure. A DELIBERATELY CAUGHT error is a warning by this
+    // tool's own design; only an UNCAUGHT one aborts the script, and that is
+    // exactly what the (now real) exit code reports. Absent/unknown must never
+    // upgrade a verdict — but a caught error must not downgrade one either.
+    const irFailed = irRun.rc !== 0;
+    const isComplete = result.output.includes("IR_DROP_COMPLETE") && !irFailed;
+    const isWarn = result.output.includes("IR_DROP_WARN") && !irFailed;
 
     if (isComplete) {
       const dir = def_file.substring(0, def_file.lastIndexOf("/"));
@@ -2863,12 +3236,21 @@ TCEOF`,
     if (isWarn) {
       warnings.push("PSM connectivity check failed — cross-layer PDN stripes were injected but connectivity still incomplete. Downgraded to WARN.");
     }
+    if (irFailed) {
+      warnings.push(
+        `openroad exited ${irRun.rc}`
+        + (typeof irRun.errorCount === "number" ? ` with ${irRun.errorCount} error(s)` : "")
+        + `; no IR-drop result was produced. Before 2026-08-27 this script ran on `
+        + `stdin, where OpenROAD ignores -exit, so such a run reported success.`);
+    }
 
     return {
       content: [{
         type: "text",
         text: JSON.stringify({
           success: isComplete || isWarn,
+          exit_code: irRun.rc,
+          openroad_error_count: irRun.errorCount,
           warnings: warnings.length ? warnings : undefined,
           psm_warn: isWarn || undefined,
           output: result.output.slice(-2000),
@@ -3601,8 +3983,9 @@ server.tool(
     lib_bci: z.string().describe("Liberty file for best-case industrial (FF) corner"),
     sdc_file: z.string().describe("SDC constraints file path"),
     top_module: z.string().describe("Top module name"),
+    allow_unconstrained: z.boolean().default(false).describe("Deliberate opt-out for a design that legitimately has NO timing paths (purely combinational, I/O-only with no set_input_delay, or an unconstrained smoke run). Without it such a corner is REFUSED (STA-9002 / STA-9003) rather than scoring a vacuous 0.00. With it the corner is permitted but reports timing_met:null and the overall verdict is NOT a pass. It does NOT relax the linkage assertion (STA-9001)."),
   },
-  async ({ netlist, lib_wci, lib_typ, lib_bci, sdc_file, top_module }) => {
+  async ({ netlist, lib_wci, lib_typ, lib_bci, sdc_file, top_module, allow_unconstrained }) => {
     try {
       assertSafePaths([netlist, lib_wci, lib_typ, lib_bci, sdc_file], "path");
       assertSafeIdent(top_module, "top_module");
@@ -3635,46 +4018,95 @@ server.tool(
     // loop until it returns) — true corner-level concurrency would need a full
     // async-spawn rewrite, which is out of scope here. Correctness first.
     for (const corner of corners) {
+      // SITE 5/5 — item 1 + item 2. MEASURED: the standalone `sta` 2.7.0 binary
+      // has the SAME stdin defect (`sta -exit < f` -> rc=0 with the sentinel
+      // printed; `sta -exit f` -> rc=1), and it has no `-metrics` flag, so the
+      // error count is UNKNOWN here and the exit code carries the verdict.
       const tclScript = `
 read_liberty ${corner.lib}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
 source ${sdc_file}
+${staAssertionTcl({ allowUnconstrained: allow_unconstrained })}
 report_checks -path_delay max -format full
 report_wns
 report_tns
 puts "=== MCORNER_${corner.name}_DONE ==="
-exit
 `;
-      const result = dockerExec(
-        `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | sta -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`,
+      const rawCornerResult = dockerExec(
+        openroadScriptCmd({ tcl: tclScript, binary: "sta", metrics: false,
+                            tag: `mcorner_${corner.name}` }),
         120000
       );
+      const cornerRun = parseOpenroadRun(rawCornerResult);
+      const result = { ...rawCornerResult, output: cornerRun.output };
 
       const done = result.output.includes(`MCORNER_${corner.name}_DONE`);
-      // Same parse as eda_sta — see src/lib/sta_slack.mjs. A corner whose wns
-      // is null was not measured; `timing_met` stays null and the manifest
-      // gate records the step INCONCLUSIVE rather than letting a corner
-      // nobody measured pass by not being `false`.
-      const wns = parseWns(result.output);
-      const tns = parseTns(result.output);
+      const cornerFailed = openroadRunFailed(cornerRun);
+      const analysed = done && !cornerFailed;
+      const cFacts = cornerRun.facts;
+      const cornerConstrained = cFacts
+        ? (cFacts.timing_paths > 0 && cFacts.clocks > 0 && cFacts.virtual_clocks === 0)
+        : null;
+      const cornerAssertion = cornerRun.raw.match(/\[ERROR STA-(900[123])\]\s*([^\n]*)/);
+      // Slack is a number only when this corner really analysed a constrained
+      // design; otherwise it stays null and must NOT be read as in-bounds.
+      // The prose fallback is lib/sta_slack.mjs. The inline regex it replaces
+      // here was `/wns\s+([\d.-]+)/i`, which needs a digit immediately after
+      // the label and so matched NEITHER `wns max 0.00` NOR `wns max -3.21` —
+      // this corner loop never read a slack out of prose at all.
+      const factSlack = cFacts && typeof cFacts.worst_slack_ns === "number"
+        ? cFacts.worst_slack_ns : null;
+      const wns = (analysed && cornerConstrained === true)
+        ? (factSlack !== null ? factSlack : parseWns(result.output))
+        : null;
+      const tns = (analysed && cornerConstrained === true)
+        ? parseTns(result.output) : null;
       const met = wns !== null ? wns >= 0 : null;
 
-      if (met === false) overall_pass = false;
+      // ABSENT IS NOT IN-BOUNDS. Previously only `met === false` cleared
+      // overall_pass, so a corner that failed outright — no slack parsed, met
+      // null — left the multi-corner verdict PASS. A corner that did not
+      // produce a verdict now fails the set, the way ORFS `sys.exit(1)`s on a
+      // missing metric rather than warning like LibreLane's checker.
+      if (met !== true) overall_pass = false;
 
       results[corner.name] = {
         wns,
         tns,
         timing_met: met,
         completed: done,
+        analysed,
+        constrained: cornerConstrained,
+        exit_code: cornerRun.rc,
+        failed_assertion: cornerAssertion
+          ? { code: `STA-${cornerAssertion[1]}`, message: cornerAssertion[2].trim() }
+          : undefined,
         log_tail: result.output.slice(-1000),
       };
     }
 
+    // Distinguish "a corner analysed and missed timing" from "a corner never
+    // produced a verdict at all". Collapsing the second into TIMING_VIOLATED
+    // would be as dishonest in the other direction as calling it PASS.
+    const cornerVals = Object.values(results);
+    const allAnalysed = cornerVals.every(v => v.analysed);
+    const anyViolated = cornerVals.some(v => v.timing_met === false);
+    // An opted-out run whose corners analysed cleanly but constrained nothing
+    // is UNCONSTRAINED. Calling it TIMING_VIOLATED would be a lie in the other
+    // direction — it says the design MISSED timing when it simply has none.
+    const allUnconstrained = cornerVals.length > 0
+      && cornerVals.every(v => v.analysed && v.constrained === false);
+    const mcornerStatus = overall_pass ? "PASS"
+      : anyViolated ? "TIMING_VIOLATED"
+      : allUnconstrained ? "UNCONSTRAINED"
+      : allAnalysed ? "TIMING_VIOLATED"
+      : "NOT_ANALYSED";
+
     const dir = netlist.substring(0, netlist.lastIndexOf("/"));
     writeManifest(dir || "/tmp", {
       step: "sta_mcorner",
-      status: overall_pass ? "PASS" : "TIMING_VIOLATED",
+      status: mcornerStatus,
       tool: "OpenSTA",
       corners: Object.fromEntries(
         Object.entries(results).map(([k, v]) => [k, { wns: v.wns, tns: v.tns, met: v.timing_met }])
@@ -3687,6 +4119,8 @@ exit
         text: JSON.stringify({
           success: overall_pass,
           overall_pass,
+          status: mcornerStatus,
+          allow_unconstrained: allow_unconstrained || undefined,
           corners: results,
         }),
       }],

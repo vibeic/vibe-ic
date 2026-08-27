@@ -34,6 +34,7 @@ them under node against these fixtures, so reverting the fix in index.js turns
 them red rather than leaving a comment-only assertion behind.
 """
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -153,8 +154,11 @@ def test_sta_script_reads_a_technology():
     # read_verilog occurrences, and comparing against those would compare the
     # wrong two things.
     region = _eda_sta_region(src)
-    a = region.index("const staCmd = ")
-    script = region[a:region.index("EOF`;", a)]
+    # The Tcl is a FILE ARGUMENT now, so the script body is the `staTcl`
+    # template literal rather than a heredoc ending in ``EOF`;``. Same region,
+    # same property.
+    a = region.index("const staTcl = ")
+    script = region[a:region.index("`;", a)]
     assert "${_staLefReads}" in script, \
         "the LEF reads are declared but never interpolated into the STA script; " \
         "that is ORD-2010 with the evidence of a fix still in the file"
@@ -172,19 +176,132 @@ def test_sta_script_emits_completion_and_clock_sentinels():
     assert 'puts "STA_CLOCK_PORT_FOUND=[llength [get_ports -quiet ${clock_port}]]"' in src
 
 
-def test_sta_verdict_is_not_the_exit_code():
-    """`success` must come from staAnalysed (sentinel + no ORD/STA errors), and
-    a run that linked nothing must not be able to write a PASS manifest."""
+def _sta_verdict_terms() -> str:
+    """The four declarations that decide `staAnalysed`, verbatim from index.js."""
+    return "\n".join([
+        _extract("const staCompleted = "),
+        _extract("const staFailed = "),
+        _extract("const staAnalysed = "),
+    ])
+
+
+def _openroad_run_failed() -> str:
     src = _src()
-    assert "const staAnalysed = result.success && staCompleted && staErrors.length === 0;" in src
-    # ASSEMBLY: `staAnalysed` is now ONE TERM of the verdict, ANDed with the
-    # independent metrics-file conjunction. Both must hold, so this is strictly
-    # stronger than the single-channel form this line used to pin.
-    assert "const staPass = staAnalysed && staEvidence.pass;" in src
+    i = src.index("function openroadRunFailed(")
+    return src[i:src.index("\n}\n", i) + 3]
+
+
+@pytest.mark.skipif(not NODE, reason="node not available")
+def test_sta_verdict_is_not_the_exit_code():
+    """A run in which no timing was analysed must not come back analysed.
+
+    THIS TEST ASSERTS THE PROPERTY, NOT THE SPELLING. It used to pin the exact
+    source text of `staAnalysed`, and two independently correct fixes to this
+    same tool then became unlandable together purely because one pinned a
+    literal the other had to delete. The literal is gone; what is checked here
+    is behaviour, by lifting the real declarations out of index.js and running
+    them under node against captured shapes. Any rewrite that keeps the meaning
+    passes; any rewrite that drops a channel goes red.
+
+    TWO MACHINE CHANNELS, MEASURED WRONG IN OPPOSITE DIRECTIONS, SO NEITHER
+    MAY STAND ALONE. Measured 2026-08-27 in the pinned eda image
+    (b8ac631e48b6, openroad 26Q3-1830-g0ac0d5ba44):
+
+        script                    mode   rc  sentinel  flow__errors__count
+        read_verilog, no tech     file    1     no             1
+        read_verilog, no tech     stdin   0    YES             3
+        utl::error inside a catch file    0    YES             1
+        set x [expr {1/0}]        file    1     no             0
+        set x [expr {1/0}]        stdin   0    YES             0
+
+    Row 4 is seen by the exit code alone; rows 2 and 3 are seen by the counter
+    alone. Row 5 is the reason the Tcl must be a file argument at all -- on
+    stdin a script that died at its first command exits 0, prints the
+    end-of-script sentinel, and reports zero errors. The end-of-script sentinel
+    is corroboration only: it may subtract, never add.
+    """
+    cases = [
+        # name, output, rc, errorCount, expected staAnalysed
+        ("the original bug: nothing linked, rc 0, sentinel printed, 3 errors",
+         STA_NO_TECH + 'STA_COMPLETE\n', 0, 3, False),
+        ("a Tcl error the counter cannot see: rc 1 with a count of 0",
+         "", 1, 0, False),
+        ("an abort the exit code and the counter both see",
+         STA_NO_TECH, 1, 1, False),
+        ("utl::error inside a catch: rc 0 and the sentinel, but the count moved",
+         "[ERROR STA-1570] No network has been linked.\nSTA_COMPLETE\n", 0, 1, False),
+        ("clean rc and counter, but the script never reached the end",
+         "tns max 0.00\nwns max 0.00\n", 0, 0, False),
+        ("a healthy clocked run", STA_OK_CLOCKED, 0, 0, True),
+        # THE CONTROL. A gate that refused this would be a refusal machine, not
+        # a fix: a real timing violation raises nothing and completes normally.
+        ("a genuine timing VIOLATION is analysed, not refused",
+         STA_OK_VIOLATING, 0, 0, True),
+        # No sidecar at all (the standalone `sta` binary has no -metrics flag):
+        # UNKNOWN must not fail this channel on its own -- lib/sta_evidence.mjs
+        # is what records an absent sidecar as UNMEASURED, and staPass ANDs it.
+        ("no metrics sidecar: unknown count does not decide here",
+         STA_OK_CLOCKED, 0, None, True),
+    ]
+    script = (
+        _openroad_run_failed()
+        + "\nfunction verdict(output, rc, errorCount) {\n"
+        + "  const result = { output };\n"
+        + "  const staRun = { rc, errorCount };\n"
+        + _sta_verdict_terms()
+        + "\n  return staAnalysed;\n}\n"
+        + "const cases = " + json.dumps([[c[1], c[2], c[3]] for c in cases]) + ";\n"
+        + "console.log(JSON.stringify(cases.map(c => verdict(c[0], c[1], c[2]))));"
+    )
+    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"node failed: {r.stderr}\n{script}"
+    got = json.loads(r.stdout)
+    for (name, _out, _rc, _n, want), actual in zip(cases, got):
+        assert actual is want, (
+            f"staAnalysed for {name!r} was {actual}, expected {want}. "
+            "A channel was dropped from the verdict, or one refuses work it "
+            "should let through.")
+
+
+def test_the_sta_verdict_is_the_conjunction_of_both_channels():
+    """`staAnalysed` is ONE term. The reported success is it ANDed with the
+    independent metrics-sidecar conjunction from lib/sta_evidence.mjs, and the
+    raw dockerExec exit status is not read by this tool at all."""
+    src = _src()
+    region = _eda_sta_region(src)
+    assert "const staPass = staAnalysed && staEvidence.pass;" in src, \
+        "the conjunction was demoted to a single channel"
     assert "success: staPass," in src
-    assert "success: result.success," not in _eda_sta_region(src), \
-        "the STA verdict fell back to the bare exit code"
-    assert 'status: clockConstrained ? "PASS" : "UNCONSTRAINED",' in src
+    # The ORIGINAL BUG was reporting dockerExec's own view of the exit status as
+    # this tool's verdict. Stated as a property rather than as a banned literal:
+    # eda_sta does not read that field ANYWHERE. `staRun.rc` -- the status the
+    # tool really returned, parsed back out of the container -- is what it reads.
+    assert "result.success" not in region, \
+        "eda_sta is reading dockerExec's own exit status again; that field was " \
+        "a constant 0 while the Tcl went in on stdin, and it is the original bug"
+    # The exit code and the error tally are conjoined; neither decides alone.
+    assert 'return rc !== 0 || (typeof errorCount === "number" && errorCount > 0);' in src
+
+
+@pytest.mark.skipif(not NODE, reason="node not available")
+def test_the_sta_manifest_status_distinguishes_pass_violation_and_unconstrained():
+    """The manifest is what downstream flow steps read, so all three outcomes
+    have to reach it. MEASURED 2026-08-27: a 40-deep chain at 0.5 ns returned
+    wns -12.10 ns and was still manifested PASS, because the status keyed only
+    on whether a clock had been found."""
+    region = _eda_sta_region(_src())
+    m = re.search(r'status: (clockConstrained[\s\S]*?),\n\s*tool: "OpenSTA"', region)
+    assert m, "the eda_sta manifest no longer has a clockConstrained-gated status"
+    expr = m.group(1)
+    script = (
+        "const f = (clockConstrained, wns) => (" + expr + ");\n"
+        "console.log(JSON.stringify([f(true, 8.43), f(true, -12.10), f(false, null)]));"
+    )
+    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"node failed: {r.stderr}\n{script}"
+    assert json.loads(r.stdout) == ["PASS", "TIMING_VIOLATED", "UNCONSTRAINED"], \
+        "the manifest status lost an arm: a missed slack or an unconstrained " \
+        "run is being written as PASS"
 
 
 @pytest.mark.skipif(not NODE, reason="node not available")
@@ -236,10 +353,22 @@ def test_sta_slack_regex_matches_real_opensta_output():
 
 def test_sta_clockless_is_not_reported_as_zero_slack():
     """A design with no clk port still yields `wns max 0.00` from a source-less
-    clock. That vacuous zero must not be handed back as a timing result."""
+    clock. That vacuous zero must not be handed back as a timing result.
+
+    2026-08-27: constrainedness is no longer inferred from a printed port
+    count. MEASURED on a clockless netlist, the clock `create_clock` invents is
+    genuinely VIRTUAL, so `is_virtual` over `all_clocks` is a direct truth we
+    can ask the timer for instead of reading a warning out of the log. Same
+    property, asked of the design database rather than of prose."""
     src = _src()
-    assert "const clockConstrained = staAnalysed && clockPortFound === true;" in src
-    assert "const wns = clockConstrained ? parseWns(result.output) : null;" in src
+    assert "const clockConstrained = staAnalysed && constrained === true;" in src
+    # constrainedness = real paths AND at least one clock AND none of them virtual
+    assert "facts.timing_paths > 0 && facts.clocks > 0 && facts.virtual_clocks === 0" in src
+    # A vacuous zero must never reach `wns`/`tns`: both stay gated on
+    # clockConstrained. The number itself is read by lib/sta_slack.mjs, whose
+    # whole-line parser supersedes the inline regex — see
+    # test_sta_slack_regex_matches_real_opensta_output.
+    assert "const wns = clockConstrained" in src
     assert "const tns = clockConstrained ? parseTns(result.output) : null;" in src
 
 
