@@ -1,0 +1,50 @@
+LANDED next/pad-ring-prose-polarity as v1.12.13, doc-only.
+
+SKIPPED, and what was run instead.
+  984f30df7 (the branch's code commit, #712 pad-ring prose polarity) was SKIPPED
+  during the rebase as ALREADY LANDED. Main carries the same repair via v1.12.12
+  in a more developed form; the conflict's HEAD side names it. Re-applying would
+  have replaced main's version with the earlier one — a revert wearing a merge's
+  clothing. Verified nothing is lost: all six of the slice's behaviour tests are
+  present in main's test_pad_ring_derived_from_l3.py, and main additionally has
+  test_the_min_distance_denial_reach_is_the_sentence, which the slice lacked.
+
+  The branch's own table was NOT taken. It was built on an older main (BOTH 36)
+  and would have re-added test_matrix_d7_outputs_list_complete[step31] and
+  test_matrix_mutation_ledger[step0.5ic] to BOTH — two rows main had already
+  cleared at 5d1b82988. The resolution was rebuilt from live main's table with
+  only the six moves this slice actually verified applied on top.
+
+RAN (whole modules, no -k selection, VIBEIC_CORPUS_ROOT unset,
+PYTHONDONTWRITEBYTECODE=1, TMPDIR outside any git work tree, host lane):
+  * the five affected modules — test_issue306_register_paydown,
+    test_issue490_drc_report_check_argv, test_medlow_synth_dft_backlog,
+    test_v0_2_96_issue460_coverage_bridge,
+    test_v0_3_5_issue502_503_cascade_attribution
+    -> 121 passed, rc 0. All six moved ids collected and passing.
+  * the five version-consistency modules — test_check_version_sync_with_commit,
+    test_issue621_prose_version_drift,
+    test_marketplace_version_matches_plugin_version,
+    test_program_inventory_no_drift, test_landing_cadence
+    -> 78 passed, rc 0.
+  * gen_program_inventory.py --check rc 0 before; gen_program_inventory.py
+    produced no drift after. No program file is added by this change.
+  * suite_write_guard PASS on both sessions.
+
+NOT APPLICABLE. This change does not touch tools/gatekeeper-land.sh, so the
+four-face pin in ci_harness_timeout_ceiling_check.py was not in scope.
+
+PRE-EXISTING REDS CARRIED ONTO MAIN UNCHANGED. None were introduced and none
+were repaired by this landing. Both runs above were green, so this landing
+carries no red of its own. Main's remaining 26 BOTH rows are untouched.
+
+OBSERVED, NOT ACTED ON. All four test_program_inventory_no_drift ids that main's
+table lists at BOTH 5/5 5/5 passed on this host lane at a4f6b4f33. That is one
+lane and one observation; the table's criterion is a both-lane re-measurement, so
+no row was moved on it. Reported for whoever measures that module next; not
+attributed.
+
+COUNTS. BOTH 32 -> 26 and CLEARED 23 -> 29, both re-derived by counting the rows
+in their own tables, not by arithmetic. 26 + 29 + 2 FLAKY = 57, which closes
+against the document's own stated population. The ledger's `^  BOTH +N$` format
+is preserved.
