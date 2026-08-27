@@ -435,9 +435,34 @@ _PROSE_HINTS = (
     ("debug", re.compile(
         r"\b(bugs?|buggy|fix(es|ed)?\s+the\s+\w+|incorrect(ly)?|"
         r"does\s?n[o']t\s+work|failing|regression)\b", re.I)),
+    # `smaller` HAD NO OBJECT, and every sibling in this alternation has one.
+    # `reduce` matches only `reduce area|cells|wires|power`; `fewer` matches only
+    # `fewer cells|wires`. A bare `smaller` matched the WORD, so any prose that
+    # merely says one thing is smaller than another read as a request to shrink
+    # the design. Measured over the 165 prompts reachable on this host
+    # (VerilogEval-Human 156 + the 9 RTLLM design descriptions), that is not a
+    # theoretical shape: `Prob042_vector4` — "sign-extending a smaller number to
+    # a larger one", a pure BUILD-THIS spec — was routed `optimization` /
+    # `prose_hint_without_context`, i.e. off Phase 1 and onto `optimize_loop`,
+    # an entry whose `deterministic_first` transforms RTL that this task does
+    # not have. It was the ONLY prompt the whole optimization hint fired on in
+    # that population, so 1 of 1 hints was false. (CVDP is not on this host, so
+    # 165 is the honest denominator, not the 664 the debug note above cites.)
+    #
+    # Requiring an object restores the sibling standard in both directions: the
+    # object may follow (`smaller area|netlist|…`) or precede it in the
+    # imperative form the request actually takes (`make the design smaller`).
+    # "Make it smaller" is deliberately NOT hinted — a bare pronoun is not an
+    # object, and `reduce` alone is not hinted either, for the same reason.
     ("optimization", re.compile(
-        r"\b(optimi[sz]e|reduce\s+(area|cells?|wires?|power)|"
-        r"smaller|fewer\s+(cells?|wires?)|lint\s+clean)\b", re.I)),
+        r"\b(optimi[sz]e"
+        r"|reduce\s+(area|cells?|wires?|power)"
+        r"|fewer\s+(cells?|wires?)"
+        r"|smaller\s+(area|footprint|design|netlist|module|implementation"
+        r"|cell\s+count|gate\s+count|die)"
+        r"|(mak(e|es|ing)|get|getting|render)\s+(the\s+|this\s+|its\s+|your\s+|a\s+)?"
+        r"(area|footprint|design|netlist|module|implementation|circuit|logic)\s+smaller"
+        r"|lint\s+clean)\b", re.I)),
     ("completion", re.compile(
         r"\b(complete\s+the|fill\s+in|finish\s+the|implement\s+the\s+missing)\b",
         re.I)),

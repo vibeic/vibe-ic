@@ -47,6 +47,8 @@ prompts are minimal synthetic shapes that reproduce the structure.
 import os
 import sys
 
+import pytest
+
 _PROGRAMS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, _PROGRAMS)
 
@@ -242,3 +244,106 @@ def test_confidence_tracks_what_the_router_actually_observed():
 def test_a_declared_nature_is_still_confirmed():
     v = tnr.classify_task_nature(SPEC_ONLY, False, "debug")
     assert v["source"] == "declared" and v["needs_ai_parse"] is False, v
+
+
+# ── `smaller` HAD NO OBJECT, so it hinted on the WORD ────────────────────────
+#
+# MEASURED DEFECT (2026-08-28). Every other alternative in the `optimization`
+# prose hint requires an object — `reduce area|cells|wires|power`,
+# `fewer cells|wires` — and `smaller` stood bare, so it matched any prose in
+# which one thing is described as smaller than another. That is not a rare
+# shape in a specification: comparators, sign extension, pointer arithmetic and
+# pulse-width prose all say it about the DESIGN'S DATA, never about the design.
+#
+# The consequence is a route, not a label. `optimization` resolves to
+# `optimize_loop`, whose `deterministic_first` is `rtl_hygiene_lint.py` — a
+# transform of EXISTING RTL — so a build-this-from-scratch task was pushed off
+# `phase1_entry` onto an entry with nothing to transform, carrying the warning
+# "prose reads as 'optimization' but no existing RTL was supplied".
+#
+# It fires on real published prompts. Over the 165 reachable on this host
+# (VerilogEval-Human 156 + the 9 RTLLM design descriptions), the whole
+# optimization hint fired on exactly ONE — `Prob042_vector4`, "sign-extending a
+# smaller number to a larger one", a pure BUILD-THIS spec. One of one hints was
+# false. After the repair the same sweep hits 0, which is the correct answer for
+# a population that contains no optimization task.
+_VE_HUMAN = os.environ.get(
+    "VIBEIC_VE_HUMAN_DIR",
+    "/home/reyerchu/_extbench/verilog-eval/dataset_code-complete-iccad2023")
+
+# Real spec-generation prose that merely uses the word. Each states the
+# comparison about VALUES, which is what a specification does.
+_MERE_PROSE = [
+    "Design a 4-bit synchronous counter. Note that the reset pulse is smaller "
+    "than one clock period; ignore glitches.",
+    "Write a FIFO. The read pointer is smaller than the write pointer while "
+    "data is queued.",
+    "Create a comparator that asserts lt when a is smaller than b.",
+    "Sign-extend a smaller number to a larger one by replicating the sign bit.",
+    "The smaller of the two inputs is forwarded to the output.",
+]
+
+# Genuine requests to shrink the design, in both word orders. These must still
+# be hinted: a check that refuses everything is not a check.
+_GENUINE_OPTIMIZATION = [
+    "Optimize this module to reduce area.",
+    "Rewrite the design so it uses fewer cells.",
+    "Make the netlist smaller in area without changing function.",
+    "Please make this module smaller.",
+    "Produce a smaller area implementation of the same function.",
+    "Give me a smaller netlist.",
+    "Make it lint clean.",
+]
+
+
+def test_prose_that_merely_says_smaller_is_not_an_optimization_request():
+    for prompt in _MERE_PROSE:
+        v = tnr.classify_task_nature(prompt, False, None)
+        assert v["nature"] == "spec_generation", (
+            f"a build-this specification was routed {v['nature']!r} via "
+            f"{v['source']!r} because its prose contains the word 'smaller':\n"
+            f"  {prompt}")
+
+
+def test_a_genuine_request_to_shrink_the_design_is_still_hinted():
+    """THE OTHER DIRECTION. Narrowing a hint is only correct if what the hint
+    was FOR still reaches it — otherwise the repair is a deletion wearing a
+    regex."""
+    for prompt in _GENUINE_OPTIMIZATION:
+        v = tnr.classify_task_nature(prompt, False, None)
+        assert v["nature"] == "optimization", (
+            f"a real optimization request stopped being hinted: {prompt!r} "
+            f"-> {v['nature']!r} / {v['source']!r}")
+
+
+def test_a_bare_pronoun_is_not_an_object():
+    """The boundary, stated so it cannot drift back by accident.
+
+    "Make it smaller" is NOT hinted, and that is deliberate rather than an
+    oversight: `reduce` alone is not hinted either, for the same reason. The
+    router has `needs_ai_parse` and the AI backup for prompts whose object is
+    only recoverable from context — inventing one from a pronoun is the guess
+    that produced the defect above."""
+    v = tnr.classify_task_nature("Make it smaller.", False, None)
+    assert v["nature"] == "spec_generation", v
+
+
+def test_the_real_corpus_prompt_that_was_misrouted():
+    """`Prob042_vector4`, verbatim from the published dataset.
+
+    Skipped rather than asserted-over-nothing when the corpus is absent: a
+    green from a file that was never opened is the vacuous pass this repo
+    refuses everywhere else."""
+    p = os.path.join(_VE_HUMAN, "Prob042_vector4_prompt.txt")
+    if not os.path.isfile(p):
+        pytest.skip(f"VerilogEval-Human dataset absent at {_VE_HUMAN}; set "
+                    "$VIBEIC_VE_HUMAN_DIR to the dataset directory")
+    with open(p, errors="replace") as fh:
+        prompt = fh.read()
+    assert "smaller" in prompt, (
+        "the fixture no longer contains the word this test is about — it is "
+        "the wrong prompt, not a passing one")
+    v = tnr.classify_task_nature(prompt, False, None)
+    assert v["nature"] == "spec_generation", (
+        f"Prob042_vector4 is a build-this spec and was routed {v['nature']!r} "
+        f"via {v['source']!r}")
