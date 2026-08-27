@@ -327,6 +327,31 @@ def test_each_lane_reports_its_own_cost_and_not_the_barrier(scheduler, work,
     assert max(seen.values()) <= wall <= serial, (wall, seen)
     assert abs(ratio - serial / wall) < 0.01, (ratio, serial, wall)
 
+    # WIDTH 1 IS THE ARM THAT SEPARATES "STAMPED IN THE LANE" FROM "STAMPED AT
+    # THE LAUNCH". At width 4 the four launches are one instant apart, so a
+    # start stamp taken by `lane_launch` reads the same as one taken by the
+    # lane and both give the numbers above. At width 1 the bodies are DEFERRED
+    # to the join and run one after another, so a launch stamp would charge
+    # every lane with the elapsed time of every lane declared before it and the
+    # numbers would come out monotonically increasing in DECLARATION order
+    # instead of tracking the sleeps. Here `corpus` (3 s) must still outrank
+    # `hygiene` and `audit` (~0 s) even though it is declared before them.
+    serial_work = work / "serial"
+    serial_work.mkdir()
+    proc = _run(scheduler, serial_work,
+                {"LANE_WIDTH": "1", "T_SEC": "6", "C_SEC": "3",
+                 "H_SEC": "0", "A_SEC": "0"}, timeout=120)
+    assert proc.returncode == 0, proc.stdout
+    seen = _elapsed(proc.stdout)
+    assert seen["targeted"] > seen["corpus"] > seen["audit"], (
+        "at width 1 the numbers no longer track the stubs' own sleeps, which "
+        f"is what a launch-time start stamp looks like: {seen}\n{proc.stdout}")
+    assert seen["corpus"] > seen["hygiene"], (seen, proc.stdout)
+    window = _LANE_WINDOW.search(proc.stdout)
+    assert window, proc.stdout
+    # Serial: the window IS the serial total, so the ratio is 1.
+    assert int(window.group(1)) >= int(window.group(2)), proc.stdout
+
 
 def test_the_join_stamped_form_really_does_collapse_the_four_numbers(
         scheduler, work, default_width):
