@@ -803,6 +803,100 @@ run "full:write-guard-baseline" "write-guard baseline" \
 # shape, so a neighbouring B1/A1 arm sees the load it sees today.
 LANE_LAUNCHED=""                     # names, in declaration order
 HYGIENE_POOL=8
+
+# ── THE STOPWATCH: EACH LANE STAMPS ITS OWN [start, end] ───────────────────
+#
+# WHY THIS EXISTS. This script ran a four-lane window for weeks and reported no
+# elapsed time at all, so "which lane is the landing's critical path" could not
+# be answered from a landing log — only guessed at from the order the labels
+# came out in, which is the EMISSION order and has nothing to do with duration.
+# A tier whose cost cannot be attributed is a tier nobody can shorten.
+#
+# THE STAMPS ARE TAKEN BY THE LANE, NOT AT THE JOIN, AND THAT IS THE WHOLE
+# DESIGN. `lane_emit_window` joins in DECLARATION order — targeted, corpus,
+# hygiene, audit — and `lane_join targeted` does not return until the longest
+# lane the tier launched first has finished. Every later `lane_join` then
+# returns immediately, because its lane finished while the main shell was
+# blocked on the first one. So an end stamp taken at the join measures WHEN THE
+# MAIN SHELL GOT ROUND TO ASKING, which is the barrier, not the work: every
+# lane reads back the same number and the report says the tier has four equally
+# expensive lanes however lopsided it really is. MEASURED: an earlier
+# join-stamped version of this instrument reported all four lanes as 1117 s.
+# Stamped by the lane itself the same tier reads targeted 1736 s, hygiene
+# 1259 s, corpus 518 s, audit 26 s.
+#
+# INTEGER SECONDS, from `date +%s`. The quantity being reported is a
+# multi-minute stage and the consumer is a human reading a log; sub-second
+# resolution would be precision this cannot honestly claim, since the stamp
+# brackets a `wait` and a fork.
+#
+# IT CANNOT MOVE A VERDICT, BY CONSTRUCTION. `lane_timed` returns its body's
+# own status unchanged and the report is printed after the window is closed and
+# every unit already emitted. A stopwatch that could fail a landing would be a
+# second gate wearing an instrument's name.
+lane_stamp() {                       # lane_stamp <name> <t0|t1>
+  # Written atomically, for the same reason `.rc` is: a half-written stamp and
+  # an absent stamp must not be the same state on disk. An absent one is
+  # reported as absent below, never as zero.
+  printf '%s' "$(date +%s)" > "$LANE_DIR/$1.$2.tmp" \
+    && mv -f "$LANE_DIR/$1.$2.tmp" "$LANE_DIR/$1.$2"
+}
+lane_timed() {                       # lane_timed <name> <fn…>
+  local name="$1"; shift
+  local rc=0
+  lane_stamp "$name" t0
+  "$@" || rc=$?
+  # NOT in a trap and NOT after an `exit`: this line is reached only when the
+  # body RETURNED. A lane that was killed leaves `t0` and no `t1`, which is the
+  # honest record of a lane that never finished — and `lane_report_window`
+  # prints it as NO END STAMP rather than inventing a duration for it.
+  lane_stamp "$name" t1
+  return "$rc"
+}
+# THE REPORT. Printed once, after the window is joined and emitted, from the
+# MAIN shell only. Three numbers, because one of them alone would mislead:
+# the per-lane elapsed (what each lane cost), the WINDOW span (what the tier
+# actually waited, = the critical path), and the SERIAL sum (what the same work
+# would have cost one after another). The ratio is the concurrency actually
+# obtained, which is the only honest answer to "was the window worth it".
+lane_report_window() {
+  local name t0 t1 elapsed sum=0 first="" last="" measured=0 missing=""
+  for name in $LANE_LAUNCHED; do
+    t0="$(cat "$LANE_DIR/$name.t0" 2>/dev/null || true)"
+    t1="$(cat "$LANE_DIR/$name.t1" 2>/dev/null || true)"
+    case "${t0:-x}${t1:-x}" in
+      *[!0-9]*) missing="$missing $name"; continue ;;
+    esac
+    elapsed=$(( t1 - t0 ))
+    sum=$(( sum + elapsed ))
+    measured=$(( measured + 1 ))
+    if [ -z "$first" ] || [ "$t0" -lt "$first" ]; then first="$t0"; fi
+    if [ -z "$last" ]  || [ "$t1" -gt "$last" ];  then last="$t1";  fi
+    printf '  REPORT  lane %-9s %6ss\n' "$name" "$elapsed"
+  done
+  # "I COULD NOT LOOK" IS SAID, NEVER ABSORBED. A lane with no end stamp did
+  # not finish; leaving it out of the list silently would make the sum below
+  # read as the whole tier's cost when it is not.
+  for name in $missing; do
+    printf '  REPORT  lane %-9s NO ELAPSED RECORD — it left no end stamp, so it did not finish\n' "$name"
+  done
+  # A span needs at least two stamps and a ratio needs a non-zero window; both
+  # are refused rather than divided by zero or printed as 1.00x.
+  if [ "$measured" -eq 0 ]; then
+    echo "  REPORT  lane elapsed: NOT MEASURED — no lane left a complete stamp pair"
+    return 0
+  fi
+  local window=$(( last - first ))
+  if [ "$window" -le 0 ]; then
+    printf '  REPORT  window %ss wall, %ss if serial (%s lane(s) measured%s); ratio NOT COMPUTED over a zero-length window\n' \
+      "$window" "$sum" "$measured" "${missing:+, $(set -- $missing; echo $#) unmeasured}"
+    return 0
+  fi
+  printf '  REPORT  window %ss wall vs %ss serial — %sx over %s lane(s)%s\n' \
+    "$window" "$sum" \
+    "$(awk -v s="$sum" -v w="$window" 'BEGIN{printf "%.2f", s/w}')" \
+    "$measured" "${missing:+, $(set -- $missing; echo $#) lane(s) unmeasured}"
+}
 lane_launch() {                      # lane_launch <name> <fn…>
   local name="$1"; shift
   eval "LANE_JOINED_$name="; eval "LANE_RC_$name=0"
@@ -812,7 +906,7 @@ lane_launch() {                      # lane_launch <name> <fn…>
     # DEFERRED to the join so the serial order is the DECLARATION order —
     # targeted, corpus, hygiene, audit — which is exactly the order this script
     # ran these stages in before lanes existed.
-    eval "LANE_BODY_$name=\"\$*\""
+    eval "LANE_BODY_$name=\"lane_timed $name \$*\""
   else
     # THE PID COMES BACK IN A VARIABLE, NOT ON STDOUT. `PID="$(lane_launch …)"`
     # would start the job inside the command substitution's OWN subshell, so
@@ -830,7 +924,7 @@ lane_launch() {                      # lane_launch <name> <fn…>
     # lane prints outside `lane_write` would otherwise land between two labels
     # and be read as belonging to one of them.
     set -m
-    ( "$@" ) </dev/null >"$LANE_DIR/$name.lane.log" 2>&1 &
+    ( lane_timed "$name" "$@" ) </dev/null >"$LANE_DIR/$name.lane.log" 2>&1 &
     eval "LANE_PID_$name=\$!"
     set +m
     eval "LANE_LIVE_PIDS=\"\$LANE_LIVE_PIDS \$LANE_PID_$name\""
@@ -1615,6 +1709,9 @@ if [ "$LANE_WIDTH" -gt 1 ]; then
   fi
 fi
 lane_emit_window
+# AFTER every unit is emitted, so no REPORT line can land between two
+# labelled stage verdicts and be read as belonging to one of them.
+lane_report_window
 
 # Merge verification already has enough evidence to refuse once the aggregate
 # session produced NO complete record.  Continuing through every remaining gate

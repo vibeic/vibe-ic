@@ -53,8 +53,11 @@ _SCHEDULER = (
     "run_emit",
     "fn_emit",
     "run",
+    "lane_stamp",
+    "lane_timed",
     "lane_launch",
     "lane_join",
+    "lane_report_window",
     "lane_window_reset",
     "lane_hygiene",
     "lane_run_window",
@@ -185,6 +188,7 @@ if [ "$LANE_WIDTH" -gt 1 ]; then
   fi
 fi
 lane_emit_window
+lane_report_window
 echo "FAILED=$FAILED"
 """
 
@@ -271,6 +275,108 @@ def test_the_window_actually_runs_at_the_same_time(scheduler, work,
     latest_start = max(spans[lane][0] for lane in lanes)
     earliest_end = min(spans[lane][1] for lane in lanes)
     assert earliest_end < latest_start, spans
+
+
+_LANE_ELAPSED = re.compile(r"^  REPORT  lane (\S+)\s+(\d+)s$", re.MULTILINE)
+_LANE_WINDOW = re.compile(
+    r"^  REPORT  window (\d+)s wall vs (\d+)s serial — ([\d.]+)x", re.MULTILINE)
+
+
+def _elapsed(stdout: str) -> dict[str, int]:
+    return {lane: int(secs) for lane, secs in _LANE_ELAPSED.findall(stdout)}
+
+
+def test_each_lane_reports_its_own_cost_and_not_the_barrier(scheduler, work,
+                                                            default_width):
+    """FAILS if the stopwatch goes back to stamping at the JOIN.
+
+    `lane_emit_window` joins in DECLARATION order and `lane_join targeted`
+    blocks until the longest lane the tier launched first is done, so every
+    later join returns at once. An end stamp taken there measures the BARRIER:
+    all four lanes read back the same number, and the report then claims a tier
+    of four equally expensive lanes whatever its real shape. That is not
+    hypothetical -- an earlier version of this instrument reported all four
+    lanes as 1117 s, which is why the tier's critical path went unnamed.
+
+    So the assertion is not "a number was printed". It is that the four numbers
+    REPRODUCE THE ORDER OF THE STUBS' OWN SLEEPS, which only a per-lane stamp
+    can do, plus the arithmetic the report claims about itself.
+    """
+    proc = _run(scheduler, work,
+                {"LANE_WIDTH": default_width, "T_SEC": "6", "C_SEC": "3",
+                 "H_SEC": "0", "A_SEC": "0"}, timeout=120)
+    assert proc.returncode == 0, proc.stdout
+    seen = _elapsed(proc.stdout)
+    assert set(seen) == {"targeted", "corpus", "hygiene", "audit"}, proc.stdout
+
+    # THE ORDER OF THE SLEEPS, RECOVERED FROM THE REPORT: targeted sleeps 6 s,
+    # corpus 3 s (plus a 0.05 s second stage), hygiene and audit ~0.
+    assert seen["targeted"] > seen["corpus"] > seen["audit"], (
+        "the per-lane numbers do not reproduce the stubs' own durations, so "
+        f"they are not measuring the lanes: {seen}\n{proc.stdout}")
+    assert seen["targeted"] >= 6 and seen["corpus"] >= 3, (seen, proc.stdout)
+    assert seen["hygiene"] < seen["targeted"], (seen, proc.stdout)
+
+    window = _LANE_WINDOW.search(proc.stdout)
+    assert window, proc.stdout
+    wall, serial = int(window.group(1)), int(window.group(2))
+    ratio = float(window.group(3))
+    assert serial == sum(seen.values()), (serial, seen)
+    # The window is the CRITICAL PATH: never shorter than the longest lane and
+    # never longer than running the same lanes one after another.
+    assert max(seen.values()) <= wall <= serial, (wall, seen)
+    assert abs(ratio - serial / wall) < 0.01, (ratio, serial, wall)
+
+
+def test_the_join_stamped_form_really_does_collapse_the_four_numbers(
+        scheduler, work, default_width):
+    """The negative control, EXECUTED rather than asserted from memory.
+
+    The SAME scheduler with the stamps moved out of `lane_timed` and into
+    `lane_launch` / `lane_join` -- which is exactly the earlier version that
+    reported 1117 s four times. If this ever stops collapsing, the test above
+    is not discriminating and the comment in `tools/gatekeeper-land.sh` has
+    become false.
+    """
+    broken = scheduler.replace('( lane_timed "$name" "$@" )', '( "$@" )')
+    assert broken != scheduler, "lane_launch no longer wraps the lane body"
+    step = '  LANE_LAUNCHED="$LANE_LAUNCHED $name"'
+    assert step in broken
+    broken = broken.replace(step, '  lane_stamp "$name" t0\n' + step)
+    step = '  eval "LANE_WAIT_RC=\\$LANE_RC_$name"'
+    assert step in broken
+    broken = broken.replace(step, '  lane_stamp "$name" t1\n' + step)
+    proc = _run(broken, work,
+                {"LANE_WIDTH": default_width, "T_SEC": "6", "C_SEC": "3",
+                 "H_SEC": "0", "A_SEC": "0"}, timeout=120)
+    seen = _elapsed(proc.stdout)
+    assert set(seen) == {"targeted", "corpus", "hygiene", "audit"}, proc.stdout
+    # THE SIGNATURE: every lane reads the barrier, so the spread collapses and
+    # a ~0 s lane is indistinguishable from the 6 s one.
+    assert max(seen.values()) - min(seen.values()) <= 1, (
+        "the join-stamped form no longer collapses on this host, so the test "
+        f"above is not discriminating: {seen}\n{proc.stdout}")
+    assert seen["audit"] >= 6, (
+        "a ~0 s lane no longer reads back the 6 s barrier: " + str(seen))
+
+
+def test_a_lane_that_never_finished_is_reported_as_unmeasured(scheduler, work,
+                                                              default_width):
+    """A missing end stamp is NAMED, never absorbed into the serial total.
+
+    A killed lane leaves `t0` and no `t1`. Dropping it silently would make the
+    remaining lanes' sum read as the whole tier's cost, which is the
+    "I could not look" -> "I looked and it was fine" substitution one level
+    down.
+    """
+    proc = _run(scheduler, work, {"LANE_WIDTH": default_width},
+                body=_DRIVER.replace(
+                    "lane_report_window",
+                    'rm -f "$LANE_DIR/hygiene.t1"\nlane_report_window'),
+                timeout=120)
+    assert "lane hygiene   NO ELAPSED RECORD" in proc.stdout, proc.stdout
+    assert "lane(s) unmeasured" in proc.stdout, proc.stdout
+    assert "hygiene" not in _elapsed(proc.stdout), proc.stdout
 
 
 def test_a_killed_lane_reaches_the_verdict_as_failed(scheduler, work):
