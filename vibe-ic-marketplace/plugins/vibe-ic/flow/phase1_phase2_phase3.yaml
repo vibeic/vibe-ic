@@ -5412,9 +5412,36 @@ steps:
         # lvs-triage, perc-check]` — the PERC skill was named with NO PERC
         # program behind it. Its input `phase3/stage3/pnr/routed.def` is Step
         # 21's output and matches this program's own `phase3/**/*.def` glob.
-        # ADVISORY, no `--report`: it writes nothing, and an empty dir is rc=2
-        # (vacuous), never a fail.
-        - advisory_program_exit_zero: "perc_corpus_sweep ."
+        # ADVISORY. It now writes its `{rows, reach}` report, because the
+        # program that CONSUMES that report is the clause directly below and
+        # without the flag there is nothing for it to read. An empty dir is
+        # still rc=2 (vacuous), never a fail.
+        - advisory_program_exit_zero: "perc_corpus_sweep . --report reports/phase3/perc_sweep.json"
+        # THE OTHER HALF OF THAT SWEEP, and the reason it was missing is the
+        # sharpest thing this campaign measured.
+        #
+        # `sweep_reach_check` asks the one question a corpus sweep cannot ask
+        # itself: a sweep that exits 0 having never ENTERED the guard it is
+        # exercising is byte-identical, in output and exit code, to a sweep
+        # that ran the guard over every target and found nothing. One is a
+        # result; the other is a measurement that did not happen.
+        #
+        # It was reached by NOTHING. Its only non-comment referrer in the whole
+        # repository was one line of argparse help text in the sweep above —
+        # `help="write {rows, reach} here — the document
+        # `sweep_reach_check.py --report` consumes"` — and three separate
+        # wiring auditors read that sentence as an invocation and certified a
+        # reachability instrument as wired. The two programs' relationship was
+        # written down in prose and never built. This clause builds it.
+        - advisory_program_exit_zero:
+            command: "sweep_reach_check --report reports/phase3/perc_sweep.json"
+            condition_files_exist:
+              - "reports/phase3/perc_sweep.json"
+            absent_condition_reason: >-
+              the PERC sweep above emits its report only when it found a routed
+              DEF to sweep; with no corpus there is no reach block to judge, and
+              a reach verdict over a sweep that never ran is the vacuity this
+              gate exists to refuse
         # TWO MORE ORPHANS RE-HOMED HERE (2026-08-25), both on Step 31's own
         # question and neither of them a second opinion on a blocking slot.
         #

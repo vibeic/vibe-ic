@@ -9,7 +9,7 @@
       "name": "vibe-ic",
       "source": "./vibe-ic-marketplace/plugins/vibe-ic",
       "description": "AI-Native IC Design plugin for Claude Code. One install bundles and auto-registers the MCP-EDA server (open-source EDA tools + lab hardware). Two entry points (NL prompt OR design docs) → one Phase 1 → layered design JSON → RTL → FPGA SOF + ASIC GDS; Analog A1-A9 + Mixed-signal M1-M4 interleaved. Strict canonical-flow compliance gate plus anti-fabrication doctrine (provenance audit-chain, chip-AGNOSTIC source guard, real-artifact/SHA256 attestation, benchmark-path consistency) — no fabrication, no hallucinated PASS.",
-      "version": "1.12.2",
+      "version": "1.12.3",
       "homepage": "https://github.com/vibeic/vibe-ic",
       "license": "Apache-2.0",
       "category": "ic-design",

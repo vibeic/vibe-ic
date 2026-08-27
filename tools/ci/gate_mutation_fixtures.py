@@ -42,6 +42,7 @@ repo's existing `parse_declarations`, and substitutes only the SUBJECT.
 
     $ROOT / $PLUGIN   -> the fixture's subject tree     (the input under test)
     $PG               -> the REAL programs directory    (the gate's own code)
+    $RUNTIME_ROOT     -> the REAL repo root             (the gate's own code)
     cwd               -> whichever of the two the declaration names
 
 MEASURED, and it is why the substitution is drawn there: `container exec
@@ -86,6 +87,13 @@ DEBT_FILE = _HERE / "gate_fixture_debt.json"
 
 #: The gate's own code, not its subject. Never redirected at a fixture tree.
 _REAL_PG = str(PROGRAMS)
+
+#: The RUNTIME checkout the dispatcher computes at its line 29, and the root
+#: `$PG` is itself spelled relative to (`$RUNTIME_ROOT/.../programs`). A gate
+#: whose executable lives outside `programs/` -- `vibe-ic-marketplace/tools/`
+#: -- can only name it through this variable, so it resolves the same way
+#: `$PG` does: to the gate's OWN code, never to the fixture subject.
+_REAL_RUNTIME_ROOT = str(REPO_ROOT)
 
 
 def _load_parse_declarations():
@@ -201,6 +209,9 @@ def _resolve_argv(cmd: str, subject: Path) -> List[str]:
     out: List[str] = []
     for tok in parts:
         tok = tok.replace("${PG}", _REAL_PG).replace("$PG", _REAL_PG)
+        # Resolved BEFORE $ROOT so the two variables stay independent.
+        tok = (tok.replace("${RUNTIME_ROOT}", _REAL_RUNTIME_ROOT)
+                  .replace("$RUNTIME_ROOT", _REAL_RUNTIME_ROOT))
         tok = (tok.replace("${ROOT}", str(subject)).replace("$ROOT", str(subject))
                   .replace("${PLUGIN}", str(subject)).replace("$PLUGIN", str(subject)))
         out.append(tok)
@@ -212,7 +223,7 @@ def unresolved_shell(cmd: str) -> Optional[str]:
     if "$(" in cmd:
         return "a command substitution: " + cmd[cmd.index("$("):][:60]
     for m in re.finditer(r'\$\{?([A-Za-z_]\w*)\}?', cmd):
-        if m.group(1) not in ("ROOT", "PLUGIN", "PG", "PJSON"):
+        if m.group(1) not in ("ROOT", "PLUGIN", "PG", "PJSON", "RUNTIME_ROOT"):
             return f"the shell variable ${m.group(1)}, bound by the enclosing loop"
     return None
 

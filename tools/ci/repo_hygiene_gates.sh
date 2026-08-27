@@ -894,6 +894,42 @@ run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_w
 # coverage. A gate nothing runs produces no verdict, and the tree looks the same
 # either way.
 run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py"
+# AND THE ONE THAT COVERS EVERY PROGRAM, NOT A FILENAME-SHAPED SUBSET.
+#
+# The two gates above are the tree's wiring auditors and neither scans the whole
+# corpus. Measured at v1.11.91 the wiring instruments' populations are
+# 630 / 653 / 208 / 64 / 139 out of 1290 programs, union 707 — so 583 programs
+# were examined by NO wiring instrument at all. `program_reachability_check` is
+# the only one whose population is all of them, and until this change it could
+# not be used: its shell scope stopped at PLUGIN and missed THIS FILE (which
+# carried 28 of the last campaign's 30 shell closures), it did not finish in ten
+# minutes, and it named all 14 glob-dispatched `*_protocol_synth` modules
+# unreachable. That is why the orphan count went 163 -> 0 without it ever being
+# consulted.
+#
+# `--strict` is the point. Without it the program prints its findings and
+# returns 0, which is a gate that cannot fail — the exact defect this lane
+# exists to catch, and one it would have committed by declaring the bare form.
+#
+# THE PROGRAM COMES FROM THE RUNTIME, THE TREE FROM THE SUBJECT, and getting
+# that backwards cost a landing.
+#
+# This was first declared as `python3 "$ROOT/.../program_reachability_check.py"`
+# because the auditor derived its tree from `__file__` and took no argument —
+# so naming the subject's copy was the only way to audit the subject's tree.
+# `$ROOT` is `VIBEIC_SUBJECT_ROOT`, so on the BASE arm of an A/B verification
+# that ran the BASE tree's copy: the one without the indexing rewrite, which
+# does not finish in ten minutes. Measured on 8HD-7 — five of them at
+# 5000-6200 s each, load average 292, sshd unable to emit a banner. The base
+# arm never completed, so no differential existed, so the change carrying the
+# fix could not land. The repair was trapped inside the verification it was
+# repairing.
+#
+# `--root` splits the two questions, so this now reads like every other gate in
+# this lane: the RUNTIME's program, the SUBJECT's tree. A mutation fixture is
+# still measured correctly, because `--root "$ROOT"` is exactly the
+# substitution the fixture engine performs.
+run "every program is reachable"        "$ROOT" python3 "$RUNTIME_ROOT/vibe-ic-marketplace/tools/program_reachability_check.py" --root "$ROOT" --strict
 # vibe-ic#712 — a prose extractor that reads a value out of a sentence without
 # asking whether the sentence DENIES it publishes a denied value as a
 # declaration. Twice in one day, in two fields, and each fix grew its OWN copy
