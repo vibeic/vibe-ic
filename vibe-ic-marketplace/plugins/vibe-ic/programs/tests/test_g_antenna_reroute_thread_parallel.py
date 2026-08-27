@@ -17,7 +17,7 @@ in-container against `routed_preantenna.def` + `post_hold.def`):
     reaches GDS well inside budget. (Bounding the reroute with `-droute_end_iter`
     was REJECTED: it left 85 DRC violations — a DRC-dirty signoff route.)
 
-Fix: emit `set_thread_count N` as the FIRST command of the PnR Tcl (and the ECO
+Fix: emit `set_thread_count N` as the FIRST command of the PnR Tcl (and the repair
 reroute Tcl) so OpenROAD parallelizes global_route / detailed_route / the antenna
 repair loop / CTS / resize. N = host CPUs (VIBEIC_OPENROAD_THREADS overrides).
 These tests pin the helper + the emitted-Tcl placement (synthetic; a blind run
@@ -159,11 +159,11 @@ def test_full_pnr_tcl_with_threads_still_parses(tmp_path):
     assert "PNR_TCL_END" in res.stdout
 
 
-# ── the ECO reroute Tcl is parallelized too (it runs its own detailed_route) ──
+# ── the repair reroute Tcl is parallelized too (it runs its own detailed_route) ──
 
-def test_eco_reroute_tcl_parallelized_before_detailed_route(tmp_path):
-    eco = R._build_eco_repair_tcl(
+def test_repair_reroute_tcl_parallelized_before_detailed_route(tmp_path):
+    repair = R._build_postroute_timing_repair_tcl(
         "chip_top", "/pdk/tech.lef", "/pdk/cells.lef", "/pdk/lib.lib",
-        "/work/pnr", "/work/eco", "met")
-    assert "set_thread_count" in eco
-    assert eco.index("set_thread_count") < eco.index("detailed_route")
+        "/work/pnr", "/work/repair", "met")
+    assert "set_thread_count" in repair
+    assert repair.index("set_thread_count") < repair.index("detailed_route")

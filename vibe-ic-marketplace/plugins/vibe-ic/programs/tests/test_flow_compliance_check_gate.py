@@ -173,7 +173,7 @@ def test_wave9_step_minus1_lists_failing_gates_by_name(tmp_path,
 # Wave 11 (v0.119.43) — `--phase 2 --strict-structural` forces Overall:
 # FAIL whenever ANY structural-RTL gate FAILs, with each gate listed.
 # Closes the v0.119.42 single-pass abandonment pattern: the agent saw
-# 4 structural FAILs collapsed into Step -1 and didn't ECO-loop.
+# 4 structural FAILs collapsed into Step -1 and didn't RTL-repair/retry.
 # ====================================================================
 
 def _make_phase2_project(tmp_path,

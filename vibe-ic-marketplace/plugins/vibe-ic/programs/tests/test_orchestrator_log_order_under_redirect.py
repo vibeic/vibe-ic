@@ -9,7 +9,7 @@ ALL banners last.
 
 MEASURED (sha256 x sky130A, run1.log): `=== PHASE 2 ===` was followed
 immediately by the `DONE` banner with zero phase-2 output between them, which
-reads as "phase 2 died instantly". Phase 2 had run its full 3-iteration ECO loop
+reads as "phase 2 died instantly". Phase 2 had run its full 3-iteration RTL repair/retry loop
 at lines 109-131 — ABOVE its own banner. Every phase attribution made from that
 log was off by one, on every cell, every run.
 

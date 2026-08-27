@@ -538,7 +538,7 @@ _UNEXPRESSIBLE = {
 #      not license this record to claim pass when the artefacts are absent, so
 #      the asymmetry is fail-closed: the executing process is the only witness
 #      that a step FAILED, while file existence remains the honest witness that
-#      it delivered. "Final" matters -- the ECO loop re-dispatches `rtl_gen`,
+#      it delivered. "Final" matters -- the RTL repair/retry loop re-dispatches `rtl_gen`,
 #      whose records read BLOCKED then PASS, and only the last one is the run's
 #      answer for step 1.
 # Reports are folded in flow order, so a later phase re-running the same step
@@ -556,7 +556,7 @@ _ORCHESTRATOR_REPORT_RUNNERS: Tuple[Tuple[str, str], ...] = (
 def _is_failure_verdict(raw: str) -> bool:
     """A runner status that means the step did NOT succeed.
 
-    Covers the FAIL tiers (FAIL, FAIL_ECO_INERT, ...) and the pre-flight
+    Covers the FAIL tiers (FAIL, FAIL_RTL_REPAIR_INERT, ...) and the pre-flight
     refusal word BLOCKED, which `step_preflight` documents as "never green"
     and both runners' `_aggregate_verdict` already group with FAIL."""
     up = str(raw or "").upper()
@@ -649,7 +649,7 @@ def _orchestrator_failures(project: Path) -> List[dict]:
     actually carries. Spans that cannot be attributed still appear ONLY here,
     unattributed, which is what this list is for.
 
-    `status` is preserved exactly as written (FAIL, FAIL_ECO_INERT, ...); it is
+    `status` is preserved exactly as written (FAIL, FAIL_RTL_REPAIR_INERT, ...); it is
     matched case-insensitively but never normalised, because the distinct tiers
     carry distinct remediation.
     """

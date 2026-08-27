@@ -200,7 +200,7 @@ RUNNER_PLANS: Dict[str, RunnerPlan] = {
             # Line numbers RE-MEASURED 2026-08-25. The previous comments said
             # 12672 / 12951 / 13070; the real dispatches are ~3,400 lines
             # further down, and step_rtl_gen has FOUR call sites, not one
-            # (16016, 16035, 16125, 16144 — the ECO loop re-dispatches it).
+            # (16016, 16035, 16125, 16144 — the RTL repair/retry loop re-dispatches it).
             # A hand-authored span whose own bookkeeping has drifted that far
             # is a claim nobody re-checked; these were read off the file.
             #
@@ -213,7 +213,7 @@ RUNNER_PLANS: Dict[str, RunnerPlan] = {
             # Ordering these by line number would have made due_steps() treat
             # step 1 as NOT-yet-due at the sim site, which is backwards.
             #
-            # main():16016 (+16035, 16125, 16144 — the ECO loop re-dispatches)
+            # main():16016 (+16035, 16125, 16144 — the RTL repair/retry loop re-dispatches)
             ("rtl_gen", ("1",)),
             # main():15799 step_determinism_gates
             # main():15806 step_crosslayer_rewrite_fidelity

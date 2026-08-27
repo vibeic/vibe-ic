@@ -13,7 +13,7 @@ Two kinds live here, and the direction matters:
 upstream, the fix is separable from our own doctrine, and sending it has not
 happened yet. The middle condition is what keeps this directory honest — most of
 what our forks carry is policy we chose (abort → warn + continue, extra DRC
-coverage, ECO-aware reroute), and upstream has not asked for any of it. Bundling
+coverage, repair reroute), and upstream has not asked for any of it. Bundling
 policy into a defect fix is how a PR stalls, and deserves to.
 
 **An INBOUND patch lives here** when upstream has landed a fix our pin predates
@@ -38,7 +38,7 @@ a test, and a test for a crash needs a reduced case, not our 22 MB DEF.
 `#pragma omp parallel for` with no exception guard. When a pin genuinely yields
 zero access points, `logger_->error(DRT, 73)` throws, the throw crosses the
 OpenMP boundary, and `std::terminate` kills the process — no diagnostic, no
-report, mid-ECO.
+report, mid-repair.
 
 **Why it is upstream's, not ours.** That file has three parallel regions, and
 the other two already carry `ThreadException`:
@@ -63,7 +63,7 @@ Verified against upstream `master` as fetched, not against our fork.
 
 **The patch is the guard only.** Our fork additionally passes
 `allow_pin_access_failure=true` so the inaccessible pin degrades to a warning
-and the ECO continues. That parameter does not exist upstream — their signature
+and the repair continues. That parameter does not exist upstream — their signature
 is `genInstAccessPoints(frInst*)` — and it is a policy change upstream has not
 asked for. It stays ours. Guard alone means `DRT-0073` still errors, but as a
 reportable error instead of `std::terminate`, which is strictly an improvement

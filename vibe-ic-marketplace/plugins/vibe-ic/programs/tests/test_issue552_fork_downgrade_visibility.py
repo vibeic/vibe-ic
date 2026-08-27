@@ -4,7 +4,8 @@ for an abort must still be visible to the gate that needs it.
 WHAT WENT WRONG (vibe-ic#552)
 =============================
 `vibeic/OpenROAD 8d040d56c` downgrades an inaccessible pin from the fatal
-`DRT-0073` to a `DRT-627` warning, so a post-route ECO is not killed by it. The
+`DRT-0073` to a `DRT-627` warning, so a post-route timing repair is not
+killed by it. The
 downgrade is correct — the fatal form is raised inside an OpenMP region and
 `std::terminate` takes the tool down with no diagnostic.
 

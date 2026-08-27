@@ -17,10 +17,10 @@ It was emitted into `pnr.tcl` and nowhere else. THREE other paths resize:
 
     _ship_signoff_spef_repair_tcl   post-route real-SPEF setup repair
     _ship_wire_length_escalation_tcl  wire-length escalation repair
-    _build_eco_repair_tcl           the multi-corner ECO
+    _build_postroute_timing_repair_tcl           the multi-corner repair
 
 MEASURED on ibex x sky130A, one run: 4 instances of `probe_p_8` in the repaired
-netlist, 1 in the ECO netlist, and `DRT-0085` four times in the repair log —
+netlist, 1 in the repair netlist, and `DRT-0085` four times in the repair log —
 once pre-reroute and once per convergence iteration, each swallowed by its own
 `catch`. The step still published `SHIP_WNS_POSTROUTE`, a name that says
 post-REROUTE, from a design whose reroute never completed; sign-off then
@@ -79,9 +79,9 @@ _SHIP_ARGS = dict(top="t", tech_lef_c="/a.tlef", cell_lef_c="/b.lef",
 RESIZING_EMITTERS = [
     ("_ship_signoff_spef_repair_tcl", _SHIP_ARGS),
     ("_ship_wire_length_escalation_tcl", _SHIP_ARGS),
-    ("_build_eco_repair_tcl", dict(top="t", tech_lef_c="/a.tlef",
+    ("_build_postroute_timing_repair_tcl", dict(top="t", tech_lef_c="/a.tlef",
                                    cell_lef_c="/b.lef", liberty_c="/ss.lib",
-                                   pnr_dir_c="/pnr", eco_dir_c="/eco",
+                                   pnr_dir_c="/pnr", postroute_timing_repair_dir_c="/repair",
                                    metal_prefix="met",
                                    corner_libs={"ss": "/ss.lib"})),
 ]

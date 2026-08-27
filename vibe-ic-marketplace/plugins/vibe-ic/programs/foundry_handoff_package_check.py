@@ -265,13 +265,13 @@ def _read_pnr_physical_top(project):
             if n and n not in names:
                 names.append(n)
 
-    # (a) DEF DESIGN line — prefer the final routed / signoff / pnr / eco DEF
+    # (a) DEF DESIGN line — prefer the final routed / signoff / pnr / repair DEF
     # (the physical database the chip GDS is streamed from). Scan only the DEF
     # header (first lines): DESIGN is emitted right after VERSION/UNITS.
     def _def_rank(p):
         s = str(p).lower()
         return 0 if any(k in s for k in ("routed", "signoff", "/pnr/",
-                                         "/eco/")) else 1
+                                         "/postroute_timing_repair/")) else 1
     defs = sorted(project.glob("phase3/**/*.def"), key=_def_rank)
     for dpath in defs[:64]:
         try:

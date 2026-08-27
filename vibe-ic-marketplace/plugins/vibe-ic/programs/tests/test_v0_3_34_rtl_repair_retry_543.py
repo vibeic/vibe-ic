@@ -1,5 +1,5 @@
-"""ORGANIC #543 — eco_loop: stale cross-round TB pickup + WAIVED reference_tb
-treated as FAIL (FAIL_ECO_INERT).
+"""ORGANIC #543 — rtl_repair_retry: stale cross-round TB pickup + WAIVED reference_tb
+treated as FAIL (FAIL_RTL_REPAIR_INERT).
 """
 import sys
 from pathlib import Path
@@ -39,14 +39,14 @@ def test_543_stale_only_falls_back_when_no_named(tmp_path):
     # fallback is accepted — result may succeed or fail depending on iverilog
 
 
-def test_543_waived_reference_tb_breaks_eco_loop(tmp_path, monkeypatch):
-    # When step_reference_tb returns WAIVED, the eco_loop must NOT enter.
+def test_543_waived_reference_tb_breaks_rtl_repair_retry(tmp_path, monkeypatch):
+    # When step_reference_tb returns WAIVED, the rtl_repair_retry must NOT enter.
     # We can't call main() easily, but we can test the break condition
     # logic by inspecting that "WAIVED" is in the allowed statuses.
     # Verify it by checking the runner's outer status-tuple includes it.
     import inspect
     src = inspect.getsource(R)
-    # The eco_loop break must include "WAIVED"
+    # The rtl_repair_retry break must include "WAIVED"
     assert '"WAIVED"' in src or "'WAIVED'" in src
     # And specifically, the break condition must appear after the
     # step_reference_tb call inside the while True loop.
@@ -56,9 +56,9 @@ def test_543_waived_reference_tb_breaks_eco_loop(tmp_path, monkeypatch):
     assert idx_break_set > idx_while
 
 
-def test_543_waived_not_entering_eco(monkeypatch):
-    # Directly test the eco_loop break: status WAIVED must break early
-    # without any ECO iteration.  We simulate by checking that the
+def test_543_waived_not_entering_repair(monkeypatch):
+    # Directly test the rtl_repair_retry break: status WAIVED must break early
+    # without any RTL repair retry.  We simulate by checking that the
     # condition `sr.status in ("PASS", "SKIP", "WAIVED")` is True for WAIVED.
     waived = R.StepResult("reference_tb", "WAIVED", 0.0, "test")
     assert waived.status in ("PASS", "SKIP", "WAIVED")  # break fires

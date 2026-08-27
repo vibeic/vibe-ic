@@ -1,5 +1,5 @@
-"""ORGANIC #561 — _build_eco_repair_tcl: 4 OpenROAD workarounds must be
-present in the generated ECO timing-repair TCL.
+"""ORGANIC #561 — _build_postroute_timing_repair_tcl: 4 OpenROAD workarounds must be
+present in the generated repair timing-repair TCL.
 """
 import sys
 from pathlib import Path
@@ -10,13 +10,13 @@ import phase3_one_shot_runner as R  # noqa: E402
 
 
 def _build(top="chip_top", metal_prefix="met"):
-    return R._build_eco_repair_tcl(
+    return R._build_postroute_timing_repair_tcl(
         top=top,
         tech_lef_c="/container/pdk/tech.lef",
         cell_lef_c="/container/pdk/cells.lef",
         liberty_c="/container/pdk/cells.lib",
         pnr_dir_c=f"/container/project/phase3/stage3/pnr",
-        eco_dir_c=f"/container/project/phase3/stage3/eco",
+        postroute_timing_repair_dir_c=f"/container/project/phase3/stage3/postroute_timing_repair",
         metal_prefix=metal_prefix,
     )
 
@@ -58,46 +58,46 @@ def test_561_dpl0033_catch_check_placement():
     assert "catch {check_placement}" in tcl
 
 
-def test_561_eco_output_paths_use_correct_dir():
-    # Output files must go to eco_dir_c, not pnr_dir_c
+def test_561_postroute_timing_repair_output_paths_use_correct_dir():
+    # Output files must go to postroute_timing_repair_dir_c, not pnr_dir_c
     tcl = _build()
-    assert "/container/project/phase3/stage3/eco/eco_routed.def" in tcl
-    assert "/container/project/phase3/stage3/eco/chip_top_eco.v" in tcl
+    assert "/container/project/phase3/stage3/postroute_timing_repair/timing_repaired.def" in tcl
+    assert "/container/project/phase3/stage3/postroute_timing_repair/chip_top_timing_repaired.v" in tcl
 
 
-def test_eco_reroute_is_bounded_droute_end_iter():
-    # spm clean-run (2026-07-11) — the ECO reroute's detailed_route must be
-    # BOUNDED with -droute_end_iter so a NON-CONVERGING ECO reroute (an
+def test_repair_reroute_is_bounded_droute_end_iter():
+    # spm clean-run (2026-07-11) — the repair reroute's detailed_route must be
+    # BOUNDED with -droute_end_iter so a NON-CONVERGING repair reroute (an
     # architecturally-unclosable setup gap over-buffering a small / low-util die)
     # cannot grind its full ~64-iteration optimization budget (~1 min/iter ~ 1 h
     # of wasted compute the progress-stall watchdog will not kill). The base
-    # signoff route (Step 21) stays UNBOUNDED/converging; only the ECO reroute is
-    # capped, and eco_routed.def is not the signoff route.
+    # signoff route (Step 21) stays UNBOUNDED/converging; only the repair reroute is
+    # capped, and timing_repaired.def is not the signoff route.
     tcl = _build()
     assert "detailed_route -droute_end_iter" in tcl, \
-        "ECO reroute must cap detailed_route optimization iterations"
-    assert f"-droute_end_iter {R._ECO_REROUTE_MAX_DROUTE_ITERS}" in tcl
-    # exactly ONE detailed_route in the ECO reroute, and it is the bounded one —
-    # the ECO tcl must NOT leave an unbounded bare `{detailed_route}` that grinds.
+        "repair reroute must cap detailed_route optimization iterations"
+    assert f"-droute_end_iter {R._POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS}" in tcl
+    # exactly ONE detailed_route in the repair reroute, and it is the bounded one —
+    # the repair tcl must NOT leave an unbounded bare `{detailed_route}` that grinds.
     assert tcl.count("detailed_route") == 1
     assert "{detailed_route}" not in tcl
     # the cap is a small positive bound (front-loads recovery, drops the futile tail)
-    assert 1 <= R._ECO_REROUTE_MAX_DROUTE_ITERS <= 20
+    assert 1 <= R._POSTROUTE_TIMING_REPAIR_MAX_DROUTE_ITERS <= 20
 
 
-def test_561_canonicalize_emits_eco_tcl(tmp_path):
-    # step_canonicalize_artefacts must write eco_timing_repair.tcl when pnr_out exists
+def test_561_canonicalize_emits_repair_tcl(tmp_path):
+    # step_canonicalize_artefacts must write postroute_timing_repair.tcl when pnr_out exists
     # Set up a minimal project tree so the function can run far enough
-    eco_out = tmp_path / "phase3" / "stage3" / "eco"
-    eco_out.mkdir(parents=True)
+    postroute_timing_repair_out = tmp_path / "phase3" / "stage3" / "postroute_timing_repair"
+    postroute_timing_repair_out.mkdir(parents=True)
     # The TCL must NOT exist yet
-    eco_tcl = eco_out / "eco_timing_repair.tcl"
-    assert not eco_tcl.exists()
-    # Call _build_eco_repair_tcl directly (canonicalize path is integration)
+    repair_tcl = postroute_timing_repair_out / "postroute_timing_repair.tcl"
+    assert not repair_tcl.exists()
+    # Call _build_postroute_timing_repair_tcl directly (canonicalize path is integration)
     content = _build()
-    eco_tcl.write_text(content)
-    assert eco_tcl.is_file()
-    tcl_text = eco_tcl.read_text()
+    repair_tcl.write_text(content)
+    assert repair_tcl.is_file()
+    tcl_text = repair_tcl.read_text()
     # All 4 workaround anchors must be present in the written file
     assert "post_hold.def" in tcl_text
     assert "setup-only" in tcl_text

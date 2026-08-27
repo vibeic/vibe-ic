@@ -40,7 +40,7 @@ def _project(tmp_path: Path, steps) -> Path:
 _STEPS = [
     {"name": "alpha_stage", "status": "PASS", "detail": "ok"},
     {"name": "beta_stage", "status": "FAIL", "detail": "tool rc=1"},
-    {"name": "gamma_loop", "status": "FAIL_ECO_INERT",
+    {"name": "gamma_loop", "status": "FAIL_RTL_REPAIR_INERT",
      "detail": "iteration produced byte-identical output (sha256=deadbeefcafe0001)"},
 ]
 
@@ -65,9 +65,9 @@ def test_failing_steps_are_surfaced_verbatim(tmp_path):
     fails = data["orchestrator_failures"]
     assert [f["name"] for f in fails] == ["beta_stage", "gamma_loop"]
     # Verbatim: the distinct tier must NOT be normalised down to "FAIL".
-    assert [f["status"] for f in fails] == ["FAIL", "FAIL_ECO_INERT"]
+    assert [f["status"] for f in fails] == ["FAIL", "FAIL_RTL_REPAIR_INERT"]
     frame = fdc.render_frame(data, width=200, color=False)
-    assert "FAIL_ECO_INERT" in frame
+    assert "FAIL_RTL_REPAIR_INERT" in frame
     assert "beta_stage" in frame and "gamma_loop" in frame
 
 

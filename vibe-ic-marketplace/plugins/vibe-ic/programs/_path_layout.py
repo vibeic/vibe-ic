@@ -48,7 +48,7 @@ not by skill (see docs/architecture/RFC_v2.0_PHASE_REDESIGN.md):
       │   ├── pnr/
       │   ├── cts/
       │   ├── extracted/      parasitics (SPEF)
-      │   ├── eco/
+      │   ├── postroute_timing_repair/
       │   ├── spice/          post-layout SPICE correlation
       │   ├── sta/            post-route STA
       │   └── sim_postlayout/
@@ -321,8 +321,8 @@ def extracted_dir(project: Path) -> Path:
     return project / "phase3/stage3/extracted"
 
 
-def eco_dir(project: Path) -> Path:
-    return project / "phase3/stage3/eco"
+def postroute_timing_repair_dir(project: Path) -> Path:
+    return project / "phase3/stage3/postroute_timing_repair"
 
 
 def spice_dir(project: Path) -> Path:

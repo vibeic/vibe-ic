@@ -195,15 +195,15 @@ def test_spef_repair_block_is_measure_only():
     assert "SPEF_MEASURE_COMPLETE" in cmd_txt
 
 
-def test_eco_builder_keeps_pre_route_repair():
-    """The #561 ECO builder runs from post_hold.def (a PRE-route state),
+def test_repair_builder_keeps_pre_route_repair():
+    """The #561 repair builder runs from post_hold.def (a PRE-route state),
     so ITS repair_timing is safe and must be preserved — only the
     POST-route SPEF block drops repair (#581 r3)."""
-    eco = R._build_eco_repair_tcl("top", "/t.lef", "/c.lef", "/l.lib",
-                                  "/pnr", "/eco", "met")
-    assert "post_hold.def" in eco           # pre-route start point
-    assert "repair_timing" in eco           # safe pre-route repair kept
-    assert eco.index("repair_design") < eco.index("pass 2")
+    repair = R._build_postroute_timing_repair_tcl("top", "/t.lef", "/c.lef", "/l.lib",
+                                  "/pnr", "/repair", "met")
+    assert "post_hold.def" in repair           # pre-route start point
+    assert "repair_timing" in repair           # safe pre-route repair kept
+    assert repair.index("repair_design") < repair.index("pass 2")
 
 
 def test_spef_repair_block_no_multiline_catch_in_bracket_expr():

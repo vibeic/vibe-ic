@@ -189,7 +189,7 @@ def audit_source(src: str, path: str = "<src>") -> List[Dict[str, Any]]:
     # already accounted for on both paths — e.g.
     #     plan.append(StepResult(..., "PASS" if remediated else "SKIP", ...))
     # records the decline BEFORE the `if remediated:` guard. Verified against a
-    # real site (design_one_shot_runner eco_loop_remediation) that the first
+    # real site (design_one_shot_runner rtl_repair_remediation) that the first
     # draft flagged. Erring toward FEWER findings is deliberate: #313 §2 says a
     # gate that fires on a legitimate state is a bug whose real cost is that
     # people learn to ignore it.

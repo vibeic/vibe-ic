@@ -113,7 +113,7 @@
 | 15.5ic | Pad ring（僅 chip/IC 路徑） | 在核心外圍擺放 I/O pad ring，讓晶粒可以打線出腳。cell/IP 路徑不執行。 | `floorplan.def` | `padring.def`・`padring.json` | OpenROAD／PDK I/O 元件庫 | `pad_ring_gen`・`pad_ring_check` |
 | 16 | Clock planning | 規劃時脈樹的分佈策略。 | floorplan | `clock_plan.json` | OpenROAD CTS 規劃 | `clock_plan_check`<br>skills：`cts-plan` |
 | 17 | Placement | 擺放標準元件（全域 + 細部）。 | floorplan・網表 | `placed.def` | OpenROAD (global+detailed place)<br>`eda_pnr` | `placement_legality_check`<br>skills：`placement-optimize` |
-| 18 | Spare-cell + ECO-prep insertion | 預置備用元件與 ECO 預備，讓日後修 bug 只需改金屬層（與 Step 32 ECO 互為前後手：此處預置、Step 32 取用）。 | placed.def | `spare_cells.json`・覆蓋率報告 | OpenROAD<br>`eda_pnr` | `spare_cell_coverage_check`（preservation 改在 Step 34 審核：備用元件必須存活的優化步驟都跑完之後） |
+| 18 | Spare-cell + ECO-prep insertion | 預置備用元件與 ECO 預備，讓未來真正的實體變更可只改金屬層。Step 32 是獨立流程，不會取用這個 spare pool。 | placed.def | `spare_cells.json`・覆蓋率報告 | OpenROAD<br>`eda_pnr` | `spare_cell_coverage_check`（preservation 改在 Step 34 審核：備用元件必須存活的優化步驟都跑完之後） |
 | 19 | CTS | 建構時脈樹、平衡時脈偏移。 | placed.def・clock plan | `post_cts.def`・時脈樹報告 | OpenROAD CTS<br>`eda_pnr` | `cts_quality_check` |
 | 20 | 🔁 Post-CTS hold fixing | 修復時脈樹建好後出現的 hold 違規（繞線後 runner 會再跑一次 hold 修復）。 | post_cts.def | `post_hold.def` | OpenROAD repair_timing -hold | `hold_closure_check`<br>skills：`hold-fix` |
 | 21 | Routing | 完成所有訊號繞線（全域 + 細部）。 | post_hold.def | `routed.def`・router DRC 報告 | OpenROAD TritonRoute<br>`eda_pnr` | `drc_report_check`・`def_stage_progression_check`・`provenance_check` |
@@ -128,7 +128,7 @@
 | 29 | Post-layout gate-level sim | 帶 SDF 延遲的閘級模擬，確認佈局後功能正確（無 SDF 重模擬即誠實 SKIP）。 | 閘級網表・SDF・TB | post-sim 結果 | iverilog + SDF<br>`eda_simulate` | `post_layout_sim_check` |
 | 30 | Post-layout SPICE verification | 電晶體級 ngspice 對 Liberty 時序的比對：單一代表性 cell 加上前 N 條 STA 關鍵路徑（每個相異終點取最差一條；抽出的 subckt 逐級串接、帶真實 net cap；逐路徑 SPICE vs STA 延遲並彙總）。 | SPICE deck・SPEF・STA paths | cell + top-N path SPICE 比對報告 | ngspice + OpenSTA<br>`eda_spice` | `spice_correlation_check`<br>skills：`ams-sim` |
 | 31 | 🔁 Physical verification | DRC / LVS / ERC / 密度實體規則簽核；密度在此屬**規則符合性**（KLayout deck 逐層 CMP 窗；執行驗證歸 Step 34、優化建議歸 Step 35）；LVS 走 Magic 抽取 + netgen 真比對（含 macro 的設計——如 Caravel 類 harness——可對 macro blackbox：Magic 以 `lef write -hide` 將 macro 遮為介面殼、netgen 補充 setup 以同名 blackbox 比對；waiver 依據＝device-level match＋KLayout 交叉驗證，由 `signoff_waiver_emit` 寫入專案 `waivers.json`，Step 36 checklist 以 open_waivers 交叉引用為 reviewer to-do）。 | GDS・閘級網表・PDK deck | 簽核 DRC・LVS・ERC 報告 | KLayout DRC・Magic ext2spice + netgen LVS・OpenROAD ERC<br>`eda_drc_klayout`・`eda_lvs` | `erc_density_check`<br>skills：`drc-fix`・`lvs-triage`・`perc-check` |
-| 32 | 🔁 繞線後時序修復 pass | 多角落 `repair_design` + `repair_timing -setup`，接著對已繞線的 DEF 跑**完整的** `global_route` + `detailed_route`。**這不是 ECO**：它重繞整顆設計而非保留既有實作，而且我們沒有已發行的版本可供變更。**它並沒有取用 Step 18 的 spare cells** —— 實測：180 行的產生器裡 spare 出現 0 次，也沒有 `dont_touch`/`preserve`。2026-07-31 更名。| 簽核報告 | 修復 log 或 no-repair flag | OpenROAD | `eco_loop_audit`<br>skills：`eco-plan` |
+| 32 | 🔁 繞線後時序修復 pass | 多角落 `repair_design` + `repair_timing -setup`，接著對已繞線的 DEF 跑**完整的** `global_route` + `detailed_route`。**這不是 ECO**：它重繞整顆設計而非保留既有實作，而且我們沒有已發行的版本可供變更。**它並沒有取用 Step 18 的 spare cells** —— 產生器裡沒有 spare-cell 參照，也沒有 `dont_touch`/`preserve`。 | 簽核報告 | `repair_log.json` 或 `no_repair_needed.flag` | OpenROAD 繞線後修復 | `postroute_timing_repair_audit`<br>skills：`sta-review` |
 
 ### Stage 4 — 輸出與 Tapeout
 

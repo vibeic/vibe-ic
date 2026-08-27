@@ -56,14 +56,14 @@ def test_313_does_not_flag_the_fix_that_actually_landed():
 
 
 def test_313_does_not_flag_disclosure_before_the_guard():
-    """A real site (design_one_shot_runner eco_loop_remediation) records the
+    """A real site (design_one_shot_runner rtl_repair_remediation) records the
     decline BEFORE the guard:
         plan.append(StepResult(..., "PASS" if remediated else "SKIP", ...))
     The first draft flagged it; verified against the real file, then fixed."""
     src = '''
 def step():
-    remediated = _eco_remediate_with_hint(p, h)
-    plan.append(StepResult("eco", "PASS" if remediated else "SKIP", 0.0, d))
+    remediated = _rtl_repair_remediate_with_hint(p, h)
+    plan.append(StepResult("repair", "PASS" if remediated else "SKIP", 0.0, d))
     if remediated:
         go()
 '''

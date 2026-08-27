@@ -6,7 +6,7 @@ on 15 of 20 designs.  In all 15 the upstream producer `rtl_gen` had returned
 BLOCKED, so rtl/ genuinely did not exist -- the message was TRUE but it was a
 statement about an ABSENT INPUT, not about the design.  In the same runs
 `rtl_validate` and `sim` reported BLOCKED for that identical state, and after
-the ECO loop re-ran `rtl_gen` the very same gate reported SKIP for the very
+the RTL repair/retry loop re-ran `rtl_gen` the very same gate reported SKIP for the very
 same class.  One gate, two verdicts, decided by an unrelated upstream step.
 
 The properties pinned here:
@@ -16,7 +16,7 @@ The properties pinned here:
   * the refusal record is RECONCILABLE with the verdict the same gate emits
     once the producer succeeds;
   * the gate can still FAIL for its own real reason;
-  * the refusal keeps the ECO recovery loop engaged;
+  * the refusal keeps the repair recovery loop engaged;
   * a plain Phase-1 design doc with no harness gets the same verdict.
 """
 from __future__ import annotations
@@ -133,15 +133,15 @@ def test_gate_can_still_fail_for_its_real_reason(tmp_path, monkeypatch):
     assert "reference TB missing" in r.detail
 
 
-# ── 5. the ECO recovery loop must still engage on the refusal ───────────────
+# ── 5. the repair recovery loop must still engage on the refusal ───────────────
 
-def test_refusal_keeps_the_eco_recovery_loop_engaged():
-    """The ECO loop in `main()` exits on PASS / SKIP / WAIVED and iterates on
+def test_refusal_keeps_the_repair_recovery_loop_engaged():
+    """The RTL repair/retry loop in `main()` exits on PASS / SKIP / WAIVED and iterates on
     anything else. The 15 recoveries measured on that run depended on the
     absent-RTL verdict NOT being one of the exit statuses."""
-    eco_loop_exit_statuses = ("PASS", "SKIP", "WAIVED")
-    assert DOR._spf.REFUSAL_STATUS not in eco_loop_exit_statuses, (
-        "the refusal status exits the ECO loop -- rtl_gen would never be "
+    rtl_repair_retry_exit_statuses = ("PASS", "SKIP", "WAIVED")
+    assert DOR._spf.REFUSAL_STATUS not in rtl_repair_retry_exit_statuses, (
+        "the refusal status exits the RTL repair/retry loop -- rtl_gen would never be "
         "re-run and the recovery would be lost")
 
 

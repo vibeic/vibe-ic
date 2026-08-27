@@ -354,12 +354,12 @@ edges:
   "A9":   {controller: null, fallback_to: "A3", note: "Analog HW mismatch -> netlist or hardmacro fix."}
   "14":   {controller: null, fallback_to: 9,   note: "Synthesis script missing required options. A script edit, not a bounded action."}
   "20":   {controller: null, fallback_to: 19,  note: "Hold violation -> delay cell or re-CTS. timing.hold is DECLARED_ONLY; pnr.deck.hold_block_emission repairs a DECK, not hold timing, and binding it here would overclaim."}
-  "23":   {controller: null, fallback_to: 32,  note: "Setup/hold -> ECO loop. Hands forward to the ECO aggregator."}
+  "23":   {controller: null, fallback_to: 32,  note: "Setup/hold -> post-route timing repair. Hands forward to Step 32."}
   "24":   {controller: null, fallback_to: 15,  note: "IR drop > 5% -> PDN strengthen. pdn.strengthen is DECLARED_ONLY."}
   "25":   {controller: null, fallback_to: 21,  note: "EM violation -> widen wire or re-route. No EM domain is declared yet."}
   "26":   {controller: null, fallback_to: 21,  note: "Antenna violation -> diode or re-route. routing.antenna_diode_insert is DECLARED_ONLY."}
   "27":   {controller: null, fallback_to: 21,  note: "Crosstalk/noise -> shielding or spacing."}
   "28":   {controller: null, fallback_to: 15,  note: "ESD/well-tap/cross-domain gap -> floorplan change."}
-  "31":   {controller: null, fallback_to: 32,  note: "DRC/LVS/ERC fail -> ECO. drc.violations is DECLARED_ONLY."}
-  "32":   {controller: null, fallback_to: 32,  note: "ECO aggregator: re-run 21-28. A SCHEDULER, not an actuator; it re-enters itself."}
+  "31":   {controller: null, fallback_to: 32,  note: "DRC/LVS/ERC failure withholds the no-repair certificate; Step 32 cannot repair these domains. drc.violations is DECLARED_ONLY."}
+  "32":   {controller: null, fallback_to: 32,  note: "Post-route timing repair scheduler: re-run affected sign-off steps. A SCHEDULER, not an actuator; it re-enters itself."}
   "33":   {controller: null, fallback_to: 17,  note: "Power above the DECLARED budget -> re-place. placement.reduce_switching_capacitance is DECLARED_ONLY."}

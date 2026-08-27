@@ -30,7 +30,7 @@ Usage:
             [--top-name chip_top]
             [--container vibeic-eda]
             [--require-image vibeic-eda:<tag>]   # enforce WHICH image
-            [--max-eco 3]
+            [--max-rtl-repair-retries 3]
             [--skip-hardware]
             [--skip-phase1]
             [--skip-analog]
@@ -559,7 +559,7 @@ def _line_buffer_own_stream() -> None:
 
     MEASURED (sha256 x sky130A, run1.log): `=== PHASE 2 ===` was followed
     immediately by `DONE` with zero phase-2 output between them, which reads as
-    "phase 2 died instantly". Phase 2 had in fact run its full 3-iteration ECO
+    "phase 2 died instantly". Phase 2 had in fact run its full 3-retry RTL repair
     loop — at lines 109-131, ABOVE its own banner. Reproduced from first
     principles with a 6-line parent/child script: banners emerge in order with
     line buffering on and after everything with it off.
@@ -591,7 +591,7 @@ def main() -> int:
                    help="image ref or id the --container MUST be running. "
                         "Omitted: the image identity is still RECORDED to "
                         "reports/container_image.json, just not enforced.")
-    p.add_argument("--max-eco", type=int, default=3)
+    p.add_argument("--max-rtl-repair-retries", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--entry-step", default=None,
                    help="START the flow at this canonical step id. The step "
@@ -925,7 +925,7 @@ def main() -> int:
         p2_args = [str(project),
                    "--top-name", flow_top,
                    "--container", args.container,
-                   "--max-eco", str(args.max_eco)]
+                   "--max-rtl-repair-retries", str(args.max_rtl_repair_retries)]
         if args.skip_hardware:
             p2_args.append("--skip-hardware")
         # Forward --skip-phase3 so phase2's DFT/LEC chain (steps 11-13) gates the
@@ -1147,7 +1147,7 @@ def main() -> int:
     # This is what the general flow does to ANY design, so EVERY run gets it,
     # not only a run driven by a benchmark adapter. Measured before this
     # existed: a plain 4-to-1 multiplexer project recorded rtl_gen BLOCKED ->
-    # eco_loop_iter -> rtl_gen PASS with deterministic_generator="multiplexer"
+    # rtl_repair_retry_iter -> rtl_gen PASS with deterministic_generator="multiplexer"
     # in its own step record, and grepping the WHOLE project tree for any
     # attribution artefact returned nothing. Every fact was already on disk
     # and nothing read it.

@@ -5,7 +5,7 @@ inside NEVER-TAKEN `ifdef arms, so the generated full-stack TB bound
 conditionally-compiled ports (a formal / debug interface gated by a macro the
 DUT define-set excludes) that the sv2v-converted DUT — built under a different
 define-set — does not expose. The reference_tb then FAILed to compile (rc=23,
-23x "port `rvfi_*` is not a port of u_dut"), rendering the ECO loop inert via a
+23x "port `rvfi_*` is not a port of u_dut"), rendering the RTL repair/retry loop inert via a
 FALSE "real structural defect" attribution.
 
 Concretely: a CPU-core RTL declares 23 rvfi_* ports inside `ifdef RVFI...`endif

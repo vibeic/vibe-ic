@@ -33,7 +33,7 @@ Behaviour (chip-AGNOSTIC)
      pnr               → phase3/stage3/pnr
      cts               → phase3/stage3/cts
      extracted         → phase3/stage3/extracted
-     eco               → phase3/stage3/eco
+     eco (legacy only) → phase3/stage3/postroute_timing_repair
      spice             → phase3/stage3/spice
      sta               → phase3/stage3/sta
      sim_postlayout    → phase3/stage3/sim_postlayout
@@ -101,7 +101,10 @@ _DIR_MIGRATIONS = {
     "pnr":                "phase3/stage3/pnr",
     "cts":                "phase3/stage3/cts",
     "extracted":          "phase3/stage3/extracted",
-    "eco":                "phase3/stage3/eco",
+    # Migration-only source alias for run trees produced before the Step 32
+    # taxonomy correction. Runtime producers and consumers must never write
+    # this legacy directory.
+    "eco":                "phase3/stage3/postroute_timing_repair",
     "spice":              "phase3/stage3/spice",
     "sta":                "phase3/stage3/sta",
     "sim_postlayout":     "phase3/stage3/sim_postlayout",

@@ -328,9 +328,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
 | `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
 | `dynamic_ir_vectored_emit` | any | — | TRANSIENT (dynamic) IR-drop EMITTER (real PSM). |
-| `eco_loop_audit` | any | — | Audit the post-route timing repair pass's log for completeness. |
-| `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
-| `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
 | `eda_image_preflight` | any | — | verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536). |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
@@ -855,6 +852,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `port_parser` | any | — | the SHARED interface-port reader for the deterministic solvers. |
 | `post_layout_sim_check` | any | — | Verify post-layout gate-level simulation with SDF back-annotation. |
 | `post_route_signoff_corner_check` | any | — | Step-23 multi-corner sign-off SLACK gate. |
+| `postroute_timing_repair_audit` | any | — | Audit the post-route timing repair pass's log for completeness. |
+| `postroute_timing_repair_decision` | any | — | The shared Step 32 post-route timing-repair trigger decision. |
+| `postroute_timing_repair_status_gen` | any | — | Emit the Step 32 post-route timing-repair status artefact. |
 | `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | Power report check — wrapper for eda_report_audit --mode power. |
@@ -1591,9 +1591,6 @@ _(no programs in this group)_
 - `dual_track_select` — deterministic DUAL-TRACK convergence selector.
 - `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
 - `dynamic_ir_vectored_emit` — TRANSIENT (dynamic) IR-drop EMITTER (real PSM).
-- `eco_loop_audit` — Audit the post-route timing repair pass's log for completeness.
-- `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
-- `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
 - `eda_image_preflight` — verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536).
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
@@ -2117,6 +2114,9 @@ _(no programs in this group)_
 - `port_parser` — the SHARED interface-port reader for the deterministic solvers.
 - `post_layout_sim_check` — Verify post-layout gate-level simulation with SDF back-annotation.
 - `post_route_signoff_corner_check` — Step-23 multi-corner sign-off SLACK gate.
+- `postroute_timing_repair_audit` — Audit the post-route timing repair pass's log for completeness.
+- `postroute_timing_repair_decision` — The shared Step 32 post-route timing-repair trigger decision.
+- `postroute_timing_repair_status_gen` — Emit the Step 32 post-route timing-repair status artefact.
 - `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — Power report check — wrapper for eda_report_audit --mode power.

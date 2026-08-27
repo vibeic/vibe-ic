@@ -393,14 +393,14 @@ _SIBLING_RED = (
     '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
     '\n'
     'def emit_b(project, body):\n'
-    '    q = project / "sta" / "sta_mcorner_ocv_posteco.rpt"\n'
+    '    q = project / "sta" / "sta_mcorner_ocv_postrepair.rpt"\n'
     '    q.write_text(body)\n')
 
 
 def test_arm_b_an_unstamped_sibling_of_a_stamped_report_goes_red(tmp_path):
     rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": _SIBLING_RED}))
     assert rc == 1, out
-    assert "sta_mcorner_ocv_posteco.rpt" in out, out
+    assert "sta_mcorner_ocv_postrepair.rpt" in out, out
     assert "the same module stamps another" in out, out
 
 
@@ -428,8 +428,8 @@ def test_arm_b_sees_a_write_made_by_atomic_rename(tmp_path):
 
     The atomic-write doctrine here is temp-file + `os.replace`, so a correct
     emitter never calls `write_text` on its destination. While this scan knew
-    only the direct write forms, `sta_mcorner_ocv_posteco.rpt` — written by
-    `_measure_posteco_mcorner_ocv` via `replace` — was invisible to it.
+    only the direct write forms, `sta_mcorner_ocv_postrepair.rpt` — written by
+    `_measure_postrepair_mcorner_ocv` via `replace` — was invisible to it.
     """
     body = ('import os\n'
             'def emit_a(project, body):\n'
@@ -437,12 +437,12 @@ def test_arm_b_sees_a_write_made_by_atomic_rename(tmp_path):
             '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
             '\n'
             'def emit_b(project, body):\n'
-            '    tmp = project / "sta" / "sta_mcorner_ocv_posteco.rpt.tmp"\n'
+            '    tmp = project / "sta" / "sta_mcorner_ocv_postrepair.rpt.tmp"\n'
             '    tmp.write_bytes(body)\n'
-            '    os.replace(tmp, project / "sta" / "sta_mcorner_ocv_posteco.rpt")\n')
+            '    os.replace(tmp, project / "sta" / "sta_mcorner_ocv_postrepair.rpt")\n')
     rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
     assert rc == 1, out
-    assert "sta_mcorner_ocv_posteco.rpt" in out, out
+    assert "sta_mcorner_ocv_postrepair.rpt" in out, out
 
 
 def test_arm_b_does_not_require_a_copier_to_stamp(tmp_path):
@@ -494,12 +494,12 @@ def test_arm_b_follows_one_hop_delegation_to_a_stamper(tmp_path):
             '    rpt_out.write_text("STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
             '\n'
             'def wrapper(project, body):\n'
-            '    out = project / "sta" / "sta_mcorner_ocv_posteco.rpt"\n'
+            '    out = project / "sta" / "sta_mcorner_ocv_postrepair.rpt"\n'
             '    _session(out, body)\n'
             '    out.write_bytes(b"")\n')
     rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
     assert rc == 0, out
-    assert "sta_mcorner_ocv_posteco.rpt" not in out.split("examined")[0], out
+    assert "sta_mcorner_ocv_postrepair.rpt" not in out.split("examined")[0], out
 
 
 def test_arm_b_still_reddens_a_wrapper_whose_callee_does_not_stamp(tmp_path):

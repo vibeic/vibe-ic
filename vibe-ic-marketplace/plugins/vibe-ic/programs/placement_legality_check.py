@@ -269,7 +269,7 @@ _LEGALIZE_MARKER_RE = re.compile(
 # --- The placer's OWN verdict, as a NUMBER -----------------------------------
 # The markers above are a BOOLEAN condensation of the legalization ladder, and
 # they only exist for the rungs inside that ladder. The `check_placement` calls
-# OUTSIDE it — after spare-cell insertion, and after the ECO's own legalization
+# OUTSIDE it — after spare-cell insertion, and after the repair's own legalization
 # — wrapped the RAISING form in a `catch` and printed the tool's refusal as a
 # warning string:
 #
@@ -311,15 +311,15 @@ _CP_UNAVAILABLE_RE = re.compile(
 
 # WHERE the runner's placement verdicts are written. The legalization ladder
 # and the spare-cell check run inside the P&R script, whose transcript lands in
-# `phase3/stage3/pnr/`; the ECO repair is a SEPARATE OpenROAD invocation and its
-# transcript lands in `phase3/stage3/eco/eco_repair.log`. Scanning only `pnr/`
-# — which is what the marker reader did — is blind to every verdict the ECO
-# emits, including its own `ECO_DPL_LEGALIZE_FAILED`. CTS is listed for the same
+# `phase3/stage3/pnr/`; the timing repair is a SEPARATE OpenROAD invocation and its
+# transcript lands in `phase3/stage3/postroute_timing_repair/postroute_timing_repair.log`. Scanning only `pnr/`
+# — which is what the marker reader did — is blind to every verdict the repair
+# emits, including its own `POSTROUTE_TIMING_REPAIR_DPL_LEGALIZE_FAILED`. CTS is listed for the same
 # reason: a stage that writes its own log must not be a hole.
 _VERDICT_LOG_DIRS = (
     ("phase3", "stage3", "pnr"),
     ("phase3", "stage3", "cts"),
-    ("phase3", "stage3", "eco"),
+    ("phase3", "stage3", "postroute_timing_repair"),
 )
 
 
@@ -381,8 +381,8 @@ def _legalizer_markers(project: Path) -> tuple[List[str], List[str]]:
     """
     failed: List[str] = []
     ok: List[str] = []
-    # Every stage transcript, not just `pnr/`: the ECO runs OpenROAD again and
-    # writes `ECO_DPL_LEGALIZE_FAILED` into its OWN log, which a `pnr/`-only
+    # Every stage transcript, not just `pnr/`: the repair runs OpenROAD again and
+    # writes `POSTROUTE_TIMING_REPAIR_DPL_LEGALIZE_FAILED` into its OWN log, which a `pnr/`-only
     # scan never saw.
     for log in _verdict_logs(project):
         try:

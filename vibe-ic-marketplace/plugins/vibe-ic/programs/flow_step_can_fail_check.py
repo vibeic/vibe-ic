@@ -19,15 +19,15 @@ which is why the entry below is gone rather than merely quiet):
 
     judged only by "the declared file exists and is non-empty"
       1    Spec-to-RTL
-      18   Spare-cell + ECO-prep insertion
+      18   Spare-cell + repair-prep insertion
       27   Signal Integrity (crosstalk / noise / glitch)
       32   Post-route timing repair pass
       35   DFM screen
 
-Step 32 is not hypothetical. A run recorded `eco_needed=true, changes_count=0,
-re_verified=false` — an ECO that changed nothing and was never re-verified — and
+Step 32 is not hypothetical. A run recorded `repair_needed=true, changes_count=0,
+re_verified=false` — a repair that changed nothing and was never re-verified — and
 the step passed, because a file existed and its program criterion is optional.
-An ECO raised and not applied is indistinguishable from no ECO at all, and the
+A repair raised and not applied is indistinguishable from no repair at all, and the
 step said PASS.
 
 WHAT THIS CHECKS

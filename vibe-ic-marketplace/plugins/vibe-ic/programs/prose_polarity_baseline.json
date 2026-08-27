@@ -36,7 +36,7 @@
     "diff_verify_harness::parse_ports",
     "dispatcher_response_size_table_audit::_extract_resp_table",
     "dynamic_ir_vectored_emit::_discover_via_res",
-    "eco_status_gen::_parse_sta_for_violations",
+    "postroute_timing_repair_status_gen::_parse_sta_for_violations",
     "em_current_density_check::parse_lef_jmax",
     "erc_density_check::_check_erc",
     "extraction_input_capability_check::parse_tech_sections",

@@ -15,7 +15,7 @@ benchmark-only path:
 
   spec_generation          → phase1_spec_to_rtl   (Phase 1 → Phase 2)
   completion               → completion_loop      (recover interface → Phase 2)
-  functional_modification  → modify_loop          (ECO / rtl-repair)
+  functional_modification  → modify_loop          (RTL modification / rtl-repair)
   optimization             → optimize_loop        (synth-doctor / ppa)
   debug                    → debug_loop           (NOT Phase 1)
 
@@ -262,7 +262,9 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
             "verify": ["rtl_hygiene_lint.py", "spec_conformance_check.py",
                        "phase2-rtl-verify"],
         }},
-    # Given RTL → change its behaviour per a spec delta (functional ECO).
+    # Given RTL → change its behaviour per a spec delta. This is an RTL
+    # modification, not an ECO: there is no released physical implementation
+    # or change-order boundary in this task.
     # Verified by 2 (rewrite fidelity) / 4 (simulation) / 5 (formal), NOT by 13.
     "functional_modification": {
         # the deliverable is step 1's RTL (see DELIVERY_TARGETS);
@@ -277,7 +279,7 @@ NATURE_ENTRY: Dict[str, Dict[str, Any]] = {
             "name": "modify_loop",
             "deterministic_first": ["cvdp_context_interface_recover.py",
                                     "modify_complete_synth.py"],
-            "ai_backup": ["rtl-repair", "eco-plan"],
+            "ai_backup": ["rtl-repair"],
             "verify": ["equivalence-check", "phase2-rtl-verify",
                        "rtl_hygiene_lint.py"],
         }},

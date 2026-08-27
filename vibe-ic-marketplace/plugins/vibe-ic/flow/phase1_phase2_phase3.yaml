@@ -2340,10 +2340,10 @@ steps:
         # clean_run_v1427_20260715`: this PRE-LAYOUT gate discovered 13 files
         # and reported STA_REAL_VIOLATION_FOUND — sourced from
         # `phase3/stage3/sta/sta_mcorner_ocv.rpt` (step 23's sign-off corner
-        # report, setup -67.61 ns), `sta_mcorner_ocv_posteco.rpt` (step 32's
-        # POST-ECO artefact) and `reports/phase3/aging_sta.rpt`. Step 10's own
+        # report, setup -67.61 ns), `sta_mcorner_ocv_postrepair.rpt` (step 32's
+        # POST-REPAIR artefact) and `reports/phase3/aging_sta.rpt`. Step 10's own
         # declared report is clean. A pre-layout gate was being failed by a
-        # post-ECO artefact, and `pre_pnr_summary.json` and
+        # post-repair artefact, and `pre_pnr_summary.json` and
         # `post_route_summary.json` came out BYTE-IDENTICAL because both gates
         # read the same 13 files. Scoped, this gate reads 2 (the declared
         # report and the `steps/10_*/` symlink to it) and rc goes 1 -> 0.
@@ -4167,7 +4167,7 @@ steps:
         path: "phase2/stage2/constraints/pvt_matrix.json"
     closed_loop:
       fallback_to: 32
-      trigger: "Setup/Hold violation; ECO loop required"
+      trigger: "Setup/Hold violation; post-route timing repair required"
     skills: [sta-review]
     mcp_tools: [eda_sta]
     required_outputs:
@@ -4347,8 +4347,8 @@ steps:
         # consumes the ABSOLUTE worst-setup / worst-hold slack across ALL
         # sign-off corners"). Unscoped it was silently doing the multi-corner
         # job too, by accident, over every STA report in the project —
-        # including step 10's pre-layout report and step 32's POST-ECO
-        # `sta_mcorner_ocv_posteco.rpt`. That is why this gate and step 10's
+        # including step 10's pre-layout report and step 32's POST-REPAIR
+        # `sta_mcorner_ocv_postrepair.rpt`. That is why this gate and step 10's
         # produced byte-identical summaries on a real run.
         #
         # WHAT THIS LICENSES, stated before the change and then verified:
@@ -4916,14 +4916,14 @@ steps:
       - "reports/phase3/perc_equivalent.json"
       - "reports/phase3/perc_equivalent.rpt"
       - "reports/phase3/PERC_SIGNOFF_MEMO.md"
-      # The PERC sign-off VERDICT, and an ECO-trigger input. `eco_trigger_decision`
+      # The PERC sign-off VERDICT, and a repair-trigger input. `postroute_timing_repair_decision`
       # reads this exact path in `_NON_TIMING_SIGNOFF_ARTEFACTS` and FAILS CLOSED
       # on it — but only on an EXPLICIT hard-failure token. Its own docstring
       # states the consequence of absence in as many words: "an absent or
       # unreadable sign-off artefact is Step 21-31's problem, and reading it as
       # failure would deadlock Step 32". That delegation is correct AND it was
       # unhonoured: no step declared the file, so nothing anywhere verified it
-      # existed, and a missing PERC verdict silently became "no ECO demanded"
+      # existed, and a missing PERC verdict silently became "no repair demanded"
       # instead of a red gate. Declaring it here is the missing half of that
       # contract — the half that puts the artefact on a list, so a reader of
       # the flow can see who owes it.
@@ -4931,7 +4931,7 @@ steps:
       # WHAT IT DOES NOT DO, stated 2026-07-28 rather than implied: it is this
       # step's own gate `--json` target and NO producer outside that gate
       # writes it (`grep -rn perc_signoff programs/` reaches only
-      # `perc_signoff_check` itself and `eco_trigger_decision`, which READS
+      # `perc_signoff_check` itself and `postroute_timing_repair_decision`, which READS
       # it), so `check_step` re-probes it after the gate runs and credits the
       # copy the audit just wrote. The absence is therefore still not red by
       # default; it is named in a SELF-CERTIFIED EVIDENCE advisory and refused
@@ -5045,7 +5045,7 @@ steps:
         path: "phase3/stage3/pnr/routed.def"
     closed_loop:
       fallback_to: 32
-      trigger: "DRC/LVS/ERC fail; ECO"
+      trigger: "DRC/LVS/ERC fail; repair and recheck required"
     skills: [drc-fix, lvs-triage, perc-check]
     mcp_tools: [eda_drc_klayout, eda_lvs]
     programs:
@@ -5055,15 +5055,15 @@ steps:
       - "reports/phase3/lvs.rpt"
       - "reports/phase3/erc.rpt"
       # The two MACHINE-READABLE verdicts the three .rpt files above do not
-      # carry, and both are ECO-trigger inputs: `eco_trigger_decision` reads
+      # carry, and both are repair-trigger inputs: `postroute_timing_repair_decision` reads
       # `reports/phase3/lvs.json` and `reports/phase2/gates/erc_density.json`
       # by name in `_NON_TIMING_SIGNOFF_ARTEFACTS` and withholds
-      # `no_eco_needed.flag` only on an EXPLICIT hard-failure token in them.
+      # `no_repair_needed.flag` only on an EXPLICIT hard-failure token in them.
       # Its docstring says what absence does — "an absent or unreadable
       # sign-off artefact is Step 21-31's problem" — and Step 31 is the step it
       # is delegating to, which had never declared either file. So an LVS or
       # ERC/density verdict that was never written read exactly like one that
-      # said PASS, and Step 32 certified "no ECO needed" over it. Both are
+      # said PASS, and Step 32 certified "no repair needed" over it. Both are
       # present in the tracked benchmark roots that carry the already-declared
       # lvs.rpt (lvs.json 7/7, erc_density.json 6/7 — the seventh, subservient,
       # is FAIL on this step before and after), and declaring them supplies the
@@ -5107,7 +5107,7 @@ steps:
       # `reports/phase3/lvs_verdict.json` is the runner's OWN machine-readable
       # LVS verdict — `_write_lvs_verdict` emits it, `eda_report_audit`
       # (:1308, this step's own lvs gate) reads it as the independent
-      # confirmation of PASS/FAIL, and `eco_trigger_decision` lists it in
+      # confirmation of PASS/FAIL, and `postroute_timing_repair_decision` lists it in
       # `_NON_TIMING_SIGNOFF_ARTEFACTS` beside the lvs.json and
       # erc_density.json above. Exactly the same class as those two, and
       # undeclared for exactly as long. It was invisible because W2's producer
@@ -5560,19 +5560,16 @@ steps:
   #
   # WHY THE NAME MATTERED, not just cosmetics: an ECO is assumed incremental,
   # safe and improving, so the step inherited that trust. That is why nobody
-  # ever compared its own before/after — `eco_before` and `eco_after` sat
+  # ever compared its own before/after — `repair_before` and `repair_after` sat
   # adjacent in one JSON record and were never subtracted, and a pass that made
   # setup 12x WORSE was recorded as applied (fixed v1.8.62). Same defect family
   # as naming an ATPG cut netlist a "scan netlist": a name asserting a property
   # the thing does not have.
   #
-  # DELIBERATELY UNCHANGED, so this rename breaks no existing run tree:
-  #   - on-disk paths `phase3/stage3/eco/*`, `eco_log.json`,
-  #     `no_eco_needed.flag`, `eco_trigger_decision.json`
-  #   - program/gate identifiers `eco_loop_audit`, `eco_status_gen`,
-  #     `timing_eco_needed`
-  # Renaming those would invalidate every run record already on disk for no
-  # measurement gain. The label is what misleads a reader; the paths do not.
+  # The rename is complete across the executable contract: module names, Python
+  # identifiers, decision keys, gate names, directory names and artefact names
+  # all use `postroute_timing_repair` / `repair`. There is no `eco_*` alias;
+  # accepting both vocabularies would recreate the ambiguity at the API edge.
   #
   # CORRECTLY named and untouched: Step 18 "Spare-cell + ECO-prep insertion
   # (Design-for-ECO)" — inserting spares pre-tapeout so a FUTURE ECO is
@@ -5594,92 +5591,94 @@ steps:
   #
   # `eco-plan` and `design-for-eco` remain, unchanged, for the case they were
   # written for: a real post-tapeout change against a frozen revision.
-  # If any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE)
-  # fails, ECO applies targeted netlist patches and re-runs the
-  # failing checks. If all sign-off steps passed on first attempt,
-  # the ECO step records "no_eco_needed" and passes through.
+  # A timing failure can fire this whole-design repair and reroute pass. A hard
+  # failure in a non-timing sign-off domain withholds the no-repair certificate
+  # and leaves the named domain red; Step 32 does not pretend its timing deck
+  # can repair IR, EM, SI or PV. If all sign-off domains pass, the step records
+  # `no_repair_needed` and passes through.
   #
   # v1.7.64 — what the AUTO-trigger actually does vs what the skill does.
-  # `eco_trigger_decision.decide()` (shared by phase3_one_shot_runner and
-  # eco_status_gen) is the ONLY producer of `no_eco_needed.flag`. It:
+  # `postroute_timing_repair_decision.decide()` is the single shared policy used
+  # by `phase3_one_shot_runner` and `postroute_timing_repair_status_gen`. It:
   #   * DECIDES ON TIMING from the multi-corner OCV sign-off (ss/ff), falling
   #     back to single-corner tt when the PDK exposes one corner (§4.05), and
-  #     AUTO-RUNS `eco_timing_repair.tcl` for a timing violation;
+  #     AUTO-RUNS `postroute_timing_repair.tcl` for a timing violation;
   #   * FAILS CLOSED on the NON-timing domains — it reads the sign-off
   #     verdicts this run already wrote (reports/phase3/{ir_drop,em,
   #     si_crosstalk,lvs,lvs_verdict,erc,antenna}.json,
   #     reports/phase2/gates/{erc_density,perc_signoff}.json) and REFUSES to
-  #     write `no_eco_needed.flag` while any of them reports a HARD failure.
+  #     write `no_repair_needed.flag` while any of them reports a HARD failure.
   #     It does NOT auto-repair those domains: the flag is withheld, this
-  #     step's gate goes red (NO_ECO_ARTIFACT), and `sta-review` owns
+  #     step's gate goes red (NO_REPAIR_ARTIFACT), and `sta-review` owns
   #     the repair. Before v1.7.64 the decision read STA alone, so a run with
-  #     a failed IR-drop / EM / SI / PV sign-off still certified "no ECO
-  #     needed" and `eco_loop_audit` short-circuited to PASS.
+  #     a failed IR-drop / EM / SI / PV sign-off still certified "no repair
+  #     needed" and `postroute_timing_repair_audit` short-circuited to PASS.
   #   Only explicit hard-fail signals count (verdict/status/result FAIL,
   #   VIOLATED, MISMATCH…, or passed/pass/summary.pass == false). Missing,
-  #   unparseable, advisory and review-tier artefacts do NOT demand an ECO.
+  #   unparseable, advisory and review-tier artefacts do NOT demand repair.
   - id: 32
     name: "🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)"
     stage: stage3
     closed_loop:
       fallback_to: 32
-      trigger: "Aggregator: re-run #21-#28 after ECO"
+      trigger: "Aggregator: re-run #21-#28 after post-route timing repair"
     skills: [sta-review]
     required_outputs:
-      - "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag"
+      - "phase3/stage3/postroute_timing_repair/repair_log.json OR phase3/stage3/postroute_timing_repair/no_repair_needed.flag"
       # The trigger DECISION itself is a durable §4.05 audit-trail artefact and
-      # is written on EVERY branch of the ECO block (no-ECO-needed, ECO fired,
-      # and the single-corner "eco_required, not auto-run" fallback — the one
-      # branch that writes NEITHER eco_log.json NOR no_eco_needed.flag). It
+      # is written on EVERY branch of the repair block (no repair needed,
+      # repair fired, and the single-corner required-but-not-auto-run fallback —
+      # the one branch that writes NEITHER repair_log.json NOR
+      # no_repair_needed.flag. It
       # records the basis, whether multi-corner OCV was available, and the
-      # violated corners; without it a reviewer cannot tell WHY the ECO did or
+      # violated corners; without it a reviewer cannot tell WHY repair did or
       # did not fire. Nothing verified it before.
-      # NOT declared here, deliberately: no_eco_summary.json (eco_status_gen
-      # writes it only on the no-ECO branch) and eco_timing_repair.tcl (a
+      # NOT declared here, deliberately: no_repair_summary.json (postroute_timing_repair_status_gen
+      # writes it only on the no-repair branch) and postroute_timing_repair.tcl (a
       # best-effort pre-stage inside try/except) — both are branch-conditional,
       # so declaring them would manufacture a MISSING on a legitimate run.
-      - "phase3/stage3/eco/eco_trigger_decision.json"
+      - "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"
     gate:
       all_of:
-        - files_exist: ["phase3/stage3/eco/eco_log.json", "phase3/stage3/eco/no_eco_needed.flag"]
+        - files_exist: ["phase3/stage3/postroute_timing_repair/repair_log.json", "phase3/stage3/postroute_timing_repair/no_repair_needed.flag"]
           any_of: true
         # `condition_files_exist` is ANY-of: the program runs when at least one
-        # listed path exists. It used to list eco_log.json ALONE, which made
+        # listed path exists. It used to list repair_log.json ALONE, which made
         # the gate unreachable in precisely the state the audit exists to
-        # judge — a run that wrote `no_eco_needed.flag` has NO eco log, so the
+        # judge — a run that wrote `no_repair_needed.flag` has no repair log, so the
         # audit was skipped and the flag certified the step by itself. That is
-        # the false-clean `eco_trigger_decision`'s own fail-close was written
-        # to prevent, one artefact downstream: measured on a project holding
-        # the flag next to a decision record saying `eco_needed: true` with a
-        # hard IR-drop failure, `eco_loop_audit` returned rc=1 while
+        # the false clean the decision record's fail-close was written to
+        # prevent, one artefact downstream: measured on a project holding
+        # the flag next to a decision record saying `repair_needed: true` with a
+        # hard IR-drop failure, `postroute_timing_repair_audit` returned rc=1 while
         # `_evaluate_gate` returned passed=True with no reasons.
         #
         # The decision record is what is added, and only it: it is the artefact
         # the cross-check reads, and `phase3_one_shot_runner` writes it on
-        # EVERY canonicalize pass regardless of which ECO branch was taken, so
+        # EVERY canonicalize pass regardless of which repair branch was taken, so
         # the gate is now reachable on both branches of a real run — including
-        # the no-ECO branch, where the contradiction can appear.
+        # the no-repair branch, where the contradiction can appear.
         #
-        # `no_eco_needed.flag` is deliberately NOT listed. Adding it would only
+        # `no_repair_needed.flag` is deliberately NOT listed. Adding it would only
         # cover a tree holding the flag and NO decision record, where the audit
         # has nothing to cross-check and exits 0 anyway — and it would cost
         # something real: `test_matrix_d2_falsifiable` proves each blocking
         # clause can FAIL by materialising every `condition_files_exist` path
         # as a substanceless file, so listing the flag hands the audit a
-        # flag-certified no-ECO run and the clause stops being reddenable at
+        # flag-certified no-repair run and the clause stops being reddenable at
         # all. Listing only the record keeps the clause falsifiable and loses
         # no reachable state.
         - optional_program_exit_zero:
-            command: "eco_loop_audit . --json reports/phase2/gates/eco_audit.json"
+            command: "postroute_timing_repair_audit . --json reports/phase2/gates/postroute_timing_repair_audit.json"
             condition_files_exist:
-              - "phase3/stage3/eco/eco_log.json"
-              - "phase3/stage3/eco/eco_trigger_decision.json"
+              - "phase3/stage3/postroute_timing_repair/repair_log.json"
+              - "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"
             absent_condition_reason: >-
               Step 32's required_outputs is the single any-of pattern
-              `eco_log.json OR no_eco_needed.flag`, so an ECO that ran and
+              `repair_log.json OR no_repair_needed.flag`, so a repair that ran and
               wrote no log leaves NEITHER and the step resolves MISSING,
               loudly. The condition's false branch therefore coincides with an
-              honestly declared no-ECO run, not with a silent loss of an ECO
+              honestly declared no-repair run, not with a silent loss of a repair
               that happened.
     blocks_on: [23, 24, 25, 26, 27, 29, 30, 31]
 

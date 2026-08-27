@@ -15,7 +15,7 @@ NECESSARY BUT NOT SUFFICIENT. v0.108 fresh-agent benchmark proved that
 a project can pass every individual structural gate while only
 completing 2/34 canonical steps because steps 15-33 (PnR canonical
 artefacts, SPEF, post-route STA, IR/EM/antenna/SI, post-layout sim,
-SPICE correlation, ECO, power, metal fill, tapeout checklist) and
+SPICE correlation, post-route timing repair, power, metal fill, tapeout checklist) and
 step 36 (FPGA final sign-off, was step 35 pre-Wave-91) were never
 verified. (Wave 91 / v1.6.15: stage3-5 cascade +1; pre-PnR Yosys gate
 is now Step 14; structural-RTL umbrella is `P0`.)
@@ -12495,7 +12495,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # when the broader --strict-step-artifacts is also set, from
     # Phase 2 step results 1-13 as well). Emit an explicit "Phase 2
     # strict-structural mode" block listing each failing gate so the
-    # agent can ECO-loop. Wave-21 fix: when --strict-structural is set
+    # agent can RTL-repair/retry. Wave-21 fix: when --strict-structural is set
     # WITHOUT --strict-step-artifacts, only structural-RTL P0 umbrella
     # contributes to the gate listing (step-level FAILs are reported
     # in the per-step listing but not under the strict-structural

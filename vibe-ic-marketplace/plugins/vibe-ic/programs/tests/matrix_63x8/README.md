@@ -486,8 +486,8 @@ python3 tools/gen_matrix_63x8_census.py --check  # exit 1 on drift
 > **Dimension 4 closed all ten**, and one of them nearly closed on the wrong
 > evidence: step 32's cell passed on the flow yaml alone, because
 > `condition_files_exist` was accepted as artefact GROUNDING. Restoring the
-> ORIGINAL defective `programs/eco_loop_audit.py` — in which
-> `grep -c eco_trigger_decision` is 0 — left the cell green. That channel is
+> ORIGINAL defective `programs/postroute_timing_repair_audit.py` — in which
+> `grep -c postroute_timing_repair_decision` is 0 — left the cell green. That channel is
 > withdrawn (`matrix_d4_probe.gate_declared_paths`); the cell now reddens on
 > its own defect and passes on the fix.
 

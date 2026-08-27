@@ -16,7 +16,7 @@ step still reporting PASS.
 
 That is the normal path, not an error path: an author is *required*
 whenever the deterministic generator cannot produce compiling RTL (the
-generator emits, the ECO loop returns ``FAIL_ECO_INERT``, a human or an
+generator emits, the RTL repair/retry loop returns ``FAIL_RTL_REPAIR_INERT``, a human or an
 agent authors the design by hand).  Re-running the front door then
 deleted precisely the work that only existed because the generator had
 failed.

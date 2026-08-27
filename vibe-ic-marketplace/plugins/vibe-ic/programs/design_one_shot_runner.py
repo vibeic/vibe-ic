@@ -7,7 +7,7 @@ auto-chains `phase1_one_shot_runner.py` when `generated_docs/L*.json` is absent 
 sparse (so either Phase-1 entry — doc-extraction OR prompt/dialogue — flows through
 the same (doc|prompt) → Phase1(L*.json) → Phase2 chain), then runs Phase 2:
   - rtl/*.sv|.v               (deterministic AID-class RTL via aid_class_rtl_gen)
-  - sim/reference_tb/*.log    (iverilog protocol TB; ECO loop)
+  - sim/reference_tb/*.log    (iverilog protocol TB; RTL repair/retry loop)
   - sim_full_stack/*.json     (oracle for protocol_ip_simulation_required_check)
   - synth/netlist_yosys.v
   - fpga/<top>.qsf, .sdc, output_files/*.sof
@@ -29,7 +29,7 @@ Pipeline (chip-AGNOSTIC, but skip-on-mismatch when class detection fails):
        (Wave 45/46 hardware-verified baseline)
        Other branches: SKIP step 2 with explicit verdict
     3. iverilog reference TB (vibe-ic/tools/protocol_tb/aid_class_reference_tb.v)
-       FAIL → ECO loop point (max 3 iterations); user must fix RTL
+       FAIL → RTL repair/retry loop point (max 3 iterations); user must fix RTL
     4. yosys offline synth (no docker) — early sanity check
     4b. qsf_gen.py / sdc_gen.py (Wave 72; Wave 73 rename) — auto-emit
        fpga/<top>.qsf + fpga/<top>.sdc when absent. SKIP if present.
@@ -42,7 +42,7 @@ Pipeline (chip-AGNOSTIC, but skip-on-mismatch when class detection fails):
        the value declared in L9 (chip-agnostic — does NOT hardcode the
        expected verdict; reads `expected_verdict_byte_hex` from L9
        and SKIPs if absent rather than asserting a default)
-       FAIL → ECO loop point (max 3 iterations) before giving up
+       FAIL → RTL repair/retry loop point (max 3 iterations) before giving up
     8. Phase 3: synth → STA → DFT → PnR → DRC → LVS → GDS via mcp-eda Docker
     9. flow_compliance_check.py --strict
    10. write RESULT.md + reports/phase23_one_shot.json
@@ -55,14 +55,14 @@ Usage:
     python3 phase23_one_shot_runner.py <project_dir>
                   [--skip-hardware]    # don't try FPGA burn / <half-duplex-tester>
                   [--skip-phase3]      # stop after byte[6] verify
-                  [--max-eco 3]        # ECO loop cap
+                  [--max-rtl-repair-retries 3]        # RTL repair/retry loop cap
                   [--top-name chip_top]
                   [--container vibeic-eda]
                   [--dry-run]          # plan only, don't execute
 
 Exit codes:
     0  every required step PASS or PASS_WITH_WAIVERS
-    1  a step FAILed and ECO budget exhausted
+    1  a step FAILed and RTL repair retry budget exhausted
     2  IO / arg / IC-class mismatch error
 
 Limitations (intentional, will be relaxed in future waves):
@@ -164,7 +164,7 @@ _FORCE_RTL_REGEN = False
 
 # True once THIS process has established ownership of phase2/stage1/rtl/.
 # Cross-run authorship is what the guard protects against; intra-run churn
-# (the ECO loop re-invoking step_rtl_gen) is the runner's own work and must
+# (the RTL repair/retry loop re-invoking step_rtl_gen) is the runner's own work and must
 # not be mistaken for a human author's.
 _RTL_SESSION_OWNED = False
 _RTL_SESSION_PROJECT: Optional[Path] = None
@@ -211,7 +211,7 @@ DEVICES_ROOT = _find_devices_root()
 @dataclass
 class StepResult:
     name: str
-    status: str            # PASS / FAIL / SKIP / ECO_LOOP / WAIVED / BLOCKED
+    status: str            # PASS / FAIL / SKIP / RTL_REPAIR_RETRY / WAIVED / BLOCKED
     #                      # / INCOMPLETE — the step ran and judged only
     #                      # PART of the population it is named for, and
     #                      # says which part. Not a pass, not a failure.
@@ -237,9 +237,9 @@ def _preflight_refusal(name: str):
     return _mk
 
 
-# v1.6.181 (#72 P1-4) — hint-driven ECO remediation policy.
-# When the ECO loop's byte-identical guard fires (RTL emitter is
-# functionally inert), `_eco_inert_hint` classifies the cause via
+# v1.6.181 (#72 P1-4) — hint-driven RTL repair remediation policy.
+# When the RTL repair/retry loop's byte-identical guard fires (RTL emitter is
+# functionally inert), `_rtl_repair_inert_hint` classifies the cause via
 # signature kinds. v1.6.181 redirects the loop to invoke
 # `phase1_one_shot_runner` ONCE per session when the hint contains
 # at least one kind in this set — those kinds map to phase1 L-doc
@@ -252,7 +252,7 @@ _HINT_KINDS_REMEDIABLE_BY_PHASE1 = frozenset({
 })
 
 
-def _eco_remediate_with_hint(project: Path,
+def _rtl_repair_remediate_with_hint(project: Path,
                               hint: Dict[str, Any]) -> Tuple[bool, str]:
     """v1.6.181 (#72 P1-4) — attempt one remediation pass on the
     project based on the inert-hint signatures.
@@ -269,7 +269,7 @@ def _eco_remediate_with_hint(project: Path,
     if not any(s.get("kind") in _HINT_KINDS_REMEDIABLE_BY_PHASE1
                 for s in sigs):
         return False, ("no remediable signature kind in hint — "
-                       "leaving loop to declare FAIL_ECO_INERT")
+                       "leaving loop to declare FAIL_RTL_REPAIR_INERT")
     phase1 = PROGRAMS_DIR / "phase1_one_shot_runner.py"
     if not phase1.is_file():
         return False, (f"phase1_one_shot_runner not found at "
@@ -286,15 +286,16 @@ def _eco_remediate_with_hint(project: Path,
                      f"tail={tail!r}")
     except subprocess.TimeoutExpired:
         return False, ("phase1 regen timed out (600s); "
-                       "leaving loop to declare FAIL_ECO_INERT")
+                       "leaving loop to declare FAIL_RTL_REPAIR_INERT")
     except OSError as exc:
         return False, (f"phase1 regen failed: {exc!r}")
 
 
-def _eco_inert_fallback(ic_class: str) -> Tuple[str, Optional[str]]:
+def _rtl_repair_inert_fallback(ic_class: str) -> Tuple[str, Optional[str]]:
     """The author handoff for a generator that has PROVEN it cannot proceed.
 
-    ``FAIL_ECO_INERT`` means the ECO loop regenerated byte-identical RTL:
+    ``FAIL_RTL_REPAIR_INERT`` means the RTL repair/retry loop regenerated
+    byte-identical RTL:
     the repair loop cannot repair itself, so no further iteration will
     change anything. If the class declares a ``fallback_skill``, that
     author is exactly the sanctioned next move — but the registry
@@ -313,7 +314,7 @@ def _eco_inert_fallback(ic_class: str) -> Tuple[str, Optional[str]]:
         return "", skill
     return (
         f" The generator for class {ic_class!r} has proven it cannot "
-        f"proceed (byte-identical RTL across ECO iterations), and this "
+        f"proceed (byte-identical RTL across repair retries), and this "
         f"class declares fallback_skill={skill!r}: AI may invoke skill "
         f"`{skill}` to author the RTL from the design documents. "
         f"Authored RTL is PRESERVED by later front-door re-runs "
@@ -326,7 +327,7 @@ def _rtl_dir_sha256(project: Path) -> Optional[str]:
     """v1.6.127 (#49 Fix 1) — compute a stable sha256 over the
     project's emitted RTL.
 
-    Used to detect byte-identical retries in the close-loop ECO
+    Used to detect byte-identical retries in the closed-loop RTL repair
     machinery: when iteration N+1 regenerates the same bytes as
     iteration N, the retry counter ticks but no actual fix has
     been applied. Field-agent #49 traced this to the RTL emitter
@@ -1170,7 +1171,7 @@ def _find_host_quartus_sh() -> Optional[str]:
 
 # v1.6.18 — Container-side probe with caching. Returns True if the named
 # container has quartus_sh on its $PATH. Cached because step_fpga_compile
-# is the hot path inside an ECO loop (≤3 retries) — we do not want to
+# is the hot path inside an RTL repair/retry loop (≤3 retries) — we do not want to
 # re-spawn a docker exec on every iteration just to confirm what we
 # learned the first time.
 _CONTAINER_QUARTUS_CACHE: Dict[str, bool] = {}
@@ -1483,7 +1484,7 @@ def _lookup_class(ic_class: str) -> Optional[dict]:
 def _is_pure_analog_no_rtl_track(ic_class: Optional[str]) -> Tuple[bool, str]:
     """True when the IC class is a *pure-analog* design that has NO digital
     RTL track at all — so the RTL-dependent digital steps (reference_tb,
-    yosys_synth, the ECO loop) must SKIP, not FAIL.
+    yosys_synth, the RTL repair/retry loop) must SKIP, not FAIL.
 
     chip-AGNOSTIC: decided purely from the registry contract, not a chip
     name. The signature of an analog-only class is:
@@ -1523,7 +1524,7 @@ def _is_pure_analog_no_rtl_track(ic_class: Optional[str]) -> Tuple[bool, str]:
 
 def _analog_rtl_track_absent(project: Path,
                              ic_class: Optional[str]) -> Tuple[bool, str]:
-    """True when the RTL-dependent digital steps (reference_tb, the ECO loop,
+    """True when the RTL-dependent digital steps (reference_tb, the RTL repair/retry loop,
     yosys_synth) have NO honest work to do — so they must SKIP, not FAIL on the
     absent rtl/. TWO chip-AGNOSTIC signals, mirroring both the WAIVE decision
     step_rtl_gen already makes (ORGANIC #141) and the flow_compliance backend
@@ -3834,7 +3835,7 @@ def _try_phase1_behavioral_fsm_rtl_bound(
     if (_RTL_SESSION_OWNED and _RTL_SESSION_PROJECT == project
             and out.is_file()
             and out.read_text(errors="replace") == rtl):
-        # An ECO-loop re-entry occurs before the exit stamp, after alias/wrapper
+        # An RTL-repair/retry re-entry occurs before the exit stamp, after alias/wrapper
         # steps may have added runner-owned files.  The on-disk ledger is
         # intentionally stale until process exit, so classifying here would call
         # those additions "authored" and abandon this deterministic path.  The
@@ -4201,7 +4202,8 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         (freq_divbyeven / freq_divbyfrac false certificates). SKIPs unless the
         spec is an unambiguous divider/generator contract and the sim runs clean.
 
-    A fired gate is a real determinism bug → FAIL (an ECO point), exactly what
+    A fired gate is a real determinism bug → FAIL (an RTL repair point),
+    exactly what
     the benchmark path blocks emit on; both gates self-skip otherwise."""
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
@@ -6123,7 +6125,7 @@ def _step_rtl_gen_bound(
     #
     # Intra-run churn is not authorship: once this process has taken
     # ownership of rtl/ (a successful generation, or a guard decision
-    # already made), later calls in the SAME run — e.g. every ECO-loop
+    # already made), later calls in the SAME run — e.g. every RTL-repair/retry
     # iteration — skip the guard and regenerate freely.
     global _RTL_SESSION_OWNED, _RTL_SESSION_PROJECT
     _force = _FORCE_RTL_REGEN if force_regen is None else force_regen
@@ -7157,7 +7159,7 @@ def step_full_stack_tb_gen(project: Path,
     # port and OMITS the real ports, iverilog rejects "port `<param>` is not a
     # port of u_dut", and the reference_tb step mislabels it a "real structural
     # defect" though the RTL is correct — a FALSE attribution that halts the
-    # functional-sim gate and renders the ECO loop inert. The chip_top wrapper
+    # functional-sim gate and renders the RTL repair/retry loop inert. The chip_top wrapper
     # gen already parses the RTL surface (ports vs parameters); do the same here.
     # Prefer the RTL surface; fall back to L9 only when the RTL top is absent /
     # non-ANSI (no regression). chip-AGNOSTIC: structural RTL parse.
@@ -7424,7 +7426,7 @@ def step_full_stack_tb_gen(project: Path,
     # opcodes_tested populated. step_reference_tb may overwrite this
     # later with its protocol-IP transcript, but this guarantees the
     # bit_level_full_stack_tb_check gate sees opcodes_tested >= 3 even
-    # if step_reference_tb is skipped (e.g. fpga-only ECO loop).
+    # if step_reference_tb is skipped (e.g. fpga-only RTL repair/retry loop).
     # IMPORTANT: do NOT overwrite a richer results.json that already
     # carries per_vector / input_doc_evidence (emitted by
     # step_reference_tb). Only write our skeleton when the file is
@@ -10932,7 +10934,7 @@ def _alias_wrapper_unsafe_as_vl_bind_top(text: str, wrapper_name: str,
     case); None when the bind top is anything else (e.g. chip_top) or the
     wrapper is not neutralized. A bind-top selector — today the in-flow default
     is chip_top (safe, returns None); the out-of-flow risk is a future
-    reference_tb / eco-loop restage picking the wrapper — consults this so a
+    reference_tb / RTL-repair/retry restage picking the wrapper — consults this so a
     neutralized wrapper can never SILENTLY become the stuck-in-reset Verilator
     top."""
     if not vl_bind_top or vl_bind_top != wrapper_name:
@@ -11582,7 +11584,7 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     # combine). chip_top is the outermost face and owns the pull, so a TB
     # that binds chip_top (the in-flow default) is safe. But a Verilator TB
     # that DIRECT-binds the neutralized wrapper itself (out-of-flow today;
-    # candidate: an eco-loop reference_tb restaging original rtl) would tie
+    # candidate: an RTL-repair/retry reference_tb restaging original rtl) would tie
     # an unbound reset face to 0 -> active-low reset permanently asserted ->
     # stuck in reset. We cannot re-pull the inner wrapper here (that would
     # recreate the #115 two-level tri-port dead-reset for the primary
@@ -12673,7 +12675,7 @@ def step_fpga_compile(project: Path, top_name: str,
     # through to a Docker exec that the iic-osic-tools image cannot
     # service (no quartus_sh — Intel proprietary). When neither the host
     # nor the container has quartus_sh we now SKIP with a clear evidence
-    # message instead of FAILing through 3 ECO retries.
+    # message instead of FAILing through 3 RTL repair retries.
     host_quartus_sh = _find_host_quartus_sh()
     if host_quartus_sh is not None:
         quartus_rootdir = str(Path(host_quartus_sh).parent.parent)  # bin/.. → quartus/
@@ -12718,7 +12720,7 @@ def step_fpga_compile(project: Path, top_name: str,
     )
 
     # v1.6.85 (#17 Bug A3) — fail-fast on port-name-mismatch in the
-    # Quartus log. The field-agent surfaced a 4-iter ECO loop where
+    # Quartus log. The field-agent surfaced a 4-iter RTL repair/retry loop where
     # iverilog elaboration emitted `port id_bus is not a port of u_dut`
     # but the runner kept treating the resulting stale SOF as success
     # (because rc=0). Match the canonical iverilog/Quartus diagnostic
@@ -12753,7 +12755,7 @@ def step_fpga_compile(project: Path, top_name: str,
         why.append("compile.log carries failure signature")
     if port_mismatch_hit:
         # v1.6.85 (#17 Bug A3): surface the offending port name so the
-        # ECO loop sees the canonicalisation gap instead of silently
+        # RTL repair/retry loop sees the canonicalisation gap instead of silently
         # re-running with a stale SOF.
         why.append(
             f"port_mismatch: '{port_mismatch_hit.group(1)}' is not a port of u_dut "
@@ -12944,7 +12946,7 @@ def step_usb_hid_tester_verify(project: Path, runs: int = 5,
     # project owner's *explicit declaration* that no rig is in scope,
     # so Step 39 (FPGA final sign-off ``all_scenarios_passed``) should
     # be unblocked with a recorded waiver entry rather than left in a
-    # permanent SKIP that gates ECO loops. ``__TODO__`` is **NOT** a
+    # permanent SKIP that gates RTL repair/retry loops. ``__TODO__`` is **NOT** a
     # waiver — it is an unfilled placeholder and continues to SKIP.
     # The other no-hardware values (``none`` / ``no_hardware`` /
     # ``digital_only``) keep their existing SKIP semantics for
@@ -13013,7 +13015,7 @@ def step_usb_hid_tester_verify(project: Path, runs: int = 5,
         if isinstance(v, str):
             cand = v.lower().lstrip("0x").strip()
             # Treat unfilled placeholders / non-hex as ABSENT, not as a real
-            # expected value. Avoids burning ECO loops on `__todo__` mismatch.
+            # expected value. Avoids burning RTL repair/retry loops on `__todo__` mismatch.
             import re as _re
             if _re.fullmatch(r"[0-9a-f]{1,2}", cand):
                 expected_hex = cand
@@ -15777,7 +15779,7 @@ def step_emit_phase2_manifests(project: Path,
             "evidence": waiver.get("evidence") or usb_hid_tester_step.detail,
         }
     else:
-        # FAIL / SKIP / ECO_LOOP / unknown — do NOT promote
+        # FAIL / SKIP / RTL_REPAIR_RETRY / unknown — do NOT promote
         # all_scenarios_passed, but DO still emit the 6-field schema
         # when fpga_burn ran so Step 39 (fpga_on_board_attestation_check)
         # has the audit-evidence fields populated (#90 P0). If
@@ -16132,7 +16134,7 @@ def _line_buffer_own_stream() -> None:
 
     MEASURED (sha256 x sky130A, run1.log): `=== PHASE 2 ===` was followed
     immediately by `DONE` with zero phase-2 output between them, which reads as
-    "phase 2 died instantly". Phase 2 had in fact run its full 3-iteration ECO
+    "phase 2 died instantly". Phase 2 had in fact run its full 3-retry RTL repair
     loop — at lines 109-131, ABOVE its own banner. Reproduced from first
     principles with a 6-line parent/child script: banners emerge in order with
     line buffering on and after everything with it off.
@@ -16169,7 +16171,7 @@ def main() -> int:
                         "are checked BEFORE anything is skipped; if they are "
                         "absent the run REFUSES rather than proceeding into a "
                         "step that has nothing to read.")
-    p.add_argument("--max-eco", type=int, default=3)
+    p.add_argument("--max-rtl-repair-retries", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--skip-phase3", action="store_true",
@@ -16335,7 +16337,7 @@ def main() -> int:
     # PRE-FLIGHT (canonical step 1). Its declared input is D1's ENTIRE L1-L13
     # set, so a Phase 1 that produced a partial doc set can no longer be
     # laundered into "the RTL generator produced nothing". Only THIS dispatch
-    # is gated: the later `step_rtl_gen` calls are ECO-loop RE-runs that fire
+    # is gated: the later `step_rtl_gen` calls are RTL-repair/retry RE-runs that fire
     # after the first one has already read D1, so gating them would re-ask a
     # question whose answer this call already established.
     if _before_entry("rtl_gen", _entry_site):
@@ -16459,8 +16461,8 @@ def main() -> int:
     # Was declared in flow step-4 but never invoked by any runner until now.
     plan.append(step_professional_tb_gen(project, args.top_name, args.container))
 
-    # v1.6.170 (#60 P0-2) — deterministic ECO-inert hint extractor.
-    # When the ECO loop detects byte-identical RTL retry it now
+    # v1.6.170 (#60 P0-2) — deterministic RTL-repair-inert hint extractor.
+    # When the RTL repair/retry loop detects byte-identical RTL retry it now
     # scans the most recent compile / lint / simulator logs for
     # known failure-mode signatures and surfaces an actionable
     # `next_steps` hint in the StepResult.extras / detail, instead
@@ -16495,7 +16497,7 @@ def main() -> int:
         r"^ERROR:\s*(.+?)$", re.MULTILINE,
     )
 
-    def _eco_inert_hint(project: Path) -> Dict[str, Any]:
+    def _rtl_repair_inert_hint(project: Path) -> Dict[str, Any]:
         """Scan the most recent compile / sim / synth logs for known
         failure-mode signatures and return a structured hint dict:
 
@@ -16602,48 +16604,51 @@ def main() -> int:
             out["recommended_skill"] = "vibe-ic:rtl-repair"
         return out
 
-    # v1.6.181 (#72 P1-4) — see module-level _eco_remediate_with_hint
+    # v1.6.181 (#72 P1-4) — see module-level _rtl_repair_remediate_with_hint
     # below; the helper was hoisted out of `main()` so unit tests can
     # exercise the remediation policy directly.
 
-    # Step 3 — reference TB (with ECO loop on FAIL only; SKIP exits loop).
-    # v1.6.127 (#49 Fix 1) — detect byte-identical RTL across ECO
-    # iterations. If iteration N+1 emits the same bytes as iteration
+    # Step 3 — reference TB (with RTL repair/retry on FAIL only; SKIP exits).
+    # v1.6.127 (#49 Fix 1) — detect byte-identical RTL across repair
+    # retries. If retry N+1 emits the same bytes as retry
     # N, the close-loop is functionally inert; abort with
-    # FAIL_ECO_INERT instead of silently exhausting the retry counter.
-    eco = 0
+    # FAIL_RTL_REPAIR_INERT instead of silently exhausting the retry counter.
+    rtl_repair_retry = 0
     last_rtl_hash = _rtl_dir_sha256(project)
-    eco_remediation_attempted = False  # v1.6.181 (#72 P1-4)
+    rtl_repair_remediation_attempted = False  # v1.6.181 (#72 P1-4)
     while True:
         sr = step_reference_tb(project, args.top_name, ic_class,
                                args.container)
         plan.append(sr)
         # ORGANIC #543 — WAIVED means the reference-TB oracle path is
         # legitimately unavailable (e.g. no L9.top_ports, analog class).
-        # Entering the ECO loop in that state is inert: each iteration
+        # Entering the RTL repair/retry loop in that state is inert: each retry
         # calls step_rtl_gen which WAIVEs again, RTL never changes, and
-        # the loop terminates only via FAIL_ECO_INERT after args.max_eco
+        # the loop terminates only via FAIL_RTL_REPAIR_INERT after args.max_rtl_repair_retries
         # rounds.  Treat WAIVED the same as SKIP — exit immediately.
-        if sr.status in ("PASS", "SKIP", "WAIVED") or eco >= args.max_eco:
+        if (sr.status in ("PASS", "SKIP", "WAIVED") or
+                rtl_repair_retry >= args.max_rtl_repair_retries):
             break
-        eco += 1
-        plan.append(StepResult("eco_loop_iter", "ECO_LOOP",
+        rtl_repair_retry += 1
+        plan.append(StepResult("rtl_repair_retry_iter", "RTL_REPAIR_RETRY",
                                0.0,
-                               f"ref_tb FAIL → ECO iteration {eco}/{args.max_eco}"))
-        # ECO body: re-run RTL gen (idempotent — no-op if already current).
+                               f"ref_tb FAIL → RTL repair retry "
+                               f"{rtl_repair_retry}/"
+                               f"{args.max_rtl_repair_retries}"))
+        # Repair body: re-run RTL gen (idempotent if already current).
         plan.append(step_rtl_gen(project, ic_class))
         new_rtl_hash = _rtl_dir_sha256(project)
         if (new_rtl_hash is not None and last_rtl_hash is not None
                 and new_rtl_hash == last_rtl_hash):
-            hint = _eco_inert_hint(project)
+            hint = _rtl_repair_inert_hint(project)
             # v1.6.181 (#72 P1-4) — try hint-driven phase1 regen
-            # ONCE before declaring FAIL_ECO_INERT.
-            if not eco_remediation_attempted:
-                eco_remediation_attempted = True
-                remediated, detail = _eco_remediate_with_hint(
+            # ONCE before declaring FAIL_RTL_REPAIR_INERT.
+            if not rtl_repair_remediation_attempted:
+                rtl_repair_remediation_attempted = True
+                remediated, detail = _rtl_repair_remediate_with_hint(
                     project, hint)
                 plan.append(StepResult(
-                    "eco_loop_remediation",
+                    "rtl_repair_remediation",
                     "PASS" if remediated else "SKIP",
                     0.0, detail,
                     extras={"hint_signatures":
@@ -16657,15 +16662,17 @@ def main() -> int:
                         last_rtl_hash = rehashed
                         continue  # productive iteration → keep looping
             steps_txt = " | ".join(hint["next_steps"][:3])
-            _fb_note, _fb_skill = _eco_inert_fallback(ic_class)
+            _fb_note, _fb_skill = _rtl_repair_inert_fallback(ic_class)
             plan.append(StepResult(
-                "eco_loop_iter", "FAIL_ECO_INERT", 0.0,
-                (f"ECO iteration {eco} produced byte-identical RTL "
+                "rtl_repair_retry_iter", "FAIL_RTL_REPAIR_INERT", 0.0,
+                (f"RTL repair retry {rtl_repair_retry} produced "
+                 f"byte-identical RTL "
                  f"(sha256={new_rtl_hash[:16]}...) to the prior "
                  f"iteration. Next steps: {steps_txt}{_fb_note}"),
-                extras={"eco_inert_hint": hint,
+                extras={"rtl_repair_inert_hint": hint,
                          "fallback_skill": _fb_skill,
-                         "remediation_attempted": eco_remediation_attempted}))
+                         "remediation_attempted":
+                         rtl_repair_remediation_attempted}))
             break
         last_rtl_hash = new_rtl_hash
 
@@ -16713,15 +16720,16 @@ def main() -> int:
             _pl.emit_final_summary(project, PROGRAMS_DIR)
             plan.append(step_fpga_burn(project, args.top_name))
 
-        eco = 0
-        # v1.6.127 (#49 Fix 1) — also guard the usb_hid_tester_verify ECO
+        rtl_repair_retry = 0
+        # v1.6.127 (#49 Fix 1) — also guard the usb_hid_tester_verify RTL repair
         # loop against byte-identical retries.
         last_rtl_hash = _rtl_dir_sha256(project)
         # v1.6.181 (#72 P1-4) — hint-driven remediation flag for the
         # usb_hid_tester_verify loop (one attempt per session).
-        eco_remediation_attempted_md = eco_remediation_attempted
+        rtl_repair_remediation_attempted_md = \
+            rtl_repair_remediation_attempted
         # v1.6.153 (#60 P0-4) — refresh the most recent fpga_burn
-        # status on each iteration (ECO re-burns), so the STALE-board
+        # status on each retry (RTL repair re-burns), so the STALE-board
         # guard fires when the latest burn in this run was SKIP / FAIL.
         def _latest_burn_status() -> Optional[str]:
             for _sr in reversed(plan):
@@ -16733,26 +16741,29 @@ def main() -> int:
                                    prior_fpga_burn_status=_latest_burn_status(),
                                    ic_class=ic_class)
             plan.append(sr)
-            # v1.6.100: WAIVED is a canonical good state (no rig available, ticket emitted). Skip ECO iteration.
-            if sr.status in ("PASS", "SKIP", "WAIVED") or eco >= args.max_eco:
+            # v1.6.100: WAIVED is a canonical good state (no rig available, ticket emitted). Skip RTL repair retry.
+            if (sr.status in ("PASS", "SKIP", "WAIVED") or
+                    rtl_repair_retry >= args.max_rtl_repair_retries):
                 break
-            eco += 1
-            plan.append(StepResult("eco_loop_iter", "ECO_LOOP",
+            rtl_repair_retry += 1
+            plan.append(StepResult("rtl_repair_retry_iter", "RTL_REPAIR_RETRY",
                                    0.0,
-                                   f"<half-duplex-tester> FAIL → ECO iteration {eco}/{args.max_eco}"))
+                                   f"<half-duplex-tester> FAIL → RTL repair "
+                                   f"retry {rtl_repair_retry}/"
+                                   f"{args.max_rtl_repair_retries}"))
             plan.append(step_rtl_gen(project, ic_class))
             new_rtl_hash = _rtl_dir_sha256(project)
             if (new_rtl_hash is not None and last_rtl_hash is not None
                     and new_rtl_hash == last_rtl_hash):
-                hint = _eco_inert_hint(project)
+                hint = _rtl_repair_inert_hint(project)
                 # v1.6.181 (#72 P1-4) — try hint-driven remediation
-                # ONCE before declaring FAIL_ECO_INERT.
-                if not eco_remediation_attempted_md:
-                    eco_remediation_attempted_md = True
-                    remediated, detail = _eco_remediate_with_hint(
+                # ONCE before declaring FAIL_RTL_REPAIR_INERT.
+                if not rtl_repair_remediation_attempted_md:
+                    rtl_repair_remediation_attempted_md = True
+                    remediated, detail = _rtl_repair_remediate_with_hint(
                         project, hint)
                     plan.append(StepResult(
-                        "eco_loop_remediation",
+                        "rtl_repair_remediation",
                         "PASS" if remediated else "SKIP",
                         0.0, detail,
                         extras={"hint_signatures":
@@ -16774,17 +16785,18 @@ def main() -> int:
                                 project, args.top_name))
                             continue
                 steps_txt = " | ".join(hint["next_steps"][:3])
-                _fb_note, _fb_skill = _eco_inert_fallback(ic_class)
+                _fb_note, _fb_skill = _rtl_repair_inert_fallback(ic_class)
                 plan.append(StepResult(
-                    "eco_loop_iter", "FAIL_ECO_INERT", 0.0,
-                    (f"ECO iteration {eco} produced byte-identical "
+                    "rtl_repair_retry_iter", "FAIL_RTL_REPAIR_INERT", 0.0,
+                    (f"RTL repair retry {rtl_repair_retry} produced "
+                     f"byte-identical "
                      f"RTL (sha256={new_rtl_hash[:16]}...) to the "
                      f"prior iteration. Next steps: {steps_txt}"
                      f"{_fb_note}"),
-                    extras={"eco_inert_hint": hint,
+                    extras={"rtl_repair_inert_hint": hint,
                              "fallback_skill": _fb_skill,
                              "remediation_attempted":
-                             eco_remediation_attempted_md}))
+                             rtl_repair_remediation_attempted_md}))
                 break
             last_rtl_hash = new_rtl_hash
             # Re-run reference TB so sim_full_stack/{results.json,
@@ -16896,7 +16908,7 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # not enumerate falls through to the catch-all `return "PASS"` below: a
     # pre-flight refusal that produced a green run would be strictly worse than
     # the mis-attribution it was added to prevent.
-    _FAIL_STATUSES = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED",
+    _FAIL_STATUSES = ("FAIL", "FAIL_RTL_REPAIR_INERT", "STALE_BOARD_DETECTED",
                       "BLOCKED")
     # THE CATCH-ALL IS NOW TOTAL. The comment above already names the hazard —
     # "everything this function does not enumerate falls through to the
@@ -16909,9 +16921,9 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # cannot arrive as a silent pass. An unknown status is now reported rather
     # than absorbed: it is NOT treated as a failure (that would turn a naming
     # change into a red run), but it is never invisible.
-    _GREEN_STATUSES = ("PASS", "ADVISORY", "ECO_LOOP")
+    _GREEN_STATUSES = ("PASS", "ADVISORY", "RTL_REPAIR_RETRY")
     # ADVISORY is non-blocking BY CONTRACT (see _estimate_* — "status is always
-    # ADVISORY ... so this step cannot change _aggregate_verdict"). ECO_LOOP is
+    # ADVISORY ... so this step cannot change _aggregate_verdict"). RTL_REPAIR_RETRY is
     # a progress marker for an iteration, not a verdict; the iteration's outcome
     # is carried by the steps around it.
     # SKIPPED-CONDITION is a second skip spelling (rtl_gen and two verdict

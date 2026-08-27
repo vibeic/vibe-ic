@@ -159,10 +159,10 @@ WAIVED_CELLS_PINNED: frozenset = frozenset()
 #   step 25  eda_report_audit:em opens em.json and refuses a formatted zero
 #   step 28  perc_signoff_check cross-checks the .rpt and the sign-off memo
 #            against perc_equivalent.json
-#   step 32  eco_loop_audit reads eco_trigger_decision.json before honouring
-#            no_eco_needed.flag, through a path composed FROM the declared
+#   step 32  postroute_timing_repair_audit reads postroute_timing_repair_decision.json before honouring
+#            no_repair_needed.flag, through a path composed FROM the declared
 #            literal; and the step's gate condition was widened so the audit
-#            actually RUNS on the no-ECO branch, which is the only branch the
+#            actually RUNS on the no-repair branch, which is the only branch the
 #            contradiction can appear on
 #   step 33  eda_report_audit:power opens power.json and corroborates its
 #            source and analysis_mode against the report

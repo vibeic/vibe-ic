@@ -73,7 +73,7 @@ import task_nature_route as _G  # noqa: E402  the GENERAL front door
 _CID_NATURE: Dict[str, str] = {
     "cid003": "spec_generation",           # pure spec  → brand-new RTL
     "cid002": "completion",                # partial RTL → complete it
-    "cid004": "functional_modification",   # RTL + spec delta → ECO
+    "cid004": "functional_modification",   # RTL + spec delta → RTL modification
     "cid007": "optimization",              # RTL → smaller / lint-clean
     "cid016": "debug",                     # buggy RTL → fix to spec
 }

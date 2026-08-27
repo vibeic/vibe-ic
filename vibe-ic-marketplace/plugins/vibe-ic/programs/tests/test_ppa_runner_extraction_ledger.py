@@ -139,7 +139,7 @@ _LEDGER = frozenset({
     "_loosen_ladder_util", "_lvs_power_pin_only_mismatch",
     "_macro_pdn_grid_outcome", "_macro_pdn_grid_plan",
     "_macro_supply_gc_plan", "_macro_supply_preroute_decision",
-    "_measure_posteco_mcorner_ocv", "_measure_signoff_drv_population",
+    "_measure_postrepair_mcorner_ocv", "_measure_signoff_drv_population",
     "_merge_si_timing_aware", "_metal_density_recipe",
     "_min_area_patch_tcl", "_multi_corner_sta_inputs",
     "_normalize_util", "_openroad_supports_postroute_spef_repair",
@@ -150,6 +150,13 @@ _LEDGER = frozenset({
     "_parse_spef_caps", "_pin_perimeter_die_side_um",
     "_pnr_pdn_grid_verdict", "_pnr_pdn_status",
     "_post_route_spef_repair_tcl", "_post_route_tns_zero",
+    # These four functions already lived in the runner under misleading
+    # _eco_* names. The taxonomy correction exposes timing/repair words to
+    # this lexical detector; no PPA logic was added or moved by the rename.
+    "_build_postroute_timing_repair_tcl",
+    "_postroute_timing_repair_log_verdict",
+    "_postroute_timing_repair_resizer_bounds",
+    "_run_postroute_timing_repair",
     "_power_domain_family", "_propagated_clock_tcl",
     "_reconcile_staged_sdc_driving_cell", "_reconcile_staged_sdc_drv",
     "_recover_power_tcl", "_reference_flow_declared_die_util",

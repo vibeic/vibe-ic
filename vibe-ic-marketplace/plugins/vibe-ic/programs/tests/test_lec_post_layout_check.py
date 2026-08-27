@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TAPEOUT-SIGNOFF P1 — lec_post_layout_check.py (post-layout LEC gate).
 
-Step 13 proves RTL==synth. This gate re-proves the FINAL routed/ECO netlist ==
+Step 13 proves RTL==synth. This gate re-proves the FINAL routed/repaired netlist ==
 synth/RTL after CTS/PnR/ECO/fill. §4.05: a non-proof / vacuous match is a FAIL,
 never a pass; an absent routed netlist is an HONEST SKIP.
 

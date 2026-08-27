@@ -509,10 +509,10 @@ def test_step11_pure_dict_callers_are_unaffected(tmp_path):
 # ══════════════════════════════════════════════════════════════════════
 # STEP 32 — the gate must RUN in the state the cross-check targets
 # ══════════════════════════════════════════════════════════════════════
-_DECISION_ECO_REQUIRED = {"eco_needed": True, "action": "run_eco",
+_DECISION_REPAIR_REQUIRED = {"repair_needed": True, "action": "run_repair",
                           "reason": "a hard sign-off domain failed",
                           "nontiming_failures": [{"domain": "ir_drop"}]}
-_DECISION_NO_ECO = {"eco_needed": False, "action": "none",
+_DECISION_NO_REPAIR = {"repair_needed": False, "action": "none",
                     "reason": "every sign-off domain passed first time"}
 
 
@@ -521,46 +521,46 @@ def _step32_gate() -> dict:
     return [s for s in doc["steps"] if str(s.get("id")) == "32"][0]["gate"]
 
 
-def _eco_project(root: Path, files: dict) -> Path:
-    eco = root / "phase3/stage3/eco"
-    eco.mkdir(parents=True, exist_ok=True)
+def _repair_project(root: Path, files: dict) -> Path:
+    repair = root / "phase3/stage3/postroute_timing_repair"
+    repair.mkdir(parents=True, exist_ok=True)
     for name, payload in files.items():
-        eco.joinpath(name).write_text(
+        repair.joinpath(name).write_text(
             payload if isinstance(payload, str)
             else json.dumps(payload, indent=2))
     return root
 
 
-def test_step32_flow_gate_goes_red_on_a_contradicted_no_eco_branch(tmp_path):
-    """THE DEFECT, through the REAL evaluator. The decision record says an ECO
-    was required; the run certified `no_eco_needed.flag`. The program caught it
+def test_step32_flow_gate_goes_red_on_a_contradicted_no_repair_branch(tmp_path):
+    """THE DEFECT, through the REAL evaluator. The decision record says a repair
+    was required; the run certified `no_repair_needed.flag`. The program caught it
     from the start — the gate never ran it, because its condition listed the
-    eco LOG, which the no-ECO branch by definition does not write."""
-    p = _eco_project(tmp_path / "contradicted", {
-        "no_eco_needed.flag": "no eco needed\n",
-        "eco_trigger_decision.json": _DECISION_ECO_REQUIRED})
+    repair LOG, which the no-repair branch by definition does not write."""
+    p = _repair_project(tmp_path / "contradicted", {
+        "no_repair_needed.flag": "no repair needed\n",
+        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
     passed, reasons = fcc._evaluate_gate(p, _step32_gate())
     assert passed is False, reasons
-    assert any("eco_loop_audit" in r for r in reasons), reasons
+    assert any("postroute_timing_repair_audit" in r for r in reasons), reasons
 
 
-def test_step32_flow_gate_stays_green_on_a_consistent_no_eco_run(tmp_path):
+def test_step32_flow_gate_stays_green_on_a_consistent_no_repair_run(tmp_path):
     """NO FALSE ALARM. Flag plus a decision record that agrees with it is the
     ordinary converged run, and it must not be reddened by making the gate
     reachable."""
-    p = _eco_project(tmp_path / "consistent", {
-        "no_eco_needed.flag": "no eco needed\n",
-        "eco_trigger_decision.json": _DECISION_NO_ECO})
+    p = _repair_project(tmp_path / "consistent", {
+        "no_repair_needed.flag": "no repair needed\n",
+        "postroute_timing_repair_decision.json": _DECISION_NO_REPAIR})
     passed, reasons = fcc._evaluate_gate(p, _step32_gate())
     assert passed is True, reasons
 
 
-def test_step32_flow_gate_stays_green_when_an_eco_really_ran(tmp_path):
+def test_step32_flow_gate_stays_green_when_an_repair_really_ran(tmp_path):
     """NO FALSE ALARM on the other branch."""
-    p = _eco_project(tmp_path / "ecoran", {
-        "eco_log.json": {"changes": [{"type": "buffer_insert", "net": "n0"}],
+    p = _repair_project(tmp_path / "ecoran", {
+        "repair_log.json": {"changes": [{"type": "buffer_insert", "net": "n0"}],
                          "re_verified": True, "affected_steps": [21]},
-        "eco_trigger_decision.json": _DECISION_ECO_REQUIRED})
+        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
     passed, reasons = fcc._evaluate_gate(p, _step32_gate())
     assert passed is True, reasons
 
@@ -574,32 +574,32 @@ def test_step32_reads_the_record_through_the_path_it_declares(tmp_path):
     reports wired. Composing the read from the constant is what makes that
     mutation visible — this test fails if `load_trigger_decision` stops
     returning what the declared path holds."""
-    import eco_loop_audit as ela
-    p = _eco_project(tmp_path / "declared", {
-        "eco_trigger_decision.json": _DECISION_ECO_REQUIRED})
+    import postroute_timing_repair_audit as ela
+    p = _repair_project(tmp_path / "declared", {
+        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
     assert (ela.decision_path(p)
-            == p / "phase3/stage3/eco/eco_trigger_decision.json")
+            == p / "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json")
     decision, problem = ela.load_trigger_decision(p)
     assert problem is None
-    assert decision == _DECISION_ECO_REQUIRED
+    assert decision == _DECISION_REPAIR_REQUIRED
 
 
 def test_step32_discloses_but_does_not_block_on_a_silent_decision(tmp_path):
     """NO FALSE ALARM, deliberately.
 
-    A decision record that states no `eco_needed` says nothing, and that is
-    reported — but it does not block. `eco_trigger_decision.decide` sets the
+    A decision record that states no `repair_needed` says nothing, and that is
+    reported — but it does not block. `postroute_timing_repair_decision.decide` sets the
     field on every path, so no run this flow produces reaches this state; the
     trees that do are synthesized ones, and blocking cost step 32 its place in
     `test_matrix_d8_missing_caught.REAL_GATE_PASS_TIER_STEPS` (the only
     production-gate proof that its missing-output downgrade is reachable).
     Measured coverage lost elsewhere is not worth a guard on an unreachable
     state."""
-    p = _eco_project(tmp_path / "silent", {
-        "no_eco_needed.flag": "no eco needed\n",
-        "eco_trigger_decision.json": {}})
+    p = _repair_project(tmp_path / "silent", {
+        "no_repair_needed.flag": "no repair needed\n",
+        "postroute_timing_repair_decision.json": {}})
     r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "eco_loop_audit.py"), str(p)],
+        [sys.executable, str(PROGRAMS / "postroute_timing_repair_audit.py"), str(p)],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TRIGGER_DECISION_SILENT" in r.stdout + r.stderr
@@ -612,20 +612,20 @@ def test_step32_clause_stays_reddenable_under_the_d2_harness(tmp_path):
 
     `test_matrix_d2_falsifiable` proves each blocking clause CAN fail by
     materialising every `condition_files_exist` path as a substanceless file
-    and running the clause. If `no_eco_needed.flag` were listed there, that
-    materialisation would hand the audit a flag-certified no-ECO run and the
+    and running the clause. If `no_repair_needed.flag` were listed there, that
+    materialisation would hand the audit a flag-certified no-repair run and the
     clause could never reach FAIL again. This asserts the property directly, on
     the yaml, so the next widening has to face it."""
     gate = _step32_gate()
     clause = [c for c in gate["all_of"]
               if "optional_program_exit_zero" in c][0]
     conds = clause["optional_program_exit_zero"]["condition_files_exist"]
-    assert "phase3/stage3/eco/eco_trigger_decision.json" in conds, conds
-    assert "phase3/stage3/eco/no_eco_needed.flag" not in conds, conds
+    assert "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json" in conds, conds
+    assert "phase3/stage3/postroute_timing_repair/no_repair_needed.flag" not in conds, conds
     # ... and the materialised state really does still fail.
     p = tmp_path / "d2shape"
-    eco = p / "phase3/stage3/eco"
-    eco.mkdir(parents=True)
+    repair = p / "phase3/stage3/postroute_timing_repair"
+    repair.mkdir(parents=True)
     for pat in conds:
         (p / pat).write_text("{}\n")
     passed, reasons = fcc._evaluate_gate(p, gate)
@@ -636,10 +636,10 @@ def test_step32_absent_decision_record_is_left_to_required_outputs(tmp_path):
     """NO FALSE ALARM. A project with no decision record at all is not this
     gate's to fail — step 32's `required_outputs` is what reports a missing
     artefact, and double-failing it here would make the two disagree."""
-    p = _eco_project(tmp_path / "norecord",
-                     {"no_eco_needed.flag": "no eco needed\n"})
+    p = _repair_project(tmp_path / "norecord",
+                     {"no_repair_needed.flag": "no repair needed\n"})
     r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "eco_loop_audit.py"), str(p)],
+        [sys.executable, str(PROGRAMS / "postroute_timing_repair_audit.py"), str(p)],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     passed, reasons = fcc._evaluate_gate(p, _step32_gate())
@@ -648,15 +648,15 @@ def test_step32_absent_decision_record_is_left_to_required_outputs(tmp_path):
 
 def test_step32_reports_a_declared_vs_catalogued_path_drift(tmp_path,
                                                             monkeypatch):
-    """The drift guard is falsifiable. If `_path_layout` ever moves the eco
+    """The drift guard is falsifiable. If `_path_layout` ever moves the repair
     directory away from the spelling the flow declares, this gate would read a
     path nothing writes and report "no decision to cross-check" — a false
     clean. It must say the two disagree instead."""
     import _path_layout as pl
-    import eco_loop_audit as ela
-    p = _eco_project(tmp_path / "drift", {
-        "eco_trigger_decision.json": _DECISION_ECO_REQUIRED})
-    monkeypatch.setattr(ela._pl, "eco_dir",
+    import postroute_timing_repair_audit as ela
+    p = _repair_project(tmp_path / "drift", {
+        "postroute_timing_repair_decision.json": _DECISION_REPAIR_REQUIRED})
+    monkeypatch.setattr(ela._pl, "postroute_timing_repair_dir",
                         lambda project: Path(project) / "somewhere/else")
     decision, problem = ela.load_trigger_decision(p)
     assert decision is None

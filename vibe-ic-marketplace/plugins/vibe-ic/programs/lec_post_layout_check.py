@@ -11,7 +11,7 @@ which can (through a tool bug, a bad manual ECO, or a mis-applied spare-cell
 patch) change the LOGIC of the routed netlist. A tape-out that only proved
 RTL==synth ships a ROUTED netlist that was never re-proven equivalent.
 
-This gate re-proves the FINAL routed/ECO netlist against a golden reference
+This gate re-proves the FINAL routed/repaired netlist against a golden reference
 (the synth netlist by default, or the RTL) with Yosys structural equivalence
 (`equiv_make` + `equiv_simple` + `equiv_induct` + `equiv_status`) — the same
 engine `eda_lvs mode=yosys_equiv` uses. Physical-only cells in the routed
@@ -39,7 +39,7 @@ VERDICT (§4.05 — a non-proof / vacuous match is a FAIL, never a pass)
          UNPROVEN (equivalence NOT proven — a bounded/aborted/SAT-gap proof is
          not a clean pass), VACUOUS (equivalent==true but 0 points compared),
          or RUN_ERROR (yosys did not produce a parseable result).
-  SKIP   no routed/ECO netlist exists yet (design not placed-and-routed) — an
+  SKIP   no routed/repaired netlist exists yet (design not placed-and-routed) — an
          HONEST skip, never a vacuous pass. Non-blocking.
 
 chip-/PDK-AGNOSTIC: no design-specific assumptions; the only PDK coupling is the
@@ -502,7 +502,7 @@ def evaluate_report(doc: dict) -> Dict[str, object]:
     if lc.get("skipped") is True or verdict_in == V_SKIP:
         return {"gate": GATE, "result": "SKIP",
                 "reason": lc.get("skip_reason")
-                or "no routed/ECO netlist — design not placed-and-routed",
+                or "no routed/repaired netlist — design not placed-and-routed",
                 "verdict": V_SKIP}
 
     total = _int_or_none(lc.get("total_points"))

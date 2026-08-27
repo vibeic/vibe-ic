@@ -4632,7 +4632,7 @@ def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
 #:
 #: THIS IS NOT A LIST OF UNPUBLISHABLE ARTEFACTS IN PRINCIPLE. The four
 #: hand-staged reference trees DO carry paths under `phase3/stage3/` —
-#: `routed.def`, `no_eco_needed.flag`, `clock_tree.rpt`, `pdn.done` — which is
+#: `routed.def`, `no_repair_needed.flag`, `clock_tree.rpt`, `pdn.done` — which is
 #: exactly why the entries that resolve on them are green while these are not.
 #: The claim is narrower and is about the PROGRAM: since the 2026-07-25
 #: program-first publish directive, a cell is produced by
@@ -4653,7 +4653,7 @@ UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
     ("20", "phase3/stage3/pnr/post_hold.def"),
     ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
            "sim_spice/*.sp"),
-    ("32", "phase3/stage3/eco/eco_trigger_decision.json"),
+    ("32", "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
 )
 
 
@@ -4791,9 +4791,9 @@ DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
            "phase3/stage3/sim_postlayout/pass.flag"),
     ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
            "sim_spice/*.sp"),
-    ("32", "phase3/stage3/eco/eco_log.json OR "
-           "phase3/stage3/eco/no_eco_needed.flag"),
-    ("32", "phase3/stage3/eco/eco_trigger_decision.json"),
+    ("32", "phase3/stage3/postroute_timing_repair/repair_log.json OR "
+           "phase3/stage3/postroute_timing_repair/no_repair_needed.flag"),
+    ("32", "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json"),
     ("34", "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"),
     ("38", "phase3/stage4/foundry_handoff/corner_test_vectors.json"),
     ("38", "phase3/stage4/foundry_handoff/mask_spec.json"),
@@ -5003,7 +5003,7 @@ def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
 #:
 #: Step 32 is deliberately NOT in this list even though it was measured into it
 #: before this change: ``phase3_one_shot_runner`` writes
-#: ``eco_trigger_decision.json`` through a drop-in atomic helper, a write
+#: ``postroute_timing_repair_decision.json`` through a drop-in atomic helper, a write
 #: position the d7 detector could not see until vibe-ic#1452 taught it the
 #: shadowing writers. The pin would have recorded a blind spot as a fact.
 UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER: Tuple[Tuple[str, str], ...] = (
@@ -5062,7 +5062,7 @@ def test_d3_the_producer_oracle_answers_both_ways():
     commit, not synthetic strings, so the oracle is exercised the way the
     verdicts exercise it.
     """
-    yes = producer_evidence("phase3/stage3/eco/eco_trigger_decision.json")
+    yes = producer_evidence("phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json")
     assert yes and "phase3_one_shot_runner" in yes.producers, yes
     no = producer_evidence("phase3/stage3/pnr/floorplan.def")
     assert not no.producers, no
@@ -5072,7 +5072,7 @@ def test_d3_the_producer_oracle_answers_both_ways():
     # An any-of entry is produced when ANY alternative is, matching `resolve`.
     either = producer_evidence(
         "phase3/stage3/pnr/floorplan.def OR "
-        "phase3/stage3/eco/eco_trigger_decision.json")
+        "phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json")
     assert either.producers == yes.producers, either
 
 

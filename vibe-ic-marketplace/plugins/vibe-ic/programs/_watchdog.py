@@ -471,7 +471,7 @@ class LoopGuard:
 
     Use as the loop's iterable:
 
-        g = loop_guard("eco_repair", max_iter=20, stall_iters=3,
+        g = loop_guard("postroute_timing_repair", max_iter=20, stall_iters=3,
                        progress_fn=lambda: resolved_count)
         for i in g:
             ... one iteration of work ...

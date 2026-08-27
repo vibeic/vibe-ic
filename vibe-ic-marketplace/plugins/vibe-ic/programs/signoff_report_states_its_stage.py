@@ -328,8 +328,8 @@ _RPT = re.compile(r'([\w.-]*(?:power|timing|sta|slack|fmax)[\w.-]*\.rpt)', re.I)
 # The atomic-write doctrine in this tree is temp-file + rename (`_atomic_output`),
 # so a scope that emits its report correctly calls `os.replace` and never
 # `write_text` on the destination. `_is_write` above knows only the direct forms,
-# which is why the capture's own `sta_mcorner_ocv_posteco.rpt` — written by
-# `_measure_posteco_mcorner_ocv` via `replace` — was invisible to this scan.
+# which is why the capture's own `sta_mcorner_ocv_postrepair.rpt` — written by
+# `_measure_postrepair_mcorner_ocv` via `replace` — was invisible to this scan.
 _RENAME_ATTRS = ("replace", "rename", "move")
 
 # A scope that COPIES an existing artefact is republishing it, not producing it,
@@ -423,8 +423,8 @@ def _stamping_callees(tree: ast.AST) -> Set[str]:
 def _delegates_to_a_stamper(scope: ast.AST, stampers: Set[str]) -> bool:
     """The scope hands its work to a same-module function that stamps.
 
-    MEASURED, AND IT COST A PUBLISHED FINDING. `_measure_posteco_mcorner_ocv`
-    writes `sta_mcorner_ocv_posteco.rpt` and stamps nothing itself, so a
+    MEASURED, AND IT COST A PUBLISHED FINDING. `_measure_postrepair_mcorner_ocv`
+    writes `sta_mcorner_ocv_postrepair.rpt` and stamps nothing itself, so a
     scope-local reading calls it unstamped. It is not: it passes the report path
     to `_emit_mcorner_ocv_sta`, whose generated session writes STA_BASIS,
     STA_BASIS_LIBERTY, STA_BASIS_NETLIST and STA_BASIS_SPEF into that very file.

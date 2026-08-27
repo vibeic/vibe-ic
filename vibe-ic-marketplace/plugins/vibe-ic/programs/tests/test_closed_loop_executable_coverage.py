@@ -32,7 +32,7 @@ THE ONE THAT MATTERS MOST is `test_a_missing_claims_document_is_rc2_not_a_clean_
 repository unfalsifiable by typo, which is the exact shape this lane exists to
 close.
 
-`test_the_eco_log_arm_can_fire` is the positive control for the project-tree
+`test_the_repair_log_arm_can_fire` is the positive control for the project-tree
 scan: without it, `_claims_from_project` could be dead code and every test here
 would still be green.
 
@@ -62,7 +62,7 @@ RC_OK, RC_FINDINGS, RC_NOT_MEASURED, RC_BAD = 0, 1, 2, 3
 #: Steps the shipped flow declares a closed_loop on, whose class is measured
 #: today. Named, not searched: the day one of them changes, this file must fail
 #: loudly rather than quietly test nothing.
-DECLARED_ONLY_WITNESS = "31"     # PV -> 32; the timing ECO explicitly declines
+DECLARED_ONLY_WITNESS = "31"     # PV -> 32; the timing repair explicitly declines
 REMEASURED_WITNESS = "32"        # the repair pass's own self-edge
 UNDECLARED_WITNESS = "19"        # a real step that declares no closed_loop
 
@@ -126,19 +126,19 @@ def test_an_unregistered_edge_defaults_to_declared_only(tmp_path):
 def test_nothing_on_main_claims_rollback_proven(tmp_path):
     """The load-bearing zero.
 
-    The step-32 repair DOES implement an undo (`eco_fired_reverted_regression`)
+    The step-32 repair DOES implement an undo (`timing_repair_reverted_regression`)
     and no test in this tree exercises it, so the top tier is unreached. If this
     ever fails, someone earned it — update the census and say which test proves
     the rollback.
     """
     _, rep = _report(tmp_path, expect=RC_OK)
     assert rep["census"]["ROLLBACK_PROVEN"] == 0
-    token = "eco_fired" + "_reverted_regression"   # split: this file greps for it
+    token = "timing_repair" + "_reverted_regression"   # split: this file greps for it
     proof = [p for p in _HERE.glob("test_*.py")
              if p.resolve() != Path(__file__).resolve()
              and token in p.read_text(errors="ignore")]
     assert not proof, (
-        f"{[p.name for p in proof]} now exercises the ECO undo — promote edges "
+        f"{[p.name for p in proof]} now exercises the repair undo — promote edges "
         f"23/32 to ROLLBACK_PROVEN in the registry and update this census")
 
 
@@ -170,7 +170,7 @@ def test_a_claim_on_a_step_with_no_declared_loop_is_refused(tmp_path):
     assert {f["rule"] for f in rep["findings"]} == {"CLC-CLAIM-UNDECLARED-EDGE"}
 
 
-def _mutant_root(tmp_path: Path, *, loop: bool, eco: bool) -> Path:
+def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool) -> Path:
     """A plugin root holding stubs of exactly the files the registry cites.
 
     `loop=False` removes the `while` around the regeneration call — the call is
@@ -181,7 +181,7 @@ def _mutant_root(tmp_path: Path, *, loop: bool, eco: bool) -> Path:
     fails to parse demotes EVERY edge citing it, which reads exactly like the
     defect under test and would make the control meaningless.
     """
-    root = tmp_path / f"root_loop{int(loop)}_eco{int(eco)}"
+    root = tmp_path / f"root_loop{int(loop)}_repair{int(repair)}"
     progs = root / "programs"
     progs.mkdir(parents=True)
     (progs / "crosslayer_rewrite_equivalence_check.py").write_text("x = 1\n")
@@ -208,26 +208,26 @@ def _mutant_root(tmp_path: Path, *, loop: bool, eco: bool) -> Path:
     compile(src, "<stub>", "exec")          # the stub must be REAL python
     (progs / "design_one_shot_runner.py").write_text(src)
 
-    eco_src = ("class _Decision:\n"
-               "    def decide(self): return {'eco_needed': True}\n"
-               "_eco_dec = _Decision()\n"
-               "def _run_eco_repair(): ...\n"
-               "def _measure_posteco_mcorner_ocv(): ...\n"
+    repair_src = ("class _Decision:\n"
+               "    def decide(self): return {'repair_needed': True}\n"
+               "_repair_dec = _Decision()\n"
+               "def _run_postroute_timing_repair(): ...\n"
+               "def _measure_postrepair_mcorner_ocv(): ...\n"
                "def step_canonicalize_artefacts():\n"
-               "    decision = _eco_dec.decide()\n"
-               "    if decision['eco_needed']:\n"
-               + ("        _run_eco_repair()\n"
-                  "        _measure_posteco_mcorner_ocv()\n"
-                  if eco else "        pass\n"))
-    compile(eco_src, "<stub>", "exec")
-    (progs / "phase3_one_shot_runner.py").write_text(eco_src)
+               "    decision = _repair_dec.decide()\n"
+               "    if decision['repair_needed']:\n"
+               + ("        _run_postroute_timing_repair()\n"
+                  "        _measure_postrepair_mcorner_ocv()\n"
+                  if repair else "        pass\n"))
+    compile(repair_src, "<stub>", "exec")
+    (progs / "phase3_one_shot_runner.py").write_text(repair_src)
     return root
 
 
 def test_the_stub_root_is_a_faithful_stand_in(tmp_path):
     """Control for the control: the healthy stub root must be GREEN, or every
     red below could be an artefact of the stub rather than of the mutation."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     _, rep = _report(tmp_path, "--root", str(root), expect=RC_OK)
     by = {e["step"]: e for e in rep["edges"]}
     assert by["4"]["class"] == "REMEASURED"
@@ -244,7 +244,7 @@ def test_refusing_a_candidate_cannot_be_laundered_as_executable(
         tmp_path, monkeypatch):
     """RED on the pre-fix semantics: a resolved refusal citation used to
     promote an edge even though the fallback step was never re-entered."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     monkeypatch.setitem(clc.REGISTRY, "2", {
         "class": "EXECUTABLE",
         "actuation_form": "refuse_candidate",
@@ -284,7 +284,7 @@ def test_refusing_a_candidate_cannot_be_laundered_as_executable(
 def test_omitting_the_actuation_form_cannot_restore_the_old_default(
         tmp_path, monkeypatch):
     """The refusal fix must not be bypassable by deleting its label."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     monkeypatch.setitem(clc.REGISTRY, "2", {
         "class": "EXECUTABLE",
         "why": "ambiguous actuator with no declared execution form",
@@ -308,7 +308,7 @@ def test_omitting_the_actuation_form_cannot_restore_the_old_default(
 def test_reexecute_label_cannot_launder_file_presence_as_execution(
         tmp_path, monkeypatch):
     """The label is a claim, not proof: file existence cannot earn a tier."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     monkeypatch.setitem(clc.REGISTRY, "2", {
         "class": "EXECUTABLE",
         "actuation_form": "re_execute",
@@ -343,7 +343,7 @@ def test_reexecute_label_cannot_launder_file_presence_as_execution(
 def test_file_presence_copied_into_every_role_cannot_claim_rollback(
         tmp_path, monkeypatch):
     """Four copies of non-execution evidence are still zero execution proof."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     citation = {
         "kind": "file_exists",
         "file": "programs/crosslayer_rewrite_equivalence_check.py",
@@ -368,7 +368,7 @@ def test_file_presence_copied_into_every_role_cannot_claim_rollback(
 def test_structural_call_to_the_wrong_step_cannot_claim_reentry(
         tmp_path, monkeypatch):
     """A real call is not proof of this edge unless it enters fallback_to."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     monkeypatch.setitem(clc.REGISTRY, "4", {
         "class": "EXECUTABLE",
         "actuation_form": "re_execute",
@@ -399,7 +399,7 @@ def test_structural_call_to_the_wrong_step_cannot_claim_reentry(
 
 def test_step2_cannot_borrow_step4s_real_retry_loop(tmp_path, monkeypatch):
     """Same fallback target is insufficient: the source trigger must match."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     monkeypatch.setitem(clc.REGISTRY, "2", {
         "class": "EXECUTABLE",
         "actuation_form": "re_execute",
@@ -439,24 +439,24 @@ def test_step2_cannot_borrow_step4s_real_retry_loop(tmp_path, monkeypatch):
 def test_guarded_remeasurement_cannot_borrow_a_sibling_path(
         tmp_path, monkeypatch):
     """The measurement must extend this edge's accepted guarded actuation."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     runner = root / "programs" / "phase3_one_shot_runner.py"
     runner.write_text(
         "class _Decision:\n"
-        "    def decide(self): return {'eco_needed': True}\n"
-        "_eco_dec = _Decision()\n"
+        "    def decide(self): return {'repair_needed': True}\n"
+        "_repair_dec = _Decision()\n"
         "_other_dec = _Decision()\n"
-        "def _run_eco_repair(): ...\n"
+        "def _run_postroute_timing_repair(): ...\n"
         "def _other_actuator(): ...\n"
-        "def _measure_posteco_mcorner_ocv(): ...\n"
+        "def _measure_postrepair_mcorner_ocv(): ...\n"
         "def step_canonicalize_artefacts():\n"
-        "    decision = _eco_dec.decide()\n"
-        "    if decision['eco_needed']:\n"
-        "        _run_eco_repair()\n"
+        "    decision = _repair_dec.decide()\n"
+        "    if decision['repair_needed']:\n"
+        "        _run_postroute_timing_repair()\n"
         "    sibling = _other_dec.decide()\n"
-        "    if sibling['eco_needed']:\n"
+        "    if sibling['repair_needed']:\n"
         "        _other_actuator()\n"
-        "        _measure_posteco_mcorner_ocv()\n")
+        "        _measure_postrepair_mcorner_ocv()\n")
     compile(runner.read_text(), "<guarded-sibling>", "exec")
     monkeypatch.setitem(clc.REGISTRY, "23", {
         "class": "REMEASURED",
@@ -467,20 +467,20 @@ def test_guarded_remeasurement_cannot_borrow_a_sibling_path(
                 "kind": "fallback_guarded_by_trigger",
                 "file": "programs/phase3_one_shot_runner.py",
                 "caller": "step_canonicalize_artefacts",
-                "trigger_callee": "_eco_dec.decide",
-                "trigger_field": "eco_needed",
+                "trigger_callee": "_repair_dec.decide",
+                "trigger_field": "repair_needed",
                 "trigger_value": True,
-                "callee": "_run_eco_repair",
+                "callee": "_run_postroute_timing_repair",
             }],
             "remeasure": [{
                 "kind": "remeasure_after_fallback_guarded_by_trigger",
                 "file": "programs/phase3_one_shot_runner.py",
                 "caller": "step_canonicalize_artefacts",
                 "trigger_callee": "_other_dec.decide",
-                "trigger_field": "eco_needed",
+                "trigger_field": "repair_needed",
                 "trigger_value": True,
                 "actuator_callee": "_other_actuator",
-                "callee": "_measure_posteco_mcorner_ocv",
+                "callee": "_measure_postrepair_mcorner_ocv",
             }],
         },
     })
@@ -503,7 +503,7 @@ def test_guarded_remeasurement_cannot_borrow_a_sibling_path(
 def test_loop_remeasurement_cannot_borrow_a_sibling_retry(
         tmp_path, monkeypatch):
     """A second loop cannot lend its back-edge to the canonical fallback."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     runner = root / "programs" / "design_one_shot_runner.py"
     runner.write_text(
         "def step_reference_tb(): ...\n"
@@ -569,7 +569,7 @@ def test_loop_remeasurement_cannot_borrow_a_sibling_retry(
 def test_step2s_real_trigger_outside_the_retry_loop_is_not_execution(
         tmp_path, monkeypatch):
     """Both calls in one function are not enough; the trigger must guard it."""
-    root = _mutant_root(tmp_path, loop=True, eco=True)
+    root = _mutant_root(tmp_path, loop=True, repair=True)
     monkeypatch.setitem(clc.REGISTRY, "2", {
         "class": "EXECUTABLE",
         "actuation_form": "re_execute",
@@ -664,47 +664,47 @@ def test_dead_or_name_only_fallback_calls_cannot_claim_execution(
 
 
 @pytest.mark.parametrize("guarded_body", [
-    """decision = _eco_dec.decide()
-if not decision['eco_needed']:
-    _run_eco_repair()
-    _measure_posteco_mcorner_ocv()
+    """decision = _repair_dec.decide()
+if not decision['repair_needed']:
+    _run_postroute_timing_repair()
+    _measure_postrepair_mcorner_ocv()
 """,
-    """decision = _eco_dec.decide()
-if decision['eco_needed']:
+    """decision = _repair_dec.decide()
+if decision['repair_needed']:
     pass
 else:
-    _run_eco_repair()
-    _measure_posteco_mcorner_ocv()
+    _run_postroute_timing_repair()
+    _measure_postrepair_mcorner_ocv()
 """,
-    """decision = _eco_dec.decide()
-decision = {'eco_needed': True}
-if decision['eco_needed']:
-    _run_eco_repair()
-    _measure_posteco_mcorner_ocv()
+    """decision = _repair_dec.decide()
+decision = {'repair_needed': True}
+if decision['repair_needed']:
+    _run_postroute_timing_repair()
+    _measure_postrepair_mcorner_ocv()
 """,
-    """decision = _eco_dec.decide()
-decision.update({'eco_needed': False})
-if decision['eco_needed']:
-    _run_eco_repair()
-    _measure_posteco_mcorner_ocv()
+    """decision = _repair_dec.decide()
+decision.update({'repair_needed': False})
+if decision['repair_needed']:
+    _run_postroute_timing_repair()
+    _measure_postrepair_mcorner_ocv()
 """,
-    """decision = _eco_dec.decide()
+    """decision = _repair_dec.decide()
 alias = decision
-alias['eco_needed'] = False
-if decision['eco_needed']:
-    _run_eco_repair()
-    _measure_posteco_mcorner_ocv()
+alias['repair_needed'] = False
+if decision['repair_needed']:
+    _run_postroute_timing_repair()
+    _measure_postrepair_mcorner_ocv()
 """,
-    """decision = _eco_dec.decide()
-if True or decision['eco_needed']:
-    _run_eco_repair()
-    _measure_posteco_mcorner_ocv()
+    """decision = _repair_dec.decide()
+if True or decision['repair_needed']:
+    _run_postroute_timing_repair()
+    _measure_postrepair_mcorner_ocv()
 """,
-    """decision = _eco_dec.decide()
+    """decision = _repair_dec.decide()
 return
-if decision['eco_needed']:
-    _run_eco_repair()
-    _measure_posteco_mcorner_ocv()
+if decision['repair_needed']:
+    _run_postroute_timing_repair()
+    _measure_postrepair_mcorner_ocv()
 """,
 ], ids=("inverted", "wrong-else", "overwritten", "method-mutation",
         "alias-mutation", "complex-or", "after-return"))
@@ -714,10 +714,10 @@ def test_wrong_or_unreachable_trigger_branch_cannot_claim_execution(
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
               + textwrap.indent(guarded_body, "    "))
     compile(source, "<guard-control>", "exec")
@@ -1080,15 +1080,15 @@ def test_guarded_remeasurement_must_follow_the_fallback(tmp_path):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
-              "        _measure_posteco_mcorner_ocv()\n"
-              "        _run_eco_repair()\n")
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
+              "        _measure_postrepair_mcorner_ocv()\n"
+              "        _run_postroute_timing_repair()\n")
     compile(source, "<guarded-order-control>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1105,17 +1105,17 @@ def test_guarded_remeasurement_cannot_come_from_mutually_exclusive_branch(
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
               "        if do_repair:\n"
-              "            _run_eco_repair()\n"
+              "            _run_postroute_timing_repair()\n"
               "        else:\n"
-              "            _measure_posteco_mcorner_ocv()\n")
+              "            _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<guarded-exclusive-paths>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1133,17 +1133,17 @@ def test_sequential_complementary_guards_cannot_invent_a_shared_path(
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
               "        if do_repair:\n"
-              "            _run_eco_repair()\n"
+              "            _run_postroute_timing_repair()\n"
               "        if not do_repair:\n"
-              "            _measure_posteco_mcorner_ocv()\n")
+              "            _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<guarded-sequential-complement>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1156,47 +1156,47 @@ def test_sequential_complementary_guards_cannot_invent_a_shared_path(
 
 @pytest.mark.parametrize("body", [
     """        if options.do_repair:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if not options.do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if do_repair and enabled:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if not do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if do_repair:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         do_repair = False
         if do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if mode == 'repair':
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if mode != 'repair':
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if not (do_repair and enabled):
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if do_repair and enabled:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if do_repair or enabled:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if not (do_repair or enabled):
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        alias = do_repair
         if alias:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if not do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if do_repair:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         do_repair |= True
         if not do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
 ])
 def test_correlated_predicates_cannot_invent_remeasurement(tmp_path, body):
@@ -1205,13 +1205,13 @@ def test_correlated_predicates_cannot_invent_remeasurement(tmp_path, body):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
               + body)
     compile(source, "<guarded-correlated-predicate>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
@@ -1225,32 +1225,32 @@ def test_correlated_predicates_cannot_invent_remeasurement(tmp_path, body):
 
 @pytest.mark.parametrize("body", [
     """        if do_repair:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         do_repair = False
         if not do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if do_repair or enabled:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if not do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if mode == 'repair':
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if mode == 'repair':
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        alias = do_repair
         if alias:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         if do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
     """        if do_repair:
-            _run_eco_repair()
+            _run_postroute_timing_repair()
         do_repair |= True
         if do_repair:
-            _measure_posteco_mcorner_ocv()
+            _measure_postrepair_mcorner_ocv()
 """,
 ])
 def test_a_real_correlated_path_is_not_falsely_demoted(tmp_path, body):
@@ -1259,13 +1259,13 @@ def test_a_real_correlated_path_is_not_falsely_demoted(tmp_path, body):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
               + body)
     compile(source, "<guarded-real-correlated-path>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
@@ -1279,16 +1279,16 @@ def test_a_real_correlated_path_is_not_falsely_demoted(tmp_path, body):
 @pytest.mark.parametrize("wrapper", [
     "class Decoy:\n"
     "    def step_canonicalize_artefacts(self):\n"
-    "        decision = _eco_dec.decide()\n"
-    "        if decision['eco_needed']:\n"
-    "            _run_eco_repair()\n"
-    "            _measure_posteco_mcorner_ocv()\n",
+    "        decision = _repair_dec.decide()\n"
+    "        if decision['repair_needed']:\n"
+    "            _run_postroute_timing_repair()\n"
+    "            _measure_postrepair_mcorner_ocv()\n",
     "def unrelated_outer():\n"
     "    def step_canonicalize_artefacts():\n"
-    "        decision = _eco_dec.decide()\n"
-    "        if decision['eco_needed']:\n"
-    "            _run_eco_repair()\n"
-    "            _measure_posteco_mcorner_ocv()\n",
+    "        decision = _repair_dec.decide()\n"
+    "        if decision['repair_needed']:\n"
+    "            _run_postroute_timing_repair()\n"
+    "            _measure_postrepair_mcorner_ocv()\n",
 ])
 def test_guarded_caller_must_be_a_module_entrypoint(tmp_path, wrapper):
     """A class/nested namesake is not the cited runner entrypoint."""
@@ -1296,10 +1296,10 @@ def test_guarded_caller_must_be_a_module_entrypoint(tmp_path, wrapper):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               + wrapper)
     compile(source, "<guarded-caller-decoy>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
@@ -1340,17 +1340,17 @@ def test_an_uncalled_nested_body_does_not_taint_the_trigger_receipt(tmp_path):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
               "        def unused_helper():\n"
-              "            decision['eco_needed'] = False\n"
-              "        _run_eco_repair()\n"
-              "        _measure_posteco_mcorner_ocv()\n")
+              "            decision['repair_needed'] = False\n"
+              "        _run_postroute_timing_repair()\n"
+              "        _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<guarded-nested-helper>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1370,16 +1370,16 @@ def test_path_state_explosion_refuses_promotion(tmp_path):
         "            pass\n"
         for index in range(10))
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
               + branches
-              + "        _run_eco_repair()\n"
-              "        _measure_posteco_mcorner_ocv()\n")
+              + "        _run_postroute_timing_repair()\n"
+              "        _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<guarded-state-budget>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1395,16 +1395,16 @@ def test_guarded_fallback_cannot_hide_under_the_opposite_trigger_value(
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
-              "        if not decision['eco_needed']:\n"
-              "            _run_eco_repair()\n"
-              "            _measure_posteco_mcorner_ocv()\n")
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
+              "        if not decision['repair_needed']:\n"
+              "            _run_postroute_timing_repair()\n"
+              "            _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<contradictory-guard-actuator>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1419,17 +1419,17 @@ def test_guarded_fact_cannot_survive_receipt_mutation_inside_branch(tmp_path):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
-              "        decision['eco_needed'] = False\n"
-              "        if decision['eco_needed']:\n"
-              "            _run_eco_repair()\n"
-              "            _measure_posteco_mcorner_ocv()\n")
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
+              "        decision['repair_needed'] = False\n"
+              "        if decision['repair_needed']:\n"
+              "            _run_postroute_timing_repair()\n"
+              "            _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<stale-guard-fact>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1444,16 +1444,16 @@ def test_guarded_known_false_dominates_an_and_sibling(tmp_path):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
-              "        if not decision['eco_needed'] and unknown:\n"
-              "            _run_eco_repair()\n"
-              "            _measure_posteco_mcorner_ocv()\n")
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
+              "        if not decision['repair_needed'] and unknown:\n"
+              "            _run_postroute_timing_repair()\n"
+              "            _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<guarded-bool-fact>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1469,16 +1469,16 @@ def test_guarded_remeasurement_cannot_hide_under_opposite_trigger_value(
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
-              "        _run_eco_repair()\n"
-              "        if not decision['eco_needed']:\n"
-              "            _measure_posteco_mcorner_ocv()\n")
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
+              "        _run_postroute_timing_repair()\n"
+              "        if not decision['repair_needed']:\n"
+              "            _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<contradictory-guard-measurement>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1494,16 +1494,16 @@ def test_deleting_guarded_trigger_field_breaks_the_proof(tmp_path):
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    del decision['eco_needed']\n"
-              "    if decision['eco_needed']:\n"
-              "        _run_eco_repair()\n"
-              "        _measure_posteco_mcorner_ocv()\n")
+              "    decision = _repair_dec.decide()\n"
+              "    del decision['repair_needed']\n"
+              "    if decision['repair_needed']:\n"
+              "        _run_postroute_timing_repair()\n"
+              "        _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<delete-guard-receipt>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1523,16 +1523,16 @@ def test_provably_nonreturning_barrier_makes_guarded_fallback_unreachable(
     progs = root / "programs"
     progs.mkdir(parents=True)
     source = ("class _Decision:\n"
-              "    def decide(self): return {'eco_needed': True}\n"
-              "_eco_dec = _Decision()\n"
-              "def _run_eco_repair(): ...\n"
-              "def _measure_posteco_mcorner_ocv(): ...\n"
+              "    def decide(self): return {'repair_needed': True}\n"
+              "_repair_dec = _Decision()\n"
+              "def _run_postroute_timing_repair(): ...\n"
+              "def _measure_postrepair_mcorner_ocv(): ...\n"
               "def step_canonicalize_artefacts():\n"
-              "    decision = _eco_dec.decide()\n"
-              "    if decision['eco_needed']:\n"
+              "    decision = _repair_dec.decide()\n"
+              "    if decision['repair_needed']:\n"
               + textwrap.indent(barrier, "        ") + "\n"
-              "        _run_eco_repair()\n"
-              "        _measure_posteco_mcorner_ocv()\n")
+              "        _run_postroute_timing_repair()\n"
+              "        _measure_postrepair_mcorner_ocv()\n")
     compile(source, "<nonreturning-guard-barrier>", "exec")
     (progs / "phase3_one_shot_runner.py").write_text(source)
 
@@ -1544,7 +1544,7 @@ def test_provably_nonreturning_barrier_makes_guarded_fallback_unreachable(
 
 def test_deleting_the_loop_around_the_actuator_demotes_the_edge(tmp_path):
     """The call survives; only the loop is gone. Structural citation, so red."""
-    root = _mutant_root(tmp_path, loop=False, eco=True)
+    root = _mutant_root(tmp_path, loop=False, repair=True)
     _, rep = _report(tmp_path, "--root", str(root), expect=RC_FINDINGS)
     by = {e["step"]: e for e in rep["edges"]}
     assert by["4"]["class"] == "DECLARED_ONLY", by["4"]
@@ -1555,8 +1555,8 @@ def test_deleting_the_loop_around_the_actuator_demotes_the_edge(tmp_path):
     assert by["23"]["class"] == "REMEASURED", "only edge 4 should have moved"
 
 
-def test_deleting_the_eco_actuator_demotes_both_edges_that_share_it(tmp_path):
-    root = _mutant_root(tmp_path, loop=True, eco=False)
+def test_deleting_the_repair_actuator_demotes_both_edges_that_share_it(tmp_path):
+    root = _mutant_root(tmp_path, loop=True, repair=False)
     _, rep = _report(tmp_path, "--root", str(root), expect=RC_FINDINGS)
     by = {e["step"]: e for e in rep["edges"]}
     assert by["23"]["class"] == "DECLARED_ONLY"
@@ -1565,19 +1565,19 @@ def test_deleting_the_eco_actuator_demotes_both_edges_that_share_it(tmp_path):
             if f["rule"] == "CLC-EVIDENCE-MISSING"} == {"23", "32"}
 
 
-def test_the_eco_log_arm_can_fire(tmp_path):
+def test_the_repair_log_arm_can_fire(tmp_path):
     """POSITIVE CONTROL for the project scan.
 
-    A tree whose `eco_log.json` says ECO_APPLIED + re_verified is presenting the
+    A tree whose `repair_log.json` says REPAIR_APPLIED + re_verified is presenting the
     step-32 loop as converged. Against the real tree that edge is REMEASURED and
     the claim stands; against a root where the actuator is gone the SAME tree is
     refused. Two arms differing only in the root, so the scan cannot be dead.
     """
     proj = tmp_path / "proj"
-    eco = proj / "phase3" / "stage3" / "eco"
-    eco.mkdir(parents=True)
-    (eco / "eco_log.json").write_text(json.dumps(
-        {"verdict": "ECO_APPLIED", "re_verified": True,
+    repair = proj / "phase3" / "stage3" / "postroute_timing_repair"
+    repair.mkdir(parents=True)
+    (repair / "repair_log.json").write_text(json.dumps(
+        {"verdict": "REPAIR_APPLIED", "re_verified": True,
          "affected_steps": [21]}))
 
     _, green = _report(tmp_path, str(proj), expect=RC_OK)
@@ -1585,21 +1585,21 @@ def test_the_eco_log_arm_can_fire(tmp_path):
     assert green["claims_examined"] == 1
     assert green["claims"][0]["step"] == "32"
 
-    root = _mutant_root(tmp_path, loop=True, eco=False)
+    root = _mutant_root(tmp_path, loop=True, repair=False)
     _, red = _report(tmp_path, str(proj), "--root", str(root),
                      expect=RC_FINDINGS)
     assert any(f["rule"] == "CLC-DECLARED-ONLY-PRESENTED-AS-SUCCESS"
                and f["step"] == "32" for f in red["findings"])
 
 
-def test_an_honest_eco_log_is_not_a_claim(tmp_path):
-    """ECO_ATTEMPTED / a false `re_verified` are honest non-successes. Reading
-    them as claims would make every failed ECO a finding and the check useless."""
+def test_an_honest_repair_log_is_not_a_claim(tmp_path):
+    """REPAIR_ATTEMPTED / a false `re_verified` are honest non-successes. Reading
+    them as claims would make every failed repair a finding and the check useless."""
     proj = tmp_path / "proj2"
-    eco = proj / "phase3" / "stage3" / "eco"
-    eco.mkdir(parents=True)
-    (eco / "eco_log.json").write_text(json.dumps(
-        {"verdict": "ECO_ATTEMPTED", "re_verified": False}))
+    repair = proj / "phase3" / "stage3" / "postroute_timing_repair"
+    repair.mkdir(parents=True)
+    (repair / "repair_log.json").write_text(json.dumps(
+        {"verdict": "REPAIR_ATTEMPTED", "re_verified": False}))
     _, rep = _report(tmp_path, str(proj), expect=RC_OK)
     assert rep["claim_audit"] == "CHECKED"      # the source WAS read
     assert rep["claims_examined"] == 0          # and it claimed nothing

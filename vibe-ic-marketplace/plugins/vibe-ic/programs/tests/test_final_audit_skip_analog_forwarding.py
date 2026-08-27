@@ -77,7 +77,7 @@ def test_main_argparse_accepts_skip_analog():
     p.add_argument("project", type=Path)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--skip-analog", action="store_true")  # the captured flag
-    p.add_argument("--max-eco", type=int, default=3)
+    p.add_argument("--max-rtl-repair-retries", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--dry-run", action="store_true")

@@ -35,7 +35,7 @@
     "undeclared::drc_report_check",
     "undeclared::drc_vacuous_pass_check",
     "undeclared::dynamic_ir_drop_check",
-    "undeclared::eco_loop_audit",
+    "undeclared::postroute_timing_repair_audit",
     "undeclared::erc_density_check",
     "undeclared::final_test_attestation_check",
     "undeclared::floorplan_pdn_check",

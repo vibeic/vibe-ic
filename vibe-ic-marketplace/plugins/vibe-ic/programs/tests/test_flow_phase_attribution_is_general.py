@@ -63,12 +63,12 @@ _PROMPT = ("Design a purely combinational 4-to-1 multiplexer.\n\n"
            "  output out\n);\n")
 
 # The shape measured on a real plain run of vibe_ic_one_shot_runner.py against
-# a 4-to-1 multiplexer project: rtl_gen refused, the ECO loop fired, rtl_gen
+# a 4-to-1 multiplexer project: rtl_gen refused, the RTL repair/retry loop fired, rtl_gen
 # then emitted with a NAMED emitter, and four gates failed.
 _REAL_SHAPE = [
     _step("rtl_gen", "BLOCKED"),
     _step("reference_tb", "FAIL"),
-    _step("eco_loop_iter", "ECO_LOOP"),
+    _step("rtl_repair_retry_iter", "RTL_REPAIR_RETRY"),
     _step("rtl_gen", "PASS", deterministic_generator="multiplexer"),
     _step("sdc_gen", "FAIL"),
     _step("yosys_synth", "PASS"),
@@ -261,7 +261,7 @@ def test_phase2_separates_a_pass_with_no_named_emitter(tmp_path):
 def test_phase2_records_the_earlier_waive_alongside_the_later_emit(tmp_path):
     p = _project(tmp_path, [
         _step("rtl_gen", "WAIVED", fallback_skill="spec-to-rtl"),
-        _step("eco_loop_iter", "ECO_LOOP"),
+        _step("rtl_repair_retry_iter", "RTL_REPAIR_RETRY"),
         _step("rtl_gen", "PASS", deterministic_generator="comb_gate"),
     ], prompt=_PROMPT)
     r = fpa.attribute(p)["phase2_solving"]
@@ -325,12 +325,12 @@ def test_phase4_reads_the_mechanism_off_the_step_after_the_marker(tmp_path):
     """PROGRAM and AI_HANDOFF differ ONLY in that next step. Both poles."""
     prog = _project(tmp_path / "a", [
         _step("reference_tb", "FAIL"),
-        _step("eco_loop_iter", "ECO_LOOP"),
+        _step("rtl_repair_retry_iter", "RTL_REPAIR_RETRY"),
         _step("rtl_gen", "PASS", deterministic_generator="vector_ops"),
     ], prompt=_PROMPT)
     ai = _project(tmp_path / "b", [
         _step("reference_tb", "FAIL"),
-        _step("eco_loop_iter", "ECO_LOOP"),
+        _step("rtl_repair_retry_iter", "RTL_REPAIR_RETRY"),
         _step("rtl_gen", "WAIVED", fallback_skill="spec-to-rtl"),
     ], prompt=_PROMPT)
     ep = fpa.attribute(prog)["phase4_debugging"]["events"][0]
@@ -345,7 +345,7 @@ def test_phase4_calls_blocked_reentry_a_retry_not_a_physical_eco(tmp_path):
     """No prior candidate failed when rtl_gen was BLOCKED; this is retry."""
     p = _project(tmp_path, [
         _step("rtl_gen", "BLOCKED"),
-        _step("eco_loop_iter", "ECO_LOOP"),
+        _step("rtl_repair_retry_iter", "RTL_REPAIR_RETRY"),
         _step("rtl_gen", "PASS", deterministic_generator="comb_gate"),
     ], prompt=_PROMPT)
     r = fpa.attribute(p)["phase4_debugging"]
