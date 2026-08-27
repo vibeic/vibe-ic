@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "0db85d8d209370f4e59729a6feaaa93a9d46dc9de5f3d26cac2addb17ddd54cb"
+    "baf6a0c08fc2bc719b6a58eebbdeb8b080dbee75f43bd422b3f76e3ad9e3e1c5"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -478,12 +478,44 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # write guard, same junit. The removed flag `exec`'d a different script before
 # any lane started, so it was never inside a supervised population.
 #
+# RE-PINNED 2026-08-28, for the LANDING TIER'S PER-LANE STOPWATCH and the
+# MEASURED-TREE DISCLOSURE. TWO of the four faces moved and the other two were
+# VERIFIED, not assumed -- the check slices all four every run, and on the tree
+# being shipped it reported no error for the three lane bodies or for the
+# semantic driver, which is the check itself saying they are byte-identical.
+#
+# WHAT MOVED: `tools/gatekeeper-land.sh` gained `lane_timed`, which wraps a lane
+# body in both scheduler shapes -- the background subshell at width > 1 and the
+# deferred body at width 1 -- so each lane stamps its OWN [start, end]; the
+# elapsed report printed once from the main shell after the window closes; and
+# `landing_measured_tree_disclosure`, one sentence before the window naming
+# WHICH TREE the two moving counts measured. All three sit ahead of the final
+# top-level `lane_emit_window`, so the whole-file digest AND the
+# entry-to-final-pytest execution prefix moved together -- the expected
+# signature of an edit before the last lane. A whole-file move with a
+# still-matching prefix would be the surprising one.
+#
+# THE WITNESS THAT NOTHING ELSE DID, enumerated from this file's own slicing
+# code rather than from the diff, because three of four re-pinned is the same
+# as none -- this is a conjunction. `lane_emit_window`'s reviewed top-level call
+# site is line 1781 and the three lane bodies are defined at 1016 / 1300 / 1403,
+# so every lane body sits INSIDE the moved prefix and each was nevertheless
+# sliced and hashed on its own: `run_pytest`, `run_repo_tools_pytest` and
+# `run_unselectable_pytest` each came back EQUAL to its pin, and so did
+# `programs/pytest_per_file_junit.py`, which this branch does not touch at all.
+#
+# NOTHING ABOUT SUPERVISION MOVED: same three populations, same driver, same
+# `--stall-after`, same `--aggregate-check`, same no-ceiling contract, same
+# write guard, same junit. `lane_timed` returns its body's status unchanged and
+# the report runs after the window is closed, so it cannot move a verdict; the
+# disclosure states a denominator and decides nothing.
+#
 # Both digests below were read back out of this check's own error text on the
 # tree being shipped, never hand-transcribed, and the check then exits 0.
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "6a4b8f1fe97d115b6ae7ea64040c645aa083bd7895e2916c23aba0741d1baf94"
+    "c8ddd93f6304b8e509a5da1eae3c62e4453db9e44bfa7cb5fb08a43037318dc3"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
