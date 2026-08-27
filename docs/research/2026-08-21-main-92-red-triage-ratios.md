@@ -498,3 +498,85 @@ them, and `test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_t
 has been CLEARED at `51c0db4b7` since. The branch's alternative is not worth
 overwriting a landed, reviewed fix to obtain, so it is dropped whole rather
 than merged over it, and its companion test file is dropped with it.
+
+### the 63x8 matrix slice — 5 IDs, cleared at `72a558fdb`
+
+```
+subject   72a558fdb  (v1.12.9)   — the sha the five were re-measured green at
+control   867de4289  (v1.11.18)  — the sha this table's own ratios were taken at
+landing   re-measured again ON the rebase, at the tree this landing pushes
+env       PYTHONDONTWRITEBYTECODE=1 · TMPDIR outside the account home ·
+          VIBEIC_CORPUS_ROOT unset · one `python3 -m pytest` per lane, serial, no xdist
+```
+
+**The five moved rows are ONE finding and it is not a fix: they were already
+green on main and the rows were stale.** Measured on a fresh `--no-local` clone
+of pristine `72a558fdb` with NOTHING applied — no branch, no patch — the whole
+`test_matrix_63x8_ledger.py` module plus the one named coverage node, never a
+`-k` selection:
+
+    host   4 runs   53 passed  (15.3 / 16.6 / 16.6 s; ledger alone 52 passed / 6.3 s)
+    image  3 runs   53 passed  (the digest-pinned CI image, not a tag)
+
+Seven observations, both lanes, no failure in any. The four ledger predicates are
+functions of the flow yaml and the waiver registry only, and every tripwire they
+pin was re-derived by RUNNING the accessor rather than re-typing the pin —
+`EXPECTED_STEPS` 68, `EXPECTED_CELLS` 612, `CENSUS_GATE_PRESENT` 67,
+`CENSUS_REQUIRED_OUTPUTS_PRESENT` 66, `CENSUS_BLOCKS_ON_PRESENT` 68,
+`CENSUS_BLOCKS_ON_NON_EMPTY` 66, `CENSUS_GATE_PROGRAMS_NON_EMPTY` 66. Nothing
+about them is host-dependent. Their `5/5 5/5` was a true measurement of
+`867de4289` and had stopped being true some landings ago. No commit of this lane
+is claimed for them.
+
+ONE OF THE FIVE IS DIFFERENT, AND THE BRANCH SAID SO AGAINST ITSELF.
+`test_output_entries_classify_into_the_four_kinds` was measured green at
+`72a558fdb`, and then v1.12.10 declared `reports/phase3/perc_sweep.json` on step
+31 WITHOUT carrying its pinned entry census — taking the pin red again between
+the measurement and the table edit. It is green here because this landing also
+carries the pin repair (165 → 166 entries, FILE 123 → 124, GLOB and ANY_OF
+untouched), not because the old measurement was re-read charitably.
+
+RE-MEASURED ON THE REBASE, not before it, at the tree this landing pushes: the
+five affected modules run WHOLE, no `-k`, serial, no xdist — **202 passed, 1
+failed, 1 skipped, 4 xfailed in 416 s**. All five moved IDs PASSED by exact node
+name. The one failure is `test_matrix_63x8_coverage.py::test_no_cell_is_counted
+_enforced_while_its_predicate_is_red`, which is ITSELF a BOTH row of this table
+and stays one — see below. It is PRE-EXISTING, carried onto main unchanged, and
+NOT attributed to this branch.
+
+The anchored figures were re-derived rather than trusted:
+`tools/gen_matrix_63x8_census.py --check-figures` reports 57 anchored figures
+fresh across 36 corpus files, rc 0 — and the gate was FALSIFIED at this tree by
+putting one digit back (`required_outputs_file` 124 → 123), which reddens it
+naming `flowref.py:76` and both numbers, rc 1. A freshness PASS whose checker
+cannot fail is not evidence.
+
+STILL BOTH, AND WHAT IS NOW KNOWN, so the next reader does not re-derive it. The
+other five IDs of this slice all depend on the live 612-cell nested outcome run.
+Two causes were stacked on one another and BOTH are addressed by this landing:
+the d7 forward control that took the whole nested run to NORECORD is repaired
+here by planting the producer with the module's own `_plant_record`, and the
+README's generated census block is re-derived here (531 → 532 ENFORCED, 3 → 2
+WAIVED-SKIPPED, undeclared 397 → 398, NOT MEASURED 54 → 53, CONTRADICTED still
+0, 612/612 accounted for). The landing run corroborates the block independently:
+the failing assertion above prints a live TWO-AXIS census of `ENFORCED 532,
+WAIVED 8, NA 19, ENFORCED-SKIPPED 45, WAIVED-SKIPPED 2, NOT_MEASURED 6` — 612,
+and identical to the block.
+
+**Four of those five were GREEN on the HOST lane at this landing tree** —
+`census_freshness::test_the_census_block_is_fresh`,
+`::test_the_published_total_equals_the_live_census`,
+`coverage::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved`
+and `::test_the_enforcement_census_is_reported_for_humans`. **They are NOT moved,
+and the reason is a limit of this landing host, not a property of the code:** the
+pinned-image lane could not be run here, and this document's own rule is that a
+row leaves BOTH only when re-measured green in BOTH lanes. One lane is an
+observation, not a clearance. Whoever has an image lane: re-run those four whole
+modules against this sha and move them — the host half is already done.
+
+The fifth, `::test_no_cell_is_counted_enforced_while_its_predicate_is_red`,
+remains RED here and is a different question from the census block. Every cell it
+names is a `d3 (outputs_produced)` coordinate reported ENFORCED while the live
+run skipped it, because `VIBEIC_CORPUS_ROOT` was unset and the d3 predicates
+need the published corpus this checkout does not carry. That is the corpus-shaped
+condition, not a defect this branch introduced or could close.
