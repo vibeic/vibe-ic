@@ -118,6 +118,8 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -125,6 +127,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
@@ -163,6 +166,19 @@ from hygiene_shard_plan import load_profile, plan          # noqa: E402
 #: keys on it, so the directories a pre-fix build already left behind are the
 #: first thing a fixed run cleans up.
 _SCRATCH_PREFIX = "hostindep-"
+
+#: The claim file for one working checkout. Deliberately NOT under
+#: `_SCRATCH_PREFIX`: `sweep_abandoned_scratch` reaps that prefix, and a reaper
+#: that deletes the lock two live drivers are holding hands them both the
+#: checkout at once. Deliberately NOT inside the subject tree either — this
+#: program's whole subject is a gate that writes into the tree it measures.
+_CLAIM_PREFIX = "vibeic-ckout-claim-"
+
+#: How long a drive waits for the claim before giving up on ATTRIBUTION. It
+#: never gives up on the DRIVE: the verdict is this gate's job and the
+#: attribution is a side observation, so a busy checkout must cost the second,
+#: never the first.
+_CLAIM_WAIT_S = 600
 
 #: A gate may DECLARE itself out of this comparison, on the line above its own
 #: `run` line, in the script where it is wired:
@@ -245,6 +261,12 @@ class Audit(NamedTuple):
     #: the same class of damage as the leak it is fixing, so both the removals
     #: and the SKIPS are named.
     scratch: Optional[Dict] = None
+    #: `(label, why)` for every gate driven in the working checkout while this
+    #: process could NOT hold an exclusive claim on it. Its checkout-write
+    #: attribution was not performed. Carried separately from `findings`
+    #: because it is not a defect in the gate and must not colour the verdict:
+    #: naming an innocent gate is the harm this list exists to replace.
+    unattributed: Optional[List[Tuple[str, str]]] = None
 
 
 def corpus_gates(script: Path) -> List[Gate]:
@@ -624,6 +646,134 @@ def sweep_abandoned_scratch(repo_root: Path,
             "kept": [{"path": p, "why": w} for p, w in rep.kept]}
 
 
+def declared_concurrent_lanes() -> int:
+    """How many stages the ENCLOSING runner is driving against this checkout.
+
+    `tools/gatekeeper-land.sh` runs `LANE_WIDTH` full-tier lanes — targeted
+    tests, the corpus suite, this hygiene tier, the plugin audit —
+    CONCURRENTLY IN ONE CHECKOUT, and exports that width here.
+
+    A DECLARATION, not an observation, and for the reason
+    `tools/ci/_gate_dispatch.sh:518` already had to write down one level below
+    this file: "no tree-only observation can separate a writer from a gate that
+    merely overlapped it". The only process that knows how many writers share
+    the tree is the one that started them, so it is the one that says.
+
+    ABSENT MEANS ONE, and that direction is chosen rather than defaulted into:
+    a standalone run does own its checkout, and it is the shape
+    `test_issue1029_the_killer_must_clean_up.py` drives. Reading an absent
+    variable as "probably concurrent" would retire that detector everywhere and
+    print nothing while doing it — quiet, not fixed.
+    """
+    raw = os.environ.get("VIBEIC_CHECKOUT_CONCURRENT_LANES", "").strip()
+    if not raw:
+        return 1
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1
+
+
+class _CheckoutClaim:
+    """An EXCLUSIVE claim on writing to one working checkout — or an honest no.
+
+    `_repair_checkout` below attributes a write to a gate and then UNDOES it.
+    Both halves are sound only inside a window where this process is the only
+    one writing to the tree, and nothing used to establish that window. This
+    does, and when it cannot, it says so instead of guessing an author.
+
+    Three states, and the caller must handle all three:
+
+      * ``want=False``  — this loop is about to run NOTHING in the working
+        checkout (Arm A came from the outer sweep's record). No write in the
+        tree can be ours, so there is no bracket to open and no true positive
+        to lose by not opening one.
+      * ``held=True``   — an exclusive `flock` is held for the window. Every
+        driver in this program takes the same file, so no two of them, and no
+        two concurrent invocations on one host, can be inside each other's
+        bracket.
+      * ``held=False``  — a concurrent window was DECLARED, or another driver
+        holds the claim, or the claim file cannot be opened. The drive still
+        happens; the ATTRIBUTION does not, and `why` says which of the three it
+        was.
+
+    ``held`` IS A RECORD, NOT A LIVE HANDLE, and it stays true after the block
+    exits. The caller decides whether to report the gate as unattributed AFTER
+    the window closes — there is nowhere else it can — so a `__exit__` that
+    reset this to False made every attributed gate report itself as skipped,
+    with `why` reading "held". That is the mirror of the false accusation this
+    class exists to stop: a clean measurement filed as "I could not look".
+    MEASURED at `parallel_audit(jobs=3)` with no attestations, 6 gates, 6 of 6
+    wrongly listed. `_fh is None` is what says the lock is released.
+
+    Non-fatal by construction: every failure path here costs an observation,
+    never a verdict.
+    """
+
+    def __init__(self, repo_root: Path, want: bool,
+                 wait_s: float = _CLAIM_WAIT_S,
+                 lock_root: Optional[Path] = None) -> None:
+        self.repo_root = Path(repo_root)
+        self.want = bool(want)
+        self.wait_s = wait_s
+        self.lock_root = (Path(lock_root) if lock_root is not None
+                          else Path(tempfile.gettempdir()))
+        self.held = False
+        self.why = "not requested"
+        self._fh = None
+
+    def _path(self) -> Path:
+        key = hashlib.sha256(
+            str(self.repo_root.resolve()).encode("utf-8")).hexdigest()[:16]
+        return self.lock_root / f"{_CLAIM_PREFIX}{key}.lock"
+
+    def __enter__(self) -> "_CheckoutClaim":
+        if not self.want:
+            self.why = ("this drive ran no child in the working checkout, so "
+                        "no write that appeared in it can be this gate's")
+            return self
+        lanes = declared_concurrent_lanes()
+        if lanes > 1:
+            self.why = (
+                f"the enclosing runner declared {lanes} lanes sharing this "
+                f"checkout (VIBEIC_CHECKOUT_CONCURRENT_LANES), so a write "
+                f"seen here may be any of them")
+            return self
+        try:
+            self.lock_root.mkdir(parents=True, exist_ok=True)
+            fh = open(self._path(), "a+")          # noqa: SIM115 - held open
+        except OSError as exc:
+            self.why = f"the claim file could not be opened: {exc}"
+            return self
+        deadline = time.monotonic() + self.wait_s
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                if time.monotonic() >= deadline:
+                    fh.close()
+                    self.why = (f"another driver held the claim on this "
+                                f"checkout for {self.wait_s:g}s")
+                    return self
+                time.sleep(0.25)
+                continue
+            self._fh = fh
+            self.held = True
+            self.why = "held"
+            return self
+
+    def __exit__(self, *exc) -> bool:
+        if self._fh is not None:
+            try:
+                fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            finally:
+                self._fh.close()
+                self._fh = None
+        return False
+
+
 def _checkout_dirty_paths(repo_root: Path) -> Dict[str, str]:
     """``{path: status}`` for everything git currently reports, or ``{}``.
 
@@ -650,9 +800,38 @@ def _checkout_dirty_paths(repo_root: Path) -> Dict[str, str]:
     return out
 
 
+def _path_digest(path: Path) -> Optional[str]:
+    """Content digest of one path, or ``None`` when it cannot be read.
+
+    A module-level function rather than an inline `read_bytes` because
+    `_repair_checkout` reads the same path TWICE and the whole question is
+    whether anything happened in between — a test needs a seam it can make the
+    two reads disagree at, and there is no way to race a real second writer
+    into that window on purpose.
+    """
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def _repair_checkout(repo_root: Path, before: Dict[str, str],
                      label: str) -> Tuple[List[str], List[str]]:
     """Undo what THIS drive wrote. Returns ``(repaired, refused)``.
+
+    THE PREMISE, WHICH THE CALLER OWNS. Every sentence below says "the child
+    this loop just ran". `git status` is a fact about the TREE and cannot name
+    an author, so the difference between two snapshots is this drive's ONLY
+    while this process was the only one writing to the tree between them.
+    `_CheckoutClaim` is what establishes that, and this function must not be
+    called without it — see the two call sites in `audit`.
+
+    AND THE REPAIR IS DESTRUCTIVE, which is why the premise is not optional.
+    ``git checkout -- <path>`` on a file this process did not write DISCARDS
+    whatever the real writer was in the middle of doing. Under
+    `gatekeeper-land.sh`'s `LANE_WIDTH=4` that is another lane's in-flight
+    work, reverted underneath it while it runs. A false accusation is
+    recoverable by reading; that is not.
 
     THE BOUNDARY, because an over-eager repair here would destroy a
     maintainer's work in order to tidy up after a gate:
@@ -670,6 +849,18 @@ def _repair_checkout(repo_root: Path, before: Dict[str, str],
         it can prove it caused, not to remove files.
     """
     after = _checkout_dirty_paths(repo_root)
+    # THE CONTENT AS THE DRIVE LEFT IT, read once here and once again in the
+    # instant before the destructive step below.
+    #
+    # `docs/capture/2026-08-22-jcapsha/evidence/concurrent_repair/MEASURED.md`
+    # prescribes this after watching this function delete a live editor's work
+    # twice: "capture it again immediately before each `checkout --` and refuse
+    # the repair if the path's content changed a second time, because a file
+    # being written twice inside one drive is not a file only the child
+    # touched." It NARROWS the window rather than closing it — a writer that
+    # lands between the two reads is still missed, which is why the CALLER's
+    # exclusive claim is the primary defence and this is the second one.
+    settled = {p: _path_digest(repo_root / p) for p in after}
     repaired: List[str] = []
     refused: List[str] = []
     for path, status in sorted(after.items()):
@@ -677,6 +868,10 @@ def _repair_checkout(repo_root: Path, before: Dict[str, str],
             continue
         if status.strip() == "??":
             refused.append(f"{path} (untracked -- named, not deleted)")
+            continue
+        if _path_digest(repo_root / path) != settled.get(path):
+            refused.append(f"{path} (written AGAIN after the drive ended, so "
+                           f"this process is not its only writer)")
             continue
         r = subprocess.run(
             ["git", "-C", str(repo_root), "checkout", "--", path],
@@ -766,6 +961,10 @@ def audit(repo_root: Path, timeout: int = 600,
 
     findings: List[Dict] = []
     not_probed: List[Tuple[str, str]] = []
+    #: Gates driven in the working checkout WITHOUT an exclusive claim on it.
+    #: Their checkout-write attribution was not performed and is reported by
+    #: name — "I could not look" is a state of its own, never a clean zero.
+    unattributed: List[Tuple[str, str]] = []
     if include_script_findings:
         for lineno, text in inert_exclusions(script):
             findings.append({
@@ -858,7 +1057,6 @@ def audit(repo_root: Path, timeout: int = 600,
             # byte-identically (measured). SIGTERM is handled too, once #1090
             # lands. SIGKILL cannot be caught by anybody -- so the only process
             # still alive to undo the write is THIS ONE, the one that sent it.
-            before_dirty = _checkout_dirty_paths(repo_root)
             drive_exc: Optional[BaseException] = None
             # A DECLARATION THE SHELL'S OWN SPLITTER CANNOT READ is not a
             # pass and not a traceback: it gets the state a gate that cannot
@@ -900,20 +1098,70 @@ def audit(repo_root: Path, timeout: int = 600,
                         "checkout": str(rec_a.get("argv_sha256", "NORECORD")),
                         "worktree": expected_argv})
                     continue
-            try:
-                if rec_a is None:
-                    a = _run_gate(argv_a, ca, timeout)
-                    rec_a = _completed_attestation(
-                        label, a, argv_a, repo_root, wt, ca)
-                b = _run_gate(argv_b, cb, timeout)
-                rec_b = _completed_attestation(
-                    label, b, argv_b, repo_root, wt, cb)
-            except (OSError, subprocess.SubprocessError) as exc:
-                drive_exc = exc
-            # ALWAYS, not only on the exception path. A gate that writes into
-            # the checkout while EXITING CLEANLY corrupts the comparison just as
-            # thoroughly, and would otherwise be invisible here.
-            repaired, refused = _repair_checkout(repo_root, before_dirty, label)
+            # THE BRACKET IS EVIDENCE ONLY WHILE ITS PREMISE HOLDS, and the
+            # premise is `_repair_checkout`'s own first line: "undo what THIS
+            # drive wrote". Two things must be true for a write seen between
+            # the two snapshots to be THIS gate's, and neither was checked.
+            #
+            #   1. THIS LOOP RAN A CHILD IN THE WORKING CHECKOUT AT ALL. Under
+            #      the wiring this gate actually ships with — `--jobs 8` with
+            #      `GATE_DISPATCH_ATTESTATION_FILE` set, `repo_hygiene_gates.sh
+            #      :2608` — Arm A is the record the outer sweep ALREADY
+            #      produced and is not re-run, so the only child driven here
+            #      runs in `wt`. The bracket then watched the working checkout
+            #      across ~40 min while nothing of ours wrote to it: every path
+            #      it could see was somebody else's, and every finding it could
+            #      file was false. Closing it loses no true positive, because
+            #      on that path there is none to lose.
+            #
+            #   2. NOBODY ELSE IS DRIVING THE SAME CHECKOUT. `gatekeeper-land
+            #      .sh:112` runs `LANE_WIDTH=4` full-tier lanes — targeted
+            #      tests, the corpus suite, this hygiene tier, the plugin audit
+            #      — CONCURRENTLY IN ONE CHECKOUT. A write by the targeted lane
+            #      lands inside this bracket and is charged to whichever gate
+            #      this probe happened to be driving. That is how
+            #      `3 GATE_CORRUPTED_CHECKOUT` appeared on one host and not
+            #      another and was briefly attributed to a landing batch that
+            #      had nothing to do with it — the detector named whoever was
+            #      standing there.
+            #
+            # `tools/ci/_gate_dispatch.sh:518-537` settled exactly this one
+            # level down and in the same words: "no tree-only observation can
+            # separate a writer from a gate that merely overlapped it. The
+            # choice is therefore between naming the wrong gate and running the
+            # watched gates one at a time." `gatekeeper-land.sh:1556` reaches
+            # the same place from the other side — a write inside the
+            # concurrent window re-runs that window SERIALLY "so the write is
+            # attributed to a stage rather than to an overlap".
+            #
+            # So: hold an EXCLUSIVE claim for the window, and when it cannot be
+            # had, DRIVE ANYWAY AND DO NOT ATTRIBUTE. The gates still get their
+            # two-tree verdict — that is this program's subject and it is
+            # untouched — and the run names the gates whose checkout-write
+            # attribution was skipped instead of filing an author it cannot
+            # support.
+            with _CheckoutClaim(repo_root, want=rec_a is None) as claim:
+                before_dirty = (_checkout_dirty_paths(repo_root)
+                                if claim.held else None)
+                try:
+                    if rec_a is None:
+                        a = _run_gate(argv_a, ca, timeout)
+                        rec_a = _completed_attestation(
+                            label, a, argv_a, repo_root, wt, ca)
+                    b = _run_gate(argv_b, cb, timeout)
+                    rec_b = _completed_attestation(
+                        label, b, argv_b, repo_root, wt, cb)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    drive_exc = exc
+                # ALWAYS, not only on the exception path. A gate that writes
+                # into the checkout while EXITING CLEANLY corrupts the
+                # comparison just as thoroughly, and would otherwise be
+                # invisible here.
+                repaired, refused = (
+                    _repair_checkout(repo_root, before_dirty, label)
+                    if before_dirty is not None else ([], []))
+            if claim.want and not claim.held:
+                unattributed.append((label, claim.why))
             if repaired or refused:
                 findings.append({
                     "gate": label, "kind": "GATE_CORRUPTED_CHECKOUT",
@@ -989,15 +1237,25 @@ def audit(repo_root: Path, timeout: int = 600,
                 #
                 # Paid ONLY on the disagreeing minority: the agreeing majority
                 # is still driven exactly twice, which matters at ~44 min.
-                retry_before = _checkout_dirty_paths(repo_root)
+                # SAME PREMISE, SAME CLAIM. The confirmation drive DOES run
+                # Arm A in the working checkout even when the first round read
+                # Arm A out of the outer record, so unlike the main path there
+                # is a real bracket to open here — but only while this process
+                # is the only one writing to the tree.
                 retry_exc: Optional[BaseException] = None
-                try:
-                    a2 = _run_gate(argv_a, ca, timeout)
-                    b2 = _run_gate(argv_b, cb, timeout)
-                except (OSError, subprocess.SubprocessError) as exc:
-                    retry_exc = exc
-                retry_repaired, retry_refused = _repair_checkout(
-                    repo_root, retry_before, label)
+                with _CheckoutClaim(repo_root, want=True) as retry_claim:
+                    retry_before = (_checkout_dirty_paths(repo_root)
+                                    if retry_claim.held else None)
+                    try:
+                        a2 = _run_gate(argv_a, ca, timeout)
+                        b2 = _run_gate(argv_b, cb, timeout)
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        retry_exc = exc
+                    retry_repaired, retry_refused = (
+                        _repair_checkout(repo_root, retry_before, label)
+                        if retry_before is not None else ([], []))
+                if not retry_claim.held:
+                    unattributed.append((label, retry_claim.why))
                 if retry_repaired or retry_refused:
                     findings.append({
                         "gate": label, "kind": "GATE_CORRUPTED_CHECKOUT",
@@ -1067,7 +1325,7 @@ def audit(repo_root: Path, timeout: int = 600,
     probed = declared - len(not_probed)
     if findings:
         return Audit("FAIL", findings, dirt, declared, probed, not_probed,
-                     scratch)
+                     scratch, unattributed)
     # NO STIMULUS IS NOT A PASS (#539). Every gate agreeing across two trees
     # that carry the same bytes is arithmetic, not evidence: the leftovers this
     # probe detects a gate READING were absent from both sides, so the run had
@@ -1082,8 +1340,9 @@ def audit(repo_root: Path, timeout: int = 600,
     # a NOT_CHECKED out of an unknown is the mirror of inventing a pass.
     if dirt is not None and dirt.ignored_reported and dirt.stimulus == 0:
         return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
-                     scratch)
-    return Audit("PASS", findings, dirt, declared, probed, not_probed, scratch)
+                     scratch, unattributed)
+    return Audit("PASS", findings, dirt, declared, probed, not_probed,
+                 scratch, unattributed)
 
 
 def _audit_doc(res: Audit, selected: Optional[List[str]] = None) -> Dict:
@@ -1094,6 +1353,8 @@ def _audit_doc(res: Audit, selected: Optional[List[str]] = None) -> Dict:
         "gates_probed": res.probed,
         "selected_labels": sorted(selected or []),
         "not_probed": [{"gate": g, "why": w} for g, w in res.not_probed],
+        "not_attributed": [{"gate": g, "why": w}
+                           for g, w in (res.unattributed or [])],
         "scratch_sweep": res.scratch,
         "stimulus": (None if res.dirt is None else {
             "untracked": len(res.dirt.untracked),
@@ -1252,6 +1513,7 @@ def parallel_audit(repo_root: Path, jobs: int,
             "checkout": text, "worktree": "-"})
 
     scratch_rows: List[Dict] = []
+    unattributed: List[Tuple[str, str]] = []
     problems: List[str] = []
     seen: List[str] = []
     probed = 0
@@ -1319,6 +1581,9 @@ def parallel_audit(repo_root: Path, jobs: int,
             findings.extend(doc.get("findings") or [])
             if doc.get("scratch_sweep"):
                 scratch_rows.append(doc["scratch_sweep"])
+            for row in doc.get("not_attributed") or []:
+                unattributed.append((str(row.get("gate", "")),
+                                     str(row.get("why", ""))))
             if rc not in (0, 1, 2):
                 problems.append(f"worker {i} exited unexpected rc {rc}")
             expected_rc = {"PASS": 0, "FAIL": 1,
@@ -1344,7 +1609,7 @@ def parallel_audit(repo_root: Path, jobs: int,
               "detail": p, "checkout": "-", "worktree": "-"}
              for p in problems],
             dirt, declared, probed, not_probed,
-            {"workers": scratch_rows})
+            {"workers": scratch_rows}, unattributed)
     if any(v not in ("PASS", "NO_STIMULUS", "FAIL") for v in verdicts):
         return Audit(
             "PARALLEL_INCOMPLETE",
@@ -1352,13 +1617,13 @@ def parallel_audit(repo_root: Path, jobs: int,
               "detail": "worker setup/refusal verdict(s): " + ", ".join(verdicts),
               "checkout": "-", "worktree": "-"}],
             dirt, declared, probed, not_probed,
-            {"workers": scratch_rows})
+            {"workers": scratch_rows}, unattributed)
     if findings or "FAIL" in verdicts:
         return Audit("FAIL", findings, dirt, declared, probed, not_probed,
-                     {"workers": scratch_rows})
+                     {"workers": scratch_rows}, unattributed)
     if verdicts and all(v == "NO_STIMULUS" for v in verdicts):
         return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
-                     {"workers": scratch_rows})
+                     {"workers": scratch_rows}, unattributed)
     if any(v == "NO_STIMULUS" for v in verdicts):
         return Audit(
             "PARALLEL_INCOMPLETE",
@@ -1366,9 +1631,9 @@ def parallel_audit(repo_root: Path, jobs: int,
               "detail": "workers disagreed about whether stimulus existed",
               "checkout": "-", "worktree": "-"}],
             dirt, declared, probed, not_probed,
-            {"workers": scratch_rows})
+            {"workers": scratch_rows}, unattributed)
     return Audit("PASS", [], dirt, declared, probed, not_probed,
-                 {"workers": scratch_rows})
+                 {"workers": scratch_rows}, unattributed)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1436,6 +1701,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # numerator without being named is how a set silently shrinks.
     for label, why in res.not_probed:
         print(f"  [NOT PROBED] {label} — {why}", file=sys.stderr)
+
+    # And say which gates were driven in a checkout this process did not own.
+    # Their two-tree verdict below is unaffected; what was NOT measured is
+    # whether the drive left the checkout modified. Named rather than counted
+    # as clean, because a zero nobody looked for is the mirror of the false
+    # accusation this replaced.
+    for label, why in (res.unattributed or []):
+        print(f"  [NOT ATTRIBUTED] {label} — a write into the working checkout "
+              f"during this drive could not be shown to be this gate's: {why}. "
+              f"No gate was named and nothing was restored; the two-tree "
+              f"verdict for it is unaffected.", file=sys.stderr)
 
     # And say what the entry sweep did to other people's directories. A cleanup
     # that runs silently is one nobody can audit when it removes the wrong

@@ -542,6 +542,33 @@ def test_the_pipe_form_really_does_lose_a_match(tmp_path):
     assert "here=0" in proc.stdout, proc.stdout
 
 
+def test_the_hygiene_lane_is_TOLD_the_checkout_is_shared(land_text):
+    """The window has to be DECLARED, or the tier inside it names the innocent.
+
+    `gate_host_independence_check` brackets each gate's drive with a
+    `git status` snapshot of this checkout and charges the difference to that
+    gate. `git status` cannot name an author, so under `LANE_WIDTH=4` a write
+    by the targeted lane is charged to whichever gate the hygiene lane happened
+    to be driving -- and then `git checkout -- <path>` REVERTS it underneath
+    the lane that wrote it. Measured as `3 GATE_CORRUPTED_CHECKOUT` on one host
+    and not another, and briefly blamed on a landing batch.
+
+    The probe reads `VIBEIC_CHECKOUT_CONCURRENT_LANES` to decide whether it may
+    attribute such a write; absent, it reads 1 and attributes, which is right
+    for a standalone run and wrong here. So this asserts on the WIRING rather
+    than on the probe: a fix that never reaches the process that runs is not a
+    fix.
+    """
+    assert re.search(r'"VIBEIC_CHECKOUT_CONCURRENT_LANES=\$LANE_WIDTH"',
+                     land_text), (
+        "the hygiene lane is no longer told how many lanes share its checkout")
+    parts = land_text.split("lane_hygiene() {", 1)
+    assert len(parts) == 2, "lane_hygiene() is gone"
+    body = parts[1].split("\n}", 1)[0]
+    assert "VIBEIC_CHECKOUT_CONCURRENT_LANES" in body, (
+        "the declaration is in the file but not in the hygiene lane's env")
+
+
 def test_there_is_no_way_to_opt_IN(land_text):
     """The fast path is the default; the escape hatch only turns it OFF."""
     assert "GATEKEEPER_LANDING_SERIAL" in land_text

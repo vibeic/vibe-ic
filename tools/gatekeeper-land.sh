@@ -1478,8 +1478,17 @@ GK_HYG_ENV=()
 [ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
   && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
 lane_hygiene() {
+  # `VIBEIC_CHECKOUT_CONCURRENT_LANES` DECLARES THE SHARED CHECKOUT. The lanes
+  # above run in THIS tree at the same time as this one, so a per-gate
+  # before/after snapshot taken inside the hygiene tier sees their writes and
+  # cannot tell them from its own. `gate_host_independence_check` reads this to
+  # decide whether it may attribute such a write to a gate; without it, it named
+  # whichever gate it was driving. Said out loud rather than inferred from
+  # `HYGIENE_POOL`: a number that means one thing and is read as another is how
+  # this went wrong the first time.
   run_capture "full:repo-hygiene" "${GK_HYG_ENV[@]}" \
       env "VIBEIC_SUBJECT_ROOT=$ROOT" \
+      "VIBEIC_CHECKOUT_CONCURRENT_LANES=$LANE_WIDTH" \
       "GATEKEEPER_HYGIENE_JOBS=$HYGIENE_POOL" \
       bash "$RUNTIME_ROOT/tools/ci/repo_hygiene_gates.sh" \
       "${GK_HYG[@]+"${GK_HYG[@]}"}"
