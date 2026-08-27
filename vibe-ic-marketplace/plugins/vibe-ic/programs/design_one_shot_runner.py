@@ -405,29 +405,56 @@ def _run(cmd: List[str], cwd: Optional[Path] = None,
          env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
     """Run a subprocess; capture stdout+stderr; return (rc, out, err).
 
-    A `docker exec … bash -lc <script>` argv is given its own container-side
-    deadline first (`_docker_exec_argv_with_deadline`) — without it a host
-    timeout orphans the in-container tool."""
-    cmd = _docker_exec_argv_with_deadline(cmd, timeout)
-    try:
-        cp = subprocess.run(
-            cmd,
-            cwd=str(cwd) if cwd else None,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env={**os.environ, **(env or {})},
-        )
-        return cp.returncode, cp.stdout, cp.stderr
-    except subprocess.TimeoutExpired as e:
-        # TimeoutExpired.stdout is BYTES even under text=True (CPython);
-        # decoding here keeps every rc=124 consumer str-safe (#525 review).
-        partial = e.stdout
-        if isinstance(partial, bytes):
-            partial = partial.decode(errors="replace")
-        return 124, partial or "", f"TIMEOUT after {timeout}s: {e}"
-    except FileNotFoundError as e:
-        return 127, "", f"COMMAND_NOT_FOUND: {e}"
+    Bounded by NO-PROGRESS, never by runtime. `timeout` is the caller's IDLE
+    tolerance, not a deadline: a job whose process tree keeps moving (output,
+    CPU or I/O) runs to completion however long that legitimately takes, and
+    only a job that has stopped moving entirely is killed — reported as rc 124,
+    the code every existing consumer already handles.
+
+    A `docker exec … bash -lc <script>` argv still gets its own container-side
+    backstop (`_docker_exec_argv_with_deadline`), pinned to the hard ceiling:
+    killing the host `docker exec` CLIENT does not reach the tool inside the
+    container, so without it a killed job leaves an ORPHAN."""
+    import _watchdog as _wd
+    # The container-side backstop stays — it is what stops an ORPHAN (measured
+    # 2026-07-22: yosys+abc still running 18 min after a 300 s cap fired, free
+    # to overwrite the good netlist). But it is now pinned to the CEILING, not
+    # to `timeout`: an anti-orphan backstop and a runtime GUESS are different
+    # things, and only the guess was producing verdicts.
+    cmd = _docker_exec_argv_with_deadline(cmd, _wd.DEFAULT_HARD_CEILING_S)
+    # `timeout` no longer bounds RUNTIME. It is read as the caller's declared
+    # IDLE tolerance — how long this job may show no progress at all before it
+    # is called hung — which is a question about the JOB, not about the host.
+    # A slow host, a big design or a loaded machine no longer manufacture a
+    # verdict: the audit comment three call-sites down already admitted a fixed
+    # 300 s "killed flow_compliance mid-run on large SoCs (155k+ filler
+    # projects legitimately need 8-9 min)".
+    res = _wd.run_host_supervised(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        # The caller's number becomes its IDLE tolerance. Read that way it is
+        # already far more generous than it was as a deadline — a progressing
+        # job now has no bound at all — while a hang is still found promptly,
+        # which `max(timeout, DEFAULT_STALL_GRACE_S)` would have cost: it turned
+        # every short probe into a 30-minute wait on a hang. The floor is one
+        # full observation cadence, because nothing can honestly be called
+        # stalled on fewer than a couple of looks.
+        stall_grace_s=max(float(timeout), _wd.DEFAULT_POLL_S),
+        env={**os.environ, **(env or {})},
+    )
+    if res.rc == 127 and res.err.startswith("COMMAND_NOT_FOUND"):
+        return 127, "", res.err
+    if res.outcome in ("stalled", "ceiling"):
+        # Reported as 124, unchanged, so every existing rc=124 consumer keeps
+        # working. Only the QUESTION changed: 124 used to mean "the clock ran
+        # out", it now means "nothing in this job's process tree moved". The
+        # message says so rather than naming a duration, because the duration
+        # was never the finding.
+        return 124, res.out, (
+            res.err + f"\nNO FORWARD PROGRESS: nothing in the process tree "
+            f"(output, CPU or I/O) advanced for {res.elapsed_s:.0f}s — killed "
+            f"as hung. This is NOT a statement that the job was too slow.")
+    return res.rc, res.out, res.err
 
 
 # -------------------------------------------------------------------------

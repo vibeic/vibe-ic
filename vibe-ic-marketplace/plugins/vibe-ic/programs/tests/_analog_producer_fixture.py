@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import _plugin_tree  # noqa: F401  — puts programs/ on sys.path
+import _watchdog
 
 PROGRAMS = Path(_plugin_tree.plugin_path("programs"))
 
@@ -71,10 +72,33 @@ def make_project(root: Path, blocks: List[Dict[str, Any]],
     return root
 
 
-def run_prog(prog: Path, project: Path, *args: str
+def run_prog(prog: Path, project: Path, *args: str,
+             stall_grace_s: Optional[float] = None
              ) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(prog), str(project), *args],
-                          capture_output=True, text=True, timeout=60)
+    """Drive a producer as a subprocess, bounded by NO-PROGRESS, not by a clock.
+
+    This used to be `subprocess.run(..., timeout=60)`. 60 s is not a property
+    of any producer here — it is a guess about a HOST, and it was wrong: the
+    owner hit a `TimeoutExpired` on `analog_a3_netlist_emit`, a module nobody
+    had touched, on a loaded machine. The failing test named a defect in the
+    producer; the producer was fine and the machine was busy. A wall-clock
+    budget cannot tell those apart, because "how long has it been" is a
+    different question from "is it working".
+
+    So nothing here bounds RUNTIME. `run_host_supervised` watches the job's
+    /proc tree and kills only a job that is not PROGRESSING — no CPU, no I/O,
+    no output across the grace window. A producer that is merely slow, on a
+    loaded host or a slower one, now runs to completion however long it takes;
+    a producer that genuinely hangs still dies, and arrives as rc RC_STALLED
+    with WATCHDOG_STALLED on stderr rather than as whatever rc the assertion
+    happened to be looking for. `stall_grace_s` is IDLE time, never a runtime
+    estimate, so it needs no per-host tuning; a test that wants to prove the
+    stall path passes a small one."""
+    cmd = [sys.executable, str(prog), str(project), *args]
+    res = _watchdog.run_host_supervised(
+        cmd, stall_grace_s=(_watchdog.DEFAULT_STALL_GRACE_S
+                            if stall_grace_s is None else stall_grace_s))
+    return _watchdog.completed_process(cmd, res)
 
 
 def bdir(project: Path, name: str) -> Path:

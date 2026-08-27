@@ -288,6 +288,7 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
                    scope_project=None,
                    scope_step=None,
                    scope_guard_dir=None,
+                   cwd=None,
                    wait_fn=None,
                    clock: Callable[[], float] = time.monotonic,
                    abort_probe: Optional[Callable[[], Optional[str]]] = None
@@ -355,7 +356,12 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
 
     t0 = time.monotonic()
     try:
-        proc = popen_factory(cmd, stdout=out_f, stderr=err_f, env=env)
+        _kw = {"stdout": out_f, "stderr": err_f, "env": env}
+        if cwd is not None:
+            # Passed only when set: an injected popen_factory that predates
+            # this parameter keeps working untouched.
+            _kw["cwd"] = cwd
+        proc = popen_factory(cmd, **_kw)
     except FileNotFoundError as e:
         out_f.close()
         err_f.close()
@@ -553,3 +559,201 @@ def loop_guard(name: str, *, max_iter: int,
     a bounded, no-progress-aware in-process loop; read ``.reason`` afterward."""
     return LoopGuard(name, max_iter=max_iter, stall_iters=stall_iters,
                      progress_fn=progress_fn, clock=clock)
+
+
+# ===========================================================================
+# HOST progress probe — the third face of the primitive.
+#
+# `run_supervised` is transport-AGNOSTIC: it asks the CALLER to inject a
+# `cpu_probe`. Two injections shipped (both docker-exec: `_docker_watchdog`
+# and `phase3_one_shot_runner`), so every HOST caller that wanted progress
+# supervision had no probe to reach for and fell back to the one thing that
+# needs no probe — `subprocess.run(..., timeout=N)`. That is why a wall-clock
+# budget kept being re-invented: the honest alternative was missing, not
+# rejected. This section supplies it.
+#
+# A host job's forward progress is read from /proc, tree-wide:
+#   • CPU  — utime+stime of every process in the tree (a silent but computing
+#     job is PROGRESSING, and must never be killed),
+#   • I/O  — read_bytes+write_bytes (a job blocked on a slow disk is
+#     PROGRESSING; interpreter boot alone moves this),
+# summed over the TREE, not the direct child: a helper that shells out and
+# then blocks in `wait()` has all of its progress in a grandchild, and probing
+# only the child would read that healthy job as frozen.
+#
+# Tree-wide is also what makes the reading HONEST in the other direction: a
+# process whose whole tree shows zero CPU and zero I/O across the grace window
+# is not slow, it is stuck. That is a verdict about the JOB, not about the
+# clock — which is the entire point.
+# ===========================================================================
+
+_CLK_TCK = None
+
+
+def _clk_tck() -> float:
+    """SC_CLK_TCK — the unit of /proc/<pid>/stat's utime/stime fields."""
+    global _CLK_TCK
+    if _CLK_TCK is None:
+        try:
+            _CLK_TCK = float(os.sysconf("SC_CLK_TCK")) or 100.0
+        except (ValueError, OSError, AttributeError):  # nosec
+            _CLK_TCK = 100.0
+    return _CLK_TCK
+
+
+def _proc_children_map() -> dict:
+    """ppid -> [pid, ...] for every live process readable in /proc.
+
+    One pass over /proc, so walking a tree of any depth costs one scan. A pid
+    that vanishes mid-scan is simply absent — a dead process contributes no
+    progress, and its CPU is already carried forward by the meter."""
+    kids: dict = {}
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return kids
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open("/proc/%s/stat" % name, "rb") as fh:
+                data = fh.read()
+        except OSError:  # nosec — raced with exit, or not ours to read
+            continue
+        # comm is parenthesised and may itself contain spaces/parens: fields
+        # after the LAST ')' are the ones with fixed positions.
+        cut = data.rfind(b")")
+        if cut < 0:
+            continue
+        rest = data[cut + 2:].split()
+        if len(rest) < 2:
+            continue
+        try:
+            kids.setdefault(int(rest[1]), []).append(int(name))
+        except ValueError:  # nosec
+            continue
+    return kids
+
+
+def _pid_cpu_s(pid: int):
+    """utime+stime of ONE pid, in seconds; None when unreadable."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            data = fh.read()
+    except OSError:  # nosec
+        return None
+    cut = data.rfind(b")")
+    if cut < 0:
+        return None
+    rest = data[cut + 2:].split()
+    # after the last ')': state, ppid, pgrp, session, tty, tpgid, flags,
+    # minflt, cminflt, majflt, cmajflt, utime, stime, ...
+    if len(rest) < 13:
+        return None
+    try:
+        return (float(rest[11]) + float(rest[12])) / _clk_tck()
+    except ValueError:  # nosec
+        return None
+
+
+def _pid_io_bytes(pid: int):
+    """read_bytes+write_bytes of ONE pid; None when unreadable.
+
+    /proc/<pid>/io is readable only for our own processes — which is exactly
+    the case here (we launched the job) — and absent on kernels built without
+    CONFIG_TASK_IO_ACCOUNTING. Absent ⇒ None ⇒ the CPU signal carries the
+    reading alone; never an error, and never mistaken for 'no progress'."""
+    try:
+        with open("/proc/%d/io" % pid, "rb") as fh:
+            total = 0.0
+            for line in fh:
+                if line.startswith(b"read_bytes:") or \
+                        line.startswith(b"write_bytes:"):
+                    try:
+                        total += float(line.split(b":", 1)[1])
+                    except ValueError:  # nosec
+                        pass
+            return total
+    except OSError:  # nosec
+        return None
+
+
+def host_tree_progress(pid: int):
+    """Forward-progress reading for the host process TREE rooted at `pid`.
+
+    Returns CPU-seconds + I/O-megabytes summed tree-wide (one comparable float
+    that only grows while the job works), or None when nothing in the tree is
+    readable — i.e. the job is gone. Returning None rather than 0.0 on a dead
+    tree matters: `ProgressMeter` CARRIES FORWARD an unavailable signal, so a
+    process exiting can never look like a progress RESET, and an unreadable
+    /proc can never look like a stall.
+
+    I/O is scaled to megabytes so neither signal swamps the other; the meter
+    only asks whether the number ADVANCED, so the scale is presentational."""
+    seen = False
+    total = 0.0
+    kids = _proc_children_map()
+    stack = [int(pid)]
+    walked = set()
+    while stack:
+        cur = stack.pop()
+        if cur in walked:
+            continue
+        walked.add(cur)
+        cpu = _pid_cpu_s(cur)
+        if cpu is not None:
+            seen = True
+            total += cpu
+        io = _pid_io_bytes(cur)
+        if io is not None:
+            seen = True
+            total += io / 1e6
+        stack.extend(kids.get(cur, ()))
+    return total if seen else None
+
+
+def host_cpu_probe(proc):
+    """`cpu_probe` injection for `run_supervised` over a HOST subprocess.
+
+    Signature matches what `run_supervised` calls: it is handed the live proc
+    object and returns a monotonic progress reading (or None)."""
+    pid = getattr(proc, "pid", None)
+    if pid is None:
+        return None
+    return host_tree_progress(pid)
+
+
+def run_host_supervised(cmd, **kw) -> "SupervisedResult":
+    """`run_supervised` with the HOST /proc progress probe already injected.
+
+    This is the honest replacement for `subprocess.run(cmd, timeout=N)`: it
+    bounds NO-PROGRESS, never RUNTIME, so a slow-but-working job on a loaded
+    host runs to completion however long that legitimately takes, while a job
+    whose entire tree is idle across the grace window is still killed as hung.
+    An explicit `cpu_probe=` in `kw` wins, so a caller with a better reading of
+    its own transport keeps it.
+
+    `poll_s` is DERIVED from the grace rather than left at the module default:
+    the loop cannot notice a stall sooner than it looks, so a caller that
+    declares a 3 s grace and inherits a 30 s cadence gets a 30 s detection —
+    the declared grace silently means nothing. Sampling four times per grace
+    window keeps the two consistent at any grace, and the default grace still
+    yields the module's default cadence. This is an observation CADENCE, not a
+    runtime bound: sampling more often never kills a working job sooner."""
+    kw.setdefault("cpu_probe", host_cpu_probe)
+    if "poll_s" not in kw:
+        grace = kw.get("stall_grace_s", DEFAULT_STALL_GRACE_S)
+        kw["poll_s"] = max(0.25, min(DEFAULT_POLL_S, float(grace) / 4.0))
+    return run_supervised(cmd, **kw)
+
+
+def completed_process(cmd, res: "SupervisedResult"
+                      ) -> subprocess.CompletedProcess:
+    """Adapt a `SupervisedResult` to `subprocess.CompletedProcess`.
+
+    Lets a call site swap a `subprocess.run(..., timeout=N)` for supervision
+    WITHOUT touching its callers: `.returncode` / `.stdout` / `.stderr` keep
+    their meanings, and a stall arrives as rc RC_STALLED with WATCHDOG_STALLED
+    on stderr — a distinct, self-describing code, never silently folded into
+    the ordinary failure rc the subject would have produced itself."""
+    return subprocess.CompletedProcess(cmd, res.rc, res.out, res.err)
