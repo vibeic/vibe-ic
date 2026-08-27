@@ -1,0 +1,27 @@
+LANDED next/timeout-helpers-progress as v1.12.19 at 851b7e8a6.
+
+SKIPPED: tools/gatekeeper-land.sh. The owner authorised pushing without it; it
+judges ABSOLUTELY and refuses on main's pre-existing reds, so it refuses every
+candidate today regardless of the candidate. This branch touches neither
+gatekeeper-land.sh nor ci_harness_timeout_ceiling_check.py, so the four-face
+re-pin does not apply here (verified by name over the branch's own file list).
+
+RAN INSTEAD: the sixteen affected modules WHOLE, twice — once at the rebased
+pre-bump tree and once at HEAD^{tree} d1fe7a1c6, the exact tree pushed. No -k,
+serial, no xdist, PYTHONDONTWRITEBYTECODE=1, VIBEIC_CORPUS_ROOT unset, scratch
+root /tmp/vibeic-pt-landq (outside every checkout — the in-repo scratch root
+refuses collection outright and would have manufactured reds). rc 0 on all
+sixteen both times; 189 passed, 1 skipped, 0 failed at the pushed tree.
+Plus at the final tree: marketplace_version_sync_check PASS,
+plugin_version_prose_sync_check PASS, version_bump_monotonic_check PASS
+(1.12.18 -> 1.12.19 strict), gen_program_inventory.py --check rc 0.
+
+PRE-EXISTING REDS CARRIED ONTO MAIN UNCHANGED: none observed. Not one module in
+the affected set failed, so nothing was attributed and nothing was carried.
+
+TABLE: no row moved, deliberately. None of this branch's node ids is a row of
+docs/research/2026-08-21-main-92-red-triage-ratios.md — the eleven BOTH rows are
+all test_matrix_63x8_* / test_matrix_d3_outputs_*, untouched here. Re-read from
+live origin/main immediately before the commit; counts re-derived by counting
+rows: BOTH 11/11, CLEARED 44/44, FLAKY 2/2, total 57. BOTH is 11 after this
+landing, unchanged and correct.
