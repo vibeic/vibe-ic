@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -53,6 +54,9 @@ import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 REPO = PROGRAMS.parents[3]
+#: The one file that DEFINES the gate dispatchers. Read rather than
+#: re-spelled — see `_dispatchers`.
+DISPATCH = REPO / "tools" / "ci" / "_gate_dispatch.sh"
 CROSS = PROGRAMS / "cross_layer_reference_check.py"
 BUBBLE = PROGRAMS / "step_internal_fail_bubble_up_check.py"
 STALE = PROGRAMS / "published_record_staleness_check.py"
@@ -724,6 +728,38 @@ def test_staleness_write_baseline_with_no_corpus_is_refused(tmp_path):
 #    programs; this tests the only lines that ever invoke them in production.
 #    Without it all three programs could be perfect and all three gates red.
 # ===========================================================================
+def _dispatchers():
+    """Every wrapper `_gate_dispatch.sh` DEFINES, read from that file.
+
+    THIS USED TO BE THE LITERAL `"run "`, and that is a name, not a property.
+    `f7f00e9e48` moved two of the three dispatch lines below onto the sibling
+    wrapper `run_tolerating_uncheckable`; the invocations were still there,
+    still carrying the flag this test is about, and the test reported
+
+        AssertionError: the hygiene sweep no longer invokes
+                        cross_layer_reference_check.py at all
+
+    which is not what it had measured. A predicate must not be able to say
+    "not invoked" about a line it can see. Reading the dispatcher names from
+    the file that defines them means a NEW wrapper cannot blind this test
+    either, and it cannot drift into matching prose: the wrapper must be the
+    line's FIRST token.
+
+    The public dispatchers only — `_`-prefixed names in that file are its
+    internals and never appear at a call site. WHICH WRAPPER a given gate
+    deserves is a real question and a different test's:
+    `test_issue1025_empty_corpus_sweep_blocks` owns it, and pins it for the
+    one gate whose rc-2 must block. This test is section 8's question only —
+    the shipped call sites carry the flag.
+    """
+    names = set(re.findall(r"^([A-Za-z][A-Za-z0-9_]*)\(\)",
+                           DISPATCH.read_text(), re.M))
+    assert names, (
+        f"no dispatcher definitions found in {DISPATCH} — this test would "
+        f"then match nothing and pass by looking at an empty set")
+    return names
+
+
 @pytest.mark.parametrize("prog", ["cross_layer_reference_check.py",
                                   "step_internal_fail_bubble_up_check.py",
                                   "published_record_staleness_check.py"])
@@ -731,9 +767,14 @@ def test_the_hygiene_sweep_actually_passes_the_flag(prog):
     sweep = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
     if not sweep.is_file():
         pytest.skip(f"{sweep} not present in this checkout")
+    if not DISPATCH.is_file():
+        pytest.skip(f"{DISPATCH} not present in this checkout")
+    wrappers = _dispatchers()
     lines = [ln for ln in sweep.read_text().splitlines()
-             if prog in ln and ln.strip().startswith("run ")]
-    assert lines, f"the hygiene sweep no longer invokes {prog} at all"
+             if prog in ln and ln.strip().split(" ", 1)[0] in wrappers]
+    assert lines, (
+        f"the hygiene sweep no longer invokes {prog} through any of the "
+        f"dispatchers {sorted(wrappers)}")
     assert all("--corpus-may-be-absent" in ln for ln in lines), (
         f"the sweep invokes {prog} without the flag, so a repo with no corpus "
         f"is still blocked:\n" + "\n".join(lines))
