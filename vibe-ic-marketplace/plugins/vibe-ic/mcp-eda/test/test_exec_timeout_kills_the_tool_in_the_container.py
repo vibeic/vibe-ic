@@ -30,6 +30,7 @@ import json
 import re
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -193,21 +194,48 @@ def _container_up() -> bool:
 def test_on_real_docker_only_the_inner_timeout_leaves_nothing_behind():
     """The measurement the fix is built on, re-run rather than quoted.
 
-    Both arms use the same marker so a leaked process from either is visible to
+    Both arms use the same token so a leaked process from either is visible to
     the other; each arm cleans up after itself.
+
+    THE TOKEN IS PER-INVOCATION, and that is load-bearing. This probe runs
+    inside `vibeic-eda` -- the SINGLE long-lived container every run on the
+    host execs into -- and it used to select on the literal `sleep 91`, shared
+    by every run of this test, with `pkill -f`. Two concurrent runs, or any
+    tool that happened to sleep 91 seconds, reaped each other's processes; the
+    pre-flight `assert alive() == 0` would then fail on a neighbour's noise, or
+    worse, pass after killing a neighbour's work. That is the same defect class
+    as the two watchdog reapers repaired in `_docker_watchdog` and
+    `phase3_one_shot_runner` (rc=143 with zero test failures, 2026-08-27).
+
+    Why not the identity stamp those two now use: the processes measured here
+    are DELIBERATELY orphaned -- being orphaned is the property under test --
+    so no supervisor survives to stamp `(pid, /proc starttime)` and nothing
+    would read it back. The token is instead carried in argv[0] via `exec -a`,
+    where no other run can produce it, and the reap resolves it to PIDs and
+    signals those. A pattern that cannot collide is not the same thing as `-x`
+    on a pattern that is shared by design.
     """
-    marker = "sleep 91"
+    token = "vibeicorphanprobe" + uuid.uuid4().hex[:12]
+    # `[t]oken` keeps the probe from matching its own pgrep command line.
+    bracketed = f"[{token[0]}]{token[1:]}"
+    marker = f"exec -a {token} sleep 91"
 
     def alive() -> int:
         r = subprocess.run(
             [_DOCKER, "exec", _CONTAINER, "bash", "-c",
-             f"pgrep -cf '[s]{marker[1:]}' || true"],
+             f"pgrep -cf '{bracketed}' || true"],
             capture_output=True, text=True, timeout=30, check=False)
         return int((r.stdout.strip() or "0").splitlines()[0])
 
     def reap():
-        subprocess.run([_DOCKER, "exec", _CONTAINER, "pkill", "-f", marker],
-                       capture_output=True, timeout=30, check=False)
+        # Resolve the token to PIDs, then signal those PIDs. Never a
+        # pattern-matching killer, which cannot be told which run it is
+        # serving. `unanchored_process_kill_check.py` pins this.
+        subprocess.run(
+            [_DOCKER, "exec", _CONTAINER, "bash", "-c",
+             f"pids=$(pgrep -f '{bracketed}' || true); "
+             f'[ -n "$pids" ] && kill -KILL $pids || true'],
+            capture_output=True, timeout=30, check=False)
 
     reap()
     assert alive() == 0, "a previous run leaked; refusing to measure against noise"

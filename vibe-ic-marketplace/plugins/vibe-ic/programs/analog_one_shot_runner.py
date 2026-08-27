@@ -1303,10 +1303,10 @@ def main() -> int:
     # The analog A1-A9 track is driven standalone for analog-only cells, which
     # therefore had no steps tree at all. Best-effort, non-gating; recorded in
     # reports/audit/steps_view.json either way.
-    summary["steps_view"] = _pl.emit_steps_view(
-        project, PROGRAMS_DIR, runner="analog_one_shot_runner")
-    out = _pl.report_path(project, "analog_one_shot.json")
-    out.parent.mkdir(parents=True, exist_ok=True)
+    # Published BEFORE the view is built -- see publish_report_then_steps_view.
+    summary["steps_view"], out = _pl.publish_report_then_steps_view(
+        project, PROGRAMS_DIR, "analog_one_shot_runner", summary,
+        "analog_one_shot.json")
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     # v1.6.32: emit canonical final_summary.md (best-effort). Analog
     # alone won't populate digital sections; the generator handles

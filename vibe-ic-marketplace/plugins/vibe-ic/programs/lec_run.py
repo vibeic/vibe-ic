@@ -73,7 +73,9 @@ DEFAULT_LIBERTY = (
     "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
     "sky130_fd_sc_hd__tt_025C_1v80.lib"
 )
-# Per-yosys-invocation budget. The equiv miter on a CPU-class gold (ibex:
+# TOTAL budget for the LEC step, shared by every attempt (see StepBudget).
+# It used to be a PER-INVOCATION budget that each retry re-armed; it is now a
+# deadline drawn down across attempts. The equiv miter on a CPU-class gold (ibex:
 # ~2k compared points through equiv_induct -seq 64) runs far past the old
 # 1800s, and a killed run produced NO evidence — indistinguishable at the
 # gate from a real mismatch. Tunable via --timeout for smaller budgets.
@@ -211,6 +213,111 @@ _SUCCESS_RE = re.compile(r"Equivalence\s+successfully\s+proven", re.IGNORECASE)
 _INDUCT_DIVERGE_RE = re.compile(r"[Cc]ircuit\s+inherently\s+diverges", re.IGNORECASE)
 _PROVED_ZERO_RE = re.compile(
     r"Proved\s+0\s+previously\s+unproven\s+\$equiv\s+cells")
+
+
+# YOSYS'S OWN INTERNAL COMBINATIONAL CELL VOCABULARY.
+#
+# This is a CLOSED, TOOL-DEFINED set (yosys's internal cell library: the `$_*_`
+# gate-level primitives and the coarse-grain word-level operators), NOT a guess
+# about any PDK's cell names. Membership is used ONLY to establish the POSITIVE
+# fact "every cell in this miter is combinational". Anything not listed -- a
+# PDK Liberty cell, a `$mem`, a flip-flop, a cell type added by a future yosys
+# -- makes the answer "unknown", which keeps the PREVIOUS behaviour exactly.
+# The asymmetry is deliberate: an omission from this list can only cost us the
+# stricter verdict, never grant a softer one.
+_YOSYS_COMB_CELL_TYPES = frozenset("""
+$_NOT_ $_BUF_ $_AND_ $_NAND_ $_OR_ $_NOR_ $_XOR_ $_XNOR_ $_ANDNOT_ $_ORNOT_
+$_MUX_ $_NMUX_ $_MUX4_ $_MUX8_ $_MUX16_ $_AOI3_ $_OAI3_ $_AOI4_ $_OAI4_
+$_TBUF_ $not $pos $neg $and $or $xor $xnor $reduce_and $reduce_or $reduce_xor
+$reduce_xnor $reduce_bool $logic_not $logic_and $logic_or $shl $shr $sshl
+$sshr $shift $shiftx $lt $le $eq $ne $eqx $nex $ge $gt $add $sub $mul $div
+$mod $divfloor $modfloor $pow $mux $pmux $bmux $demux $bwmux $tribuf $lut
+$sop $macc $macc_v2 $alu $lcu $fa $concat $slice $buf $equiv
+""".split())
+
+# A state-bearing miter and a stateless one are different questions, and only
+# the first one `equiv_induct` can answer.
+# The miter module name `build_equiv_script` always uses.
+_MITER_MODULE = "equiv"
+_STAT_MODULE_RE = re.compile(r"(?m)^\s*===\s+(\S+)\s+===\s*$")
+# yosys prints the per-type histogram as "count", then 2+ spaces, then the
+# cell type, indented under the module header; the SUMMARY lines above it
+# ("113 cells", "222 wires") use a SINGLE space. Requiring 2+ spaces separates the two without
+# keyword-matching, and keeps bare Liberty cell names (which must count as
+# UNKNOWN, i.e. fail-open) in the histogram rather than dropping them.
+_STAT_CELL_RE = re.compile(r"(?m)^[ \t]+(\d+)[ \t]{2,}(\S+)[ \t]*$")
+
+
+def miter_is_stateless(text: str):
+    """(stateless, evidence) -- True ONLY on positive evidence that the miter
+    yosys built contains no state element at all.
+
+    WHY THIS EXISTS -- MEASURED 2026-08-27, on unpatched main 40d0e14c08.
+    A `popcount8` gold was synthesised, ONE gate in the netlist was mutated
+    (`$_NAND_` -> `$_NOR_`), and `lec_run.py` reported that genuinely
+    non-equivalent pair as **INCONCLUSIVE**, not FAIL. The mechanism:
+
+      * the design is purely combinational, so `equiv_simple` correctly left
+        the 4 differing output bits unproven;
+      * the script then ran `equiv_induct -seq 4/16/64` anyway. On a miter with
+        NO state there is nothing to induct over, so every rung necessarily
+        printed `Proved 0 previously unproven $equiv cells.`;
+      * `induction_did_not_converge` reads exactly that phrase as "a flat
+        induction wall", and the classifier re-classes a flat wall from
+        NOT_EQUIVALENT to INCONCLUSIVE.
+
+    That re-class is right for a DEEP SEQUENTIAL design, where `-seq 64` really
+    can run out of depth. On a stateless design it is unconditional: EVERY real
+    combinational mismatch produces that phrase, so the discriminator says "not
+    a mismatch" about every mismatch it is shown. A checker that cannot say
+    FAIL is not a checker.
+
+    THE OBSERVABLE, not a name guess: this reads the cell histogram YOSYS
+    ITSELF printed for the miter module (`stat` after `equiv_make`), and
+    returns True only when the histogram was found, counted at least one cell,
+    and EVERY type in it is in yosys's own combinational vocabulary. A PDK
+    Liberty cell, a `$mem`, a `$_DFF_*`, or any type this list does not know
+    yields False -- i.e. the previous behaviour, unchanged. PURE."""
+    # ANCHOR ON THE MITER MODULE BY NAME. `build_equiv_script` always builds
+    # the miter as `equiv_make gold gate equiv`, so the histogram we need is
+    # the one headed `=== equiv ===`. Anchoring matters: `prep` prints its OWN
+    # `=== <gold-top> ===` statistics earlier in the same log, and taking
+    # merely the LAST section would read the GOLD's cell mix on any log that
+    # lacks the miter `stat` -- e.g. a log produced before this pass was added.
+    # Requiring the miter's own section makes such a log answer "unknown"
+    # (False), which is the previous behaviour, instead of answering from the
+    # wrong design.
+    mods = [m for m in _STAT_MODULE_RE.finditer(text or "")
+            if m.group(1) == _MITER_MODULE]
+    if not mods:
+        return False, (f"no `stat` cell histogram for the miter module "
+                       f"`{_MITER_MODULE}` in the log -- statelessness was "
+                       f"not established, so the sequential-depth "
+                       f"re-classification keeps its previous behaviour")
+    last = mods[-1]
+    section = (text or "")[last.end():]
+    nxt = _STAT_MODULE_RE.search(section)
+    if nxt:
+        section = section[:nxt.start()]
+    types = {}
+    for m in _STAT_CELL_RE.finditer(section):
+        cnt, name = int(m.group(1)), m.group(2)
+        types[name] = cnt
+    if not types:
+        return False, ("`stat` reported no cell types for the miter -- "
+                       "statelessness was not established")
+    unknown = sorted(t for t in types if t not in _YOSYS_COMB_CELL_TYPES)
+    if unknown:
+        return False, (
+            f"the miter contains cell type(s) outside yosys's combinational "
+            f"vocabulary ({', '.join(unknown[:6])}) -- it may hold state, so "
+            f"induction non-convergence remains a possible explanation")
+    return True, (
+        f"`stat` shows the miter is built entirely from combinational cells "
+        f"({', '.join(sorted(types)[:6])}) -- it holds NO state, so temporal "
+        f"induction had nothing to unroll and `Proved 0 previously unproven` "
+        f"is the guaranteed output for ANY unproven point, mismatch or not. "
+        f"Induction non-convergence cannot explain this result.")
 
 
 def induction_did_not_converge(text: str):
@@ -491,6 +598,61 @@ def gold_requires_sv2017(gold_files: List[str]) -> bool:
     return False
 
 
+# A WALL-BUDGET KILL IS NOT A FRONTEND FAILURE.
+#
+# MEASURED 2026-08-27 (VerilogEval-Human Prob030_popcount255, a 255-bit popcount
+# whose gold is PURELY COMBINATIONAL): `yosys -s reports/lec_equiv.ys` ground at
+# 99.9% CPU for the full 7195s container budget inside `equiv_simple`, was
+# SIGTERMed, and left `parse_error=True` (no equiv_status, so nothing parsed).
+# `should_retry_gold_with_slang` keys on exactly that observable - "the built-in
+# gold read produced NO equivalence miter at all" - and so read the budget kill
+# as a GOLD-READ failure and re-ran the WHOLE proof under `read_slang` with the
+# SAME 7195s budget. Observed directly on the live sweep: yosys pid A went
+# <defunct> at the deadline, reports/lec_equiv.ys was rewritten with
+# `read_slang` 20s later, and a fresh yosys pid B started on it. NOTHING was
+# written to reports/lec.json or reports/lec.rpt at the deadline - not a FAIL,
+# not a SKIPPED-CONDITION, nothing - because the report is only written after
+# the whole retry ladder finishes. With the -DSYNTHESIS rung as well, the same
+# undecidable proof can consume THREE full budgets (~6h) before the honest
+# "I could not decide this within the resources given" reaches disk.
+#
+# The retry rule was missing one conjunct: "no miter was built" must exclude
+# "we never found out, because the clock killed it". Those are different facts.
+# The gold read DEMONSTRABLY SUCCEEDED here - yosys reached `equiv_simple`,
+# which is downstream of both reads - so a different FRONTEND cannot change the
+# outcome; only a larger budget or a cheaper proof strategy could, and neither
+# is what the retry does.
+#
+# `_TIMEOUT_MARKER` is written ONLY by this program's own two budget-kill paths
+# (host `TimeoutExpired` and the container `timeout` rc in
+# `_CONTAINER_TIMEOUT_RCS`) - it is never tool output a design could emit - so
+# this discriminator cannot fire on any run that was not killed by OUR bound.
+#
+# DIRECTION OF RISK: declining the retry can only make the recorded outcome
+# LESS conclusive, never more. It cannot manufacture a PASS (only a completed
+# `equiv_status` with 0 unproven does that, and a killed run has no
+# equiv_status), and it cannot hide a mismatch (a recorded counterexample keeps
+# its FAIL through `_MISMATCH_EVIDENCE_RE` in the SAME branch). What it removes
+# is one way to spend hours and record nothing. chip/PDK/tool-AGNOSTIC: keys
+# only on this program's own marker.
+def budget_kill_blocks_frontend_retry(gold_log: str) -> Tuple[bool, str]:
+    """(blocked, evidence) - True iff <gold_log> was cut short by OUR OWN wall
+    budget, which makes a gold-FRONTEND retry incapable of changing the answer.
+
+    PURE. Returns False (retry stays available) for every log that does not
+    carry `_TIMEOUT_MARKER`, so no run that ends on its own is moved."""
+    if not _TIMEOUT_RE.search(gold_log or ""):
+        return False, ""
+    return True, (
+        "the gold read was NOT the failure - yosys ran to its wall budget and "
+        "was killed mid-proof (this program's own budget-exhaustion marker is "
+        "in the log), so no equiv_status was reached. Re-reading the gold with "
+        "a different frontend cannot make an undecided SAT proof converge; it "
+        "only spends the budget again and delays the honest record. Raise "
+        "--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S, or close the remainder with "
+        "sign-off LEC.")
+
+
 def should_retry_gold_with_slang(parsed: Dict, gold_log: str,
                                  requires_sv2017: bool) -> "tuple[bool, str]":
     """Decide whether to re-read the GOLD with `read_slang`. Returns (retry, why).
@@ -524,6 +686,35 @@ def should_retry_gold_with_slang(parsed: Dict, gold_log: str,
     """
     if not parsed.get("parse_error"):
         return False, ""
+    # A WALL-BUDGET KILL IS NOT A GOLD-READ FAILURE (measured 2026-08-27).
+    # `parse_error` means "no miter counts were parsed", and a run KILLED at its
+    # deadline mid-`equiv_induct` produces exactly that - with no equiv_status
+    # line - even though the gold read SUCCEEDED and the proof was running. This
+    # retry exists for a gold read that FAILED; firing it on a killed one asks a
+    # different frontend to make a combinatorially explosive proof cheap, which
+    # it cannot, and costs another full budget to find out (Prob030_popcount255:
+    # 7195s ground, killed, then re-read with read_slang and started over).
+    #
+    # ASSEMBLY v1.11.95 - TWO BRANCHES IMPLEMENTED THIS SAME GUARD, and only one
+    # copy may survive. The predicate is IDENTICAL: budget_kill_blocks_frontend_
+    # retry's whole test is `_TIMEOUT_RE.search(gold_log)`, and `_TIMEOUT_RE` is
+    # written ONLY by the two kill paths in `run_yosys_equiv`, so its presence is
+    # unambiguous evidence of budget exhaustion. The named function is kept
+    # because it is a superset: same predicate, PLUS the evidence string that
+    # reaches reports/lec.json, and it is the form under test
+    # (test_lec_bounded_proof.py::test_budget_killed_log_blocks_the_retry). A
+    # second inline `_TIMEOUT_RE.search` here would be an unreachable duplicate
+    # of one decision, not a second guard.
+    #
+    # 4.05 NO-LEAK: this only ever turns a retry OFF - it can never widen what
+    # PASSES, and it leaves the timeout VERDICT classification untouched. The
+    # genuine gold-read failures this retry was written for carry no such
+    # marker, so that recovery is unaffected. Declining here is what lets the
+    # SKIPPED-CONDITION verdict the classifier ALREADY computes actually reach
+    # reports/lec.json.
+    _budget_blocked, _budget_ev = budget_kill_blocks_frontend_retry(gold_log)
+    if _budget_blocked:
+        return False, _budget_ev
     if is_frontend_parse_abort(gold_log):
         return True, ("built-in read_verilog -sv aborted with a frontend "
                       "parse/elaboration signature and built no miter")
@@ -844,12 +1035,25 @@ def parse_equiv_output(text: str) -> Dict:
         # WITHOUT the flat-wall signature also stays FAIL. Never a PASS.
         _noconv, _noconv_ev = induction_did_not_converge(text)
         _has_ctrex = bool(_MISMATCH_EVIDENCE_RE.search(text))
+        # A STATELESS MITER CANNOT HAVE AN INDUCTION-DEPTH PROBLEM. See
+        # miter_is_stateless: on a combinational miter every rung of the
+        # `-seq` ladder is guaranteed to print `Proved 0 previously unproven`
+        # for any point equiv_simple left open, so the flat-wall signature
+        # fires on EVERY real combinational mismatch and laundered it into a
+        # non-blocking INCONCLUSIVE. Requiring positive evidence that the
+        # miter holds state is what lets the FAIL survive. Fail-CLOSED: when
+        # statelessness cannot be established, `_stateless` is False and this
+        # line is a no-op -- every sequential design keeps today's verdict.
+        _stateless, _stateless_ev = miter_is_stateless(text)
+        if _stateless:
+            _noconv = False
+            _noconv_ev = _stateless_ev
         # #778 — a `-seq` ladder that ran out of depth WHILE STILL PROVING new
         # cells on its deepest rung (converging, not a flat wall) is the same
         # disclosed sequential-depth capability gap. Only consulted when there is
         # neither a flat wall nor a counterexample, so it can never soften a real
         # mismatch (which prints a counterexample → stays the blocking FAIL).
-        if not _noconv and not _has_ctrex:
+        if not _noconv and not _has_ctrex and not _stateless:
             _noconv, _noconv_ev = induction_ladder_exhausted(text)
         # A WALL-CLOCK KILL THAT MADE PARTIAL PROGRESS.
         #
@@ -1427,8 +1631,16 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"design -stash gate\n"
         f"design -copy-from gold -as gold {top}\n"
         f"design -copy-from gate -as gate {top}\n"
-        f"equiv_make gold gate equiv\n"
-        f"hierarchy -top equiv\n"
+        f"equiv_make gold gate {_MITER_MODULE}\n"
+        f"hierarchy -top {_MITER_MODULE}\n"
+        # READ-ONLY report pass. It prints the miter's cell histogram, which is
+        # the OBSERVABLE `miter_is_stateless` reads to decide whether temporal
+        # induction could have had anything to unroll. Without it the parser
+        # has to guess, and the guess it used to make was "assume a flat
+        # induction wall explains this", which turned every combinational
+        # mismatch into a non-blocking INCONCLUSIVE. `stat` mutates no design
+        # and costs no solver time.
+        f"stat\n"
         # SAT-FREE structural pre-reduction BEFORE any SAT is spent. equiv_struct
         # merges the $equiv key-points whose driving cones are structurally
         # identical across gold and gate (the majority of a name-mapped
@@ -1449,6 +1661,135 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"equiv_induct -seq 64\n"
         f"equiv_status\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# STEP WALL BUDGET — measured ONCE, from the FIRST attempt, across ALL retries.
+# ---------------------------------------------------------------------------
+# THE DEFECT THIS EXISTS TO PREVENT (measured 2026-08-27 on the VerilogEval-Human
+# sweep `_vehuman_clean156`, problem `Prob030_popcount255` — a 255-bit popcount
+# whose `equiv_induct` is combinatorially explosive):
+#
+#   Every attempt used to be handed the SAME constant `args.timeout`. The gold
+#   read ground for the full 7195s budget, was killed, and the slang gold-read
+#   retry started the SAME problem over with a FRESH full 7195s. A deadline that
+#   a retry re-arms is not a deadline: the real bound was `timeout x attempts`
+#   (three straight-line attempts x 7200s = SIX HOURS against a nominal "7200s
+#   budget"), and NOTHING measured total elapsed. A 156-problem sweep whose
+#   MEDIAN problem takes ~30s sat on ONE problem for 131 minutes with a 0-byte
+#   dispatch log — from outside, indistinguishable from a sweep making progress.
+#
+# THE RULE: the budget is a DEADLINE, established before the first attempt. Each
+# attempt gets what is LEFT of it, never a fresh copy. When nothing meaningful
+# is left the next attempt is NOT LAUNCHED, and the step records how many
+# attempts it made and how long they took — so an exhausted proof is visibly
+# different from a finished one.
+#
+# Injectable clock so the ceiling is testable without spending it.
+_MIN_ATTEMPT_BUDGET_S = 30
+
+
+class StepBudget:
+    """TOTAL wall-clock budget for one LEC step, shared by every attempt.
+
+    `next_attempt_budget()` returns the REMAINING seconds, or 0 once less than
+    `floor_s` is left. 0 means "do not launch" — never "launch with no limit".
+    A retry can only ever SHRINK what is left, so the total time this step can
+    consume is bounded by `total_s` no matter how many attempts the retry logic
+    decides to make.
+    """
+
+    def __init__(self, total_s: int, floor_s: int = _MIN_ATTEMPT_BUDGET_S,
+                 clock=time.monotonic) -> None:
+        self.total_s = int(total_s)
+        self.floor_s = int(floor_s)
+        self._clock = clock
+        self._t0 = clock()
+        self.attempts: List[Dict] = []
+
+    def elapsed_s(self) -> float:
+        return self._clock() - self._t0
+
+    def remaining_s(self) -> int:
+        return int(round(self.total_s - self.elapsed_s()))
+
+    def next_attempt_budget(self) -> int:
+        """Seconds the NEXT attempt may run. 0 = the step budget is spent.
+
+        The FIRST attempt always receives the whole budget. The floor exists to
+        refuse a POINTLESS RETRY on a nearly-spent budget; it must never turn a
+        small operator-configured `--timeout` into "do not run at all", which
+        would convert a tight budget into a step that produces no evidence.
+        """
+        left = self.remaining_s()
+        if not self.attempts:
+            return max(left, 1)
+        return left if left >= self.floor_s else 0
+
+    def exhausted(self) -> bool:
+        return self.next_attempt_budget() == 0
+
+    def record(self, frontend: str, defines: str, budget_s: int,
+               elapsed_s: float, launched: bool, timed_out: bool) -> None:
+        """Record an attempt that WAS launched."""
+        self.attempts.append({
+            "attempt": len(self.attempts) + 1,
+            "gold_frontend": frontend,
+            "gold_defines": defines,
+            "budget_sec": budget_s,
+            "elapsed_sec": round(elapsed_s, 2),
+            "launched": launched,
+            "killed_by_budget": timed_out,
+        })
+
+    def skipped(self, frontend: str, defines: str, why: str) -> None:
+        """Record a retry the budget REFUSED to launch."""
+        self.attempts.append({
+            "attempt": len(self.attempts) + 1,
+            "gold_frontend": frontend,
+            "gold_defines": defines,
+            "budget_sec": 0,
+            "elapsed_sec": 0.0,
+            "launched": False,
+            "killed_by_budget": False,
+            "not_launched_reason": why,
+        })
+
+    def count_launched(self) -> int:
+        return sum(1 for a in self.attempts if a["launched"])
+
+
+def annotate_step_budget(report: Dict, budget: "StepBudget") -> Dict:
+    """Record WHAT was attempted, WHICH resource ran out, and HOW MANY attempts
+    were made onto the verdict the parser already produced.
+
+    ADDITIVE ONLY — it never touches `verdict` or `equivalent`. A budget-killed
+    proof already classifies as a DISCLOSED non-PASS (`SKIPPED-CONDITION`, or
+    `INCONCLUSIVE` on the zero-completed-comparison path); neither is a PASS and
+    neither is a FAIL, which is the honest outcome for a proof that did not
+    finish. What was MISSING was the EVIDENCE of how much was spent and how
+    often it was retried — the absence that made a re-armed deadline look
+    exactly like progress from outside.
+    """
+    launched = [a for a in budget.attempts if a["launched"]]
+    report["lec_attempts"] = len(launched)
+    report["lec_attempts_detail"] = list(budget.attempts)
+    report["step_budget_sec"] = budget.total_s
+    report["step_elapsed_sec"] = round(budget.elapsed_s(), 2)
+    report["step_budget_exhausted"] = budget.exhausted()
+    report["exhausted_resource"] = (
+        "wall_clock_seconds" if budget.exhausted() else None)
+    if budget.exhausted():
+        report["verdict_explanation"] = (
+            (report.get("verdict_explanation") or "").rstrip()
+            + f" STEP BUDGET: exhausted the TOTAL {budget.total_s}s wall-clock "
+              f"budget for this step after {len(launched)} attempt(s), "
+              f"{report['step_elapsed_sec']}s elapsed. The resource that ran "
+              "out is WALL-CLOCK TIME, not equivalence evidence: the designs "
+              "are neither proven equivalent nor proven different. Raise "
+              "--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S, or close the remainder "
+              "with sign-off LEC.")
+    return report
 
 
 def run_yosys_equiv(container: str, ys_path_in_container: str,
@@ -2074,10 +2415,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     gate_wrapper_v=gate_wrapper_v,
                                     gold_wrapper_v=gold_wrapper_v)
         ys_host.write_text(script, encoding="utf-8")
-        return run_yosys_equiv(container, ys_in_container,
-                               timeout=args.timeout,
-                               workdir=equiv_workdir)
+        # THE TOTAL, NOT A FRESH COPY. Handing `args.timeout` here is the defect
+        # measured on 2026-08-27: it re-armed the deadline on every attempt.
+        # Every attempt now draws from the SAME StepBudget deadline.
+        _attempt_budget = budget.next_attempt_budget()
+        _started = budget.elapsed_s()
+        _launched, _raw = run_yosys_equiv(container, ys_in_container,
+                                          timeout=_attempt_budget,
+                                          workdir=equiv_workdir)
+        budget.record(frontend, defines, _attempt_budget,
+                      budget.elapsed_s() - _started, _launched,
+                      bool(_TIMEOUT_RE.search(_raw)))
+        return _launched, _raw
 
+    # The deadline is established HERE, once, before the first attempt.
+    budget = StepBudget(args.timeout)
     t0 = time.time()
     launched, raw = _run("verilog")
 
@@ -2101,6 +2453,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         _p1 = parse_equiv_output(raw)
         _retry_gold, gold_frontend_reason = should_retry_gold_with_slang(
             _p1, raw, gold_requires_sv2017(gold_files))
+        if _retry_gold and budget.next_attempt_budget() == 0:
+            # THE CEILING IS THE TOTAL: a retry that would re-arm a spent budget
+            # is not launched at all. Only the RETRY is refused — the verdict
+            # stays whatever the evidence already supports.
+            budget.skipped("slang", gold_defines,
+                           "step wall budget exhausted before the gold-read "
+                           "retry")
+            print("[lec_run] gold-frontend retry NOT launched: the step's "
+                  f"total {budget.total_s}s wall budget is spent "
+                  f"({round(budget.elapsed_s(), 2)}s elapsed). A retry must "
+                  "not re-arm a deadline.", file=sys.stderr)
+            _retry_gold = False
         if _retry_gold:
             try:
                 from synth_frontend import resolve_slang_load_prefix
@@ -2142,6 +2506,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                                 produced_output=False)
                     except Exception:
                         _retry = False
+                    # TWO INDEPENDENT DECLINES, both kept, in this order.
+                    # (1) A wall-budget kill on the slang rung is not a
+                    # define-set problem either (same measurement and reasoning
+                    # as budget_kill_blocks_frontend_retry). Without this the
+                    # THIRD rung spends a third full budget on the same
+                    # undecided proof before anything is recorded. `_b3` is read
+                    # again below, so this must run first.
+                    _b3, _b3_ev = budget_kill_blocks_frontend_retry(raw2)
+                    if _b3:
+                        _retry = False
+                        gold_frontend_reason = _b3_ev
+                        print("[lec_run] -DSYNTHESIS gold retry DECLINED: "
+                              + _b3_ev, file=sys.stderr)
+                    # (2) A DIFFERENT condition: the rung was not killed, but
+                    # the step's TOTAL wall budget is already spent, so a retry
+                    # would have to re-arm a deadline. Budget accounting, not a
+                    # kill marker - neither test implies the other, so neither
+                    # may replace the other.
+                    if _retry and budget.next_attempt_budget() == 0:
+                        budget.skipped(
+                            "slang", "-DSYNTHESIS -DYOSYS",
+                            "step wall budget exhausted before the define-set "
+                            "retry")
+                        print("[lec_run] -DSYNTHESIS retry NOT launched: the "
+                              f"step's total {budget.total_s}s wall budget is "
+                              "spent. A retry must not re-arm a deadline.",
+                              file=sys.stderr)
+                        _retry = False
                     if _retry:
                         gold_defines = "-DSYNTHESIS -DYOSYS"
                         print("[lec_run] read_slang -DSIMULATION died on a "
@@ -2157,7 +2549,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                             slang_retry_failed = True
                     else:
                         # slang failed for a non-define reason → no free pass.
-                        slang_retry_failed = True
+                        slang_retry_failed = not _b3
                     if slang_retry_failed:
                         print("[lec_run] read_slang could not build the gold "
                               "miter under either define set → verdict finalized "
@@ -2181,6 +2573,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "Yosys/Docker could not run — no equivalence evidence "
                  "produced. See reports/lec.rpt.")},
             resolved_top, gate_abs, liberty)
+        diag = annotate_step_budget(diag, budget)
         json_out.write_text(json.dumps(diag, indent=2, ensure_ascii=False))
         return 1
 
@@ -2192,6 +2585,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parsed = finalize_after_slang_retry(parsed, slang_retry_failed)
     report = build_report(parsed, resolved_top, gate_abs, liberty)
     report["elapsed_sec"] = elapsed
+    # WHAT was attempted, WHICH resource ran out, HOW MANY attempts. Additive:
+    # never changes verdict/equivalent.
+    report = annotate_step_budget(report, budget)
     report["gold_rtl_files"] = [Path(f).name for f in gold_files]
     # Provenance: which gold frontend + define set actually built the miter
     # (verilog | slang; -DSIMULATION vs -DSYNTHESIS — how synth built the gate).
@@ -2200,6 +2596,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # WHY that frontend — empty when the built-in reader built the miter on the
     # first pass; otherwise the explicit justification for the slang fallback.
     report["gold_frontend_reason"] = gold_frontend_reason or None
+    # THE BOUND AND WHETHER IT WAS HIT. Without these a reader of lec.json
+    # cannot tell a proof that DECIDED nothing from a proof that was never
+    # given enough resources to decide anything -- the exact confusion that
+    # made a 2h grind indistinguishable from a hang. `yosys_budget_s` is the
+    # bound the CALLER set (--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S);
+    # `budget_exhausted` is True only when THIS program's own budget-kill
+    # marker is in the log; `proof_stages_attempted` names the yosys passes
+    # that actually ran, so "what was attempted" is evidence, not a guess.
+    report["yosys_budget_s"] = args.timeout
+    report["budget_exhausted"] = bool(_TIMEOUT_RE.search(raw))
+    report["proof_stages_attempted"] = yosys_executed_passes(raw)[:40]
     # WHAT WAS CONSTRAINED, ALWAYS. Recorded on every run — including the runs
     # where nothing was constrained, with the reason — so a PASS on a scan
     # netlist can never be read without seeing the mode it was proven in, and a

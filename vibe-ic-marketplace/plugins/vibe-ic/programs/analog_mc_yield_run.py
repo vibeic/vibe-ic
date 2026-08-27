@@ -42,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import analog_real_corner_sweep as _ars  # noqa: E402  (docker/ngspice helpers)
+import _designs_root as _dr  # noqa: E402  (host mount root, measured)
 
 # PDK Monte-Carlo model sections — the corner section that ENABLES device
 # MISMATCH resampling (the foundry's own mismatch distribution). ORGANIC #142
@@ -265,6 +266,20 @@ def _assert_single_model_family(wrap_text: str, mc_include_line: str) -> None:
 
 def run_block(project: Path, block: str, container: str, pdk: str,
               n: int) -> dict:
+    """Entry point. A path the container cannot be shown to see is a structured
+    SKIP naming what IS mounted — never a traceback, never a guessed path."""
+    try:
+        return _run_block(project, block, container, pdk, n)
+    except _dr.MountRootUnresolved as exc:
+        st = exc.status
+        return {"verdict": st["verdict"], "rc": 2, "mc_runs": 0,
+                "error_code": st["error_code"],
+                "needs_user_decision": st["needs_user_decision"],
+                "reason": st["reason"], "options": st["options"]}
+
+
+def _run_block(project: Path, block: str, container: str, pdk: str,
+               n: int) -> dict:
     deck, deck_rank = _find_deck(project, block)
     if deck is None:
         # ORGANIC #142 — distinguish "no deck at all" from "only a bare
@@ -305,8 +320,12 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         return {"verdict": "SKIP", "rc": 2,
                 "reason": f"ngspice not available in container {container!r}"}
 
-    host_root = (Path(str(project).split("AI_IC_design")[0]) / "AI_IC_design"
-                 if "AI_IC_design" in str(project) else project)
+    # The HOST MOUNT ROOT for docker path mapping — MEASURED from the
+    # container's own mount table via the designs-root ladder, never guessed
+    # from a directory NAME found in the path (that test is False on every
+    # machine whose design tree is called something else, and the fall-through
+    # emitted container paths the container cannot see).
+    host_root = _dr.resolve_host_root(project, container)
 
     if native:
         # native mismatch lib → the wrapper's SINGLE model source.

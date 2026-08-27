@@ -3,9 +3,13 @@
 
 WHY
 ===
-The flow-gate dashboard publishes 63 steps x 8 dimensions = 504 cells under the
-words "every cell is a predicate recomputed against the current source, not a
-stored verdict read back".
+The flow-gate dashboard publishes the flow-gate matrix under the words "every
+cell is a predicate recomputed against the current source, not a stored verdict
+read back". The population is DERIVED, never typed: `matrix_63x8.cells` builds
+it as `flowref.step_ids() x DIMENSIONS`, which is 68 x 9 = 612 today. The
+sentence here used to state a frozen `63 x 8 = 504` count;
+both halves had drifted, and a stated count that cannot move is how a page keeps
+describing a tree it no longer measures.
 
 Nothing recomputes them. The page's own generator says so in its docstring and
 carries the eight distributions forward untouched, so each is a judgement made
@@ -27,9 +31,15 @@ doing properly rather than assessing:
     declared ones are the flow's genuine entry points; a NEW root means a step
     was detached from the chain, deliberately or by an edit that dropped a line.
 
-MEASURED on `origin/main`: 63 steps, 60 declaring dependencies, 0 dangling
-references, 0 cycles, 3 roots — the Phase-1 doc entry, the analog spec entry and
-the structural pre-flight. All three legitimate.
+RE-MEASURED on `40d0e14c0` (v1.11.94): 68 steps, 66 declaring dependencies, 0
+dangling references, 0 cycles, 2 roots — `D1` (the Phase-1 doc entry) and
+`0.5ic` (the submission-template pre-flight). Both legitimate.
+
+The previous figures here read "63 steps, 60 declaring dependencies … 3 roots"
+and named `origin/main` as their subject. `origin/main` MOVES, so that sentence
+could never go stale in a way a reader could detect — it described whatever the
+branch happened to be. A measurement is pinned to a commit from here on, so the
+next drift is an event rather than a slow untruth.
 
 The baseline started as FOUR because the exploratory measurement was taken in a
 checkout 700 commits behind, where spec-to-RTL had no dependencies; on the

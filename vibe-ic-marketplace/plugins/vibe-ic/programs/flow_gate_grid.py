@@ -3,15 +3,41 @@
 
 WHY
 ===
-The dashboard publishes 63 steps x 8 dimensions = 504 cells under the words
-"every cell is a predicate recomputed against the current source, not a stored
-verdict read back". Nothing recomputed them: the page's own generator says so in
-its docstring and carries the eight distributions forward.
+The dashboard publishes the flow-gate matrix under the words "every cell is a
+predicate recomputed against the current source, not a stored verdict read
+back". Nothing recomputed them: the page's own generator says so in its
+docstring and carries the distributions forward.
 
-This program recomputes every dimension that IS decidable from the flow source,
-and for the rest says plainly that it is not and why — because the alternative,
-inventing a plausible predicate, produces a grid that measures something
-ADJACENT to what it claims, which is the defect the whole review was about.
+THE CELL COUNT IS DERIVED HERE, NOT TYPED (see DIMENSIONS below)
+===============================================================
+This file used to open with a frozen `63 x 8 = 504` headline and then print a
+denominator of `8 * n` with `n` read live. MEASURED on `40d0e14c0`, that
+arithmetic emitted:
+
+    recomputed 340 of 544 cells (68 steps x 5 of 8 dimensions)
+
+544 is a number nobody wrote down and nobody checked: half of it (68) tracked
+the flow, the other half (8) was frozen. The live population is
+`matrix_63x8.cells.ALL_CELLS` = `flowref.step_ids() x DIMENSIONS` = 68 x 9 =
+**612**, and the 9 has been 9 since dimension D9 (`verdict_consumed`) was added.
+So this grid was under-reporting the DENOMINATOR by a whole dimension while
+quoting its own rule that "`declared` is the denominator, and a consumer reports
+coverage against THAT, never against the number that happened to run."
+
+Both halves are now derived: the steps from the flow, the dimensions from
+`DIMENSIONS` below. Adding a tenth dimension changes the arithmetic by editing
+one tuple, which is the only way a stated count survives its own maintenance.
+
+This program recomputes every dimension that IS decidable — from the flow source
+for D1/D2/D5/D6/D8, and from a SUPPLIED RUN for D3 — and for the rest says
+plainly that it is not and why, because the alternative, inventing a plausible
+predicate, produces a grid that measures something ADJACENT to what it claims,
+which is the defect the whole review was about.
+
+The three states are kept apart on purpose and none of them is a verdict about
+the flow: NOT DERIVABLE FROM SOURCE (nothing could decide it here), NOT MEASURED
+(a decider exists and was not given its input), and a recomputed answer. Only the
+third moves the numerator.
 
 WHAT IS RECOMPUTED, AND WHAT IS NOT
 ===================================
@@ -22,16 +48,40 @@ WHAT IS RECOMPUTED, AND WHAT IS NOT
   D5 deps       delegated to `flow_dependency_graph_check` — one implementation.
   D6 skip       a step with a `condition` must declare `condition_kind`. The
                 consumer branches on it (`design_dependent` -> silent skip;
-                `setup_required` -> SKIPPED-SETUP-REQUIRED unless waived) and NO
-                step declares it, so every conditional skip falls to the benign
-                default and the discriminator between "this design legitimately
-                has none" and "someone forgot to author the trigger" is dead.
+                `setup_required` -> SKIPPED-SETUP-REQUIRED unless waived).
+
+                RE-MEASURED on `40d0e14c0`: FOUR steps now declare it -- 15.5ic,
+                26.5ic, 37.5ip, 37.5ic, all `design_dependent` -- and 22 still do
+                not. The previous sentence here said NO step declares it and is
+                corrected rather than left standing. HALF the discriminator is
+                alive: `setup_required` is still declared by ZERO steps, so
+                "someone forgot to author the trigger" remains unreachable while
+                "this design legitimately has none" can now be said. Classifying
+                the remaining 22 is a per-step judgement by whoever knows the
+                step and is NOT done here; only the false claim is repaired.
   D8 catcher    every `required_outputs` entry must have a gate criterion that
                 would fail on its absence.
 
-  D3 outputs    NOT DERIVABLE FROM SOURCE. "required_outputs really exist and are
-                non-empty" is a fact about a RUN. The page's framing is wrong for
-                this dimension, not merely stale.
+  D3 outputs    A FACT ABOUT A RUN, so it is computed WHEN A RUN IS SUPPLIED
+                (`--run`) and reports NOT MEASURED when one is not. Delegated to
+                `flow_output_substance` -- one implementation.
+
+                The earlier text here read "NOT DERIVABLE FROM SOURCE", and its
+                reasoning was right while its conclusion was too strong: a fact
+                about a run is not undecidable, it is UNSUPPLIED. What stays
+                refused is inventing a source-derived stand-in, because that
+                "produces a grid that measures something ADJACENT to what it
+                claims". `--run` is therefore a real argument with no default:
+                a defaulted run directory is how "unmeasured" becomes "fine".
+
+                AND IT IS NOT D8 UNDER A NEW NAME. D8 asks whether a catcher is
+                DECLARED for each declared output. D3 asks whether the artefact a
+                run actually wrote carries substance. MEASURED 2026-08-27: an
+                `eda_sta` run that read no LEF failed `link_design` (STA-1570) and
+                every report (STA-1571), `openroad` exited 0, and it wrote a
+                591-byte report. D8's catcher was declared and had no reason to
+                fire -- the file was there. D8 asks whether a catcher is on the
+                field; D3 asks whether the ball was caught.
   D4 criteria   NOT DERIVABLE. "does the thing measured match the thing claimed"
                 is semantic. A mechanical stand-in here would be exactly the
                 proxy-for-property substitution under review.
@@ -91,14 +141,26 @@ D6_BASELINE = {
 # about the other.
 D8_BASELINE = {"14"}
 
+#: THE DECLARED POPULATION. The denominator is this tuple's length times the
+#: flow's step count -- both derived, neither typed. `matrix_63x8.cells`
+#: enumerates the same nine and the ledger test cross-checks the two agree, so a
+#: tenth dimension cannot be added on one side only.
+DIMENSIONS = ("D1 wiring", "D2 runnable", "D3 outputs", "D4 criteria",
+              "D5 deps", "D6 skip", "D7 list", "D8 catcher", "D9 verdict")
+
 NOT_DERIVABLE = {
-    "D3 outputs": ("'required_outputs really exist and are non-empty' is a fact "
-                   "about a RUN, not about the source tree"),
     "D4 criteria": ("'does the thing measured match the thing claimed' is "
                     "semantic; a mechanical stand-in would be the very "
                     "proxy-for-property substitution under review"),
     "D7 list": ("whether a declared output list is COMPLETE needs knowledge of "
                 "what the step ought to produce"),
+    "D9 verdict": ("whether a step's FAIL reaches the run's EXIT CODE is decided "
+                   "by `tools/d9_flow_gate_reality.py`, which lives in the "
+                   "repo-root `tools/` tree and does NOT ship inside the plugin; "
+                   "this grid cannot delegate to a program its own install does "
+                   "not carry. It is named and counted in the denominator anyway "
+                   "-- a dimension nobody asked about is exactly what the wrong "
+                   "544 above concealed"),
 }
 
 
@@ -195,6 +257,49 @@ def d8_catcher(steps: List[dict]) -> List[str]:
     return sorted(out)
 
 
+def d3_outputs(run: Optional[Path], steps: List[dict]) -> Tuple[str, dict, str]:
+    """D3 — did the run write substance, or only files?
+
+    Returns ``(state, record, line)`` where state is one of MEASURED /
+    NOT_MEASURED / NO_DECIDER.
+
+    THE THREE WRONG ANSWERS, REFUSED HERE EXPLICITLY:
+      * with no run, returning "clean" -- that is the original disease, an
+        absent measurement rendered as a good one;
+      * with no run, returning "broken" -- that converts "we did not look" into
+        "it is bad", and an all-red grid gets ignored at the same cost;
+      * deriving a verdict from the DECLARATION -- that is D8 wearing D3's name.
+
+    A missing delegate is NO_DECIDER, never a pass, for the same reason rc=3 is
+    not folded into rc=2 twenty lines below: the cell count must not credit a
+    dimension nobody computed.
+    """
+    if run is None:
+        return ("NOT_MEASURED", {"state": "NOT_MEASURED",
+                                 "code": "NO_RUN_SUPPLIED"},
+                "no run directory was supplied (--run); D3 is a fact about a RUN "
+                "and this tree holds no answer to it. Not a pass and not a fail.")
+    try:
+        import flow_output_substance as fos          # noqa: E402
+    except Exception as e:
+        return ("NO_DECIDER", {"state": "NO_DECIDER"},
+                f"flow_output_substance could not be imported ({type(e).__name__}); "
+                f"no D3 verdict was obtained and none is invented")
+    try:
+        rec = fos.classify_flow(run, steps)
+    except Exception as e:
+        # A decider that cannot answer is NO_DECIDER, never a pass and never a
+        # traceback that takes the other four dimensions down with it. The same
+        # rule the rc=2/rc=3 delegate arms below already follow.
+        return ("NO_DECIDER", {"state": "NO_DECIDER", "error": f"{type(e).__name__}: {e}"},
+                f"flow_output_substance could not reach a verdict "
+                f"({type(e).__name__}: {e})")
+    bad = [c for c in rec["cells"] if c["state"] in fos.FAILING]
+    line = (f"{len(bad)} step(s) declare outputs the run did not substantiate"
+            if bad else f"every decided cell is substantive under {run}")
+    return ("MEASURED", rec, line)
+
+
 def _delegate(program: Path, flow: Path) -> Tuple[int, str]:
     """Run a sibling check and return (rc, its last line).
 
@@ -202,7 +307,7 @@ def _delegate(program: Path, flow: Path) -> Tuple[int, str]:
     them means this program is claiming a dimension it did not recompute — and
     the claimed cell count is printed a few lines below. Folding an absent
     delegate into the same bucket as an unreadable input would let the headline
-    say 315 of 504 while two dimensions were never asked.
+    say a full-coverage headline while two dimensions were never asked.
 
     THE DOOR THAT WAS OPEN. The paragraph above describes rc=3 and stops there,
     and so did the caller: rc=2 — the delegate RAN and answered "NOT CHECKED" —
@@ -241,6 +346,11 @@ def main(argv=None) -> int:
     ap.add_argument("--flow", type=Path,
                     default=here.parent / "flow" / "phase1_phase2_phase3.yaml")
     ap.add_argument("--programs", type=Path, default=here)
+    ap.add_argument("--run", type=Path, default=None,
+                    help="a COMPLETED run directory, for D3. NO DEFAULT ON "
+                         "PURPOSE: omit it and D3 reports NOT MEASURED, which is "
+                         "neither a pass nor a fail. A defaulted run directory is "
+                         "how an absent measurement becomes a good one.")
     ap.add_argument("--json", type=Path, default=None)
     a = ap.parse_args(argv)
 
@@ -271,6 +381,10 @@ def main(argv=None) -> int:
     gone8 = sorted(D8_BASELINE - _present)
     rc2, line2 = _delegate(a.programs / "flow_step_can_fail_check.py", a.flow)
     rc5, line5 = _delegate(a.programs / "flow_dependency_graph_check.py", a.flow)
+    if a.run is not None and not a.run.is_dir():
+        print(f"flow_gate_grid: rc=2 NOT CHECKED — --run {a.run} is not a directory")
+        return 2
+    d3_state, d3_rec, d3_line = d3_outputs(a.run, steps)
 
     # rc=2 AND rc=3 are both "no answer". Only 0 and 1 are answers: the delegate
     # looked and said clean, or looked and said broken. Anything else must leave
@@ -279,14 +393,27 @@ def main(argv=None) -> int:
     # run.
     _no_answer = [(nm, rc) for nm, rc in (("D2", rc2), ("D5", rc5))
                   if rc not in (0, 1)]
-    _dims = 5 - len(_no_answer)
+    # D3 joins the recomputed count ONLY when a run was supplied AND the decider
+    # answered. NOT_MEASURED and NO_DECIDER both leave the numerator alone; the
+    # denominator is `len(DIMENSIONS)` either way, because the denominator is the
+    # DECLARED population and never the number that happened to run.
+    _recomputed = ["D1", "D6", "D8"] + [nm for nm, rc in (("D2", rc2), ("D5", rc5))
+                                        if rc in (0, 1)]
+    if d3_state == "MEASURED":
+        _recomputed.append("D3")
+    _dims = len(_recomputed)
+    _declared_dims = len(DIMENSIONS)
     rec = {
         "steps": n,
         "recomputed_dimensions": _dims,
         "recomputed_cells": _dims * n,
         "delegates_absent": [nm for nm, rc in _no_answer if rc == 3],
         "delegates_no_answer": [{"dim": nm, "rc": rc} for nm, rc in _no_answer],
-        "total_cells": 8 * n,
+        "declared_dimensions": _declared_dims,
+        "dimension_names": list(DIMENSIONS),
+        "recomputed_dimension_names": _recomputed,
+        "total_cells": _declared_dims * n,
+        "D3_outputs": d3_rec,
         "D1_wiring_broken": bad1,
         "D2_delegated": {"rc": rc2, "line": line2},
         "D5_delegated": {"rc": rc5, "line": line5},
@@ -328,6 +455,25 @@ def main(argv=None) -> int:
                   f"delegate ran and did not reach a verdict, so this dimension "
                   f"is excluded from the cell count below. Treating it as clean "
                   f"would report coverage this grid never obtained.")
+    if d3_state == "MEASURED":
+        import flow_output_substance as _fos          # noqa: E402
+        _bad3 = [c for c in d3_rec["cells"] if c["state"] in _fos.FAILING]
+        if _bad3:
+            problems += 1
+            print(f"flow_gate_grid: D3 outputs — {len(_bad3)} step(s) declare "
+                  f"outputs the run did not substantiate. A file that exists and "
+                  f"is non-empty is not evidence that the work happened:")
+            for c in _bad3:
+                for e in c.get("entries", []):
+                    if e["state"] in _fos.FAILING:
+                        print(f"    step {c['step']}: {e['entry']}")
+                        print(f"        [{e['state']}/{e.get('code') or '-'}] "
+                              f"{e['detail']}")
+    elif d3_state == "NO_DECIDER":
+        problems += 1
+        print(f"flow_gate_grid: D3 outputs — NOT RECOMPUTED, {d3_line}. The cell "
+              f"count below excludes it.")
+
     if bad6:
         problems += 1
         print(f"flow_gate_grid: D6 skip — {len(bad6)} step(s) declare a "
@@ -358,8 +504,18 @@ def main(argv=None) -> int:
                   f"one that never shrinks stops describing anything and becomes "
                   f"a list of permissions.")
 
-    print(f"\n  recomputed {_dims * n} of {8 * n} cells "
-          f"({n} steps x {_dims} of 8 dimensions)")
+    print(f"\n  recomputed {_dims * n} of {_declared_dims * n} cells "
+          f"({n} steps x {_dims} of {_declared_dims} dimensions)")
+    print(f"  recomputed: {', '.join(_recomputed)}")
+    if d3_state == "NOT_MEASURED":
+        # PRINTED UNCONDITIONALLY, and never as a verdict. The only consumer of
+        # this program reads the EXIT CODE alone (tools/ci/repo_hygiene_gates.sh
+        # runs it with no arguments), so at rc level "D3 was clean" and "D3 was
+        # never asked" are indistinguishable -- which is precisely why the
+        # numerator above excludes D3 and this line names it. A reader or a
+        # future consumer gets the disclosure; nothing gets a pass it did not
+        # earn.
+        print(f"  NOT MEASURED               D3 outputs: {d3_line}")
     for name, why in sorted(NOT_DERIVABLE.items()):
         print(f"  NOT DERIVABLE FROM SOURCE  {name}: {why}")
     return 1 if problems else 0

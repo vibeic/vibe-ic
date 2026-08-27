@@ -28,6 +28,20 @@ Verdicts / exit codes:
   1 = a property FAILED (a real counterexample) — reported with its frame
   2 = NOT_APPLICABLE: no formal properties authored for this design — an
       honest SKIPPED-CONDITION manifest is written (never a fabricated pass)
+  3 = ENV_UNAVAILABLE: the proof engine was never REACHED (see #216)
+  4 = INCONCLUSIVE because a RESOURCE CEILING stopped the proof — the run
+      names which resource ran out and at what limit
+  5 = EMIT_ONLY: the .sby was authored and its sources staged; NO proof was
+      run, so nothing was proved and nothing was refuted
+
+BOUNDED BY CONSTRUCTION. A formal proof is entitled to be expensive; it is not
+entitled to the host. Every invocation carries an address-space ceiling and a
+deadline, on BOTH the container path and the ambient-PATH path, and the deadline
+reaches the whole solver process group rather than the launcher we hold. A run a
+ceiling stopped is INCONCLUSIVE — never PASS (nothing was proved) and never FAIL
+(nothing was refuted) — and it says WHICH resource ran out, because
+"inconclusive" with no resource named sends the reader to the design when the
+fix is on the host. `assert_resource_honesty` is the executed guard.
 
 §4.05: reads only design INPUT (the RTL + the authored property harness).
 It never reads a hidden testbench/oracle to synthesise a proof.
@@ -43,6 +57,7 @@ import json
 import re
 import shutil
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -221,6 +236,32 @@ def assert_bound_honesty(props: List[dict]) -> bool:
             raise AssertionError(
                 f"inconsistent strength: proved task '{p.get('task')}' "
                 "not labelled 'unbounded'")
+    return True
+
+
+def assert_resource_honesty(results: dict,
+                            resource_stop: Optional[dict]) -> bool:
+    """HONESTY GUARD: a run a RESOURCE CEILING stopped can never be recorded as
+    proved.
+
+    The twin of `assert_bound_honesty`, and for the same reason: the rule is
+    stated once, EXECUTED on every run, and unit-tested, so a future refactor
+    cannot quietly let a bound-stop be counted as a proof. Recording an
+    unfinished proof as proved is the worst outcome available here — it is the
+    only one that makes the flow greener than the evidence.
+
+    Returns True when the record is honest; raises AssertionError otherwise.
+    """
+    if not resource_stop:
+        return True
+    if results.get("all_proved") or results.get("verdict") == "PASS":
+        raise AssertionError(
+            "dishonest verdict: the proof was stopped by a "
+            f"{resource_stop.get('resource')} ceiling "
+            f"({resource_stop.get('limit')} {resource_stop.get('unit')}) yet "
+            f"the record claims verdict={results.get('verdict')!r} "
+            f"all_proved={results.get('all_proved')!r} — a proof that ran out "
+            "of a resource is INCONCLUSIVE, never proved")
     return True
 
 
@@ -681,6 +722,18 @@ def detect_engines(container: Optional[str]) -> Dict[str, bool]:
     return avail
 
 
+# ── exit-code lexicon (see the module docstring) ───────────────────────────
+RC_ALL_PROVED = 0
+RC_PROPERTY_FAILED = 1
+RC_NOT_APPLICABLE = 2
+RC_ENV_UNAVAILABLE = 3
+#: A ceiling stopped the proof. Deliberately NOT 1: "your design has a bug" and
+#: "this host ran out of room" send the reader to different places.
+RC_RESOURCE_INCONCLUSIVE = 4
+#: The .sby was authored and NO proof was run. Deliberately NOT 0: an emit is
+#: not a pass.
+RC_EMIT_ONLY = 5
+
 #: vibe-ic#628 — the share of host memory ONE solver process tree may address.
 #: A bound on how much of the machine a disposable process may take, NOT a model
 #: of what a proof needs: a formal property that fails to converge is the
@@ -722,44 +775,247 @@ def memory_limit_kb(meminfo: Optional[str] = None,
     return max(FORMAL_MEM_FLOOR_KB, int(int(m.group(1)) * FORMAL_MEM_SHARE))
 
 
+# ── resource-ceiling classification (pure) ─────────────────────────────────
+# "The proof did not converge" and "we ran out of a resource" are DIFFERENT
+# facts, exactly as #216 separated "the engine was never reached" from "the
+# proof was inconclusive". Collapsing them costs the reader the one thing that
+# makes the result actionable: WHICH resource, and at what limit. A wall-clock
+# stop is a budget question; an address-space stop is a host question; a
+# non-converging solver is a design/property question. They have different fixes.
+#
+# Every signature below is a TOOL/RUNTIME output shape — the C++ runtime's
+# allocation failure, glibc's, the kernel's signal report, or our own deadline
+# note — never a chip, design or PDK literal, so the classification stays
+# chip-AGNOSTIC.
+_RESOURCE_STOP_SIGNATURES = (
+    (re.compile(r"SOLVER DEADLINE|\bTIMEOUT after \d+s"), "wall_clock"),
+    (re.compile(r"std::bad_alloc|\bbad_alloc\b|\bMemoryError\b|"
+                r"[Cc]annot allocate memory|"
+                r"virtual memory exhausted|[Oo]ut of memory|"
+                r"memory allocation of \d+ bytes failed|"
+                r"killed by signal 9|\bSIGKILL\b|^\s*Killed\s*$",
+                re.MULTILINE), "memory"),
+)
+
+#: What each resource stop MEANS, so the record says it rather than assuming the
+#: reader will infer it.
+_RESOURCE_MEANING = {
+    "wall_clock": ("the deadline expired while the solver was still working — "
+                   "the properties may well hold and we simply did not finish"),
+    "memory": ("the solver hit its address-space ceiling — the properties may "
+               "well hold and we simply could not afford to find out here"),
+}
+
+
+def classify_resource_stop(transcript: str,
+                           timeout_s: Optional[int] = None,
+                           mem_limit_kb: Optional[int] = None
+                           ) -> Optional[Dict[str, object]]:
+    """Return a structured record when the run was stopped by a RESOURCE
+    CEILING rather than by the solver reaching an answer, else None.
+
+    Pure: transcript text in, dict out — no process is spawned, so the
+    classification is unit-testable without a solver.
+
+    The returned dict answers what a reader needs in order to act: WHICH
+    resource ran out, at WHAT limit, what the tool actually said, and what the
+    stop does and does not mean about the design.
+    """
+    text = transcript or ""
+    for rx, resource in _RESOURCE_STOP_SIGNATURES:
+        m = rx.search(text)
+        if not m:
+            continue
+        if resource == "wall_clock":
+            limit = int(timeout_s) if timeout_s is not None else None
+            unit = "s"
+        else:
+            limit = int(mem_limit_kb) if mem_limit_kb else None
+            unit = "KiB"
+        return {
+            "resource": resource,
+            "limit": limit,
+            "unit": unit,
+            "tool_message": (m.group(0) or "").strip()[:300],
+            "meaning": _RESOURCE_MEANING[resource],
+        }
+    return None
+
+
+def apply_resource_stop(results: dict,
+                        resource_stop: Optional[dict]) -> dict:
+    """Fold a resource stop into the record, honestly. Pure (mutates + returns).
+
+    Not a pass: nothing finished, so `all_proved` cannot stand. Not a fail
+    either: the properties may well hold and we simply did not finish. The one
+    thing a ceiling does NOT overturn is a real counterexample — a cex is sound
+    evidence the moment it is found, so a FAIL survives a later stop rather than
+    being laundered into "we ran out of time".
+
+    `attempted` travels with it because the reader's next move is to raise the
+    right ceiling, and they cannot pick one without knowing which tasks, modes
+    and depths were dispatched.
+    """
+    if not resource_stop:
+        return results
+    results["resource_stop"] = resource_stop
+    results["attempted"] = [
+        {"task": p["task"], "mode": p["mode"], "depth": p["depth"],
+         "engine": p["engine"], "status": p["status"]}
+        for p in results.get("properties", [])]
+    results["all_proved"] = False
+    if results.get("verdict") != "FAIL":
+        results["verdict"] = "INCONCLUSIVE"
+    results.setdefault("bounded_vs_unbounded", []).append(
+        f"RESOURCE CEILING: the run was stopped by its "
+        f"{resource_stop['resource']} limit "
+        f"({resource_stop['limit']} {resource_stop['unit']}) — "
+        f"{resource_stop['meaning']}. Tool said: "
+        f"{resource_stop['tool_message']}")
+    return results
+
+
+def local_bounded_argv(command: str,
+                       mem_limit_kb: Optional[int]) -> List[str]:
+    """The argv that runs `command` on THIS host under an address-space ceiling.
+
+    The local twin of `_container_exec.container_deadline_argv`, and split out
+    for the same reason: a test drives the argv the caller actually runs instead
+    of re-typing it, and a re-typed argv agrees with the implementation only by
+    coincidence — which is how this class of defect returns.
+
+    `ulimit -v` is the FIRST thing in the shell line: set after the tool has
+    started it bounds nothing, and the memory lives in the children. `exec`
+    replaces the shell so the tool is our own direct child and a signal reaches
+    it. When no limit can be derived NO `ulimit` is emitted at all — a guessed
+    ceiling is one nobody can reason about, and too low is the same outage from
+    the other end.
+    """
+    prefix = f"ulimit -v {int(mem_limit_kb)}; " if mem_limit_kb else ""
+    return ["bash", "-lc", f"{prefix}exec {command}"]
+
+
 # ── impure runner ──────────────────────────────────────────────────────────
+def _kill_process_group(proc: "subprocess.Popen") -> None:
+    """SIGTERM then SIGKILL the whole process GROUP.
+
+    sby is a launcher; the memory and the cores live in the yosys it spawns.
+    Signalling only the handle we hold leaves the solver running — the #623/#628
+    shape in a third place, and the one that took a 125 GB host off the network.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:                       # already reaped
+        proc.kill()
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except OSError:
+            return
+        try:
+            proc.wait(timeout=_CE.DEFAULT_KILL_GRACE_S)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _run_group_bounded(argv: List[str], cwd: Path,
+                       timeout: int) -> "tuple":
+    """Run `argv` in its OWN session so the deadline reaches the whole tree.
+
+    Returns `(rc, combined_output)`. `rc == _CE.TIMEOUT_EXPIRED_RC` (124, the
+    coreutils protocol the container path already speaks) means the deadline
+    expired and the group was signalled; no orphan survives it.
+    """
+    proc = subprocess.Popen(argv, cwd=str(cwd), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            errors="replace", start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+        return proc.returncode, out or ""
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        try:
+            out, _ = proc.communicate(timeout=_CE.CLIENT_GRACE_S)
+        except subprocess.TimeoutExpired:  # pragma: no cover - group is dead
+            out = ""
+        return _CE.TIMEOUT_EXPIRED_RC, out or ""
+
+
+def _run_sby_ambient(name: str, formal_dir: Path, timeout: int,
+                     mem_limit_kb: Optional[int]) -> str:
+    """Run sby from the AMBIENT PATH under the SAME two bounds as the container.
+
+    THE AMBIENT PATH IS NOT THE UNUSUAL ONE. It is the path taken whenever the
+    caller ALREADY runs inside the vibeic-eda image — where `docker` is absent
+    and `sby` is at /usr/local/bin/sby — which is how CI, the flow
+    (`design_one_shot_runner` passes `container or None`) and every agent run
+    it. It carried NO memory bound and only a CLIENT-side deadline, so an expiry
+    killed the launcher we held while its yosys children carried on. MEASURED:
+    two yosys reached 35.6 GB apiece on a 125 GB host, no log output for twelve
+    minutes, MemAvailable falling ~2 GB per 20 s; the host stopped answering ssh.
+
+    The bound was skipped here on the premise that "imposing a rlimit on the
+    caller's own shell is not this function's business". It is not the caller's
+    shell — it is a shell WE spawn, whose only child is the solver.
+    """
+    cmd = local_bounded_argv(f"sby -f {name}", mem_limit_kb)
+    try:
+        rc, out = _run_group_bounded(cmd, formal_dir, int(timeout))
+    except FileNotFoundError:
+        return "[formal_property_run] ERROR: sby/docker not found on PATH\n"
+    if rc == _CE.TIMEOUT_EXPIRED_RC:
+        # Named, because an anonymous death reads as a tool crash and sends the
+        # reader to the wrong place.
+        out += (f"\n[formal_property_run] SOLVER DEADLINE: the host-side "
+                f"deadline stopped sby and its whole process group after "
+                f"{int(timeout)}s. The proof is INCONCLUSIVE — not "
+                f"disproved.\n")
+    return out
+
+
 def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
-             timeout: int) -> str:
+             timeout: int, mem_limit_kb: Optional[int] = None) -> str:
     """Run `sby -f <sby>` in `formal_dir` and return the transcript. When
     `container` is set the run is `docker exec <container>` with the vibeic-eda
-    tool PATH; otherwise sby is invoked from the ambient PATH."""
+    tool PATH; otherwise sby is invoked from the ambient PATH. BOTH paths carry
+    an address-space ceiling and a deadline that reaches the solver.
+
+    `mem_limit_kb` is the caller's explicit ceiling; `None` derives one from the
+    host (`memory_limit_kb`), and `0` is an explicit, sayable "do not bound".
+    """
     name = sby_path.name
-    if container:
-        path_export = ("export PATH=/foss/tools/bin:/foss/tools/yosys/bin:"
-                       "$PATH")
-        # vibe-ic#628 — BOUND THE SOLVER, NOT THE CLIENT. This was
-        # `docker exec` under a client-side `subprocess.run(timeout=)`, which
-        # is the #623 defect in a second place: the deadline killed the local
-        # client while sby's yosys carried on inside the container, unsignalled
-        # and unwatched. MEASURED on a 125.7 GB host: one such yosys reached
-        # 109 GB RSS, still climbing at ~1 GB per 20 s, with MemAvailable at
-        # 3.2 GB and swap exhausted — about a minute from the OOM killer, on a
-        # machine also running four production services. Killing that one
-        # process returned MemAvailable 3.2 GB -> 113.0 GB.
-        #
-        # Two bounds, because they stop different things:
-        #   * the deadline moves INSIDE the container (coreutils `timeout`, the
-        #     `_container_exec` primitive) so an expiry actually reaches the
-        #     solver;
-        #   * `ulimit -v` bounds ADDRESS SPACE for sby and every child it
-        #     spawns — a process may lower its own rlimit but never raise it,
-        #     so yosys cannot escape it. A deadline alone does not help a
-        #     solver that eats the host in less time than its budget.
-        _lim = memory_limit_kb()
-        _ul = f"ulimit -v {_lim}; " if _lim else ""
-        inner = (f"{_ul}{path_export}; cd {formal_dir} && rm -rf {sby_path.stem} "
-                 f"&& sby -f {name}")
-        cmd = ["docker", "exec", container,
-               "timeout", "-k", str(_CE.DEFAULT_KILL_GRACE_S), str(int(timeout)),
-               "bash", "-lc", inner]
-        timeout = int(timeout) + _CE.CLIENT_GRACE_S
-    else:
-        cmd = ["sby", "-f", name]
+    _lim = mem_limit_kb if mem_limit_kb is not None else memory_limit_kb()
+    if not container:
+        return _run_sby_ambient(name, formal_dir, timeout, _lim)
+    path_export = ("export PATH=/foss/tools/bin:/foss/tools/yosys/bin:"
+                   "$PATH")
+    # vibe-ic#628 — BOUND THE SOLVER, NOT THE CLIENT. This was
+    # `docker exec` under a client-side `subprocess.run(timeout=)`, which
+    # is the #623 defect in a second place: the deadline killed the local
+    # client while sby's yosys carried on inside the container, unsignalled
+    # and unwatched. MEASURED on a 125.7 GB host: one such yosys reached
+    # 109 GB RSS, still climbing at ~1 GB per 20 s, with MemAvailable at
+    # 3.2 GB and swap exhausted — about a minute from the OOM killer, on a
+    # machine also running four production services. Killing that one
+    # process returned MemAvailable 3.2 GB -> 113.0 GB.
+    #
+    # Two bounds, because they stop different things:
+    #   * the deadline moves INSIDE the container (coreutils `timeout`, the
+    #     `_container_exec` primitive) so an expiry actually reaches the
+    #     solver;
+    #   * `ulimit -v` bounds ADDRESS SPACE for sby and every child it
+    #     spawns — a process may lower its own rlimit but never raise it,
+    #     so yosys cannot escape it. A deadline alone does not help a
+    #     solver that eats the host in less time than its budget.
+    _ul = f"ulimit -v {_lim}; " if _lim else ""
+    inner = (f"{_ul}{path_export}; cd {formal_dir} && rm -rf {sby_path.stem} "
+             f"&& sby -f {name}")
+    cmd = ["docker", "exec", container,
+           "timeout", "-k", str(_CE.DEFAULT_KILL_GRACE_S), str(int(timeout)),
+           "bash", "-lc", inner]
+    timeout = int(timeout) + _CE.CLIENT_GRACE_S
     try:
         p = subprocess.run(cmd, cwd=str(formal_dir), capture_output=True,
                            text=True, timeout=timeout)
@@ -799,11 +1055,36 @@ def run(project: Path, harness: Optional[Path] = None,
         bmc_depth: int = 12, safety_depth: int = 20,
         timeout: int = 900,
         invariant_harness: Optional[Path] = None,
-        engine_backend: str = "auto") -> dict:
+        engine_backend: str = "auto",
+        mem_limit_kb: Optional[int] = None,
+        emit_only: bool = False) -> dict:
+    """Author the .sby, run the proof, and record an HONEST verdict.
+
+    `timeout` and `mem_limit_kb` are the RESOURCE CEILING the caller grants this
+    proof. `mem_limit_kb=None` derives an address-space ceiling from the host;
+    `0` is an explicit, sayable "do not bound". A run either ceiling stops comes
+    back INCONCLUSIVE, carrying `resource_stop` (which resource, what limit,
+    what the tool said) and `attempted` (the tasks that were dispatched) — never
+    PASS, because nothing was proved, and never FAIL, because nothing was
+    refuted.
+
+    `emit_only=True` STOPS AFTER THE EMIT. The .sby is authored and its sources
+    are staged, and the function returns before any executor exists: no engine
+    is probed, no solver is launched, and no `results.json` is written. This is
+    the entry point for a caller that wants the ARTEFACT and explicitly does not
+    want the proof — a dry run, or a test asserting what ends up on the
+    `read_verilog` line. It exists because the alternative such callers relied on
+    was the ACCIDENT that the tool would not be found, which is false in the
+    image the flow is designed for: inside vibeic-eda `sby` IS on PATH, so "it
+    will just fail to launch" launched a real proof.
+    """
     formal_dir = _pl.formal_dir(project)
     formal_dir.mkdir(parents=True, exist_ok=True)
 
-    engine_availability = detect_engines(container)
+    # An emit-only run probes NOTHING: engine availability is evidence about an
+    # environment we are not going to use, and probing it would spawn the one
+    # kind of thing this mode promises not to spawn.
+    engine_availability = {} if emit_only else detect_engines(container)
     engine_note = None
 
     # An invariant-strengthened harness may be passed explicitly via
@@ -924,8 +1205,31 @@ def run(project: Path, harness: Optional[Path] = None,
             if ls.endswith((".v", ".sv")) and "/" in ls and Path(ls).is_file():
                 shutil.copy2(ls, formal_dir / Path(ls).name)
 
+    # 1b) EMIT-ONLY — the artefact is written; the proof is NOT run ---------
+    # Returns BEFORE the executor is reached, so the guarantee is structural
+    # rather than environmental: there is no code path from here to a solver,
+    # whatever tools happen to be installed. Nothing that resembles proof
+    # evidence is written — the .sby is the whole artefact — so an emit-only run
+    # can never be mistaken downstream for a proof that ran.
+    if emit_only:
+        return {
+            "program": "formal_property_run",
+            "verdict": "EMIT_ONLY",
+            "all_proved": False,
+            "property_count": 0,
+            "properties": [],
+            "sby": str(sby_path.relative_to(project)),
+            "reason": ("emit-only: the .sby was authored and its sources "
+                       "staged; NO proof engine was invoked, so NOTHING was "
+                       "proved and NOTHING was refuted"),
+            "rc": RC_EMIT_ONLY,
+        }
+
     # 2) run sby -------------------------------------------------------------
-    transcript = _run_sby(sby_path, formal_dir, container, timeout)
+    eff_mem_kb = (mem_limit_kb if mem_limit_kb is not None
+                  else memory_limit_kb())
+    transcript = _run_sby(sby_path, formal_dir, container, timeout,
+                          mem_limit_kb=eff_mem_kb)
     log_path = formal_dir / f"{sby_path.stem}.sby.log"
     log_path.write_text(transcript)
 
@@ -966,7 +1270,7 @@ def run(project: Path, harness: Optional[Path] = None,
         (formal_dir / "formal_env_unavailable.json").write_text(
             json.dumps(env_manifest, indent=2, ensure_ascii=False) + "\n")
         _write_env_gap_report(formal_dir, env_manifest)
-        env_manifest["rc"] = 3
+        env_manifest["rc"] = RC_ENV_UNAVAILABLE
         return env_manifest
 
     # 3) parse + build results ----------------------------------------------
@@ -987,6 +1291,17 @@ def run(project: Path, harness: Optional[Path] = None,
     results["engine_availability"] = engine_availability
     if engine_note:
         results["engine_note"] = engine_note
+
+    # 3b) DID A RESOURCE CEILING STOP THE PROOF? (see `apply_resource_stop`)
+    resource_stop = classify_resource_stop(transcript, timeout, eff_mem_kb)
+    apply_resource_stop(results, resource_stop)
+    # EXECUTED honesty guard, and DELIBERATELY SEPARATE from the function that
+    # is supposed to keep the rule. `apply_resource_stop` is where a future
+    # change would land — a new verdict name, a "PARTIAL is nicer here" tweak,
+    # a refactor that reorders the fields — and a rule enforced only by the code
+    # that could break it is enforced by nothing. This line re-derives the one
+    # question that matters from the record as it FINALLY stands.
+    assert_resource_honesty(results, resource_stop)
     # The invariant-strengthened proof is a SUPPLEMENTARY datapath-formal
     # attempt: it writes to its OWN results file so it can never clobber the
     # canonical `results.json` that the Step-5 evidence gate consumes (a wide
@@ -1008,8 +1323,9 @@ def run(project: Path, harness: Optional[Path] = None,
     # 4) human report --------------------------------------------------------
     _write_report(formal_dir, results)
 
-    rc = 0 if results["all_proved"] else (
-        2 if results["verdict"] == "SKIPPED-CONDITION" else 1)
+    rc = RC_ALL_PROVED if results["all_proved"] else (
+        RC_NOT_APPLICABLE if results["verdict"] == "SKIPPED-CONDITION" else
+        RC_RESOURCE_INCONCLUSIVE if resource_stop else RC_PROPERTY_FAILED)
     results["rc"] = rc
     return results
 
@@ -1070,6 +1386,16 @@ def _write_report(formal_dir: Path, results: dict) -> None:
     strength = results.get("proof_strength", "?")
     lines += ["", f"proof strength: **{strength}** "
               f"(unbounded_proved={results.get('unbounded_proved')})"]
+    stop = results.get("resource_stop")
+    if stop:
+        lines += ["", "## Stopped by a resource ceiling",
+                  f"- resource: **{stop['resource']}**  "
+                  f"limit: **{stop['limit']} {stop['unit']}**",
+                  f"- {stop['meaning']}",
+                  f"- tool said: `{stop['tool_message']}`",
+                  "- This is **INCONCLUSIVE**: nothing was proved and nothing "
+                  "was refuted. Raise the ceiling and re-run, or accept the "
+                  "bounded result that was reached — do not read it as a pass."]
     lines += ["", "## Bounded vs unbounded disclosure"]
     for d in results["bounded_vs_unbounded"]:
         lines.append(f"- {d}")
@@ -1172,6 +1498,14 @@ def main(argv=None) -> int:
     ap.add_argument("--bmc-depth", type=int, default=12)
     ap.add_argument("--safety-depth", type=int, default=20)
     ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--mem-limit-kb", type=int, default=None,
+                    dest="mem_limit_kb",
+                    help="address-space ceiling (KiB) for the solver and every "
+                         "child it spawns; omit to derive one from this host, "
+                         "0 to run unbounded on purpose")
+    ap.add_argument("--emit-only", action="store_true", dest="emit_only",
+                    help="author the .sby and stage its sources, then STOP — "
+                         "no proof is run, nothing is proved or refuted")
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)
     if not args.project_dir.is_dir():
@@ -1183,7 +1517,9 @@ def main(argv=None) -> int:
               bmc_depth=args.bmc_depth, safety_depth=args.safety_depth,
               timeout=args.timeout,
               invariant_harness=args.invariant_harness,
-              engine_backend=args.engine_backend)
+              engine_backend=args.engine_backend,
+              mem_limit_kb=args.mem_limit_kb,
+              emit_only=args.emit_only)
     rc = res.pop("rc", 0)
     out = json.dumps(res, indent=2, ensure_ascii=False)
     if args.json:

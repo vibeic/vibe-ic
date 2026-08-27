@@ -42,6 +42,9 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parents[1]
 ATPG_HARMONIZE = PLUGIN / "programs" / "fix_fault_cut_names.py"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _designs_root as _dr  # noqa: E402  (host mount root, measured)
+
 YS_TEMPLATE = """\
 read_verilog {pdk_shim}
 read_verilog {gate_netlist}
@@ -54,6 +57,17 @@ stat
 """
 
 def main():
+    """Entry point. A path the container cannot be shown to see is rc=2 naming
+    what IS mounted — never a guessed prefix written into a .ys script."""
+    try:
+        return _main()
+    except _dr.MountRootUnresolved as exc:
+        print(f"[flatten] BLOCKED on host mount root: {exc.status['reason']}",
+              file=sys.stderr)
+        return 2
+
+
+def _main():
     p = argparse.ArgumentParser()
     p.add_argument("--gate-netlist", type=Path, required=True)
     p.add_argument("--pdk-shim",      type=Path, required=True)
@@ -64,23 +78,34 @@ def main():
     p.add_argument("--keep-tmp",      action="store_true")
     args = p.parse_args()
 
-    # Map host paths to docker paths (<host> convention)
-    def _docker_path(host: Path) -> str:
-        h = host.resolve()
-        if "AI_IC_design" in str(h):
-            # host.resolve() yields an absolute path (e.g.
-            # /home/<user>/AI_IC_design/...), so the host→container mount root
-            # must be matched as an absolute path — the literal "~/AI_IC_design"
-            # never appears post-resolve, which made the old replace a no-op.
-            aid_root = str((Path.home() / "AI_IC_design").resolve())
-            return str(h).replace(aid_root, "/foss/designs")
-        return str(h)
+    # Map host paths to container paths through the container's OWN mount
+    # table (the designs-root ladder in `_designs_root`).
+    #
+    # The predecessor searched the host path for one developer's design-tree
+    # directory NAME and rewrote that prefix to the historical /foss/designs.
+    # On every machine whose tree is called something else the test was False,
+    # the host path went into the .ys script unchanged, and yosys reported
+    # "can't open input file" for a file that exists — a wrong answer that
+    # renders exactly like a right one. The mount table answers the question
+    # the name was standing in for, and keeps the Source/Destination pair
+    # intact so a tree mounted somewhere other than /foss/designs still works.
+    _mounts = _dr.container_mounts(args.container)
 
-    # Place tmp dir alongside the output so it lives inside the docker
-    # mount (/foss/designs ↔ AI_IC_design). If output is under /tmp,
-    # the .ys script and yosys output need to be reachable from
-    # inside the container — fall back to /tmp inside container by
-    # using the project root as anchor.
+    def _docker_path(host: Path) -> str:
+        """Container path for `host`. Raises when no mount covers it: an
+        unreachable input must not be written into a .ys script as though the
+        container could open it."""
+        h = host.resolve()
+        tr = _dr.container_path(h, h.parent, args.container, mounts=_mounts)
+        if not tr.ok:
+            raise _dr.MountRootUnresolved(
+                _dr.unresolved_status(tr.detail, args.container))
+        return tr.path
+
+    # Place tmp dir alongside the output so it lives under the same bind mount
+    # the output does — the .ys script and the yosys output must both be
+    # reachable from inside the container, and `_docker_path` refuses any path
+    # that is not.
     tmp = args.output.resolve().parent / ".tmp_flatten"
     tmp.mkdir(parents=True, exist_ok=True)
 

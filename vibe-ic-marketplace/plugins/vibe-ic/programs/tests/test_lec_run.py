@@ -1323,3 +1323,370 @@ def test_killed_mid_proof_with_counterexample_still_fails():
     p = lec_run.parse_equiv_output(txt)
     assert p["proven"] is None and p["unproven"] is None
     assert p["verdict"] == "FAIL"               # counterexample overrides
+
+
+# ---------------------------------------------------------------------------
+# A DEADLINE THAT A RETRY RE-ARMS IS NOT A DEADLINE (measured 2026-08-27).
+# ---------------------------------------------------------------------------
+# Live evidence, VerilogEval-Human sweep `_vehuman_clean156` on a 156-problem
+# run whose MEDIAN problem takes ~30s: `Prob030_popcount255` (a 255-bit popcount
+# whose `equiv_induct` is combinatorially explosive) ground for the full 7195s
+# gold-read budget, was killed, and then STARTED OVER — `reports/lec_equiv.ys`
+# was rewritten 2h later with `read_slang`, proving the slang gold-read retry
+# fired on a TIMEOUT and was handed a FRESH full budget. Two independent
+# defects, and both are guarded below:
+#   (1) the retry fired on a failure class it was not written for (a killed run,
+#       not a failed gold read);
+#   (2) every attempt was handed the same constant `args.timeout`, so the real
+#       bound was `timeout x attempts` and nothing counted total elapsed.
+# ---------------------------------------------------------------------------
+_BUDGET_KILLED_GOLD = (
+    "equiv_make: Creating equivalence miter.\n"
+    "equiv_induct: Proving $equiv cells in module equiv.\n"
+    + lec_run._TIMEOUT_MARKER + " after 7195s\n"
+)
+
+
+class _FakeClock:
+    """Injectable monotonic clock, so the ceiling is tested without spending it."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, d: float) -> None:
+        self.t += d
+
+
+def test_a_retry_cannot_rearm_the_step_deadline():
+    # POLE A — the ceiling is the TOTAL across attempts, measured from the
+    # FIRST. After attempt 1 grinds to the deadline there is NOTHING left, so
+    # the sweep moves on instead of starting the same problem over.
+    clk = _FakeClock()
+    b = lec_run.StepBudget(7195, clock=clk)
+    assert b.next_attempt_budget() == 7195      # attempt 1: the full budget
+    clk.advance(7195)                           # ...ground to the deadline
+    b.record("verilog", "-DSIMULATION -DYOSYS", 7195, 7195.0, True, True)
+    assert b.next_attempt_budget() == 0, (
+        "a second attempt must NOT be handed a fresh budget — that is the "
+        "defect: total time became `deadline x attempts`")
+    assert b.exhausted() is True
+
+
+def test_each_attempt_draws_down_the_same_deadline():
+    # The budget is strictly non-increasing: a retry can only ever SHRINK it.
+    clk = _FakeClock()
+    b = lec_run.StepBudget(600, clock=clk)
+    seen = []
+    for spend in (100, 200, 280):
+        seen.append(b.next_attempt_budget())
+        clk.advance(spend)
+        b.record("verilog", "-DSIMULATION -DYOSYS", seen[-1], spend, True,
+                 False)
+    assert seen == [600, 500, 300]
+    assert all(seen[i] > seen[i + 1] for i in range(len(seen) - 1))
+    assert b.next_attempt_budget() == 0     # 580 spent, 20 left < floor
+
+
+def test_budget_floor_refuses_a_pointless_sliver():
+    clk = _FakeClock()
+    b = lec_run.StepBudget(600, floor_s=30, clock=clk)
+    clk.advance(571)
+    b.record("verilog", "-DSIMULATION -DYOSYS", 600, 571.0, True, False)
+    assert b.remaining_s() == 29
+    assert b.next_attempt_budget() == 0, (
+        "0 must mean DO NOT LAUNCH, never launch-with-no-limit")
+
+
+def test_the_floor_never_blocks_the_first_attempt():
+    # The floor refuses a pointless RETRY. A tight operator --timeout must
+    # still RUN — turning it into "no run at all" would produce no evidence.
+    b = lec_run.StepBudget(5, floor_s=30, clock=_FakeClock())
+    assert b.next_attempt_budget() == 5
+
+
+def test_slang_retry_does_not_fire_on_a_wall_budget_kill():
+    # FINDING 2 — the retry is for a gold read that FAILED. This gold read did
+    # not fail: it succeeded and the RUN was killed at its deadline, mid-proof.
+    # Re-reading the gold with a different frontend cannot make a
+    # combinatorially explosive proof cheap, and costs another full budget.
+    parsed = lec_run.parse_equiv_output(_BUDGET_KILLED_GOLD)
+    assert parsed["parse_error"] is True, (
+        "a mid-proof kill leaves no equiv_status, so it looks exactly like a "
+        "zero-miter gold-read abort to the parser — that is why it fired")
+    retry, why = lec_run.should_retry_gold_with_slang(
+        parsed, _BUDGET_KILLED_GOLD, requires_sv2017=True)
+    assert retry is False, (
+        "a budget kill must not select the slang gold-read retry")
+    # THE REASON IS PUBLISHED, so it may not be empty. This function's second
+    # return value reaches reports/lec.json through `gold_frontend_reason`
+    # (lec_run.py: `report["gold_frontend_reason"] = gold_frontend_reason or
+    # None`) and is printed on the operator-facing decline line. An empty string
+    # there renders a decline that HAD a reason byte-identically to a run in
+    # which nothing happened -- the absent-measurement-rendered-as-a-real-one
+    # defect this file exists to refuse.
+    #
+    # `why == ""` was an OVER-SPECIFICATION: it held only while the path had no
+    # voice, and it was never what this test is about -- the failure message
+    # above names the decline and nothing else. The behavioural claim is
+    # unchanged and still fully asserted; what is added is that the decline must
+    # say why. See test_lec_bounded_proof.py::BudgetKillIsNotAFrontendFailure::
+    # test_budget_killed_log_blocks_the_retry, which asserts the same reason
+    # from the other side.
+    assert why and "was NOT the failure" in why, (
+        "a budget-kill decline must carry its reason; an empty one is "
+        "indistinguishable from a run in which nothing happened")
+
+
+def test_the_budget_kill_verdict_is_neither_pass_nor_fail():
+    # (c) A timed-out proof gets the honest outcome. Both mislabels are
+    # available and both are wrong: PASS would record an unfinished equivalence
+    # proof as proven; FAIL would call designs different that may well be
+    # equivalent. The verdict must be the disclosed non-PASS tier.
+    parsed = lec_run.parse_equiv_output(_BUDGET_KILLED_GOLD)
+    assert parsed["verdict"] in ("SKIPPED-CONDITION", "INCONCLUSIVE")
+    assert parsed["equivalent"] is False
+
+
+def test_budget_annotation_carries_attempts_elapsed_and_the_resource():
+    # (c) the outcome must SAY what was attempted, which resource ran out, and
+    # how many attempts were made — the evidence whose absence made a re-armed
+    # deadline indistinguishable from progress.
+    clk = _FakeClock()
+    b = lec_run.StepBudget(600, clock=clk)
+    b.record("verilog", "-DSIMULATION -DYOSYS", 600, 600.0, True, True)
+    clk.advance(600)
+    rep = {"verdict": "SKIPPED-CONDITION", "equivalent": False,
+           "verdict_explanation": "Yosys equiv exceeded its time budget."}
+    out = lec_run.annotate_step_budget(rep, b)
+    # ADDITIVE — the verdict itself is never rewritten.
+    assert out["verdict"] == "SKIPPED-CONDITION"
+    assert out["equivalent"] is False
+    assert out["lec_attempts"] == 1
+    assert out["step_budget_sec"] == 600
+    assert out["step_budget_exhausted"] is True
+    assert out["exhausted_resource"] == "wall_clock_seconds"
+    assert "1 attempt(s)" in out["verdict_explanation"]
+    assert out["lec_attempts_detail"][0]["killed_by_budget"] is True
+
+
+def test_budget_annotation_names_no_resource_when_nothing_ran_out():
+    clk = _FakeClock()
+    b = lec_run.StepBudget(600, clock=clk)
+    b.record("verilog", "-DSIMULATION -DYOSYS", 600, 30.0, True, False)
+    clk.advance(30)
+    out = lec_run.annotate_step_budget({"verdict": "PASS", "equivalent": True,
+                                        "verdict_explanation": "ok"}, b)
+    assert out["verdict"] == "PASS" and out["equivalent"] is True
+    assert out["step_budget_exhausted"] is False
+    assert out["exhausted_resource"] is None
+    assert out["verdict_explanation"] == "ok"   # untouched
+
+
+def test_a_skipped_retry_is_recorded_not_silently_dropped():
+    b = lec_run.StepBudget(600, clock=_FakeClock())
+    b.record("verilog", "-DSIMULATION -DYOSYS", 600, 600.0, True, True)
+    b.skipped("slang", "-DSIMULATION -DYOSYS", "step wall budget exhausted")
+    assert b.count_launched() == 1              # the skipped one is not an attempt
+    assert len(b.attempts) == 2                 # ...but it IS on the record
+    assert b.attempts[1]["not_launched_reason"] == "step wall budget exhausted"
+
+
+# --- CONTROLS: the recovery must survive, and normal problems must not move ---
+
+def test_a_genuine_gold_read_failure_still_retries_with_slang():
+    # POLE B — the control proving the loop was BOUNDED, not DELETED. A real
+    # gold-read failure (the reason this retry exists) carries no budget-kill
+    # marker, so it still selects the capable SV-2017 frontend and recovers.
+    for log in (_FRONTEND_ABORT_OUTPUT, _IBEX_ELAB_ABORT, GARBAGE_OUTPUT):
+        assert lec_run._TIMEOUT_RE.search(log) is None, (
+            "fixture must be a genuine READ failure, not a budget kill")
+        retry, why = lec_run.should_retry_gold_with_slang(
+            dict(_ZERO_MITER), log, requires_sv2017=True)
+        assert retry is True and why, (
+            f"the gold-read recovery must still fire on: {log[:60]!r}")
+
+
+def test_a_normal_problem_is_unchanged_by_the_budget():
+    # POLE C — the control proving the benchmark still measures what it did.
+    # A median (~30s) problem runs ONE attempt, gets the full budget, passes,
+    # and selects no retry.
+    parsed = lec_run.parse_equiv_output(PASS_OUTPUT)
+    assert parsed["verdict"] == "PASS" and parsed["equivalent"] is True
+    assert lec_run.should_retry_gold_with_slang(
+        parsed, PASS_OUTPUT, requires_sv2017=True) == (False, "")
+    clk = _FakeClock()
+    b = lec_run.StepBudget(7195, clock=clk)
+    assert b.next_attempt_budget() == 7195, (
+        "attempt 1 must get exactly the budget it got before the fix")
+    clk.advance(30)
+    b.record("verilog", "-DSIMULATION -DYOSYS", 7195, 30.0, True, False)
+    rep = lec_run.annotate_step_budget(dict(parsed), b)
+    assert rep["verdict"] == "PASS" and rep["equivalent"] is True
+    assert rep["lec_attempts"] == 1 and rep["step_budget_exhausted"] is False
+
+
+def test_a_real_mismatch_still_fails_and_never_retries():
+    # §4.05 NO-LEAK regression: bounding the retry must not let a genuine
+    # non-equivalence become anything other than FAIL.
+    parsed = lec_run.parse_equiv_output(MISMATCH_OUTPUT)
+    assert parsed["verdict"] == "FAIL"
+    assert lec_run.should_retry_gold_with_slang(
+        parsed, MISMATCH_OUTPUT, requires_sv2017=True) == (False, "")
+
+
+# --- THE RATCHET: fails if a future change lets a retry re-arm a deadline ---
+
+def test_no_yosys_attempt_may_be_handed_a_fresh_full_budget():
+    """RATCHET. The defect was `timeout=args.timeout` inside the closure that
+    drives the gold-read retries: a CONSTANT, re-armed on every attempt. Every
+    attempt must draw from the shared StepBudget deadline instead.
+
+    This test FAILS if a future change reintroduces a per-attempt deadline."""
+    src = SCRIPT.read_text(encoding="utf-8")
+    body = src[src.index("def main("):]
+    assert "timeout=args.timeout" not in body, (
+        "a yosys attempt is being handed the raw --timeout again: that is a "
+        "PER-ATTEMPT deadline, which a retry re-arms. Draw from "
+        "StepBudget.next_attempt_budget() so the ceiling is the TOTAL.")
+    assert "budget.next_attempt_budget()" in body, (
+        "the attempt budget must come from the shared StepBudget deadline")
+    # every retry decision must consult the ceiling before launching
+    assert body.count("budget.next_attempt_budget() == 0") >= 2, (
+        "each retry site must refuse to launch on a spent budget")
+
+
+def test_the_retry_decision_still_guards_the_budget_kill_class():
+    """RATCHET. Fails if the budget-kill guard is removed from the retry
+    decision, letting a timeout select the gold-read retry again."""
+    src = SCRIPT.read_text(encoding="utf-8")
+    fn = src[src.index("def should_retry_gold_with_slang("):]
+    fn = fn[:fn.index("\ndef ")]
+    assert "_TIMEOUT_RE.search(gold_log)" in fn, (
+        "a wall-budget kill must not select the gold-read retry")
+
+
+# ---------------------------------------------------------------------------
+# END-TO-END through the REAL main(), with a fast stub and an injected clock.
+# Reproduces the measured stall in milliseconds instead of four hours.
+# On the code as it stood 2026-08-27 the first case launched TWO attempts,
+# EACH handed the full budget: [('verilog', 1), ('slang', 1)] — verilog then
+# slang, exactly the transition the live run's rewritten `lec_equiv.ys` showed.
+# ---------------------------------------------------------------------------
+_E2E_RTL = "module m(input a, input b, output y); assign y = a & b; endmodule\n"
+_E2E_GATE = ("module m(input a, input b, output y);\n"
+             "  AND2X1 u0 (.A(a), .B(b), .Y(y));\n"
+             "endmodule\n")
+_E2E_GRIND = ("equiv_make: Creating equivalence miter.\n"
+              "equiv_induct: Proving $equiv cells in module equiv.\n")
+_E2E_PASS = ("equiv_status: Found 4 $equiv cells in equiv:\n"
+             "  of which 4 are proven and 0 are unproven.\n"
+             "  Equivalence successfully proven!\n")
+_E2E_READ_FAIL = "ERROR: syntax error, unexpected TOK_PACKAGE\n"
+
+
+def _drive_lec(monkeypatch, tmp_path, stub, timeout_s, spend_per_attempt=0.0):
+    """Run the REAL lec_run.main() with yosys stubbed and a fake clock."""
+    clk = _FakeClock()
+    calls = []
+
+    class _ClockedBudget(lec_run.StepBudget):
+        def __init__(self, total_s, floor_s=lec_run._MIN_ATTEMPT_BUDGET_S,
+                     clock=None):
+            super().__init__(total_s, floor_s=floor_s, clock=clk)
+
+    def _fake_yosys(container, ys, timeout=None, workdir=None):
+        script = Path(ys).read_text(encoding="utf-8")
+        frontend = "slang" if "read_slang" in script else "verilog"
+        calls.append({"budget": timeout, "frontend": frontend})
+        clk.advance(spend_per_attempt)
+        return stub(len(calls), frontend)
+
+    monkeypatch.setattr(lec_run, "StepBudget", _ClockedBudget)
+    monkeypatch.setattr(lec_run, "run_yosys_equiv", _fake_yosys)
+    monkeypatch.setattr(lec_run, "_container_available", lambda c: True)
+
+    proj = tmp_path / "proj"
+    (proj / "phase2/stage1/rtl").mkdir(parents=True)
+    (proj / "phase2/stage2/synth").mkdir(parents=True)
+    (proj / "reports").mkdir(parents=True)
+    (proj / "phase2/stage1/rtl/m.v").write_text(_E2E_RTL, encoding="utf-8")
+    (proj / "phase2/stage2/synth/netlist.v").write_text(_E2E_GATE,
+                                                        encoding="utf-8")
+    rc = lec_run.main([str(proj), "--top", "m", "--timeout", str(timeout_s),
+                       "--container", "none", "--liberty", "/nonexistent"])
+    rep = json.loads((proj / "reports/lec.json").read_text(encoding="utf-8"))
+    return rc, rep, calls
+
+
+def test_e2e_a_ground_out_proof_stops_instead_of_starting_over(monkeypatch,
+                                                               tmp_path):
+    """POLE A. The measured stall: attempt 1 grinds to the deadline. The step
+    must STOP and report, not re-arm the deadline and start the same problem
+    over. On the unfixed code this launched a second full-budget attempt."""
+    rc, rep, calls = _drive_lec(
+        monkeypatch, tmp_path,
+        lambda n, fe: (True, _E2E_GRIND + lec_run._TIMEOUT_MARKER + " after 600s\n"),
+        timeout_s=600, spend_per_attempt=600.0)
+
+    assert len(calls) == 1, f"a SECOND attempt was launched: {calls}"
+    assert rep["lec_attempts"] == 1
+    assert rep["step_budget_exhausted"] is True
+    assert rep["exhausted_resource"] == "wall_clock_seconds"
+    # the honest outcome: NOT proven, NOT disproven
+    assert rep["verdict"] in ("SKIPPED-CONDITION", "INCONCLUSIVE")
+    assert rep["equivalent"] is False
+    assert "1 attempt(s)" in rep["verdict_explanation"]
+    assert rep["lec_attempts_detail"][0]["killed_by_budget"] is True
+    assert rc == 0          # a truthful verdict was written; the sweep moves on
+
+
+def test_e2e_b_a_real_gold_read_failure_still_recovers(monkeypatch, tmp_path):
+    """POLE B. The control proving the loop was BOUNDED, not DELETED: a genuine
+    gold-read failure still selects slang and still recovers to PASS. A real
+    read failure aborts in SECONDS, so the total budget is still nearly whole —
+    which is exactly why bounding the total does not cost this recovery."""
+    rc, rep, calls = _drive_lec(
+        monkeypatch, tmp_path,
+        lambda n, fe: (True, _E2E_READ_FAIL) if fe == "verilog"
+        else (True, _E2E_PASS),
+        timeout_s=600, spend_per_attempt=2.0)
+
+    assert len(calls) == 2, f"the slang recovery did NOT fire: {calls}"
+    assert calls[1]["frontend"] == "slang"
+    assert rep["verdict"] == "PASS" and rep["equivalent"] is True
+    assert rep["gold_frontend"] == "slang"
+    assert rep["lec_attempts"] == 2
+    # the deadline was DRAWN DOWN, never re-armed
+    assert calls[1]["budget"] < calls[0]["budget"], (
+        f"the retry re-armed the deadline: {calls}")
+
+
+def test_e2e_c_a_normal_problem_is_unchanged(monkeypatch, tmp_path):
+    """POLE C. The control proving the benchmark still measures what it did:
+    one attempt, the FULL budget, the same PASS with the same evidence."""
+    rc, rep, calls = _drive_lec(
+        monkeypatch, tmp_path, lambda n, fe: (True, _E2E_PASS),
+        timeout_s=7195, spend_per_attempt=30.0)
+
+    assert len(calls) == 1
+    assert calls[0]["budget"] == 7195, (
+        "attempt 1 must receive exactly the budget it received before the fix")
+    assert rep["verdict"] == "PASS" and rep["equivalent"] is True
+    assert rep["compared_points"] == 4 and rep["unproven_points"] == 0
+    assert rep["step_budget_exhausted"] is False
+    assert rep["exhausted_resource"] is None
+    assert rc == 0
+
+
+def test_e2e_a_tight_operator_budget_still_runs_once(monkeypatch, tmp_path):
+    """A `--timeout` SMALLER than the retry floor must still run the first
+    attempt. The floor refuses a pointless RETRY; it must never turn a tight
+    budget into a step that produces no evidence at all."""
+    rc, rep, calls = _drive_lec(
+        monkeypatch, tmp_path, lambda n, fe: (True, _E2E_PASS),
+        timeout_s=5, spend_per_attempt=1.0)
+    assert len(calls) == 1 and calls[0]["budget"] == 5
+    assert rep["verdict"] == "PASS"

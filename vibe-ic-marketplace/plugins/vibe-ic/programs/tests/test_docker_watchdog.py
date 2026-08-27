@@ -9,7 +9,16 @@ Covers the docker-specific pieces INJECTED into the general supervisor:
   • run_docker_supervised      — builds the ceiling `timeout` wrap + host/
                                  container argv, threads cpu_probe/kill into
                                  run_supervised, propagates (rc,out,err); the
-                                 kill callback pkills the marker via the raw exec.
+                                 kill callback reaps BY IDENTITY (the stamped
+                                 pid + /proc starttime) via the raw exec.
+
+The kill assertion below used to read `any("pkill" in c and marker in c)` —
+it asserted the defect. A marker is a path in the tool's argv, so that reap
+matched ANY process carrying it, and on the single shared long-lived
+`vibeic-eda` container one run SIGTERMed another run's healthy tool (rc=143,
+zero test failures, 2026-08-27). The assertion is now the opposite AND
+stronger: the reap must still fire, must carry the stamp, and must NOT carry
+the marker.
 No real docker: the raw exec and run_supervised are injected fakes.
 """
 import sys
@@ -105,13 +114,26 @@ def test_run_docker_supervised_threads_callbacks_and_wraps(monkeypatch):
     # cpu_probe delegates to the injected raw exec (ps)
     captured["kw"]["cpu_probe"](object())
     assert any("cputime" in c for c in raw_calls)
-    # kill callback pkills the marker via the raw exec
+    # kill callback reaps BY IDENTITY via the raw exec — never by pattern.
     class _P:
         def kill(self):
             self.killed = True
     p = _P()
     captured["kw"]["kill"](p, "stalled")
-    assert any("pkill" in c and "/p/x.tcl" in c for c in raw_calls)
+    reaps = [c for c in raw_calls if "VIBEIC_REAP" in c]
+    # the recovery the reaper exists for still fires, and still escalates
+    assert reaps, "the kill callback issued no reap at all"
+    assert any("kill -TERM" in c for c in reaps)
+    assert any("kill -KILL" in c for c in reaps)
+    # but it never selects a victim by matching a command line
+    assert not any("pkill" in c or "killall" in c for c in raw_calls)
+    assert not any("/p/x.tcl" in c for c in reaps), (
+        "the reap must not carry the tool's argv marker — that marker is "
+        "what matched a stranger's process")
+    # it selects the stamped identity and re-validates starttime first
+    assert all(".vibeic-job-" in c for c in reaps)
+    assert all("/proc/$1/stat" in c for c in reaps)
+    assert all('[ "$VCUR" = "$VST" ]' in c for c in reaps)
 
 
 def test_run_docker_supervised_host_argv(monkeypatch):

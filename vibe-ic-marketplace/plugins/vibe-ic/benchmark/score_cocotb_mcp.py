@@ -26,7 +26,7 @@ test_runner.py via `docker exec`.
 Usage:
     python3 score_cocotb_mcp.py --project /path/to/cvdp_fixed_priority_arbiter \\
         --top fixed_priority_arbiter --rtl work/rtl/fixed_priority_arbiter.sv \\
-        --mount-root /home/<user>/AI_IC_design \\
+        --mount-root /home/<user>/<your-designs-dir> \\
         --container vibeic-eda
 
 Outputs <project>/reports/cocotb_score.json with the TESTS / PASS / FAIL counts.
@@ -97,7 +97,7 @@ def main():
                          "If omitted (v0.1.59 R10), auto-discover from canonical runner output "
                          "locations: work/rtl/<top>.{sv|v} → phase2/stage1/rtl/<top>.{sv|v}. "
                          "Pass --rtl explicitly to score a non-canonical RTL file.")
-    ap.add_argument("--mount-root", required=True, help="host path mounted into the container as /foss/designs (e.g. /home/<user>/AI_IC_design)")
+    ap.add_argument("--mount-root", required=True, help="host path mounted into the container as /foss/designs (e.g. /home/<user>/<your-designs-dir>)")
     ap.add_argument("--mount-container", default="/foss/designs")
     ap.add_argument("--container", default="vibeic-eda")
     ap.add_argument("--simulator", default="icarus")

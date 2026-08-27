@@ -69,6 +69,9 @@ import {
 import { antennaRepairTcl } from "./lib/pnr_antenna.mjs";
 import { threadCountTcl } from "./lib/pnr_threads.mjs";
 import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
+import { gateManifestEntry } from "./lib/manifest_metrics.mjs";
+import { parseWns, parseTns } from "./lib/sta_slack.mjs";
+import { evaluateStaEvidence, staEvidenceTcl, STA_EVIDENCE_TERMS } from "./lib/sta_evidence.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -115,10 +118,19 @@ function _edaOpenroadThreadsToken() {
 
 // Helper: write result manifest (P0 improvement)
 // After each PASS, records the latest result so reviewers never pick up stale logs
+//
+// A manifest may record `status:"PASS"` only when the metrics that prove the
+// work happened are present. `gateManifestEntry` (src/lib/manifest_metrics.mjs)
+// holds the per-step declaration of what those metrics are; a PASS whose
+// required metrics are absent is rewritten to INCONCLUSIVE here, naming the
+// metrics that are missing. INCONCLUSIVE is neither a pass nor a failure: it
+// says we did not measure this. Every call site goes through this function, so
+// the rule cannot be forgotten at a new one — a step with no declaration is
+// simply not gated. Returns the entry as it was actually recorded.
 function writeManifest(workDir, entry) {
   const manifest = {
     timestamp: new Date().toISOString(),
-    ...entry,
+    ...gateManifestEntry(entry),
   };
   const manifestJson = JSON.stringify(manifest, null, 2);
   // Append to latest_results.jsonl (one JSON per line, newest last)
@@ -129,6 +141,7 @@ function writeManifest(workDir, entry) {
     .join("\\n");
   const ymlCmd = `echo -e '${ymlLines}\\n---' >> ${workDir}/latest_results.yml`;
   dockerExec(`${appendCmd} && ${ymlCmd}`, 5000);
+  return manifest;
 }
 
 // Helper: SHA-256 of a host-side file (used for provenance hashing)
@@ -955,6 +968,66 @@ function getToolVersion(name) {
   return v;
 }
 
+// ─── Tool identity for the provenance log ────────────────────────────────
+// MEASURED 2026-08-27: every logProvenance call passed a HARDCODED literal as
+// `version` -- "yosys (mcp-eda) pdk=gf180", "openroad (mcp-eda) pdk=gf180", and
+// five more. Those strings name a tool but carry no version and no image, so
+// they read identically across two different images holding two different
+// builds. A run recorded which TOOL was asked for, never which BINARY answered.
+// That is not identity: a tag was measured this same night naming two different
+// images on two hosts, so only a digest re-derives.
+//
+// The parts were already here and simply unused: getToolVersion() probes the
+// real version inside the container, and the version cache already inspects the
+// container's image. This composes them, preferring the REPO DIGEST (which
+// re-derives anywhere) over the local image id (which does not).
+//
+// It must never throw and never invent: if docker cannot answer, the record
+// says so in words rather than carrying a confident-looking blank.
+let _imageIdentityCache = null;
+let _imageIdentityCheckedAt = 0;
+function containerImageIdentity() {
+  const now = Date.now();
+  if (_imageIdentityCache && now - _imageIdentityCheckedAt < 10000) return _imageIdentityCache;
+  let ident;
+  try {
+    const r = _spawnSync("docker", ["inspect", CONTAINER, "--format", "{{.Image}}"],
+      { encoding: "utf-8", timeout: 3000 });
+    const imageId = (r && r.status === 0 && r.stdout) ? r.stdout.trim() : null;
+    if (!imageId) {
+      ident = { image_ref: "unavailable (docker inspect failed)", image_id: null };
+    } else {
+      // The container's image id resolves to the image; ask THAT for a repo
+      // digest, which is the only form that re-derives on another host.
+      const d = _spawnSync("docker", ["image", "inspect", imageId,
+        "--format", "{{json .RepoDigests}}"], { encoding: "utf-8", timeout: 3000 });
+      let digest = null;
+      if (d && d.status === 0 && d.stdout) {
+        try {
+          const arr = JSON.parse(d.stdout.trim());
+          if (Array.isArray(arr) && arr.length) digest = arr[0];
+        } catch (_) { /* fall through to the image id */ }
+      }
+      ident = { image_ref: digest || imageId, image_id: imageId };
+    }
+  } catch (e) {
+    ident = { image_ref: `unavailable (${e.message})`, image_id: null };
+  }
+  _imageIdentityCache = ident;
+  _imageIdentityCheckedAt = now;
+  return ident;
+}
+
+// `label` lets a caller name the wrapper it used (e.g. "opensta via openroad")
+// while still probing the binary that actually ran.
+function toolIdentity(probeName, pdk, label) {
+  const img = containerImageIdentity();
+  let ver;
+  try { ver = getToolVersion(probeName); } catch (e) { ver = `unavailable (${e.message})`; }
+  return `${label || probeName} | version=${ver} | image=${img.image_ref} `
+       + `| container=${CONTAINER} | pdk=${pdk} | via=mcp-eda@${SERVER_VERSION}`;
+}
+
 // ─── Server Setup ───
 const server = new McpServer({
   name: "mcp-eda",
@@ -1027,8 +1100,29 @@ server.tool(
     if (result.success) canonicalizeNetlistSrcCoords(output_netlist);
 
     // Extract key metrics
-    const areaMatch = result.output.match(/Chip area for top module.*?:\s*([\d.]+)/);
-    const cellMatch = result.output.match(/(\d+)\s+[\d.E+]+\s+cells$/m);
+    // MEASURED 2026-08-27 on vibeic-eda@sha256:4ece6c01 (yosys 0.68+):
+    //
+    //  CELLS. `stat -liberty` prints `<count> <area> cells` ONLY when the count
+    //  is non-zero. A design that legitimately synthesises to ZERO cells - the
+    //  constant-driven output `assign zero = 1'b0` is the canonical case, and
+    //  it is CORRECT for it to have no cells - prints the bare `0 cells`, with
+    //  no area column, because yosys omits the Local Area column entirely.
+    //  The old two-number pattern therefore returned `cells: null` for it: the
+    //  SAME value the tool returns when it cannot parse the stat block at all.
+    //  A caller could not tell "synthesised to a legitimate constant" from
+    //  "could not determine the cell count", which is precisely how a correct
+    //  0-cell synthesis got scored as a failure downstream. Zero is now
+    //  reported AS zero, and null still means only "not measured".
+    //
+    //  AREA. yosys prints `Chip area for top module '<t>':` only when the
+    //  design is HIERARCHICAL. A flat single-module design - every small
+    //  design, and anything already flattened - prints only `Chip area for
+    //  module '<t>':`, so the old pattern read null for the whole flat class.
+    //  Prefer the top-module line when present, else the module line.
+    const areaMatch = result.output.match(/Chip area for top module.*?:\s*([\d.]+)/)
+                   || result.output.match(/Chip area for module.*?:\s*([\d.]+)/);
+    const cellMatch = result.output.match(/(\d+)\s+[\d.E+]+\s+cells$/m)
+                   || result.output.match(/^\s*(\d+)\s+cells$/m);
 
     // v0.119.41 (Wave 9, gap #2): the v0.119.40 fresh-agent benchmark
     // observed `log_tail` truncating actual Yosys parser errors when
@@ -1071,7 +1165,10 @@ server.tool(
     };
 
     // P0: Write manifest
-    if (metrics.success && metrics.cells) {
+    // `metrics.cells` is FALSY at 0, so the legitimately zero-cell design above
+    // was also denied a manifest - the same silence as an unparseable run. The
+    // test is "was the cell count measured", not "is it non-zero".
+    if (metrics.success && metrics.cells !== null) {
       const dir = output_netlist.substring(0, output_netlist.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "synthesis",
@@ -1097,7 +1194,7 @@ server.tool(
     logProvenance({
       projectDir,
       tool: "yosys",
-      version: `yosys (mcp-eda) pdk=${pdk}`,
+      version: toolIdentity("yosys", pdk),
       argv: ["yosys", "-p", `synth -top ${top_module} ...`],
       inputs, outputs,
       exitCode: result.success ? 0 : (result.exitCode || 1),
@@ -1537,7 +1634,7 @@ exit`;
     logProvenance({
       projectDir: projPnr,
       tool: "openroad",
-      version: `openroad (mcp-eda) pdk=${pdk}`,
+      version: toolIdentity("openroad", pdk),
       argv: ["openroad", "-exit", `pnr ${top_module} util=${utilization}`],
       inputs: { [netlist]: sha256File(netlist.replace("/work/", projPnr + "/")) },
       outputs: { [output_def]: sha256File(output_def.replace("/work/", projPnr + "/")) },
@@ -1642,7 +1739,7 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
     logProvenance({
       projectDir: projGds,
       tool: "klayout",
-      version: `klayout (mcp-eda) pdk=${pdk}`,
+      version: toolIdentity("klayout", pdk),
       argv: ["klayout", "-z", "-r", "gen_gds.py"],
       inputs: { [def_file]: sha256File(def_file.replace("/work/", projGds + "/")) },
       outputs: { [output_gds]: sha256File(output_gds.replace("/work/", projGds + "/")) },
@@ -1729,32 +1826,167 @@ server.tool(
       if (flatResult.success) { canonicalizeNetlistSrcCoords(flatNetlist); effectiveNetlist = flatNetlist; }
     }
 
-    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'EOF'
+    // MEASURED 2026-08-27 on vibeic-eda@sha256:4ece6c01 - this tool could not
+    // produce a timing number, and could not say so. Three coupled defects:
+    //
+    //  (1) NO TECH WAS READ. The script read only the Liberty and the Verilog.
+    //      OpenROAD's `read_verilog` needs a technology first, so it aborted
+    //      with `[ERROR ORD-2010] no technology has been read`, `link_design`
+    //      then failed `[ERROR STA-1570] No network has been linked`, and every
+    //      report failed STA-1571. `eda_ir_drop` in this same file has always
+    //      read techlef + celllef before its design; STA was the outlier.
+    //  (2) OPENROAD EXITS 0 ANYWAY. Measured: the fully-failing script above
+    //      returns rc=0. `dockerExec` calls rc=0 success, so the tool reported
+    //      `success:true` and wrote a manifest `status:"PASS"` for a run in
+    //      which nothing was linked and no path was analysed. A sign-off gate
+    //      that cannot fail is not a gate. `eda_pnr` (PNR_COMPLETE) and
+    //      `eda_ir_drop` (IR_DROP_COMPLETE) already key on a positive
+    //      end-of-script sentinel rather than the exit code; STA now does too.
+    //  (3) A CLOCKLESS DESIGN SCORED A PERFECT ZERO. `create_clock` on a port
+    //      the design does not have emits only `[WARNING STA-0366] port '<p>'
+    //      not found` and still creates a source-less clock, so `report_wns`
+    //      prints `wns max 0.00` - indistinguishable from a genuinely clean
+    //      clocked design. Nothing read that warning. It is now read, and an
+    //      unconstrained run reports clock_found:false with wns/tns null
+    //      instead of zero.
+    //
+    // read_lef lines are emitted only for paths we actually have: a custom PDK
+    // that supplied no LEF keeps the old liberty-only script rather than being
+    // handed a `null/...` path.
+    const _staLefs = [techlefPath(cfg), celllefPath(cfg)]
+      .filter(pth => typeof pth === "string" && pth.length > 0 && !pth.includes("null/"));
+    const _staLefReads = _staLefs.map(pth => `read_lef ${pth}`).join("\n");
+
+    // ── STA evidence channels (see src/lib/sta_evidence.mjs for the measurements) ──
+    // The metrics JSON is a SECOND, independent channel next to the exit code.
+    // It is written into the netlist's own directory and DELETED FIRST: a
+    // metrics file left behind by an earlier run would otherwise satisfy the
+    // "file present" term with numbers from a different design.
+    const staDir = (netlist.substring(0, netlist.lastIndexOf("/")) || "/tmp");
+    const staMetricsFile = `${staDir}/sta_metrics.json`;
+    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && rm -f ${staMetricsFile} && openroad -threads ${_edaOpenroadThreadsToken()} -metrics ${staMetricsFile} -exit << 'EOF'
+${_staLefReads}
 read_liberty ${libPath(cfg)}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
+${staEvidenceTcl()}
 create_clock -name clk -period ${clock_period_ns} [get_ports ${clock_port}]
+puts "STA_CLOCK_PORT_FOUND=[llength [get_ports -quiet ${clock_port}]]"
 report_checks -path_delay max -format full
 report_checks -path_delay min -format full
 report_tns
 report_wns
+puts "STA_COMPLETE"
 exit
 EOF`;
     const t0sta = Date.now();
     const result = dockerExec(staCmd);
     const durationStaMs = Date.now() - t0sta;
 
-    const wnsMatch = result.output.match(/wns\s+([\d.-]+)/i);
-    const tnsMatch = result.output.match(/tns\s+([\d.-]+)/i);
+    // MEASURED: OpenSTA prints `wns max 0.00`. The old /wns\s+([\d.-]+)/
+    // required a digit straight after the label, so it matched NEITHER a clean
+    // run (`wns max 0.00`) NOR a violating one (`wns max -3.21`): it returned
+    // null for the clean run, the violating run and the run that linked
+    // nothing alike, and all three wrote byte-identical manifests. The slack
+    // numbers are read below by parseWns/parseTns (lib/sta_slack.mjs), which
+    // return null when the tool printed no such line — null means NOT
+    // MEASURED, and writeManifest records that as INCONCLUSIVE.
 
-    if (result.success) {
+    // Did the script actually reach the end? OpenROAD exits 0 even when every
+    // command in the heredoc failed, so the exit code cannot answer this.
+    const staCompleted = result.output.includes("STA_COMPLETE");
+    const staErrors = (result.output.match(/^\[ERROR [A-Z]+-\d+\][^\n]*/gm) || []);
+    const staAnalysed = result.success && staCompleted && staErrors.length === 0;
+
+    // Did `create_clock` land on a port that exists? `[WARNING STA-0366] port
+    // '<p>' not found` still yields a source-less clock whose report_wns is
+    // 0.00 - a clockless design otherwise scores a perfect timing result.
+    const clockPortMatch = result.output.match(/STA_CLOCK_PORT_FOUND=(\d+)/);
+    const clockPortFound = clockPortMatch ? parseInt(clockPortMatch[1]) > 0 : null;
+    const clockConstrained = staAnalysed && clockPortFound === true;
+
+    // Slack is only meaningful when a real clock constrained a linked design.
+    const wns = clockConstrained ? parseWns(result.output) : null;
+    const tns = clockConstrained ? parseTns(result.output) : null;
+
+    const staWarnings = [];
+    if (!staAnalysed) {
+      staWarnings.push(
+        staErrors.length
+          ? `OpenROAD reported ${staErrors.length} error(s); no timing was analysed: `
+            + staErrors.slice(0, 3).join(" | ")
+          : "the STA script did not reach STA_COMPLETE; no timing was analysed");
+    } else if (clockPortFound === false) {
+      staWarnings.push(
+        `clock_port '${clock_port}' does not exist on '${top_module}'. create_clock `
+        + `matched no port, so the design is UNCONSTRAINED and the reported slack `
+        + `would be a vacuous 0.00. wns/tns are null, not zero.`);
+    }
+
+    // Read the metrics file back. The sentinel distinguishes an ABSENT file
+    // from an EMPTY one — `cat ... || true` cannot, and conflating them is
+    // exactly the mistake this channel exists to prevent. Measured: the file
+    // IS absent after a SIGKILL (rc=137) and after an unwritable-path run
+    // (rc=1, UTL-0010), so absent must mean UNMEASURED, never "zero errors".
+    const mRead = dockerExec(
+      `if [ -f ${staMetricsFile} ]; then echo __STA_METRICS_PRESENT__; cat ${staMetricsFile}; else echo __STA_METRICS_ABSENT__; fi`,
+      15000);
+    const mOut = mRead.output || "";
+    const staMetricsPresent = mOut.includes("__STA_METRICS_PRESENT__");
+    const staMetricsRaw = staMetricsPresent
+      ? mOut.slice(mOut.indexOf("__STA_METRICS_PRESENT__") + "__STA_METRICS_PRESENT__".length)
+      : null;
+
+    // THE CONJUNCTION. `result.success` (the exit code) is ONE term, not the
+    // verdict. Measured on openroad 26Q3-1797-g1c09d62b96: a file script that
+    // aborts gives rc=1 with flow__errors__count=0, while the stdin form gives
+    // rc=0 with flow__errors__count=4 — the two terms are wrong in OPPOSITE
+    // directions on the same broken input, so neither may stand alone. Do not
+    // reduce this to `result.success`, and do not reduce it to the metrics.
+    const staEvidence = evaluateStaEvidence({
+      exitCode: result.success ? 0 : 1,
+      metricsFileExists: staMetricsPresent,
+      metricsRaw: staMetricsRaw,
+    });
+
+    // ASSEMBLY NOTE. Two independently measured channels landed on this tool in
+    // the same night and they catch DIFFERENT failures: `staAnalysed` reads the
+    // end-of-script sentinel and the [ERROR ...] lines, `staEvidence.pass` reads
+    // the metrics JSON and the port count. A pass requires BOTH. This is an AND
+    // on purpose — reducing it to either term restores a hole that was measured
+    // open.
+    const staPass = staAnalysed && staEvidence.pass;
+
+    // A run that never reached the end of the script has produced no evidence at
+    // all, so it may not borrow the metrics channel's verdict.
+    const staVerdict = staAnalysed
+      ? staEvidence.verdict
+      : (staErrors.length ? "FAIL" : "UNMEASURED");
+
+    if (staPass) {
       const dir = netlist.substring(0, netlist.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
         step: "sta",
-        status: "PASS",
+        // A run that linked but constrained nothing is NOT a timing PASS.
+        status: clockConstrained ? "PASS" : "UNCONSTRAINED",
         tool: "OpenSTA",
-        wns: wnsMatch ? parseFloat(wnsMatch[1]) : null,
-        tns: tnsMatch ? parseFloat(tnsMatch[1]) : null,
+        clock_port_found: clockPortFound,
+        wns,
+        tns,
+        evidence_terms: STA_EVIDENCE_TERMS,
+      });
+    } else {
+      const dir = netlist.substring(0, netlist.lastIndexOf("/"));
+      writeManifest(dir || "/tmp", {
+        step: "sta",
+        status: staVerdict,   // FAIL, or UNMEASURED when no evidence was produced
+        tool: "OpenSTA",
+        clock_port_found: clockPortFound,
+        wns: null,
+        tns: null,
+        failed_terms: staEvidence.failedTerms,
+        reasons: staEvidence.reasons,
+        warnings: staWarnings.length ? staWarnings : undefined,
       });
     }
 
@@ -1766,11 +1998,11 @@ EOF`;
     logProvenance({
       projectDir: projSta,
       tool: "opensta",
-      version: `opensta via openroad (mcp-eda) pdk=${pdk}`,
+      version: toolIdentity("openroad", pdk, "opensta via openroad"),
       argv: ["openroad", "-exit", `sta ${top_module} clk=${clock_period_ns}ns`],
       inputs: { [netlist]: sha256File(netlist.replace("/work/", projSta + "/")) },
       outputs: {},
-      exitCode: result.success ? 0 : 1,
+      exitCode: staPass ? 0 : 1,
       durationMs: durationStaMs,
       stdoutTail: result.output || "",
       stderrTail: result.error || "",
@@ -1781,9 +2013,23 @@ EOF`;
         {
           type: "text",
           text: JSON.stringify({
-            success: result.success,
-            wns: wnsMatch ? parseFloat(wnsMatch[1]) : null,
-            tns: tnsMatch ? parseFloat(tnsMatch[1]) : null,
+            success: staPass,
+            timing_analysed: staAnalysed,
+            clock_constrained: clockConstrained,
+            clock_port_found: clockPortFound,
+            exit_code_ok: result.success,   // ONE term of the AND, never the verdict
+            sta_verdict: staVerdict,
+            sta_evidence: {
+              terms: staEvidence.terms,
+              failed_terms: staEvidence.failedTerms,
+              reasons: staEvidence.reasons,
+              metrics: staEvidence.metrics,
+              metrics_file: staMetricsFile,
+            },
+            wns: staPass ? wns : null,
+            tns: staPass ? tns : null,
+            warnings: staWarnings.length ? staWarnings : undefined,
+            errors: staErrors.length ? staErrors.slice(0, 10) : undefined,
             report: result.output.slice(-3000),
           }),
         },
@@ -2202,7 +2448,7 @@ equiv_status
     logProvenance({
       projectDir: projLvs,
       tool: "netgen",
-      version: `netgen (mcp-eda) pdk=${pdk}`,
+      version: toolIdentity("netgen", pdk),
       argv: ["netgen", "-batch", "source", tclPath,
              `# lvs "${layout_netlist} ${layoutTop}" "${schematic_netlist} ${schTop}"`],
       inputs: {
@@ -2288,7 +2534,7 @@ server.tool(
         logProvenance({
           projectDir: projDrcC,
           tool: "klayout",
-          version: `klayout DRC (mcp-eda) pdk=custom`,
+          version: toolIdentity("klayout", "custom", "klayout DRC"),
           argv: ["klayout", "-b", "-r", custom_drc_script, "input=" + gds_file],
           inputs: { [gds_file]: sha256File(gds_file.replace("/work/", projDrcC + "/")) },
           outputs: { [rdbPath]: sha256File(rdbPath.replace("/work/", projDrcC + "/")) },
@@ -2507,7 +2753,7 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
     logProvenance({
       projectDir: projDrc,
       tool: "klayout",
-      version: `klayout sign-off DRC (mcp-eda) pdk=${pdk} deck=${deckLeaf}`,
+      version: toolIdentity("klayout", pdk, `klayout sign-off DRC deck=${deckLeaf}`),
       argv: ["klayout", "-b", "-r", deckPath, "input=" + gds_file],
       inputs: { [gds_file]: sha256File(gds_file.replace("/work/", projDrc + "/")) },
       outputs: reportExists ? { [rdbPath]: sha256File(rdbPath.replace("/work/", projDrc + "/")) } : {},
@@ -3405,11 +3651,13 @@ exit
         120000
       );
 
-      const wnsMatch = result.output.match(/wns\s+([\d.-]+)/i);
-      const tnsMatch = result.output.match(/tns\s+([\d.-]+)/i);
       const done = result.output.includes(`MCORNER_${corner.name}_DONE`);
-      const wns = wnsMatch ? parseFloat(wnsMatch[1]) : null;
-      const tns = tnsMatch ? parseFloat(tnsMatch[1]) : null;
+      // Same parse as eda_sta — see src/lib/sta_slack.mjs. A corner whose wns
+      // is null was not measured; `timing_met` stays null and the manifest
+      // gate records the step INCONCLUSIVE rather than letting a corner
+      // nobody measured pass by not being `false`.
+      const wns = parseWns(result.output);
+      const tns = parseTns(result.output);
       const met = wns !== null ? wns >= 0 : null;
 
       if (met === false) overall_pass = false;

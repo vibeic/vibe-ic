@@ -954,3 +954,35 @@ def emit_steps_view(project, programs_dir=None, runner=None,
     except Exception:
         pass
     return rec
+
+
+def publish_report_then_steps_view(project, programs_dir, runner, summary,
+                                   report_name):
+    """Write `summary` to its report path, THEN build the steps view.
+
+    Returns (steps_view_record, report_path). The caller attaches the record to
+    `summary` and re-writes the report -- which is why the report is published
+    twice: once so the view can READ it, once so it CARRIES the view's outcome.
+
+    THE ORDER IS THE POINT. `steps/index.json` now takes a step's status from
+    the runner's own verdict when its plan attributes one (see
+    `flow_dashboard_data._runner_verdict_overrides`), and the collector is a
+    SUBPROCESS -- it can only read what is already on disk. Every orchestrator
+    used to call `emit_steps_view` BEFORE writing its report, so at view-build
+    time this run's verdicts did not exist yet and the view fell back to
+    file-existence inference. That is how a step whose runner returned FAIL --
+    after the FAIL's own artefacts had already been written -- was published as
+    "pass". Publishing first is what makes the two records read the same fact
+    instead of two independently-derived guesses about it.
+
+    Never raises: a report that cannot be written must not kill a run, and the
+    view is best-effort by construction."""
+    import json
+
+    out = report_path(project, report_name)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+    except Exception:                                     # noqa: BLE001
+        pass
+    return emit_steps_view(project, programs_dir, runner=runner), out

@@ -132,6 +132,17 @@ def test_helper_builds_nested_tree_and_records_ok(tmp_path):
 # --------------------------------------------------------------------------
 # 2. every orchestrator calls it, inside main()
 # --------------------------------------------------------------------------
+# The two ways main() may build the view. `publish_report_then_steps_view` is
+# `emit_steps_view` with the run's own per-step verdicts written to disk FIRST,
+# so the collector subprocess can join them onto the step records; a runner that
+# uses it builds the tree exactly as before. Admitting the name here is not a
+# relaxation — `test_the_view_publisher_actually_builds_the_view` below asserts,
+# by AST, that the wrapper really does call `emit_steps_view` and really does
+# write the report before it. Without that companion this list would let a
+# same-named no-op satisfy the control.
+_VIEW_BUILDERS = ("emit_steps_view", "publish_report_then_steps_view")
+
+
 @pytest.mark.parametrize("runner", ORCHESTRATORS)
 def test_every_orchestrator_calls_emit_steps_view_in_main(runner):
     tree = ast.parse((PROGRAMS / runner).read_text())
@@ -142,10 +153,46 @@ def test_every_orchestrator_calls_emit_steps_view_in_main(runner):
     calls = [n for m in mains for n in ast.walk(m)
              if isinstance(n, ast.Call)
              and isinstance(n.func, ast.Attribute)
-             and n.func.attr == "emit_steps_view"]
+             and n.func.attr in _VIEW_BUILDERS]
     assert calls, (
-        f"{runner}: main() never calls _pl.emit_steps_view — a run driven "
-        f"through this front door would end with no steps/ tree")
+        f"{runner}: main() never builds the steps view (no call to any of "
+        f"{_VIEW_BUILDERS}) — a run driven through this front door would end "
+        f"with no steps/ tree")
+
+
+def test_the_view_publisher_actually_builds_the_view():
+    """The wrapper admitted above must do both halves of its name.
+
+    ORDER IS THE POINT, and it is asserted rather than assumed: the collector
+    runs as a SUBPROCESS and can only join this run's per-step verdicts onto
+    the step records if the report is already on disk. A wrapper that built the
+    view first would silently restore the defect it exists to remove — a step
+    whose runner returned FAIL published as `pass`, because the FAIL's own
+    artefacts had already been written when existence was measured.
+    """
+    tree = ast.parse((PROGRAMS / "_path_layout.py").read_text())
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef)
+               and n.name == "publish_report_then_steps_view"), None)
+    assert fn is not None, (
+        "_path_layout no longer defines publish_report_then_steps_view, but "
+        "the wiring control above still admits the name")
+
+    def _offset(pred):
+        hits = [n.lineno for n in ast.walk(fn) if pred(n)]
+        assert hits, "not found in publish_report_then_steps_view"
+        return min(hits)
+
+    write_at = _offset(
+        lambda n: isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute) and n.func.attr == "write_text")
+    build_at = _offset(
+        lambda n: isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name) and n.func.id == "emit_steps_view")
+    assert write_at < build_at, (
+        "publish_report_then_steps_view builds the steps view at line "
+        f"{build_at} but only writes the report at line {write_at} — the "
+        "collector would read a report from a previous run, or none")
 
 
 def test_phase1_wires_both_of_its_exits():

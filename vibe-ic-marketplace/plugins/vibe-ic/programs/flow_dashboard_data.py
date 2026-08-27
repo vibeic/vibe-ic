@@ -429,6 +429,7 @@ def _umbrella_reports_exist(project: Path, step: dict) -> bool:
 def _lightweight_status(
     project: Path, step: dict, n_present: int, n_total: int,
     primary_present: bool = False, newest_mtime: float = 0.0,
+    live: bool = True,
 ) -> Tuple[str, str]:
     """FAST status from file existence only. Returns (status, detail).
 
@@ -445,7 +446,22 @@ def _lightweight_status(
     exists but a SECONDARY report is absent ("partial"). Lightweight mode has no
     process handle, so we must NOT assert "running" from partial file counts
     alone — that mislabels every completed step with an optional missing report
-    as forever-running (the exact spm 26/59 display bug)."""
+    as forever-running (the exact spm 26/59 display bug).
+
+    `live` = this call is answering "what is true RIGHT NOW", and its answer
+    will be re-asked. Only such a call may return "running", because "running"
+    is a claim about the instant it was made and about nothing else. A caller
+    that PERSISTS the answer into a file (step_output_collector ->
+    steps/index.json) passes live=False: a durable record is by construction
+    read later than it was written, so a frozen "running" there can never be
+    re-evaluated and says "still working" forever -- indistinguishable from a
+    step that IS still working, which is the one distinction a reader needs.
+    With live=False the same evidence yields the mtime-free answer this
+    classifier already has for a non-live writer ("partial", naming how many
+    outputs landed), which states a FINISHED observation instead of an
+    unfinishable one. It is NOT a reinterpretation of "running" as "done":
+    a step that produced nothing records "pending" and a step that produced
+    part of its contract records "partial"; neither can become "pass"."""
     if n_total == 0:
         # umbrella / container-ish step with no outputs to judge cheaply
         if _umbrella_reports_exist(project, step):
@@ -460,9 +476,10 @@ def _lightweight_status(
         # Some outputs present, not all. Only call it "running" if a writer
         # touched an output very recently; otherwise it RAN and a secondary
         # artifact is absent -> honest "partial" (run --full for the verdict).
-        live = newest_mtime > 0.0 and (time.time() - newest_mtime) <= _RUNNING_WINDOW_S
+        live_now = (live and newest_mtime > 0.0
+                    and (time.time() - newest_mtime) <= _RUNNING_WINDOW_S)
         missing = n_total - n_present
-        if live:
+        if live_now:
             return "running", f"{n_present}/{n_total} outputs · writing"
         return "partial", f"{n_present}/{n_total} outputs · {missing} secondary absent"
     return "pending", ""
@@ -472,22 +489,165 @@ def _lightweight_status(
 # 0 and must never be rendered as if it were a measurement. `_lightweight_status`
 # decides purely on output-file presence and has no branch returning "fail" or
 # "missing"; printing "fail 0" from it states a verdict the mode never computed.
+#
+# `fail` is CONDITIONAL for lightweight since `_runner_verdict_overrides` was
+# wired in, and `collect` resolves it per project: with no runner verdict to
+# join, lightweight still has no branch that can say "fail" and its 0 is not a
+# measurement; with at least one joined, the count is real and printing "n/a"
+# over a genuine failure would be the same defect pointing the other way. See
+# the `summary_unavailable` assembly in `collect`.
 _UNEXPRESSIBLE = {
     "lightweight": frozenset({"fail", "missing"}),
     "full": frozenset(),
 }
 
 
+# --------------------------------------------------------------------------- #
+# THE RUNNER'S OWN VERDICT, JOINED ONTO THE FLOW STEP IT RAN
+# --------------------------------------------------------------------------- #
+# A step's status was derived here from output-file EXISTENCE alone, while the
+# process that actually executed the step recorded its verdict in
+# reports/orchestrator/<phase>_one_shot.json under a runner-internal name. The
+# two records then described the same step and disagreed: measured on a
+# 3-problem VerilogEval-Human run, `yosys_synth` returned FAIL (rc=0 from yosys
+# but synth_netlist_check rejected a 0-cell netlist) AFTER it had already
+# written both artefacts step 9 declares -- so existence said "pass" and the
+# runner said FAIL, and steps/index.json (what a dashboard, a human and any
+# per-step tally read) published the pass.
+#
+# THE MAPPING IS NOT INVENTED HERE. `step_preflight.RUNNER_PLANS` already
+# declares, per runner, the ORDERED dispatch sites and the flow step ids each
+# site executes -- ("yosys_synth", ("9",)) among them. It is the runner's own
+# plan, read off its main() and machine-checked against the flow, and it is
+# what makes this join a lookup rather than a guess. (The comment in
+# `_orchestrator_failures` below used to say no such mapping existed in this
+# repo; it did, one module away.)
+#
+# THREE DELIBERATE LIMITS, each of which makes a wrong attribution impossible
+# rather than unlikely:
+#   1. SINGLE-STEP SITES ONLY. A site whose span is several ids (`pnr` covers
+#      15-22) failed SOMEWHERE in that span and the record cannot say where;
+#      painting one verdict across eight rows sends the reader somewhere
+#      specific and wrong. Those spans stay unattributed, exactly as before.
+#   2. NAME IDENTITY IS REQUIRED, NOT ASSUMED. A site participates only if its
+#      name appears verbatim as a `steps[].name` in that runner's report. The
+#      analog runner's sites are named "A1".."A9" while its StepResults are
+#      "A1_spec_extract".., so nothing of its is joined -- self-limiting, with
+#      no allowlist to keep in sync.
+#   3. FAILURE VERDICTS ONLY, and only the site's FINAL one. A runner PASS does
+#      not license this record to claim pass when the artefacts are absent, so
+#      the asymmetry is fail-closed: the executing process is the only witness
+#      that a step FAILED, while file existence remains the honest witness that
+#      it delivered. "Final" matters -- the ECO loop re-dispatches `rtl_gen`,
+#      whose records read BLOCKED then PASS, and only the last one is the run's
+#      answer for step 1.
+# Reports are folded in flow order, so a later phase re-running the same step
+# (phase 3's `synth` is step 9 too) supersedes the earlier phase's verdict.
+
+# Report file -> the RunnerPlan whose site names its `steps[]` uses. ORDERED by
+# flow progression: a later entry supersedes an earlier one for the same step.
+_ORCHESTRATOR_REPORT_RUNNERS: Tuple[Tuple[str, str], ...] = (
+    ("phase2_one_shot.json", "design_one_shot_runner"),
+    ("analog_one_shot.json", "analog_one_shot_runner"),
+    ("phase3_one_shot.json", "phase3_one_shot_runner"),
+)
+
+
+def _is_failure_verdict(raw: str) -> bool:
+    """A runner status that means the step did NOT succeed.
+
+    Covers the FAIL tiers (FAIL, FAIL_ECO_INERT, ...) and the pre-flight
+    refusal word BLOCKED, which `step_preflight` documents as "never green"
+    and both runners' `_aggregate_verdict` already group with FAIL."""
+    up = str(raw or "").upper()
+    return "FAIL" in up or up == "BLOCKED"
+
+
+def _runner_verdict_overrides(project: Path) -> Dict[str, dict]:
+    """Flow step id -> the runner's OWN failure verdict for that step.
+
+    Empty when nothing is joinable (no report, no plan, no name match). Never
+    raises: a status pipeline that crashes on a malformed report is worse than
+    one that declines to join."""
+    out: Dict[str, dict] = {}
+    try:
+        import step_preflight as _spf
+    except Exception:                                    # noqa: BLE001
+        return out
+    odir = project / "reports" / "orchestrator"
+    for fname, runner in _ORCHESTRATOR_REPORT_RUNNERS:
+        plan = getattr(_spf, "RUNNER_PLANS", {}).get(runner)
+        if plan is None:
+            continue
+        # Site name -> the ONE flow step it executes (limit 1 above).
+        solo = {site: ids[0] for site, ids in plan.sites if len(ids) == 1}
+        if not solo:
+            continue
+        try:
+            doc = json.loads((odir / fname).read_text(
+                encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        # Each site's FINAL record in this report (limit 3 above).
+        final: Dict[str, dict] = {}
+        for st in doc.get("steps") or []:
+            if not isinstance(st, dict):
+                continue
+            name = str(st.get("name") or "")
+            if name in solo:                              # limit 2 above
+                final[name] = st
+        # WITHIN one report, two sites can execute the SAME flow step -- phase
+        # 3 splits step 31 (DRC + LVS + ERC + Density) across `drc` and `lvs`.
+        # Those are contemporaneous dispatches of one step, so ANY of them
+        # failing means the step failed; folding them by iteration order would
+        # let a passing `drc` erase a failing `lvs` purely because of where it
+        # sits in the list. MEASURED on a published tree: drc PASS + lvs FAIL,
+        # where step 31 stood recorded as `pass`.
+        this_report: Dict[str, Optional[dict]] = {}
+        for name, st in final.items():
+            sid = solo[name]
+            raw = str(st.get("status") or "")
+            if not _is_failure_verdict(raw):
+                this_report.setdefault(sid, None)
+                continue
+            this_report[sid] = {
+                "status": "fail",
+                "detail": (f"{runner}:{name} {raw}"
+                           + (f" - {st.get('detail')}" if st.get("detail")
+                              else "")),
+                "source": f"reports/orchestrator/{fname}",
+                "runner_step": name,
+                "runner_status": raw,
+            }
+        # ACROSS reports the later phase supersedes, in both directions: a
+        # phase-3 `synth` that PASSes clears a phase-2 `yosys_synth` failure
+        # for the same step 9, and vice versa.
+        for sid, rec in this_report.items():
+            if rec is None:
+                out.pop(sid, None)
+            else:
+                out[sid] = rec
+    return out
+
+
 def _orchestrator_failures(project: Path) -> List[dict]:
     """Failing step records quoted VERBATIM from reports/orchestrator/*.json.
 
-    These are the runner's OWN authoritative per-step verdicts. They are
-    reported as a flat list and are deliberately NOT joined onto dashboard step
-    rows: the orchestrator keys steps by runner-internal name ("pnr",
-    "yosys_synth") while the flow keys them by id ("21", "9"), and no mapping
-    between those vocabularies exists in this repo. Inventing one would let a
-    FAIL be painted onto the wrong row, which is worse than leaving it
-    unattributed -- it sends the reader somewhere specific and wrong.
+    These are the runner's OWN authoritative per-step verdicts, reported as a
+    flat list so a reader sees every one of them, including the ones that
+    cannot be attributed to a single flow row.
+
+    ATTRIBUTION now happens in `_runner_verdict_overrides` above, through
+    `step_preflight.RUNNER_PLANS` -- the runner's own declared dispatch plan.
+    This docstring used to state that no mapping between the two vocabularies
+    existed in this repo and that inventing one would paint a FAIL onto the
+    wrong row; the first half was false (the plan is one module away) and the
+    second half is answered by that function's three limits, which keep the
+    join to sites that execute exactly one flow step and whose name the report
+    actually carries. Spans that cannot be attributed still appear ONLY here,
+    unattributed, which is what this list is for.
 
     `status` is preserved exactly as written (FAIL, FAIL_ECO_INERT, ...); it is
     matched case-insensitively but never normalised, because the distinct tiers
@@ -691,12 +851,31 @@ def _reclassify_inapplicable_lane(sid, step, status, detail, project_path,
     return status, detail
 
 
-def collect(project, full: bool = False) -> dict:
+def _unavailable_statuses(mode: str, verdicts: Dict[str, dict]) -> set:
+    """Statuses whose 0 in this collect is structural rather than measured.
+
+    Lightweight's `fail` leaves the set exactly when a runner verdict was
+    attributable to a flow step: at that point the mode CAN say fail, so the
+    count is a real one. With nothing joined it stays in, because a 0 that only
+    means "this classifier has no fail branch" must not be read as "nothing
+    failed" -- the defect this set was introduced to remove."""
+    out = set(_UNEXPRESSIBLE.get(mode, frozenset()))
+    if verdicts:
+        out.discard("fail")
+    return out
+
+
+def collect(project, full: bool = False, live: bool = True) -> dict:
     """Collect the live dashboard data for `project`.
 
     `project` may be a str or Path. `full=True` runs the authoritative
     compliance gate matrix; the default is the fast file-stat-only lightweight
-    mode. Never raises: any failure in full mode falls back to lightweight."""
+    mode. Never raises: any failure in full mode falls back to lightweight.
+
+    `live=False` says the caller is going to PERSIST this answer (see
+    `_lightweight_status`), so no step may be classified "running" -- a stored
+    record is read later than it was written and cannot re-evaluate liveness.
+    Default True keeps the polling dashboard's behaviour unchanged."""
     project_path = Path(project).expanduser().resolve()
 
     doc, steps = _load_flow()
@@ -729,6 +908,9 @@ def collect(project, full: bool = False) -> dict:
     # Cheap project-level lane applicability (lightweight-only refinement).
     analog_applicable, silicon_received = _lane_applicability(project_path)
 
+    # The runner's own failure verdicts, keyed by flow step id. Read ONCE.
+    verdicts = _runner_verdict_overrides(project_path)
+
     for step in steps:
         sid = str(step.get("id"))
         outputs, n_present, n_total = _resolve_outputs(
@@ -747,7 +929,7 @@ def collect(project, full: bool = False) -> dict:
             )
             status, detail = _lightweight_status(
                 project_path, step, n_present, n_total, primary_present,
-                newest_mtime,
+                newest_mtime, live=live,
             )
         # Honesty refinement (BOTH modes): a `pending`/`missing` for a lane that
         # will NEVER run for THIS design is misleading — name the reason at a
@@ -756,6 +938,16 @@ def collect(project, full: bool = False) -> dict:
             sid, step, status, detail, project_path,
             analog_applicable, silicon_received,
         )
+
+        # LAST, and it WINS. The process that executed the step is the only
+        # witness that it failed; every classifier above this line reasons from
+        # artefacts, and this step's artefacts were written BEFORE its verdict
+        # was reached. Applying the join last is what makes it impossible for
+        # steps/index.json to publish "pass" over the runner's own FAIL.
+        vd = verdicts.get(sid)
+        if vd is not None:
+            status = vd["status"]
+            detail = vd["detail"]
 
         blocks_on = step.get("blocks_on")
         if not isinstance(blocks_on, list):
@@ -814,7 +1006,7 @@ def collect(project, full: bool = False) -> dict:
         "plugin_version": _plugin_version(),
         "note": note,
         "summary": summary,
-        "summary_unavailable": sorted(_UNEXPRESSIBLE.get(mode, frozenset())),
+        "summary_unavailable": sorted(_unavailable_statuses(mode, verdicts)),
         "orchestrator_failures": _orchestrator_failures(project_path),
         "phases": phases_out,
     }

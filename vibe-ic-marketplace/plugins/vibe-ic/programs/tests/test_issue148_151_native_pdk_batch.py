@@ -96,12 +96,27 @@ def test_148_yosys_synth_skips_on_all_analog(tmp_path):
     assert r.extras.get("deferred_to") == "analog_track"
 
 
-def test_148_reference_tb_fails_on_digital_iface(tmp_path):
+def test_148_reference_tb_refuses_on_digital_iface(tmp_path):
     """No-leak: a design that DOES expose a digital clk/rst/data input must
-    still run reference_tb and FAIL honestly on the absent rtl/."""
+    NOT be deferred to the analog track on the absent rtl/ -- it must produce
+    a non-green record naming the absent input.
+
+    The status asserted here changed from FAIL to the runner refusal status
+    BLOCKED: the reference TB never ran, so FAIL asserted a design verdict
+    that had not been measured. Every property #148 relies on is still
+    asserted, and more: the verdict is non-green, is not deferred to the
+    analog track, still names the absent rtl/, and now also names the
+    producer that failed to fill it."""
     p = _l9_project(tmp_path, _CONV_DIGITAL_IFACE)
     r = DOR.step_reference_tb(p, "chip_top", "data_converter")
-    assert r.status == "FAIL" and "rtl/ missing" in r.detail
+    assert r.status == DOR._spf.REFUSAL_STATUS == "BLOCKED"
+    assert "rtl/ missing" in r.detail
+    # the load-bearing #148 property: must not leak into the analog track
+    assert r.extras.get("deferred_to") != "analog_track"
+    # and it must remain a red verdict, exactly as FAIL was
+    assert DOR._aggregate_verdict([r]) not in ("PASS", "PASS_WITH_WAIVERS")
+    # strictly more than the original assertion: name the producer
+    assert r.extras.get("producer_step") == "rtl_gen"
 
 
 def test_148_yosys_synth_fails_on_digital_iface(tmp_path):

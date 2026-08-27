@@ -1139,6 +1139,34 @@ def main() -> int:
     dsc = _deliverable_self_check(project)
     summary["deliverable_self_check"] = dsc
 
+    # FOUR-PHASE ATTRIBUTION — who routed this design, who solved it (the
+    # deterministic emitter BY NAME, or the AI skill the runner waived to),
+    # which gates ran and what each of them said, and whether anything
+    # repaired it.
+    #
+    # This is what the general flow does to ANY design, so EVERY run gets it,
+    # not only a run driven by a benchmark adapter. Measured before this
+    # existed: a plain 4-to-1 multiplexer project recorded rtl_gen BLOCKED ->
+    # eco_loop_iter -> rtl_gen PASS with deterministic_generator="multiplexer"
+    # in its own step record, and grepping the WHOLE project tree for any
+    # attribution artefact returned nothing. Every fact was already on disk
+    # and nothing read it.
+    #
+    # Best-effort by construction: an attribution DESCRIBES the run, so
+    # failing the run because the description could not be taken would be
+    # worse than the gap it closes. The failure is recorded, never swallowed.
+    try:
+        import flow_phase_attribution as _fpa           # noqa: PLC0415
+        _att = _fpa.attribute(project)
+        _fpa.write_report(project, _att)
+        summary["phase_attribution"] = _att
+    except Exception as _exc:                            # noqa: BLE001
+        summary["phase_attribution"] = {
+            "attributed": False,
+            "reason": f"four-phase attribution unavailable: "
+                      f"{type(_exc).__name__}: {_exc}",
+        }
+
     out = _pl.report_path(project, "vibe_ic_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")

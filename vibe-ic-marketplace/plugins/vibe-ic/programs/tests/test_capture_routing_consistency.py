@@ -52,14 +52,27 @@ def test_bucket_A_program_paths_exist():
         prog = cfg.get("bucket_A_program")
         if not prog:
             continue
-        # path is relative to plugin root; some referenced files live under
-        # mcp-eda/ which may or may not be at the same root depending
-        # on install layout. We check existence at PLUGIN_ROOT/<path>
-        # AND skip mcp-eda references (they live in a sibling package).
-        if prog.startswith("mcp-eda/"):
-            continue
-        if prog.startswith("tools/phase1_engine/"):
-            # tools/ may live at the repo root above plugins/vibe-ic
+        # MEASURED 2026-08-27 on 40d0e14c08: BOTH exemptions that used to sit
+        # here rested on a premise that is false in the shipped layout, and the
+        # mcp-eda one was hiding three dead routes.
+        #
+        #   PLUGIN_ROOT/mcp-eda/src/index.js   -> exists
+        #   PLUGIN_ROOT/tools/phase1_engine/   -> exists
+        #
+        # mcp-eda is NOT "a sibling package": it ships inside the plugin, so
+        # PLUGIN_ROOT/<path> resolves it correctly. Skipping it meant this
+        # gate - whose whole stated job is "catch stale routing entries
+        # pointing at deleted / renamed program files" - was blind to exactly
+        # the entries that were stale. mcp_eda.{synth,lint,cocotb} all pointed
+        # at mcp-eda/src/tools/*.js, which have NEVER existed at any commit.
+        #
+        # The one real layout difference is an install that carries no mcp-eda
+        # at all. That is handled by asking whether the ROOT DIRECTORY is
+        # present rather than by exempting the path: absent -> nothing to
+        # check; present -> the routed file must exist. A guard that cannot
+        # fire on a broken shipped tree is not a guard.
+        root = prog.split("/", 1)[0]
+        if not (PLUGIN_ROOT / root).exists():
             continue
         candidate = PLUGIN_ROOT / prog
         if not candidate.is_file():

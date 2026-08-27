@@ -63,6 +63,7 @@ import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
+import _designs_root as _dr  # noqa: E402  (host mount root, measured)
 
 try:
     from . import _container_exec                            # type: ignore
@@ -876,16 +877,26 @@ def _ngspice_available(container):
 # SAME absolute path (`/home/user` → `/home/user`), so the legacy
 # `/foss/designs/` rewrite handed ngspice a non-existent path.
 #
-# Probe order (chip-AGNOSTIC + container-AGNOSTIC):
+# Probe order (chip-AGNOSTIC + container-AGNOSTIC + directory-name-AGNOSTIC):
 #   1. Try host_path verbatim — works when the bind-mount preserves
 #      the absolute path (modern dev workflow: `-v $PWD:$PWD`).
-#   2. Fall back to the legacy `/foss/designs/<rel>` rewrite —
-#      preserves backwards compat for any container still using the
-#      historical scheme.
-# The probe is `docker exec ... test -e <path>` — cheap, cached per
-# (container, host_path.parent) since the parent's existence in the
-# container is stable across all sp files written into the same
-# project subtree.
+#      The probe is `docker exec ... test -e <path>` — cheap, cached
+#      per (container, host_path.parent) since the parent's existence
+#      in the container is stable across all sp files written into the
+#      same project subtree.
+#   2. Translate through the container's OWN mount table — the
+#      Source/Destination pairs `docker inspect` reports, longest
+#      source prefix first (`_designs_root`). This subsumes the legacy
+#      `/foss/designs/<rel>` scheme WITHOUT assuming it: users may
+#      mount the same tree at any container path.
+#   3. There is no third probe. The predecessor derived the mount root
+#      by searching the host path for one developer's design-directory
+#      NAME; that test is False on every machine whose tree is called
+#      something else, and the fall-through then emitted paths the
+#      container cannot see. A path that cannot be shown to be
+#      reachable now RAISES `_dr.MountRootUnresolved` and the block is
+#      reported BLOCKED — "I cannot tell" is the honest answer, and it
+#      must not render like a good one.
 _CONTAINER_PATH_CACHE: dict = {}
 
 def _norm_host_path(host_path):
@@ -900,24 +911,40 @@ def _norm_host_path(host_path):
     return p.parent.resolve() / p.name
 
 
+def _mount_table_path(container, host_root, norm):
+    """Translate `norm` through the container's own Source/Destination pairs.
+
+    `host_root` is the `_designs_root.Resolution` measured for the project; a
+    bare Path is still accepted for a caller that already holds one. Raises
+    `_dr.MountRootUnresolved` when no mount covers the path — an unreachable
+    file must not be handed to `docker exec` dressed as a reachable one."""
+    root = getattr(host_root, "host_root", host_root)
+    mounts = getattr(host_root, "mounts", None) or _dr.container_mounts(container)
+    tr = _dr.translate(norm, root=root, mounts=mounts,
+                       explicit_container_root=os.environ.get(_dr.CONT_ROOT_ENV))
+    if not tr.ok:
+        raise _dr.MountRootUnresolved(
+            _dr.unresolved_status(tr.detail, container))
+    return tr.path
+
+
 def _container_path(container, host_root, host_path):
     key = (container, str(Path(host_path).parent.resolve()))
     norm = _norm_host_path(host_path)
     cached = _CONTAINER_PATH_CACHE.get(key)
     if cached == "verbatim":
         return str(norm)
-    if cached == "foss_designs":
-        rel = norm.relative_to(Path(host_root).resolve())
-        return f"/foss/designs/{rel}"
+    if cached == "mount_table":
+        return _mount_table_path(container, host_root, norm)
     # Probe: is the host_path's parent reachable verbatim?
     parent = str(Path(host_path).parent.resolve())
     r = _docker(container, f"test -e {shlex.quote(parent)}")
     if r.returncode == 0:
         _CONTAINER_PATH_CACHE[key] = "verbatim"
         return str(norm)
-    _CONTAINER_PATH_CACHE[key] = "foss_designs"
-    rel = norm.relative_to(Path(host_root).resolve())
-    return f"/foss/designs/{rel}"
+    out = _mount_table_path(container, host_root, norm)
+    _CONTAINER_PATH_CACHE[key] = "mount_table"
+    return out
 
 def _run_ngspice(container, sp_in_container, cwd=None):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
@@ -2423,6 +2450,17 @@ def _worst_corner_of(pvt_grid, target_center, tol):
 
 
 def run_block(project, block, container, pdk, topology_override):
+    """Entry point. A path the container cannot be shown to see is a BLOCKED
+    verdict naming what IS mounted — never a traceback, never a guessed path."""
+    try:
+        return _run_block(project, block, container, pdk, topology_override)
+    except _dr.MountRootUnresolved as exc:
+        print(f"[real_sim] block={block} BLOCKED on host mount root: "
+              f"{exc.status['reason']}", file=sys.stderr)
+        return 2
+
+
+def _run_block(project, block, container, pdk, topology_override):
     bdir = project / "phase3" / "analog" / block
     if not bdir.is_dir():
         print(f"[real_sim] block dir missing: {bdir}", file=sys.stderr)
@@ -2458,9 +2496,12 @@ def run_block(project, block, container, pdk, topology_override):
         print(f"[real_sim] ngspice not in container {container}", file=sys.stderr)
         return 2
 
-    # Host root for docker mount mapping
-    host_root = Path(str(project).split("AI_IC_design")[0]) / "AI_IC_design" \
-        if "AI_IC_design" in str(project) else project
+    # The HOST MOUNT ROOT for docker path mapping — MEASURED from the
+    # container's own mount table via the designs-root ladder, never guessed
+    # from a directory NAME found in the path. `mount_root_is_measured` is
+    # False when nothing has confirmed the container can see this tree; the
+    # translation below then refuses instead of inventing a prefix.
+    host_root = _dr.resolve_host_root(project, container)
     btype = topology_override if topology_override and topology_override != "auto" \
             else _pick_block_type(block, project)
     # The built-in table is consulted for a CIRCUIT only when there is no design

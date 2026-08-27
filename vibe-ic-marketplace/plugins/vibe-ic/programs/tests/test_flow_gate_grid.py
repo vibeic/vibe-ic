@@ -135,7 +135,7 @@ def test_it_reports_how_many_cells_it_recomputed(tmp_path):
     rc, out = _run(_flow(tmp_path, [{"id": "D1", "name": "x",
                                      "gate": {"program_exit_zero": "p"}}]),
                    tmp_path)
-    assert "recomputed 3 of 8 cells" in out, out
+    assert "recomputed 3 of 9 cells" in out, out
 
 
 def test_an_empty_flow_is_not_checked(tmp_path):
@@ -157,7 +157,7 @@ def test_an_absent_delegate_is_named_and_not_counted(tmp_path, monkeypatch):
     # --programs points at a directory holding neither delegate
     rc, out = _run(flow, tmp_path)
     assert "NOT RECOMPUTED" in out, out
-    assert "recomputed 3 of 8 cells" in out, out
+    assert "recomputed 3 of 9 cells" in out, out
     assert rc == 1, out
 
 
@@ -190,7 +190,7 @@ def test_a_delegate_that_answers_rc2_is_not_counted_as_recomputed(tmp_path):
                              "gate": {"program_exit_zero": "p"}}])
     rc, out = _run(flow, tmp_path)
     assert "NO ANSWER (rc=2)" in out, out
-    assert "recomputed 3 of 8 cells" in out, out
+    assert "recomputed 3 of 9 cells" in out, out
     assert rc == 1, out
 
 
@@ -210,7 +210,7 @@ def test_a_delegate_that_answers_is_still_counted(tmp_path):
     # The count, not the exit code: a one-step fixture also trips the unrelated
     # D6/D8 baseline-shrink notices, so rc here would assert something this test
     # is not about.
-    assert "recomputed 5 of 8 cells" in out, out
+    assert "recomputed 5 of 9 cells" in out, out
 
 
 def test_the_flow_argument_reaches_the_delegates(tmp_path):
@@ -285,3 +285,160 @@ def test_a_genuinely_repaired_baselined_step_is_still_reported_as_fixed(tmp_path
     d8 = [ln for ln in out.splitlines() if "D8" in ln]
     assert any("left the baseline" in ln for ln in d8), d8
     assert not any("NO LONGER EXISTS" in ln for ln in d8), d8
+
+
+# ── D3: the dimension that is a fact about a RUN (vibe-ic, 2026-08-27) ──────
+#
+# Both poles for every claim. The grid's D3 must refuse a vacuous run, accept a
+# real one, refuse to guess when no run is supplied, and never let any of those
+# three be mistaken for another.
+
+_VACUOUS_STA = """OpenROAD 26Q3-1797-g1c09d62b96 
+[ERROR ORD-2010] no technology has been read.
+[ERROR STA-1570] No network has been linked.
+[ERROR STA-1571] No network has been linked.
+"""
+
+_GOOD_STA = """OpenROAD 26Q3-1797-g1c09d62b96 
+Startpoint: _38_ (rising edge-triggered flip-flop clocked by clk)
+           1.27   slack (MET)
+
+tns max 0.00
+wns max 0.00
+"""
+
+
+def _shipped_run(root, sta_body):
+    """A run tree carrying step 10's two declared outputs and nothing else."""
+    sta = root / "phase3" / "stage3" / "sta"
+    sta.mkdir(parents=True, exist_ok=True)
+    (sta / "pre_pnr_timing.rpt").write_text(sta_body)
+    summ = root / "reports" / "phase3" / "sta"
+    summ.mkdir(parents=True, exist_ok=True)
+    (summ / "pre_pnr_summary.json").write_text('{"wns_ns": 1.27}')
+    return root
+
+
+def _grid(*args):
+    p = subprocess.run([sys.executable, str(GRID), *args],
+                       capture_output=True, text=True, timeout=900)
+    return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def test_d3_refuses_a_run_whose_output_records_its_own_tool_failure(tmp_path):
+    """THE REAL CASE, through the grid. MEASURED 2026-08-27: eda_sta read no
+    LEF, link_design failed STA-1570, every report failed STA-1571, openroad
+    exited 0, and a 591-byte report landed. D8's catcher was declared and had
+    no reason to fire, because the file was there.
+    """
+    run = _shipped_run(tmp_path / "r", _VACUOUS_STA)
+    rc, out = _grid("--run", str(run))
+    assert rc == 1, out
+    assert "D3 outputs" in out, out
+    assert "step 10" in out, out
+    assert "STA-1571" in out, out
+    assert "TOOL_REPORTED_ERROR" in out, out
+
+
+def test_d3_accepts_the_same_step_when_the_run_actually_linked(tmp_path):
+    """THE OTHER POLE, so the test above is not proving a detector that always
+    fires. Same step, same path, same kind of file.
+    """
+    run = _shipped_run(tmp_path / "r", _GOOD_STA)
+    rc, out = _grid("--run", str(run))
+    assert "D3 outputs —" not in out, out
+    assert rc == 0, out
+
+
+def test_d3_reports_NOT_MEASURED_when_no_run_is_supplied():
+    """Neither a pass nor a fail. Both wrong answers are named in the source and
+    both are asserted against here.
+    """
+    rc, out = _grid()
+    assert "NOT MEASURED" in out and "D3 outputs" in out, out
+    assert "Not a pass and not a fail" in out, out
+    # not a fail
+    assert rc == 0, out
+    # and not a pass either: it must be absent from the recomputed set, so the
+    # numerator cannot credit it.
+    line = [x for x in out.splitlines() if x.strip().startswith("recomputed:")]
+    assert line, out
+    assert "D3" not in line[0], line[0]
+
+
+def test_the_numerator_grows_by_exactly_one_dimension_when_a_run_is_given(tmp_path):
+    """The disclosure has to MOVE, or it is not a disclosure.
+
+    Without this, D3 could report NOT MEASURED and be silently counted anyway —
+    which is the arithmetic defect this grid already documents for its rc=2
+    delegates one screen up.
+    """
+    import re
+    run = _shipped_run(tmp_path / "r", _GOOD_STA)
+    pat = re.compile(r"recomputed (\d+) of (\d+) cells \((\d+) steps x (\d+) of (\d+)")
+
+    _, without = _grid()
+    _, with_run = _grid("--run", str(run))
+    a = pat.search(without); b = pat.search(with_run)
+    assert a and b, (without, with_run)
+    assert int(b.group(4)) == int(a.group(4)) + 1, (a.groups(), b.groups())
+    assert int(b.group(1)) == int(b.group(3)) * int(b.group(4))
+    # the DENOMINATOR is the declared population and does not move.
+    assert a.group(5) == b.group(5) == str(len(fgg.DIMENSIONS))
+    assert int(a.group(2)) == int(a.group(3)) * len(fgg.DIMENSIONS)
+
+
+def test_the_declared_denominator_is_derived_from_both_axes(tmp_path):
+    """MEASURED on `40d0e14c0`, this program printed `544 = 68 x 8`: the steps
+    tracked the flow and the dimensions were frozen at 8, so the denominator
+    matched no reality at all. Both halves are derived now.
+    """
+    import re
+    _, out = _grid()
+    m = re.search(r"recomputed \d+ of (\d+) cells \((\d+) steps x \d+ of (\d+)", out)
+    assert m, out
+    total, steps_n, dims = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    assert dims == len(fgg.DIMENSIONS), (dims, fgg.DIMENSIONS)
+    assert total == steps_n * dims, (total, steps_n, dims)
+    assert total != 544, "the frozen-dimension arithmetic is back"
+    assert total != 504, "the frozen-both-axes arithmetic is back"
+
+
+def test_the_grids_dimension_list_agrees_with_the_live_cell_ledger():
+    """ADDING ONE MUST NOT BE POSSIBLE ON ONE SIDE ONLY.
+
+    `matrix_63x8.cells` enumerates the same population from the other end. A
+    tenth dimension added there and not here would put this grid back to
+    under-reporting its denominator — which is exactly how D9 went uncounted.
+    """
+    sys.path.insert(0, str(GRID.parent / "tests"))
+    from matrix_63x8 import cells  # noqa: E402
+    assert len(fgg.DIMENSIONS) == len(cells.DIMENSIONS), (
+        f"the grid declares {len(fgg.DIMENSIONS)} dimensions {fgg.DIMENSIONS} "
+        f"and the ledger declares {len(cells.DIMENSIONS)} {cells.DIMENSIONS}")
+
+
+def test_every_declared_dimension_is_either_recomputed_or_says_why():
+    """No dimension may be invisible. D9 was: it existed in the ledger, was
+    absent from this program's arithmetic, and therefore was never disclosed as
+    un-recomputed either. Silence about a dimension is the same defect as a
+    false verdict about one.
+    """
+    _, out = _grid()
+    for dim in fgg.DIMENSIONS:
+        tag = dim.split()[0]
+        recomputed = any(l.strip().startswith("recomputed:") and tag in l
+                         for l in out.splitlines())
+        disclosed = any(tag in l and ("NOT DERIVABLE" in l or "NOT MEASURED" in l)
+                        for l in out.splitlines())
+        assert recomputed or disclosed, (
+            f"{dim} is neither in the recomputed list nor disclosed as not "
+            f"recomputed; it is invisible:\n{out}")
+
+
+def test_a_run_path_that_is_not_a_directory_is_rc2_not_a_pass(tmp_path):
+    f = tmp_path / "notadir"
+    f.write_text("x")
+    rc, out = _grid("--run", str(f))
+    assert rc == 2, out
+    assert "NOT CHECKED" in out, out

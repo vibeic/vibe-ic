@@ -971,7 +971,8 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
                      ) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container with a SIMPLE container-side
     wall-clock `timeout` (the pre-v1.3.47 behaviour). Used for SHORT, bounded
-    probes (`command -v`, `ls`, `ps`, `pkill`) where a fixed budget is correct
+    probes (`command -v`, `ls`, `ps`, the identity reap) where a fixed budget
+    is correct
     and for the internal watchdog kill/CPU probes (must not recurse through the
     supervisor). Long, open-ended tool runs use `_docker_exec(..., marker=...)`
     which routes through the progress-stall watchdog instead.
@@ -1039,8 +1040,10 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
         (captured output grew OR `log_path` grew OR in-container CPU advanced)
         for `stall_grace_s` (default 30 min) — a still-progressing tool runs to
         completion. `marker` is a token already present in the tool's argv (its
-        script/deck path): used BOTH to sum the tool's in-container CPU AND to
-        `pkill` the job tree. rc=_wd.RC_STALLED on a stall kill, 124 on the
+        script/deck path) used to sum the tool's in-container CPU until its
+        identity stamp lands; the KILL selects by that stamped
+        (pid, /proc starttime), never by argv.
+        rc=_wd.RC_STALLED on a stall kill, 124 on the
         24h+ pathological ceiling. chip/tool-AGNOSTIC.
     """
     if marker is None:
@@ -1053,13 +1056,15 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
 
     # OUTER backstop only: wrap with a container-side `timeout` at the CEILING so
     # the in-container tool self-terminates even if the host watchdog dies.
+    # DELEGATED to `_docker_watchdog.wrap_with_container_timeout` — this file
+    # used to rebuild that string inline, which is how the reap below came to
+    # be a second copy of the same code (see `_kill`).
     cmd = _tool_status_not_the_log_sinks(cmd)
-    _ceil_inner = max(1, int(ceiling) - 5)
-    _wrapped = (
-        f"if command -v timeout >/dev/null 2>&1; then "
-        f"exec timeout --kill-after=5 {_ceil_inner} bash -lc {shlex.quote(cmd)}; "
-        f"else exec bash -lc {shlex.quote(cmd)}; fi"
-    )
+    # Per-invocation IDENTITY STAMP: the job records its own (pid, starttime)
+    # at spawn so `_kill` can select IT and nothing else.
+    _pidfile = _dwd.new_job_pidfile()
+    _wrapped = _dwd.wrap_with_container_timeout(cmd, ceiling,
+                                                pidfile=_pidfile)
     full = ["docker", "exec",
             # The vibeic-eda image's profile prints a startup banner
             # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
@@ -1072,25 +1077,32 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
             container, "bash", "-lc", _wrapped]
 
     def _cpu_probe(_proc):
-        return _container_cpu_seconds(container, marker)
+        return _container_cpu_seconds(container, marker, pidfile=_pidfile)
 
     def _kill(_proc, reason):
-        q = shlex.quote(marker)
-        try:
-            _docker_exec_raw(container, f"pkill -TERM -f {q}", timeout=15)
-            time.sleep(min(_WATCHDOG_TERM_GRACE_S, 30))
-            _docker_exec_raw(container, f"pkill -KILL -f {q}", timeout=15)
-        except Exception:  # nosec — best-effort in-container kill
-            pass
+        # DELEGATED to the ONE identity-anchored reap in `_docker_watchdog`.
+        # This closure used to be a second, independent copy of the marker
+        # `pkill -f` reap — same defect in two files, so fixing either one
+        # alone left the other live. It now signals only the process whose
+        # stamped (pid, /proc starttime) still matches, plus that process's
+        # descendants; a stranger sharing the tool's command line is never
+        # selected. See the block comment above
+        # `_docker_watchdog.new_job_pidfile` for the measurement.
+        _dwd.kill_supervised_job(container, _pidfile,
+                                 docker_exec_raw=_docker_exec_raw,
+                                 term_grace_s=_WATCHDOG_TERM_GRACE_S)
         try:
             _proc.kill()
         except Exception:  # nosec — release the host docker exec client
             pass
 
     _t0 = time.monotonic()
-    res = _wd.run_supervised(
-        full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
-        stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
+    try:
+        res = _wd.run_supervised(
+            full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
+            stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
+    finally:
+        _dwd.cleanup_job_pidfile(container, _pidfile, _docker_exec_raw)
     _log_invocation(cmd, res.rc if res.rc is not None else -1,
                     int((time.monotonic() - _t0) * 1000), marker=marker,
                     container=container, outputs=outputs)
@@ -1118,8 +1130,8 @@ def _docker_timeout_isolate(outputs: List[Path]) -> None:
 # its job"). The GENERAL supervision primitive lives in the shared, importable
 # `_watchdog.py` (ProgressMeter + supervise + run_supervised); this file keeps
 # ONLY the docker/EDA-specific glue injected into it: the in-container CPU probe
-# (`_container_cpu_seconds`, via `docker exec ps`) and the marker `pkill` kill
-# path (see `_docker_exec`). Long tool runs (`_docker_exec(..., marker=...)`)
+# (`_container_cpu_seconds`, via `docker exec ps`) and the IDENTITY-ANCHORED
+# reap path (see `_docker_exec`, which delegates it to `_docker_watchdog`). Long tool runs (`_docker_exec(..., marker=...)`)
 # are killed ONLY on NO forward progress for the grace window — a still-
 # progressing tool runs to completion; short probes keep the simple wall-clock
 # `_docker_exec_raw`.
@@ -1146,9 +1158,11 @@ _WATCHDOG_CEILING_MULT = 6
 
 
 def _container_cpu_seconds(container: str, marker: Optional[str],
-                           timeout: int = 15) -> Optional[float]:
-    """Sum the CPU-seconds (utime+stime) of in-container processes whose argv
-    contains `marker`. Returns float seconds, or None when the signal is
+                           timeout: int = 15,
+                           pidfile: Optional[str] = None) -> Optional[float]:
+    """Sum the CPU-seconds (utime+stime) of the supervised job process TREE —
+    rooted at the identity-verified pid from `pidfile` when one is stamped,
+    else at processes whose argv contains `marker`. Returns float seconds, or None when the signal is
     unavailable (no marker, ps missing, nothing matched). tool-AGNOSTIC +
     chip-AGNOSTIC: `marker` is a caller-supplied token already present in the
     tool's command line (e.g. its script/deck path); no tool or chip literal.
@@ -1169,7 +1183,7 @@ def _container_cpu_seconds(container: str, marker: Optional[str],
         return _docker_exec_raw(_c, cmd, timeout)
 
     return _dwd.container_cpu_seconds(container, marker, _raw,
-                                      timeout=timeout)
+                                      timeout=timeout, pidfile=pidfile)
 
 
 def _parse_cputime_hms(tok: str) -> Optional[float]:
@@ -42580,10 +42594,10 @@ def main() -> int:
     # orchestrator built one), so the backend evidence had no per-step folder
     # at all. Best-effort and non-gating; the outcome is recorded in
     # reports/audit/steps_view.json whether it worked or not.
-    summary["steps_view"] = _pl.emit_steps_view(
-        project, PROGRAMS_DIR, runner="phase3_one_shot_runner")
-    out_path = _pl.report_path(project, "phase3_one_shot.json")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Published BEFORE the view is built -- see publish_report_then_steps_view.
+    summary["steps_view"], out_path = _pl.publish_report_then_steps_view(
+        project, PROGRAMS_DIR, "phase3_one_shot_runner", summary,
+        "phase3_one_shot.json")
     out_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
 
     print(f"\n=== phase3_one_shot_runner DONE ===")

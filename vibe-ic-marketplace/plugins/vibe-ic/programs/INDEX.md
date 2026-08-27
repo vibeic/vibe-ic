@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1214
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1214)
+- **Total programs (excluding helpers / shims):** 1218
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1218)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1205 |
+| `any` | 1209 |
 
 ## Alphabetical listing
 
@@ -392,6 +392,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_dependency_graph_check` | any | — | recompute the flow-gate's dependency dimension. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
+| `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
+| `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
 | `flow_stage_membership_single_declaration_check` | any | — | stage membership is declared once. |
 | `flow_step_can_fail_check` | any | — | a step whose gate cannot fail must say so. |
@@ -1096,6 +1098,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spi_protocol_synth` | any | v0.1.77 | SPI-class protocol synth helper. |
 | `spice_correlation_check` | any | — | canonical Step-30 post-layout SPICE correlation |
 | `sta_achievable_fmax_report` | any | — | honest achievable-Fmax measurement (Step 23 STA). |
+| `sta_continue_on_error_guard` | any | — | REFUSE a tree that turns OpenSTA's error-abort off. |
 | `sta_corner_record_completeness_check` | any | — | the timing RECORD-completeness gate. |
 | `sta_engine_parity_check` | any | — | `sta` and `openroad` must offer the same timing engine. |
 | `sta_report_check` | any | — | STA report check — wrapper for eda_report_audit --mode sta. |
@@ -1187,6 +1190,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `uart_protocol_synth` | any | v0.1.80 | UART-class protocol synth helper. |
 | `ucie_protocol_synth` | any | v0.1.89 | Universal Chiplet Interconnect Express (UCIe 1.1) protocol synth helper. |
 | `ufs_protocol_synth` | any | v0.1.89 | UFS (Universal Flash Storage) protocol synth helper. |
+| `unanchored_process_kill_check` | any | — | no shipped code may choose which process to KILL by matching a command-line pattern. |
 | `upf_syntax_check` | any | — | upf_syntax_check.py -- Deterministic UPF file syntax checker. |
 | `upstream_contract_parity_check` | any | — | a re-implementation must be pinned to the thing it re-implements. |
 | `upstream_mirror_is_pinned_check` | any | — | a re-implementation must be pinned to the thing it re-implements. |
@@ -1286,7 +1290,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1205 programs)
+### `any` (1209 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1650,6 +1654,8 @@ _(no programs in this group)_
 - `flow_dependency_graph_check` — recompute the flow-gate's dependency dimension.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
+- `flow_output_substance` — did the run actually produce this output, or only a file?
+- `flow_phase_attribution` — WHO did each of the four phases, and HOW.
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
 - `flow_stage_membership_single_declaration_check` — stage membership is declared once.
 - `flow_step_can_fail_check` — a step whose gate cannot fail must say so.
@@ -2351,6 +2357,7 @@ _(no programs in this group)_
 - `spi_protocol_synth` — SPI-class protocol synth helper.  _[v0.1.77]_
 - `spice_correlation_check` — canonical Step-30 post-layout SPICE correlation
 - `sta_achievable_fmax_report` — honest achievable-Fmax measurement (Step 23 STA).
+- `sta_continue_on_error_guard` — REFUSE a tree that turns OpenSTA's error-abort off.
 - `sta_corner_record_completeness_check` — the timing RECORD-completeness gate.
 - `sta_engine_parity_check` — `sta` and `openroad` must offer the same timing engine.
 - `sta_report_check` — STA report check — wrapper for eda_report_audit --mode sta.
@@ -2442,6 +2449,7 @@ _(no programs in this group)_
 - `uart_protocol_synth` — UART-class protocol synth helper.  _[v0.1.80]_
 - `ucie_protocol_synth` — Universal Chiplet Interconnect Express (UCIe 1.1) protocol synth helper.  _[v0.1.89]_
 - `ufs_protocol_synth` — UFS (Universal Flash Storage) protocol synth helper.  _[v0.1.89]_
+- `unanchored_process_kill_check` — no shipped code may choose which process to KILL by matching a command-line pattern.
 - `upf_syntax_check` — upf_syntax_check.py -- Deterministic UPF file syntax checker.
 - `upstream_contract_parity_check` — a re-implementation must be pinned to the thing it re-implements.
 - `upstream_mirror_is_pinned_check` — a re-implementation must be pinned to the thing it re-implements.

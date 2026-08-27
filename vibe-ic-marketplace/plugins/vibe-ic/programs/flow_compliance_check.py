@@ -7013,6 +7013,95 @@ def _p0_not_invocable_count(records: List[Dict[str, Any]]) -> int:
     return sum(1 for r in records if r.get("verdict") == "NOT_INVOCABLE")
 
 
+STRUCTURAL_MEASUREMENT_PREFIX = "STRUCTURAL MEASUREMENT:"
+
+
+def structural_measurement_line(registered: Optional[int],
+                                invoked: Optional[int]) -> str:
+    """The POPULATION this run's structural verdict was computed over.
+
+    THE DEFECT THIS CLOSES. The `Overall:` line is the only thing
+    `design_one_shot_runner.step_final_audit` reads out of this program: it
+    greps stdout for `Overall: PASS_WITH_WAIVERS` / `Overall: PASS` and calls
+    everything else FAIL. `Overall` is computed from `structural_fail_lines`,
+    which `_p0_structural_fail_lines` builds from records whose verdict is
+    exactly ``FAIL``. A registered gate that returned NO verdict at all —
+    ``NOT_INVOCABLE``, the caller's own argv defect (#492) — contributes to that
+    list exactly what a PASS contributes: nothing. So a run over the whole
+    registered population and a run over a fraction of it print the SAME WORD
+    and exit the SAME CODE.
+
+    MEASURED, not argued. A 20-problem VerilogEval-Human run through
+    `benchmark_dispatch.py --solve`, re-audited from a clean checkout of this
+    file at origin/main 40d0e14c0:
+
+      * 19 of 20 projects: ``registered_gate_count 246 / invoked_gate_count
+        210 / not_invocable_gate_count 36``. The un-invocable 36 are a property
+        of the CALL, not of any project (see ``_gate_invocation``), so EVERY
+        one of those verdicts is over 210 gates and says 246.
+      * 5 of them printed ``Overall: PASS_WITH_WAIVERS`` and exited 0. A
+        project whose 246 gates ALL answered clean prints the same two things.
+      * 1 of them (``Prob019``) dispatched the umbrella not at all —
+        ``0 of 246 checkers returned a verdict`` — and still printed
+        ``Overall: PASS_WITH_WAIVERS``, rc 0, which `step_final_audit` records
+        as WAIVED. Not one structural gate looked at that design.
+
+    The honest numbers already existed: `_p0_umbrella_status` returns
+    ``INCOMPLETE``, and `phase23_completion_audit.json` carries all three
+    counts. Neither reaches the verdict line or the exit code, and
+    `_build_final_audit_cmd` does not even pass ``--json``, so on the runner's
+    own path the honest number has NO consumer. This line is that consumer's
+    input, printed where the runner's captured tail can see it.
+
+    WHY A LINE AND NOT A NEW ``Overall:`` WORD. A verdict word is a claim about
+    the DESIGN; this is a claim about the MEASUREMENT. Folding "36 gates never
+    ran" into `Overall` would either green a real FAIL or red a clean run for
+    something the design did not do — both are the false claim in one of its
+    two directions. The verdict, the exit code and every existing consumer are
+    untouched; the population is stated beside them, in its own units, so a
+    reader and a program can tell the two cases apart.
+
+    FOUR STATES, FOUR DIFFERENT SENTENCES — a disclosure that says the same
+    thing about every input is not a disclosure:
+
+      * ``registered`` or ``invoked`` is ``None`` -> NOT ASKED. A stage-3/4
+        invocation never dispatches the umbrella. ``None`` is not zero and is
+        never rendered as zero: "no measurement was requested" and "a
+        measurement was requested and nothing answered" are the two states this
+        whole finding is about, so they may not share a rendering.
+      * ``invoked == 0 < registered``          -> NONE ANSWERED.
+      * ``0 < invoked < registered``           -> PARTIAL.
+      * ``invoked == registered``              -> WHOLE.
+
+    chip-AGNOSTIC and benchmark-agnostic by construction: it reads two integers
+    and names no design, no dataset and no flow. Machine-readable head
+    (``registered=`` / ``invoked=`` / ``no_verdict=``) so a consumer parses
+    rather than scrapes prose; ``null`` for the not-asked state.
+    """
+    if registered is None or invoked is None:
+        return (f"{STRUCTURAL_MEASUREMENT_PREFIX} registered=null invoked=null "
+                f"no_verdict=null — the structural-RTL umbrella was NOT ASKED "
+                f"to run in this invocation, so this report makes no claim "
+                f"about structural gate coverage. Not asked is not zero.")
+    no_verdict = registered - invoked
+    head = (f"{STRUCTURAL_MEASUREMENT_PREFIX} registered={registered} "
+            f"invoked={invoked} no_verdict={no_verdict}")
+    if registered and invoked == 0:
+        return (f"{head} — NONE of the {registered} registered structural "
+                f"sub-gate(s) returned a verdict. The verdict above was "
+                f"computed over an EMPTY structural population: nothing "
+                f"structural was measured about this design, and the verdict "
+                f"word says nothing about that on its own.")
+    if no_verdict > 0:
+        return (f"{head} — PARTIAL: {no_verdict} of {registered} registered "
+                f"structural sub-gate(s) returned NO verdict, so the verdict "
+                f"above is over {invoked} gates, not {registered}, and what "
+                f"those {no_verdict} audit is UNCHECKED — not clean.")
+    return (f"{head} — WHOLE: every registered structural sub-gate returned a "
+            f"verdict, so the verdict above is over the full registered "
+            f"population.")
+
+
 def _p0_umbrella_status(executed: Optional[bool],
                         records: List[Dict[str, Any]]) -> str:
     """THE ONE OWNER of the P0 umbrella's step verdict.
@@ -13242,6 +13331,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     # was, which is the defect.
     for _line in gate_ledger_lines():
         print(_line)
+
+    # THE DENOMINATOR, BESIDE THE VERDICT. Printed on EVERY run and LAST, after
+    # the ledger: `step_final_audit` keeps only the final 25 lines of this
+    # stdout as the step's detail, so a disclosure emitted next to `Overall:`
+    # — 130+ lines earlier — never reaches the one consumer that needs it. It
+    # is advisory by construction: it moves no verdict and no exit code, it
+    # states what the verdict was computed over. See
+    # `structural_measurement_line`.
+    print(structural_measurement_line(structural_registered_count,
+                                      structural_invoked_count))
 
     # v1.6.210 (#91) — PASS_WITH_OPEN_SOURCE_CONSTRAINTS exits 0 (it is
     # a recognised verdict tier, not a FAIL). PASS, PASS_WITH_WAIVERS,

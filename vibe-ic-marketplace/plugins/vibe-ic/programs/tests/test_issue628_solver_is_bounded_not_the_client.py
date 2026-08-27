@@ -147,14 +147,94 @@ def test_the_solver_command_still_runs(monkeypatch, tmp_path):
     assert "rm -rf formal_top" in shell
 
 
-def test_the_ambient_path_run_is_unchanged(monkeypatch, tmp_path):
-    """No container, no `docker exec` to wrap — and imposing a rlimit on the
-    caller's own shell is not this function's business."""
-    rec = _Rec()
-    monkeypatch.setattr(F.subprocess, "run", rec)
-    F._run_sby(_sby(tmp_path), tmp_path, None, 60)
-    assert rec.argv == ["sby", "-f", "formal_top.sby"]
-    assert rec.timeout == 60
+def _ambient(monkeypatch, tmp_path, limit, timeout=60):
+    """Drive the ambient (no-container) path and capture what it dispatched."""
+    seen = {}
+
+    def _fake(argv, cwd, to):
+        seen["argv"], seen["cwd"], seen["timeout"] = argv, cwd, to
+        return 0, "[top] DONE (PASS)\n"
+
+    monkeypatch.setattr(F, "_run_group_bounded", _fake)
+    monkeypatch.setattr(F, "memory_limit_kb", lambda: limit)
+    F._run_sby(_sby(tmp_path), tmp_path, None, timeout)
+    return seen
+
+
+def test_the_ambient_path_carries_the_bound_too(monkeypatch, tmp_path):
+    """SUPERSEDES "the ambient path is unchanged".
+
+    That expectation was written on the premise that a rlimit here would land on
+    "the caller's own shell". It does not: the shell is one WE spawn and its only
+    child is the solver. And the ambient path is not the exotic one — it is the
+    path taken whenever the caller is ALREADY inside the vibeic-eda image, where
+    `docker` is absent and `sby` is at /usr/local/bin/sby, which is how CI, the
+    flow (`container or None`) and every agent run it. Leaving it unbounded is
+    what put two 35.6 GB yosys on a 125 GB host and took it off the network.
+
+    The original assertions are KEPT, not relaxed: still no `docker exec` to
+    wrap, still the caller's own deadline, still `sby -f <name>` as the command.
+    """
+    seen = _ambient(monkeypatch, tmp_path, 32952508)
+    assert seen["argv"][:2] == ["bash", "-lc"]
+    assert seen["argv"][2].startswith("ulimit -v 32952508; "), seen["argv"][2]
+    assert seen["argv"][2].endswith("exec sby -f formal_top.sby")
+    assert "docker" not in seen["argv"]
+    assert seen["timeout"] == 60
+
+
+def test_the_ambient_path_omits_the_bound_when_none_can_be_derived(
+        monkeypatch, tmp_path):
+    """Same rule as the container path: no derivable limit means NO `ulimit`,
+    never a guessed one."""
+    seen = _ambient(monkeypatch, tmp_path, None)
+    assert "ulimit" not in seen["argv"][2]
+    assert "sby -f formal_top.sby" in seen["argv"][2]
+
+
+def test_the_ambient_deadline_is_reported_as_inconclusive_not_a_crash(
+        monkeypatch, tmp_path):
+    """Symmetric with the container path: an anonymous death reads as a tool
+    crash and sends the reader to the wrong place."""
+    monkeypatch.setattr(F, "memory_limit_kb", lambda: 32952508)
+    monkeypatch.setattr(F, "_run_group_bounded",
+                        lambda argv, cwd, to: (124, "[top] engine_0\n"))
+    out = F._run_sby(_sby(tmp_path), tmp_path, None, 60)
+    assert "SOLVER DEADLINE" in out
+    assert "INCONCLUSIVE" in out
+    assert "not disproved" in out
+
+
+def test_an_absent_sby_on_the_ambient_path_still_says_so_in_the_transcript(
+        monkeypatch, tmp_path):
+    """The bound must not SWALLOW the tool's own words.
+
+    Wrapping the command in `bash -lc` changes who reports the absence: the
+    shell now says it (`sby: not found`) where a bare argv raised
+    FileNotFoundError. Either way the transcript has to carry the tool name and
+    the fact, or "no proof ran" becomes unattributable.
+    """
+    monkeypatch.setattr(F, "memory_limit_kb", lambda: 32952508)
+    monkeypatch.setattr(
+        F, "_run_group_bounded",
+        lambda argv, cwd, to: (127, "bash: line 1: exec: sby: not found\n"))
+    out = F._run_sby(_sby(tmp_path), tmp_path, None, 60)
+    assert "sby" in out and "not found" in out, out
+    assert "SOLVER DEADLINE" not in out, "an absent tool is not a deadline"
+
+
+def test_a_missing_shell_keeps_the_historic_not_found_message(
+        monkeypatch, tmp_path):
+    """The last-resort path: if even `bash` cannot be launched, the ambient
+    runner still returns the message the rest of the program keys on, rather
+    than letting FileNotFoundError escape into the caller."""
+    def _boom(argv, cwd, to):
+        raise FileNotFoundError(argv[0])
+
+    monkeypatch.setattr(F, "memory_limit_kb", lambda: 32952508)
+    monkeypatch.setattr(F, "_run_group_bounded", _boom)
+    out = F._run_sby(_sby(tmp_path), tmp_path, None, 60)
+    assert "sby/docker not found on PATH" in out
 
 
 # ── hitting a bound is INCONCLUSIVE, never a disproof ──────────────────────

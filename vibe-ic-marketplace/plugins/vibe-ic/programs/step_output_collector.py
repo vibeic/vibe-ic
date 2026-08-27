@@ -56,9 +56,23 @@ def _iter_step_records(project: Path):
     data source as the dashboard (flow_dashboard_data.collect — never raises).
     `stage` is the step's own yaml stage id; a step lacking one (should not
     happen for a real flow node) falls back to "stage" so nesting never
-    silently collapses two unrelated steps into the same directory."""
+    silently collapses two unrelated steps into the same directory.
+
+    `live=False` IS LOAD-BEARING. Everything this module produces is a FILE --
+    steps/index.json and a per-step outputs.json -- and a file is read later
+    than it was written. `flow_dashboard_data`'s "running" is a claim about the
+    instant of the query (an output touched within `_RUNNING_WINDOW_S`), so
+    freezing it into a durable record produces a step that says "in progress"
+    forever and can never say whether it finished or died. MEASURED on a
+    3-problem VerilogEval-Human run whose runner had already exited: step D1
+    was recorded "running" in two of the three projects -- both were missing
+    exactly one of D1's nineteen declared outputs while a sibling output had
+    been written seconds earlier, and the third, which wrote all nineteen, was
+    recorded "pass". live=False makes the record state a finished observation
+    ("partial", with the count) instead of an unfinishable one; it does NOT
+    turn an incomplete step into a passing one."""
     import flow_dashboard_data as fdd
-    data = fdd.collect(project)
+    data = fdd.collect(project, live=False)
     for ph in data.get("phases", []):
         pkey = ph.get("key", "")
         for st in ph.get("steps", []):

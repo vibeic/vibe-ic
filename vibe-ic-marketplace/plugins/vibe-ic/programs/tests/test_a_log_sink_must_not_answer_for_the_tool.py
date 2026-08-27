@@ -104,9 +104,14 @@ def test_both_container_exec_paths_normalise():
     assert _SRC.count("cmd = _tool_status_not_the_log_sinks(cmd)") == 2, (
         "expected the normalisation on BOTH _docker_exec_raw and the "
         "_docker_exec watchdog branch")
+    # `tail` is the line where each function BUILDS its bash wrapper; the
+    # normalisation must appear before it. `_docker_exec` no longer inlines
+    # the ceiling arithmetic — it delegates the wrap to _docker_watchdog
+    # (one owner for that string) — so the landmark is the delegating call.
+    # The assertion is unchanged: normalise first, wrap second.
     for fn_head, tail in (
             ("def _docker_exec_raw(", "_inner = max(1, timeout - 5)"),
-            ("def _docker_exec(", "_ceil_inner = max(1, int(ceiling) - 5)")):
+            ("def _docker_exec(", "_wrapped = _dwd.wrap_with_container_timeout(")):
         i = _SRC.index(fn_head)
         j = _SRC.index(tail, i)
         assert "cmd = _tool_status_not_the_log_sinks(cmd)" in _SRC[i:j], (

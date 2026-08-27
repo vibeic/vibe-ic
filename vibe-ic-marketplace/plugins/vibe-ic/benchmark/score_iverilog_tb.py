@@ -64,6 +64,11 @@ _PROGRAMS_DIR = Path(__file__).resolve().parent.parent / "programs"
 if _PROGRAMS_DIR.is_dir() and str(_PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS_DIR))
 
+# The designs-root resolution ladder (see "PORTABILITY" below) is shared with
+# the programs that need the same host mount root; it lives in programs/ so
+# there is exactly one implementation of it in the plugin.
+import _designs_root as _dr  # noqa: E402
+
 
 def _registry_path() -> Path:
     return Path(__file__).resolve().parent / "BENCHMARK_REGISTRY.json"
@@ -350,18 +355,17 @@ _CONT_DESIGNS_ROOT = os.environ.get("VIBEIC_DESIGNS_CONT_ROOT", "/foss/designs")
 #      reports a machine-readable state with the concrete options, and the
 #      agent relays the question to the user. Prompting from here would break
 #      on a non-TTY; guessing would resurrect the original defect.
-_HOST_DESIGNS_ROOT_ENV = "VIBEIC_DESIGNS_HOST_ROOT"
-_DESIGNS_ROOT_ERROR_CODE = "DESIGNS_ROOT_UNRESOLVED"
-_DESIGNS_ROOT_HELP = (
-    "Cannot tell which host directory the EDA container can see. Choose one:\n"
-    f"  (a) pass a project directory, so the root is derived from it "
-    f"automatically; or\n"
-    f"  (b) export {_HOST_DESIGNS_ROOT_ENV}=<an EXISTING directory you have "
-    f"bind-mounted into the '{_IV13_CONTAINER}' container as "
-    f"{_CONT_DESIGNS_ROOT}>.\n"
-    "Nothing is created for you — the plugin never adds directories to your "
-    "home directory."
-)
+#
+# The ladder itself lives in `programs/_designs_root.py` and is shared: three
+# analog / flatten programs used to derive the same root by searching the host
+# path for a developer's design-directory NAME, which is a guess wearing the
+# clothes of a measurement. Rather than give this repo a second answer to a
+# question it already answers, that module OWNS the ladder and this scorer
+# delegates to it. The names below stay module-level so a caller (and this
+# file's regression suite) can still substitute the mount table.
+_HOST_DESIGNS_ROOT_ENV = _dr.HOST_ROOT_ENV
+_DESIGNS_ROOT_ERROR_CODE = _dr.ERROR_CODE
+_DESIGNS_ROOT_HELP = _dr.help_text(_IV13_CONTAINER)
 _warned_no_designs_root = False
 
 
@@ -371,18 +375,7 @@ def _designs_root_undecided(detail: str = "") -> dict:
     Deliberately a VALUE, not an exception or an exit: the caller is an AI agent
     that can surface the choice to the user.
     """
-    return {
-        "verdict": "SKIP",
-        "error_code": _DESIGNS_ROOT_ERROR_CODE,
-        "needs_user_decision": True,
-        "reason": (detail + " " if detail else "") + _DESIGNS_ROOT_HELP,
-        "options": [
-            {"id": "derive_from_project",
-             "how": "invoke with a project/design directory"},
-            {"id": "explicit_env",
-             "how": f"export {_HOST_DESIGNS_ROOT_ENV}=<existing directory>"},
-        ],
-    }
+    return _dr.unresolved_status(detail, _IV13_CONTAINER)
 
 
 def _container_mounts(container: str) -> "List[tuple[Path, str]]":
@@ -393,30 +386,22 @@ def _container_mounts(container: str) -> "List[tuple[Path, str]]":
     users may mount the same tree at any container path.  Keep the pair intact
     so path translation follows the container's actual namespace.
     """
-    try:
-        out = subprocess.check_output(["docker", "inspect", container],
-                                      text=True, stderr=subprocess.DEVNULL,
-                                      timeout=20)
-        data = json.loads(out)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
-        return []
-    if not data:
-        return []
-    mounts = []
-    for m in (data[0].get("Mounts") or []):
-        s = m.get("Source")
-        d = m.get("Destination")
-        if s and d:
-            try:
-                mounts.append((Path(s).resolve(), str(d)))
-            except OSError:
-                pass
-    return mounts
+    return _dr.container_mounts(container)
 
 
 def _container_mount_sources(container: str) -> "List[Path]":
     """Host-side sources of the container's bind mounts. [] if unknowable."""
     return [src for src, _dst in _container_mounts(container)]
+
+
+def _warn_unusable_env_root(raw: str) -> None:
+    global _warned_no_designs_root
+    if not _warned_no_designs_root:
+        _warned_no_designs_root = True
+        print(f"[score_iverilog_tb] ${_HOST_DESIGNS_ROOT_ENV}={raw} is not "
+              f"an existing directory — falling back to deriving the "
+              f"designs root from the project being scored (nothing is "
+              f"created).", file=sys.stderr)
 
 
 def _host_designs_root(design_dir: "Optional[Path]" = None) -> Optional[Path]:
@@ -425,80 +410,26 @@ def _host_designs_root(design_dir: "Optional[Path]" = None) -> Optional[Path]:
     Returns None only when the caller supplied no project AND no env var is set
     — the case the caller must convert into `_designs_root_undecided()`.
     """
-    global _warned_no_designs_root
-    # ---- 1. explicit env -------------------------------------------------
-    raw = os.environ.get(_HOST_DESIGNS_ROOT_ENV)
-    if raw:
-        p = Path(raw).expanduser()
-        if p.is_dir():
-            return p.resolve()
-        if not _warned_no_designs_root:
-            _warned_no_designs_root = True
-            print(f"[score_iverilog_tb] ${_HOST_DESIGNS_ROOT_ENV}={raw} is not "
-                  f"an existing directory — falling back to deriving the "
-                  f"designs root from the project being scored (nothing is "
-                  f"created).", file=sys.stderr)
-    # ---- 2. derive from the caller's project ----------------------------
-    if design_dir is not None:
-        try:
-            proj = Path(design_dir).resolve()
-        except OSError:
-            return None
-        # Prefer the actual bind mount that CONTAINS the project: staging there
-        # keeps host→container translation correct for the whole tree.
-        for src in _container_mount_sources(_IV13_CONTAINER):
-            if proj == src or src in proj.parents:
-                return src
-        # No queryable mount table (docker absent / container down): use the
-        # project itself. It is the user's own directory, it already exists, and
-        # it is the thing the container needs to see anyway.
-        if proj.is_dir():
-            return proj
-    # ---- 3. undecidable --------------------------------------------------
-    return None
+    return _dr.resolve_host_root(
+        design_dir, _IV13_CONTAINER,
+        sources=_container_mount_sources(_IV13_CONTAINER),
+        warn=_warn_unusable_env_root,
+    ).host_root
 
 
 def _to_container(p: str, design_dir: "Optional[Path]" = None) -> str:
     root = _host_designs_root(design_dir)
     if root is None:
         return p
-    try:
-        host_path = Path(p).resolve()
-    except OSError:
-        host_path = Path(p)
-
     # An explicitly configured destination remains authoritative for CI and
-    # power users who intentionally decouple scoring from docker inspection.
-    explicit_dst = os.environ.get("VIBEIC_DESIGNS_CONT_ROOT")
-    if explicit_dst:
-        try:
-            rel = host_path.relative_to(root)
-        except ValueError:
-            return p
-        return explicit_dst.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
-
-    # Normal zero-config path: translate through the exact Source/Destination
-    # pair reported by docker.  Nested mounts are legal, so the longest source
-    # prefix wins (the same rule the kernel applies to the visible namespace).
-    matches = []
-    for src, dst in _container_mounts(_IV13_CONTAINER):
-        try:
-            rel = host_path.relative_to(src)
-        except ValueError:
-            continue
-        matches.append((len(src.parts), dst, rel))
-    if matches:
-        _depth, dst, rel = max(matches, key=lambda item: item[0])
-        return dst.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
-
-    # Docker may be absent/down during a unit check.  Preserve the documented
-    # offline fallback, but use a true prefix-relative join rather than global
-    # string replacement (which could rewrite a coincidental substring).
-    try:
-        rel = host_path.relative_to(root)
-    except ValueError:
-        return p
-    return _CONT_DESIGNS_ROOT.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
+    # power users who intentionally decouple scoring from docker inspection;
+    # otherwise the exact Source/Destination pair docker reports wins (longest
+    # source prefix first), and only then the documented offline default.
+    tr = _dr.translate(
+        p, root=root, mounts=_container_mounts(_IV13_CONTAINER),
+        explicit_container_root=os.environ.get("VIBEIC_DESIGNS_CONT_ROOT"),
+        offline_default=_CONT_DESIGNS_ROOT)
+    return tr.path if tr.ok else p
 
 
 # CALL-scoped, not LINE-scoped (adversarial-verify finding on v1.3.83): the

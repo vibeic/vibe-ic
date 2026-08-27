@@ -421,8 +421,19 @@ _UNPINNED_TRANSFORM_NATURE = "transform_existing_rtl"
 _UNPINNED_TRANSFORM_ENTRY = "functional_modification"
 
 _PROSE_HINTS = (
+    # `bug` not `bugs?` was a one-character blind spot with a measured cost:
+    # `\bbug\b` cannot match "bugs", because the word boundary after `bug`
+    # requires a non-word character and `s` is one. Every prompt whose author
+    # wrote the plural fell through to spec_generation — a debug task pushed
+    # into Phase 1, which is the single failure this file's own docstring says
+    # it exists to prevent. Measured over all 664 prompts of the four open
+    # benchmarks, widening it to `bugs?` gains exactly 4 matches and every one
+    # is a genuine debug task ("Fix any and all bugs in this code",
+    # "Identify and fix these RTL Bugs", "Identify and correct the bugs",
+    # "resolving the identified bugs"). Zero false positives on that
+    # population, so the alternative is admitted on its own evidence.
     ("debug", re.compile(
-        r"\b(bug|buggy|fix(es|ed)?\s+the\s+\w+|incorrect(ly)?|"
+        r"\b(bugs?|buggy|fix(es|ed)?\s+the\s+\w+|incorrect(ly)?|"
         r"does\s?n[o']t\s+work|failing|regression)\b", re.I)),
     ("optimization", re.compile(
         r"\b(optimi[sz]e|reduce\s+(area|cells?|wires?|power)|"
@@ -436,6 +447,72 @@ _PROSE_HINTS = (
 )
 
 
+# ── DOES THE PROMPT ITSELF CARRY THE RTL? ───────────────────────────────────
+# `has_context` answers "did the caller hand me a FILE PATH". That is a question
+# about the CALL, not about the TASK. Someone who pastes their module into the
+# prompt has supplied the RTL just as surely as one who passes `--rtl`, and the
+# four transform natures need the RTL, not the path. So the router had a
+# structural fact in hand — the prompt text — and never looked at it.
+#
+# Measured 2026-08-27 over all 664 prompts of the four open benchmarks
+# (VerilogEval-Human 156 + VerilogEval-v2 156 + RTLLM 50 + CVDP-open 302),
+# classified with has_context=False, which is what a bare prompt gives:
+#
+#   * 94 of the 664 embed a complete `module … endmodule`. 86 of those are
+#     CVDP — the very dataset whose 224 mis-entered records this file was
+#     written for — so this is that dataset's DOMINANT shape, not an oddity.
+#   * 153 verdicts carried the warning "prose reads as X but no existing RTL
+#     was supplied". On 85 of those 153 the RTL is IN THE PROMPT. The warning
+#     was therefore false more often than it was true (85 of 153, 55.6%).
+#   * That warning is not inert: it is what makes a run abandon the hinted
+#     entry for a degraded fallback, so 85 false statements become 85 wrong
+#     routes the moment anything acts on them.
+#
+# The test is STRUCTURAL and language-level — a module header through its
+# `endmodule` — never vendor-, SKU- or design-specific. The interface stub the
+# open benchmarks append (`module TopModule ( … );`, no body) has no
+# `endmodule`, so a bare specification is correctly NOT read as an
+# implementation.
+# TWO LINEAR SEARCHES, NOT ONE SPANNING MATCH. The obvious form of this test is
+# a single regex spanning header→`endmodule`, and it backtracks quadratically:
+# for every `module` in the text the lazy span rescans to the end looking for an
+# `endmodule` that is not there. Measured on the finished detector before this
+# was split — 664 real prompts cost 15 ms in total (23 us each), but one 1.25 MB
+# input carrying 3000 module headers and no `endmodule` cost 12.7 SECONDS. The
+# router takes a prompt string from whoever is calling, so a pathological input
+# is a hang in the front door, not a benchmark curiosity.
+#
+# Asking the two questions separately is equivalent and linear. `endmodule` after
+# the FIRST header is the same predicate as `endmodule` after ANY header: every
+# position after a later header is also after the first one. The header scan is
+# bounded so it cannot degenerate either — a port list running 4000 characters
+# without a `;` is not a module header.
+_MODULE_HEAD = re.compile(r"^[ \t]*module\b[^;]{0,4000};", re.M)
+_ENDMODULE = re.compile(r"^[ \t]*endmodule\b", re.M)
+
+
+def prompt_embeds_rtl(prompt: str) -> bool:
+    """True when the prompt text itself carries a complete HDL module body.
+
+    EMBEDDED RTL IS A PRECONDITION, NOT A NATURE, and reading it as a nature is
+    the mistake this function is deliberately too weak to make. It establishes
+    that the artefact a transform would operate on is PRESENT; it says nothing
+    about whether a transform is what was asked for. The measured
+    counter-example is in the same corpus: a prompt that quotes a complete
+    working module and then asks for a NEW sub-module to be written from a
+    description ("factor this into a hierarchical design … create the submodule
+    … you do not have to provide the revised module"). Eight of the 94
+    embedding prompts carry no transform verb at all, and for every one of them
+    the quoted RTL is reference material for a generation task.
+
+    So this promotes a HINTED transform out of a warning that is false for it.
+    It never turns an unhinted request into a transform.
+    """
+    text = prompt or ""
+    head = _MODULE_HEAD.search(text)
+    return head is not None and _ENDMODULE.search(text, head.end()) is not None
+
+
 def classify_task_nature(prompt: str,
                          has_context: bool,
                          nature: Optional[str] = None) -> Dict[str, Any]:
@@ -444,13 +521,35 @@ def classify_task_nature(prompt: str,
     `nature` — when the caller already KNOWS the nature (a benchmark label, a
     user who said "debug this"), pass it and the routing is deterministic.
 
-    Otherwise the structural signal decides and `needs_ai_parse` is set so the
-    caller runs the real AI first-layer parse to confirm:
-      * existing RTL context  ⇒ a transform on existing RTL;
-      * no context            ⇒ a spec asking for new RTL ⇒ Phase 1.
+    Otherwise the structural signal decides:
+      * existing RTL          ⇒ a transform on existing RTL;
+      * no RTL anywhere       ⇒ a spec asking for new RTL ⇒ Phase 1.
     Prose hints refine WHICH transform, but never promote a context-bearing
     task to spec_generation — that is the mistake that pushes a debug task
     through Phase 1.
+
+    `needs_ai_parse` — WHAT IT MUST MEAN, AND WHAT IT USED TO MEAN. It reads
+    as a measurement of this verdict's reliability, and a caller acting on it
+    is deciding whether to spend an AI confirmation pass. It was neither.
+    Measured 2026-08-27 it was True on 664 of 664 real prompts across all four
+    open benchmarks — a field that never varies over its entire input domain
+    carries no information, and a consumer for it would not have made it a
+    signal, it would have sent every design down the AI path.
+
+    The mechanism was not a badly-tuned threshold, it was that the flag was
+    never a condition at all. Every branch that CLASSIFIES returned True and
+    the only branch returning False was the one where the caller passed
+    `nature` — so the field restated its own argument (`nature is None`)
+    while presenting itself as a verdict about the prompt.
+
+    It is now a real condition, and it varies because it reports what was
+    actually observed. False when the router holds a POSITIVE signal for both
+    halves of the question — the RTL is present (a path, or embedded in the
+    prompt) AND the prose names which transform. True whenever the verdict
+    still rests on something not being there: no transform verb was found
+    (and the hint set has finite recall — the one blind reading disagreement
+    measured over VerilogEval-Human was exactly a debug task whose verb the
+    regex missed), or the RTL the named transform needs is genuinely absent.
     """
     if nature and nature in NATURE_ENTRY:
         t = NATURE_ENTRY[nature]
@@ -460,6 +559,7 @@ def classify_task_nature(prompt: str,
 
     text = prompt or ""
     hinted = next((n for n, rx in _PROSE_HINTS if rx.search(text)), None)
+    embedded = prompt_embeds_rtl(text)
 
     if has_context:
         n = hinted or _UNPINNED_TRANSFORM_NATURE
@@ -467,13 +567,22 @@ def classify_task_nature(prompt: str,
         return {"nature": n, "route": t["route"],
                 "plugin_entry": t["plugin_entry"],
                 "source": "context_prose_hint" if hinted else "context_heuristic",
-                "needs_ai_parse": True}
+                "needs_ai_parse": not hinted}
 
-    # No context. Only a hint that INHERENTLY needs existing RTL would be wrong
-    # here, so a hint of debug/optimization/completion without context means the
-    # caller has not supplied the RTL yet — say so rather than guessing.
+    # No context supplied as a PATH. Only a hint that INHERENTLY needs existing
+    # RTL would be wrong here — but "no path" is not "no RTL", so before saying
+    # the RTL is missing, look for it where the task actually put it.
     if hinted in ("debug", "optimization", "completion"):
         t = NATURE_ENTRY[hinted]
+        if embedded:
+            # The RTL is in the prompt. The warning below would be FALSE here,
+            # and a false warning is worse than a silent one once anything acts
+            # on it: it is what diverts a run off the hinted entry onto a
+            # degraded fallback. Measured, this branch is 85 of the 664.
+            return {"nature": hinted, "route": t["route"],
+                    "plugin_entry": t["plugin_entry"],
+                    "source": "embedded_rtl_prose_hint",
+                    "needs_ai_parse": False}
         return {"nature": hinted, "route": t["route"],
                 "plugin_entry": t["plugin_entry"],
                 "source": "prose_hint_without_context",

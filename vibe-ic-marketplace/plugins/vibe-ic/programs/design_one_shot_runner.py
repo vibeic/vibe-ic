@@ -212,6 +212,10 @@ DEVICES_ROOT = _find_devices_root()
 class StepResult:
     name: str
     status: str            # PASS / FAIL / SKIP / ECO_LOOP / WAIVED / BLOCKED
+    #                      # / INCOMPLETE — the step ran and judged only
+    #                      # PART of the population it is named for, and
+    #                      # says which part. Not a pass, not a failure.
+    #                      # Classified in `_aggregate_verdict`.
     duration_s: float = 0.0
     detail: str = ""
     output_files: List[str] = field(default_factory=list)
@@ -10009,6 +10013,50 @@ def _class_uses_aid_reference_tb(ic_class: Optional[str]) -> Tuple[bool, str]:
             f"id_bus) cannot bind this interface family")
 
 
+def _rtl_absent_refusal_detail(project: Path,
+                               ic_class: Optional[str]) -> Tuple[str, Dict[str, Any]]:
+    """Compose the refusal record for a verification gate whose RTL input is
+    absent, so the record names a CAUSE and a PRODUCER instead of a symptom.
+
+    "rtl/ missing" is true but unactionable: it restates the gate's own input
+    check. What a reader needs is (a) which step was supposed to fill that
+    directory and (b) whether this gate would even have applied had it been
+    filled -- because without (b) the SAME gate reports two different verdicts
+    about the SAME class depending only on whether an upstream producer ran.
+
+    Returns (detail, extras). chip-AGNOSTIC and benchmark-AGNOSTIC: derived
+    from the project layout and the class registry, never from a dataset
+    record, a problem id, or a harness path.
+    """
+    rtl_dir = _pl.rtl_dir(project)
+    extras: Dict[str, Any] = {
+        "refused_for": "absent_declared_input",
+        "absent_path": str(rtl_dir),
+        "producer_step": "rtl_gen",
+        "ic_class": ic_class,
+    }
+    # Would this gate have applied at all once rtl/ existed?  Recording the
+    # answer here is what makes the refusal reconcilable with the verdict the
+    # same gate emits after the producer succeeds.
+    try:
+        uses_aid_tb, track_reason = _class_uses_aid_reference_tb(ic_class)
+    except Exception:  # pragma: no cover - advisory only, must never crash
+        uses_aid_tb, track_reason = (True, "applicability undetermined")
+    extras["would_apply_when_present"] = bool(uses_aid_tb)
+    extras["applicability_reason"] = track_reason
+    if uses_aid_tb:
+        tail = ("once rtl/ exists this gate WILL run the AID reference TB, so "
+                "the design is genuinely untested at this point")
+    else:
+        tail = (f"once rtl/ exists this gate will SKIP ({track_reason}) -- so "
+                f"this verdict is about the ABSENT INPUT, not about the design")
+    detail = (f"rtl/ missing -- REFUSED TO RUN: the declared input {rtl_dir} "
+              f"was never produced; its producer is step `rtl_gen`, which did "
+              f"not complete. NOTHING is known about this design from this "
+              f"gate. {tail}.")
+    return detail, extras
+
+
 def step_reference_tb(project: Path, top_name: str = "chip_top",
                       ic_class: Optional[str] = None,
                       container: str = "vibeic-eda") -> StepResult:
@@ -10032,9 +10080,19 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
                 f"to the analog A1..A8 track (/vibe-ic-analog)",
                 extras={"deferred_to": "analog_track",
                         "ic_class": ic_class})
-        return StepResult("reference_tb", "FAIL",
+        # The RTL this gate verifies was never produced. That is a REFUSAL,
+        # not a verdict on the design: `BLOCKED` is this runner's documented
+        # status for "refused for want of a declared input; the step never
+        # ran, so nothing is known" (see `_aggregate_verdict`, where BLOCKED
+        # is enumerated in `_FAIL_STATUSES` -- the run still goes RED, this
+        # is not a silencing). Reporting FAIL here claimed the reference TB
+        # had run and the design had failed it, which is false, and made this
+        # gate report a different verdict than `rtl_validate` / `sim` report
+        # for the identical upstream state in the identical run.
+        _detail, _extras = _rtl_absent_refusal_detail(project, ic_class)
+        return StepResult("reference_tb", _spf.REFUSAL_STATUS,
                           time.time() - t0,
-                          "rtl/ missing")
+                          _detail, extras=_extras)
 
     # v1.6.523 — class-aware AID reference-TB gating. For non-AID-track
     # classes (generic_full_stack: CPUs / SoCs / arithmetic primitives /
@@ -15408,11 +15466,20 @@ def step_emit_phase2_manifests(project: Path,
                     _rp = formal_dir / "results.json"
                     if _rp.is_file():
                         _rp.unlink()
+                    # A run a RESOURCE CEILING stopped is not the same fact as
+                    # a proof that ran and did not converge: one is fixed on the
+                    # host, the other in the property. Say which, or the reader
+                    # goes looking in the design for a shortage of memory.
+                    _stop = _res.get("resource_stop") or {}
+                    _why = (f" — stopped by its {_stop['resource']} ceiling "
+                            f"({_stop['limit']} {_stop['unit']}), so NOTHING "
+                            f"was proved and NOTHING was refuted"
+                            if _stop else "")
                     _formal_disclose = (
                         f"deterministic reset-safety harness ran "
                         f"(verdict={_res.get('verdict')}, "
                         f"strength={_res.get('proof_strength')}) but produced no "
-                        f"clean proof — kept SKIPPED-CONDITION, NOT a design "
+                        f"clean proof{_why} — kept SKIPPED-CONDITION, NOT a design "
                         f"FAIL (best-effort auto-harness; see formal/*.sby.log)")
             else:
                 _formal_disclose = (
@@ -15843,6 +15910,45 @@ def _build_final_audit_cmd(project: Path, audit: Path,
     return cmd
 
 
+_STRUCTURAL_MEASUREMENT_RE = re.compile(
+    r"^STRUCTURAL MEASUREMENT:\s+registered=(\d+|null)\s+"
+    r"invoked=(\d+|null)\s+no_verdict=(\d+|null)\b",
+    re.M)
+
+
+def parse_structural_measurement(stdout: str
+                                 ) -> Dict[str, Optional[int]]:
+    """How much of the structural population the audit actually measured.
+
+    `flow_compliance_check` prints one `STRUCTURAL MEASUREMENT:` line per run
+    naming `registered` / `invoked` / `no_verdict`. This reads it.
+
+    THREE OUTCOMES, AND THE THIRD IS NOT ZERO:
+      * line present with integers -> those integers.
+      * line present with `null`   -> `None`: the umbrella was NOT ASKED to run
+        (a stage-3/4 invocation). No claim either way.
+      * line ABSENT                -> `None`, and `disclosed` is False. An
+        older `flow_compliance_check`, or one whose stdout was truncated, told
+        us NOTHING about its coverage. Reading that as "0 gates unmeasured"
+        would manufacture the exact clean bill of health this pair of changes
+        exists to stop, so absence is recorded as absence.
+
+    chip-AGNOSTIC: it reads three integers off one line and names no design.
+    """
+    m = _STRUCTURAL_MEASUREMENT_RE.search(stdout or "")
+    if not m:
+        return {"disclosed": False, "registered": None,
+                "invoked": None, "no_verdict": None}
+
+    def _i(tok: str) -> Optional[int]:
+        return None if tok == "null" else int(tok)
+
+    return {"disclosed": True,
+            "registered": _i(m.group(1)),
+            "invoked": _i(m.group(2)),
+            "no_verdict": _i(m.group(3))}
+
+
 def step_final_audit(project: Path, phase: int = 3,
                      skip_analog: bool = False) -> StepResult:
     t0 = time.time()
@@ -15902,20 +16008,65 @@ def step_final_audit(project: Path, phase: int = 3,
     # substring of "Overall: PASS_WITH_WAIVERS" so the previous order
     # never reached the WAIVED branch (latent bug surfaced by the #33
     # final_audit subprocess test).
-    if "Overall: PASS_WITH_WAIVERS" in out:
-        return StepResult("final_audit", "WAIVED",
+    # THE POPULATION THE VERDICT WAS COMPUTED OVER, carried as a field rather
+    # than left in the transcript. Attached to EVERY outcome below — a FAIL
+    # over a partial denominator is a different fact from a FAIL over a whole
+    # one, and this step used to render them with the same word and the same
+    # empty extras.
+    meas = parse_structural_measurement(out)
+    no_verdict = meas["no_verdict"]
+    if no_verdict:
+        head = (f"{meas['invoked']} of {meas['registered']} structural "
+                f"sub-gate(s) returned a verdict; {no_verdict} returned NONE, "
+                f"so this verdict is over {meas['invoked']} gates, not "
+                f"{meas['registered']}.\n{head}")
+    if "Overall: PASS_WITH_WAIVERS" in out or "Overall: PASS" in out:
+        # vibe-ic — A VERDICT OVER A FRACTION OF THE POPULATION IS NOT A PASS.
+        #
+        # `flow_compliance_check` computes `Overall` from sub-gate records whose
+        # verdict is exactly FAIL. A registered sub-gate that returned NO
+        # verdict contributes what a PASS contributes: nothing. MEASURED on the
+        # preserved 20-problem VerilogEval-Human run, re-audited from a clean
+        # checkout at origin/main 40d0e14c0: 19 of 20 projects reported
+        # registered=246 / invoked=210 / no_verdict=36, and one reported
+        # invoked=0 — not one structural gate looked at that design. All six
+        # non-FAIL runs recorded WAIVED here, which is the same word this step
+        # returns when every registered gate answered and the run was merely
+        # waived. The step could not say which it was.
+        #
+        # INCOMPLETE, NOT FAIL, and not a quieter PASS. A gate that never ran
+        # said nothing about the design, so calling the run a failure is the
+        # same false claim pointing the other way — this is the reasoning
+        # `flow_compliance_check._p0_umbrella_status` already settled for the
+        # umbrella's own status, and `INCOMPLETE` is the tier this repo built
+        # for it (`_flow_verdict_tiers.PRODUCER_STATUSES`): a DONE-CLAIM that is
+        # not a full pass. It is classified in `_aggregate_verdict` as
+        # not-green and not-failing, so the RUN-level word is unchanged.
+        #
+        # A VACUOUS_PASS SUB-GATE IS NOT TOUCHED BY THIS. `VACUOUS_PASS` is a
+        # verdict — the gate ran, found its input inapplicable, and said so —
+        # and it is counted in `invoked`. Only `NOT_INVOCABLE`, where the gate
+        # returned no verdict at all, is in `no_verdict`. Nothing here converts
+        # an unmeasured gate into a pass; it names the unmeasured population so
+        # the pass stops implying one.
+        if no_verdict:
+            return StepResult("final_audit", "INCOMPLETE",
+                              time.time() - t0,
+                              head,
+                              [str(transcript)],
+                              extras={"structural_measurement": meas})
+        status = ("WAIVED" if "Overall: PASS_WITH_WAIVERS" in out
+                  else "PASS")
+        return StepResult("final_audit", status,
                           time.time() - t0,
                           head,
-                          [str(transcript)])
-    if "Overall: PASS" in out:
-        return StepResult("final_audit", "PASS",
-                          time.time() - t0,
-                          head,
-                          [str(transcript)])
+                          [str(transcript)],
+                          extras={"structural_measurement": meas})
     return StepResult("final_audit", "FAIL",
                       time.time() - t0,
                       head,
-                      [str(transcript)])
+                      [str(transcript)],
+                      extras={"structural_measurement": meas})
 
 
 # -------------------------------------------------------------------------
@@ -16715,10 +16866,12 @@ def main() -> int:
     # either way. Cheap enough to run here as well as at the chained end —
     # MEASURED 0.22 s on an 89 MB run dir — and idempotent, so the phase3 /
     # phase23 / top-orchestrator rebuild simply refreshes it.
-    summary["steps_view"] = _pl.emit_steps_view(
-        project, PROGRAMS_DIR, runner="design_one_shot_runner")
-    out = _pl.report_path(project, "phase2_one_shot.json")
-    out.parent.mkdir(parents=True, exist_ok=True)
+    # Published BEFORE the view is built -- see publish_report_then_steps_view:
+    # the collector is a subprocess and can only join this run's per-step
+    # verdicts onto the step records if they are already on disk.
+    summary["steps_view"], out = _pl.publish_report_then_steps_view(
+        project, PROGRAMS_DIR, "design_one_shot_runner", summary,
+        "phase2_one_shot.json")
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     # Record rtl/ as the runner is leaving it, so the NEXT front-door run
     # can tell this tree (generator-produced, safe to regenerate) from one
@@ -16771,11 +16924,22 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # stderr warning on every legitimate mid-flow entry — correct behaviour for
     # a status nobody classified, and noise once it is a designed one.
     _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION", "SKIPPED-BY-ENTRY")
+    # INCOMPLETE — the step ran and disclosed that it judged a FRACTION of the
+    # population it is named for (`step_final_audit`, when the structural
+    # umbrella left registered > invoked). Not a failure: the gates that did not
+    # run said nothing about the design. Not green either: a step that measured
+    # part of its population has not certified the whole of it. Classified
+    # here so it cannot arrive as a silent PASS through the catch-all, and
+    # counted with WAIVED so the RUN-level word this function returns is
+    # unchanged — the new distinction lives at the STEP verdict, which is where
+    # the fact belongs and where nothing could state it before.
+    _INCOMPLETE_STATUSES = ("INCOMPLETE",)
     _KNOWN = (set(_FAIL_STATUSES) | set(_GREEN_STATUSES)
-              | set(_SKIP_STATUSES) | {"WAIVED"})
+              | set(_SKIP_STATUSES) | set(_INCOMPLETE_STATUSES) | {"WAIVED"})
 
     has_fail = any(s.status in _FAIL_STATUSES for s in plan)
-    has_waived = any(s.status == "WAIVED" for s in plan)
+    has_waived = any(s.status == "WAIVED"
+                     or s.status in _INCOMPLETE_STATUSES for s in plan)
     unknown = sorted({s.status for s in plan if s.status not in _KNOWN})
     if unknown:
         # Loud, and on stderr so it survives a caller that reads only stdout.

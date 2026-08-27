@@ -19,9 +19,32 @@ both "returned PASS").
 
 These tests exercise the SHIPPED emitter end-to-end through
 ``formal_property_run.run()`` and assert the PROPERTY (what ends up on the
-``read_verilog`` line), never a source literal. The proof itself is not run
-here - sby is not assumed present - so the tests stay hermetic; the executed
-two-tree proof is the acceptance evidence for the change.
+``read_verilog`` line), never a source literal.
+
+THE PROOF IS NOT RUN HERE, AND THAT IS NOW ENFORCED RATHER THAN ASSUMED.
+=======================================================================
+This file used to rest its isolation on an ENVIRONMENTAL ACCIDENT: "``run``
+needs no tool to reach the emit - it writes the .sby, then fails to find
+sby/docker". The guarantee was "the tool will not be found". Inside our OWN
+image the tool IS found - ``sby`` is at ``/usr/local/bin/sby`` and ``docker``
+is absent, which is exactly the ambient-PATH branch - so when the suite ran
+where it is designed to run, ``run`` wrote the .sby AND THEN RAN THE PROOF.
+MEASURED: two ``yosys`` at 35.6 GB apiece on a 125 GB host, no log output for
+twelve minutes, memory falling ~2 GB per 20 s. The host stopped answering ssh.
+``test_filter_never_empties_the_read_list`` stages two sources that ``include``
+each other, so the proof it launched was an unterminated include recursion.
+
+Two mechanisms now make the isolation STRUCTURAL, and both are load-bearing:
+
+* ``emit_only=True`` is an explicit entry point that returns BEFORE any
+  executor is reached - no engine probe, no solver, no ``results.json``. There
+  is no code path from it to a proof, whatever tools are installed.
+* ``_no_solver_may_be_launched`` (autouse) replaces the executor with a
+  tripwire for the whole module. If a future change routes any test here back
+  through a launch, the test FAILS LOUDLY instead of quietly eating the host.
+
+What this file must never become is a ``skipif(which("sby"))``: that would
+delete the coverage in precisely the environment the coverage is for.
 """
 
 from __future__ import annotations
@@ -34,6 +57,32 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import formal_property_run as fpr  # noqa: E402
+
+
+class SolverLaunched(AssertionError):
+    """Raised if anything in this module reaches a proof executor."""
+
+
+@pytest.fixture(autouse=True)
+def _no_solver_may_be_launched(monkeypatch):
+    """ENFORCEMENT, not belief: no test in this file may launch a proof.
+
+    The emit-only entry point already returns before the executor exists; this
+    tripwire is what makes that a checked property rather than a claim about
+    today\'s control flow. It also covers the engine PROBE, so the module spawns
+    no sub-process of any kind.
+    """
+    def _tripwire(*a, **kw):
+        raise SolverLaunched(
+            "a test in test_formal_sby_excludes_include_hub.py reached a proof "
+            "executor. This file wants the EMIT and must never run the PROOF: "
+            "inside vibeic-eda sby IS on PATH, so a launch here is a real "
+            "unbounded solver on the test host, not a no-op. Route the call "
+            "through fpr.run(..., emit_only=True).")
+    monkeypatch.setattr(fpr, "_run_sby", _tripwire)
+    monkeypatch.setattr(fpr, "_run_sby_ambient", _tripwire)
+    monkeypatch.setattr(fpr, "_run_group_bounded", _tripwire)
+    monkeypatch.setattr(fpr, "detect_engines", _tripwire)
 
 
 HUB_BODY = """\
@@ -94,14 +143,19 @@ def _read_line(sby_text: str) -> str:
 
 
 def _emit(tmp_path: Path, files: dict) -> str:
+    """Drive the SHIPPED emitter and read the artefact it wrote.
+
+    `emit_only=True` is what makes this safe by construction: the runner stages
+    the sources, authors the .sby and returns, with no executor between here and
+    a solver. No `except Exception` swallow either - the emit is not allowed to
+    fail, and a swallowed failure is how "the runner emitted no .sby" would read
+    as a passing test.
+    """
     proj, harness, rtl = _stage(tmp_path, files)
-    # `run` needs no tool to reach the emit: it writes the .sby, then fails to
-    # find sby/docker. We only read the artefact it wrote.
-    try:
-        fpr.run(project=proj, harness=harness, rtl=rtl, top="formal_leaf_a",
-                container=None)
-    except Exception:  # pragma: no cover - tool absence is not the subject
-        pass
+    res = fpr.run(project=proj, harness=harness, rtl=rtl, top="formal_leaf_a",
+                  container=None, emit_only=True)
+    assert res["verdict"] == "EMIT_ONLY", res
+    assert res["all_proved"] is False, "an emit is not a pass"
     sbys = sorted((proj / "phase2" / "stage1" / "formal").glob("*.sby"))
     assert sbys, "the runner emitted no .sby at all"
     return sbys[0].read_text()
@@ -140,14 +194,15 @@ def test_filter_never_empties_the_read_list(tmp_path):
 
     Reading a redundant file is recoverable; reading nothing is not.
     """
+    # NOTE: these two sources `include` each other. Handed to a real yosys this
+    # is an unterminated include recursion - it is the input that took a 125 GB
+    # host off the network when this file still launched proofs.
     mutual_a = '`include "b.v"\nmodule a (input wire c); endmodule\n'
     mutual_b = '`include "a.v"\nmodule b (input wire c); endmodule\n'
     proj, harness, rtl = _stage(tmp_path, {"a.v": mutual_a, "b.v": mutual_b})
-    try:
-        fpr.run(project=proj, harness=harness, rtl=rtl, top="formal_leaf_a",
-                container=None)
-    except Exception:  # pragma: no cover
-        pass
+    res = fpr.run(project=proj, harness=harness, rtl=rtl, top="formal_leaf_a",
+                  container=None, emit_only=True)
+    assert res["verdict"] == "EMIT_ONLY", res
     sbys = sorted((proj / "phase2" / "stage1" / "formal").glob("*.sby"))
     assert sbys
     line = _read_line(sbys[0].read_text())
@@ -166,3 +221,37 @@ def test_files_block_matches_the_read_list(tmp_path):
     listed = {ln.strip() for ln in block.splitlines() if ln.strip()}
     missing = read_srcs - listed
     assert not missing, f"read but not staged under [files]: {sorted(missing)}"
+
+
+# ── the isolation itself, tested in both directions ────────────────────────
+def test_emit_only_returns_before_any_executor_exists(tmp_path):
+    """THE CONTROL FOR THE FIX. The tripwire above replaces every executor with
+    a raise; if `emit_only` reached one, this test would error rather than pass.
+    So a green here IS the statement "no proof was launched", and it holds with
+    every tool present because nothing about the tool is consulted."""
+    proj, harness, rtl = _stage(tmp_path, {"defines.v": DEFINES,
+                                           "leaf_a.v": LEAF_A})
+    res = fpr.run(project=proj, harness=harness, rtl=rtl, top="formal_leaf_a",
+                  container=None, emit_only=True)
+    assert res["verdict"] == "EMIT_ONLY"
+    assert res["all_proved"] is False
+    assert res["rc"] == fpr.RC_EMIT_ONLY != 0, "an emit must not exit 0"
+    formal = proj / "phase2" / "stage1" / "formal"
+    # Nothing that could be mistaken downstream for proof evidence.
+    assert not (formal / "results.json").exists()
+    assert not list(formal.glob("*.sby.log"))
+
+
+def test_the_tripwire_would_catch_a_launch(tmp_path, monkeypatch):
+    """A guard that cannot fire is not a guard.
+
+    Drive the SAME runner without emit_only, with the engine probe stubbed out
+    so the only thing left to trip is the solver launch itself. It trips - which
+    is what makes the green in the test above mean something.
+    """
+    monkeypatch.setattr(fpr, "detect_engines", lambda container: {})
+    proj, harness, rtl = _stage(tmp_path, {"defines.v": DEFINES,
+                                           "leaf_a.v": LEAF_A})
+    with pytest.raises(SolverLaunched):
+        fpr.run(project=proj, harness=harness, rtl=rtl, top="formal_leaf_a",
+                container=None)
