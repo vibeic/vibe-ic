@@ -3,8 +3,8 @@
 ### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          32
-  CLEARED       23
+  BOTH          26
+  CLEARED       29
   FLAKY         2
 
 bucket        image    host     id
@@ -15,8 +15,6 @@ BOTH          5/5      5/5      test_flow_manifest_declaration_parity.py::test_t
 BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_no_declared_report_is_written_through_open_w
 BOTH          5/5      5/5      test_issue1082_open_w_category_closed.py::test_no_new_offender_and_the_ratchet_holds
 BOTH          5/5      5/5      test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds
-BOTH          5/5      5/5      test_issue306_register_paydown.py::test_306_shipped_tree_is_green_against_its_register
-BOTH          5/5      5/5      test_issue490_drc_report_check_argv.py::test_the_docstring_does_not_claim_an_enforcement_tier_it_lacks
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_census_block_is_fresh
 BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_published_total_equals_the_live_census
 BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved
@@ -33,15 +31,11 @@ BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_requ
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]
-BOTH          5/5      5/5      test_medlow_synth_dft_backlog.py::test_step11_declaration_is_satisfiable_by_a_successful_run
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_check_mode_exits_zero_on_the_committed_tree
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_clean_tree_reports_no_failure
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_declared_non_counts_are_still_present[and all 56 EDA/device tools]
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_stated_counts_in_the_documents_match_the_tree
 BOTH          5/5      5/5      test_step_metrics_coverage.py::test_declared_coverage_matches_the_tree
-BOTH          5/5      5/5      test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_is_deferred_not_counted_without_coverage
-BOTH          5/5      5/5      test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_lifts_step4_out_of_skipped_condition
-BOTH          5/5      5/5      test_v0_3_5_issue502_503_cascade_attribution.py::test_ordering_ancestry_is_two_orders_of_magnitude_wider
 
 ### CLEARED — re-measured GREEN in both lanes at a named later sha
 
@@ -78,6 +72,12 @@ ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matchi
 5d1b82988    5/5 5/5 RED     0/1 0/1 GREEN  test_matrix_mutation_ledger.py::test_every_enforced_cell_carries_a_named_mutation[step0.5ic]
 51c0db4b7    5/5 5/5 RED     0/1 0/1 GREEN  test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships
 51c0db4b7    5/5 5/5 RED     0/1 0/1 GREEN  test_flow_compliance_check_gate.py::test_a_real_verdict_is_not_mistaken_for_a_crash
+984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_issue306_register_paydown.py::test_306_shipped_tree_is_green_against_its_register
+984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_issue490_drc_report_check_argv.py::test_the_docstring_does_not_claim_an_enforcement_tier_it_lacks
+984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_medlow_synth_dft_backlog.py::test_step11_declaration_is_satisfiable_by_a_successful_run
+984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_is_deferred_not_counted_without_coverage
+984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_2_96_issue460_coverage_bridge.py::test_e2e_oracle_pass_lifts_step4_out_of_skipped_condition
+984f30df7    5/5 5/5 RED     0/2 0/3 GREEN  test_v0_3_5_issue502_503_cascade_attribution.py::test_ordering_ancestry_is_two_orders_of_magnitude_wider
 
 All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
 modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
@@ -253,3 +253,83 @@ have taken a truncated traceback FRAME line with it, which is a crash's only
 evidence — and over 4000 random stdout/stderr pairs every line the old snippet
 carried is still carried, with crash detection never downgrading. The width
 stays bounded: a line wider than the budget falls back to the plain tail.
+
+### the six-singles slice — 6 IDs, measured at `984f30df7`, landed doc-only
+
+```
+subject   984f30df7               TREE_SHA 1b97203f4055143c29c8d03d9a1e2dd36f867ec7
+          (branch next/pad-ring-prose-polarity, one commit on 5a9bc15fd / v1.12.8)
+control   867de4289  (v1.11.18)   TREE_SHA 7840974874537d10d0952057f06857f4b699ec38
+          — the sha this table's own ratios were taken at
+host      8hd-3 (192.168.1.121)
+image     ghcr.io/vibeic/vibeic-eda@sha256:9f8676be8f7b8d99f5b0013fecad6b3532193146bf9599a7a846df23219db0d9
+          (entrypoint bypassed; USER=designer; /work WRITABLE, /work/.git read-only)
+env       PYTHONDONTWRITEBYTECODE=1 · TMPDIR=/tmp/s6/{tmp,itmp}, outside the account home ·
+          VIBEIC_TRUSTED_PYTEST_SITE=auto · PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ·
+          VIBEIC_CORPUS_ROOT unset · one `python3 -m pytest` per lane, serial, no xdist ·
+          independent `--no-local` clone, `git clean -xdfq`, own control clone
+```
+
+Whole modules, never a `-k` selection. At the subject: **host 202 passed / 12 skipped**
+on 3 of 3 runs, **image 203 passed / 11 skipped** on 2 of 2. All named IDs collect and
+PASS explicitly in both lanes, so the green is not a collection hole. **Red ratio for
+each: image 0/2, host 0/3.**
+
+**The control.** At `867de4289` the same command in the same two lanes fails **8 of 192**,
+and the failing set is those eight exactly — not a superset, not a subset — in BOTH lanes
+(`host 8 failed, 184 passed`; image identical). The harness demonstrably still produces
+this red, and the original `BOTH 5/5 5/5` was a true measurement of its own subject.
+
+**EIGHT WERE MEASURED; SIX MOVE HERE, AND THE OTHER TWO ALREADY LEFT.** Stated so the
+count is checkable against the rows rather than against the slice's own headline.
+`test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships` and
+`test_flow_compliance_check_gate.py::test_a_real_verdict_is_not_mistaken_for_a_crash`
+were both moved to CLEARED at `51c0db4b7` by v1.12.12, which landed while this slice was
+parked. Their rows are not written twice. `BOTH 32 -> 26` and `CLEARED 23 -> 29` are the
+literal row counts of the two tables above, re-derived by counting them, and
+`26 + 29 + 2 FLAKY = 57` closes against this document's own population.
+
+**THIS LANDING IS DOCUMENTATION ONLY — the code half of `984f30df7` was already on main.**
+That commit's repair of `_l_doc_pad_placement` (vibe-ic#712) landed independently as
+v1.12.12, in a strictly more developed form: main imports `_prose_polarity` the same way,
+scopes the minimum distance with `sentence_scope(extra_breaks=("\n",))`, and carries an
+extra pinned test, `test_the_min_distance_denial_reach_is_the_sentence`, that this slice
+did not have. All six of the slice's behaviour tests are present in main's
+`test_pad_ring_derived_from_l3.py`. The commit was therefore SKIPPED as already-landed
+rather than re-applied — re-applying it would have replaced main's version with the
+earlier one. Nothing of this branch's code is lost and nothing of main's is reverted: the
+diff this landing carries is one documentation file.
+
+**CAUSE NOT ATTRIBUTED FOR THE SIX.** Every one of them was already green at `5a9bc15fd`
+— an ancestor of main — before this branch existed, and is unchanged by it. What carried
+each from red at `867de4289` to green at `5a9bc15fd` was NOT bisected. It is not needed
+for the bucket, whose stated criterion for leaving BOTH is a both-lane re-measurement at a
+named later sha, and that is what these rows carry; but it is missing, and the next reader
+should know it is missing rather than infer a fix.
+
+**CONFIRMED AGAIN AT THE LANDING PARENT.** Host lane at `a4f6b4f33` (v1.12.12), the five
+modules run WHOLE with no `-k` selection, `VIBEIC_CORPUS_ROOT` unset,
+`PYTHONDONTWRITEBYTECODE=1`: **121 passed, rc 0**, all six IDs collected and passing, and
+`suite_write_guard` reported the session wrote nothing `git status --porcelain` would
+show. This is a third host observation, not a second lane, and it is recorded as such.
+
+**LANE CONFIGURATION, measured by the slice, because it produces five reds that are not
+code.** Two flags the image lane needs, neither guessable from the failure text:
+
+  * `-e USER=designer`. The image's own `$USER` is the two-line string `"1000\ndesigner"`
+    (uid 1000 has no passwd entry), so `getpass.getuser()` returns it verbatim and pytest
+    builds `<TMPDIR>/pytest-of-1000\ndesigner/...`. Every `tmp_path` then carries an
+    embedded newline.
+  * **`/work` must be mounted WRITABLE, with `/work/.git` mounted `:ro` separately.** Five
+    IDs in `test_flow_compliance_check_gate.py` write a helper into `programs/` and delete
+    it again. Under a whole-tree `:ro` mount they fail with `Read-only file system`, which
+    reads as an IMAGE-ONLY red of the gate under test. The `.git` half of the split is not
+    optional: a writable `.git` inside a container lets the hygiene gates prune every
+    worktree's metadata on the host.
+
+  With the tree mounted `:ro` the slice measured `image 5 failed, 198 passed, 11 skipped`,
+  twice; with the split mount, `203 passed, 11 skipped`, twice, on the same image and the
+  same commit. The tell is that the SAME FIVE IDs appear under `:ro` at the subject AND at
+  the control, giving `12 failed` there against `8 failed` on the host and under the split
+  mount. A lane artefact does not care which tree it is aimed at, which is what separates
+  it from a finding.
