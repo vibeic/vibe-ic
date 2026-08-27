@@ -162,8 +162,9 @@ def floor_proof(tb, golden, tb_top: str, dut_name: str,
     """Run the § 4.1 floor-proof for a detected Category-D construct.
 
     Returns a record with `verdict` in
-    VERILATOR_FAITHFUL / VERILATOR_UNFAITHFUL / VERILATOR_ABSENT, the
+    VERILATOR_FAITHFUL / VERILATOR_UNFAITHFUL / CANNOT_ADJUDICATE, the
     adjudicator's own sentence, and the disposition the triage should carry.
+    Only the first two are findings about the golden.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import verilator_timing_fallback_check as _vtf
@@ -173,10 +174,17 @@ def floor_proof(tb, golden, tb_top: str, dut_name: str,
         golden_top or dut_name,
         Path(data_dir) if data_dir else None,
         list(_vtf._DEFAULT_PASS), list(_vtf._DEFAULT_FAIL))
+    # rc 2 is the adjudicator's "cannot adjudicate" and covers THREE causes:
+    # verilator is not on PATH, an argument / file error, or the build / sim did
+    # not finish. Labelling all three VERILATOR_ABSENT said the tool was missing
+    # when it was present and merely slow — a claim about this host that the
+    # record then carried as if it were measured. The DISPOSITION is unchanged
+    # (FORK-FIXABLE, the conservative side); only the word is now true, and the
+    # adjudicator's own sentence in `detail` names which of the three it was.
     verdict, disposition = {
         0: ("VERILATOR_FAITHFUL", "SCORABLE-UNDER-VERILATOR"),
         1: ("VERILATOR_UNFAITHFUL", "FORK-FIXABLE"),
-    }.get(rc, ("VERILATOR_ABSENT", "FORK-FIXABLE"))
+    }.get(rc, ("CANNOT_ADJUDICATE", "FORK-FIXABLE"))
     return {"tool": "verilator_timing_fallback_check",
             "verdict": verdict, "rc": rc, "detail": detail,
             "disposition": disposition,

@@ -336,7 +336,18 @@ def _git_apply_check(repo_root: Path, patch: Path) -> Tuple[bool, str]:
     except FileNotFoundError:
         return False, "git not available to run `git apply --check`"
     except subprocess.TimeoutExpired:
-        return False, "`git apply --check` timed out"
+        # THE SAME SHAPE `check_root_cause_verdict` ALREADY USES for a composed
+        # program that dies, and for the same reason. "does not apply" is a
+        # finding about the PATCH; a `git apply --check` that was killed made no
+        # finding about the patch at all. The old text spent the accusing
+        # sentence on a slow host, and the field agent whose bundle it rejected
+        # had no way to tell that from a patch that genuinely conflicts.
+        # Fail-closed is preserved — the item is NOT green and the bundle is
+        # NOT admitted — but it now says which of the two happened.
+        return False, ("INCONCLUSIVE — `git apply --check` did not finish "
+                       "within 60s. That is not a finding that the patch "
+                       "conflicts; the bundle is NOT admitted, but this item "
+                       "was never judged. Re-run it.")
     if out.returncode == 0:
         return True, "applies clean"
     err = (out.stderr or out.stdout or "").strip().splitlines()

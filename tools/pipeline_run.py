@@ -136,7 +136,13 @@ def _count_sva(filepath: str) -> int:
     return len(re.findall(r'\bassert\s+property\b', content, re.IGNORECASE))
 
 
-def _run_yosys_synth(rtl_path: str, ic_dir: str) -> Tuple[bool, int, str]:
+#: Marker shared by `_run_yosys_synth` and its one caller, so the producer and
+#: the reader of "this did not finish" cannot drift apart into a synthesis that
+#: is reported as failed at one end and not-measured at the other.
+_SYNTH_NOT_MEASURED = "SYNTH_NOT_MEASURED"
+
+
+def _run_yosys_synth(rtl_path: str, ic_dir: str) -> Tuple[bool, Optional[int], str]:
     """Run Yosys synthesis and return (success, cell_count, log)."""
     synth_dir = os.path.join(ic_dir, 'phase2_design', 'synth')
     os.makedirs(synth_dir, exist_ok=True)
@@ -174,7 +180,16 @@ def _run_yosys_synth(rtl_path: str, ic_dir: str) -> Tuple[bool, int, str]:
     except FileNotFoundError:
         return False, 0, "Yosys not found in PATH"
     except subprocess.TimeoutExpired:
-        return False, 0, "Yosys synthesis timed out"
+        # NOT "Synthesis failed". This file ALREADY distinguishes "could not
+        # run" from "ran and failed" one branch down, for the yosys-not-found
+        # case; a synthesis that was KILLED belongs on that same side. The old
+        # text sent it to the other one, where the pipeline recorded
+        # `Synthesis failed` and a cell count of 0 — and 0 cells is a
+        # MEASUREMENT, published about a design nothing ever measured.
+        return False, None, _SYNTH_NOT_MEASURED + (
+            ": the yosys run did not finish inside its bound. That is a fact "
+            "about this host, not about the RTL — re-run it before reading "
+            "anything into it.")
 
 
 # ============================================================================
@@ -392,11 +407,18 @@ def run_phase2(ic_dir: str, ic_name: str, auto: bool = False) -> PhaseResult:
     # Run Yosys synthesis
     synth_success, cell_count, synth_log = _run_yosys_synth(rtl_file, ic_dir)
     metrics['synth_success'] = synth_success
+    # `None`, not 0, when nothing was measured. A published `synth_cells: 0` is
+    # read as "this design synthesised to nothing".
     metrics['synth_cells'] = cell_count
 
     if not synth_success:
         # Check if it's a Yosys-not-found issue vs actual synthesis error
-        if 'not found' in synth_log.lower():
+        if synth_log.startswith(_SYNTH_NOT_MEASURED):
+            metrics['synth_note'] = 'synthesis NOT MEASURED (run did not finish)'
+            errors.append(
+                'Yosys synthesis did not finish -- NOT MEASURED, not a '
+                'synthesis failure; nothing here is a finding about the RTL')
+        elif 'not found' in synth_log.lower():
             metrics['synth_note'] = 'Yosys not installed'
             errors.append('Yosys not found -- synthesis skipped')
         else:

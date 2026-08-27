@@ -73,23 +73,48 @@ _BUG_PREFIX_RE = re.compile(
 )
 
 
+#: rc for "git could not be RUN", as distinct from "git ran and said no".
+#: 127 is the shell's own code for an uninvocable command, and the point of a
+#: separate code is that `_resolve_repo_root` used to collapse both into
+#: `None`, which `inspect` then published as the SKIP reason "not inside a git
+#: repository" — a claim about the PROJECT that is false whenever it was
+#: really a slow or missing git. See `_resolve_repo_root`.
+_GIT_UNUSABLE_RC = 127
+
+
 def _git(args: list[str], cwd: Path) -> tuple[int, str]:
     try:
         r = subprocess.run(
             ["git"] + args, cwd=cwd, capture_output=True, text=True,
             timeout=30,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        return 1, str(exc)
+    except FileNotFoundError as exc:
+        return _GIT_UNUSABLE_RC, f"git is not on PATH ({exc})"
+    except subprocess.TimeoutExpired:
+        return _GIT_UNUSABLE_RC, (
+            f"`git {' '.join(args)}` did not finish within 30s — NOT "
+            f"MEASURED. Nothing was learned about this project.")
     return r.returncode, r.stdout
 
 
-def _resolve_repo_root(path: Path) -> Path | None:
+def _resolve_repo_root(path: Path) -> tuple[Path | None, str]:
+    """(root, why-not). `why-not` distinguishes the two ways this returns None.
+
+    THE DEFECT IT CLOSES: git failing to RUN and git answering "this is not a
+    repository" both produced `None`, and the single caller turned `None` into
+    the published reason "not inside a git repository". On a host where git was
+    slow, the metric asserted something FALSE about the project — a wall clock
+    deciding a fact about the tree it was pointed at.
+    """
     rc, out = _git(["rev-parse", "--show-toplevel"], path)
+    if rc == _GIT_UNUSABLE_RC:
+        return None, f"git could not be run, so nothing was measured: {out}"
     if rc != 0:
-        return None
+        return None, "not inside a git repository"
     root = out.strip()
-    return Path(root) if root else None
+    if not root:
+        return None, "not inside a git repository"
+    return Path(root), ""
 
 
 def _bug_commits_for_paths(repo: Path, project: Path,
@@ -144,9 +169,9 @@ def inspect(project: Path, since: str | None = None) -> dict:
         "first_bug_at": None,
         "last_bug_at": None,
     }
-    repo = _resolve_repo_root(project)
+    repo, why_not = _resolve_repo_root(project)
     if repo is None:
-        summary["skipped_reason"] = "not inside a git repository"
+        summary["skipped_reason"] = why_not
         return summary
     rels = _rtl_relpaths(project, repo)
     summary["rtl_files_count"] = len(rels)
@@ -244,7 +269,7 @@ def main() -> int:
     out = write_report(project, summary)
 
     if not args.no_learning_log:
-        repo = _resolve_repo_root(project)
+        repo, _why = _resolve_repo_root(project)
         if repo is not None:
             log = append_learning_log(repo, summary)
             print(f"  [appended] {log.relative_to(repo)}")

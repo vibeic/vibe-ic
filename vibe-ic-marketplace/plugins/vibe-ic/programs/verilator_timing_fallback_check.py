@@ -49,9 +49,15 @@ EXIT CODES
   0  VERILATOR_FAITHFUL    — golden passes its own TB under Verilator → NOT a
                             tool-gap floor; score under Verilator (disclose).
   1  VERILATOR_UNFAITHFUL  — golden fails its own TB under Verilator → FLOOR-D
-                            stands (needs VCS); OR Verilator cannot build the TB.
-  2  VERILATOR_ABSENT / IO — verilator not on PATH (cannot adjudicate; FLOOR-D
-                            stands), or an argument / file error.
+                            stands (needs VCS); OR Verilator cannot build the
+                            TB. BOTH are MEASURED: the tool ran to completion
+                            and said no. A timeout is rc 2, never this.
+  2  CANNOT ADJUDICATE     — verilator not on PATH, an argument / file error,
+                            OR the build / sim did not FINISH (a wall clock
+                            fired). In every case the FLOOR-D stands and no
+                            claim is made about the golden. A run that did not
+                            finish is not a run that failed, and rc 1 is
+                            reserved for what was actually observed.
 
 chip-AGNOSTIC: reasons over a TB, a golden, module names, and sim output tokens.
 """
@@ -128,8 +134,17 @@ def adjudicate(tb: Path, golden: Path, tb_top: str, dut_name: str,
                  "golden.v", "testbench.v", "-o", "sim"],
                 cwd=work, capture_output=True, text=True, timeout=300)
         except subprocess.TimeoutExpired:
-            return 1, ("VERILATOR_BUILD_TIMEOUT: Verilator build exceeded 300s → "
-                       "cannot adjudicate; the FLOOR-D stands.")
+            # rc 2, not rc 1. This file's own exit-code table says rc 1 means
+            # "golden FAILS its own TB under Verilator" — a MEASURED claim about
+            # the golden — and rc 2 means "cannot adjudicate". The message on
+            # the next line already says "cannot adjudicate"; only the code
+            # disagreed with it, and it spent the code that accuses the golden.
+            # A build that did not FINISH is not a build that FAILED.
+            # The conservative direction is untouched: the FLOOR-D still stands,
+            # so no non-real floor can be recovered and no number inflated.
+            return 2, ("VERILATOR_BUILD_TIMEOUT: the Verilator build did not "
+                       "finish within 300s → cannot adjudicate; the FLOOR-D "
+                       "stands. This is NOT a finding about the golden.")
         if build.returncode != 0:
             tailerr = "\n".join(
                 ln for ln in build.stderr.splitlines() if "%Error" in ln)[:400]
@@ -144,8 +159,13 @@ def adjudicate(tb: Path, golden: Path, tb_top: str, dut_name: str,
             run = subprocess.run([str(simbin)], cwd=work, capture_output=True,
                                  text=True, timeout=120)
         except subprocess.TimeoutExpired:
-            return 1, ("VERILATOR_SIM_TIMEOUT: the golden's TB did not finish within "
-                       "120s under Verilator → no faithful pass; the FLOOR-D stands.")
+            # Same correction. "The TB did not finish within 120s" is exactly
+            # the observation that does NOT distinguish an unfaithful golden
+            # from a loaded host, and rc 1 asserted the first of those.
+            return 2, ("VERILATOR_SIM_TIMEOUT: the golden's TB did not finish "
+                       "within 120s under Verilator → cannot adjudicate; the "
+                       "FLOOR-D stands. This is NOT a finding about the "
+                       "golden: a TB that did not finish did not fail.")
         out = run.stdout + run.stderr
         # §4.05 — the DANGEROUS direction is FALSE-FAITHFUL (declare a golden a
         # pass when it did not cleanly pass → recover a NON-real floor → inflate
