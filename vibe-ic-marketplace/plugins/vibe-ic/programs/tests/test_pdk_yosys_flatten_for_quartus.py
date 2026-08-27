@@ -111,10 +111,70 @@ def _patch_subprocess(monkeypatch, behaviors):
     return calls
 
 
+#: The container-side root the tests translate INTO. Any path; what matters is
+#: that the test names it rather than letting the machine's docker
+#: configuration decide.
+_CONT_ROOT = "/ci/designs"
+
+
+def _declare_mount_root(monkeypatch, host_root):
+    """Declare the host<->container mount the way the program itself documents.
+
+    WHY THIS EXISTS, MEASURED. This file's own header promises the mocked
+    `subprocess.run` gives "no dependence on container state". That stopped
+    being true when the program started resolving the container's mount table
+    before running anything (`_designs_root`, ea51511ef1): `container_mounts`
+    goes through the SAME `subprocess.run` these tests replace, so the mock
+    answers `docker inspect` with the yosys stub's stdout, no mount covers
+    `tmp_path`, and `main()` returns rc 2 — BLOCKED on host mount root —
+    without ever reaching the branch under test.
+
+    That was one red and FOUR VACUOUS GREENS. Measured on ae5cc4dbfc, with
+    `-s`, every one of the four `returns_2` tests printed
+
+        [flatten] BLOCKED on host mount root: ... (basis: project_dir_fallback)
+
+    and passed on it. They asserted the right NUMBER for the wrong REASON, and
+    a yosys guard could have been deleted outright without one of them noticing.
+
+    `VIBEIC_DESIGNS_HOST_ROOT` / `VIBEIC_DESIGNS_CONT_ROOT` are not a way
+    around the check: they are branch 1 of `_designs_root`'s documented ladder
+    ("explicit; power users and CI"), the pair the program's own refusal
+    message tells the operator to set, and the same pair
+    `test_designs_root_resolution_ladder` drives. Declaring them makes this
+    file hermetic in the direction its header always claimed — the verdict no
+    longer depends on what this machine happens to have bind-mounted.
+    """
+    monkeypatch.setenv("VIBEIC_DESIGNS_HOST_ROOT", str(host_root))
+    monkeypatch.setenv("VIBEIC_DESIGNS_CONT_ROOT", _CONT_ROOT)
+
+
+def _yosys_calls(calls):
+    """The recorded calls that actually invoke yosys inside the container.
+
+    NOT "any docker command": `_designs_root.container_mounts` reads the mount
+    table with `docker inspect` through this same mock, so `"docker" in c[0]`
+    is true before `main()` has decided anything. That distinction is the whole
+    point here — see `_declare_mount_root`.
+    """
+    return [c for c in calls if c[0] == "docker" and c[1] == "exec"
+            and any("yosys -s" in str(part) for part in c)]
+
+
+def _reached_the_tool(calls):
+    """True when `main()` got far enough to invoke yosys-in-docker.
+
+    The discriminator between "the branch under test returned 2" and "the
+    program refused before it ran anything and returned 2 as well".
+    """
+    return bool(_yosys_calls(calls))
+
+
 def test_main_pass(tmp_path, monkeypatch):
     argv, out = _argv(tmp_path)
     _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
+    _declare_mount_root(monkeypatch, tmp_path)
     tmp = out.resolve().parent / ".tmp_flatten"
 
     def behavior(cmd, calls):
@@ -126,55 +186,69 @@ def test_main_pass(tmp_path, monkeypatch):
         out.write_text("module x();\n" * 50)
         return _CP(rc=0, stdout="")
 
-    _patch_subprocess(monkeypatch, behavior)
+    calls = _patch_subprocess(monkeypatch, behavior)
     rc = mod.main()
     assert rc == 0
     assert out.is_file()
+    # the .ys script was written with CONTAINER paths, not host paths — the
+    # translation is the reason the mount root has to be resolved at all
+    ys = _yosys_calls(calls)[0][-1]
+    assert _CONT_ROOT in ys and str(tmp_path) not in ys
 
 
-def test_main_yosys_fail_returns_2(tmp_path, monkeypatch):
+def test_main_yosys_fail_returns_2(tmp_path, monkeypatch, capsys):
     argv, out = _argv(tmp_path)
     _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
+    _declare_mount_root(monkeypatch, tmp_path)
 
     def behavior(cmd, calls):
         return _CP(rc=1, stdout="ERROR: hierarchy check failed")
 
-    _patch_subprocess(monkeypatch, behavior)
+    calls = _patch_subprocess(monkeypatch, behavior)
     assert mod.main() == 2
+    assert _reached_the_tool(calls)
+    assert "yosys FAILED" in capsys.readouterr().err
 
 
-def test_main_yosys_error_string_returns_2(tmp_path, monkeypatch):
+def test_main_yosys_error_string_returns_2(tmp_path, monkeypatch, capsys):
     """rc 0 but 'ERROR' in stdout is still a yosys failure (real guard)."""
     argv, out = _argv(tmp_path)
     _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
+    _declare_mount_root(monkeypatch, tmp_path)
 
     def behavior(cmd, calls):
         return _CP(rc=0, stdout="something ERROR something")
 
-    _patch_subprocess(monkeypatch, behavior)
+    calls = _patch_subprocess(monkeypatch, behavior)
     assert mod.main() == 2
+    assert _reached_the_tool(calls)
+    assert "yosys FAILED" in capsys.readouterr().err
 
 
-def test_main_yosys_output_missing_returns_2(tmp_path, monkeypatch):
+def test_main_yosys_output_missing_returns_2(tmp_path, monkeypatch, capsys):
     """yosys reports success but produces no (or a too-small) file."""
     argv, out = _argv(tmp_path)
     _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
+    _declare_mount_root(monkeypatch, tmp_path)
 
     def behavior(cmd, calls):
         # don't create flat_raw.v at all.
         return _CP(rc=0, stdout="stat\n")
 
-    _patch_subprocess(monkeypatch, behavior)
+    calls = _patch_subprocess(monkeypatch, behavior)
     assert mod.main() == 2
+    assert _reached_the_tool(calls)
+    assert "yosys output missing" in capsys.readouterr().err
 
 
-def test_main_harmonise_fail_returns_2(tmp_path, monkeypatch):
+def test_main_harmonise_fail_returns_2(tmp_path, monkeypatch, capsys):
     argv, out = _argv(tmp_path)
     _declare_the_host_root(monkeypatch, tmp_path)
     monkeypatch.setattr(sys, "argv", argv)
+    _declare_mount_root(monkeypatch, tmp_path)
     tmp = out.resolve().parent / ".tmp_flatten"
 
     def behavior(cmd, calls):
@@ -184,5 +258,30 @@ def test_main_harmonise_fail_returns_2(tmp_path, monkeypatch):
         # harmoniser fails.
         return _CP(rc=3, stdout="", stderr="bad escape ids")
 
-    _patch_subprocess(monkeypatch, behavior)
+    calls = _patch_subprocess(monkeypatch, behavior)
     assert mod.main() == 2
+    assert _reached_the_tool(calls)
+    assert "name harmonise FAILED" in capsys.readouterr().err
+
+
+def test_an_unmountable_path_is_refused_and_nothing_is_run(tmp_path,
+                                                           monkeypatch,
+                                                           capsys):
+    """THE GUARD THAT THE FOUR TESTS ABOVE WERE ACCIDENTALLY STANDING ON, now
+    asserted deliberately and where a reader can see it.
+
+    A path the container has not been shown to see must be rc 2 NAMING that,
+    and must run nothing — a guessed prefix in a .ys script makes yosys report
+    "can't open input file" for a file that exists, which renders exactly like
+    a real failure. This is the ONLY test in this file that leaves the mount
+    root undeclared, and it asserts the refusal rather than merely the number.
+    """
+    argv, _out = _argv(tmp_path)
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.delenv("VIBEIC_DESIGNS_HOST_ROOT", raising=False)
+    monkeypatch.delenv("VIBEIC_DESIGNS_CONT_ROOT", raising=False)
+    calls = _patch_subprocess(monkeypatch, lambda cmd, calls: _CP(rc=0))
+    assert mod.main() == 2
+    assert "BLOCKED on host mount root" in capsys.readouterr().err
+    assert not _reached_the_tool(calls), (
+        "the refusal must fire BEFORE anything is executed in the container")
