@@ -216,3 +216,69 @@ def test_this_file_would_have_failed_against_the_pre_fix_runner():
     assert combine(1, 2) == 1, (
         "this is `max`: the pre-fix combiner laundered a measured failure into "
         "an inconclusive as soon as a second rc existed")
+
+
+# ── the hole the new word opened, and its closure ───────────────────────────
+#
+# THE NEAR-MISS THAT MADE THIS SECTION. Adding a third verdict word to Phase 1
+# was not free. `vibe_ic_one_shot_runner` halts the whole flow on
+# `verdict == "FAIL"` and aggregates with "FAIL else waivers else PASS" — so
+# the moment Phase 1 could say UNDETERMINED, a killed Phase-1 track stopped
+# halting the run AND aggregated to a clean overall PASS.
+#
+# That is strictly worse than the defect being fixed. The old code at least
+# stopped. This is the "a guard that stopped refusing is a deletion" case,
+# arriving through the fix rather than around it, and these are the tests that
+# would have caught it.
+
+import vibe_ic_one_shot_runner as O                # noqa: E402
+
+
+def test_an_undetermined_phase_never_aggregates_to_a_pass():
+    """THE FALSE GREEN. `_aggregate` decides `overall`, and `overall` decides
+    this program's exit code and the word a human reads."""
+    assert O._aggregate([O.VERDICT_UNDETERMINED]) != "PASS"
+    assert O._aggregate(["PASS", O.VERDICT_UNDETERMINED]) != "PASS"
+    assert O._aggregate([O.VERDICT_UNDETERMINED]) == O.VERDICT_UNDETERMINED
+    # And it outranks the waiver tier — a phase nobody measured must not be
+    # summarised with a word from the passing family.
+    assert O._aggregate(["PASS_WITH_WAIVERS",
+                         O.VERDICT_UNDETERMINED]) == O.VERDICT_UNDETERMINED
+    # NON-VACUITY, both ends: a real failure still outranks it, and a genuinely
+    # clean run is still clean.
+    assert O._aggregate(["FAIL", O.VERDICT_UNDETERMINED]) == "FAIL"
+    assert O._aggregate(["PASS", "PASS"]) == "PASS"
+
+
+def test_an_undetermined_phase_still_halts_the_flow():
+    """The other half. Phase 2 must not run on a Phase 1 that was killed
+    mid-track — which is exactly what happened before, when the same condition
+    was spelled FAIL."""
+    assert O._is_halting(O.VERDICT_UNDETERMINED)
+    assert O._is_halting("FAIL")
+    assert not O._is_halting("PASS")
+    assert not O._is_halting("PASS_WITH_WAIVERS")
+
+
+def test_the_pre_fix_orchestrator_would_have_greened_the_killed_run():
+    """THE CONTROL, again written so the pre-fix tree can RUN it.
+
+    The old `_aggregate` was `FAIL -> waivers -> PASS` with no third arm, so an
+    UNDETERMINED verdict fell through the bottom and came out PASS. This
+    reconstructs that function EXACTLY and asserts it gives the wrong answer,
+    so the test states the defect rather than merely asserting the fix.
+    """
+    def _pre_fix_aggregate(verdicts):
+        if any(v == "FAIL" for v in verdicts):
+            return "FAIL"
+        if any(v in ("PASS_WITH_WAIVERS", "WAIVED", "COVERAGE-INCOMPLETE")
+               for v in verdicts):
+            return "PASS_WITH_WAIVERS"
+        return "PASS"
+
+    assert _pre_fix_aggregate(["UNDETERMINED"]) == "PASS", (
+        "if this stops being true the control has lost its subject")
+    assert O._aggregate(["UNDETERMINED"]) != _pre_fix_aggregate(["UNDETERMINED"])
+    # and the pre-fix halt condition, which is the same shape
+    assert ("UNDETERMINED" == "FAIL") is False
+    assert O._is_halting("UNDETERMINED") is True
