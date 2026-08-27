@@ -3,8 +3,8 @@
 ### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          36
-  CLEARED       19
+  BOTH          34
+  CLEARED       21
   FLAKY         2
 
 bucket        image    host     id
@@ -35,8 +35,6 @@ BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_requ
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]
-BOTH          5/5      5/5      test_matrix_d7_outputs_list_complete.py::test_d7_required_outputs_list_is_complete[step31]
-BOTH          5/5      5/5      test_matrix_mutation_ledger.py::test_every_enforced_cell_carries_a_named_mutation[step0.5ic]
 BOTH          5/5      5/5      test_medlow_synth_dft_backlog.py::test_step11_declaration_is_satisfiable_by_a_successful_run
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_check_mode_exits_zero_on_the_committed_tree
 BOTH          5/5      5/5      test_program_inventory_no_drift.py::test_clean_tree_reports_no_failure
@@ -78,6 +76,8 @@ ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matchi
 628ca251f    5/5 5/5 RED     0/2 0/2 GREEN  test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_passed_the_empty_predicate_lists
 628ca251f    5/5 5/5 RED     0/2 0/2 GREEN  test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_passes_the_same_empty_corpus_silently
 628ca251f    5/5 5/5 RED     0/2 0/2 GREEN  test_w4_absent_condition_is_not_a_pass.py::test_negative_control_origin_main_was_silent_on_the_advisory_slot
+5d1b82988    5/5 5/5 RED     0/1 0/1 GREEN  test_matrix_d7_outputs_list_complete.py::test_d7_required_outputs_list_is_complete[step31]
+5d1b82988    5/5 5/5 RED     0/1 0/1 GREEN  test_matrix_mutation_ledger.py::test_every_enforced_cell_carries_a_named_mutation[step0.5ic]
 
 All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
 modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
