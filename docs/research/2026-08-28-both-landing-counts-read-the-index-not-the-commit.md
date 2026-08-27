@@ -60,57 +60,68 @@ Both counters therefore describe **the landing worktree at the moment the gate
 ran**, and a landing runs on exactly the tree where that distinction is
 maximal: `HEAD` is the base and the candidate is *staged*.
 
-## Measured, on a tree whose commit is byte-identical to main's
+## SETTLED: all three numbers reproduced, on main's own commit tree
 
-One extra test file, `git add`-ed and never committed, outside `programs/tests`
-and outside `tools/`:
+One directory carrying uncommitted work — `vibe-ic-marketplace/plugins/vibe-ic/
+tools/phase1_engine/` — reproduces the landing's three numbers exactly, with the
+commit tree unmoved:
 
 ```
-$ git rev-parse HEAD^{tree}                      954bc27704cb7d12cf7ba5c0fc4a348b6898ec3b
-$ landing_unselectable_pytest_corpus.py | wc -l  132
+$ git rev-parse HEAD^{tree}                 954bc27704cb…   (= main's tree, unchanged)
+$ echo >> …/tools/phase1_engine/cli.py                      # edited, NOT committed
+$ git add …/tools/phase1_engine/tests/test_zzz_landing_probe.py   # staged, NOT committed
+$ git rev-parse HEAD^{tree}                 954bc27704cb…   (STILL main's tree)
 
-$ git add …/skills/rtl-review/tests/test_zzz_landing_probe.py
-$ git rev-parse HEAD^{tree}                      954bc27704cb7d12cf7ba5c0fc4a348b6898ec3b   <- UNCHANGED
-$ landing_unselectable_pytest_corpus.py | wc -l  133                                        <- MOVED
-$ find tools … | wc -l                            50                                        <- unmoved
-$ ci_targeted_test_select.py --base d1f9885f0440
-  … selected 221 test file(s) from 17 changed path(s)                                       <- 16 -> 17
+  unselectable census        133      (was 132)
+  repo tools (find tools)     50      (unmoved)
+  targeted selection         225      (was 221) — "from 18 changed path(s)"
 ```
 
-Three of the four observations are the landing's own numbers, reproduced
-exactly: the census moves 132 → 133, the repo-tools count does not move (it is a
-`find` over `tools/`, and the file is not under `tools/`), and the selector's
-changed-path population moves 16 → 17 while the commit tree does not move at
-all.
+Each number moves for its own reason, and the reasons are all in the same tree:
 
-The fourth — the targeted count — moved by 0 for *this* stimulus, because the
-selector's delta for a path no rule maps is not 1. It is rule 7: the path is
-keyed by the most specific suffix of itself that is unique in the tree, and the
-key selects the tests that NAME it, through three hops (a test names it, a
-`programs/tests` helper names it, a program opens it as a live string literal).
-A probe file nothing mentions selects nothing. **A file that four tests mention
-selects four**, and 221 + 4 = 225.
+* **census 132 → 133.** `git ls-files` reads the INDEX, so the staged test file
+  counts. It is under the PLUGIN's `tools/`, not the repo root's, and the
+  census's `tools/` subtrahend is the repo-root one (`run_repo_tools_pytest`'s
+  `find tools …` runs from `$ROOT`) — so it lands in the complement. This is not
+  a corner: the plugin's `tools/phase1_engine/tests/` already supplies **8 of
+  the 132** existing members.
+* **repo tools 50, unmoved.** Same reason from the other side: that `find` never
+  descends into the plugin, so a plugin-`tools/` test file is invisible to it.
+  This is the observation that pins the file's location — any file that moved
+  the census by living under the REPO-ROOT `tools/` would have moved this to 51.
+* **targeted 221 → 225.** `git diff --name-only <base>` sees the edited
+  `cli.py`, so the changed-path population goes 16 → 18. `cli.py` is under a
+  `tools/` dir, so rule 6 keys it by its BASENAME — no uniqueness test on that
+  path — and selects every test file that names `cli.py`. Measured over the
+  whole `tools/` basename space, exactly one basename selects exactly four tests
+  the rest of this diff had not already selected, and it is this one:
 
-## What this settles
+      programs/tests/test_die_finishing_step_265ic.py
+      programs/tests/test_l_doc_generator_stamp.py
+      programs/tests/test_v0_2_55_phase1_flat_generated_docs.py
+      programs/tests/test_v0_2_58_phase1_engine_bundle.py
 
-* **The two counts move together because they read the same thing** — the
-  landing worktree's index — and they move independently of every commit on
-  either side. That is why the reproduction could not reach 225/133 from any
-  base: it was replaying commits against a question neither counter asks.
-* **The file cannot be named from `main`.** It was never committed on either
-  side; `d1f9885f0440..ae5cc4dbf` adds and deletes no test file outside
-  `programs/tests` and `tools/` (checked with `--diff-filter=AD`), so no
-  artefact in this repository records it. Naming it needs the landing worktree,
-  which no longer exists. What CAN be named is its shape, and it is tightly
-  constrained by the two numbers: a **tracked-in-the-index** file, matching
-  pytest's collection patterns, **outside** `programs/tests` and `tools/`, not in
-  the census's declared exclusions, and named by exactly **four** test files
-  under `programs/tests` that the rest of the diff did not already select.
-* **This is not exotic.** The census's own 132 members include three files of
-  precisely that species — two under `_jcapsha_notes/candidate_tests/` and one
-  under `docs/capture/2026-08-21-jcap-ppa/` — test files that reached the tree
-  as somebody's scratch and stayed. A landing that stages its assembly with a
-  broad `git add` puts a 133rd in the index for the length of one gate run.
+  221 + 4 = 225.
+
+### The hypothesis was half right, and the half it got wrong is the useful half
+
+"One extra tracked test file outside `programs/tests` and `tools/`" accounts for
+the census and **cannot** account for the targeted count. Measured over all 132
+existing members of that species, driving each through the real selector's
+three-hop rule 7: **131 add zero selected tests and one adds one. None adds
+four.** A newly-created test file is, by construction, named by nothing, so its
+selection delta is zero — the census and the selection are moved by *different
+files in the same tree*, not by one file.
+
+### What the landing worktree was carrying
+
+Uncommitted work in the plugin's `tools/phase1_engine/`: at least an edit to
+`cli.py` and at least one new test under its `tests/`. Neither is in any commit
+on either side of `d1f9885f0440..ae5cc4dbf` — checked with `--diff-filter=AD`,
+which reports no test file added or deleted outside `programs/tests` and
+`tools/` in that range — so no artefact in this repository records it and the
+worktree that held it is gone. The mechanism, the tree, and the exact selection
+delta are named; the individual bytes are not recoverable and are not claimed.
 
 ## What is worth changing, and what is not
 
