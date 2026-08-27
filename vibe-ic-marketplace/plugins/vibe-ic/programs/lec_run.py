@@ -715,6 +715,16 @@ def should_retry_gold_with_slang(parsed: Dict, gold_log: str,
     _budget_blocked, _budget_ev = budget_kill_blocks_frontend_retry(gold_log)
     if _budget_blocked:
         return False, _budget_ev
+    # AND THE NOT-BLOCKED ANSWER IS RECORDED TOO (#313 §6). "the budget-kill
+    # check ran and did not block" and "the budget-kill check never ran" are
+    # different facts about a run, and until this line the log could not tell
+    # them apart — the decline was audible and the non-decline was silent,
+    # which is the asymmetry `silent_decline_audit` exists to remove. It names
+    # `_budget_blocked` so the predicate's own answer is in the record, not
+    # merely its consequence.
+    print(f"[lec_run] gold-frontend retry: budget-kill check consulted, "
+          f"_budget_blocked={_budget_blocked!r} — not declined here.",
+          file=sys.stderr)
     if is_frontend_parse_abort(gold_log):
         return True, ("built-in read_verilog -sv aborted with a frontend "
                       "parse/elaboration signature and built no miter")
@@ -2519,6 +2529,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                         gold_frontend_reason = _b3_ev
                         print("[lec_run] -DSYNTHESIS gold retry DECLINED: "
                               + _b3_ev, file=sys.stderr)
+                    else:
+                        # The same asymmetry as the call site in
+                        # `should_retry_gold_with_slang` above: without this
+                        # branch a reader cannot tell a check that RAN and
+                        # passed from one that was never reached, and the third
+                        # rung then spends a full budget with nothing in the
+                        # log to say why it was allowed to.
+                        print(f"[lec_run] -DSYNTHESIS gold retry: budget-kill "
+                              f"check consulted, _b3={_b3!r} — not declined "
+                              f"here.", file=sys.stderr)
                     # (2) A DIFFERENT condition: the rung was not killed, but
                     # the step's TOTAL wall budget is already spent, so a retry
                     # would have to re-arm a deadline. Budget accounting, not a
