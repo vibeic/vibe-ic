@@ -3,18 +3,14 @@
 ### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          11
-  CLEARED       44
+  BOTH          7
+  CLEARED       48
   FLAKY         2
 
 bucket        image    host     id
 FLAKY         4/13     13/13    test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged
 FLAKY         1/10     0/10     test_matrix_63x8_coverage.py::test_live_collection_relays_finite_semantic_progress_past_old_bound
-BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_census_block_is_fresh
-BOTH          2/2      2/2      test_matrix_63x8_census_freshness.py::test_the_published_total_equals_the_live_census
-BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved
 BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_no_cell_is_counted_enforced_while_its_predicate_is_red
-BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_the_enforcement_census_is_reported_for_humans
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step15]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step17]
 BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step19]
@@ -87,6 +83,10 @@ ae5cc4dbf    5/5 5/5 RED     0/4 0/6 GREEN  test_v0_3_24_issue524_lvs_pin_matchi
 72a558fdb    5/5 5/5 RED     0/3 0/4 GREEN  test_matrix_63x8_ledger.py::test_accessors_track_a_removed_field
 72a558fdb    5/5 5/5 RED     0/3 0/4 GREEN  test_matrix_63x8_ledger.py::test_every_coordinate_appears_exactly_once
 72a558fdb    5/5 5/5 RED     0/3 0/4 GREEN  test_matrix_63x8_ledger.py::test_output_entries_classify_into_the_four_kinds
+f8781ed4d    2/2 2/2 RED     0/2 0/2 GREEN  test_matrix_63x8_census_freshness.py::test_the_census_block_is_fresh
+f8781ed4d    2/2 2/2 RED     0/2 0/2 GREEN  test_matrix_63x8_census_freshness.py::test_the_published_total_equals_the_live_census
+f8781ed4d    2/2 2/2 RED     0/2 0/2 GREEN  test_matrix_63x8_coverage.py::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved
+f8781ed4d    2/2 2/2 RED     0/2 0/2 GREEN  test_matrix_63x8_coverage.py::test_the_enforcement_census_is_reported_for_humans
 
 All eight are one cause and one fix. The three modules' shared `_fake_docker` stub
 modelled a Magic `ext2spice` that wrote the extracted netlist but never wrote
@@ -114,6 +114,56 @@ dump that IS written and carries two real `Illegal overlap` records while netgen
 reports `Circuits match uniquely`, and `step_lvs` still returns FAIL /
 `LVS_EXTRACTION_ILLEGAL_OVERLAP` in both lanes. The gate therefore refuses an
 unmeasured channel AND a dirty one, and is not a check that refuses everything.
+
+The four `test_matrix_63x8_{census_freshness,coverage}` IDs above are ONE cause and it is
+the LAST non-cell red in the dimension modules. `_cell_outcomes_from_reports` refuses to let
+the nested outcome run's rc=1 be represented by anything outside the step x dimension cell
+join, so ONE red SUPPORTING test in any `test_matrix_d*` module declares the whole 612-cell
+census NORECORD — and every id that reads that census goes red with it, five files away from
+the cause. The one red item was
+`test_matrix_d7_outputs_list_complete.py::test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag`.
+
+Its premise had never been true on a corpus-free checkout. W2 is produced AND consumed AND
+undeclared; the control is about the CONSUMER leg, and its first two assertions prove that
+leg and passed before and after. The third asks the whole pipeline for a finding, which also
+needs a PRODUCER, and for `reports/final_summary.md` neither oracle can answer here: the AST
+does not follow `_pl.report_path(project, "final_summary.md")` through an `IfExp`
+(`writers_of` is `()`), and every root carrying a `reports/write_ledger.json` is a published
+cell that moved to vibeic/benchmark-data (`record_roots()` is `()`). MEASURED at
+`a974ed55c~1` — the tree from before the rule the control was written for —
+`findings_for("37")` is ALREADY `()`. It was landed green where a record was readable and
+was red everywhere else. Fixed at `f8781ed4d` [v1.12.18] by PLANTING the producer with the
+module's own `_plant_record` (the real `step_write_ledger` emitter over a committed probe
+run), which also makes the REVERSE direction live for the first time — it previously
+compared an empty set against an empty set and would have passed against a rule that had
+blinded the oracle completely. Falsified in both directions against
+`_gate_consumers`: drop the edge regardless of the step's own flags -> the forward assertion
+reddens; never drop it -> the reverse assertion reddens.
+
+Two derived-artefact repairs landed with it, each a legitimate flow change whose figures
+were left behind: seven ANCHORED figures (v1.12.3's advisory PERC clause moved four,
+v1.12.10's step-31 declaration moved three), the `required_outputs` entry pin 165 -> 166
+(FILE 123 -> 124, GLOB and ANY_OF untouched, measured by diffing the (step, entry) SET), and
+the generated census block (531 -> 532 ENFORCED, 3 -> 2 WAIVED-SKIPPED, CONTRADICTED 0).
+
+    host   2 runs   1 failed, 89 passed   (402.2 / 401.7 s)
+    image  2 runs   1 failed, 89 passed   (454.0 / 464.0 s)
+           ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2... via tools/ci/run_suite_in_eda_image.sh
+
+whole modules, never a `-k` selection, at `f8781ed4d`. The single remaining failure in both
+lanes is the fifth ID of this slice, `test_no_cell_is_counted_enforced_while_its_predicate_
+is_red`, which STAYS IN BOTH and is not this change's to move.
+
+WHY THAT ONE IS STILL RED, measured rather than guessed. It now reports **0 measured red and
+47 NOT MEASURED**, identically in both lanes — the one MEASURED red it used to carry (31/d7,
+`reports/phase3/perc_sweep.json`) was closed by v1.12.10. The 47 are dimension-3 cells whose
+predicate SKIPS because the published corpus is not in this checkout. The test's own failure
+message calls them "a HOST problem, not a repo defect" and the census publishes them in its
+own NOT MEASURED column as "not a pass and not a defect... read them as UNKNOWN" — and the
+test fails on them anyway, which is the very conflation `_join_axes` introduced the
+`-SKIPPED` label to remove one level down. Whether it should fail on an UNMEASURABLE
+predicate is a gate-semantics decision on a check that is itself part of the criterion, so it
+is named here for its owner and not changed unilaterally.
 
 ADJACENT, NOW MOVED — the four `test_extraction_input_blocked_verdict.py` IDs carry
 the same `FEEDBACK_OUT` stub repair from the same commit. They were measured green at
