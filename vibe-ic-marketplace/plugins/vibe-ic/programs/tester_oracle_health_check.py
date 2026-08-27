@@ -50,13 +50,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _watchdog                                        # noqa: E402
 
 
 REQUIRED_KEYS = (
@@ -115,19 +120,67 @@ def load_config(path: Path) -> tuple[Optional[dict], List[Finding]]:
     return data, findings
 
 
+#: What `run_cmd` raises when the job made NO FORWARD PROGRESS. Distinct from
+#: `subprocess.TimeoutExpired`, and the distinction is the point: the old bound
+#: fired on "it has been N seconds", which is a different question from "is it
+#: working". A burn tool writing to a board over a slow link, or a tester
+#: waiting on a device that is answering, is PROGRESSING and must run to
+#: completion however long that legitimately takes.
+class Stalled(RuntimeError):
+    """The job was alive and produced nothing — no output, no CPU — for the
+    whole grace. That is a wedged tool, and unlike a timeout it is a MEASURED
+    statement about the tool rather than about the host's load."""
+
+
 def run_cmd(cmd_str: str, timeout: int) -> tuple[int, str, str]:
-    """Run a shell-style command with shell=False. Returns (rc, stdout, stderr)."""
+    """Run a shell-style command with shell=False. Returns (rc, stdout, stderr).
+
+    SUPERVISED BY PROGRESS, not by a wall clock. `timeout` is no longer "how
+    long may this take" — it is the STALL GRACE, "how long may this be silent
+    AND idle before we call it hung". Any of stdout/stderr growing or the
+    process burning CPU resets it, so a job that is doing something is never
+    killed; a job doing nothing at all for the grace raises `Stalled`.
+
+    The grace is floored at the measured cost of launching a process on THIS
+    host, scaled: a grace under the boot cost is how a supervisor kills its
+    child during startup, and a config written for the old meaning could carry
+    a very small number.
+    """
     tokens = shlex.split(cmd_str)
     if not tokens:
         raise ValueError("empty command")
-    proc = subprocess.run(
+    res = _watchdog.run_supervised(
         tokens,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
+        stall_grace_s=max(float(timeout), _stall_grace_floor_s()),
+        poll_s=1.0,
+        cpu_probe=_cpu_seconds,
     )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    if res.outcome in ("stalled", "ceiling"):
+        raise Stalled(
+            f"`{cmd_str}` produced no output and used no CPU for "
+            f"{res.elapsed_s:.0f}s and was stopped. It was not slow — it was "
+            f"doing nothing.")
+    return res.rc, res.out or "", res.err or ""
+
+
+def _cpu_seconds(proc) -> Optional[float]:
+    """utime+stime of the job, from /proc. A burn tool that is computing but
+    silent is PROGRESSING, and without this probe its silence alone would be
+    read as a stall. Returns None where /proc is unavailable, which the meter
+    treats as "no reading" and never as "no progress"."""
+    try:
+        with open(f"/proc/{proc.pid}/stat", "rb") as fh:
+            fields = fh.read().rsplit(b")", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+    except Exception:      # nosec — a probe error is "no reading"
+        return None
+
+
+def _stall_grace_floor_s() -> float:
+    """Measured here, in this session, on this host. See `run_cmd`."""
+    t0 = time.monotonic()
+    subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
+    return max(10.0, (time.monotonic() - t0) * 100.0)
 
 
 def check_oracle(config: dict, dry_run: bool = False) -> tuple[List[Finding], dict]:
@@ -176,11 +229,17 @@ def check_oracle(config: dict, dry_run: bool = False) -> tuple[List[Finding], di
             details=burn_cmd,
         ))
         return findings, report_extras
-    except subprocess.TimeoutExpired:
+    except Stalled as exc:
+        # STILL AN ERROR, and deliberately so: this gate's subject IS "does the
+        # burn/test path work", and a burn command that is alive and doing
+        # nothing is a broken one. What changed is that this is now reached only
+        # when nothing moved at all — the old message, "timed out after Ns",
+        # was equally reachable by a correct tool on a loaded host, and said the
+        # ORACLE was broken about a fact concerning the machine.
         findings.append(Finding(
             severity="ERROR",
             category="BURN_FAIL",
-            message=f"burn_command timed out after {timeout}s",
+            message=f"burn_command made no forward progress: {exc}",
             details=burn_cmd,
         ))
         return findings, report_extras
@@ -214,11 +273,12 @@ def check_oracle(config: dict, dry_run: bool = False) -> tuple[List[Finding], di
             details=tester_cmd,
         ))
         return findings, report_extras
-    except subprocess.TimeoutExpired:
+    except Stalled as exc:
+        # Same correction as the burn arm above.
         findings.append(Finding(
             severity="ERROR",
             category="TESTER_FAIL",
-            message=f"tester_command timed out after {timeout}s",
+            message=f"tester_command made no forward progress: {exc}",
             details=tester_cmd,
         ))
         return findings, report_extras
