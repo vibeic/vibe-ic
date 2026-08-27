@@ -603,6 +603,33 @@ _SPAWN_CARRIER = {
     "check_output": "raise",
 }
 _SPAWN_ATTRS = frozenset(_SPAWN_CARRIER)
+#: THE SECOND SANCTIONED WAY TO START A PROCESS.
+#:
+#: This module could read exactly one launch vocabulary, `subprocess.<attr>`.
+#: The plugin has another, and is actively being MOVED onto it:
+#: `loop_watchdog_compliance_check` REFUSES a raw `subprocess.run` and directs
+#: the author to `_watchdog.run_supervised`, because a wall-clock timeout
+#: answers "how long has it been" instead of "is it working". So the two gates
+#: pulled against each other -- satisfying the one that demands supervision
+#: took the launch site out of the vocabulary of the one that traces exit
+#: statuses, and a gate whose status was PROVABLY ignored silently became
+#: merely UNPROVEN. Measured on `design_one_shot_runner._run`:
+#: `rtl_hygiene_lint` INLINE_STATUS_IGNORED -> INLINE_UNPROVEN, on a change
+#: that altered nothing about whether anybody reads its rc.
+#:
+#: Losing resolution is not a neutral outcome here: UNPROVEN is this audit's
+#: "unknown", and #884's whole subject is that unknown must not be reported as
+#: enforcement. An audit that goes blind as the tree migrates would report a
+#: shrinking debt that is not shrinking.
+#:
+#: `completed_process(cmd, res)` adapts a supervised run to a real
+#: `CompletedProcess`, so its result IS a process carrier and is read through
+#: the ordinary `.returncode` -- no new status attribute is introduced, and a
+#: supervised launch is traced exactly as a `subprocess.run` one is.
+_WD_SPAWN_CARRIER = {
+    "completed_process": "process",
+}
+_WD_SPAWN_ATTRS = frozenset(_WD_SPAWN_CARRIER)
 #: Attributes of a `CompletedProcess`/`Popen` that ARE the exit status.
 _STATUS_ATTRS = frozenset({"returncode", "check_returncode", "wait", "poll"})
 #: `sys.exit(rc)` / `os._exit(rc)` — the status becomes the process's own exit
@@ -735,6 +762,10 @@ class _RunnerModule:
         #: the module's nickname, which is the same species of defect as
         #: answering from the gate's filename.
         self.sp_aliases: Set[str] = {"subprocess"}
+        #: the same, for the watchdog module — `import _watchdog as _wd`.
+        self.wd_aliases: Set[str] = {"_watchdog"}
+        #: bare names bound by `from _watchdog import completed_process`.
+        self.wd_funcs: Dict[str, str] = {}
         #: bare names bound to a subprocess entry point by `from subprocess
         #: import run as r` — name -> the entry point it is.
         self.sp_funcs: Dict[str, str] = {}
@@ -765,10 +796,16 @@ class _RunnerModule:
                 for a in node.names:
                     if a.name == "subprocess":
                         self.sp_aliases.add(a.asname or "subprocess")
+                    elif a.name == "_watchdog":
+                        self.wd_aliases.add(a.asname or "_watchdog")
             elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
                 for a in node.names:
                     if a.name in _SPAWN_ATTRS:
                         self.sp_funcs[a.asname or a.name] = a.name
+            elif isinstance(node, ast.ImportFrom) and node.module == "_watchdog":
+                for a in node.names:
+                    if a.name in _WD_SPAWN_ATTRS:
+                        self.wd_funcs[a.asname or a.name] = a.name
 
     def _build(self) -> None:
         stack: List[tuple] = [(self.tree, None)]
@@ -865,6 +902,14 @@ class _RunnerModule:
             elif f.id in ("check_call", "check_output"):
                 attr = f.id
         if attr is None:
+            # The watchdog vocabulary, read through every name it is bound to,
+            # exactly as the subprocess one is.
+            if isinstance(f, ast.Attribute) and f.attr in _WD_SPAWN_ATTRS:
+                base = f.value
+                if isinstance(base, ast.Name) and base.id in self.wd_aliases:
+                    return (_WD_SPAWN_CARRIER[f.attr], None)
+            elif isinstance(f, ast.Name) and f.id in self.wd_funcs:
+                return (_WD_SPAWN_CARRIER[self.wd_funcs[f.id]], None)
             return None
         if attr == "run" and _RunnerModule._check_true(call):
             return ("raise", None)

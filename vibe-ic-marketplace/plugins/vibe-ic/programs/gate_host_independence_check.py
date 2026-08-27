@@ -126,6 +126,8 @@ import re
 import shlex
 import subprocess
 import sys
+
+import _watchdog
 import tempfile
 import time
 from pathlib import Path
@@ -463,10 +465,37 @@ def _run_gate(argv: List[str], cwd: Path,
     ``2>&1 | tee`` observes.  Python buffering makes that distinction verdict
     bearing: stderr can arrive first while the final stdout PASS flushes at
     exit.  Both arms therefore preserve one combined stream.
+
+    BOUNDED BY NO-PROGRESS, NOT BY A CLOCK.  This module's own subject is that
+    the same commit must give the same verdict whoever runs it, and a
+    wall-clock bound is precisely a thing that makes the verdict depend on WHO
+    RUNS IT.  `TimeoutExpired` is a `SubprocessError`, so a gate that was
+    merely SLOW on a loaded host landed in the callers' `GATE_UNRUNNABLE`
+    handler and FAILed the probe: the machine's load reported as a property of
+    the commit.  The comment at the confirmation drive already named this
+    exactly -- "the same tool reported 6/6 clean on one run and 5/6 on the
+    next -- a verdict that depends on the machine's load is the very thing this
+    probe exists to refuse, occurring in the probe itself".
+
+    `timeout` is now the IDLE tolerance.  A gate whose process tree keeps
+    moving runs to completion however long it legitimately takes; one that has
+    stopped moving entirely still raises `TimeoutExpired`, so every caller's
+    `GATE_UNRUNNABLE` path is untouched -- and that verdict is now honest,
+    because "this gate made no progress at all" is a statement about the GATE,
+    which is what `GATE_UNRUNNABLE` claims, and not about the host.
     """
-    return subprocess.run(
-        argv, cwd=str(cwd), stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True, timeout=timeout)
+    res = _watchdog.run_host_supervised(
+        argv, cwd=str(cwd), merge_stderr=True,
+        stall_grace_s=float(timeout))
+    if res.outcome in ("stalled", "ceiling"):
+        # Raised, not returned: a stalled arm has NO verdict, and letting it
+        # reach the comparison would invent a difference out of an absence.
+        raise subprocess.TimeoutExpired(
+            argv, timeout,
+            output=(res.out + "\nNO FORWARD PROGRESS: nothing in the process "
+                    "tree (output, CPU or I/O) advanced — killed as hung. This "
+                    "is NOT a statement that the gate was too slow."))
+    return subprocess.CompletedProcess(argv, res.rc, res.out, "")
 
 
 def _attestation_summary(rec: Dict, limit: int = 200) -> str:

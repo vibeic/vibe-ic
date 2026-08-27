@@ -433,29 +433,41 @@ def _run(cmd: List[str], cwd: Optional[Path] = None,
     res = _wd.run_host_supervised(
         cmd,
         cwd=str(cwd) if cwd else None,
-        # The caller's number becomes its IDLE tolerance. Read that way it is
-        # already far more generous than it was as a deadline — a progressing
-        # job now has no bound at all — while a hang is still found promptly,
-        # which `max(timeout, DEFAULT_STALL_GRACE_S)` would have cost: it turned
-        # every short probe into a 30-minute wait on a hang. The floor is one
-        # full observation cadence, because nothing can honestly be called
-        # stalled on fewer than a couple of looks.
-        stall_grace_s=max(float(timeout), _wd.DEFAULT_POLL_S),
+        # The caller's number becomes its IDLE tolerance, honoured as given.
+        # Read that way it is already far more generous than it was as a
+        # deadline — a progressing job now has no bound at all — while a hang
+        # is still found on the caller's own terms. No floor is imposed on it:
+        # `run_host_supervised` derives the poll cadence as a quarter of the
+        # grace, so the job is looked at several times whatever the grace, and
+        # a floor would only override a caller that meant what it said.
+        stall_grace_s=float(timeout),
         env={**os.environ, **(env or {})},
     )
-    if res.rc == 127 and res.err.startswith("COMMAND_NOT_FOUND"):
-        return 127, "", res.err
     if res.outcome in ("stalled", "ceiling"):
         # Reported as 124, unchanged, so every existing rc=124 consumer keeps
         # working. Only the QUESTION changed: 124 used to mean "the clock ran
         # out", it now means "nothing in this job's process tree moved". The
         # message says so rather than naming a duration, because the duration
         # was never the finding.
-        return 124, res.out, (
+        cp = subprocess.CompletedProcess(
+            cmd, 124, res.out,
             res.err + f"\nNO FORWARD PROGRESS: nothing in the process tree "
             f"(output, CPU or I/O) advanced for {res.elapsed_s:.0f}s — killed "
             f"as hung. This is NOT a statement that the job was too slow.")
-    return res.rc, res.out, res.err
+    else:
+        # A missing binary already arrives here as rc 127 / COMMAND_NOT_FOUND,
+        # so it needs no branch of its own.
+        cp = _wd.completed_process(cmd, res)
+    # Handed back through a real `CompletedProcess`, and returned as
+    # `cp.returncode, cp.stdout, cp.stderr`, deliberately. That triple is the
+    # shape `flow_gate_enforcement_audit` recognises as "the runners' `_run`
+    # house helper" (its `("tuple", i)` case) and follows to decide whether a
+    # gate's exit status reaches a reader. Returning `res.rc` instead took the
+    # trace cold and silently downgraded `rtl_hygiene_lint` from
+    # INLINE_STATUS_IGNORED — provably ignored, a recorded debt — to
+    # INLINE_UNPROVEN, unknown. Making a static audit lose resolution is not a
+    # side effect worth paying for a spelling.
+    return cp.returncode, cp.stdout, cp.stderr
 
 
 # -------------------------------------------------------------------------

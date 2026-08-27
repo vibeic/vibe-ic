@@ -285,6 +285,7 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
                    kill: Optional[Callable[[object, str], None]] = None,
                    popen_factory: Optional[Callable[..., object]] = None,
                    env=None,
+                   merge_stderr: bool = False,
                    scope_project=None,
                    scope_step=None,
                    scope_guard_dir=None,
@@ -336,12 +337,19 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
             scope_meta = {"enforced": False, "error": repr(_exc)}
 
     out_f = tempfile.TemporaryFile()
-    err_f = tempfile.TemporaryFile()
+    # `merge_stderr` sends stderr down the SAME descriptor as stdout, which is
+    # what `2>&1 | tee` and a human at a terminal see. Separately captured
+    # streams re-order under Python's own buffering -- stderr can arrive first
+    # while the final stdout verdict flushes at exit -- so for a caller whose
+    # comparison is over the combined text, the split is not cosmetic.
+    err_f = None if merge_stderr else tempfile.TemporaryFile()
 
     def _size():
         try:
-            return (os.fstat(out_f.fileno()).st_size
-                    + os.fstat(err_f.fileno()).st_size)
+            n = os.fstat(out_f.fileno()).st_size
+            if err_f is not None:
+                n += os.fstat(err_f.fileno()).st_size
+            return n
         except OSError:
             return 0
 
@@ -356,7 +364,9 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
 
     t0 = time.monotonic()
     try:
-        _kw = {"stdout": out_f, "stderr": err_f, "env": env}
+        _kw = {"stdout": out_f,
+               "stderr": (subprocess.STDOUT if merge_stderr else err_f),
+               "env": env}
         if cwd is not None:
             # Passed only when set: an injected popen_factory that predates
             # this parameter keeps working untouched.
@@ -364,7 +374,8 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
         proc = popen_factory(cmd, **_kw)
     except FileNotFoundError as e:
         out_f.close()
-        err_f.close()
+        if err_f is not None:
+            err_f.close()
         return SupervisedResult(127, "", f"COMMAND_NOT_FOUND: {e}",
                                 "launch_error", 0.0, scope=scope_meta)
 
@@ -414,9 +425,10 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
             return ""
 
     out = _read(out_f)
-    err = _read(err_f)
+    err = _read(err_f) if err_f is not None else ""
     out_f.close()
-    err_f.close()
+    if err_f is not None:
+        err_f.close()
     elapsed = time.monotonic() - t0
 
     # §4.05 LIVENESS (vibe-ic#1079). The child has exited, so this is the only
