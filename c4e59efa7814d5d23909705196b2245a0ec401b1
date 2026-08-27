@@ -1,0 +1,163 @@
+LANDING NOTE — the two-arm differential was deleted (owner instruction, 2026-08-28)
+
+THE LANDING GATE WAS NOT RUN FOR THIS COMMIT.
+=============================================
+This is deliberate and owner-authorised, and a reader who sees a green history
+must not read it as "the gate passed". It did not run at all.
+
+WHY NOT: `tools/gatekeeper-land.sh` judges ABSOLUTELY — it refuses on ANY red,
+including reds `main` already carries. Measured 2026-08-17: origin/main
+(f6b0e77dd) FAILS ITS OWN GATES (`repo tools tests` 9 red, `repo hygiene gates`
+1 of 80). It therefore refuses every commit today, including one that repairs
+it. The escape hatch used to be the two-arm differential — which is precisely
+what this commit deletes, because it cost ~3.5h per arm and answered wrongly.
+
+WHAT WAS RUN INSTEAD (authored on ae5cc4dbf, REBASED onto 7072a11fa
+when main moved to v1.11.97 mid-work; the rebase was clean because that
+landing touched none of these files):
+  1. `bash -n tools/gatekeeper-land.sh`            -> clean
+     `bash -n tools/git-hooks/pre-push`            -> clean
+  2. `tools/gatekeeper-land.sh --differential`     -> rc=2, explanatory refusal
+  3. BIDIRECTIONAL NEGATIVE CONTROL. The 12 tests in
+     `tools/test_gatekeeper_land_differential_removed.py` were run against a
+     pristine worktree of the PRE-removal tree (ae5cc4dbf):
+         pre-removal tree : 5 failed, 7 passed
+         this tree        : 12 passed
+     The 5 that flip are the removal invariants. The 7 that pass in both are the
+     `pre-push` stamp-reader tests, whose subject this change does not alter —
+     that is the intended result, not a weak control.
+  4. FLAG A/B against the pre-removal script, via the extracted arg-parse loop:
+         --cheap-only                     CHEAP_ONLY=1 PREPARE=0 LANE_WIDTH=4  SAME
+         --prepare                        CHEAP_ONLY=0 PREPARE=1 LANE_WIDTH=4  SAME
+         --serial                         CHEAP_ONLY=0 PREPARE=0 LANE_WIDTH=1  SAME
+         --cheap-only --prepare --serial  CHEAP_ONLY=1 PREPARE=1 LANE_WIDTH=1  SAME
+         (no flags)                       CHEAP_ONLY=0 PREPARE=0 LANE_WIDTH=4  SAME
+     Identical rc in all five.
+  5. EXECUTABLE-LINE DIFF (comments/blanks stripped) vs the pre-removal tree.
+     gatekeeper-land.sh: only the `--differential` case body and the failure-path
+     suggestion. pre-push: only three message lines. NO GATE LOGIC TOUCHED.
+  6. DISCOVERY A/B of the repo-tools-tests corpus: 51 files -> 49, differing by
+     exactly the two deleted files. `tools/harvest` stays pruned.
+  7. Suites green: the rewritten module; tools/test_gatekeeper_land_lanes.py;
+     tools/ci/test_repo_tools_tests_gate.py; and the plugin's
+     test_arm_env_reachability / test_landing_noop_verdict_check /
+     test_landing_gate_direct_push_tier / test_landing_merge_verdict.
+
+WHAT IS NOT CLAIMED
+===================
+The FULL landing gate's other stages (repo hygiene gates, the corpus stages, the
+hermetic runner lanes) were NOT run for this commit. This change does not touch
+them — the executable-line diff above bounds what it could affect — but "not
+touched" is an argument, not a measurement, and it is recorded here as such.
+
+`tools/gatekeeper-verify-merge.sh` (the MERGE path, #1019) is UNTOUCHED:
+`git diff` against it is empty. It has its own arms and its own judge and is not
+what was removed.
+
+WHAT WAS REMOVED, AND WHAT SURVIVED
+===================================
+REMOVED: tools/gatekeeper-land-differential.sh (869 lines); the `--differential`
+flag; tools/ci/pytest_finding_delta.py and its test (wired to nothing — verified
+by grep, and its own test was literally named
+`test_it_is_wired_to_nothing_and_that_is_deliberate`).
+
+KEPT ON PURPOSE: the comment explaining why the gate judges absolutely (the fact
+is still true, only the remedy changed); the `base=` stamp-tail reader in
+pre-push (a pre-removal stamp can still be on disk, and keeping the reader makes
+it REFUSE rather than silently authorise); the `direct-push` tier in
+landing_merge_verdict.py (its shell driver is gone, the tier is still a valid
+declared shape with live tests).
+
+The old 974-line test module was NOT deleted wholesale to make this pass its own
+suite. 26 tests lost their subject with the driver; the 5 stamp-reader tests
+survive verbatim; the one test that asserted the FLAG EXISTS was rewritten into
+the invariant that replaces it (the flag is refused, by name, with a cause and a
+remedy). No assertion weakened, no skipif added, no baseline written.
+
+PROTECTED-PATH PROTOCOL, AND WHY THERE ARE TWO COMMITS
+======================================================
+`tools/gatekeeper-land.sh` and `programs/ci_harness_timeout_ceiling_check.py`
+are protected paths in `tools/ci/protected_landing_transition.json`. Measured
+before this landing: pristine main matched the manifest's `next` state 47/47,
+and its `current` state 45/47. Editing a protected path without declaring the
+move first leaves the tree matching NEITHER state, and `build_receipt` parses
+that manifest BEFORE it looks at any candidate — so the next landing on the
+merge path would refuse for a reason that has nothing to do with it.
+
+  PREPARE  5c064ac52  the manifest alone (1 file), rendered by
+                      `tools/ci/protected_landing_manifest_author.py` against
+                      HEAD and handed back to `parse_manifest` before writing.
+                      Never hand-authored.
+  ACTIVATE c4e59efa7  installs exactly those bytes, and does not touch the
+                      manifest.
+
+Verified independently of the author: `parse_manifest` accepts the rendered
+manifest, and the two shipped files' sha256 equal the `next` digests it names
+(aa79ad108498…, 6f4d3c4de49b…).
+
+FOUR-FACE DIGEST RE-PIN (concurrency notice from the operator)
+==============================================================
+`ci_harness_timeout_ceiling_check` pins `gatekeeper-land.sh` with four faces and
+the check is a CONJUNCTION — three of four re-pinned is the same as none. All
+four were enumerated FROM THE CHECK'S OWN SLICING CODE, by calling
+`landing_semantic_progress_contract` and reading the `sha256=<observed>` it
+reports:
+
+    whole file                    6118f25ccad0 -> aa79ad108498   MOVED
+    entry-to-final-pytest prefix  f9f176413f7d -> b58c10cdd345   MOVED
+    run_pytest                    e0b1e4f33374                   equal (checked)
+    run_repo_tools_pytest         fafa41bc2277                   equal (checked)
+    run_unselectable_pytest       70d7764ca0c8                   equal (checked)
+    semantic driver               da77e90942af                   equal (checked)
+
+The four "equal" rows are the CHECK's verdict, not an inference from the diff:
+it slices every face on every run and reported no error for them (`lanes
+sliced=3`). No digest was hand-transcribed. `ci_harness_timeout_ceiling_check`
+exits 0 on the shipped tree.
+
+CONCURRENCY: `lane/gate-corrupted-checkout` is also editing `gatekeeper-land.sh`.
+This landing went FIRST. That lane will find these pins stale and must re-render
+all four faces — and the protected-landing manifest — against the tree it ships.
+
+ONE MEASUREMENT THAT WAS VOIDED AND RE-TAKEN
+============================================
+The first plugin-suite run reported 177 passed with `suite_write_guard` rc=1.
+That rc was MINE, not the suite's: I ran `git add -A` while the session was in
+flight, and all ten paths it listed are marked "status-changed"/"appeared" —
+staging, not writing. A run whose tree moved under it is void as a measurement,
+so the whole verification was re-run against the committed, unchanging tree and
+that second run is what is reported above.
+
+LANDED
+======
+  base            d0c73aa09  [v1.12.0]
+  PREPARE         5c064ac52
+  ACTIVATE        c4e59efa7  [v1.12.1]
+  push            ordinary fast-forward, --no-verify, live_main == candidate_parent
+                  checked immediately before the push
+  confirmed       `git ls-remote` returns c4e59efa7, and the OBJECTS were fetched
+                  back: gatekeeper-land-differential.sh and pytest_finding_delta.py
+                  are absent from origin/main, the shipped gatekeeper-land.sh has
+                  sha256 aa79ad108498… (the digest the manifest and the checker
+                  both name), and the published version reads 1.12.1.
+                  rc is a claim; these are the fetched facts.
+
+VERSION RACE, RECORDED
+======================
+main moved four times during this work: 7072a11fa [v1.11.97], b1f7e1542
+[v1.11.98], 638505d44, d0c73aa09 [v1.12.0]. v1.11.98 was the number this landing
+had already assigned itself; another lane took it first. The landing was rebuilt
+on d0c73aa09 and re-assigned v1.12.1. At every step it was verified that none of
+those landings touched any file in this change, so the PREPARE manifest was
+RE-RENDERED against the new base rather than replayed, and the four digest faces
+were re-checked on the tree actually shipped.
+
+WHAT A LATER READER SHOULD NOT CONCLUDE
+=======================================
+Not "the landing gate passed" — it was not run.
+Not "the full suite is green on main" — it is not, and that is the standing
+condition this commit's subject existed to work around.
+What IS established: this change does what it says, the flag is refused with a
+reason, nothing live still routes anyone to it, the surviving flags behave
+identically to before, and the four protected-path digest faces plus the
+protected-landing transition manifest are consistent with the bytes shipped.
