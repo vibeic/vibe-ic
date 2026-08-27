@@ -1,0 +1,91 @@
+LANDING NOTE — lane31/harness-environment-repair -> main @ 366e99c27 [v1.12.6]
+Landed 2026-08-28 by jlandpar, direct to main, landing gate not used (the gate
+judges ABSOLUTELY and refuses on main's pre-existing reds, so it refuses every
+candidate today; the owner authorised the direct push).
+
+REBASE
+  merge-base ae5cc4dbf -> parent 88809e6bf (15 commits behind, ZERO conflicts).
+  842+/21- against the new parent, identical to the diff against the stale
+  merge-base. Nothing on main was reverted.
+
+THE PREFLIGHT HAZARD — the branch's own verifier raised it and it reproduces.
+  scratch_root_guard gains a third BLOCKING condition in the CLI preflight:
+  NOT UNDER A VOLATILE ROOT (/tmp/, /var/tmp/, /dev/shm/, /run/).
+  gatekeeper-land.sh:934 asks that preflight and turns rc 1 into
+  `FAILED=1; return 1`, with refusal text saying "There is NO waiver for this
+  one."
+
+  MEASURED on this host, this tree, one invocation each, only TMPDIR moved:
+
+      TMPDIR                     base guard rc   v1.12.6 guard rc
+      /tmp/l31scratch                  0                0
+      /scratchvol/l31                  0                1
+
+  CONSEQUENCE FOR FUTURE AGENTS: any agent whose dispatch discipline puts
+  scratch on a dedicated volume -- outside every repo, outside the account
+  home, and outside all four volatile prefixes -- will have its LANDING refused
+  from v1.12.6 onward where v1.12.5 proceeded. Ordinary pytest runs are NOT
+  refused; the hook only declares. The refusal is the landing preflight only.
+
+  REMEDY, printed verbatim by the refusal:
+      env -u TMPDIR pytest ...
+      TMPDIR=/var/tmp/<something> pytest ...
+      pytest --basetemp=/tmp/<something> ...
+
+DECISION: (a) LANDED AS-IS, hazard recorded here. NOT (b) narrowed.
+  The refusal is true, not over-broad. Same two modules, both roots, one
+  invocation each:
+      TMPDIR=/tmp/l31scratch        25 passed
+      TMPDIR=/scratchvol/l31         6 failed, 19 passed
+  and the six are exactly the six the refusal names, by node id:
+      test_issue146_collect_external_outputs.py::test_live_external_output_collected_and_gate_passes
+      test_issue146_collect_external_outputs.py::test_dangling_reference_not_masked
+      test_issue146_collect_external_outputs.py::test_idempotent
+      test_issue146_collect_external_outputs.py::test_provenance_recorded
+      test_project_outputs_in_tree_check.py::test_in_tree_self_reference_is_disclosed_not_silent
+      test_project_outputs_in_tree_check.py::test_symlink_out_of_the_tree_is_still_external
+  So {roots refused} == {roots that falsify}. There is no false-positive slice
+  to narrow; narrowing would admit a root that publishes six causeless reds.
+
+  THE ONE SLICE WHERE THE BLOCK IS WIDER THAN THE HARM, stated so the next
+  reader does not have to rediscover it: a TARGETED landing whose selection
+  excludes both files is refused even though its own run would not be falsified
+  -- those six files are NOT in tools/ci/trusted_test_selection.py::CONTROL_TESTS,
+  so they are not pinned into every landing's denominator. Closing that slice
+  means moving the preflight to AFTER the selection is built, inside
+  tools/gatekeeper-land.sh, which programs/ci_harness_timeout_ceiling_check.py
+  pins with four faces. That is a change to the pinned landing script, and this
+  branch was chosen to land first precisely because it does not touch it. If a
+  future agent hits this refusal on a targeted landing, that is the fix to make
+  -- not a waiver, and not deletion of the guard, which is the repair for 6 of
+  the 31 failures this branch removes.
+
+RAN (whole modules)
+  test_issue1446_scratch_root_guard.py + test_issue613_gds_port_labels.py
+    + test_issue630_labels_on_a_layer_the_extractor_reads.py
+                                          -> 107 passed, 1 skipped, rc=0
+  tools/ci/test_run_suite_in_eda_image.py -> 10 passed, rc=0
+  test_issue146_collect_external_outputs.py + test_project_outputs_in_tree_check.py
+                                          -> 25 passed rc=0 (volatile root)
+  scratch_root_guard.py CLI (the production checker changed), both arms x both
+    roots -> the four rcs in the table above.
+  gen_program_inventory --check, marketplace_version_sync_check,
+    plugin_version_prose_sync_check, version_bump_monotonic_check,
+    content_pinned_authority_verified_only_at_merge,
+    ci_harness_timeout_ceiling_check     -> all rc=0
+
+SKIPPED, and what was run instead
+  The FULL suite was not run. Run instead: every module this branch touches,
+  whole, plus the two modules its condition (b) predicts, plus the production
+  checker under both roots. No base arm, no differential, no set difference --
+  that machinery was deleted from the repo at v1.12.1.
+  The landing gate (tools/gatekeeper-land.sh) was not run, per the owner's
+  authorisation above.
+
+PRE-EXISTING REDS CARRIED ONTO MAIN UNCHANGED
+  None observed in the modules run: every module this branch touches or
+  predicts is green at 366e99c27 under a volatile scratch root. No unattributed
+  red was encountered, so none was carried.
+
+PROTECTED PATHS: none touched (checked against all 47 in
+  tools/ci/protected_landing_transition.json).
