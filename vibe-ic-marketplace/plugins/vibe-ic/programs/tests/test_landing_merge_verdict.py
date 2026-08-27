@@ -58,6 +58,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import landing_merge_verdict as V  # noqa: E402
+import _watchdog  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "landing_merge_verdict.py"
@@ -2622,6 +2623,134 @@ def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+# ── waiting for the verifier by PROGRESS, not by a clock ────────────────────
+#
+# `proc.communicate(timeout=_T)` asked "has it been 55 seconds", which is a
+# different question from "is it still working". This is an END-TO-END verifier
+# driving four arms through a hermetic runner, on a host that routinely carries
+# other work; a healthy wave outlives any constant somebody picks, and when it
+# did, three tests called `pytest.fail("the verifier never finished")` — a red
+# about the verifier, manufactured by the load on the machine.
+#
+# The verifier's own run directory IS the progress signal, and this file already
+# relies on that: TMPDIR is pointed at a caller-owned directory, so the
+# `mktemp -d -t gkverify.XXXXXX` tree and every arm artefact in it are visible
+# under a known name WHILE the run is going. Files appearing, bytes growing and
+# mtimes advancing are forward progress. A run that is still writing is never
+# killed, however long it legitimately takes. A run that has written nothing for
+# the whole grace, with its process still alive, is genuinely wedged — and that
+# still FAILS these tests, which is the half that must not move.
+
+class _WhileProgressing:
+    """`while watcher.alive():` — the loop condition the watchers below need.
+
+    They used `proc.poll() is None and time.monotonic() < deadline` with the
+    same 55 s constant, and that is the SAME defect one level up from the
+    handler. On a slow host the watcher gave up while the verifier was still
+    producing the very artefacts the test then asserts about, so the assertion
+    failed about a run that was working — and it failed with a message about the
+    ARTEFACTS, which is the worst version: the reader is pointed at the wave
+    ordering when the real answer is that nobody watched long enough.
+
+    Alive means: the process has not exited AND its run tree has moved at some
+    point within the grace. A verifier that is producing files is watched for as
+    long as it keeps producing them; one that has gone completely quiet with the
+    process still up is not watched forever.
+    """
+
+    def __init__(self, proc, run_root: Path):
+        self._proc = proc
+        self._root = run_root
+        self._grace = _stall_grace_s()
+        self._score = None
+        self._moved = time.monotonic()
+
+    def alive(self) -> bool:
+        if self._proc.poll() is not None:
+            return False
+        now = time.monotonic()
+        try:
+            score = _run_dir_progress(self._root)
+        except OSError:
+            # A probe that could not read is "no reading", never "no progress":
+            # treating an unreadable tree as a stall would kill a healthy run
+            # for a reason that is about the prober.
+            return True
+        if score != self._score:
+            self._score = score
+            self._moved = now
+            return True
+        return (now - self._moved) <= self._grace
+
+
+def _run_dir_progress(run_root: Path) -> float:
+    """A monotonic score over the verifier's run tree: file count, total bytes,
+    and the newest mtime. Any one of them advancing is progress; none of them
+    can advance without the verifier doing something."""
+    files = 0
+    total = 0.0
+    newest = 0.0
+    # `os.walk`, not `Path.rglob`. THE TREE IS BEING WRITTEN AND DELETED WHILE
+    # THIS WALKS IT — `_first_seen_wave_artefacts` says so in as many words
+    # ("cleanup removes the run directory and `publish_validated_arm_artifact`
+    # consumes receipts") — and on 3.10 `rglob` raises FileNotFoundError out of
+    # its own scandir when a directory vanishes mid-walk. MEASURED: it did,
+    # inside the progress probe, and failed the test it was added to protect.
+    # `os.walk` ignores such errors by default and returns what it could see.
+    #
+    # A score that goes DOWN because a directory was removed is still MOVEMENT,
+    # which is the right reading: cleanup running is the verifier working.
+    try:
+        roots = list(run_root.glob("gkverify.*"))
+    except OSError:
+        return 0.0
+    for run in roots:
+        for dirpath, _dirs, names in os.walk(run):
+            for name in names:
+                try:
+                    st = os.stat(os.path.join(dirpath, name))
+                except OSError:
+                    continue
+                files += 1
+                total += st.st_size
+                newest = max(newest, st.st_mtime)
+    return float(files) + total + newest
+
+
+def _stall_grace_s() -> float:
+    """Measured on THIS host in THIS session, not hard-coded.
+
+    A grace below the cost of simply LAUNCHING a process is how a supervisor
+    kills its child during boot. The floor here is the observed cost of starting
+    and reaping a trivial subprocess, scaled generously: the verifier's quietest
+    legitimate stretch is a container step producing no file for a while, which
+    is many multiples of a bare launch. 30 s is the lower bound so an
+    unrealistically fast measurement cannot shrink it to nothing.
+    """
+    t0 = time.monotonic()
+    subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
+    launch = time.monotonic() - t0
+    return max(30.0, launch * 200.0)
+
+
+def _finish_by_progress(proc, run_root: Path):
+    """(stdout, stderr) once the verifier exits. Fails the test only if it is
+    STALLED — no movement in its run tree across the whole grace — never merely
+    because it has been slow."""
+    meter = _watchdog.ProgressMeter(size_fn=lambda: _run_dir_progress(run_root))
+    outcome, _rc = _watchdog.supervise(
+        proc, meter.sample, lambda p, _why: p.kill(),
+        poll_s=0.5, stall_grace_s=_stall_grace_s(),
+        hard_ceiling_s=3600.0)
+    stdout, stderr = proc.communicate()
+    if outcome != "natural":
+        pytest.fail(
+            f"the verifier was {outcome}: its run directory did not change at "
+            f"all for the whole stall grace, so it was not working — this is "
+            f"NOT the same as it having been slow:\n{stdout}\n{stderr}")
+    return stdout, stderr
+
+
 _WAVE_ARTEFACTS = (
     "b1-runner.log", "b2-runner.log",
     "b1-hermetic-receipt.json", "b2-hermetic-receipt.json",
@@ -2648,8 +2777,8 @@ def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
     """
     seen: dict[str, float] = {}
     start = time.monotonic()
-    deadline = start + _T
-    while proc.poll() is None and time.monotonic() < deadline:
+    watcher = _WhileProgressing(proc, run_root)
+    while watcher.alive():
         runs = sorted(run_root.glob("gkverify.*"))
         if runs:
             for name in _WAVE_ARTEFACTS:
@@ -2713,12 +2842,7 @@ def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
              "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
                  str(_BENCHMARK_TEST["remote"])})
     seen = _first_seen_wave_artefacts(proc, run_root)
-    try:
-        stdout, stderr = proc.communicate(timeout=_T)
-    except subprocess.TimeoutExpired:                     # pragma: no cover
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    stdout, stderr = _finish_by_progress(proc, run_root)
     doc = json.loads(out.read_text()) if out.is_file() else None
 
     assert proc.returncode == 0, stdout + stderr
@@ -2834,8 +2958,8 @@ def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
 
     planted: list[str] = []
     survivors: list[str] | None = None
-    deadline = time.monotonic() + _T
-    while proc.poll() is None and time.monotonic() < deadline:
+    watcher = _WhileProgressing(proc, run_root)
+    while watcher.alive():
         runs = sorted(run_root.glob("gkverify.*"))
         if not runs:
             time.sleep(0.02)
@@ -2863,12 +2987,7 @@ def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
             survivors = _leaked_forgeries(run)
             break
         time.sleep(0.02)
-    try:
-        stdout, stderr = proc.communicate(timeout=_T)
-    except subprocess.TimeoutExpired:                     # pragma: no cover
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    stdout, stderr = _finish_by_progress(proc, run_root)
     doc = json.loads(out.read_text()) if out.is_file() else None
 
     assert planted == list(_BASE_WAVE_ARTEFACTS), (
@@ -2923,21 +3042,15 @@ def _verify_watching_the_run_dir(sandbox, ref, tmp_path, when_b1_starts=None):
              "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
                  str(_BENCHMARK_TEST["remote"])})
     fired = False
-    deadline = time.monotonic() + _T
-    while (when_b1_starts is not None and not fired
-           and proc.poll() is None and time.monotonic() < deadline):
+    watcher = _WhileProgressing(proc, run_root)
+    while when_b1_starts is not None and not fired and watcher.alive():
         runs = sorted(run_root.glob("gkverify.*"))
         if runs and (runs[0] / "b1-runner.log").exists():
             when_b1_starts(runs[0])
             fired = True
             break
         time.sleep(0.02)
-    try:
-        stdout, stderr = proc.communicate(timeout=_T)
-    except subprocess.TimeoutExpired:                     # pragma: no cover
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    stdout, stderr = _finish_by_progress(proc, run_root)
     doc = json.loads(out.read_text()) if out.is_file() else None
     return proc.returncode, doc, stdout, stderr, fired
 
