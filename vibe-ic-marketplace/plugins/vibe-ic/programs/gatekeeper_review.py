@@ -2012,20 +2012,30 @@ def _run_program(prog: Path, args: List[str],
     failing gate, so "I could not determine this" lands on the safe side of
     the verdict. A bounded wait that returned 0 would be a worse defect than
     the hang: it would convert "never finished" into "clean".
+
+    WHAT THE BOUND IS NOW BOUNDING. #1208 fixed the hang with a WALL CLOCK,
+    and a wall clock cannot tell a hung gate from a slow one: at 90 s,
+    `plugin_full_audit.py` over the whole plugin root on a loaded machine was
+    filed UNDETERMINED — a failing gate — for finishing late. `timeout` is
+    therefore the STALL GRACE handed to `_watchdog`, which kills only a child
+    whose CPU, I/O and output have ALL sat flat for that long. Both halves of
+    #1208 survive: the wait is still bounded (it is a poll loop over
+    file-backed capture, never the `communicate` -> `selector.poll` that
+    `--timeout-method=thread` could not interrupt), and a stop is still 124
+    with UNDETERMINED, never 0. What changed is only the QUESTION being asked
+    — "has it stopped working?" instead of "has it taken too long?".
     """
-    try:
-        proc = subprocess.run([sys.executable, str(prog), *args],
-                              capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        def _txt(v) -> str:
-            if v is None:
-                return ""
-            return v.decode("utf-8", "replace") if isinstance(v, bytes) else v
-        return 124, _txt(exc.stdout), (
-            f"{prog.name}: exceeded the {timeout:g}s bound and was stopped "
-            f"(#1208) — this gate is UNDETERMINED, which is reported as a "
-            f"failure because it is not a clean result\n" + _txt(exc.stderr))
-    return proc.returncode, proc.stdout, proc.stderr
+    res = _wd.run_host_supervised([sys.executable, str(prog), *args],
+                                  stall_grace_s=float(timeout))
+    if res.outcome == "launch_error":
+        return 127, "", f"{prog.name}: could not be started — {res.err}"
+    if res.stalled:
+        return 124, res.out, (
+            f"{prog.name}: made no forward progress — no CPU, no I/O and no "
+            f"output — for {timeout:g}s and was stopped as hung (#1208) — "
+            f"this gate is UNDETERMINED, which is reported as a "
+            f"failure because it is not a clean result\n" + (res.err or ""))
+    return res.rc, res.out, res.err
 
 
 # --------------------------------------------------------------------------
