@@ -1,253 +1,300 @@
-# The 1178 direct points — grouped, and the first group fixed
+# The 1178 direct points — a watchdog, not a relabel
 
-The census's direct slice is `cls==A && direct==yes`: a call site passes its own
-`timeout=` and the expiry becomes a failing verdict about the subject. The brief
-for this lane was explicit — **do not start until you have grouped**, because a
-tail of 1178 is not 1178 problems.
+The census slice this lane owns is `cls==A && direct==yes`: **1178 rows** where a
+call site passes its own `timeout=` and the expiry becomes a *failing verdict
+about the subject*. The brief was explicit — do not start until you have
+grouped, because a tail of 1178 is not 1178 problems.
 
-## The denominator is mine, not inherited
+It is not. It is **one problem, 1178 times.**
 
-The census was measured at `2ffa7a594`; `main` is now `a4f6b4f33`, so line numbers
-have drifted. Rather than trust them, every site was re-derived by AST on the
-current tree: a call to `subprocess.{run,check_output,check_call,call,Popen}` /
-`.communicate` / `.wait` carrying a `timeout*` kwarg, **not** enclosed by any
-`try` whose handler can catch `TimeoutExpired` (which includes `SubprocessError`,
-`Exception`, `BaseException` and a bare `except`).
+## The owner's rulings this lane is written to
 
-| | |
-| --- | ---: |
-| files parsed | 4507 |
-| parse failures | 0 |
-| `timeout=` spawn sites | 1484 |
-| …covered by a timeout-catching handler | 334 |
-| **uncovered — this lane's slice** | **1150** |
+> 出現 1 個 failure，位置是未修改的 analog_a3_netlist_emit，看起來是 60 秒的
+> timeout 造成的 failure。你怎麼知道它 60 秒這次過了，換一臺機器會不會跑得更久
+> 或跑得更快？你不知道嘛。
 
-1150 against the census's 1178. The gap is not disagreement: this derivation is
-tighter, and it separates the census's own two false-positive kinds mechanically
-rather than by sampling.
+and, on what counts as a fix:
 
-## The grouping
+> Timeout 就結束這件事情不 make sense。任何 Timeout 要先用「看門狗」取代，而不是
+> 把 fail 變成 not_measured — 那是**最下策**。
 
-### By tree
+Both are load-bearing here. The first says a wall-clock bound answers *"how long
+has it been"* and is then spent as if it answered *"is this working"*. The second
+says that relabelling the expiry to NOT_MEASURED is not a fix: it still kills
+work that was progressing, and only stops lying about why. **The kill is the
+defect.**
+
+The first ruling's own example is a TEST bound, and this lane's slice is 89%
+tests. That is not a low-value corner of the tail; it is where the report came
+from.
+
+## Grouping, before any edit
+
+Every row is the same call — `subprocess.run(..., timeout=N)`. 1165 of 1167 are
+`subprocess.run`; 2 are `Popen`. What differs is only *who reads the result*.
 
 | tree | sites |
 | --- | ---: |
-| `programs/tests/` | 1010 |
+| `programs/tests/` | 997 |
 | `programs/` (non-test) | 68 |
 | `mcp-eda/` | 36 |
-| `tools/` (repo root) | 35 |
-| `plugin/tools/` | 1 |
+| `tools/` (repo root) | 40 |
+| elsewhere | 13 |
 
-### By enclosing name — the tail is copy-paste, not variety
+**584 distinct files, 1104 distinct enclosing functions.** The tail is flat, not
+clustered — so it was grouped by the only axis that predicts the fix: what the
+call passes.
 
-676 distinct enclosing names, but the top of the distribution is one helper
-written 200 times:
-
-| enclosing | files | sites |
+| kwarg | sites | share |
 | --- | ---: | ---: |
-| `_run` | 200 | 200 |
-| `_git` | 24 | 24 |
-| `test_a_bad_invocation_is_rc_3` | 21 | 21 |
-| `test_a_missing_tree_is_undetermined_not_a_pass` | 20 | 20 |
-| `_run_gate` | 18 | 18 |
-| `run` | 15 | 16 |
-| `_cli` | 14 | 14 |
-| `test_the_shipped_tree_passes_its_own_rule` | 14 | 14 |
-| `_run_cli` | 9 | 9 |
-| `_run_tclsh`, `test_chip_agnostic_guard`, `_gate` | 19 | 19 |
+| `timeout` | 1165 | 99.8% |
+| `capture_output` | 1153 | 98.8% |
+| `text` | 1121 | 96.1% |
+| `cwd` | 168 | 14.4% |
+| `env` | 92 | 7.9% |
+| `check` | 51 | 4.4% |
+| `input` | 16 | 1.4% |
+| `stdout` / `stderr` | 12 / 12 | 1.0% |
+| `stdin` | 9 | 0.8% |
+| `errors` | 4 | 0.3% |
 
-**355 sites in 12 name-families.** They are near-duplicates, not exact ones —
-the 200 `_run` bodies are 157 distinct texts — so a single shared helper is a
-large mechanical edit rather than a small one. What they DO share is the shape:
-one `subprocess.run` and one constant.
+**1128 of 1167 (96.7%) pass nothing a `subprocess.run`-shaped progress-supervised
+drop-in cannot take.** That single number is the grouping result, and it is why
+this lane is one fix applied 1065 times rather than a thousand judgement calls.
 
-### By the constant — this is the group that matters
+## The census's own precision, measured
 
-| bound | sites | cumulative |
-| ---: | ---: | ---: |
-| `timeout=60` | 462 | 40 % |
-| `timeout=30` | 103 | 49 % |
-| `timeout=_T` | 94 | 57 % |
-| `timeout=300` | 72 | 63 % |
-| `timeout=120` | 36 | 69 % |
-| `timeout=55` | 31 | 72 % |
-| `timeout=1800` | 30 | 75 % |
+The brief warned to expect ~1 in 5 false positives. On this slice it is far
+better than that, and the difference is worth recording because it changes how
+the next lane should budget.
 
-**Four numbers cover 63 % of the slice, and one number covers 40 %.** `60` is the
-number in the owner's ruling.
+Every row was located on the current tree by AST (alias-aware: a function-local
+`import subprocess as _sp` counts), not by the census's line numbers, which had
+drifted 30 commits.
 
-The clearest single piece of evidence in the slice sits beside one of them.
-`tests/test_ci_harness_timeout_ceiling_check.py` defines `_T_TREE = 60` under a
-comment recording what was actually measured for that call:
-
-```
-uncontended, 3 runs   13.75 / 13.53 / 13.70 s
-8 concurrent copies   worst 15.10 s
-32 concurrent copies  worst 43.75 s
-```
-
-43.75 s of a 60 s bound is consumed by load alone, on a 32-core host, at 4x the
-landing lane's concurrency. The author measured the defect and then wrote the
-number down anyway. Nothing about the subject changes between those rows.
-
-## What was fixed
-
-**29 sites in 12 landing gates — the `git`-plumbing group.** One cause: a gate
-asks `git` a question under a wall-clock bound, and the expiry escapes as rc 1,
-which downstream reads as *this commit is defective*.
-
-`tracked_symlink_target_present_check` states the principle and then breaks it
-three lines below:
-
-> reporting it would make the gate fail on a machine rather than on a commit,
-> which is the thing #555 is about
-
-```python
-r = subprocess.run(["git", "-C", str(root), "ls-files"], timeout=180)
-```
-
-Not hypothetical on the host these run on. Measured on the shared checkout
-while writing this: **32 registered worktrees**, **20,670 loose objects**, 48
-packs. Load average on this box moved from 12.45 to 1.43 over the few hours this
-lane took — the same `git ls-files`, the same commit, an order of magnitude
-apart in what it costs. That spread is the whole argument.
-
-Two shapes, and the difference is load-bearing:
-
-* **20 verdict-bearing reads** → `_pr.run`, and each gate's entry point maps a
-  stall to **rc 2, announced**. Verified, not assumed: all 11 wrapped gates
-  spell rc 2 "could not measure"
-  (`_vacuous_exit.RC_PASS,RC_FAIL,RC_VACUOUS = 0,1,2`, plus `RC_NOTHING`,
-  `RC_UNDETERMINED`, `RC_CANNOT_MEASURE`, `RC_NOT_CHECKED`).
-* **9 best-effort cleanups** (worktree remove/unlock/prune, `checkout --`) →
-  `_pr.run_best_effort`, rc 199, which their existing `if rc == 0` already
-  handles.
-
-Keeping those two apart is the whole point. An rc at a *verdict* site would let
-every `if rc != 0: fail` in the repo convert a host condition straight back into
-a finding about the subject.
-
-rc 2 still blocks the landing sweep — `_gate_dispatch.sh` maps it to NOT_CHECKED
-by design. That is intended: the outcome is as blocking as before, but the reason
-is now **true**. "This gate could not finish looking" is actionable; "this commit
-has a broken pointer" was not, because it was false.
-
-### The replacement primitive
-
-`programs/_progress_run.py`, deliberately `subprocess.run`-shaped so a site
-converts by deleting `timeout=`. It reuses `_watchdog`'s supervision loop rather
-than reinventing it, and judges three signals: output bytes, `utime+stime` summed
-over the child **and its live descendants**, and `read_bytes+write_bytes`. Any
-signal advancing = progressing, and a progressing child is never killed. Nothing
-advancing across N **consecutive looks** = stalled. N counts looks, not seconds.
-
-Two defects in the first draft, both worth recording because both are the same
-error this lane exists to remove:
-
-* the poll cadence was derived **downward** from a measured spawn floor
-  (0.0126 s here), producing a 3 s stall window that would have murdered anything
-  blocked on a slow network read — which moves neither CPU nor block-I/O. The
-  measurement now only ever makes the primitive **more** patient:
-  `max(30 s, floor x 100)`.
-* `input=` set `stdin=PIPE` and never wrote to it — a silent hang, which is
-  precisely the failure mode being removed. It refuses out loud instead.
-
-## Evidence
-
-* 10 gates driven against one fixed subject tree from both arms: identical rc and
-  byte-identical output, 0 differences.
-* The first sweep **proved nothing, and said so**: under `python3 -I` every gate
-  died at import (isolated mode drops site-packages), and argparse's rc 2 for an
-  unrecognised argument reads exactly like a gate's own rc 2 UNDETERMINED. Both
-  arms agreeing on a crash is not agreement about the change.
-* Identical output is also what *"my code never ran"* looks like, so the calls
-  were **counted**: 6 gates reached the primitive across 19 real calls
-  (target_present 4, portability 1, worktree_is_clean 5, noop_verdict 6,
-  doc_table 1, conflict_resolve 2).
-* Both arms of the 10 owning test files: **209 passed, 3 skipped**, identical.
-* `_progress_run`'s own control is bidirectional and each test drives the SAME
-  child through both shapes, asserting they DISAGREE: a quiet CPU-bound child is
-  refused by `timeout=0.6` and completes under a 0.6 s **stall** window; a
-  motionless child is still caught. 10 passed.
-
-## Rejected as false positives
-
-**16**, all mechanically separable, none requiring a judgement call:
-
-| callee | n | why |
+| | rows | |
 | --- | ---: | --- |
-| `runner.run(...)` | 8 | `runner = _kl.find_runner()` — a call-through |
-| `run(...)` | 6 | a local helper; 4 of them are `mcp-eda/.../de10lite/driver.py`, whose `run()` **already catches** `TimeoutExpired` and returns rc 124 — indirect *and* covered, two reasons |
-| `_s.run`, `M.run` | 2 | call-throughs |
+| located as a true direct site | 1167 | 99.1% |
+| **genuine false positives** | **5** | **0.4%** |
+| line-drift, could not be located | 6 | 0.5% |
 
-A further 2 sites sit in files that patch `subprocess.run`, so nothing is spawned.
+The 5 genuine false positives are both of the kinds the brief named, and both
+are mechanically separable:
 
-This is a **correction to the census**, and it runs the other way from the
-sampled 80 %: on the tightened direct-subprocess definition the false-positive
-rate in this slice is 16/1150 ≈ **1.4 %**, not ~20 %. The census predicted this
-("the tightened direct-subprocess count is the more accurate one"); this measures
-it.
+* **4 are call-through, not direct** — `mcp-eda/.../terasic-de10lite/driver.py`
+  lines 230, 245, 911, 1128 are `run([...], timeout_s=20)`, a *local helper*.
+  The helper itself is a separate census row and IS direct; fixing it fixed all
+  four callers, which is the grouping working.
+* **1 is not a subprocess call at all** — `formal_property_run.py:1514` calls
+  that module's own `def run(project, ...)`.
 
-## Two corrections to the framing — both were nearly shipped as confident claims
+The remaining 6 are the census's line numbers pointing into a file that moved
+more than the ±60-line search window; the sites are real and elsewhere in the
+same files.
 
-**1. The landing harness no longer has an elapsed ceiling.**
-`ci_harness_timeout_ceiling_check`'s docstring describes
-`pytest --timeout=180 --timeout-method=thread`, and reasoning from it produces a
-conclusion that is now false — that deleting an inner bound in a test merely
-*relocates* the verdict to a coarser session kill. Measured on this tree instead:
-all three landing pytest populations run through
-`pytest_per_file_junit.py --stall-after 300`, a **stall** parameter; `--timeout=`
-appears nowhere; `pytest-timeout` is *deliberately* absent — "elapsed time is not
-a test verdict". The gate itself now reports **"fixed elapsed ceiling: none"**.
+**The 20% figure did not reproduce. 0.4% did.**
 
-So the 1010 test rows are safely convertible. Nothing above them re-imposes a
-clock.
+## The fix: `_progress_run`, built on `_watchdog`
 
-**2. Converting a file *completely* can break a self-referential test.**
-Attempted and **reverted**: all 35 sites in
-`tests/test_ci_harness_timeout_ceiling_check.py` (one cause — the constant `_T`).
-The conversion is clean and 88 tests pass, but
-`test_this_files_own_bounds_are_inside_the_ceiling` fails on
+`programs/_progress_run.py` is a `subprocess.run`-shaped call that judges
+PROGRESS. A call site converts by deleting `timeout=`.
 
-```python
-assert sites, "no bound was READ — has the scan stopped working?"
-```
+It does not reinvent the supervisor: it drives `_watchdog.run_supervised`, the
+primitive this repo already had. Progress is *did anything MOVE between two
+looks* — output bytes, CPU (`utime+stime` over the child **and its live
+descendants**, so a quiet compute phase counts), block I/O. Any signal advancing
+= PROGRESSING, and a progressing child is **never** killed, however long it
+legitimately takes. Nothing advancing across N consecutive looks = STALLED.
 
-Base 89 passed; candidate 1 failed / 88 passed. The guard is a non-vacuity check
-on the *scanner*, and a file with genuinely zero bounds makes it unsatisfiable —
-the ideal end state breaks the check that polices the way there. The correct
-repair re-anchors the guard onto a fixture that still contains a bound, while
-asserting separately that this file has no offenders. That is strictly stronger,
-but it is an edit to another subsystem's non-vacuity guard and needs its own
-bidirectional control, so it was not done unverified. **Whoever takes the test
-tail hits this on every self-policing file.**
+**N is how many times we looked, not how long we waited.** A six-hour proof
+burning CPU advances the CPU signal at every look and can never trip the stall.
+That is the property a wall-clock bound cannot have.
 
-## Left, and why
+Two outcomes, and neither is a timeout:
 
-* **`programs/tests/` — 1010 sites.** Convertible (see correction 1), and the
-  four-constant grouping above is the order to do it in. Not started here beyond
-  the one reverted trial.
-* **`mcp-eda/` — 36 sites.** 32 are in `test/`; the only 4 in tool code are the
-  rejected `driver.py` call-throughs. There is **no direct user-visible verdict
-  defect in `mcp-eda/`** — priority 2 in the brief is empty once read.
-* **`tools/` (repo root) — 35 sites.** 24 in tests, 11 in non-test. Not started.
-* **`gate_host_independence_check.py:467, :986`** — `timeout=timeout`, the bound
-  the gate deliberately imposes on the subject it drives. A different question
-  from this lane's, and left alone.
-* **`shape_b_sample_export.py:362`** — an `iverilog` bound carrying an explicit
-  `# watchdog-exempt:` justification. Class A, but it belongs to
-  `loop_watchdog_compliance_check`'s exemption bookkeeping. Deprioritised, not
-  rejected.
+* the child exits → a `CompletedProcess`, whatever it took;
+* every readable signal sat still across N looks → `Stalled`, which is a
+  **finding about the child**, not about the host, and therefore actionable.
 
-## Not measured, by name
+Where the caller is a gate and cannot act on it, `exit_undetermined_on_stall`
+maps it to rc 2 UNDETERMINED — the repo's existing rule that *a review which
+could not decide must never reach the stamp as a review that decided nothing was
+wrong*. That is the last resort the second ruling permits, and it is reached only
+**after** the progress logic has decided the child is genuinely wedged.
 
-Converted but **not exercised** by a run that reached the call — stated rather
-than implied:
+### What the compatibility surface serves, and what it refuses
 
-* `published_record_staleness_check.py` — its `check-ignore` site needs a
-  superseded record present to reach.
-* `attestation_preflight_check.py` — refused my invocation at rc 3 on both arms.
-* `ci_ran_at_all_check.py`, `benchmark_run_manifest.py`,
-  `policy_direction_pin_check.py`, `gate_host_independence_check.py` — covered by
-  their owning test files (both arms identical) but not by a direct corpus run
-  that entered the converted line.
+Widening it was not cosmetic: 39 of 1167 sites passed something the drop-in
+refused, and they were concentrated exactly where it matters — the protected
+landing transition and the pytest runtime preflight feed children
+`stdin=DEVNULL`; `gate_host_independence_check` needs ONE combined stream
+because separately captured stdout-then-stderr is not the order a human or
+`2>&1 | tee` observes, and that ordering is verdict-bearing.
+
+Served: `cwd`, `env`, `check`, `input=` (handed over as a seekable file, never a
+writer thread this module could block on), `stdin=`, `(stdout=PIPE,
+stderr=STDOUT)` for one combined stream, `(stdout=PIPE, stderr=PIPE)` for the two
+separately, `errors="replace"`, `shell=`, and `text=False` for raw bytes.
+
+Refused, **out loud**: any other `errors=` policy, and any `stdout=<file>`
+redirect. An argument accepted and then not honoured would leave a converted gate
+reading an empty answer and calling it a clean one — worse than the timeout it
+replaced. A file redirect would take the output away from the progress meter
+while the result went on claiming an output signal; the honest answer there is
+`run_supervised(log_path=...)`, which watches the file it writes.
+
+`text=False` is real bytes, not decode-and-re-encode. The test asserts, as its
+own negative control, that the lossy alternative really would destroy a payload:
+a caller splitting `git ls-files -z` on NUL or reading a blob out of `git
+cat-file --batch` must get the bytes the child actually wrote.
+
+`FileNotFoundError` is re-raised rather than reported as rc 127. `subprocess.run`
+raises for a missing executable and call sites across this repo catch it to say
+"the tool is not installed"; the supervisor's rc 127 is right for a supervisor
+and wrong for a drop-in. **A drop-in may not change the exception contract.**
+
+## What was done
+
+| | sites |
+| --- | ---: |
+| worklist (census class-A direct, located) | 1154 |
+| **converted** | **1065** |
+| held, with a reason | 89 |
+
+* **PROD: 101 of 102.** Gates, flow runners, and MCP tools — where a fired bound
+  becomes a landing verdict or a tool's answer to a user.
+* **TEST: 964 of 1052**, across `programs/tests/`, `mcp-eda/test/` and `tools/`.
+
+Three coordinated edits per site, all by AST position, never by regex:
+
+1. the callee becomes `_pr.run` — or `_pr.run_best_effort` at **12 hand-named**
+   cleanup/capability probes whose result reaches no verdict;
+2. `timeout=` goes, or becomes an explicit `text=False` at the 11 sites reading
+   bytes;
+3. the **22 `except ...TimeoutExpired` handlers guarding those calls** are
+   retargeted to `_pr.Stalled`, and every one of their messages is rewritten.
+
+That third edit is not tidiness. Those are recovery paths their authors wrote for
+"the child did not finish"; left catching an exception that can no longer be
+raised, they would be dead code that still reads as coverage. And a retargeted
+handler that still says "timed out" says the wrong thing about the right event —
+three of them named a bound that no longer exists, including a `_p0_gate_record`
+carrying `timeout_s: 60` and a message telling the reader to raise
+`VIBEIC_GATE_TIMEOUT_S`. **A record naming a ceiling nobody spent is worse than
+no detail: the first thing it makes a reader do is raise something.**
+
+51 entry points now exit through `exit_undetermined_on_stall`. 358 + 16 + 22
+orphaned `import subprocess` lines and 80 orphaned module-level bounds
+(`_CLI_BOUND_S`, `_GATE_TIMEOUT_S`, `_NESTED_PYTEST_TIMEOUT_S`, …) are removed
+with the comment blocks that documented them: a dead `_TIMEOUT_S = 60` is not
+inert, it reads as live policy and invites the next author to spend it.
+
+### `matrix_mutation_ledger` — the flagship
+
+It was already doing what the second ruling calls 最下策. It killed a cell at
+900 s and recorded NOT_MEASURED: honest about the lie, and still killing work
+that was progressing. `_run_cell` and `replay` now take the supervision cadence
+instead of a bound, and the two docstrings that said "``timeout`` bounds ONE
+cell" say what is true.
+
+Its three bound tests are re-anchored on the property rather than on the number.
+The probe sleeps **forever** instead of for thirty seconds — under a clock,
+thirty seconds was merely longer than the bound; under supervision a
+thirty-second sleep wakes and answers. The cadence is three looks a second
+apart, chosen **above** pytest's own ~0.65 s idle boot floor, so the stall is
+caused by the probe going quiet and not by looking during start-up.
+
+## What was held, and why — 89 sites in 23 files
+
+Not one was held for convenience.
+
+| reason | sites | files |
+| --- | ---: | ---: |
+| the file is NAMED for the timeout machinery — converting it converts the subject under test | 62 | 12 |
+| the file drives a deliberately hanging or spinning child, where the bound IS the stimulus | 17 | 6 |
+| `phase3_one_shot_runner` / others: already covered elsewhere or single stragglers | 9 | 4 |
+| `tools/flow_runner.py:358` redirects stdout to a log file | 1 | 1 |
+
+The largest single holding is `test_ci_harness_timeout_ceiling_check.py` (35
+sites), which exists to police inner bounds. `tools/flow_runner.py:358` needs
+`run_supervised(log_path=...)`, watching the file it writes, and is a different
+change.
+
+**One of those holds is a correction to my own selection.**
+`tools/ci/test_landing_runtime_preflight_gate.py` has neither "timeout" nor
+"bound" in its name, so the filter missed it and it was converted. Its
+`test_an_inner_bound_is_a_real_bound` exists to prove the bounds THAT FILE uses
+sit under the harness ceiling and that one of them really stops a child that
+does not return — and `pytest.raises(subprocess.TimeoutExpired)` cannot hold
+against a call with no bound to expire. Retiring that guard is a policy decision
+about whether the ceiling rule still applies, and it belongs to whoever owns the
+rule. Reverted, and reported.
+
+## Both directions, everywhere
+
+**A guard that stopped refusing is a deletion, not a fix.** Every property is
+asserted in both directions, and each pair is written as an A/B against the call
+being replaced — testing only the new call would pass just as well if the new
+call never refused anything at all:
+
+* a quiet CPU-bound child that outlives a bound is **no longer failed**, and the
+  same child IS failed by `subprocess.run(timeout=...)`;
+* a motionless child is **still caught** — on the plain path, on the combined
+  stream, in bytes mode, and when fed by `input=`;
+* a measured slow host makes the primitive **more patient, never less**;
+* a missing executable raises `FileNotFoundError` on both sides.
+
+## Verification, and the three defects it caught
+
+Three real defects in this work were found by measuring rather than asserting.
+They are recorded because each is a reusable trap.
+
+**A file-wide regex reached code no site named.** The first pass tidied the
+ragged `text=True, )` left by the deletions with `s/,\s*\n\s*\)/)/` over the
+whole file. It found a `tuple(rules,)` in `formal_property_run.py`, turned a
+one-element tuple into a bare value, and broke the module's import. The cleanup
+is now scoped to the span each site owns, the whole pass is regenerated from
+main rather than patched, and the property is **checked**: an AST node-kind
+histogram per file, base vs here, reports drift in exactly the statements the
+change deliberately deletes. A vanished `Tuple` shows up in the same column.
+
+**Ten converted files pointed the loader at their own directory.** `_progress_run`
+lives in `programs/`; nine files under `tools/` and one five levels down inside
+`mcp-eda/src` are not there. All ten raised `ModuleNotFoundError` — including two
+landing gates, which would have failed at the first line rather than at the
+check. They now walk UP for the directory that holds it.
+
+**A differential is not optional when the instrument is new.** The probe that
+found those ten also reported 17 failures among the 50 converted modules under
+`programs/`, with `'NoneType' object has no attribute '__dict__'`. Running the
+identical probe against clean main produced the identical 17: those modules
+introspect themselves through `sys.modules`, and a module loaded by
+`spec_from_file_location` under a made-up name has no entry to find. A real
+import reports 0 on both arms.
+
+### The A/B
+
+Two equal-length sibling checkouts, base commit vs candidate, run separately.
+
+| arm | failures |
+| --- | ---: |
+| base `851b7e8a69`, 69 files | 2 |
+| candidate, same 69 files | 25 |
+
+The 2 on the base are pre-existing on this host. The 23 new ones were **one
+cause in three shapes**, and none of them was the conversion being wrong about
+production behaviour: the tests inject the process launch at `subprocess.run`,
+and the launch had moved. Six files now substitute at `mod._pr` (two of those
+modules no longer import `subprocess` at all, so the old line could not even
+resolve); `test_suite_write_guard` copies the guard into a detached mirror and
+now carries its siblings with it; and
+`test_analog_one_shot_runner_a1a3_producers` spied on one seam when the runner
+has two — three of its producer dispatches are census rows classified
+NOT_MEASURED, outside this lane, and still launch through `subprocess.run`.
+
+Fixing those seams surfaced the `FileNotFoundError` contract and the ledger's
+bound tests, both above.
+
+On the `tools/` and `mcp-eda/` set: **6 failed / 313 passed on BOTH arms, same
+names**, plus 152 passed under `mcp-eda/test`. Differential pyflakes on every
+touched file, base vs here: 152 → 147, 104 → 96, 8 → 7. No new findings.
