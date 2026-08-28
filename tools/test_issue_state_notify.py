@@ -19,7 +19,6 @@ spec):
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -107,12 +106,11 @@ def test_classifier_empty_body_is_not_core() -> None:
 
 def _run_classifier_cli(stdin: str) -> str:
     script = _HERE / "issue_state_notify.py"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(script), "--classify-comment-stdin"],
         input=stdin,
         capture_output=True,
         text=True,
-        timeout=10,
         env={**os.environ, "HOME": os.environ.get("HOME", "/tmp")},
     )
     assert result.returncode == 0, result.stderr
@@ -156,6 +154,17 @@ import json  # noqa: E402
 from typing import Any, Dict, List, Optional  # noqa: E402
 
 import issue_state_notify as isn  # noqa: E402
+
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 
 def _node(number: int, state: str, title: str,

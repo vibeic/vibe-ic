@@ -30,16 +30,22 @@ from pathlib import Path
 
 import pytest
 
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tools" / "check_no_unguarded_burn.sh"
 SRC = ROOT / "src"
 assert SCRIPT.exists()
-
-#: Every subprocess bound in this file. The landing harness runs pytest at
-#: `--timeout=180 --timeout-method=thread`, where an inner bound at or above
-#: the harness bound does not fail the TEST — it outlives the harness and
-#: takes the whole session down, losing every other verdict in the run.
-_BOUND_S = 60
 
 #: A burn-class call the sentinel's PATTERN_BURN is written to match.
 _BURN_CALL = 'return execSync(`quartus_pgm -c 1 -m JTAG -o "P;${sof}"`);'
@@ -56,10 +62,9 @@ def _run_sentinel():
     # decodable. A strict decoder here would turn a correct FAIL verdict into
     # a UnicodeDecodeError inside the harness — the same defect one layer up,
     # and it is how this test first went red after the fix landed.
-    return subprocess.run(
+    return _pr.run(
         ["bash", str(SCRIPT)],
-        capture_output=True, text=True, errors="replace", timeout=_BOUND_S,
-    )
+        capture_output=True, text=True, errors="replace")
 
 
 def test_current_tree_passes_sentinel():
@@ -173,10 +178,9 @@ def test_zero_denominator_refuses_instead_of_certifying(tmp_path):
     (tmp_path / "src").mkdir()
     clone = tmp_path / "tools" / SCRIPT.name
     clone.write_bytes(SCRIPT.read_bytes())
-    r = subprocess.run(
+    r = _pr.run(
         ["bash", str(clone)],
-        capture_output=True, text=True, errors="replace", timeout=_BOUND_S,
-    )
+        capture_output=True, text=True, errors="replace")
     assert r.returncode == 2, (
         "gate certified an EMPTY tree instead of refusing:\n"
         f"rc={r.returncode}\nstdout={r.stdout}\nstderr={r.stderr}"

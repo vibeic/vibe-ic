@@ -6,9 +6,19 @@ believes. Nobody reads a two-part timestamp to decide what a sentence means.
 from __future__ import annotations
 
 import ast
-import subprocess
 import sys
 from pathlib import Path
+
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 GEN = None
 for _c in (Path(__file__).resolve().parents[2] / "tools" / "gen_flow_gate_header.py",
@@ -37,10 +47,10 @@ def _write(tmp: Path) -> Path:
 
 def _run(page: Path, *extra):
     root = GEN.resolve().parents[1]
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(GEN), "--page", str(page), "--plugin-root",
          str(root / "vibe-ic-marketplace" / "plugins" / "vibe-ic"), *extra],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
 
 
 def test_main_still_reaches_its_write_call():

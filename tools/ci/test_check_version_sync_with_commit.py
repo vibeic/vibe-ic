@@ -18,8 +18,19 @@ a commit-message file as $1 — no git fixtures, no repo state.
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 REAL_SCRIPT = Path(__file__).resolve().parent / "check_version_sync_with_commit.sh"
 
@@ -41,8 +52,8 @@ def _stage(tmp_path: Path, version: str = "9.9.9") -> Path:
 def _run(script: Path, tmp_path: Path, msg: str):
     mf = tmp_path / "COMMIT_MSG.txt"
     mf.write_text(msg)
-    return subprocess.run(["bash", str(script), str(mf)],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run(["bash", str(script), str(mf)],
+                          capture_output=True, text=True)
 
 
 # ── #422: historical markers must exempt BOTH version spellings ───────────

@@ -35,11 +35,21 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 MCP_ROOT = Path(__file__).resolve().parent.parent
 INDEX_JS = MCP_ROOT / "src" / "index.js"
@@ -156,10 +166,9 @@ def _node_classify(output: str, report_written) -> dict:
         "process.stdout.write(JSON.stringify(r));});"
     )
     payload = json.dumps({"output": output, "reportWritten": report_written})
-    p = subprocess.run(
+    p = _pr.run(
         [NODE, "--input-type=module", "-e", js],
-        input=payload, capture_output=True, text=True, timeout=30,
-    )
+        input=payload, capture_output=True, text=True)
     assert p.returncode == 0, f"node failed: {p.stderr}"
     return json.loads(p.stdout)
 
@@ -241,8 +250,8 @@ def test_resolve_layout_top_flat_alignment():
         'const b=resolveLayoutTop(".subckt myinv A Y\\n.ends","myinv");'
         'process.stdout.write(JSON.stringify({a,b}));'
     )
-    p = subprocess.run([NODE, "--input-type=module", "-e", js],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([NODE, "--input-type=module", "-e", js],
+                       capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     out = json.loads(p.stdout)
     assert out["a"] == {"name": "myinv_flat", "aligned": True}
@@ -257,8 +266,8 @@ def test_stdcell_spice_path_per_pdk():
         's:stdcellSpicePath("sky130"),g:stdcellSpicePath("gf180"),'
         'c:stdcellSpicePath("custom")}));'
     )
-    p = subprocess.run([NODE, "--input-type=module", "-e", js],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([NODE, "--input-type=module", "-e", js],
+                       capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     out = json.loads(p.stdout)
     assert out["s"].endswith("sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice")
@@ -278,8 +287,8 @@ def test_build_netgen_lvs_tcl_loads_stdcell_into_schematic():
         'reportPath:"/r.txt",stdcellSpice:"/std.spice"});'
         'process.stdout.write(t);'
     )
-    p = subprocess.run([NODE, "--input-type=module", "-e", js],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([NODE, "--input-type=module", "-e", js],
+                       capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     tcl = p.stdout
     assert "readnet spice /std.spice $schCkt" in tcl

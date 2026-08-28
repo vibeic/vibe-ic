@@ -9,9 +9,19 @@ and fast.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 PROGRAM = Path(__file__).resolve().parent / "staged_version_claim_check.py"
 
@@ -26,11 +36,10 @@ def _make_plugin_json(tmp_path: Path, version: str) -> Path:
 
 
 def _run(plugin_dir: Path, diff_text: str):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAM), "--diff-from-stdin",
          "--repo-root", str(plugin_dir)],
-        input=diff_text, capture_output=True, text=True, timeout=10,
-    )
+        input=diff_text, capture_output=True, text=True)
 
 
 # A synthetic unified=0 diff that adds N lines to a single file.

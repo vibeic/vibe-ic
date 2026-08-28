@@ -22,10 +22,21 @@ passing when it could not look.
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 
 def _find(rel):
@@ -50,8 +61,8 @@ _DIGEST_REF = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
 
 
 def _resolve(*args, expect_ok=True):
-    r = subprocess.run(["bash", str(SCRIPT), *args],
-                       capture_output=True, text=True, env=_ENV, timeout=180)
+    r = _pr.run(["bash", str(SCRIPT), *args],
+                       capture_output=True, text=True, env=_ENV)
     if expect_ok:
         assert r.returncode == 0, r.stderr
     return r

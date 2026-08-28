@@ -20,10 +20,21 @@ chip/PDK-AGNOSTIC (machine property only).
 from __future__ import annotations
 
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 MCP_ROOT = Path(__file__).resolve().parent.parent
 INDEX_JS = MCP_ROOT / "src" / "index.js"
@@ -38,8 +49,8 @@ def _node(js: str, env: dict | None = None) -> str:
     e = dict(os.environ)
     if env:
         e.update(env)
-    r = subprocess.run([node, "-e", js], capture_output=True, text=True,
-                       timeout=30, env=e)
+    r = _pr.run([node, "-e", js], capture_output=True, text=True,
+                       env=e)
     assert r.returncode == 0, r.stderr
     return r.stdout
 

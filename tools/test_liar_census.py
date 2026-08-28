@@ -31,6 +31,17 @@ _TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TOOLS))
 import liar_census as lc  # noqa: E402
 
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 _T = 55
 
 #: See `test_the_mutation_never_writes_inside_the_checkout`.
@@ -674,8 +685,8 @@ def test_the_mutation_replaces_the_verdict_and_keeps_every_side_effect(tmp_path)
     assert sites >= 2, "nothing was forced, so the probe would measure nothing"
     gate = tmp_path / "planted.py"
     gate.write_text(forced)
-    proc = subprocess.run([sys.executable, str(gate), "bad"],
-                          capture_output=True, text=True, timeout=_T)
+    proc = _pr.run([sys.executable, str(gate), "bad"],
+                          capture_output=True, text=True)
     assert proc.returncode == 0, "the verdict was not forced"
     assert "[FAIL] planted: found the defect" in proc.stdout, (
         "the gate stopped doing its work, so this is a lobotomy rather than a "
@@ -791,9 +802,9 @@ def test_the_mutation_never_writes_inside_the_checkout(tmp_path):
     reason, and the flag that would let it do otherwise does not exist.
     """
     def dirt():
-        return subprocess.run(
+        return _pr.run(
             ["git", "status", "--porcelain", str(lc.PLUGIN)],
-            cwd=str(lc.REPO), capture_output=True, text=True, timeout=_T).stdout
+            cwd=str(lc.REPO), capture_output=True, text=True).stdout
 
     before = dirt()
     # 45 s, not 300: the harness that now runs this file bounds the SESSION at

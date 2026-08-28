@@ -19,10 +19,21 @@ This test locks in three properties:
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 MCP_ROOT = Path(__file__).resolve().parents[1]
 INDEX_JS = MCP_ROOT / "src" / "index.js"
@@ -81,8 +92,8 @@ if (shq("a'b") !== "'a'\\''b'") { fail++; console.log("shq wrong"); }
 console.log("FAILCOUNT=" + fail);
 process.exit(fail ? 1 : 0);
 """ % SAFETY_MJS.as_posix()
-    r = subprocess.run([_NODE, "--input-type=module", "-e", script],
-                       capture_output=True, text=True, timeout=30)
+    r = _pr.run([_NODE, "--input-type=module", "-e", script],
+                       capture_output=True, text=True)
     assert r.returncode == 0, f"validator behaviour failed:\n{r.stdout}\n{r.stderr}"
     assert "FAILCOUNT=0" in r.stdout
 

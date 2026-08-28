@@ -37,6 +37,17 @@ from pathlib import Path
 
 import pytest
 
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
@@ -225,9 +236,9 @@ def _run(scheduler: str, work: Path, env: dict[str, str], *,
     full.update({"WORK": str(work), "T_SEC": "1", "C_SEC": "1", "H_SEC": "1",
                  "A_SEC": "1", "T_RC": "0", "C_RC": "0", "LANE_WIDTH": "4"})
     full.update(env)
-    return subprocess.run(
+    return _pr.run(
         ["bash", str(script)], env=full, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True, timeout=timeout, check=False)
+        stderr=subprocess.STDOUT, text=True, check=False)
 
 
 def _journal(work: Path) -> list[tuple[str, str, str]]:

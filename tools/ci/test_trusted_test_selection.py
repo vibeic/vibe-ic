@@ -9,6 +9,17 @@ from pathlib import Path
 
 import pytest
 
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location(
@@ -224,11 +235,11 @@ def test_nested_progress_schedule_matches_live_pytest_collection():
     env = os.environ.copy()
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q",
          "-p", "no:cacheprovider", *S.HERMETIC_TEST_PROGRESS],
         cwd=plugin_root, env=env, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, timeout=60, check=False)
+        stderr=subprocess.PIPE, text=True, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     collected = [
         line.strip() for line in proc.stdout.splitlines()

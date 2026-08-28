@@ -60,6 +60,17 @@ from tools.phase1_engine.gap_detect import (
 from tools.phase1_engine.render import render_layers
 from tools.phase1_engine.schema import FactGraph
 
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 
 # The three classes that inherited the AES-specific scaffolds through the
 # `crypto-engine` parent. Asserted (not assumed) by
@@ -443,7 +454,6 @@ print("RESOLVES" if ref.is_file() else "EMPTY")
 
 def test_the_defaults_dir_resolves_from_a_cwd_OUTSIDE_the_repo(tmp_path):
     """The defect's own condition, in a child process."""
-    import subprocess
     import sys as _sys
     from pathlib import Path as _Path
     pkg_parent = str(_Path(__file__).resolve().parents[2])  # dir holding phase1_engine/
@@ -451,8 +461,8 @@ def test_the_defaults_dir_resolves_from_a_cwd_OUTSIDE_the_repo(tmp_path):
     probe.write_text(_CWD_PROBE)
     # 60s is the inner ceiling a 180s harness implies; this is an import, so the
     # bound is insurance against a hang rather than a budget.
-    out = subprocess.run([_sys.executable, str(probe), pkg_parent, str(tmp_path)],
-                         capture_output=True, text=True, timeout=60)
+    out = _pr.run([_sys.executable, str(probe), pkg_parent, str(tmp_path)],
+                         capture_output=True, text=True)
     assert out.returncode == 0, f"probe failed: {out.stderr[-800:]}"
     assert out.stdout.strip() == "RESOLVES", (
         "DEFAULT_DEFAULTS_DIR did not resolve from a cwd outside the repo, so "

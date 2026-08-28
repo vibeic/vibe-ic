@@ -36,10 +36,21 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 MODULE = Path(__file__).resolve().parents[1] / "src" / "lib" / "sta_evidence.mjs"
 
@@ -79,8 +90,8 @@ def _evaluate(**kwargs) -> dict:
         f'    allTerms: m.STA_EVIDENCE_TERMS}}));'
         f'}}).catch(e => {{ process.stderr.write(String(e)); process.exit(9); }});'
     )
-    run = subprocess.run([_node(), "--input-type=module", "-e", script],
-                         capture_output=True, text=True, timeout=60)
+    run = _pr.run([_node(), "--input-type=module", "-e", script],
+                         capture_output=True, text=True)
     assert run.returncode == 0, f"node failed: {run.stderr}"
     return json.loads(run.stdout)
 

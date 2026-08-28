@@ -39,11 +39,22 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 MCP_ROOT = Path(__file__).resolve().parent.parent
 INDEX_JS = MCP_ROOT / "src" / "index.js"
@@ -63,8 +74,7 @@ def _emit(diode) -> str:
     arg = "null" if diode is None else repr(str(diode)).replace("'", '"')
     js = (f"import({str(ANTENNA_MJS)!r}).then(m => "
           f"process.stdout.write(m.antennaRepairTcl({arg})))")
-    r = subprocess.run([node, "-e", js], capture_output=True, text=True,
-                       timeout=30)
+    r = _pr.run([node, "-e", js], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -127,8 +137,8 @@ def test_antenna_block_parses_and_evaluates_in_tclsh():
     with tempfile.TemporaryDirectory() as td:
         script = Path(td) / "ant.tcl"
         script.write_text(_STUB + block)
-        r = subprocess.run([tclsh, str(script)], capture_output=True,
-                           text=True, timeout=60)
+        r = _pr.run([tclsh, str(script)], capture_output=True,
+                           text=True)
     assert r.returncode == 0, r.stderr
     assert "missing close-bracket" not in r.stderr
     assert "ANTENNA_POSTROUTE_DONE" in r.stdout

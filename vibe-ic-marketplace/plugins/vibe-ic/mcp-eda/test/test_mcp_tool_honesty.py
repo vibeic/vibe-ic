@@ -36,10 +36,21 @@ them red rather than leaving a comment-only assertion behind.
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 INDEX_JS = Path(__file__).resolve().parent.parent / "src" / "index.js"
 assert INDEX_JS.exists()
@@ -118,7 +129,7 @@ def _eval_match(expr_decls, fixture):
           "tns: (typeof tnsMatch !== 'undefined' && tnsMatch) ? parseFloat(tnsMatch[1]) : null"
           "}));"
     )
-    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, f"node failed: {r.stderr}\n{script}"
     return json.loads(r.stdout)
 
@@ -253,7 +264,7 @@ def test_sta_verdict_is_not_the_exit_code():
         + "const cases = " + json.dumps([[c[1], c[2], c[3]] for c in cases]) + ";\n"
         + "console.log(JSON.stringify(cases.map(c => verdict(c[0], c[1], c[2]))));"
     )
-    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, f"node failed: {r.stderr}\n{script}"
     got = json.loads(r.stdout)
     for (name, _out, _rc, _n, want), actual in zip(cases, got):
@@ -309,7 +320,7 @@ def test_the_sta_manifest_status_distinguishes_pass_violation_and_unconstrained(
         ' f(false, null, "UNCONSTRAINED"),'
         ' f(false, null, "NOTHING_TO_MEASURE")]));'
     )
-    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, f"node failed: {r.stderr}\n{script}"
     assert json.loads(r.stdout) == ["PASS", "TIMING_VIOLATED", "UNCONSTRAINED",
                                     "NOTHING_TO_MEASURE"], \
@@ -326,14 +337,14 @@ def test_sta_error_regex_catches_openroad_errors():
     decl = _extract("const staErrors = ")
     script = ("const result = { output: " + json.dumps(STA_NO_TECH) + " };\n"
               + decl + "\nconsole.log(staErrors.length);")
-    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert int(r.stdout.strip()) == 3, \
         f"must see all three ORD-2010/STA-1570/STA-1571 errors, saw {r.stdout.strip()}"
 
     clean = ("const result = { output: " + json.dumps(STA_OK_CLOCKED) + " };\n"
              + decl + "\nconsole.log(staErrors.length);")
-    r2 = subprocess.run([NODE, "-e", clean], capture_output=True, text=True, timeout=30)
+    r2 = _pr.run([NODE, "-e", clean], capture_output=True, text=True)
     assert int(r2.stdout.strip()) == 0, "a healthy run must report zero errors"
 
 
@@ -353,8 +364,8 @@ def test_sta_slack_regex_matches_real_opensta_output():
         script = ("import { parseWns, parseTns } from " + json.dumps(lib) + ";\n"
                   "const out = " + json.dumps(fixture) + ";\n"
                   "console.log(JSON.stringify({wns: parseWns(out), tns: parseTns(out)}));")
-        r = subprocess.run([NODE, "--input-type=module", "-e", script],
-                           capture_output=True, text=True, timeout=30)
+        r = _pr.run([NODE, "--input-type=module", "-e", script],
+                           capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         return json.loads(r.stdout)
 
@@ -396,7 +407,7 @@ def test_sta_clockless_fixture_parses_as_unconstrained():
         + "const clockPortFound = clockPortMatch ? parseInt(clockPortMatch[1]) > 0 : null;\n"
         + "console.log(JSON.stringify({found: clockPortFound}));"
     )
-    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["found"] is False, \
         "clockless capture must resolve clock_port_found=false"

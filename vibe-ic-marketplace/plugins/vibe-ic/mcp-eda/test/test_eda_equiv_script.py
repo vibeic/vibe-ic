@@ -28,6 +28,17 @@ from pathlib import Path
 
 import pytest
 
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 MCP_ROOT = Path(__file__).resolve().parent.parent
 INDEX_JS = MCP_ROOT / "src" / "index.js"
 assert INDEX_JS.is_file(), f"missing {INDEX_JS}"
@@ -111,10 +122,9 @@ def _yosys_equiv(tmp_path: Path, gold_text: str, gate_text: str,
         "equiv_induct",
         "equiv_status -assert",
     ])
-    return subprocess.run(
+    return _pr.run(
         [YOSYS, "-p", script],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 @pytest.mark.skipif(not YOSYS, reason="yosys not on PATH")

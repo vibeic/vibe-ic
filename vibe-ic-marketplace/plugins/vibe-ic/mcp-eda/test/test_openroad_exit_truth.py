@@ -26,10 +26,21 @@ import re
 import shutil
 import os
 import tempfile
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "index.js"
 NODE = shutil.which("node")
@@ -78,7 +89,7 @@ def _fn(name: str) -> str:
 
 
 def _node(script: str) -> str:
-    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout.strip()
 
@@ -399,7 +410,7 @@ def _assertion_tcl(allow_unconstrained: bool) -> str:
     fn = src[i:src.index("\n}\n", i) + 3]
     script = (fn + "\nprocess.stdout.write(staAssertionTcl({ allowUnconstrained: "
               + ("true" if allow_unconstrained else "false") + " }));")
-    r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -429,7 +440,7 @@ def _run_trio(shape, allow_unconstrained=False):
         fh.write(_stub(*shape) + _assertion_tcl(allow_unconstrained) + "\n")
         path = fh.name
     try:
-        r = subprocess.run([TCLSH, path], capture_output=True, text=True, timeout=60)
+        r = _pr.run([TCLSH, path], capture_output=True, text=True)
     finally:
         os.unlink(path)
     return r

@@ -28,6 +28,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 _CI = Path(__file__).resolve().parent
 _REPO = _CI.parents[1]
 _HARNESS = _CI / "run_suite_in_eda_image.sh"
@@ -70,8 +81,8 @@ def _run(*args, env_extra=None, timeout=_BOUND):
     env = dict(os.environ)
     if env_extra:
         env.update(env_extra)
-    return subprocess.run([str(_HARNESS), *args], capture_output=True,
-                          text=True, timeout=timeout, env=env, cwd=str(_REPO))
+    return _pr.run([str(_HARNESS), *args], capture_output=True,
+                          text=True, env=env, cwd=str(_REPO))
 
 
 def test_every_bind_is_at_its_own_path():

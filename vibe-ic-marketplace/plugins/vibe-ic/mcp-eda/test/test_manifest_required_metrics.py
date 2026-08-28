@@ -26,10 +26,21 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
 
 MCP_ROOT = Path(__file__).resolve().parent.parent
 INDEX_JS = MCP_ROOT / "src" / "index.js"
@@ -84,9 +95,9 @@ if (entry.__dump_table__) {
 
 def _gate(entry: dict) -> dict:
     src = _HARNESS % GATE_MJS.as_uri()
-    r = subprocess.run(
+    r = _pr.run(
         [NODE, "--input-type=module", "-e", src, json.dumps(entry)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -219,9 +230,9 @@ def _parse(text: str) -> dict:
            'const t = JSON.parse(process.argv[1]);\n'
            'console.log(JSON.stringify({wns: parseWns(t), tns: parseTns(t)}));'
            % SLACK_MJS.as_uri())
-    r = subprocess.run([NODE, "--input-type=module", "-e", src,
+    r = _pr.run([NODE, "--input-type=module", "-e", src,
                         json.dumps(text)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 

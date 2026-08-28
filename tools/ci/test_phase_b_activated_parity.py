@@ -83,6 +83,18 @@ from pathlib import Path
 
 import pytest
 
+import sys
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MANIFEST = "tools/ci/protected_landing_transition.json"
@@ -138,38 +150,27 @@ _UNVERIFIED = (
 )
 
 
-#: Inner bound for the `git` plumbing calls below, in seconds.
-#:
-#: These are `git cat-file` / `git ls-tree` / `git rev-parse` reads of this
-#: repository, MEASURED at under 0.01 s each in the pinned image (the whole file
-#: runs in 1.30 s with the sibling preflight file). The 120 s literal they
-#: carried was above the per-call ceiling `ci_harness_timeout_ceiling_check`
-#: publishes, and a bound above that ceiling turns that gate red — which put a
-#: smoke-floor test, and therefore every landing, in refusal.
-_GIT_BOUND = 30
-
-
 def _git(*args: str, input_bytes: bytes | None = None) -> tuple[int, bytes]:
-    proc = subprocess.run(
+    proc = _pr.run(
         ["git", *args],
         cwd=_ROOT,
         input=input_bytes,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=_GIT_BOUND,
+        text=False,
         check=False,
     )
     return proc.returncode, proc.stdout
 
 
 def _git_bytes(*args: str, input_bytes: bytes | None = None) -> bytes:
-    proc = subprocess.run(
+    proc = _pr.run(
         ["git", *args],
         cwd=_ROOT,
         input=input_bytes,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=_GIT_BOUND,
+        text=False,
         check=False,
     )
     assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
