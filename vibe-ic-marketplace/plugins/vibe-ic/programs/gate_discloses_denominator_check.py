@@ -98,6 +98,9 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+import _watchdog as _wd  # noqa: E402  progress-stall process supervision
 
 # This repo's disclosed-skip vocabulary is written with UNDERSCORES —
 # `VACUOUS_PASS`, `PASS_SKIP`, `NOT_APPLICABLE`, `NOT_CHECKED`. `\b` does not
@@ -634,25 +637,49 @@ def audit_ci(repo_root: Path, timeout: int = 120,
         why = _driveable(argv)
         if why is not None:
             return ("not_driven", label, why)
-        per_gate = timeout
-        if deadline is not None:
-            per_gate = max(1, min(timeout, int(deadline - time.monotonic())))
+        # TWO BOUNDS, BECAUSE THEY MEAN DIFFERENT THINGS — and they used to be
+        # ONE number, which is why a healthy gate could be filed as a defect.
+        #
+        # `timeout` was a per-gate WALL, and its expiry outside the aggregate
+        # budget filed GATE_UNRUNNABLE → verdict FAIL. That is a finding
+        # against a gate for being SLOW. This repo's own hygiene suite takes
+        # ~57 min end to end with one gate two thirds of it, and eight of these
+        # probes run concurrently on whatever else the host is doing, so the
+        # number decided the verdict far more often than the gate did. It is
+        # now the STALL GRACE: a gate whose CPU, I/O and output have ALL sat
+        # flat for that long is hung, and calling THAT unrunnable is true.
+        #
+        # `budget` (#1181) is the aggregate probe budget, and it is NOT a
+        # verdict — its expiry marks the sweep truncated → NOT_CHECKED, an
+        # honest "how far it got". So it stays a wall clock, moved onto the
+        # supervisor's `abort_probe`, which stops the child with its own
+        # distinct outcome instead of being folded into the stall.
+        def _budget_spent():
+            if deadline is not None and time.monotonic() > deadline:
+                return (f"aggregate budget of {budget:g}s ran out while "
+                        f"this gate was running (vibe-ic#1181)")
+            return None
+
         with tempfile.TemporaryDirectory() as gd:
             scratch = _scratch_repo(Path(gd))
             argv = _expand(cmd, repo_root, scratch)
             try:
-                r = subprocess.run(argv, cwd=str(scratch), capture_output=True,
-                                   text=True, timeout=per_gate)
-            except subprocess.TimeoutExpired as exc:
-                if per_gate < timeout:
-                    return ("budget", label,
-                            f"aggregate budget of {budget:g}s ran out while "
-                            f"this gate was running (vibe-ic#1181)")
-                return ("unrunnable", label, str(exc))
+                r = _wd.run_host_supervised(
+                    argv, cwd=str(scratch), stall_grace_s=float(timeout),
+                    abort_probe=(_budget_spent if deadline is not None
+                                 else None))
             except (OSError, subprocess.SubprocessError) as exc:
                 return ("unrunnable", label, str(exc))
-            out = (r.stdout or "") + (r.stderr or "")
-            if r.returncode == 0 and not discloses(out):
+            if r.outcome == "launch_error":
+                return ("unrunnable", label, r.err)
+            if r.aborted:
+                return ("budget", label, r.abort_reason)
+            if r.stalled:
+                return ("unrunnable", label,
+                        f"made no forward progress — no CPU, no I/O and no "
+                        f"output — for {timeout}s, and was stopped as hung")
+            out = (r.out or "") + (r.err or "")
+            if r.rc == 0 and not discloses(out):
                 return ("silent", label, out)
             return ("ok", label, "")
 
@@ -717,18 +744,26 @@ def _drive_on_empty_project(prog: Path, timeout: int) -> Dict:
         proj = Path(td)
         (proj / "input" / "docs").mkdir(parents=True)
         (proj / "reports").mkdir(parents=True)
+        # `timeout` is the STALL GRACE, not a probe wall. As a wall its
+        # expiry filed GATE_UNRUNNABLE → FAIL, i.e. a census hole reported
+        # against a gate that was merely slower than the constant on a host
+        # running eight of these at once.
         try:
-            r = subprocess.run([sys.executable, str(prog), "."],
-                               cwd=str(proj), capture_output=True, text=True,
-                               timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return {"gate": prog.stem, "rc": None, "disclosed": None,
-                    "unrunnable": f"exceeded the {timeout}s probe budget"}
+            r = _wd.run_host_supervised(
+                [sys.executable, str(prog), "."], cwd=str(proj),
+                stall_grace_s=float(timeout))
         except (OSError, subprocess.SubprocessError) as exc:
             return {"gate": prog.stem, "rc": None, "disclosed": None,
                     "unrunnable": f"could not be driven: {exc}"}
-    out = ((r.stdout or "") + (r.stderr or "")).strip()
-    return {"gate": prog.stem, "rc": r.returncode,
+        if r.outcome == "launch_error":
+            return {"gate": prog.stem, "rc": None, "disclosed": None,
+                    "unrunnable": f"could not be driven: {r.err}"}
+        if r.stalled:
+            return {"gate": prog.stem, "rc": None, "disclosed": None,
+                    "unrunnable": f"made no forward progress for {timeout}s "
+                                  f"and was stopped as hung"}
+    out = ((r.out or "") + (r.err or "")).strip()
+    return {"gate": prog.stem, "rc": r.rc,
             "disclosed": discloses(out),
             "reasoned": discloses_a_reason(out),
             "output_tail": (out.splitlines()[-1][:200] if out
@@ -829,17 +864,22 @@ def _drive_on_absent_project(prog: Path, timeout: int = 120) -> Dict:
     directory that does not exist), so this drives the gate's argument-handling
     path — which is exactly where both defects lived.
     """
+    # `timeout` is the STALL GRACE — see `_drive_on_empty_project`.
     try:
-        r = subprocess.run([sys.executable, str(prog), _ABSENT],
-                           capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return {"gate": prog.stem, "rc": None,
-                "unrunnable": f"exceeded the {timeout}s probe budget"}
+        r = _wd.run_host_supervised([sys.executable, str(prog), _ABSENT],
+                                    stall_grace_s=float(timeout))
     except (OSError, subprocess.SubprocessError) as exc:
         return {"gate": prog.stem, "rc": None,
                 "unrunnable": f"could not be driven: {exc}"}
-    out = ((r.stdout or "") + (r.stderr or "")).strip()
-    return {"gate": prog.stem, "rc": r.returncode,
+    if r.outcome == "launch_error":
+        return {"gate": prog.stem, "rc": None,
+                "unrunnable": f"could not be driven: {r.err}"}
+    if r.stalled:
+        return {"gate": prog.stem, "rc": None,
+                "unrunnable": f"made no forward progress for {timeout}s and "
+                              f"was stopped as hung"}
+    out = ((r.out or "") + (r.err or "")).strip()
+    return {"gate": prog.stem, "rc": r.rc,
             "disclosed": _honest_about_an_absent_project(out),
             "output_tail": (out.splitlines()[-1][:200] if out
                             else "(no output at all)")}

@@ -58,6 +58,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import _path_layout as _pl
 import _analog_a_check_common as _acc
+import _watchdog as _wd  # progress-stall process supervision
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -612,12 +613,19 @@ def _run_audit(project: Path,
                prior_marker: Optional[str] = None) -> Tuple[str, str]:
     """Run flow_compliance_check.py and return (audit_text, overall).
 
-    #469: the timeout is now resolved via `_resolve_audit_timeout`
-    (CLI > env > size-adaptive default) rather than a hard-coded 180 s,
-    and a TimeoutExpired yields the NAMED verdict AUDIT_TIMEOUT_VERDICT
-    (never UNKNOWN) so a reader can distinguish 審不完 (the audit could
-    not finish on a large run dir) from 沒審 (the audit was never run).
-    Any other failure still degrades to AUDIT_NOT_RUN_VERDICT.
+    #469 named the two non-answers apart: AUDIT_TIMEOUT_VERDICT (審不完)
+    versus AUDIT_NOT_RUN_VERDICT (沒審). What it could not fix is that the
+    first was decided by a WALL CLOCK: a size-adaptive guess, capped at an
+    hour, whose expiry recorded "the per-step verdict snapshot is
+    unobtainable" about a run dir the audit would have finished given the
+    time. Naming a kill honestly does not give the answer back.
+
+    So the bound is now FORWARD PROGRESS. `eff_timeout` is the STALL GRACE
+    handed to `_watchdog`: an audit whose CPU, I/O and output are all flat
+    for that long is hung and still books AUDIT_TIMEOUT — which is now what
+    that verdict actually means — while a long audit that is working runs to
+    completion and produces the snapshot. Any other failure still degrades
+    to AUDIT_NOT_RUN_VERDICT.
 
     `prior_marker` is the previous summary's snapshot marker, captured by
     the caller BEFORE any attestation pre-pass overwrote the file (the
@@ -627,30 +635,32 @@ def _run_audit(project: Path,
         return ("(flow_compliance_check.py unavailable)", AUDIT_NOT_RUN_VERDICT)
     eff_timeout = _resolve_audit_timeout(project, timeout_s)
     try:
-        cp = subprocess.run(
+        res = _wd.run_host_supervised(
             [sys.executable, str(COMPLIANCE_TOOL), str(project), "--strict"],
-            capture_output=True, text=True, timeout=eff_timeout,
-        )
-        text = cp.stdout
-    except subprocess.TimeoutExpired:
-        # 審不完: the snapshot is unobtainable. Surface the named verdict
-        # and the prior snapshot marker (if any) so the report can tell
-        # the reader WHEN the design last audited cleanly.
+            stall_grace_s=float(eff_timeout))
+    except Exception as exc:                            # noqa: BLE001
+        return (f"(audit failed: {exc})", AUDIT_NOT_RUN_VERDICT)
+    if res.outcome == "launch_error":
+        return (f"(audit failed: {res.err})", AUDIT_NOT_RUN_VERDICT)
+    if res.stalled:
+        # 審不完, and now it means it: the audit made NO forward progress —
+        # no CPU, no I/O, no output — for the whole grace window. Surface the
+        # named verdict and the prior snapshot marker (if any) so the report
+        # can tell the reader WHEN the design last audited cleanly.
         prev_marker = prior_marker or _previous_snapshot_marker(project)
         prev_note = (f" Last clean snapshot: {prev_marker}."
                      if prev_marker else
                      " No prior clean snapshot is available.")
         text = (
             f"Overall: {AUDIT_TIMEOUT_VERDICT}\n"
-            f"(flow_compliance_check.py did not finish within "
-            f"{eff_timeout}s on this run dir — the per-step verdict "
-            f"snapshot is unobtainable.{prev_note}\n"
-            f" Raise the budget via --audit-timeout / "
-            f"{AUDIT_TIMEOUT_ENV} and re-run, or shrink the run dir.)"
+            f"(flow_compliance_check.py made no forward progress for "
+            f"{eff_timeout}s on this run dir and was stopped as hung — the "
+            f"per-step verdict snapshot is unobtainable.{prev_note}\n"
+            f" Raise the no-progress grace via --audit-timeout / "
+            f"{AUDIT_TIMEOUT_ENV} and re-run.)"
         )
         return text, AUDIT_TIMEOUT_VERDICT
-    except Exception as exc:
-        return (f"(audit failed: {exc})", AUDIT_NOT_RUN_VERDICT)
+    text = res.out
     overall = AUDIT_NOT_RUN_VERDICT
     for ln in text.splitlines():
         if ln.startswith("Overall:"):

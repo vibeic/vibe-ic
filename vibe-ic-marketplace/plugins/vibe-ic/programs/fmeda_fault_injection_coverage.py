@@ -88,9 +88,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
+# Retained after the launchers moved to `_watchdog`: this module no longer
+# calls it, but `fi.subprocess` is the patch surface two tests use to assert
+# that the no-backend path launches NOTHING. Removing it turns those into an
+# AttributeError, not a pass.
+import subprocess  # noqa: F401
 import sys
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -99,6 +102,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import _path_layout as _pl  # noqa: E402
+import _watchdog as _wd  # noqa: E402  progress-stall process supervision
 try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
 except ImportError:  # pragma: no cover - packaged/flattened layouts
@@ -839,27 +843,34 @@ def _run_injection_host(project: Path,
     Mirrors the container leg's `compile && run` semantics exactly: vvp runs
     only when the compile succeeded, and the caller sees the CONCATENATED
     stdout of both stages, because that is where the `GOLDEN`/`FAULT` transcript
-    the parser reads comes from. The single `timeout` is a budget for the pair,
-    not for each, so this leg cannot outlast the container leg's bound.
+    the parser reads comes from.
+
+    `timeout` is the STALL GRACE for each stage, not a runtime budget. It used
+    to be a wall-clock budget shared across the pair, whose expiry returned rc
+    124 — and `main` books any non-zero rc as `verdict: FAIL` on the design's
+    diagnostic coverage. So the number of vectors a machine could simulate in
+    300 s decided whether a safety mechanism PASSED. That is a verdict about
+    the host. The two stages no longer share a budget either: the shared
+    deadline existed to keep this leg from outlasting the container leg's
+    wall, and neither leg has a wall any more — a stage that is progressing
+    runs to completion on both.
     """
     vvp_out = project / f"{tb_rel}.vvp"
     vvp_out.parent.mkdir(parents=True, exist_ok=True)
     srcs = [str(project / s) for s in rtl_rel_files + [tb_rel]]
-    deadline = time.monotonic() + timeout
-    try:
-        c = subprocess.run(
-            ["iverilog", "-g2012", "-o", str(vvp_out), "-s", tb_top] + srcs,
-            capture_output=True, text=True, cwd=str(project), timeout=timeout)
-        if c.returncode != 0:
-            return c.returncode, c.stdout, c.stderr
-        left = max(1, int(deadline - time.monotonic()))
-        r = subprocess.run(["vvp", str(vvp_out)], capture_output=True,
-                           text=True, cwd=str(project), timeout=left)
-        return r.returncode, c.stdout + r.stdout, c.stderr + r.stderr
-    except subprocess.TimeoutExpired:
-        return 124, "", "iverilog/vvp timed out"
-    except FileNotFoundError:
+    grace = float(timeout)
+    c = _wd.run_host_supervised(
+        ["iverilog", "-g2012", "-o", str(vvp_out), "-s", tb_top] + srcs,
+        cwd=str(project), stall_grace_s=grace)
+    if c.outcome == "launch_error":
         return 127, "", "iverilog/vvp not found on the host PATH"
+    if c.rc != 0:
+        return c.rc, c.out, c.err
+    r = _wd.run_host_supervised(["vvp", str(vvp_out)], cwd=str(project),
+                                stall_grace_s=grace)
+    if r.outcome == "launch_error":
+        return 127, "", "iverilog/vvp not found on the host PATH"
+    return r.rc, c.out + r.out, c.err + r.err
 
 
 def run_injection_iverilog(project: Path,
@@ -893,14 +904,14 @@ def run_injection_iverilog(project: Path,
         "--entrypoint", "bash",
         "-v", f"{project}:/work", img, "-c", full,
     ]
-    try:
-        r = subprocess.run(docker_cmd, capture_output=True, text=True,
-                           timeout=timeout)
-        return r.returncode, r.stdout, r.stderr
-    except subprocess.TimeoutExpired:
-        return 124, "", "iverilog/vvp timed out"
-    except FileNotFoundError:
+    # `timeout` is the STALL GRACE, not a runtime bound — see
+    # `_run_injection_host`. A fault-injection campaign's runtime scales with
+    # the vector count and the mechanism's size; expiry used to return rc 124,
+    # which `main` books as `verdict: FAIL` for the design.
+    r = _wd.run_host_supervised(docker_cmd, stall_grace_s=float(timeout))
+    if r.outcome == "launch_error":
         return 127, "", "docker binary not found"
+    return r.rc, r.out, r.err
 
 
 # ─────────────────────────── report emit ────────────────────────────────
