@@ -80,21 +80,27 @@ def _server_cpu_s():
 def _fetch(url):
     """GET `url` and return the response. NO wall-clock bound, and no retry.
 
-    RUNG 2 (structural assertion), with the reason RUNG 1 could not serve
-    MEASURED rather than assumed. `_watchdog` supervises a PROCESS by its /proc
-    forward progress; the dashboard here is a THREAD of this very test process,
-    and every in-process progress signal tried for an HTTP wait is SELF-FEEDING
-    — advanced by the waiter, so a wedged server keeps looking busy and the
-    retry never ends. Whole-process CPU is advanced by the retry loop itself;
-    other-thread CPU is advanced because `ThreadingHTTPServer` spawns a fresh
-    handler thread PER REQUEST. A falsification probe for both failed to
-    terminate.
+    RUNG 2 (structural assertion). Rung 1 for an HTTP wait would mean demoting
+    the socket timeout to a LOOK INTERVAL and retrying while the server still
+    makes progress. That cannot work here, and the reason is MEASURED rather
+    than assumed: a retry ABANDONS the request in flight and starts a new one,
+    so when the honest answer legitimately takes longer than one look, every
+    attempt is abandoned and none ever completes. That is a LIVELOCK, and it
+    bites in exactly the case the old bound was manufacturing verdicts for — a
+    handler slower than the guess. The stall detector does not rescue it either:
+    the abandoned handlers keep burning CPU, so the progress signal reports the
+    server as working and the loop ends only at its iteration cap. Measured: a
+    6 s handler under a 0.5 s look returned NO response at all, while one
+    blocking GET against the same server answered 200 in 6.0 s.
 
-    The 5 s that used to sit here decided one thing when it fired: that this
-    HOST did not answer in five seconds — reported as the dashboard not serving.
-    That verdict is gone and no other clock replaces it; what is asserted is
-    that the server ANSWERED. A wedge now blocks, which the outer
-    progress-supervised session ends."""
+    (The signal itself is sound — it stops on a wedge wherever the waiter does
+    not touch the subject, which is why the file and bind polls in this campaign
+    KEPT rung 1. It is the retry that is unavailable, not the watchdog.)
+
+    So the 5 s bound is gone and nothing replaces it with another clock. What is
+    asserted is the thing meant: the server ANSWERED, and with what. A genuinely
+    wedged server now blocks, and the outer progress-supervised session ends it
+    — the only layer that can tell a wedge from a slow host."""
     return urllib.request.urlopen(url)
 
 
