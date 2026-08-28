@@ -23,8 +23,11 @@ Pinned here in the order the driver can be wrong:
   * `--stop-after-failures` NAMES what it did not launch instead of leaving it
     to look clean.
 
-`_T` is only the test suite's final safety net. The production driver uses
-forward-progress supervision and has no whole-run wall-clock estimate.
+Neither the production driver NOR this file carries a whole-run wall-clock
+estimate: both are supervised by forward progress. The one bound left here is
+`_SINGLE_SESSION_KILL`, and it is a SUBJECT, not a safety net —
+`test_one_session_loses_the_whole_record_and_per_file_does_not` needs a killed
+session to have anything to prove.
 """
 import hashlib
 import json
@@ -44,15 +47,73 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import pytest_per_file_junit as D                              # noqa: E402
+import _watchdog                                              # noqa: E402
 
 _PROG = _PROGRAMS / "pytest_per_file_junit.py"
 _FALLBACK_ENV = "VIBEIC_PYTEST_FALLBACK_WORKER"
 
-#: Inner bound for every subprocess this file launches. Each one runs at most
-#: three trivial pytest sessions plus one deliberately-killed one, measured at
-#: well under 20 s on this host, so 50 s is generous and inside the 60 s ceiling
-#: the harness gate publishes for a 180 s lane.
-_T = 50
+#: NOT a bound. `_LOOK_S` is how often a wait LOOKS; `_STALL_LOOKS` is how many
+#: consecutive looks the thing being waited on may show ZERO forward progress
+#: (no CPU, no I/O anywhere in its /proc tree) before it is called hung;
+#: `_MAX_LOOKS` is a pathological backstop counted in LOOKS.
+#:
+#: What was here was `_T = 50`, justified by "measured at well under 20 s on
+#: this host". That reasoning is the defect: 50 s is a reading of one machine on
+#: one day, and when a busier machine exceeds it the `TimeoutExpired` does not
+#: say "this box was loaded", it fails the test as though
+#: `pytest_per_file_junit.py` were broken. The subject of this file is a driver
+#: whose own contract is SEMANTIC PROGRESS (`--stall-after`), so bounding it
+#: with a wall clock contradicted the thing being tested.
+_LOOK_S = 0.05
+_STALL_LOOKS = 600
+_MAX_LOOKS = 200_000
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True)` with no wall clock.
+
+    Bounds NO FORWARD PROGRESS instead — CPU and I/O over the child's whole
+    /proc tree plus the growth of its captured output — so a driver that is
+    merely slow always finishes and one that is wedged still dies, as rc
+    `_watchdog.RC_STALLED`, which is not a code this driver produces."""
+    return _watchdog.completed_process(
+        cmd, _watchdog.run_host_supervised(cmd, **kw))
+
+
+def _await(name, ready, proc):
+    """Poll `ready()` while `proc`'s process TREE keeps making progress.
+
+    Replaces `deadline = time.monotonic() + N; while ...` — a wall clock wearing
+    a loop. When one of those ran out the assertion that followed blamed the
+    driver ("never launched its escapee", "never entered its TERM-ignoring
+    grace") on the evidence that this host was slow. Returns True the moment
+    `ready()` holds; returns False only when the tree stopped progressing."""
+    guard = _watchdog.loop_guard(
+        name, max_iter=_MAX_LOOKS, stall_iters=_STALL_LOOKS,
+        progress_fn=lambda: _watchdog.host_tree_progress(proc.pid))
+    for _ in guard:
+        if ready():
+            return True
+        if proc.poll() is not None:
+            return ready()
+        time.sleep(_LOOK_S)
+    return False
+
+
+def _await_exit(name, proc):
+    """Wait for `proc` to exit, bounded by NO FORWARD PROGRESS.
+
+    What is meant after a signal is "the process ended", not "the process ended
+    within 15 seconds". A process still burning CPU is not one that failed to
+    handle its signal yet, and a bound cannot tell those apart."""
+    guard = _watchdog.loop_guard(
+        name, max_iter=_MAX_LOOKS, stall_iters=_STALL_LOOKS,
+        progress_fn=lambda: _watchdog.host_tree_progress(proc.pid))
+    for _ in guard:
+        if proc.poll() is not None:
+            return True
+        time.sleep(_LOOK_S)
+    return False
 
 #: Test-only no-progress window. It is not a cap on healthy runtime.
 _STALL = 1
@@ -462,13 +523,13 @@ def _pytest_cmd():
 
 
 def _run_driver(corpus: Path, junit: Path, *extra, pytest_extra=()):
-    return subprocess.run(
+    return _supervised(
         [sys.executable, str(_PROG),
          "--selection", str(corpus / "selection.txt"),
          "--junit", str(junit),
          "--stall-after", str(_STALL), *extra,
         "--"] + _pytest_cmd() + list(pytest_extra),
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+        cwd=str(corpus))
 
 
 def _files_in(junit: Path):
@@ -1111,17 +1172,16 @@ def test_term_during_cleanup_cancels_before_fallback_and_leaves_zero(
         env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1"))
     output = ""
     try:
-        deadline = time.monotonic() + 12
-        while time.monotonic() < deadline:
-            if (aggregate_pid_file.is_file()
-                    and descendant_pid_file.is_file()
-                    and cleanup_term_seen.is_file()):
-                break
-            time.sleep(0.02)
+        _await("aggregate-cleanup-grace",
+               lambda: (aggregate_pid_file.is_file()
+                        and descendant_pid_file.is_file()
+                        and cleanup_term_seen.is_file()),
+               driver)
         assert cleanup_term_seen.is_file(), (
             "aggregate cleanup never entered its TERM-ignoring grace")
         os.kill(driver.pid, signal.SIGTERM)
-        output = driver.communicate(timeout=15)[0]
+        _await_exit("aggregate-cleanup-term", driver)
+        output = driver.communicate()[0]
         assert driver.returncode == 128 + signal.SIGTERM, output
         assert "=== [fallback]" not in output, output
         assert not fallback_marker.exists(), output
@@ -1132,7 +1192,9 @@ def test_term_during_cleanup_cancels_before_fallback_and_leaves_zero(
     finally:
         if driver.poll() is None:
             os.killpg(driver.pid, signal.SIGKILL)
-            driver.wait(timeout=5)
+            # Unbounded: after SIGKILL to the group what is meant is "reaped",
+            # and a bound here could only report a busy host as a leak.
+            driver.wait()
         for pid_path in (aggregate_pid_file, descendant_pid_file):
             if not pid_path.is_file():
                 continue
@@ -1170,14 +1232,12 @@ def test_driver_signal_cleanup_reaps_the_active_detached_descendant(tmp_path):
          "--stall-after", "30", "--"] + _pytest_cmd(),
         cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, start_new_session=True)
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline and not pid_file.is_file():
-        time.sleep(0.05)
+    _await("detached-child-launch", pid_file.is_file, driver)
     assert pid_file.is_file(), "fixture never launched its detached child"
     escaped_pid = int(pid_file.read_text())
 
     os.kill(driver.pid, signal.SIGTERM)
-    driver.wait(timeout=15)
+    _await_exit("detached-child-term", driver)
 
     with pytest.raises(ProcessLookupError):
         os.kill(escaped_pid, 0)
@@ -1630,15 +1690,13 @@ def test_signal_during_parallel_fallback_reaps_detached_descendant(tmp_path):
          "--aggregate-stall-after", "1", "--"] + _pytest_cmd(),
         cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, start_new_session=True)
-    deadline = time.monotonic() + 12
     try:
-        while time.monotonic() < deadline and not pid_file.is_file():
-            time.sleep(0.05)
+        _await("parallel-escapee-launch", pid_file.is_file, driver)
         assert pid_file.is_file(), "parallel fallback never launched its escapee"
         escaped_pid = int(pid_file.read_text())
 
         os.kill(driver.pid, signal.SIGTERM)
-        driver.wait(timeout=15)
+        _await_exit("parallel-escapee-term", driver)
 
         with pytest.raises(ProcessLookupError):
             os.kill(escaped_pid, 0)
@@ -1647,7 +1705,9 @@ def test_signal_during_parallel_fallback_reaps_detached_descendant(tmp_path):
     finally:
         if driver.poll() is None:
             os.killpg(driver.pid, signal.SIGKILL)
-            driver.wait(timeout=5)
+            # Unbounded: after SIGKILL to the group what is meant is "reaped",
+            # and a bound here could only report a busy host as a leak.
+            driver.wait()
 
 
 def test_aggregate_norecord_is_named_and_returns_unknown(tmp_path):
@@ -2176,17 +2236,53 @@ def test_the_landing_harness_argv_shape_is_the_one_this_file_pins():
     assert "-q" in body and "-q" in cmd, (body, cmd)
 
 
-def test_this_files_final_test_safety_bound_is_inside_the_ceiling():
-    import ci_harness_timeout_ceiling_check as C
-    root = C.find_repo_root()
-    if root is None:
-        pytest.skip("no repo root in reach")
-    ceiling = C.inner_timeout_ceiling(root)
-    if ceiling is None:
-        pytest.skip("no harness bound in reach")
-    assert _T <= ceiling, (_T, ceiling)
-    # `_STALL` is deliberately not compared: it measures absence of progress,
-    # not healthy runtime, and therefore is not a wall-clock harness bound.
+def test_this_file_declares_no_whole_run_wall_clock_bound():
+    """The SUCCESSOR of `assert _T <= ceiling`, and a stronger claim.
+
+    `_T = 50` was this file's "final safety net": a wall clock on every driver
+    launch, kept under the harness ceiling so it could actually fire. Both
+    halves of that were wrong for this file in particular. The subject here is a
+    driver whose own contract is SEMANTIC PROGRESS (`--stall-after`), so
+    bounding it by elapsed time asserted the opposite of the thing under test;
+    and 50 s was justified by "measured at well under 20 s on this host", which
+    is a reading of one machine, not a property of the driver. When a busier
+    machine crossed it, the `TimeoutExpired` did not say "this box was loaded",
+    it failed the test as though `pytest_per_file_junit.py` were broken.
+
+    There is no number left to compare against a ceiling, so the assertion
+    becomes the absence of one — checked STRUCTURALLY over this file's own AST
+    rather than by looking for a constant, so it stays true of whatever this
+    file grows into and fails on a bound reintroduced under any name.
+
+    ONE bound is exempt and named: `_SINGLE_SESSION_KILL`, which is the SUBJECT
+    of `test_one_session_loses_the_whole_record_and_per_file_does_not` — that
+    arm exists to prove a session killed mid-run writes no junit at all, and a
+    test whose subject is a kill needs a kill.
+
+    `_STALL` is not compared either, for the reason the retired test already
+    gave: it measures absence of progress, not healthy runtime.
+    """
+    import ast as _ast
+    src = Path(__file__).read_text(encoding="utf-8")
+    blocking = {"run", "Popen", "call", "check_output", "check_call",
+                "communicate", "wait"}
+    offenders = []
+    for node in _ast.walk(_ast.parse(src)):
+        if not isinstance(node, _ast.Call):
+            continue
+        name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+        if name not in blocking:
+            continue
+        for kw in node.keywords:
+            if kw.arg != "timeout":
+                continue
+            if _ast.unparse(kw.value) == "_SINGLE_SESSION_KILL":
+                continue
+            offenders.append((node.lineno, _ast.unparse(kw.value)))
+    assert not offenders, (
+        "a wall-clock bound is back on a blocking call in this file; every "
+        "launch here is supervised by forward progress instead — "
+        f"{offenders}")
 
 
 # ── the selection and the report must be read in ONE frame (jnorec, C) ───────
@@ -2245,13 +2341,13 @@ def _split_frame_tree(tmp_path: Path, files: dict) -> Path:
 
 
 def _run_driver_in(root: Path, junit: Path, *extra, pytest_extra=()):
-    return subprocess.run(
+    return _supervised(
         [sys.executable, str(_PROG),
          "--selection", str(root / "selection.txt"),
          "--junit", str(junit),
          "--stall-after", str(_STALL), *extra,
          "--"] + _plain_pytest_cmd() + list(pytest_extra),
-        cwd=str(root), capture_output=True, text=True, timeout=_T)
+        cwd=str(root))
 
 
 def test_a_green_session_read_in_another_frame_is_not_refused(tmp_path):
@@ -2316,13 +2412,13 @@ def test_a_maxfail_prefix_is_named_and_still_refused(tmp_path):
     """POSITIVE CONTROL: the cause is knowable, so it must be named."""
     corpus = _tree(tmp_path, {"test_aa_red.py": _TWO_RED,
                               "test_bb_never_ran.py": _PLAIN_GREEN})
-    proc = subprocess.run(
+    proc = _supervised(
         [sys.executable, str(_PROG),
          "--selection", str(corpus / "selection.txt"),
          "--junit", str(tmp_path / "merged.xml"),
          "--stall-after", str(_STALL), "--aggregate-only",
          "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+        cwd=str(corpus))
     assert "AGGREGATE_TRUNCATED  2 failures reached at file 1/2," in proc.stdout, (
         proc.stdout)
     assert "test_aa_red.py::test_red_one" in proc.stdout.replace(
@@ -2342,14 +2438,14 @@ def test_a_real_stall_is_not_reclassified_as_a_truncation(tmp_path):
     keep the truncation label off.
     """
     corpus = _tree(tmp_path, {"test_hangs.py": _HANGS_IN_TEST})
-    proc = subprocess.run(
+    proc = _supervised(
         [sys.executable, str(_PROG),
          "--selection", str(corpus / "selection.txt"),
          "--junit", str(tmp_path / "merged.xml"),
          "--stall-after", str(_STALL), "--aggregate-only",
          "--aggregate-stall-after", str(_STALL),
          "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+        cwd=str(corpus))
     assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
     # The REASON must still be the stall, not a bound. A diagnosis that renames
     # a hang after the failure bound is the permissive direction: it would send
@@ -2367,13 +2463,13 @@ def test_a_zero_collecting_file_is_not_reclassified_as_a_truncation(tmp_path):
     """
     corpus = _tree(tmp_path, {"test_green.py": _PLAIN_GREEN,
                               "test_silent.py": _COLLECTS_NOTHING})
-    proc = subprocess.run(
+    proc = _supervised(
         [sys.executable, str(_PROG),
          "--selection", str(corpus / "selection.txt"),
          "--junit", str(tmp_path / "merged.xml"),
          "--stall-after", str(_STALL), "--aggregate-only",
          "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+        cwd=str(corpus))
     assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
     assert "missing=['test_silent.py'], extra=[]" in proc.stdout, proc.stdout
     assert proc.returncode == D.RC_NORECORD, proc.stdout
