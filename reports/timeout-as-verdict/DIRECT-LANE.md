@@ -295,3 +295,57 @@ bound tests, both above.
 On the `tools/` and `mcp-eda/` set: **6 failed / 313 passed on BOTH arms, same
 names**, plus 152 passed under `mcp-eda/test`. Differential pyflakes on every
 touched file, base vs here: 152 → 147, 104 → 96, 8 → 7. No new findings.
+
+
+## Self-review with the repo's own gate
+
+`gatekeeper_review.py --base 851b7e8a69 --head HEAD` returns REQUEST_CHANGES with
+7 blockers. Run against **clean main** (`851b7e8a69~1..851b7e8a69`) as the
+control, three of them appear identically and are not this branch's:
+
+* `loop_watchdog_compliance_check` — the same single offender, an unbounded
+  `while` in `gate_host_independence_check` (line 749 on main, 752 here: the
+  drift is this branch's import line, the loop is untouched);
+* `repo_hygiene_gates` — the same 92 wiring errors, including the same
+  `outcome=stalled, rc=199` shard;
+* `gate_red_since` — 21 NEW red on main, 23 here. The hygiene tier is a
+  documented non-fixed reference on a contended host, and this measurement was
+  taken while two full A/B arms were running, so ±2 is not attributable.
+
+Three more are the shape of a branch rather than a defect: `version_bump_monotonic`
+(the version is assigned at landing, not by the author), `landing_is_one_commit`
+(11 commits; the landing lane squashes), and `ppa_pr_scope_check`, whose every
+finding reads *"no answers document was supplied"* — a landing-supplied artefact
+this invocation did not have.
+
+### And one of them is this lane's own subject, in the gatekeeper
+
+`landing_collateral_revert_check` came back:
+
+> exceeded the 90s bound and was stopped (#1208) — this gate is UNDETERMINED,
+> which is reported as a failure because it is not a clean result
+
+That is `gatekeeper_review._run_program`, the single chokepoint all 15 gate
+drivers go through, and it is **census row `gatekeeper_review.py:2017`, class
+B** — the class the census marks *honest, leave alone*, because its expiry
+already produces NOT_MEASURED rather than a false finding.
+
+It did not fire on the control. It fired here because this branch's diff is
+larger, which is the whole point: **the bound is a property of the diff's size
+and the host's load, and it decided a gate.** Being honest about not knowing is
+better than lying, and it is still the 最下策 the second ruling names — the
+work was progressing and was killed.
+
+**This is left alone, deliberately.** Class B is outside this lane's slice by
+the brief's own classification, another lane may own it, and widening scope
+without being asked is not this lane's call. It is reported instead, with the
+observation that the docstring's stated reason for the number —
+
+> MUST BE TIGHTER THAN THE HARNESS TIMEOUT ABOVE IT … At 300s under the suite's
+> `--timeout=180`, pytest's own timeout fires FIRST
+
+— **is now obsolete**: `ci_harness_timeout_ceiling_check` reports on this branch
+that *"every landing pytest population is supervised by validated lifecycle
+progress with no total runtime ceiling; elapsed time is not a test verdict."*
+There is no longer a 180 s harness above it for 90 s to fit under. The number is
+a fit to a constraint that no longer exists.
