@@ -81,6 +81,16 @@ RUNTIME_PATHS = frozenset({
 
 # This is the minimum trusted closure.  A manifest may name more imported
 # modules, but it may not omit one of these and still call itself complete.
+#
+# AUTHORITY IS NOT RUNTIME, AND THE DIFFERENCE IS WHO MAY SUPPLY THE BYTES.
+# `RUNTIME_PATHS` is compared for EXACT EQUALITY, because it is the set a
+# candidate is ALLOWED to change under one authorised atomic transition — the
+# landing runtime evolves, which is what PREPARE/ACTIVATE is for.  This set is
+# compared as a SUBSET (`REQUIRED_AUTHORITY_PATHS <= authority`), because it is
+# what the verifier EXECUTES TO REACH A VERDICT, and a candidate never supplies
+# any of it at all.  A file that decides whether the candidate lands therefore
+# belongs here and NOT in `RUNTIME_PATHS`: listing it there would hand the
+# subject under test a sanctioned ACTIVATE channel over its own guard.
 REQUIRED_AUTHORITY_PATHS = frozenset({
     "tools/gatekeeper-verify-merge.sh",
     "tools/ci/protected_landing_transition.py",
@@ -109,10 +119,14 @@ REQUIRED_AUTHORITY_PATHS = frozenset({
     "vibe-ic-marketplace/plugins/vibe-ic/programs/_progress_run.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/_corpus_location.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/_crash_safe_scratch.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/_gate_usage_exit.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/_vacuous_exit.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/_prose_polarity.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/_routed_checker_progress.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/drc_vacuous_pass_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/hygiene_shard_plan.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/generated_test_list_min_guard.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/macro_obs_geometry_intersect_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/policy_direction_pin_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py",

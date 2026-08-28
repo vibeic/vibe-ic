@@ -34,9 +34,14 @@ import _progress_run as _pr  # noqa: E402
 SCRIPT_REL = "tools/ci/check_version_sync_with_commit.sh"
 
 
-def _stage_repo(tmp_path: Path, plugin_ver: str, market_ver: str) -> Path:
-    """Build a synthetic repo with .git/, the script, plugin.json,
-    marketplace.json, set to the requested versions.
+def _stage_repo(tmp_path: Path, plugin_ver: str, market_ver: str,
+                root_ver: str | None = None) -> Path:
+    """Build a synthetic repo with .git/, the script, plugin.json, and BOTH
+    marketplace.json files, set to the requested versions.
+
+    ``root_ver`` defaults to ``market_ver``: the root manifest is a
+    marketplace.json too, so absent a reason it drifts with its sibling.
+    Pass it explicitly to move ONLY the root one.
 
     flow #486: tools/ci/ is a repo-root-only CI script that is NOT shipped
     in the flattened install cache. ``repo_resource_or_skip`` yields a
@@ -47,6 +52,7 @@ def _stage_repo(tmp_path: Path, plugin_ver: str, market_ver: str) -> Path:
     # Layout
     (root / ".git").mkdir(parents=True)
     (root / "tools" / "ci").mkdir(parents=True)
+    (root / ".claude-plugin").mkdir(parents=True)
     (root / "vibe-ic-marketplace" / ".claude-plugin").mkdir(parents=True)
     (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / ".claude-plugin").mkdir(parents=True)
 
@@ -67,6 +73,23 @@ def _stage_repo(tmp_path: Path, plugin_ver: str, market_ver: str) -> Path:
         json.dumps({"plugins": [{"name": "vibe-ic",
                                  "source": "./plugins/vibe-ic",
                                  "version": market_ver}]},
+                   indent=2)
+    )
+    # THE THIRD MANIFEST, at the REPO ROOT. `/plugin update` reads this one as
+    # the version truth, and the script gained a check for it at 7e1aab3e1f --
+    # a landing that did not update this fixture, so (a) and the subject/body
+    # case began failing on a manifest the fixture never staged. The CHECKER is
+    # right and the fixture was the stale side. Staging it is not the whole
+    # fix: see `test_a_desynced_root_manifest_is_refused` below, without which
+    # this block would merely make the red go away. The tools-side twin,
+    # `tools/ci/test_check_version_sync_with_commit.py`, holds both halves --
+    # these two tests of one checker must not disagree about what a valid
+    # repository is.
+    (root / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"name": "vibe-ic",
+                                 "source": "./vibe-ic-marketplace/plugins/vibe-ic",
+                                 "version": root_ver if root_ver is not None
+                                 else market_ver}]},
                    indent=2)
     )
     return root
@@ -150,3 +173,30 @@ def test_subject_advertises_body_has_history(tmp_path):
     r = _run(repo, msg)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "PASS" in r.stdout
+
+
+# The guard that makes the third manifest STAGED above mean something. Without
+# it, adding the file to `_stage_repo` would restore the green while leaving the
+# root manifest -- the one `/plugin update` actually reads -- unchecked on this
+# side of the repo. Mirrors `test_a_desynced_root_manifest_is_refused` in
+# `tools/ci/test_check_version_sync_with_commit.py`.
+def test_a_desynced_root_manifest_is_refused(tmp_path):
+    """The two maintainer manifests agree; ONLY the root one is behind."""
+    repo = _stage_repo(tmp_path, "1.6.17", "1.6.17", root_ver="1.6.15")
+    r = _run(repo, "feat(plugin): v1.6.17 Wave 93 — bump\n")
+    assert r.returncode == 1, (
+        "a root-only desync was accepted; the manifest `/plugin update` reads "
+        "is unchecked again\n" + r.stdout + r.stderr)
+    assert "ROOT" in (r.stdout + r.stderr), (
+        "it failed, but not for the root manifest — the message must say which "
+        "of the three is wrong or the next reader edits the wrong file")
+
+
+def test_an_absent_root_manifest_is_not_a_pass(tmp_path):
+    """"I could not find the version" is not "the version is right"."""
+    repo = _stage_repo(tmp_path, "1.6.17", "1.6.17")
+    (repo / ".claude-plugin" / "marketplace.json").unlink()
+    r = _run(repo, "feat(plugin): v1.6.17 Wave 93 — bump\n")
+    assert r.returncode == 1, (
+        "an absent root manifest passed; an unreadable version is not a "
+        "matching one\n" + r.stdout + r.stderr)

@@ -1423,6 +1423,62 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     || die "cannot bind the pre-arm protected landing receipt"
   materialize_protected_runtime
   build_trusted_test_selection
+
+  # BETWEEN THE SELECTOR AND THE RUNNER, which is the position
+  # `generated_test_list_min_guard` was written for and had never once been
+  # called from: vibe-ic#381 counted it as a checker nothing but its own unit
+  # test runs. It closes two measured failures that both read as green and fail
+  # in OPPOSITE directions, so neither guards the other:
+  #
+  #   an EMPTY list runs EVERYTHING — `xargs -a <empty> python3 -m pytest`
+  #     invokes pytest with no path arguments, so it falls back to `testpaths`
+  #     and sweeps the whole suite. Measured: a selector timed out, wrote a
+  #     zero-byte list, and two arms launched an unbounded sweep across two
+  #     clones.
+  #   a list naming a path that DOES NOT RESOLVE runs NOTHING, and reports it
+  #     with a success code.
+  #
+  # MEASURED before wiring, over a real 1313-entry selection from this
+  # selector: `[PASS] 1313 distinct entr(ies) >= minimum 1, all resolvable`.
+  #
+  # `--root` is the CANDIDATE plugin tree, because that is where the selector's
+  # relative paths resolve and the arm about to consume the list runs there —
+  # resolving them against the parent checkout would answer for a tree that is
+  # not the one under test.
+  #
+  # `--min 1` IS THE FLOOR THE CALLER CAN HONESTLY STATE TODAY, and it is
+  # deliberately not larger. The guard's own header argues that a real minimum
+  # must come from outside the list, and this lane does not yet carry a
+  # declared expected size; inventing one here would be a number nobody
+  # measured, which is the shape this repository keeps finding in its own
+  # baselines. At 1 it still closes both failures above — emptiness by the
+  # count, the unresolvable path by the resolution — and raising it later is a
+  # ratchet, not a rewrite.
+  python3 -B "$RUNTIME_SNAPSHOT/$PLUGIN_REL/programs/generated_test_list_min_guard.py" \
+      "$RUN/selection.txt" --min 1 --root "$WT_CAND/$PLUGIN_REL" \
+    || die "the candidate test selection is not a usable list (empty, or naming a path that does not resolve): a bad list runs everything or nothing, and both report success"
+
+  # THE LANDING IS A CLAIM ABOUT TWO TREES. `landing_noop_verdict_check` also
+  # shipped with nothing but its own unit test running it. This repository
+  # SQUASH-lands, so content reaches the trunk without ancestry and a merge
+  # tool asked "is there anything to land?" answers for its own staging area
+  # instead of for the trees — measured 2026-08-21, a batch logged NOTHING TO
+  # LAND for a lane that differed from the trunk in FOUR files, three of them
+  # not generated, one push from being dropped without a word.
+  #
+  # `--claim work` is the claim THIS lane makes: a verification arm is about to
+  # spend an hour proving a candidate that asserts it changes something. Every
+  # non-zero refuses, and the two non-zero codes are different facts worth
+  # keeping apart in the message: rc 1 is "the trees do not support the claim",
+  # rc 2 is "the branch touches no path at all relative to the merge base" —
+  # which for `--claim work` is the no-op this gate exists to name.
+  #
+  # MEASURED before wiring, against a real lane (`origin/next/b73land` vs
+  # `origin/main`): rc 1, naming all 4 paths that are not byte-identical. The
+  # instrument works on real artefacts, not only on its author's fixture.
+  python3 -B "$RUNTIME_SNAPSHOT/$PLUGIN_REL/programs/landing_noop_verdict_check.py" \
+      --branch "$VERIFIED_SHA" --target "$BASE_SHA" --repo "$REPO" --claim work \
+    || die "the candidate does not differ from the base it is being verified against: a landing verdict is a claim about the two TREES, and this pair does not support it"
   materialize_hermetic_git_subject \
     "$REPO" "$VERIFIED_SHA" "$CAND_SUBJECT" "$CAND_SUBJECT_RECORD"
   materialize_hermetic_git_subject \

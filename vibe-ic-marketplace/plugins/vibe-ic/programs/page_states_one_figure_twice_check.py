@@ -170,6 +170,45 @@ def audit(raw: str) -> dict:
     }
 
 
+#: THE PROOF BEHIND THIS PROGRAM'S `unwired_by_decision` ENTRY.
+#:
+#: The docstring above states that this rule has no subject in this repository
+#: and is therefore deliberately not machine-wired. That sentence is a
+#: MEASUREMENT, and a measurement nothing re-derives decays into a waiver — so
+#: `checker_execution_wiring_audit` re-derives it every run by calling this
+#: function and requiring 0. The day a page carrying a metric card lands in
+#: this tree, the count stops being 0, the disclosure stops being true, and
+#: that audit goes RED naming this entry. That is the whole difference between
+#: a disclosure and permission.
+#:
+#: A CARD, not a page: `_CARD_RE` is the same predicate `statements()` uses to
+#: decide a quantity is a declared figure, so the probe and the rule cannot
+#: disagree about what a subject is. Reusing it is the point — a probe with its
+#: own copy of the pattern would go on returning 0 after the rule's pattern
+#: changed.
+def subject_count(root, globs=("**/*.md", "**/*.html", "**/*.htm")) -> int:
+    """How many pages under `root` declare at least one metric card.
+
+    0 means this rule HAS NO SUBJECT here — not that it passed. `.git/` is
+    skipped because a packfile is not a published page, and an unreadable file
+    is counted as no subject rather than raising: a probe that can crash is a
+    probe that can take the audit down with it.
+    """
+    root = Path(root)
+    seen, n = set(), 0
+    for g in globs:
+        for f in root.glob(g):
+            if ".git/" in str(f) or not f.is_file() or f in seen:
+                continue
+            seen.add(f)
+            try:
+                if _CARD_RE.search(f.read_text(errors="replace")):
+                    n += 1
+            except OSError:
+                continue
+    return n
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("page", help="the published page (HTML or Markdown)")

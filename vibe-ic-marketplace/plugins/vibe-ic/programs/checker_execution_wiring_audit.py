@@ -1107,7 +1107,7 @@ def check_unwired_by_decision(rep: dict, decisions: Dict[str, str],
     problems: List[str] = []
     in_scope = set(rep.get("machine_runners") or {})
     for name in sorted(decisions):
-        reason = decisions[name]
+        reason = decision_reason(decisions[name])
         if name not in in_scope:
             problems.append(
                 f"   {name}: recorded as deliberately unwired, but it is not a "
@@ -1132,7 +1132,7 @@ def check_unwired_by_decision(rep: dict, decisions: Dict[str, str],
     return problems
 
 
-def _load_decisions(p: Path) -> Dict[str, str]:
+def _load_decisions(p: Path) -> Dict[str, object]:
     if not p.is_file():
         return {}
     try:
@@ -1141,6 +1141,82 @@ def _load_decisions(p: Path) -> Dict[str, str]:
         return {}
     v = d.get("unwired_by_decision") if isinstance(d, dict) else None
     return v if isinstance(v, dict) else {}
+
+
+def decision_reason(entry: object) -> str:
+    """The reason text of a decision entry, in either shape it may be written.
+
+    TWO SHAPES ON PURPOSE, and only one of them excuses anything. A bare string
+    is the register as it shipped: a disclosure that a reader can weigh and that
+    this audit still BLOCKS on, which is what `checkpoint_gate_check.py` is.
+    An object additionally carries a `proof` this audit RE-DERIVES, and only
+    that shape can excuse a checker from the test-only finding.
+    """
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict):
+        r = entry.get("reason")
+        return r if isinstance(r, str) else ""
+    return ""
+
+
+#: The proof kinds `unwired_by_decision` understands. A kind this audit does not
+#: know is REFUSED rather than ignored — an unrecognised proof that silently
+#: excused its entry would be the escape hatch this whole mechanism exists to
+#: not be.
+_PROOF_KINDS = ("no_subject_in_tree",)
+
+
+def evaluate_proof(programs: Path, root: Path, entry: object):
+    """`(holds, detail)` for one decision entry's proof.
+
+    `holds` is True only when the proof was RUN and came back the way the entry
+    says it does. It is False for every other outcome — no proof, an unknown
+    kind, a probe that cannot be imported or called, a probe that raised, or a
+    count that moved. THERE IS NO THIRD STATE ON PURPOSE: "I could not check
+    the proof" must not excuse a checker, because that is indistinguishable
+    from the proof having gone false, and one of those two is a checker nobody
+    runs wearing a disclosure that no longer holds.
+
+    WHY THE PROBE LIVES IN THE CHECKER AND NOT HERE. The entry claims the
+    checker has no subject in this tree; only the checker knows what its own
+    subject looks like. A predicate re-typed here would go on returning the
+    old answer after the checker's own pattern changed — the hand-copied-list
+    failure this repository has now measured several times.
+    """
+    if not isinstance(entry, dict):
+        return False, ("no `proof`: a bare reason string is a disclosure a "
+                       "reader can weigh, and it does not excuse the finding")
+    proof = entry.get("proof")
+    if not isinstance(proof, dict):
+        return False, "no `proof` object"
+    kind = proof.get("kind")
+    if kind not in _PROOF_KINDS:
+        return False, (f"proof kind {kind!r} is not one this audit can "
+                       f"re-derive (known: {', '.join(_PROOF_KINDS)})")
+    ref = proof.get("probe")
+    if not isinstance(ref, str) or ":" not in ref:
+        return False, "`probe` must be '<module>:<callable>'"
+    mod_name, _, fn_name = ref.partition(":")
+    if not (programs / f"{mod_name}.py").is_file():
+        return False, f"`probe` names {mod_name}.py, which is not in programs/"
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location(
+            f"_proof_{mod_name}", programs / f"{mod_name}.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        fn = getattr(mod, fn_name)
+        measured = int(fn(root))
+    except Exception as exc:                       # noqa: BLE001 - see docstring
+        return False, f"the probe could not be run: {type(exc).__name__}: {exc}"
+    if kind == "no_subject_in_tree":
+        if measured == 0:
+            return True, f"{ref}(root) == 0 — the subject is still absent"
+        return False, (f"{ref}(root) == {measured}: this tree now HOLDS the "
+                       f"subject the entry says is absent, so the disclosure "
+                       f"is false and the checker must be wired")
+    return False, f"unhandled proof kind {kind!r}"
 
 
 def measure_triage(programs: Path, names: List[str], timeout: int = 200) -> Dict[str, str]:
@@ -1262,7 +1338,31 @@ def main(argv=None) -> int:
     rep = audit(plugin, root)
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
-    now = sorted(rep["test_only"] + rep["no_runner_at_all"])
+    # THE DISCLOSURE IS EVALUATED BEFORE THE FINDING, because it changes the
+    # population the finding is computed over. `unwired_by_decision` entries
+    # whose PROOF this audit re-derived and found still true are not debt: they
+    # are a decision, and reporting them as "a checker nothing runs" made a
+    # decision and an oversight indistinguishable — which is what let four
+    # unwired checkers redden two unrelated test files with no way for a reader
+    # to tell which of the four anybody had actually thought about.
+    #
+    # A PROOF THAT DID NOT HOLD EXCUSES NOTHING and is its own FAIL below, so
+    # the only way out of the finding is a claim this program can re-derive.
+    decisions = _load_decisions(bl)
+    excused, proof_failed = [], []
+    for _name in sorted(decisions):
+        _holds, _detail = evaluate_proof(plugin / "programs", root,
+                                         decisions[_name])
+        if _holds:
+            excused.append((_name, _detail))
+        elif isinstance(decisions[_name], dict) and "proof" in decisions[_name]:
+            # Only an entry that CLAIMED a proof can fail one. A bare string
+            # entry claims nothing, blocks as it always did, and must not be
+            # converted into a new failure by this change.
+            proof_failed.append((_name, _detail))
+    _excused_names = {n for n, _ in excused}
+    now = sorted(set(rep["test_only"] + rep["no_runner_at_all"])
+                 - _excused_names)
 
     if a.write_baseline:
         if a.scope_expanded is not None and len(a.scope_expanded.strip()) < 30:
@@ -1380,7 +1480,17 @@ def main(argv=None) -> int:
             print(f"   {c}: reason must state the MEASUREMENT that decided it "
                   f"(>= {_MIN_DECISION_REASON} chars), not gesture at one: "
                   f"{str(reasons.get(c))[:80]!r}")
-    decisions = _load_decisions(bl)
+    for _name, _detail in excused:
+        # REPORTED, never silent. An excused checker that vanished from the
+        # output would be the same defect one level up: a population that only
+        # appears when it is non-empty cannot be told from one nobody looked at.
+        print(f"   (unwired by design, proof re-derived) {_name}: {_detail}")
+    if proof_failed:
+        print(f"[FAIL] {len(proof_failed)} `unwired_by_decision` entry(ies) "
+              f"claim a proof that DOES NOT HOLD on this tree — an entry that "
+              f"cannot be re-derived is a waiver, not a disclosure:")
+        for _name, _detail in proof_failed:
+            print(f"   {_name}: {_detail}")
     stale = check_unwired_by_decision(rep, decisions, base or [])
     if stale:
         print(f"[FAIL] {len(stale)} problem(s) in `unwired_by_decision` — a "
@@ -1388,10 +1498,11 @@ def main(argv=None) -> int:
               f"licence, not a disclosure:")
         for line in stale:
             print(line)
-    if new or paid or stale or gestured:
+    if new or paid or stale or gestured or proof_failed:
         return 1
     print(f"[PASS] no NEW test-only checker ({len(now)} recorded)"
           + (f"; {len(decisions)} deliberately unwired, disclosed"
+             f" ({len(excused)} with a proof re-derived this run)"
              if decisions else ""))
     return 0
 

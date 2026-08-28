@@ -40,6 +40,17 @@ PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
 PG="$RUNTIME_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
 cd "$ROOT"
 
+# EXPORTED, and `python3 -B` is not a substitute. `-B` sets
+# `sys.dont_write_bytecode` for THIS interpreter and DOES NOT PROPAGATE to a
+# child; every gate below spawns children, and a `.pyc` one of them writes lands
+# inside the tree the later attestation and host-independence gates re-derive
+# and compare. `git status --porcelain` cannot see it (`.gitignore`) and
+# `_run_isolation.snapshot` can, and that asymmetry is the measured 13-of-39
+# differential failure `attestation_preflight_check` was written from. The gate
+# immediately below re-asserts this rather than assuming it, so deleting this
+# line reddens the sweep instead of quietly re-arming the defect.
+export PYTHONDONTWRITEBYTECODE=1
+
 # One machine record per completed gate.  When the caller supplies a path it
 # remains available as a progress/attestation channel; otherwise this run owns
 # a private temporary file and embeds its records into --summary-json before
@@ -85,6 +96,25 @@ trap _gate_attestation_cleanup EXIT
 gate_dispatch_init "$@"
 
 # --- repo-root scoped ------------------------------------------------------
+# THE PREFLIGHT, AND IT IS FIRST ON PURPOSE. vibe-ic#381: this checker shipped
+# with nothing but its own unit test running it, which is zero coverage of real
+# inputs — a gate written from three measured failures and never once pointed at
+# the tree it was written about. MEASURED here before wiring, over this repo:
+# rc 0, `no residue, no tracked drift, PYTHONDONTWRITEBYTECODE set for every
+# child [12871 file(s) under 1 declared root(s)]`.
+#
+# FIRST, because its subject is one every later gate can create: a single `.pyc`
+# from any gate below it lands in the snapshot path set, and the preflight would
+# then be reporting residue this sweep had just written. Asking the question
+# before anything has run is the only position where the answer is about the
+# CHECKOUT rather than about the sweep.
+#
+# A plain `run`. Its rc 2 is VACUOUS — "the declared roots hold no file at all"
+# — which cannot happen for `$ROOT`: the script already refused a `$ROOT` that
+# is not a directory, and an empty one would have failed every gate below. So
+# there is no could-not-check state here to buy an exemption with, and rc 1 is a
+# real finding about this checkout.
+run "attestation preflight"             "$ROOT" python3 "$PG/attestation_preflight_check.py" "$ROOT" --repo "$ROOT"
 run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnostic_check.py" "$PLUGIN"
 # Its PORTABILITY twin. Wired here because `gatekeeper_review` — the only
 # other place that runs it — is invoked on PRs, and this repo lands most work
@@ -1327,8 +1357,23 @@ run_tolerating_uncheckable "cross-layer reference regression" "$ROOT" python3 "$
 # `runs_swept` or `runs_with_reports` without `--shrink-reason '<why>'`.
 # Nothing on the line below writes anything, so this gate is read-only as
 # before.
-uncheckable_until 2027-02-28 "SUBJECT ABSENT BY OWNER INSTRUCTION. This sweeps published run trees for a reports/ directory carrying step verdicts; the corpus holds zero published run trees since bcf2f94, so the sweep examines nothing and says VACUOUS_PASS rather than passing. The INSTRUMENT is proven by tools/ci/gate_fixtures/step_fail_bubbles_up.py over two run trees with four readable verdicts, two of them FAIL. Closes on the first converged cell benchmark_evidence_publish stages; NOTHING IN THIS REPOSITORY CAN CLOSE IT, which is why it is here and not in a code change. rc 1 is UNAFFECTED and still blocks: an exemption converts only rc 2, so this gate looking and finding a defect still refuses the landing. The per-cell invocation earlier in this file is unaffected and still blocks."
-run_tolerating_uncheckable "step FAIL bubbles up" "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
+# vibe-ic#1025 — MEASURED, and the exemption that used to sit here was DEAD ON
+# ARRIVAL. f7f00e9e moved this row to `run_tolerating_uncheckable` and bought it
+# with an `uncheckable_until` whose reason said the sweep "examines nothing and
+# says VACUOUS_PASS rather than passing", i.e. rc 2. It does not, and it did not
+# then: `--corpus-may-be-absent` was already on this line since bd3c3a4c3
+# (2026-08-17), and that flag is exactly the opt-in that turns an absent corpus
+# into NO_CORPUS -> rc 0. MEASURED at f7f00e9e itself and on this tree: rc 0,
+# printing `0 published run tree(s) swept` and claiming nothing about them. So
+# the tolerance bought an rc this gate cannot emit, and the only thing the
+# wrapper still did was convert the rc 2 states that ARE reachable — a corpus
+# pointer that is set and wrong, and a register that is absent or malformed —
+# from FAIL into a non-fatal NOT_CHECKED. Restored to `run`, which is STRICTER
+# than what it replaces: rc 0 still passes, rc 1 blocked before and blocks now
+# (an exemption only ever converted rc 2), and rc 2 blocks again. The exemption
+# goes with it — `uncheckable_until` on a plain `run` is itself a WIRING ERROR,
+# because it describes a state that gate cannot reach.
+run "step FAIL bubbles up" "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
 # on that list's contract — complete over the non-PASS steps, inventing none,

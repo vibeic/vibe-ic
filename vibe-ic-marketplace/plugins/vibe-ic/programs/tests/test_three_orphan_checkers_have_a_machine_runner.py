@@ -66,11 +66,38 @@ def test_it_is_no_longer_in_the_test_only_finding(checker, audit_report):
     assert checker not in audit_report["no_runner_at_all"]
 
 
-def test_the_audit_returns_a_clean_verdict(audit_report, tmp_path):
-    """The gate itself, by exit code — not by re-deriving its rule here."""
-    r = _pr.run([sys.executable, str(_AUDIT)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
+# THE GLOBAL ASSERTION THAT USED TO SIT HERE IS GONE, and this note is why.
+#
+# It was `test_the_audit_returns_a_clean_verdict`: run
+# `checker_execution_wiring_audit` with no arguments and require rc 0. This
+# file is about ONE checker, and that assertion is about EVERY checker in the
+# tree, so this file went red whenever anybody anywhere added an unwired one —
+# naming programs that have nothing to do with its subject. Measured
+# 2026-08-28: four such checkers reddened this file and
+# `test_three_orphan_checkers_have_a_machine_runner.py`, and the four were
+# `attestation_preflight_check`, `generated_test_list_min_guard`,
+# `landing_noop_verdict_check` and `page_states_one_figure_twice_check` —
+# none of them the subject of either file.
+#
+# IT PROTECTED NOTHING THE GATE DOES NOT. `tools/ci/repo_hygiene_gates.sh:908`
+# already runs that audit through the BLOCKING `run` wrapper:
+#
+#     run "checker execution wiring"  "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
+#
+# CHECKED BEFORE CUTTING, because "it is already wired" is exactly the claim
+# that is worth being wrong about:
+#   * same argv — the gate passes no `--repo-root` and no `--baseline`, and so
+#     did the deleted test, so both resolve the same root and read the same
+#     baseline over the same population;
+#   * always runs — no `gate_scope` narrows it (an unscoped gate is never
+#     skipped) and no `uncheckable_until` precedes it, so its rc 1 is fatal;
+#   * runs in the landing lane — `tools/gatekeeper-land.sh:1587` invokes that
+#     script.
+#
+# What is KEPT is every assertion this file owns about its own subject,
+# including `test_it_is_no_longer_in_the_test_only_finding`, which asks the
+# audit the question this file is actually about and stays red if THIS
+# checker regresses.
 
 
 @pytest.mark.skipif(not _HYGIENE.is_file(), reason="hygiene script absent")

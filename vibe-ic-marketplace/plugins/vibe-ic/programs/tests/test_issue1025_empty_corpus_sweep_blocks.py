@@ -247,3 +247,143 @@ def test_a_nonempty_corpus_with_a_new_unacknowledged_fail_is_rc_1(tmp_path):
         f"an unacknowledged FAIL above the baseline must be rc 1. "
         f"rc={res.returncode}\n{res.stdout}{res.stderr}")
     assert "GREW" in res.stdout, res.stdout
+
+
+# ---------------------------------------------------------------------------
+# 4. what the WRAPPER on the real line still has to buy (vibe-ic#1025, 2026-08-28)
+#
+# The wrapper assertion above pins a TOKEN. These pin the PROPERTY that token
+# exists to protect, measured against the gate's actual exit codes rather than
+# against the ones the 2026-08-25 landing believed it had.
+#
+# THE MEASUREMENT THAT MOTIVATES THEM. `--corpus-may-be-absent` has been on the
+# real dispatch line since bd3c3a4c3 (2026-08-17), and it splits two facts that
+# used to share rc 2:
+#
+#     corpus ABSENT (moved to its own repo in v1.10.56)   -> rc 0, NO_CORPUS
+#     pointer SET AND WRONG                               -> rc 2
+#     corpus present but not a git checkout               -> rc 2
+#     --write-baseline with no corpus                     -> rc 2  (the #1025
+#                                                             destruction refusal)
+#
+# So EVERY rc 2 this gate can still emit is a state that must block, and the
+# one state a tolerating wrapper was bought for does not produce rc 2 at all.
+# That is the whole content of the wrapper question, and until these existed
+# nothing asserted it — which is how a wrapper could be swapped in the belief
+# that it covered "the corpus is gone" while what it actually covered was
+# "somebody's pointer is broken" and "a write that would destroy the register".
+# ---------------------------------------------------------------------------
+def _gate_env(*args, env=None):
+    """`_gate`, but with VIBE_IC_BENCHMARK_DATA under the test's control.
+
+    The pointer is READ from the ambient environment, so a host that happens to
+    export it turns the NO_CORPUS assertions below into UNDETERMINED ones and
+    the file would pass or fail for a reason that is not about this repo.
+    """
+    import os
+    e = dict(os.environ)
+    e.pop("VIBE_IC_BENCHMARK_DATA", None)
+    e.update(env or {})
+    return _pr.run([sys.executable, str(GATE), *args],
+                   capture_output=True, text=True, env=e)
+
+
+def _said(res):
+    """Everything the gate emitted, both streams.
+
+    The NO_CORPUS banners go to stderr while the NOT_EXAMINED ones a few
+    assertions up go to stdout. Which stream carries a sentence is an
+    incidental of the branch that prints it; that the sentence is SAID AT ALL
+    is the property these assertions are about, so pinning the stream would be
+    pinning the wrong half.
+    """
+    return res.stdout + res.stderr
+
+
+def _wired_wrapper():
+    """The wrapper the corpus sweep is ACTUALLY dispatched by, on this tree."""
+    stmts = [(w, s) for w, s in _dispatch_statements(HYGIENE.read_text())
+             if "step_internal_fail_bubble_up_check.py" in s and "--corpus" in s]
+    assert len(stmts) == 1, f"expected exactly one corpus-mode dispatch: {stmts}"
+    return stmts[0][0]
+
+
+def test_a_pointer_that_is_set_and_wrong_is_rc_2_and_says_it_is_not_excused(
+        tmp_path):
+    """rc 2 #1 of 3. The gate REFUSES to let `--corpus-may-be-absent` cover a
+    broken pointer, and says so in words. If this ever became rc 0, a CI host
+    with a stale export would sweep nothing and be recorded as having swept."""
+    res = _gate_env("--corpus", str(tmp_path / "unused"),
+                    "--corpus-may-be-absent",
+                    env={"VIBE_IC_BENCHMARK_DATA": str(tmp_path / "gone")})
+    assert res.returncode == 2, (
+        f"a pointer set and wrong must not be excused. rc={res.returncode}\n"
+        f"{res.stdout}{res.stderr}")
+    assert "UNDETERMINED" in _said(res), _said(res)
+    assert "--corpus-may-be-absent does not excuse it" in _said(res), _said(res)
+
+
+def test_write_baseline_with_no_corpus_is_refused_at_rc_2(tmp_path):
+    """rc 2 #2 of 3, and it is THE #1025 destruction. `--write-baseline` over a
+    corpus that was never opened would record `findings_total=0` as a
+    measurement and lose the reference point. The register is copied to
+    tmp_path first, so a regression that stopped refusing cannot damage the
+    real one while proving that it stopped."""
+    real = GATE.parent / "step_internal_fail_bubble_up_baseline.json"
+    bl = tmp_path / "baseline.json"
+    bl.write_text(real.read_text())
+    before = bl.read_text()
+    res = _gate_env("--corpus", str(tmp_path / "gone"), "--corpus-may-be-absent",
+                    "--baseline", str(bl), "--write-baseline")
+    assert res.returncode == 2, (
+        f"a write from a scan that did not happen must be refused. "
+        f"rc={res.returncode}\n{res.stdout}{res.stderr}")
+    assert "REFUSED" in res.stderr, res.stderr
+    assert bl.read_text() == before, "the register was rewritten anyway"
+
+
+def test_the_no_corpus_pass_must_say_that_nothing_was_measured(tmp_path):
+    """The rc-0 arm is only honest because it is LOUD. A silent 0 here is
+    indistinguishable from a sweep that read fourteen cells and found them
+    clean, which is the exact confusion #1025 was filed about."""
+    res = _gate_env("--corpus", str(tmp_path / "gone"), "--corpus-may-be-absent")
+    assert res.returncode == 0, (
+        f"an absent corpus is opted-in NO_CORPUS, not a failure. "
+        f"rc={res.returncode}\n{res.stdout}{res.stderr}")
+    assert "NO_CORPUS" in _said(res), _said(res)
+    assert "0 published run tree(s)" in _said(res), _said(res)
+    assert "NOT RE-MEASURED" in _said(res), _said(res)
+
+
+def test_the_wired_wrapper_still_blocks_a_real_finding_at_rc_1(tmp_path):
+    """rc 1 is the gate LOOKING AND FINDING A DEFECT — an unacknowledged FAIL,
+    or a register whose counts fell with nobody on record. It must fail the
+    suite under whatever wrapper this tree actually uses. This holds for every
+    wrapper in the file today, and it is the assertion that stays true if the
+    dispatch line is ever legitimately re-spelled."""
+    res = _suite(tmp_path, _wired_wrapper(), 1)
+    assert res.returncode == 1, (
+        f"rc 1 under `{_wired_wrapper()}` did not fail the suite "
+        f"(rc={res.returncode})\n{res.stdout}{res.stderr}")
+    assert "FAILED" in res.stderr, res.stderr
+
+
+def test_the_wired_wrapper_still_blocks_every_rc_2_this_gate_can_emit(tmp_path):
+    """The assertion that would have caught the 2026-08-25 landing.
+
+    It does not name a token. It asks the only question that matters: of the
+    states this gate can actually reach, is there one it refuses in and the
+    suite shrugs at? Because `--corpus-may-be-absent` already routed the absent
+    corpus to rc 0, every REMAINING rc 2 is a broken configuration or a refused
+    destruction — so a wrapper that tolerates rc 2 is tolerating exactly those,
+    and nothing else."""
+    res = _suite(tmp_path, _wired_wrapper(), 2)
+    assert res.returncode == 1, (
+        f"the corpus sweep is dispatched by `{_wired_wrapper()}`, under which "
+        f"rc 2 does not fail the suite (rc={res.returncode}).\n"
+        "Every rc 2 this gate can still emit is a MUST-BLOCK state: a pointer "
+        "that is set and wrong, a corpus that is not a git checkout, and "
+        "`--write-baseline` refusing to record findings_total=0 as a "
+        "measurement. The absent corpus — the one state a tolerance would be "
+        "bought for — exits 0 and needs none.\n"
+        f"{res.stdout}{res.stderr}")
