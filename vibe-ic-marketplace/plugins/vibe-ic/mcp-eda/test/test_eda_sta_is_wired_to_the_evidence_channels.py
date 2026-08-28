@@ -190,17 +190,27 @@ def test_the_manifest_status_is_gated_on_the_conjunction():
     be true: a constrained run that MISSED timing was manifested PASS by it. It
     is now a three-way expression, and this test requires the TIMING_VIOLATED
     arm rather than forbidding it. See
-    `test_a_constrained_run_that_missed_timing_is_not_manifested_pass`."""
+    `test_a_constrained_run_that_missed_timing_is_not_manifested_pass`.
+
+    WIDENED AGAIN 2026-08-28, the same way and for the same reason. The
+    measurement contract adds a FOURTH outcome the three could not express: a
+    run that legitimately had nothing to measure. Its own arm is REQUIRED here,
+    not permitted — folding it back into "UNCONSTRAINED" makes this gate refuse
+    every purely combinational design, and a gate that refuses everything gets
+    bypassed. Requiring four arms is strictly harder to satisfy than three."""
     block = _eda_sta_block()
     m = re.search(
         r'if \(staPass\) \{\s*const dir[^}]*?status: clockConstrained\s*'
         r'\?\s*\(wns !== null && wns < 0 \? "TIMING_VIOLATED" : "PASS"\)\s*'
-        r':\s*"UNCONSTRAINED"',
+        r':\s*\(staClass === NOT_MEASURED_BENIGN\s*\?\s*"NOTHING_TO_MEASURE"\s*'
+        r':\s*"UNCONSTRAINED"\)',
         block, re.S)
     assert m, (
         'the manifest still writes status:"PASS" on something other than the '
         'conjunction, or its status expression lost an arm. Writing PASS on '
-        'the bare exit code is how the original bug reached the manifest.')
+        'the bare exit code is how the original bug reached the manifest, and '
+        'collapsing NOTHING_TO_MEASURE into UNCONSTRAINED is the same lie '
+        'pointing the other way.')
 
 
 def test_a_constrained_run_that_missed_timing_is_not_manifested_pass():

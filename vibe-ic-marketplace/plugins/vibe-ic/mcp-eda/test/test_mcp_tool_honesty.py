@@ -293,15 +293,30 @@ def test_the_sta_manifest_status_distinguishes_pass_violation_and_unconstrained(
     m = re.search(r'status: (clockConstrained[\s\S]*?),\n\s*tool: "OpenSTA"', region)
     assert m, "the eda_sta manifest no longer has a clockConstrained-gated status"
     expr = m.group(1)
+    # A FOURTH ARM, 2026-08-28. The measurement contract adds one outcome the
+    # three above cannot express: a run that legitimately had NOTHING to
+    # measure. It is not a PASS (no slack was measured) and it is not
+    # UNCONSTRAINED (nothing was left unconstrained -- there was never anything
+    # to constrain). Collapsing it into UNCONSTRAINED makes this gate refuse
+    # every purely combinational design, and a gate that refuses everything
+    # gets bypassed. This asserts all FOUR arms, so it is strictly harder to
+    # satisfy than the three-arm form it replaces.
     script = (
-        "const f = (clockConstrained, wns) => (" + expr + ");\n"
-        "console.log(JSON.stringify([f(true, 8.43), f(true, -12.10), f(false, null)]));"
+        'const NOT_MEASURED_BENIGN = "NOTHING_TO_MEASURE";\n'
+        "const f = (clockConstrained, wns, staClass) => (" + expr + ");\n"
+        "console.log(JSON.stringify(["
+        "f(true, 8.43, null), f(true, -12.10, null),"
+        ' f(false, null, "UNCONSTRAINED"),'
+        ' f(false, null, "NOTHING_TO_MEASURE")]));'
     )
     r = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, f"node failed: {r.stderr}\n{script}"
-    assert json.loads(r.stdout) == ["PASS", "TIMING_VIOLATED", "UNCONSTRAINED"], \
-        "the manifest status lost an arm: a missed slack or an unconstrained " \
-        "run is being written as PASS"
+    assert json.loads(r.stdout) == ["PASS", "TIMING_VIOLATED", "UNCONSTRAINED",
+                                    "NOTHING_TO_MEASURE"], \
+        "the manifest status lost an arm: a missed slack, an unconstrained " \
+        "run, or a run with nothing to measure is being written as PASS — or " \
+        "the last two have been collapsed into one another, which is wrong in " \
+        "both directions"
 
 
 @pytest.mark.skipif(not NODE, reason="node not available")
