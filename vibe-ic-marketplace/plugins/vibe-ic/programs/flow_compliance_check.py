@@ -85,6 +85,7 @@ import _waiver_entries as _we
 import _evidence_independence as _ev_ind  # #524
 import _sim_results_bridge as _srb
 import _gate_invocation
+import _watchdog
 # vibe-ic#634 — the ONE classification of verdict words, shared with
 # `flow_step_execution_coverage_check` so a tier added here cannot be
 # unknown to the guard that adjudicates dependency ordering.
@@ -6698,6 +6699,13 @@ _UNDRIVABLE_BY_STRUCTURAL_UMBRELLA: Dict[str, Dict[str, str]] = {
 }
 
 
+#: How long a P0 structural gate may show NO forward progress at all — no
+#: output, no CPU, no I/O anywhere in its process tree — before the umbrella
+#: calls it hung. This is an IDLE tolerance, not a runtime budget: a gate that
+#: is still moving is never killed, however long it legitimately takes.
+_P0_GATE_STALL_GRACE_S = 60.0
+
+
 def _structural_gate_argv(gate_name: str,
                           project: Path,
                           rtl_dir: Optional[Path] = None,
@@ -7359,17 +7367,28 @@ def _run_structural_rtl_gates(project: Path,
         # the entire runner ("if no RTL at all, skip the lot").
         argv = _structural_gate_argv(gate_name, project, rtl_dir=rtl_dir,
                                      strict_timing=strict_timing)
-        try:
-            r = subprocess.run(
-                argv,
-                cwd=project,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except subprocess.TimeoutExpired:
-            return _p0_gate_record(gate_name, "FAIL", "timed out",
-                                   {"timeout_s": 60})
+        # TIMEOUT-AS-VERDICT (census row plugin/programs/flow_compliance_check.py
+        # :7368, class A — "handler records a FAILING verdict"). The fixed 60 s
+        # was a RUNTIME guess, and when it fired the umbrella wrote FAIL against
+        # the gate: a loaded host or a large design manufactured a substantive
+        # verdict about the DESIGN. `run_host_supervised` bounds NO-PROGRESS
+        # instead — a gate whose process tree keeps moving runs to completion
+        # however long it legitimately takes, and the caller's 60 s is re-read as
+        # what it should always have been: how long this gate may show no
+        # progress at all before it is called hung.
+        res = _watchdog.run_host_supervised(
+            argv, cwd=str(project), stall_grace_s=_P0_GATE_STALL_GRACE_S)
+        if res.outcome in ("stalled", "ceiling"):
+            # Still a FAIL — an unevaluated gate cannot pass — but the reason
+            # now states what was actually observed. "made no forward progress"
+            # is a claim about the GATE; "timed out" was a claim about the clock.
+            return _p0_gate_record(
+                gate_name, "FAIL",
+                "made no forward progress (output, CPU and I/O all flat) — "
+                "killed as hung; this is NOT a statement that the gate was slow",
+                {"stall_grace_s": _P0_GATE_STALL_GRACE_S,
+                 "elapsed_s": round(res.elapsed_s, 1)})
+        r = _watchdog.completed_process(argv, res)
         if r.returncode == 2:
             # #492 — rc 2 carried two unrelated meanings: "there was no input
             # to check" (a benign verdict FROM the gate) and "you called me
