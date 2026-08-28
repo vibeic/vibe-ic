@@ -695,12 +695,17 @@ def _governing_compares(loop: ast.AST):
         stack.extend(ast.iter_child_nodes(n))    # type: ignore[arg-type]
 
 
-def _deadline_bounded(loop: ast.AST, scope: Optional[ast.AST]) -> bool:
+def _deadline_bounded(loop: ast.AST, scope: Optional[ast.AST],
+                      aliases: Optional[set] = None) -> bool:
     """The loop's exit is governed by a monotonic clock compared against a
-    deadline computed before it — however the identifiers are spelled."""
+    deadline computed before it — however the identifiers are spelled.
+
+    `aliases` is the MODULE's clock-alias table (a `_now = time.monotonic` at
+    module level is the common spelling), merged with the scope's own.
+    """
     if scope is None:
         return False
-    aliases = _monotonic_aliases(scope)
+    aliases = set(aliases or ()) | _monotonic_aliases(scope)
     pre = _predeadline_paths(scope, loop.lineno, aliases)
     if not pre:
         return False
@@ -725,6 +730,7 @@ def scan_file(path: Path) -> List[Offense]:
                         f"SyntaxError: {exc.msg}")]
 
     module_consts = _collect_str_consts(tree.body)
+    clock_aliases = _monotonic_aliases(tree)
 
     # Enclosing-function index for cmd tracing + loop_guard var maps.
     funcs: List[Tuple[int, int, ast.AST]] = []
@@ -831,7 +837,8 @@ def scan_file(path: Path) -> List[Offense]:
         elif isinstance(node, ast.While):
             subp, sleep = _loop_body_signals(node)
             if (subp or sleep) and not _annotated(lines, node) \
-                    and not _deadline_bounded(node, enclosing(node.lineno)):
+                    and not _deadline_bounded(node, enclosing(node.lineno),
+                                              clock_aliases):
                 why = ("launches a sub-process" if subp
                        else "sleeps (poll)")
                 offenses.append(Offense(
@@ -850,7 +857,7 @@ def scan_file(path: Path) -> List[Offense]:
             if _for_iter_is_infinite(node):
                 subp, sleep = _loop_body_signals(node)
                 if (subp or sleep) and not _annotated(lines, node) \
-                        and not _deadline_bounded(node, fn):
+                        and not _deadline_bounded(node, fn, clock_aliases):
                     offenses.append(Offense(
                         path.name, node.lineno, "for",
                         "for-loop over an INFINITE iterator with a "
