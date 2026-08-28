@@ -62,6 +62,20 @@ from pnr_doctor import analyze_pnr as pnr_analyze
 from phase1_menu import check_and_prompt as phase1_prompt
 from phase2_menu import handle_eda_failure as phase2_prompt
 
+# `_progress_run` lives in the plugin's `programs/`, which is not a sibling of
+# this file. Walk UP until the directory that actually holds it is found, so
+# this works from `tools/` and from inside the flattened plugin cache.
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
+import _progress_run as _pr  # noqa: E402
+
 
 # ============================================================================
 # Constants
@@ -354,11 +368,28 @@ def run_phase2(ic_dir: str, ic_name: str, log_path: str,
         ).returncode == 0
 
         if yosys_avail:
-            with open(synth_log, "w") as _logf:
-                result = subprocess.run(
+            # The 300 s bound here was a guess about a HOST, spent as a claim
+            # about the synthesis: on a busy machine a yosys run that was
+            # working got killed and `synth_analyze` then read a truncated log
+            # as a synthesis result. Supervised by forward progress instead —
+            # yosys is chatty, so its own output is the progress signal, and a
+            # run that is merely slow now finishes.
+            #
+            # The combined stream is captured and then written to `synth_log`,
+            # which is the artefact `synth_analyze` reads below. A stall writes
+            # what the child DID emit before going quiet, because a partial log
+            # is evidence and an absent one is not.
+            try:
+                result = _pr.run(
                     ["yosys", "-p", yosys_script],
-                    stdout=_logf, stderr=subprocess.STDOUT, timeout=300, text=True,
-                )
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                _synth_out = result.stdout
+            except _pr.Stalled as _exc:
+                _synth_out = (_exc.stdout or "") + f"\n[flow_runner] {_exc}\n"
+                result = subprocess.CompletedProcess(
+                    ["yosys"], _pr.RC_STALLED, _synth_out, "")
+            with open(synth_log, "w") as _logf:
+                _logf.write(_synth_out)
         else:
             _print_step(2, "Yosys available", "SKIP",
                         "yosys not installed, checking existing logs only")

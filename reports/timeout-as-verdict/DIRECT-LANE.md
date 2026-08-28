@@ -158,10 +158,10 @@ and wrong for a drop-in. **A drop-in may not change the exception contract.**
 | | sites |
 | --- | ---: |
 | worklist (census class-A direct, located) | 1154 |
-| **converted** | **1065** |
-| held, with a reason | 89 |
+| **converted** | **1066** |
+| held, with a reason | 88 |
 
-* **PROD: 101 of 102.** Gates, flow runners, and MCP tools — where a fired bound
+* **PROD: 102 of 102.** Gates, flow runners, and MCP tools — where a fired bound
   becomes a landing verdict or a tool's answer to a user.
 * **TEST: 964 of 1052**, across `programs/tests/`, `mcp-eda/test/` and `tools/`.
 
@@ -204,7 +204,7 @@ thirty-second sleep wakes and answers. The cadence is three looks a second
 apart, chosen **above** pytest's own ~0.65 s idle boot floor, so the stall is
 caused by the probe going quiet and not by looking during start-up.
 
-## What was held, and why — 89 sites in 23 files
+## What was held, and why — 88 sites in 22 files
 
 Not one was held for convenience.
 
@@ -212,13 +212,10 @@ Not one was held for convenience.
 | --- | ---: | ---: |
 | the file is NAMED for the timeout machinery — converting it converts the subject under test | 62 | 12 |
 | the file drives a deliberately hanging or spinning child, where the bound IS the stimulus | 17 | 6 |
-| `phase3_one_shot_runner` / others: already covered elsewhere or single stragglers | 9 | 4 |
-| `tools/flow_runner.py:358` redirects stdout to a log file | 1 | 1 |
+| single stragglers in files otherwise converted | 9 | 4 |
 
 The largest single holding is `test_ci_harness_timeout_ceiling_check.py` (35
-sites), which exists to police inner bounds. `tools/flow_runner.py:358` needs
-`run_supervised(log_path=...)`, watching the file it writes, and is a different
-change.
+sites), which exists to police inner bounds.
 
 **One of those holds is a correction to my own selection.**
 `tools/ci/test_landing_runtime_preflight_gate.py` has neither "timeout" nor
