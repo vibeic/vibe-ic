@@ -34,7 +34,9 @@ import contextlib
 import os
 import signal
 import sys
+import socket
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -45,6 +47,69 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import vibe_ic_one_shot_runner as orch  # noqa: E402
+import _watchdog  # noqa: E402
+
+#: How often the waits below LOOK, never how long they may take. Every bound in
+#: this file used to be a wall-clock guess about a HOST — "≤10 s to bind", a 5 s
+#: socket timeout — and each of them, on expiry, made the test report the
+#: dashboard as broken. That is the manufactured verdict: a daemon that is slow
+#: to bind on a loaded box is not a daemon that failed to bind.
+_LOOK_S = 0.1
+#: Consecutive looks with NO forward progress from the thing being waited on
+#: before it is called hung. For the daemon that reading is its own /proc tree
+#: (CPU + I/O); for the in-process server it is this process's CPU.
+_STALL_LOOKS = 300
+#: Pathological backstop, counted in LOOKS, not seconds. A daemon that keeps
+#: making progress is never stopped by it.
+_MAX_LOOKS = 200_000
+
+
+def _await(name, ready, progress_fn, alive=None):
+    """Wait for `ready()` bounded by NO FORWARD PROGRESS.
+
+    Returns True the moment `ready()` is true. Returns False only when the
+    subject stopped progressing (or `alive()` went false) — never because a
+    clock ran out. The caller can then say which of the two happened, instead
+    of a fixed poll count silently turning "still starting" into "never
+    started"."""
+    guard = _watchdog.loop_guard(name, max_iter=_MAX_LOOKS,
+                                 stall_iters=_STALL_LOOKS,
+                                 progress_fn=progress_fn)
+    for _ in guard:
+        if ready():
+            return True
+        if alive is not None and not alive():
+            return False
+        time.sleep(_LOOK_S)
+    return False
+
+
+def _fetch(url, progress_fn):
+    """GET `url` with the socket timeout demoted to a LOOK INTERVAL.
+
+    The 5 s that used to sit here propagated on expiry and made the test say the
+    dashboard did not serve. It could say that about a host under load just as
+    easily as about a broken daemon, and the two are the cases the test exists
+    to tell apart. Retrying while the server is still progressing removes the
+    ambiguity: only a server making no progress at all ends the wait."""
+    guard = _watchdog.loop_guard("dashboard-http", max_iter=_MAX_LOOKS,
+                                 stall_iters=_STALL_LOOKS,
+                                 progress_fn=progress_fn)
+    for _ in guard:
+        try:
+            return urllib.request.urlopen(url, timeout=_LOOK_S)
+        except urllib.error.HTTPError:
+            raise
+        except (socket.timeout, TimeoutError, ConnectionRefusedError):
+            continue
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, (socket.timeout, TimeoutError,
+                                       ConnectionRefusedError)):
+                continue
+            raise
+    raise AssertionError(
+        f"no forward progress from the server behind {url!r} "
+        f"({guard.reason} after {guard.iterations} looks)")
 
 
 # ---------------------------------------------------------------------------
@@ -125,16 +190,21 @@ def _dashboard_daemon(project: Path, port: int = 0):
     try:
         url_f = project / "reports" / "dashboard_web.url"
         bound = None
-        for _ in range(100):                    # ≤10 s to bind + record
-            if url_f.is_file():
-                rec = url_f.read_text().strip()
-                tail = rec.rsplit(":", 1)[-1]
-                if tail.isdigit():
-                    bound = int(tail)
-                    break
-            if proc.poll() is not None:          # daemon died early
-                break
-            time.sleep(0.1)
+
+        def _recorded():
+            if not url_f.is_file():
+                return False
+            tail = url_f.read_text().strip().rsplit(":", 1)[-1]
+            return tail.isdigit()
+
+        # No "≤10 s to bind": the daemon is watched by its own forward progress
+        # (CPU + I/O over its /proc tree), so a slow start on a loaded host is
+        # waited out and a daemon that wedges before binding still ends the wait.
+        _await("dashboard-bind", _recorded,
+               progress_fn=lambda: _watchdog.host_tree_progress(proc.pid),
+               alive=lambda: proc.poll() is None)
+        if _recorded():
+            bound = int(url_f.read_text().strip().rsplit(":", 1)[-1])
         yield proc, bound
     finally:
         # Reap through the Popen object so the child is fully waited (no
@@ -144,13 +214,20 @@ def _dashboard_daemon(project: Path, port: int = 0):
         except (ProcessLookupError, PermissionError):
             proc.terminate()
         try:
+            # The first bound is an ESCALATION step, not a verdict: when it
+            # expires nothing is recorded, the signal is upgraded to SIGKILL and
+            # the reap is retried. It is kept exactly as it was.
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 proc.kill()
-            proc.wait(timeout=5)
+            # The second one is NOT an escalation — there is nothing left to
+            # escalate to — so its expiry propagated out of teardown and errored
+            # the test. What is meant here is "the child has been reaped", which
+            # is what an unbounded wait after SIGKILL asserts directly.
+            proc.wait()
         log.close()
 
 
@@ -214,9 +291,9 @@ def test_two_dashboards_serve_on_distinct_ports(tmp_path):
         assert pa and pb, f"both daemons must bind a port (got {pa!r}, {pb!r})"
         assert pa != pb, (
             f"concurrent dashboards must serve on DISTINCT ports (both {pa})")
-        for port in (pa, pb):
-            resp = urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/", timeout=5)
+        for proc, port in ((a, pa), (b, pb)):
+            resp = _fetch(f"http://127.0.0.1:{port}/",
+                          lambda: _watchdog.host_tree_progress(proc.pid))
             assert resp.status == 200, f"dashboard on {port} must serve"
         pid_a, pid_b = a.pid, b.pid
     assert not _alive(pid_a) and not _alive(pid_b), (
@@ -234,15 +311,17 @@ def test_serve_records_actual_port_for_port_zero(tmp_path):
         daemon=True)
     t.start()
     url_f = tmp_path / "reports" / "dashboard_web.url"
-    for _ in range(80):
-        if url_f.is_file():
-            break
-        time.sleep(0.1)
+    # The server is a thread of THIS process, so this process's CPU advancing is
+    # the "it is working" reading; a fixed 80-look budget was a reading of the
+    # host instead.
+    _await("serve-bind", url_f.is_file,
+           progress_fn=lambda: sum(os.times()[:2]),
+           alive=t.is_alive)
     assert url_f.is_file(), "daemon must record its actually-bound URL"
     rec = url_f.read_text().strip()
     bound = int(rec.rsplit(":", 1)[-1])
     assert bound != 0, "port-0 must resolve to a real OS-assigned port, not :0"
-    assert urllib.request.urlopen(rec, timeout=5).status == 200
+    assert _fetch(rec, lambda: sum(os.times()[:2])).status == 200
 
 
 if __name__ == "__main__":

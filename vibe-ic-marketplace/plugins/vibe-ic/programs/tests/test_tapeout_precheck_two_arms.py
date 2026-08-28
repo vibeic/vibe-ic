@@ -43,6 +43,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _tapeout_declaration as TD          # noqa: E402
 import general_precheck as GP              # noqa: E402
 import tapeout_precheck as TP              # noqa: E402
+import _watchdog                           # noqa: E402
+
+
+def _supervised_runner(cmd, timeout=None):
+    """A `tapeout_precheck.Runner` that bounds NO PROGRESS instead of runtime.
+
+    `TP.default_runner` launches each arm under `subprocess.run(..., timeout=N)`
+    and maps a `TimeoutExpired` onto rc 124, which `_run_arm` then reports as the
+    arm having FAILED. So the wall-clock budget is not a guard here — it is a
+    verdict generator: exceed it because the host is busy and the merged report
+    records the precheck as broken, indistinguishably from the precheck really
+    being broken. The number cannot tell those apart, because "how long has it
+    been" is a different question from "is it working".
+
+    Every launch in this module therefore goes through progress supervision
+    (CPU + I/O over the child's /proc tree, plus the growth of its captured
+    output). `timeout` is accepted and IGNORED so the Runner signature — and
+    `TP.main`'s `--timeout` path, which cannot be handed a runner — keep
+    working; a genuinely hung arm is still killed, arriving as rc
+    `_watchdog.RC_STALLED`, which is not 124 and not any rc an arm produces."""
+    res = _watchdog.run_host_supervised(list(cmd))
+    return res.rc, res.out, res.err
+
+
+@pytest.fixture(autouse=True)
+def _no_wall_clock_verdicts(monkeypatch):
+    """Every arm launch in this module is supervised, including the ones this
+    file cannot pass a `runner=` to (`TP.main`, and the `TP.default_runner`
+    delegation inside `_mirror_operator`). Patching the module seam rather than
+    each call site is what makes that complete."""
+    monkeypatch.setattr(TP, "default_runner", _supervised_runner)
 import tapeout_readiness_check as TRC      # noqa: E402
 
 # The GDSII writer is REAL BYTES, and it is the one the general-precheck tests
@@ -205,7 +236,7 @@ def test_t8_a_retired_counterparty_is_not_an_answer_of_yes_and_is_still_named():
 def test_t1_our_arm_runs_on_a_project_with_no_operator_template(tmp_path):
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="ihp-sg13g2", slots=False)
-    rep = TP.evaluate(proj, timeout=120.0)
+    rep = TP.evaluate(proj)
 
     ours = _arm(rep, "ours")
     assert ours.state == TP.RAN, ours.reason
@@ -221,7 +252,7 @@ def test_t1_our_arm_runs_on_a_project_with_no_operator_template(tmp_path):
 def test_t2_a_pdk_with_no_shuttle_is_one_fewer_arm_not_a_failure(tmp_path):
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="ihp-sg13g2", slots=False)
-    rep = TP.evaluate(proj, timeout=120.0)
+    rep = TP.evaluate(proj)
 
     op = _arm(rep, "operator")
     assert op.state == TP.NOT_APPLICABLE, op.reason
@@ -238,7 +269,7 @@ def test_t2_a_pdk_with_no_shuttle_is_one_fewer_arm_not_a_failure(tmp_path):
 def test_t7_the_operator_artefact_exists_even_when_nobody_asked(tmp_path):
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="ihp-sg13g2", slots=False)
-    TP.evaluate(proj, timeout=120.0)
+    TP.evaluate(proj)
 
     rec = json.loads((proj / TP.THEIR_ARM_ARTEFACT).read_text())
     assert rec["arm_ran"] is False
@@ -254,7 +285,7 @@ def test_t7_the_operator_artefact_exists_even_when_nobody_asked(tmp_path):
 def test_t3_registry_says_yes_but_nothing_fetched_is_not_determined(tmp_path):
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=False)
-    rep = TP.evaluate(proj, timeout=120.0)
+    rep = TP.evaluate(proj)
 
     op = _arm(rep, "operator")
     assert op.state == TP.NOT_DETERMINED, op.reason
@@ -279,7 +310,7 @@ def test_t3_a_missing_operator_arm_alone_is_enough_to_refuse(tmp_path):
     """
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=False)
-    rep = TP.evaluate(proj, timeout=120.0, runner=_stub_both(
+    rep = TP.evaluate(proj, runner=_stub_both(
         _all_green(s.step_id for s in GP.LADDER), []))
 
     assert _arm(rep, "ours").verdict == GP.PASS
@@ -295,7 +326,7 @@ def test_t3_the_same_project_with_the_template_fetched_can_pass(tmp_path):
     nothing else."""
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
-    rep = TP.evaluate(proj, timeout=120.0, runner=_stub_both(
+    rep = TP.evaluate(proj, runner=_stub_both(
         _all_green(s.step_id for s in GP.LADDER),
         _all_green(_OPERATOR_LADDER)))
 
@@ -317,8 +348,8 @@ def test_t3_the_not_fetched_case_is_a_different_artefact_from_the_no_shuttle_cas
     fetched_none_shuttle_no = _project(
         tmp_path / "b", _die_at_origin, _DIE_ANSWERS,
         pdk="ihp-sg13g2", slots=False)
-    a = TP.evaluate(fetched_none_shuttle_yes, timeout=120.0)
-    b = TP.evaluate(fetched_none_shuttle_no, timeout=120.0)
+    a = TP.evaluate(fetched_none_shuttle_yes)
+    b = TP.evaluate(fetched_none_shuttle_no)
 
     assert _arm(a, "operator").state == TP.NOT_DETERMINED
     assert _arm(b, "operator").state == TP.NOT_APPLICABLE
@@ -332,7 +363,7 @@ def test_t3_a_pdk_nobody_declared_is_not_determined_never_not_applicable(tmp_pat
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="", slots=False)
     (proj / "input" / "project.json").unlink()
-    rep = TP.evaluate(proj, timeout=120.0)
+    rep = TP.evaluate(proj)
 
     op = _arm(rep, "operator")
     assert op.state == TP.NOT_DETERMINED, op.reason
@@ -346,7 +377,7 @@ def test_t3_a_pdk_nobody_declared_is_not_determined_never_not_applicable(tmp_pat
 def test_t4_both_arms_run_when_the_template_was_fetched(tmp_path):
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
-    rep = TP.evaluate(proj, timeout=120.0,
+    rep = TP.evaluate(proj,
                       runner=_mirror_operator())
 
     assert _arm(rep, "ours").state == TP.RAN
@@ -364,7 +395,7 @@ def test_t4_a_forced_disagreement_fails_the_step(tmp_path):
     """OUR arm refuses the origin; the operator's stand-in clears it."""
     proj = _project(tmp_path, _die_off_origin_via_children, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
-    rep = TP.evaluate(proj, timeout=120.0, runner=_mirror_operator(
+    rep = TP.evaluate(proj, runner=_mirror_operator(
         flip="KLayout.CheckSize", flip_to=GP.PASS))
 
     ours = next(s for s in _arm(rep, "ours").steps
@@ -391,7 +422,7 @@ def test_t4_the_disagreement_fails_in_the_other_direction_too(tmp_path):
     refusals is half a merge."""
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
-    rep = TP.evaluate(proj, timeout=120.0, runner=_mirror_operator(
+    rep = TP.evaluate(proj, runner=_mirror_operator(
         flip="KLayout.CheckSize", flip_to=GP.FAIL))
 
     ours = next(s for s in _arm(rep, "ours").steps
@@ -404,7 +435,7 @@ def test_t4_the_disagreement_fails_in_the_other_direction_too(tmp_path):
 def test_t5_agreement_is_not_reported_as_disagreement(tmp_path):
     proj = _project(tmp_path, _die_off_origin_via_children, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
-    rep = TP.evaluate(proj, timeout=120.0, runner=_mirror_operator())
+    rep = TP.evaluate(proj, runner=_mirror_operator())
 
     assert rep.disagreements == [], (
         "both authorities refused the SAME step for the same layout; that is "
@@ -424,7 +455,7 @@ def test_t5_an_undetermined_on_one_side_is_an_absence_not_a_disagreement(tmp_pat
     for st in theirs:
         if st["step_id"] == "KLayout.CheckSize":
             st["verdict"] = GP.NOT_DETERMINED
-    rep = TP.evaluate(proj, timeout=120.0, runner=_stub_both(
+    rep = TP.evaluate(proj, runner=_stub_both(
         _all_green(s.step_id for s in GP.LADDER), theirs))
 
     assert rep.disagreements == [], (
@@ -438,7 +469,7 @@ def test_t5_an_undetermined_on_one_side_is_an_absence_not_a_disagreement(tmp_pat
 def test_t6_every_finding_names_its_authority(tmp_path):
     proj = _project(tmp_path, _die_off_origin_via_children, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
-    rep = TP.evaluate(proj, timeout=120.0, runner=_mirror_operator(
+    rep = TP.evaluate(proj, runner=_mirror_operator(
         flip="KLayout.CheckSize", flip_to=GP.PASS))
 
     assert rep.findings, "a step that found nothing to say has not been run"
@@ -455,7 +486,7 @@ def test_t6_every_finding_names_its_authority(tmp_path):
 def test_t6_the_summary_line_states_the_denominator(tmp_path):
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="ihp-sg13g2", slots=False)
-    line = TP.evaluate(proj, timeout=120.0).summary_line()
+    line = TP.evaluate(proj).summary_line()
     for token in ("arms_expected=", "arms_ran=", "disagreements=",
                   "findings_by_authority=", "pdk="):
         assert token in line, f"{token!r} missing from {line!r}"
@@ -470,7 +501,7 @@ def test_a_clean_two_arm_run_passes_and_rc_is_zero(tmp_path):
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
 
-    rep = TP.evaluate(proj, timeout=120.0, runner=_stub_both(
+    rep = TP.evaluate(proj, runner=_stub_both(
         _all_green(s.step_id for s in GP.LADDER),
         _all_green(_OPERATOR_LADDER)))
     assert rep.verdict == TP.PASS, rep.reason
@@ -484,7 +515,7 @@ def test_an_arm_that_writes_no_report_is_an_error_not_a_pass(tmp_path):
     def writes_nothing(cmd, timeout):
         return 0, "", ""          # rc 0 and NO artefact — the worst shape
 
-    rep = TP.evaluate(proj, timeout=120.0, runner=writes_nothing)
+    rep = TP.evaluate(proj, runner=writes_nothing)
     assert _arm(rep, "ours").state == TP.ERROR
     assert rep.verdict == TP.NOT_DETERMINED, (
         "an arm that exited 0 and produced nothing must never be credited as "
@@ -501,7 +532,7 @@ def test_the_operator_artefact_exists_even_when_the_arm_ERRORED(tmp_path):
     """
     proj = _project(tmp_path, _die_at_origin, _DIE_ANSWERS,
                     pdk="gf180mcuD", slots=True)
-    rep = TP.evaluate(proj, timeout=120.0,
+    rep = TP.evaluate(proj,
                       runner=lambda cmd, t: (0, "", ""))   # rc 0, writes nothing
 
     assert _arm(rep, "operator").state == TP.ERROR
@@ -518,7 +549,11 @@ def test_the_operator_artefact_exists_even_when_the_arm_ERRORED(tmp_path):
 def test_main_returns_one_for_every_non_pass(tmp_path):
     proj = _project(tmp_path, _die_off_origin_via_children, _DIE_ANSWERS,
                     pdk="ihp-sg13g2", slots=False)
-    rc = TP.main([str(proj), "--timeout", "120"])
+    # `--timeout` is deliberately not passed: the launcher this reaches is
+    # supervised (see `_no_wall_clock_verdicts`), so any value would be inert,
+    # and leaving one in argv would read as a bound that still decides
+    # something.
+    rc = TP.main([str(proj)])
     assert rc == 1
     doc = json.loads((proj / TP.MERGED_ARTEFACT).read_text())
     assert doc["verdict"] in (TP.FAIL, TP.NOT_DETERMINED)

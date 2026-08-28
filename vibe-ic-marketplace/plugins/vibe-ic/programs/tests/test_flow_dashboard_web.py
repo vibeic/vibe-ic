@@ -17,14 +17,73 @@ is unavailable, so the suite stays hermetic and quick.
 from __future__ import annotations
 
 import json
+import os
 import re
+import socket
 import sys
 import threading
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
+import _watchdog
 import flow_dashboard_web as fdw
+
+#: How often the fetch below LOOKS, not how long it is allowed to take. The
+#: distinction is the whole point: a socket timeout that PROPAGATES decides one
+#: thing when it fires — that this host did not answer inside the guess — and
+#: the test then records `flow_dashboard_web` as broken. Five seconds is not a
+#: property of the dashboard.
+_LOOK_S = 5.0
+#: Consecutive looks across which this process's CPU may fail to advance at all
+#: before the server is called hung. The server runs in a thread of THIS
+#: process, so process CPU advancing is a true "it is working" signal and a flat
+#: reading across two minutes is a wedge, not a slow machine.
+_STALL_LOOKS = 24
+#: Pathological backstop only, counted in LOOKS. A server that keeps answering
+#: slowly is never stopped by it.
+_MAX_LOOKS = 4320
+
+
+def _fetch(url):
+    """GET `url` from the in-process test server with NO wall-clock verdict.
+
+    Every call site here used to pass `timeout=5` straight to `urlopen`, where
+    expiry raises out of the test and is recorded as the dashboard failing. That
+    is the manufactured verdict this campaign removes: five seconds measures the
+    host, and a busy host is not a broken handler.
+
+    So the socket timeout is demoted to a LOOK INTERVAL — when it expires the
+    request is simply retried — and the only thing that stops the retrying is
+    the absence of forward progress, read the way `_watchdog` reads it for a
+    sub-process: `loop_guard` holds the bounded, no-progress-aware loop and the
+    progress signal is this process's own CPU (`os.times()`), which the serving
+    thread advances while it works. A handler that is merely slow now always
+    completes; one that is wedged still stops the test, and stops it saying
+    'no forward progress', not 'the dashboard answered wrongly'.
+
+    HTTP errors are NOT retried: `HTTPError` is a real answer from the server
+    and several tests here assert on one, so it propagates on the first look."""
+    guard = _watchdog.loop_guard(
+        "flow-dashboard-fetch", max_iter=_MAX_LOOKS,
+        stall_iters=_STALL_LOOKS,
+        progress_fn=lambda: sum(os.times()[:2]))
+    for _ in guard:
+        try:
+            return urllib.request.urlopen(url, timeout=_LOOK_S)
+        except urllib.error.HTTPError:
+            raise
+        except (socket.timeout, TimeoutError):
+            continue
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, (socket.timeout, TimeoutError)):
+                continue
+            raise
+    raise AssertionError(
+        f"the in-process dashboard server made no forward progress on {url!r} "
+        f"({guard.reason} after {guard.iterations} looks) — this is a hang, "
+        "not a slow answer, and it is deliberately not reported as a content "
+        "verdict")
 
 
 # ---------------------------------------------------------------------------
@@ -439,12 +498,12 @@ def test_live_fleet_card_route(monkeypatch, tmp_path):
     try:
         from urllib.parse import quote
         base = "http://127.0.0.1:%d" % port
-        with urllib.request.urlopen(base + "/api/card?project=" + quote(projA), timeout=5) as r:
+        with _fetch(base + "/api/card?project=" + quote(projA)) as r:
             card = json.loads(r.read().decode("utf-8"))
             assert card["project_name"] == "chipA" and card["full"] is True
         # non-member project refused
         try:
-            urllib.request.urlopen(base + "/api/card?project=/etc", timeout=5)
+            _fetch(base + "/api/card?project=/etc")
             raised = False
         except urllib.error.HTTPError as e:
             raised = (e.code == 404)
@@ -486,23 +545,23 @@ def test_live_fleet_server_drilldown(tmp_path):
     try:
         base = "http://127.0.0.1:%d" % port
         # fleet page + api
-        with urllib.request.urlopen(base + "/", timeout=5) as r:
+        with _fetch(base + "/") as r:
             assert r.status == 200 and "text/html" in r.headers.get("Content-Type", "")
-        with urllib.request.urlopen(base + "/api/fleet", timeout=5) as r:
+        with _fetch(base + "/api/fleet") as r:
             d = json.loads(r.read().decode("utf-8"))
             assert d["kind"] == "fleet" and d["count"] == 2
         # drill-down page for a real member
         from urllib.parse import quote
-        with urllib.request.urlopen(base + "/ic?project=" + quote(str(tmp_path / "chipA")), timeout=5) as r:
+        with _fetch(base + "/ic?project=" + quote(str(tmp_path / "chipA"))) as r:
             assert r.status == 200 and "text/html" in r.headers.get("Content-Type", "")
         # per-IC status for a real member
-        with urllib.request.urlopen(base + "/api/status?project=" + quote(str(tmp_path / "chipA")), timeout=5) as r:
+        with _fetch(base + "/api/status?project=" + quote(str(tmp_path / "chipA"))) as r:
             d = json.loads(r.read().decode("utf-8"))
             assert d["project_name"] == "chipA"
             assert len(d["phases"]) == 6
         # a non-member project is refused (404), never disclosed
         try:
-            urllib.request.urlopen(base + "/api/status?project=/etc", timeout=5)
+            _fetch(base + "/api/status?project=/etc")
             raised = False
         except urllib.error.HTTPError as e:
             raised = (e.code == 404)
@@ -532,18 +591,18 @@ def test_live_server_serves_html_and_json(monkeypatch):
     t.start()
     try:
         base = "http://127.0.0.1:%d" % port
-        with urllib.request.urlopen(base + "/", timeout=5) as r:
+        with _fetch(base + "/") as r:
             assert r.status == 200
             assert "text/html" in r.headers.get("Content-Type", "")
             body = r.read().decode("utf-8")
             assert "/api/status" in body
-        with urllib.request.urlopen(base + "/api/status", timeout=5) as r:
+        with _fetch(base + "/api/status") as r:
             assert r.status == 200
             assert "application/json" in r.headers.get("Content-Type", "")
             data = json.loads(r.read().decode("utf-8"))
             assert "phases" in data and "summary" in data
         # favicon -> 204
-        with urllib.request.urlopen(base + "/favicon.ico", timeout=5) as r:
+        with _fetch(base + "/favicon.ico") as r:
             assert r.status == 204
     finally:
         httpd.shutdown()
