@@ -194,7 +194,8 @@ def test_m1_ram_uses_stated_depth_not_2pow_width():
     not 2**WIDTH (=64)."""
     rtl = M.synth(_RAM_DEPTH8)
     assert rtl is not None
-    assert "RAM [0:7]" in rtl              # depth 8 -> indices 0..7
+    assert "parameter DEPTH = 8" in rtl
+    assert "RAM [0:DEPTH-1]" in rtl        # stated depth remains configurable
     assert "2**WIDTH" not in rtl           # the hard-coded form is gone
     assert "[0:63]" not in rtl             # NOT 2**6
 

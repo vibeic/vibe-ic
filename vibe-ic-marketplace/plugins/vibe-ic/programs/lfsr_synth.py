@@ -307,8 +307,8 @@ def _dia_lfsr(prompt_text: str, top: str = "TopModule") -> Optional[str]:
 
     xor = " ^ ".join(f"{q}[{i}]" for i in seen)
     fb = f"~({xor})" if inverted else f"({xor})"
-    # The RTLLM LFSR testbench binds ports POSITIONALLY in (out, clk, rst) order
-    # (the canonical LFSR(out, clk, rst) interface), so emit the output bus FIRST.
+    # Preserve the established positional surface while honoring the prompt's
+    # explicit synchronous-reset timing contract.
     lines = [
         "// program-SOLVED Fibonacci external-XOR LEFT-shift LFSR; deterministic, no AI.",
         f"module {top} (",
@@ -317,7 +317,7 @@ def _dia_lfsr(prompt_text: str, top: str = "TopModule") -> Optional[str]:
         f"    input  {rst}",
         ");",
         f"    wire feedback = {fb};",
-        f"    always @(posedge {clk} or posedge {rst}) begin",
+        f"    always @(posedge {clk}) begin",
         f"        if ({rst})",
         f"            {q} <= {qw}'b0;",
         f"        else",

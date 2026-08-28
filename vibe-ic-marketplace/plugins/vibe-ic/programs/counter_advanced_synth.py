@@ -854,10 +854,14 @@ def _dia_up_down(prompt, ins, outs, top):
         return None
     active_low = rst.lower().endswith("_n") or rst.lower() == "resetn" \
         or bool(re.search(r"active[- ]low", low))
-    rst_edge = f"negedge {rst}" if active_low else f"posedge {rst}"
     rst_test = f"!{rst}" if active_low else rst
+    synchronous_reset = bool(re.search(
+        r"synchronous\s+process|triggered\s+by\s+the\s+rising\s+edge", low))
+    sensitivity = (f"posedge {clk}" if synchronous_reset else
+                   f"posedge {clk} or "
+                   f"{'negedge' if active_low else 'posedge'} {rst}")
     body = (
-        f"  always @(posedge {clk} or {rst_edge}) begin\n"
+        f"  always @({sensitivity}) begin\n"
         f"    if ({rst_test})\n"
         f"      {q_name} <= 0;\n"
         f"    else if ({dirn})\n"

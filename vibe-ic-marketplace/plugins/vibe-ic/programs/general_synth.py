@@ -157,9 +157,18 @@ def _try_comparator(prompt: str, ins: List[Port], outs: List[Port], top: str) ->
     l = next((n for n, _ in outs if re.search(r"(?i)less|lt|smaller|<", n)), None)
     if not (g and e and l) or len({g, e, l}) != 3:
         return None
-    body = (f"    assign {g} = ({a} > {b});\n"
-            f"    assign {e} = ({a} == {b});\n"
-            f"    assign {l} = ({a} < {b});\n")
+    if re.search(r"subtraction\s+operation|borrow\s+occurs", prompt, re.I):
+        body = (f"    wire [{aw}:0] subtraction = "
+                f"{{1'b0,{a}}} + {{1'b0,~{b}}} + 1'b1;\n"
+                f"    wire difference_is_zero = ~|subtraction[{aw-1}:0];\n"
+                f"    wire no_borrow = subtraction[{aw}];\n"
+                f"    assign {e} = difference_is_zero;\n"
+                f"    assign {l} = ~no_borrow;\n"
+                f"    assign {g} = no_borrow & ~difference_is_zero;\n")
+    else:
+        body = (f"    assign {g} = ({a} > {b});\n"
+                f"    assign {e} = ({a} == {b});\n"
+                f"    assign {l} = ({a} < {b});\n")
     return ("// program-SOLVED magnitude comparator (mutually-exclusive g/e/l).\n"
             + _ansi_header(top, ins, outs) + body + "endmodule\n")
 

@@ -148,33 +148,31 @@ def _try_ram(text: str, top: str, ins, outs) -> Optional[str]:
     clk_n, rst_n = clk[0], rst[0]
     wen_n, waddr_n, wdata_n = wen[0], waddr[0], wdata[0]
     ren_n, raddr_n, rdata_n = ren[0], raddr[0], rdata[0]
-    # Array depth/address-width come from the STATED dims — NOT 2**WIDTH. The
-    # address bus is sized to address `depth` locations; an explicitly stated
-    # address width (if any) wins.
-    stated_aw = _int_after(text, r"address\s+width\s*=\s*(\d+)",
-                           r"(\d+)[- ]bit\s+address")
-    aw = stated_aw if stated_aw is not None else max(1, (depth - 1).bit_length())
-    array_depth = depth
+    # Keep both stated dimensions as real public parameters. Address widths and
+    # array bounds derive from DEPTH; data widths derive from WIDTH.
     sync_read = _has(text, "second always", "read_data register",
                      "posedge", "synchronous")
     if not sync_read:
         return None
     body = []
-    body.append(f"module {top} (")
+    body.append(f"module {top} #(")
+    body.append(f"    parameter WIDTH = {width},")
+    body.append(f"    parameter DEPTH = {depth}")
+    body.append(") (")
     body.append(f"    input              {clk_n},")
     body.append(f"    input              {rst_n},")
     body.append(f"    input              {wen_n},")
-    body.append(f"    input  [{aw-1}:0]      {waddr_n},")
-    body.append(f"    input  [{width-1}:0]      {wdata_n},")
+    body.append(f"    input  [$clog2(DEPTH)-1:0] {waddr_n},")
+    body.append(f"    input  [WIDTH-1:0]      {wdata_n},")
     body.append(f"    input              {ren_n},")
-    body.append(f"    input  [{aw-1}:0]      {raddr_n},")
-    body.append(f"    output reg [{width-1}:0]  {rdata_n}")
+    body.append(f"    input  [$clog2(DEPTH)-1:0] {raddr_n},")
+    body.append(f"    output reg [WIDTH-1:0]  {rdata_n}")
     body.append(");")
-    body.append(f"    reg [{width-1}:0] RAM [0:{array_depth-1}];")
+    body.append("    reg [WIDTH-1:0] RAM [0:DEPTH-1];")
     body.append("    integer i;")
     body.append(f"    always @(posedge {clk_n} or negedge {rst_n}) begin")
     body.append(f"        if (!{rst_n}) begin")
-    body.append(f"            for (i = 0; i < {array_depth}; i = i + 1)")
+    body.append("            for (i = 0; i < DEPTH; i = i + 1)")
     body.append("                RAM[i] <= 0;")
     body.append(f"        end else if ({wen_n}) begin")
     body.append(f"            RAM[{waddr_n}] <= {wdata_n};")

@@ -344,6 +344,8 @@ def _probe(modname: str, const: str, fake, *, pin_stage2: bool = False):
 WHICH_GATES = (
     ("test_arith_ext_synth", "_HAVE_TOOLS"),
     ("test_bcd_synth", "_HAVE_SIM"),
+    ("test_capture_program_first_semantics", "_HAVE_IVERILOG"),
+    ("test_capture_program_first_semantics", "_HAVE_TOOLS"),
     ("test_cvdp_gate", "_HAS_IVERILOG"),
     ("test_cvdp_gate", "_HAS_YOSYS"),
     ("test_cvdp_gate_multifile_split", "_HAS_TOOLCHAIN"),
