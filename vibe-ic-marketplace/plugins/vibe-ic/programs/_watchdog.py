@@ -107,7 +107,8 @@ DEFAULT_HARD_CEILING_S = 86_400  # 24 h absolute backstop (pathological loop)
 class SupervisedResult:
     """Outcome of a supervised sub-process. `.rc` is the return code
     (RC_STALLED on a stall kill, RC_CEILING on the backstop kill, else the
-    process's natural rc). `.out`/`.err` are decoded str (never bytes)."""
+    process's natural rc). `.out`/`.err` are decoded str, or raw bytes
+    when the caller passed `as_text=False`."""
     rc: int
     out: str
     err: str
@@ -448,7 +449,12 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
         return text if as_text else text.encode("utf-8")
 
     out = _read(out_f)
-    err = _read(err_f) if err_f is not None else ""
+    # `merge_stderr` leaves err_f None, so this branch supplies the empty
+    # stderr directly -- and it must be empty IN THE CALLER'S ALPHABET.
+    # A str "" here meets the bytes from _note() below, and the stalled /
+    # ceiling / aborted returns then die on `str + bytes`: a crash in the
+    # verdict path, which is the one path that still has to report.
+    err = _read(err_f) if err_f is not None else ("" if as_text else b"")
     out_f.close()
     if err_f is not None:
         err_f.close()

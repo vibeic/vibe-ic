@@ -408,3 +408,62 @@ def test_run_supervised_maps_the_abort_to_rc_aborted():
     i = src.index("RC_ABORTED, out,")
     window = src[max(0, i - 600):i]
     assert "aborted" in window, "RC_ABORTED must be returned on the abort path"
+
+
+# --- bytes mode (`as_text=False`) x `merge_stderr` -------------------------
+# `merge_stderr=True` sends stderr down stdout's descriptor and leaves err_f
+# None, so the empty stderr is supplied by a literal rather than by a read.
+# That literal is the one value on the path that does not pass through the
+# alphabet switch, which is exactly why it went wrong: a str "" met the bytes
+# annotation from _note() and the verdict returns died on `str + bytes`.
+# These cases pin the alphabet on BOTH sides of the switch, so a future edit
+# to either one cannot drift from the other.
+
+def _no_progress_child(**kw):
+    """A child that emits nothing and idles: the only progress signal is its
+    stdout size, which never grows, so the watchdog must call it stalled."""
+    return W.run_supervised(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        output_progress=True, stall_grace_s=1.0, poll_s=0.2,
+        hard_ceiling_s=25.0, **kw)
+
+
+def test_merged_stderr_stall_verdict_survives_in_bytes_mode():
+    """The stall verdict must REACH a bytes-mode caller that merged stderr.
+    Before the fix this raised TypeError inside run_supervised -- the crash
+    landed in the verdict path, so a hung child was reported as a broken
+    watchdog instead of as a hung child."""
+    r = _no_progress_child(merge_stderr=True, as_text=False)
+    assert r.outcome == "stalled", r.outcome
+    assert r.rc == W.RC_STALLED
+    assert isinstance(r.err, bytes), type(r.err)
+    assert isinstance(r.out, bytes), type(r.out)
+    assert b"WATCHDOG_STALLED" in r.err
+
+
+def test_merged_stderr_stall_verdict_stays_str_in_text_mode():
+    """The other side of the same switch: text mode must stay str, so the fix
+    for bytes mode cannot be a blanket encode that breaks every str caller."""
+    r = _no_progress_child(merge_stderr=True, as_text=True)
+    assert r.outcome == "stalled", r.outcome
+    assert isinstance(r.err, str), type(r.err)
+    assert isinstance(r.out, str), type(r.out)
+    assert "WATCHDOG_STALLED" in r.err
+
+
+def test_launch_error_is_returned_in_the_callers_alphabet():
+    """A failed LAUNCH is the least convenient moment to change type on the
+    caller. Both halves of the conflict resolution are asserted here: the
+    err_f None-guard must not raise, and the message must match the mode."""
+    for as_text in (True, False):
+        r = W.run_supervised(["/nonexistent/vibeic-no-such-binary"],
+                             output_progress=True, stall_grace_s=1.0,
+                             poll_s=0.2, hard_ceiling_s=5.0,
+                             merge_stderr=True, as_text=as_text)
+        assert r.outcome == "launch_error", (as_text, r.outcome)
+        assert r.rc == 127
+        want = str if as_text else bytes
+        assert isinstance(r.err, want), (as_text, type(r.err))
+        assert isinstance(r.out, want), (as_text, type(r.out))
+        needle = "COMMAND_NOT_FOUND" if as_text else b"COMMAND_NOT_FOUND"
+        assert needle in r.err
