@@ -79,6 +79,9 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 #: The required status context. This exact string is what branch protection on
 #: `main` is configured to require, so it is load-bearing: change it here and
 #: the protection rule silently stops ever being satisfied, which fails closed
@@ -102,8 +105,7 @@ _DID_RUN = re.compile(r"\b(\d+)\s+passed\b")
 
 
 def _run(cmd, cwd=None, env=None, timeout=None):
-    return subprocess.run(cmd, cwd=cwd, env=env, timeout=timeout,
-                          capture_output=True, text=True)
+    return _pr.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
 
 
 def gh_api(args, check=True):
@@ -409,4 +411,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

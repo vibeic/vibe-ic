@@ -59,6 +59,9 @@ import _path_layout as _pl
 import _vacuous_exit as _vx
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 ANALOG_MODULE_PATTERNS = re.compile(
     r"(ldo|pll|vco|osc|oscillat|bandgap|bgr|adc|dac|comparator|"
@@ -777,8 +780,8 @@ def _run_ngspice_in(container: str, cwd_dir: str, deck_path: str,
     cmd = (f"export PATH=/foss/tools/bin:$PATH; cd {shlex.quote(cwd_dir)} && "
            f"{shlex.quote(ngspice)} -b {shlex.quote(deck_path)} 2>&1")
     try:
-        cp = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
-                            capture_output=True, text=True, timeout=timeout)
+        cp = _pr.run(["docker", "exec", container, "bash", "-lc", cmd],
+                            capture_output=True, text=True)
     except Exception as e:  # pragma: no cover - env dependent
         return False, f"docker/ngspice invocation failed: {e}"
     return cp.returncode == 0, cp.stdout
@@ -1689,8 +1692,8 @@ def _run_opensta_in(container: str, cwd_dir: str, tcl_path: str,
     cmd = (f"export PATH=/foss/tools/bin:$PATH; cd {shlex.quote(cwd_dir)} && "
            f"{shlex.quote(sta)} -no_init -exit {shlex.quote(tcl_path)} 2>&1")
     try:
-        cp = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
-                            capture_output=True, text=True, timeout=timeout)
+        cp = _pr.run(["docker", "exec", container, "bash", "-lc", cmd],
+                            capture_output=True, text=True)
     except Exception as e:  # pragma: no cover - env dependent
         return False, f"docker/opensta invocation failed: {e}"
     return cp.returncode == 0, cp.stdout
@@ -2136,4 +2139,6 @@ def main(argv: list = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

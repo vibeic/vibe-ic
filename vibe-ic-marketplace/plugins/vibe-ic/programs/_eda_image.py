@@ -102,6 +102,10 @@ import subprocess
 import sys
 from typing import NamedTuple, Optional, Tuple
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 IMAGE_REPO = "ghcr.io/vibeic/vibeic-eda"
 #: Last resort only. The upstream image this fork descends from; it lacks the
 #: forked tools (Fault, the patched yosys/iverilog) that most callers need.
@@ -127,7 +131,7 @@ VERSION_LABEL = "org.opencontainers.image.version"
 
 
 def _run(*argv: str, timeout: int = _TIMEOUT_S):
-    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    return _pr.run_best_effort(argv, capture_output=True, text=True)
 
 
 def registry_digest(repo: str = IMAGE_REPO, tag: str = "latest") -> Optional[str]:
@@ -571,4 +575,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

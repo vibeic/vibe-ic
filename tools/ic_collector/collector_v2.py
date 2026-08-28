@@ -27,12 +27,14 @@ Rules:
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import argparse
 from pathlib import Path
 from datetime import datetime
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 # ============================================================================
 # Configuration
@@ -113,9 +115,9 @@ def download_pdf(part_number: str, url: str, doc_type: str = "datasheet") -> dic
         tmp_path = tmp.name
 
     try:
-        result = subprocess.run(
+        result = _pr.run(
             ["curl", "-sL", "--max-time", "30", "-o", tmp_path, url],
-            capture_output=True, text=True, timeout=45
+            capture_output=True, text=True, 
         )
         if result.returncode != 0:
             os.unlink(tmp_path)
@@ -342,4 +344,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

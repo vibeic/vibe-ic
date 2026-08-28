@@ -32,6 +32,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ip_catalog_query import find_catalog_dir, load_manifests  # noqa: E402
 from ip_catalog_pull import find_local_mirror  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -43,9 +46,9 @@ def _sha256_file(path: Path) -> str:
 
 def _git_clone_shallow(url: str, dest: Path, commit: Optional[str] = None) -> bool:
     try:
-        subprocess.run(
+        _pr.run(
             ["git", "clone", "--depth", "1", url, str(dest)],
-            check=True, capture_output=True, timeout=120,
+            check=True, capture_output=True, text=False,
         )
         if commit and commit not in ("master", "main", "HEAD"):
             # Best-effort: try to check out the pinned commit. It may fail — a
@@ -243,4 +246,6 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main, sys.argv[1:]))

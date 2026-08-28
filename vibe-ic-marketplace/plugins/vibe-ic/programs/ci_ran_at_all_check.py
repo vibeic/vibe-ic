@@ -98,8 +98,7 @@ _WORKFLOW_PATH_PREFIX = ".github/workflows/"
 
 def _gh(args: List[str], timeout: int = 60) -> Tuple[int, str, str]:
     try:
-        r = subprocess.run(["gh", *args], capture_output=True, text=True,
-                           timeout=timeout)
+        r = _pr.run(["gh", *args], capture_output=True, text=True)
         return r.returncode, r.stdout, r.stderr
     except FileNotFoundError:
         return 127, "", "gh not found"

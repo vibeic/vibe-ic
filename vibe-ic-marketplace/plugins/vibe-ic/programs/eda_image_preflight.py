@@ -36,10 +36,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 # The official Dockerfile.sim spec — (tool, expected, comparison level).
 # Comparison levels: 'major' (first numeric component), 'major.minor',
@@ -97,8 +99,7 @@ def probe_image(image: str, runner=None) -> Tuple[int, str]:
     `runner` is injectable for tests."""
     if runner is None:
         def runner(cmd):
-            cp = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=300)
+            cp = _pr.run_best_effort(cmd, capture_output=True, text=True)
             return cp.returncode, (cp.stdout or "") + (cp.stderr or "")
     # A probe container is still a container: one unbounded `docker run` is all
     # it takes for a tool inside to eat the host. (This gate was added earlier
@@ -358,8 +359,7 @@ def _image_pullable(image: str, runner=None) -> Optional[bool]:
         return None
     if runner is None:
         def runner(cmd):
-            return subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=60)
+            return _pr.run_best_effort(cmd, capture_output=True, text=True)
     try:
         if runner(["docker", "image", "inspect", image]).returncode == 0:
             return True
@@ -554,4 +554,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

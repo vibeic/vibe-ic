@@ -213,6 +213,9 @@ from _derived_corpus_figure import (  # noqa: E402
     render_anchored,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 # ============================================================================
 # WHICH TREE IS THIS RUN ABOUT? (vibe-ic#972)
@@ -618,8 +621,8 @@ def tracked_corpus_files(root: Path) -> Optional[List[Path]]:
     owns it.
     """
     try:
-        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
-                           capture_output=True, timeout=_GIT_LS_TIMEOUT_S)
+        r = _pr.run(["git", "-C", str(root), "ls-files", "-z"],
+                           capture_output=True, text=False)
     except FileNotFoundError:
         # No git on this machine at all. Not a repo question, and not a
         # failure to look at a repo — enumerate the filesystem and say so.
@@ -1423,4 +1426,6 @@ def _run(args: argparse.Namespace) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main, sys.argv[1:]))

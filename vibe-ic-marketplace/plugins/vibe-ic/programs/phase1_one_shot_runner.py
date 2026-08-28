@@ -64,6 +64,9 @@ import _tapeout_declaration as _TD
 # excluded from `from X import *`, so we use a manual `globals()`
 # splice.
 import phase1_doc_one_shot_runner as _phase1_doc  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 for _sym in dir(_phase1_doc):
     if not _sym.startswith('__'):
         globals().setdefault(_sym, getattr(_phase1_doc, _sym))
@@ -919,4 +922,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

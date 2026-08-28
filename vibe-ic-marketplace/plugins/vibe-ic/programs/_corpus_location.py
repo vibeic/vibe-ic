@@ -75,6 +75,9 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 #: Where a caller may point us at a clone of the published-corpus repository.
 #:
 #: Spelled exactly as `benchmark_evidence_structure_check.CORPUS_ENV`,
@@ -264,9 +267,9 @@ def not_a_checkout_reason(root: Path, reads: str, *,
         raise ValueError(
             "strict corpus index probes must be owned without an inner timeout")
     try:
-        probe = subprocess.run(["git", "-C", str(root), "rev-parse",
+        probe = _pr.run(["git", "-C", str(root), "rev-parse",
                                 "--show-toplevel"],
-                               capture_output=True, text=True, timeout=timeout)
+                               capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError) as exc:   # noqa: BLE001
         if strict:
             raise CorpusIndexIndeterminate(

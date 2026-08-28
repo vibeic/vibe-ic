@@ -36,6 +36,9 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 @dataclass
 class ExtractResult:
@@ -63,8 +66,8 @@ def extract_pdf(p: Path, out_txt: Path) -> ExtractResult:
     if not _which("pdftotext"):
         return ExtractResult(str(p), "pdf", "", None, 0, "FAIL", "pdftotext not in PATH")
     try:
-        subprocess.run(["pdftotext", "-layout", str(p), str(out_txt)],
-                       check=True, capture_output=True, timeout=120)
+        _pr.run(["pdftotext", "-layout", str(p), str(out_txt)],
+                       check=True, capture_output=True, text=False)
         text = out_txt.read_text(errors="replace") if out_txt.exists() else ""
         return ExtractResult(str(p), "pdf", str(out_txt), None, len(text), "PASS")
     except Exception as e:
@@ -393,4 +396,6 @@ def main(argv: List[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -299,18 +299,16 @@ def resolve(
                 conflicted=v.conflicted, derived=v.derived,
             )
         try:
-            cp = subprocess.run(
+            cp = _pr.run(
                 art.regenerate, cwd=str(root), capture_output=True,
-                text=True, timeout=SUBPROCESS_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired:
+                text=True)
+        except _pr.Stalled:
             return Verdict(
                 2,
-                f"{rel}: {' '.join(art.regenerate)} exceeded the "
-                f"{SUBPROCESS_TIMEOUT_S}s inner bound. That bound is a ceiling "
-                f"set by the landing harness, not an estimate — this generator "
-                f"measured 25-28s warm and over 60s on a cold tree, so re-run "
-                f"it once the tree is warm. The question was not answered.",
+                f"{rel}: {' '.join(art.regenerate)} STOPPED MAKING PROGRESS "
+                f"and was killed. A cold tree is no longer the explanation — "
+                f"this generator measured 25-28s warm and over 60s cold, and "
+                f"both now run to completion. The question was not answered.",
                 conflicted=v.conflicted, derived=v.derived,
             )
         except OSError as e:

@@ -66,6 +66,9 @@ from _rtl_include_hub import (  # noqa: E402
 )
 import _hardmacro_stage as _hms  # noqa: E402 — staged SRAM/IP macro blackbox
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAM = "lec_run"
 
 DEFAULT_CONTAINER = "vibeic-eda"
@@ -1291,9 +1294,9 @@ def _docker(container: str, cmd: str, timeout: int = 120):
         cmd = _dw.wrap_with_container_timeout(cmd, timeout)
     except Exception:  # nosec — never let hardening break the call
         pass
-    return subprocess.run(
+    return _pr.run(
         ["docker", "exec", container, "bash", "-lc", cmd],
-        capture_output=True, text=True, timeout=timeout)
+        capture_output=True, text=True)
 
 
 def _docker_exec3(container: str, cmd: str):
@@ -2658,4 +2661,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

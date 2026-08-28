@@ -129,6 +129,9 @@ import _hardmacro_stage as _hms  # staged SRAM/IP macro discovery + blackbox
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
 TOOLS_IN_CONTAINER = "/foss/tools"
@@ -277,16 +280,19 @@ def _rtl_repair_remediate_with_hint(project: Path,
     cmd = [sys.executable, str(phase1), str(project),
            "--skip-text-extract"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                            timeout=600)
+        r = _pr.run(cmd, capture_output=True, text=True)
         ok = r.returncode in (0, 1)  # 0 = clean, 1 = strict warn
         tail = (r.stdout or "")[-400:]
         return ok, (f"phase1 regen rc={r.returncode}; "
                      f"signatures={[s.get('kind') for s in sigs]}; "
                      f"tail={tail!r}")
-    except subprocess.TimeoutExpired:
-        return False, ("phase1 regen timed out (600s); "
-                       "leaving loop to declare FAIL_RTL_REPAIR_INERT")
+    # UNION: this lane's EXCEPTION (a stall, not a clock -- the whole point of
+    # the conversion) with MAIN's post-rename VERDICT NAME. The branch predates
+    # v1.12.20, which reserved "ECO" for physical changes; taking its text whole
+    # would reinstate FAIL_ECO_INERT for a step that is an RTL repair.
+    except _pr.Stalled as exc:
+        return False, (f"phase1 regen stopped making progress ({exc}); "
+                       f"leaving loop to declare FAIL_RTL_REPAIR_INERT")
     except OSError as exc:
         return False, (f"phase1 regen failed: {exc!r}")
 
@@ -1777,10 +1783,10 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
         with tempfile.TemporaryDirectory(prefix="vibeic-rtl-dispatch-") as td:
             staged_out = Path(td) / out.name
             _phase1_project_checkpoint(project)
-            r = subprocess.run(
+            r = _pr.run(
                 [sys.executable, str(dispatcher), str(spec),
                  "-o", str(staged_out)],
-                capture_output=True, text=True, timeout=120)
+                capture_output=True, text=True)
             _phase1_project_checkpoint(project)
             if r.returncode == 3:
                 return None
@@ -1853,8 +1859,8 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
         return None  # author/generator guard — never overwrite existing RTL
     try:
         _phase1_project_checkpoint(project)
-        r = subprocess.run([sys.executable, str(solver), str(project), "--emit"],
-                           capture_output=True, text=True, timeout=60)
+        r = _pr.run([sys.executable, str(solver), str(project), "--emit"],
+                           capture_output=True, text=True)
         _phase1_project_checkpoint(project)
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
@@ -8711,7 +8717,7 @@ def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
            "--search-space", "reports/crosslayer/search_space.json",
            "--json", out_rel]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        r = _pr.run(cmd, capture_output=True, text=True)
         rc = r.returncode
         detail = (r.stdout or r.stderr or "").strip().splitlines()
         detail = detail[-1] if detail else f"rc={rc}"
@@ -8775,8 +8781,7 @@ def step_slot_pad_budget(project: Path, top_name: str) -> StepResult:
                                / "slot_pad_budget_check.py"),
            str(project), "--top", top_name, "--json", out_rel]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
-                           cwd=str(project))
+        r = _pr.run(cmd, capture_output=True, text=True, cwd=str(project))
         rc = r.returncode
         detail = (r.stdout or r.stderr or "").strip().splitlines()
         detail = " | ".join(x.strip() for x in detail[:3]) or f"rc={rc}"
@@ -17026,4 +17031,6 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

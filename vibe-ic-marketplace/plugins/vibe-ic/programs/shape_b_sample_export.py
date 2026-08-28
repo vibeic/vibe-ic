@@ -110,6 +110,9 @@ import port_convention_corpus as _pcc  # noqa: E402
 import spec_conformance_check as _scc  # noqa: E402
 import emit_attestation as _ea  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 # The runner's own inner-rename suffix (step_reset_clock_variant_aliases,
 # design_one_shot_runner.py). chip-AGNOSTIC structural token, not a chip name.
 RCVAR_INNER_SUFFIX = "__rcvar_inner"
@@ -359,9 +362,9 @@ def guard_export(sample: Path, prompt_text: str = "") -> Tuple[bool, List[str]]:
         with tempfile.TemporaryDirectory() as td:
             binp = Path(td) / "syn.bin"
             # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
-            r = subprocess.run(
+            r = _pr.run(
                 ["iverilog", "-g2012", "-o", str(binp), str(sample)],
-                capture_output=True, text=True, timeout=120)
+                capture_output=True, text=True)
             if r.returncode != 0:
                 problems.append(
                     "standalone iverilog -g2012 compile FAILED — the exported "
@@ -1457,4 +1460,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

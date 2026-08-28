@@ -59,6 +59,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 # Reuse the detector's construct taxonomy so detect↔remediate never drift.
 try:
     import tb_vcs_only_construct_detect as _det
@@ -295,14 +298,12 @@ def golden_still_passes(golden_src: Path, remediated_tb: Path,
     import re as _re
     if run is None:
         import shutil
-        import subprocess
         import tempfile
 
         def run(argv):
             return (lambda cp: (cp.returncode, (cp.stdout or "") +
                                 (cp.stderr or "")))(
-                subprocess.run(argv, capture_output=True, text=True,
-                               timeout=timeout))
+                _pr.run(argv, capture_output=True, text=True))
         if shutil.which("iverilog") is None or shutil.which("vvp") is None:
             return False
         with tempfile.TemporaryDirectory() as td:
@@ -391,4 +392,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -72,7 +72,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -99,6 +98,9 @@ import _blocker_classification as _bc
 # importing it cannot give the verdict path a dependency on a classification.
 import blocker_classification_check as _bcc
 import fpga_board_capability as _fpga_cap
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 try:
     import yaml
@@ -13450,4 +13452,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -134,6 +134,9 @@ import _analog_a_check_common as _acc  # noqa: E402
 # the substring heuristic and bind a role by name order.
 import pdk_device_map as _pdm  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 PRODUCER = "analog_a3_netlist_emit"
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-netlist-gen"
@@ -874,8 +877,7 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
             if per_block:
                 cmd += ["--block", block]
             try:
-                cp = subprocess.run(cmd, capture_output=True, text=True,
-                                    timeout=300)
+                cp = _pr.run(cmd, capture_output=True, text=True)
             except (OSError, subprocess.SubprocessError) as exc:
                 findings.append({"checker": label, "rc": None,
                                  "detail": f"could not run: {exc}"})
@@ -895,8 +897,8 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
 
 def _docker_ok(container: str) -> bool:
     try:
-        cp = subprocess.run(["docker", "exec", container, "true"],
-                            capture_output=True, text=True, timeout=60)
+        cp = _pr.run_best_effort(["docker", "exec", container, "true"],
+                            capture_output=True, text=True)
         return cp.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1456,4 +1458,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

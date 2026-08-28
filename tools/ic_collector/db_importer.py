@@ -20,9 +20,11 @@ import json
 import os
 import sys
 import argparse
-import subprocess
 from pathlib import Path
 from datetime import datetime
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 METADATA_DIR = Path("/mnt/2a6ff798-a964-4a91-b131-e34fd4ca66ed/ic_documents/datasheets_metadata")
 DB_NAME = "vibe_ic"
@@ -36,9 +38,9 @@ def log(msg: str):
 
 def run_sql(sql: str) -> str:
     """Execute SQL and return output."""
-    result = subprocess.run(
+    result = _pr.run(
         ["psql", "-U", DB_USER, "-d", DB_NAME, "-t", "-A", "-c", sql],
-        capture_output=True, text=True, timeout=10
+        capture_output=True, text=True, 
     )
     return result.stdout.strip()
 
@@ -321,4 +323,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

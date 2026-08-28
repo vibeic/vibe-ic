@@ -55708,6 +55708,9 @@ def _v1_6_524_extract_signals_from_row(row_text: str) -> List[str]:
 # header for one bucket-walker.
 from collections import defaultdict as _v1_6_528_defaultdict
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 def _v1_6_528_partition_by_signal_prefix(
         rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -60319,11 +60322,10 @@ def main() -> int:
         cov_report_path = _pl.report_path(
             project, "phase1/l3_opcode_name_coverage.json")
         cov_report_path.parent.mkdir(parents=True, exist_ok=True)
-        cov_cp = subprocess.run(
+        cov_cp = _pr.run(
             [sys.executable, str(cov_gate), str(project),
              "--json", str(cov_report_path)],
-            capture_output=True, text=True, timeout=60,
-        )
+            capture_output=True, text=True)
         # #497: the gate subprocess writes an identity-less verdict JSON;
         # a non-protocol IP honestly produces an empty-L3 VACUOUS_PASS that
         # is byte-identical across DIFFERENT designs. Stamp the per-design
@@ -64568,4 +64570,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

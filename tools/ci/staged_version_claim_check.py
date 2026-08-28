@@ -56,6 +56,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 # Match a semver-ish triple, with optional `v` prefix. We constrain to
 # 1-3 digit components so noise like an IPv4 address (`<lan-ip>`)
@@ -241,10 +244,10 @@ def _diff_unified_zero(repo_root: Path) -> str:
     """Capture `git diff --cached --unified=0 -- .` from the repo root.
     Decodes with errors='replace' so a single binary blob in the diff
     (e.g. a .sof / .gds / .vvp file) doesn't crash the whole gate."""
-    cp = subprocess.run(
+    cp = _pr.run(
         ["git", "diff", "--cached", "--unified=0", "--no-color"],
         cwd=str(repo_root),
-        capture_output=True, timeout=60,
+        capture_output=True, text=False,
     )
     if cp.returncode != 0:
         stderr_txt = cp.stderr.decode("utf-8", errors="replace").strip()
@@ -573,4 +576,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

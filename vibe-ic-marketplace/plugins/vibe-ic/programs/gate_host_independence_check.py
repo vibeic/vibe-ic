@@ -527,9 +527,9 @@ def checkout_dirt(repo_root: Path, timeout: int = 600) -> Optional[Dirt]:
     """
     def _status(extra: List[str]) -> Optional[List[str]]:
         try:
-            st = subprocess.run(
+            st = _pr.run(
                 ["git", "-C", str(repo_root), "status", "--porcelain", *extra],
-                capture_output=True, text=True, timeout=timeout)
+                capture_output=True, text=True)
         except (OSError, subprocess.SubprocessError):
             return None
         if st.returncode != 0:
@@ -818,9 +818,9 @@ def _checkout_dirty_paths(repo_root: Path) -> Dict[str, str]:
     it can then only fail to repair, never repair the wrong thing.
     """
     try:
-        r = subprocess.run(["git", "-C", str(repo_root), "status",
+        r = _pr.run(["git", "-C", str(repo_root), "status",
                             "--porcelain"],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError):
         return {}
     if r.returncode != 0:
@@ -1015,10 +1015,10 @@ def audit(repo_root: Path, timeout: int = 600,
                               root=tmp_root)
     wt = res.path / "wt"
     try:
-        r = subprocess.run(
+        r = _pr.run(
             ["git", "-C", str(repo_root), "worktree", "add", "-q",
              "--detach", str(wt), "HEAD"],
-            capture_output=True, text=True, timeout=timeout)
+            capture_output=True, text=True)
         if r.returncode != 0:
             # NEVER a silent pass — "I could not look" is its own state.
             return _setup("WORKTREE_UNAVAILABLE", "WORKTREE_UNAVAILABLE",
@@ -1833,4 +1833,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

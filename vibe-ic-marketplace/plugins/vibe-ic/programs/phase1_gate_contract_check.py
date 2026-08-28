@@ -61,6 +61,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 PROGRAMS_DIR = Path(__file__).parent
 TESTS_DIR = PROGRAMS_DIR / "tests"
@@ -165,8 +168,8 @@ def check_gate(gate: str) -> list[Finding]:
                 "occurrence, or Rule enforced section) — prevents fabricated gates."))
 
     # 3. --help exit 0
-    r = subprocess.run([sys.executable, str(py), "--help"],
-                       capture_output=True, text=True, timeout=10)
+    r = _pr.run([sys.executable, str(py), "--help"],
+                       capture_output=True, text=True)
     if r.returncode != 0:
         findings.append(Finding(gate, "ERROR", "help_nonzero",
             f"--help exited {r.returncode}; help stdout: {r.stdout[:100]!r}"))
@@ -178,8 +181,8 @@ def check_gate(gate: str) -> list[Finding]:
             "Gate must accept `--json` for machine-readable output."))
 
     # 5. Exit 2 on missing input
-    r = subprocess.run([sys.executable, str(py), "/tmp/__nonexistent_for_gate_check__"],
-                       capture_output=True, text=True, timeout=10)
+    r = _pr.run([sys.executable, str(py), "/tmp/__nonexistent_for_gate_check__"],
+                       capture_output=True, text=True)
     if r.returncode != 2:
         findings.append(Finding(gate, "WARN", "missing_input_not_exit2",
             f"Missing-input smoke test returned {r.returncode}, expected 2. "
@@ -250,4 +253,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

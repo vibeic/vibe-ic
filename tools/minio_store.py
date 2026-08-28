@@ -24,9 +24,11 @@ import sys
 import json
 import hashlib
 import argparse
-import subprocess
 from pathlib import Path
 from datetime import datetime
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 MINIO_ENDPOINT  = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
@@ -45,7 +47,7 @@ BUCKETS = {
 def mc_cmd(args: list) -> tuple:
     """Run mc command, return (stdout, returncode)."""
     cmd = [MC_BIN] + args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    result = _pr.run(cmd, capture_output=True, text=True)
     return result.stdout.strip(), result.returncode
 
 
@@ -188,4 +190,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -59,6 +59,9 @@ from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _watchdog                                        # noqa: E402
+import _progress_run as _pr  # noqa: E402  — only exit_undetermined_on_stall(),
+# the main-entry stall-to-rc2 wrapper main has no equivalent for; run_cmd()
+# itself is fully on `_watchdog` (this file's own `Stalled`, not `_pr.Stalled`).
 
 
 REQUIRED_KEYS = (
@@ -386,4 +389,6 @@ def main(argv: list = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

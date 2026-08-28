@@ -49,6 +49,9 @@ from ip_catalog_pull import LOCAL_MIRROR_ROOTS, LOCAL_MIRROR_MAP, find_local_mir
 # every design pull — never reaches it, so a design run costs nothing.
 from ip_catalog_reproduce_pull import reproduce_one_ip  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 # License keyword → SPDX inference
 LICENSE_KEYWORDS = [
@@ -315,10 +318,9 @@ def audit_upstream(m: Dict[str, Any]) -> Dict[str, Any]:
                                     "files_missing_sample": []}
     tmpdir = tempfile.mkdtemp(prefix=f"catalog_audit_{ip_name}_")
     try:
-        cp = subprocess.run(
+        cp = _pr.run(
             ["git", "clone", "--depth", "1", url, tmpdir],
-            capture_output=True, text=True, timeout=120,
-        )
+            capture_output=True, text=True)
         if cp.returncode != 0:
             issues.append(f"git clone failed (rc={cp.returncode}): {cp.stderr[:200]}")
         else:
@@ -470,4 +472,6 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main, sys.argv[1:]))

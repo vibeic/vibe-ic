@@ -72,6 +72,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 # ─── phase1 ──────────────────────────────────────────────────────────────
 
@@ -775,16 +779,18 @@ def gate_timeout_s() -> int:
 # subprocess. Best-effort: failure is logged but does NOT change the
 # runner's verdict (the runner's own step audit is the source of truth;
 # the summary is a derived view).
-def emit_final_summary(project, programs_dir=None, timeout=None) -> bool:
+def emit_final_summary(project, programs_dir=None) -> bool:
     """Run `final_report_generate.py` against `project` and return True
     on success, False on any failure (exception, missing tool, non-zero
-    exit, timeout). Caller logs the True/False; do NOT use the return
+    exit, stall). Caller logs the True/False; do NOT use the return
     to gate the verdict — final report is a downstream artefact.
 
-    #525: the default timeout is the child's OWN size-adaptive audit
-    budget plus a margin — a fixed 240s outer cap used to kill the child
-    before #469's 900-3600s inner budget could even apply."""
-    import subprocess  # local import: helper is rarely called
+    #525 sized an OUTER bound from the child's OWN size-adaptive audit
+    budget, because a fixed 240s cap was killing the child before #469's
+    900-3600s inner budget could even apply. Sizing a bound better is still
+    guessing at one: the child is now supervised by forward progress, so it
+    runs as long as it is working and no `timeout` parameter is left to get
+    the arithmetic wrong. No caller ever passed one."""
     import sys
     from pathlib import Path
     if programs_dir is None:
@@ -792,12 +798,10 @@ def emit_final_summary(project, programs_dir=None, timeout=None) -> bool:
     final_gen = Path(programs_dir) / "final_report_generate.py"
     if not final_gen.is_file():
         return False
-    if timeout is None:
-        timeout = audit_timeout_s(project) + OUTER_TIMEOUT_MARGIN_S
     try:
-        r = subprocess.run(
+        r = _pr.run(
             [sys.executable, str(final_gen), str(project)],
-            timeout=timeout, check=False,
+            check=False,
             capture_output=True, text=True,
         )
         return r.returncode == 0

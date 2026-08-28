@@ -72,6 +72,9 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 #: The environment variable that opts a host OUT of the digest-pinned image and
 #: INTO its own site directory.  Read by `trusted_pytest_entry.py`, which owns
@@ -111,10 +114,10 @@ _PROBE_NAME = "test_landing_runtime_probe.py"
 def _run(argv: List[str], *, cwd: Optional[Path] = None,
          env: Optional[Dict[str, str]] = None,
          ) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         argv, cwd=None if cwd is None else str(cwd), env=env,
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        timeout=300, check=False)
+        check=False)
 
 
 def isolated_import_lane(python: str) -> Tuple[bool, str]:
@@ -315,4 +318,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

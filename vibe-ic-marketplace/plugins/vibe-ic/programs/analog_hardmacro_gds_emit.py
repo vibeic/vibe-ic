@@ -97,7 +97,6 @@ import json
 import re
 import shlex
 import struct as _struct
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -128,6 +127,9 @@ from analog_lef_gds_outline_check import (  # noqa: E402
     _GDS_STRNAME,
     _GDS_XY,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAM = "analog_hardmacro_gds_emit"
 
@@ -205,8 +207,7 @@ def _stage_layout_subtree(stage, layout: Path, block: str):
 def _run(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
     """Bounded subprocess. Monkeypatch surface for the unit tests."""
     try:
-        p = subprocess.run(argv, capture_output=True, text=True,
-                           timeout=timeout)
+        p = _pr.run(argv, capture_output=True, text=True)
         return p.returncode, p.stdout, p.stderr
     except Exception as exc:  # noqa: BLE001 — surfaced to the caller verbatim
         return 1, "", str(exc)
@@ -753,4 +754,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

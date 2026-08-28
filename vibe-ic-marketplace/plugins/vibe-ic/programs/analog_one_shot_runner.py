@@ -44,6 +44,9 @@ import _path_layout as _pl
 import _analog_a_check_common as _acc
 import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAMS_DIR = Path(__file__).resolve().parent
 
 
@@ -774,8 +777,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
     skill = skill_map.get(step_name, "(no skill mapped)")
     if det and det.is_file():
         cmd = [sys.executable, str(det), str(project), "--block", bname]
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            timeout=1800)
+        cp = _pr.run(cmd, capture_output=True, text=True)
         if cp.returncode == 0:
             # v1.6.129 (#50 Fix 2) — distinguish a real PASS (artefact
             # present + substance check passed) from a VACUOUS_PASS
@@ -848,8 +850,8 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     except (OSError, subprocess.SubprocessError):
                         pcp = None
                     if pcp is not None and pcp.returncode == 0:
-                        cp_prod = subprocess.run(cmd, capture_output=True,
-                                                 text=True, timeout=1800)
+                        cp_prod = _pr.run(cmd, capture_output=True,
+                                                 text=True)
                         if cp_prod.returncode == 0:
                             tail = (pcp.stdout.strip().splitlines()[-1]
                                     if pcp.stdout else "produced")
@@ -920,8 +922,8 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                               "--pdk",
                               os.environ.get("VIBEIC_ANALOG_PDK",
                                               "sky130")]
-                    rs_cp = subprocess.run(rs_cmd, capture_output=True,
-                                            text=True, timeout=600)
+                    rs_cp = _pr.run(rs_cmd, capture_output=True,
+                                            text=True)
                     # Re-run the substance gate whenever the sweep left an
                     # artefact behind — not only when the sweep exited 0.
                     #
@@ -939,8 +941,8 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     cr = (project / "phase3" / "analog" / bname
                           / "corner_results.json")
                     if rs_cp.returncode == 0 or cr.is_file():
-                        cp_real = subprocess.run(cmd, capture_output=True,
-                                                  text=True, timeout=1800)
+                        cp_real = _pr.run(cmd, capture_output=True,
+                                                  text=True)
                         if cp_real.returncode == 0:
                             # PASS means real sim converged AND met
                             # spec_results.status==PASS AND its deck came from
@@ -1006,8 +1008,8 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                 stub_paths = _emit_deterministic_stub(
                     project, bname, step_name)
                 if stub_paths:
-                    cp2 = subprocess.run(cmd, capture_output=True,
-                                          text=True, timeout=1800)
+                    cp2 = _pr.run(cmd, capture_output=True,
+                                          text=True)
                     if cp2.returncode == 0:
                         return StepResult(
                             step_name, bname, "PASS_WITH_STUB",
@@ -1043,8 +1045,8 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                 project, bname,
                 getattr(args, "container", None) or "vibeic-eda")
             if native and native.get("ran"):
-                cp2 = subprocess.run(cmd, capture_output=True,
-                                      text=True, timeout=1800)
+                cp2 = _pr.run(cmd, capture_output=True,
+                                      text=True)
                 passed = cp2.returncode == 0
                 return StepResult(
                     step_name, bname,
@@ -1062,8 +1064,8 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         if step_name == "A6_block_pv" and _stubs_enabled(args):
             stub_paths = _emit_deterministic_stub(project, bname, step_name)
             if stub_paths:
-                cp2 = subprocess.run(cmd, capture_output=True,
-                                      text=True, timeout=1800)
+                cp2 = _pr.run(cmd, capture_output=True,
+                                      text=True)
                 if cp2.returncode == 0:
                     return StepResult(
                         step_name, bname, "PASS_WITH_STUB",
@@ -1319,4 +1321,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

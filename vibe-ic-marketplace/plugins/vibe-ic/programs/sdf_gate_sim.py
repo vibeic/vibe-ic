@@ -42,12 +42,14 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 try:
     import _path_layout as _pl
@@ -546,9 +548,9 @@ def missing_empty_cell_stubs(text: str, used: set, pdk_text: str) -> List[str]:
 
 
 def _docker(container: str, cmd: str, timeout: int = 600):
-    return subprocess.run(
+    return _pr.run(
         ["docker", "exec", container, "bash", "-lc", _TOOL_PATH + cmd],
-        capture_output=True, text=True, timeout=timeout)
+        capture_output=True, text=True)
 
 
 # sha256×sky130A / #SS-SETUP — DFT test-mode ports are NOT part of the functional
@@ -848,4 +850,6 @@ def main(argv: Optional[list] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

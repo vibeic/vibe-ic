@@ -35,6 +35,9 @@ import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 __all__ = ["KLayoutRunner", "HostRunner", "ContainerRunner", "find_runner"]
 
 DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
@@ -219,9 +222,9 @@ class ContainerRunner(KLayoutRunner):
 
     def exists(self, path):
         try:
-            cp = subprocess.run(
+            cp = _pr.run_best_effort(
                 ["docker", "exec", self._c, "test", "-f", str(path)],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True)
             return cp.returncode == 0
         except Exception:                                    # noqa: BLE001
             return False
@@ -229,10 +232,10 @@ class ContainerRunner(KLayoutRunner):
 
 def _container_has_klayout(container: str) -> bool:
     try:
-        cp = subprocess.run(
+        cp = _pr.run_best_effort(
             ["docker", "exec", container, "bash", "-lc",
              "command -v klayout >/dev/null 2>&1"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         return cp.returncode == 0
     except Exception:                                        # noqa: BLE001
         return False

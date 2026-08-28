@@ -82,6 +82,9 @@ from def_gds_port_power_restore import (  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
 
@@ -422,7 +425,6 @@ def _docker_exec_raw(container, cmd, timeout=600):
     """Simple bounded wall-clock exec (monkeypatch surface for tests) — for
     short probes. Long tool runs use `_docker_exec(..., marker=...)` → the
     progress-stall watchdog."""
-    import subprocess
     if container not in ("", "host"):
         # OWN container-side deadline: a host timeout kills only the
         # `docker exec` CLIENT and ORPHANS the tool inside the container
@@ -433,8 +435,7 @@ def _docker_exec_raw(container, cmd, timeout=600):
     else:
         full = ["bash", "-lc", cmd]
     try:
-        r = subprocess.run(full, capture_output=True, text=True,
-                           timeout=timeout)
+        r = _pr.run(full, capture_output=True, text=True)
         return r.returncode, r.stdout, r.stderr
     except Exception as exc:  # noqa: BLE001 — surfaced to the caller
         return 1, "", str(exc)
@@ -1026,4 +1027,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

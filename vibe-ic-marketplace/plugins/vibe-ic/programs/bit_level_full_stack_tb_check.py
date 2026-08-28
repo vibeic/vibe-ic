@@ -95,12 +95,14 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 import _design_module_set as _dms
 import _path_layout as _pl
 import _sim_results_bridge as _srb
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 
 _DEFAULT_MIN_DISTINCT = 10
@@ -687,8 +689,8 @@ def _maybe_run(sim_dir: Path) -> tuple[bool, str]:
         # the offline `--run` path of this gate, NOT an unbounded EDA-closure
         # loop; the shell-runner boundary is surfaced (loop_watchdog class c)
         # and justified here rather than left silent.
-        r = subprocess.run(["bash", str(runner)], cwd=str(sim_dir),
-                           capture_output=True, text=True, timeout=900)
+        r = _pr.run(["bash", str(runner)], cwd=str(sim_dir),
+                           capture_output=True, text=True)
     except Exception as e:
         return False, f"runner failed: {e}"
     if r.returncode != 0:
@@ -1076,4 +1078,6 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

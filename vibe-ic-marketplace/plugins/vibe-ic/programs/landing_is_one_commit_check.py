@@ -69,6 +69,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 _VERSION_RE = re.compile(r"\[v\d+\.\d+\.\d+\]")
 
 # The manifests a version bump touches, and NOTHING else. A landing that only
@@ -80,8 +83,8 @@ _MANIFEST_SUFFIXES = (".claude-plugin/plugin.json",
 
 def _git(repo: Path, *args: str) -> Tuple[int, str]:
     try:
-        r = subprocess.run(["git", "-C", str(repo), *args],
-                           capture_output=True, text=True, timeout=120)
+        r = _pr.run(["git", "-C", str(repo), *args],
+                           capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, f"{type(exc).__name__}: {exc}"
     return r.returncode, r.stdout
@@ -351,4 +354,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

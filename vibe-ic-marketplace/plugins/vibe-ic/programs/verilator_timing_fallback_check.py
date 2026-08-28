@@ -71,7 +71,6 @@ import argparse
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -79,6 +78,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _watchdog as _wd            # noqa: E402  progress supervision
 from typing import List
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 # Defaults MIRROR the authoritative official RTLLM scorer
 # (benchmark-data/evaluation/rtllm/score_rtllm.py): PASS iff "Your Design Passed"
@@ -259,4 +261,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

@@ -140,6 +140,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 DEFAULT_LABEL = "artefact-defect"
 DEFAULT_DATA_ROOT = "benchmark-data"
 # The vacuous outcome, named so a reader can never mistake it for a verdict.
@@ -171,8 +174,8 @@ _MANIFEST_NAMES = ("plugin.json", "marketplace.json")
 # --------------------------------------------------------------------------
 def _git(root: Path, *args: str, timeout: int = 120) -> Tuple[int, str]:
     try:
-        r = subprocess.run(["git", "-C", str(root), *args],
-                           capture_output=True, text=True, timeout=timeout)
+        r = _pr.run(["git", "-C", str(root), *args],
+                           capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError):
         return 1, ""
     return r.returncode, r.stdout
@@ -711,4 +714,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -1017,8 +1017,8 @@ def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
            "bash", "-lc", inner]
     timeout = int(timeout) + _CE.CLIENT_GRACE_S
     try:
-        p = subprocess.run(cmd, cwd=str(formal_dir), capture_output=True,
-                           text=True, timeout=timeout)
+        p = _pr.run(cmd, cwd=str(formal_dir), capture_output=True,
+                           text=True)
         out = (p.stdout or "") + (p.stderr or "")
         if container and p.returncode == 124:
             # The CONTAINER-side deadline fired, so the solver was signalled
@@ -1028,14 +1028,17 @@ def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
                     f"container-side `timeout` stopped sby after {timeout - _CE.CLIENT_GRACE_S}s. "
                     f"The proof is INCONCLUSIVE — not disproved.\n")
         return out
-    except subprocess.TimeoutExpired as e:
+    except _pr.Stalled as e:
         out = e.stdout or ""
         err = e.stderr or ""
         if isinstance(out, bytes):
             out = out.decode("utf-8", "replace")
         if isinstance(err, bytes):
             err = err.decode("utf-8", "replace")
-        return out + err + f"\n[formal_property_run] TIMEOUT after {timeout}s\n"
+        return out + err + (f"\n[formal_property_run] SOLVER STALLED: every "
+                            f"progress signal sat still, so it was killed as "
+                            f"hung. The proof is INCONCLUSIVE — not "
+                            f"disproved. {e}\n")
     except FileNotFoundError:
         return "[formal_property_run] ERROR: sby/docker not found on PATH\n"
 
@@ -1429,6 +1432,9 @@ def _write_report(formal_dir: Path, results: dict) -> None:
 # it was written with.
 import _record_adjudication as _ra  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 def _strength_honesty(record: dict):
     """Would this gate still call this a PASS on the strength it recorded?"""
@@ -1530,4 +1536,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

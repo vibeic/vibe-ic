@@ -146,6 +146,9 @@ from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _vacuous_exit as _vx  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 #: States the dispatcher can record. Everything that is not PASS and not LISTED
 #: is RED for this program's purpose: a gate that FAILED, one that REFUSED
 #: (NOT_CHECKED), and one that WROTE_CORPUS are all gates whose result a reader
@@ -398,9 +401,9 @@ def load_ledger_from_ref(repo: Path, ref: str) -> List[Dict[str, Any]]:
     An empty `acknowledged` at a valid ref is still the normal starting state.
     """
     try:
-        proc = subprocess.run(
+        proc = _pr.run(
             ["git", "-C", str(repo), "show", f"{ref}:{LEDGER_REL}"],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise LedgerUnreadable(f"cannot read {LEDGER_REL} at {ref} in {repo}: "
                                f"{exc}") from exc
@@ -995,4 +998,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -115,6 +115,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _provenance as _prov  # noqa: E402  (ORGANIC #770)
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 @dataclass
 class Finding:
@@ -6751,7 +6754,6 @@ def main():
         # as usual (no revert — the fixer is not what broke it). Skipped
         # silently when iverilog is unavailable (the net needs a verifier).
         import shutil as _sh
-        import subprocess as _sp
         _iv = _sh.which("iverilog")
 
         def _compiles(fp: Path) -> bool:
@@ -6763,8 +6765,8 @@ def main():
             # generate-scoped reg) is an elaboration error -i does NOT
             # suppress, so the net still catches real bugs.
             try:
-                return _sp.run([_iv, "-g2012", "-i", "-t", "null", str(fp)],
-                               capture_output=True, timeout=120
+                return _pr.run([_iv, "-g2012", "-i", "-t", "null", str(fp)],
+                               capture_output=True, text=False
                                ).returncode == 0
             except Exception:
                 return False
@@ -6901,4 +6903,6 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

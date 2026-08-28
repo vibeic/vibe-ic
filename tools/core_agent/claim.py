@@ -42,9 +42,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from typing import Callable, Dict, List, Optional, Tuple
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 #: The two work queues, and the marker each uses. Kept in one place so a third
 #: queue cannot be added with a marker nobody else recognises.
@@ -59,10 +62,10 @@ def _gh_post(repo: str, number: int, body: str) -> Optional[Dict]:
     ago" — see the `mine` note in :func:`claim`. The id is the only thing that
     distinguishes them, and the POST is the only place it is available.
     """
-    out = subprocess.run(
+    out = _pr.run(
         ["gh", "api", "-X", "POST", f"repos/{repo}/issues/{number}/comments",
          "-f", f"body={body}"],
-        check=True, capture_output=True, text=True, timeout=60).stdout
+        check=True, capture_output=True, text=True).stdout
     doc = json.loads(out or "null")
     return doc if isinstance(doc, dict) else None
 
@@ -86,10 +89,10 @@ def _gh_list(repo: str, number: int) -> List[Dict]:
     `json.loads` clean). `--slurp` instead returns an array OF PAGES, which
     would need flattening and would silently give this function a list of lists.
     """
-    out = subprocess.run(
+    out = _pr.run(
         ["gh", "api", "--paginate",
          f"repos/{repo}/issues/{number}/comments?per_page=100"],
-        check=True, capture_output=True, text=True, timeout=60).stdout
+        check=True, capture_output=True, text=True).stdout
     return json.loads(out or "[]")
 
 
@@ -180,4 +183,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

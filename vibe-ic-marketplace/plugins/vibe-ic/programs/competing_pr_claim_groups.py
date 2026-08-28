@@ -78,6 +78,10 @@ import subprocess
 import sys
 from typing import Dict, FrozenSet, Iterable, List, Sequence, Tuple
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 # `Refs #N` is deliberately INCLUDED. #1407 uses `Refs` rather than `Closes`
 # precisely because it fixes part of an issue, and a partial fix competing with
 # another partial fix is exactly the case worth surfacing.
@@ -434,10 +438,10 @@ def claimants_from_rev_range(repo_root: str, rev_range: str) -> List[dict]:
     check.
     """
     sep, fsep = "\x1e", "\x1f"     # cannot occur in a commit message
-    proc = subprocess.run(
+    proc = _pr.run(
         ["git", "-C", repo_root, "log", "--no-merges", "--name-only",
          "--format=%s%%H%s%%s%s%%b%s" % (sep, fsep, fsep, fsep), rev_range],
-        capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S)
+        capture_output=True, text=True)
     if proc.returncode != 0:
         # rc 2, not 1: "the range could not be resolved" is a gap in the
         # MEASUREMENT, not a finding about the landing, and the two must never
@@ -610,4 +614,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -44,8 +44,11 @@ Exit codes:
     2 — input/setup error
 """
 from __future__ import annotations
-import argparse, json, subprocess, sys, re
+import argparse, json, sys, re
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 
 def load_vectors(path: Path) -> list[dict]:
@@ -98,8 +101,8 @@ def run_hook(hook: str, vectors_path: Path, cwd: Path) -> list[str]:
     arbitrary shell with this process's privileges.
     """
     cmd = hook.replace("{VECTORS}", str(vectors_path))
-    r = subprocess.run(cmd, shell=True, cwd=str(cwd),  # nosec B602 — trusted config hook
-                       capture_output=True, text=True, timeout=600)
+    r = _pr.run(cmd, shell=True, cwd=str(cwd),  # nosec B602 — trusted config hook
+                       capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"hook exit {r.returncode}: {r.stderr[:500]}")
     # Parse stdout: expect JSON list (first { or [ to end of stdout)
@@ -181,4 +184,6 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -66,6 +66,10 @@ from errors import (  # noqa: E402
     EXIT_FOR_CODE,
 )
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 def find_quartus_pgm() -> Optional[str]:
     """Search $QUARTUS_ROOTDIR/bin, $PATH, common defaults, and external mounts.
@@ -131,10 +135,14 @@ def find_quartus_pgm() -> Optional[str]:
 def run(cmd: List[str], timeout_s: float = 90.0) -> Tuple[int, str, str]:
     print(f"+ {' '.join(shlex.quote(c) for c in cmd)}", file=sys.stderr)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        p = _pr.run(cmd, capture_output=True, text=True)
         return p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired as e:
-        return 124, e.stdout or "", (e.stderr or "") + f"\n[timeout after {timeout_s}s]"
+    except _pr.Stalled as e:
+        # rc 124 meant "the clock ran out". This is a different finding — the
+        # tool stopped moving — so it gets its own rc rather than borrowing the
+        # one every caller reads as a deadline.
+        return (_pr.RC_STALLED, e.stdout or "",
+                (e.stderr or "") + f"\n[stalled: {e}]")
     except FileNotFoundError as e:
         return 127, "", str(e)
 
@@ -341,12 +349,11 @@ def _run_post_burn_scope_check(
         argv += [flag, str(v)]
 
     try:
-        r = subprocess.run(argv, capture_output=True, text=True,
-                           timeout=timeout_s)
-    except subprocess.TimeoutExpired:
+        r = _pr.run(argv, capture_output=True, text=True)
+    except _pr.Stalled as exc:
         return {"name": check.get("name", "unnamed"),
                 "success": False,
-                "error": f"scope check timeout {timeout_s}s"}
+                "error": f"scope check stalled (not slow): {exc}"}
 
     return {
         "name": check.get("name", "unnamed"),
@@ -382,10 +389,9 @@ def _run_rtl_precheck_gate(
     if l12_json and os.path.isfile(l12_json):
         argv += ["--l12-json", l12_json]
     try:
-        r = subprocess.run(argv, capture_output=True, text=True,
-                           timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        return -2, {"precheck_error": f"gate timeout {timeout_s}s"}
+        r = _pr.run(argv, capture_output=True, text=True)
+    except _pr.Stalled as exc:
+        return -2, {"precheck_error": f"gate stalled (not slow): {exc}"}
     try:
         report = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -540,13 +546,12 @@ def _run_flow_compliance_pre_burn(
     env = dict(os.environ)
     env["PHASE23_ANALOG_FPGA_STUB"] = "1"
     try:
-        r = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout_s,
-            env=env,
+        r = _pr.run(
+            argv, capture_output=True, text=True, env=env,
         )
-    except subprocess.TimeoutExpired:
+    except _pr.Stalled as exc:
         return -2, {
-            "flow_compliance_error": f"audit timeout {timeout_s}s",
+            "flow_compliance_error": f"audit stalled (not slow): {exc}",
         }
 
     out_text = (r.stdout or "") + "\n" + (r.stderr or "")
@@ -1228,4 +1233,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

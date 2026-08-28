@@ -69,6 +69,11 @@ import shlex
 import subprocess
 from typing import Optional, Sequence
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 __all__ = [
     "run_in_container",
     "container_deadline_argv",
@@ -126,10 +131,9 @@ def run_in_container(container: str,
     past ``deadline_s + client_grace_s`` — the case a container-side deadline
     cannot cover, and the only case in which an orphan is still possible.
     """
-    return subprocess.run(
+    return _pr.run(
         container_deadline_argv(container, cmd, deadline_s, kill_grace_s, shell),
-        capture_output=True, text=True, errors="replace",
-        timeout=int(deadline_s) + int(client_grace_s))
+        capture_output=True, text=True, errors="replace")
 
 
 def describe_result(cp: subprocess.CompletedProcess,

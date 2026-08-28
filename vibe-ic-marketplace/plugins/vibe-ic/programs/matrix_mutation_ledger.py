@@ -271,6 +271,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 try:  # the shared isolation harness (#996) — see its module docstring
     import _run_isolation as _iso
 except ImportError:  # pragma: no cover - exercised by the packaged layout
@@ -2627,13 +2630,12 @@ def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
     junit = holder / "cell.xml"
     try:
         try:
-            proc = subprocess.run(
+            proc = _pr.run(
                 [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
                  "-q", "-p", "no:randomly", "--no-header", "-rN",
                  "--junit-xml", str(junit)],
-                cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
-                env=env)
-        except subprocess.TimeoutExpired as exc:
+                cwd=str(cwd), capture_output=True, text=True, env=env)
+        except _pr.Stalled as exc:
             # THE BOUND FIRING IS A MEASUREMENT FAILURE, NOT A COLOUR
             # (vibe-ic#1403).
             #
@@ -2659,12 +2661,12 @@ def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
             # expensive wrong answer). `not_replayable` makes `proved` and
             # `as_recorded` both False, so this can never buy a pass.
             return None, _decoded(exc.stdout) + _decoded(exc.stderr), (
-                f"the cell exceeded its {timeout}s bound and was killed, so "
-                f"pytest never recorded it — this arm was NOT MEASURED. That "
-                f"is not evidence the gate stopped catching, and it is not a "
-                f"reason to re-record the ledger or re-pick the witness. "
-                f"Re-run the pair; if it is genuinely this slow, raise the "
-                f"bound in a change that states the measurement")
+                f"the cell STOPPED MAKING PROGRESS and was killed, so pytest "
+                f"never recorded it — this arm was NOT MEASURED. That is not "
+                f"evidence the gate stopped catching, and it is not a reason "
+                f"to re-record the ledger or re-pick the witness. There is no "
+                f"bound to raise now: a cell that is merely slow runs to "
+                f"completion, so this one was genuinely wedged. {exc}")
         out = (proc.stdout or "") + (proc.stderr or "")
         rc, why = _cell_rc_from_report(junit, proc.returncode)
         return rc, out, why
@@ -2792,8 +2794,8 @@ def _run_gate(cmd: str, project: Path) -> Tuple[int, str]:
     argv = fcc._resolve_program_cmd(cmd, cwd=project)
     if not argv:
         return 1, f"program not found: {cmd.split()[0]}"
-    proc = subprocess.run(argv, cwd=str(project), capture_output=True,
-                          text=True, timeout=fcc._pl.gate_timeout_s())
+    proc = _pr.run(argv, cwd=str(project), capture_output=True,
+                          text=True)
     out = (proc.stdout or "") + (proc.stderr or "")
     rc = proc.returncode
     if rc == 0 or rc == 2:                       # 2 = VACUOUS_PASS
@@ -3258,4 +3260,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

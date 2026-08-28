@@ -62,7 +62,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -70,6 +69,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling impor
 import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 import _eda_image as _img  # noqa: E402 — the one site that answers "which image"
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
@@ -141,7 +143,7 @@ def image_gated_sites(tests_dir: Path) -> List[Tuple[str, int, str]]:
 def image_is_readable(image: str, timeout: int = 60) -> Tuple[bool, str]:
     """THE SAME operation the gated tests perform, once."""
     try:
-        r = subprocess.run(
+        r = _pr.run(
             # `--pull never`: `judged_image()` only ever names an image this
             # host already holds, so this changes no reachable answer today — it
             # is the guard for the day something else names one it does not, and
@@ -149,11 +151,12 @@ def image_is_readable(image: str, timeout: int = 60) -> Tuple[bool, str]:
             ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
              "--pull", "never",
              "--entrypoint", "cat", image, _PROBE_PATH],
-            capture_output=True, timeout=timeout)
+            capture_output=True, text=False)
     except FileNotFoundError:
         return False, "no `docker` binary on PATH"
-    except subprocess.TimeoutExpired:
-        return False, f"reading {_PROBE_PATH} out of {image} timed out at {timeout}s"
+    except _pr.Stalled as exc:
+        return False, (f"reading {_PROBE_PATH} out of {image} stalled — no "
+                       f"forward progress, so it was stopped: {exc}")
     except OSError as exc:
         return False, f"{type(exc).__name__}: {exc}"
     if r.returncode != 0:
@@ -249,4 +252,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

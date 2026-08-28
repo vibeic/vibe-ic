@@ -86,6 +86,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 _DEFAULT_CONTAINER = "vibeic-eda"
 _TOOLS = "/foss/tools"
 # Dynamic tier default budget (%-of-Vdd). LOOSER than the static tier: a
@@ -661,7 +664,7 @@ def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
         log = (out or "") + "\n" + (err or "")
     except (FileNotFoundError, OSError) as e:
         payload = {"status": "ERROR_TOOL", "dynamic_ir_report_emitted": False,
-                   "reason": f"openroad run failed: {e}"}
+                   "reason": f"openroad run failed or stalled: {e}"}
         out_json.write_text(json.dumps(payload, indent=2) + "\n")
         return 1, payload
 
@@ -808,4 +811,6 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main, sys.argv[1:]))

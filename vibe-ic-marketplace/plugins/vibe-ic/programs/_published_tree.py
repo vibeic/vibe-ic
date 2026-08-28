@@ -86,6 +86,10 @@ import subprocess
 from pathlib import Path
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 _SYMLINK_MODE = "120000"
 # A link chain is followed, not assumed absent. Measured 0 of 172 in this
 # corpus, so the loop is pinned by a fixture rather than by real data — but
@@ -109,8 +113,8 @@ def _index(root: Path, timeout: Optional[float], *,
     ships a promise about someone else's.
     """
     try:
-        r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
-                           capture_output=True, text=True, timeout=timeout)
+        r = _pr.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
+                           capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError) as exc:
         if strict:
             raise PublishedTreeIndeterminate(
@@ -162,9 +166,9 @@ def _blobs(root: Path, shas: List[str], timeout: Optional[float], *,
     if not shas:
         return {}
     try:
-        r = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
+        r = _pr.run(["git", "-C", str(root), "cat-file", "--batch"],
                            input=("\n".join(shas) + "\n").encode(),
-                           capture_output=True, timeout=timeout)
+                           capture_output=True, text=False)
     except (OSError, subprocess.SubprocessError) as exc:
         if strict:
             raise PublishedTreeIndeterminate(

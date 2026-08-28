@@ -71,6 +71,9 @@ from pathlib import Path
 from gate_utils import find_rtl_files as _rtl_files
 import _path_layout as _pl
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 _BUG_PREFIX_RE = re.compile(
     r"^(fix|bug|hotfix)\s*[:(]", re.IGNORECASE,
@@ -293,4 +296,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

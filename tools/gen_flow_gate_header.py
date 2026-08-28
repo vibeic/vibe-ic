@@ -64,11 +64,13 @@ import argparse
 import json
 import os
 import re
-import subprocess
 from typing import List, Tuple
 import sys
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 
 def flow_steps(flow_yaml: Path) -> tuple[int, int, int]:
@@ -97,8 +99,7 @@ def dimension_rows(page: str) -> int:
 
 
 def run_suite(cmd: str, cwd: Path) -> str:
-    r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True,
-                       timeout=14400)
+    r = _pr.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
     tail = (r.stdout or "").strip().splitlines()
     for line in reversed(tail):
         if re.search(r"\d+ (passed|failed)", line):
@@ -243,4 +244,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

@@ -8045,10 +8045,10 @@ def _stage_asap7_merged_liberty(project: Path, container: str,
     ``phase3/pdk_stage/`` — a staging area the runner already uses.
     """
     import hashlib as _hl
-    cp = subprocess.run(
+    cp = _pr.run(
         ["docker", "exec", container, "bash", "-lc",
          f"ls {reg['container_path']}/{reg['liberty_glob']}"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     files = sorted(f for f in cp.stdout.split() if f.endswith(".lib"))
     if not files:
         raise SystemExit(
@@ -9436,6 +9436,9 @@ import synth_frontend as _sf
 import adder_map_techmap as _amt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -20567,9 +20570,9 @@ def step_pad_ring_gen(project: Path, container: Optional[str] = None,
             cmd = " ".join(shlex.quote(str(x)) for x in argv)
             rc, out, err = _docker_exec(container, cmd, marker=prog_c)
         else:
-            cp = subprocess.run(
+            cp = _pr.run(
                 [sys.executable, str(prog), str(project), *extra],
-                capture_output=True, text=True, errors="replace", timeout=600)
+                capture_output=True, text=True, errors="replace")
             rc, out, err = cp.returncode, cp.stdout, cp.stderr
         detail = (out or err or "").strip().splitlines()
         notes.append(f"{name}: rc={rc} {detail[0] if detail else ''}".strip())
@@ -22530,7 +22533,7 @@ def _decap_route_short_guard(project: Path, top: str,
     if rm is not None:
         cmd += ["--rail-margin-um", str(rm)]
     try:
-        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        cp = _pr.run_best_effort(cmd, capture_output=True, text=True)
     except Exception as exc:  # nosec — guard is best-effort, never fatal to PnR
         return False, f"decap_guard: run failed ({exc})"
     if cp.returncode != 0 or not fixed.is_file():
@@ -24166,8 +24169,8 @@ def _die_finishing(project: Path, top: str, pdk: PdkConfig,
     if container:
         run_env["VIBEIC_EDA_CONTAINER"] = container
     try:
-        cp = subprocess.run(argv, capture_output=True, text=True,
-                            timeout=3600, env=run_env)
+        cp = _pr.run_best_effort(argv, capture_output=True, text=True,
+                            env=run_env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"die finishing NONFATAL: {exc}"
     if cp.returncode != 0:
@@ -24287,8 +24290,8 @@ def _die_density_fill(project: Path, top: str, pdk: PdkConfig,
     if container:
         run_env["VIBEIC_EDA_CONTAINER"] = container
     try:
-        cp = subprocess.run(argv, capture_output=True, text=True,
-                            timeout=3600, env=run_env)
+        cp = _pr.run_best_effort(argv, capture_output=True, text=True,
+                            env=run_env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"die density fill NONFATAL: {exc}"
     if cp.returncode != 0:
@@ -24359,11 +24362,11 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
     if container:
         run_env["VIBEIC_EDA_CONTAINER"] = container
     try:
-        cp = subprocess.run(
+        cp = _pr.run_best_effort(
             [sys.executable, str(prog), str(project),
              "--gds", str(gds_path), "--config", str(cfg),
              "--cell", top, "--in-place"],
-            capture_output=True, text=True, timeout=3600, env=run_env)
+            capture_output=True, text=True, env=run_env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"density fill NONFATAL: {exc}"
     if cp.returncode != 0:
@@ -40569,10 +40572,10 @@ def _emit_thermal_screen(project: Path, top: str, pdk: PdkConfig,
     # report -- `return False` with nothing said, so a screen that CRASHED was
     # indistinguishable to the caller from one that was not applicable.
     try:
-        _th = subprocess.run(
+        _th = _pr.run_best_effort(
             [sys.executable, str(PROGRAMS_DIR / "thermal_screen_check.py"),
              str(project), "--json", str(out_json)],
-            timeout=300, check=False, capture_output=True, text=True)
+            check=False, capture_output=True, text=True)
     except Exception as exc:  # pragma: no cover - subprocess edge
         notes.append(f"thermal screen emit failed: {exc}")
         return False
@@ -43080,4 +43083,6 @@ def _autogen_waivers_json(project: Path,
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

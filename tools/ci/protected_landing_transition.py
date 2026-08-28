@@ -21,6 +21,9 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 
 SCHEMA = 1
 MANIFEST_KIND = "vibeic.protected-landing-transition"
@@ -1249,10 +1252,10 @@ def build_push_preflight_receipt(*, object_repo: Path, base: str,
              ["--repo", str(repo), "--rev-range", push_range]),
         ]
         for name, argv in commands:
-            proc = subprocess.run(
+            proc = _pr.run(
                 [sys.executable, "-B", str(authority / name), *argv],
                 env=env, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
             gate_records.append(_preflight_gate_record(name, proc))
 
         messages = _git(
@@ -1260,11 +1263,11 @@ def build_push_preflight_receipt(*, object_repo: Path, base: str,
         assert isinstance(messages, bytes)
         message_file = authority / "commit-messages.txt"
         message_file.write_bytes(messages)
-        proc = subprocess.run(
+        proc = _pr.run(
             [sys.executable, "-B", str(authority / "git_prohibition_guard.py"),
              str(message_file)],
             env=env, stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
         gate_records.append(_preflight_gate_record(
             "git_prohibition_guard.py", proc))
 
@@ -1896,4 +1899,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(main))

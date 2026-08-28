@@ -456,8 +456,8 @@ def _tracked_paths(root: Path) -> Tuple[List[Path], str]:
     rather than assumed away.
     """
     try:
-        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
-                           capture_output=True, timeout=120)
+        r = _pr.run(["git", "-C", str(root), "ls-files", "-z"],
+                           capture_output=True, text=False)
     except (OSError, subprocess.SubprocessError):
         r = None
     if r is not None and r.returncode == 0:

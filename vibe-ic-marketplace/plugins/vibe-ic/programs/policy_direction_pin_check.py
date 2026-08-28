@@ -928,9 +928,9 @@ def leftover_signature(root: Path, site: Dict[str, Any]) -> Optional[str]:
     """
     target = root / site["file"]
     try:
-        repo = subprocess.run(
+        repo = _pr.run(
             ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         if repo.returncode != 0:
             raise ValueError("not inside a git work tree")
         repo_root = Path(repo.stdout.strip())
@@ -1306,9 +1306,9 @@ def verify_pins_parallel(
         wt = res.path / "wt"
         rows = []
         try:
-            add = subprocess.run(
+            add = _pr.run(
                 ["git", "-C", str(repo), "worktree", "add", "-q", "--detach",
-                 str(wt), "HEAD"], capture_output=True, text=True, timeout=180)
+                 str(wt), "HEAD"], capture_output=True, text=True)
             if add.returncode != 0:
                 return index, rows, ["could not create isolated worktree: "
                                      + (add.stderr or add.stdout).strip()[:240]]

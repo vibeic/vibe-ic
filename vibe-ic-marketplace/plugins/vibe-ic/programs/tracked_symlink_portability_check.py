@@ -129,8 +129,8 @@ def tracked_symlinks(root: Path) -> List[str]:
     120000. Read from the INDEX, never from a filesystem walk, so the answer
     does not depend on what the walk can follow."""
     try:
-        r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
-                           capture_output=True, timeout=300)
+        r = _pr.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
+                           capture_output=True, text=False)
     except (OSError, subprocess.SubprocessError):
         return []
     if r.returncode != 0:

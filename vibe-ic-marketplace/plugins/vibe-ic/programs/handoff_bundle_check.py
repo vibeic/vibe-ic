@@ -190,6 +190,9 @@ if str(_HERE) not in sys.path:
 import fix_surface_classify as _fsc                 # noqa: E402
 import source_chip_agnostic_check as _agnostic      # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
+
 # Bundle conventions (defaults; manifest may override the candidate name and
 # clean-room log paths).
 DEFAULT_CANDIDATE = "candidate.patch"
@@ -802,4 +805,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

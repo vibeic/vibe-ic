@@ -36,7 +36,7 @@ Usage:
         [--container vibeic-eda]
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys, tempfile, shutil
+import argparse, json, os, sys, tempfile, shutil
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
@@ -44,6 +44,9 @@ ATPG_HARMONIZE = PLUGIN / "programs" / "fix_fault_cut_names.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _designs_root as _dr  # noqa: E402  (host mount root, measured)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 YS_TEMPLATE = """\
 read_verilog {pdk_shim}
@@ -122,7 +125,7 @@ def _main():
     # Run Yosys in container
     cmd = ["docker", "exec", args.container, "bash", "-lc",
            f"yosys -s {_docker_path(ys_path)} 2>&1 | tail -30"]
-    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    cp = _pr.run(cmd, capture_output=True, text=True)
     if cp.returncode != 0 or "ERROR" in cp.stdout:
         print(f"[flatten] yosys FAILED:\n{cp.stdout}{cp.stderr}",
               file=sys.stderr)
@@ -136,11 +139,11 @@ def _main():
         print(f"[flatten] missing harmoniser: {ATPG_HARMONIZE}", file=sys.stderr)
         return 2
     name_map = tmp / "harmonize.json"
-    cp2 = subprocess.run([sys.executable, str(ATPG_HARMONIZE),
+    cp2 = _pr.run([sys.executable, str(ATPG_HARMONIZE),
                           "--scan-cut", str(flat_v),
                           "--out", str(args.output),
                           "--name-map", str(name_map)],
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True)
     if cp2.returncode != 0:
         print(f"[flatten] name harmonise FAILED:\n{cp2.stdout}{cp2.stderr}",
               file=sys.stderr)
@@ -155,4 +158,6 @@ def _main():
     return 0
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))

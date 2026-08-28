@@ -97,10 +97,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 #: Exit codes. 2 is NOT CHECKED and is never folded into 0.
 RC_CLEAN = 0
@@ -155,11 +157,12 @@ def _git(repo: Path, *args: str, timeout: int = 120) -> str:
     """
     argv = ["git", "--no-optional-locks", "-C", str(repo), *args]
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        p = _pr.run(argv, capture_output=True, text=True)
     except FileNotFoundError:
         raise NotChecked("git executable not found on PATH")
-    except subprocess.TimeoutExpired:
-        raise NotChecked(f"git timed out after {timeout}s: {' '.join(args)}")
+    except _pr.Stalled as exc:
+        raise NotChecked(f"git stopped making progress: {' '.join(args)}"
+                         f" — {exc}")
     if p.returncode != 0:
         raise NotChecked(
             f"git {' '.join(args)} exited {p.returncode}: "
@@ -510,4 +513,6 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 if __name__ == "__main__":
-    raise SystemExit(_main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    raise SystemExit(_pr.exit_undetermined_on_stall(_main))

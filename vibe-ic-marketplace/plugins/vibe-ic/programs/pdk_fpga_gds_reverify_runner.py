@@ -49,12 +49,14 @@ import argparse
 import hashlib
 import json
 import shutil
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _progress_run as _pr  # noqa: E402
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -80,8 +82,7 @@ def _step(label: str, cmd: List[str], cwd: Optional[Path] = None,
            + (f"  (cwd={cwd})" if cwd else ""),
           file=sys.stderr)
     try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            timeout=timeout,
+        cp = _pr.run(cmd, capture_output=True, text=True,
                             cwd=str(cwd) if cwd else None)
     except FileNotFoundError as e:
         return StepResult(step=label, cmd=cmd, rc=2,
@@ -358,4 +359,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A stall is not a verdict about the subject: it reaches the exit
+    # code as rc 2 (UNDETERMINED), announced, never as a finding.
+    sys.exit(_pr.exit_undetermined_on_stall(main))
