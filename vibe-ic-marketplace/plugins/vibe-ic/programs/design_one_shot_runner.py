@@ -4922,8 +4922,20 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     if not plan and not additive_reset_map:
         return StepResult(
             "reset_clock_variant_aliases", "SKIP", time.time() - t0,
-            f"design's staged constraint SDC already pins the original "
-            f"spelling(s) {_sdc_pinned}; renaming would break the SDC "
+            (f"design's staged constraint SDC already pins the original "
+             f"spelling(s) {_sdc_pinned}; renaming would break the SDC "
+             if _sdc_pinned else
+             # MEASURED: this branch printed "...pins the original spelling(s) []"
+             # on a project staging no SDC at all. Both maps can already be empty
+             # because an EARLIER suppression (#689 / #186) emptied them, and this
+             # return then blamed an SDC it has no case for. The SKIP is CORRECT —
+             # proceeding renames the inner module and emits a wrapper for an EMPTY
+             # alias map, which is the structural change #186 exists to prevent —
+             # but the REASON was wrong, and a reader chasing a phantom SDC is a
+             # real cost. Only the message changes here; the control flow does not.
+             f"nothing left to alias: an earlier contract-aware suppression "
+             f"emptied the plan (no SDC is staged; #618's own cause is empty) "
+             f"and renaming would break the SDC ") +
             f"get_ports + l9_rtl_pin_consistency_check — refusing to rename "
             f"the design's own contract (#618)")
     # In-flow EVIDENCE guard (#518 round-4 adversarial review, HIGH): when the

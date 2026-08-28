@@ -137,10 +137,28 @@ def _stage(tmp_path):
     (proj / "input" / "docs").mkdir(parents=True)
     (proj / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     (proj / "input" / "docs" / "design_description.md").write_text(
+        # THE DOC SHAPE IS LOAD-BEARING, and this is why it changed (#186/#689).
+        # These two tests are about the ADDITIVE DUAL-SPELLING wrapper — the
+        # second one says so: "the driven value must transfer ... for BOTH
+        # spellings". The VERILATOR `tri1` pull exists to hold the spelling the
+        # hidden TB did NOT bind. So the fixture must reach the additive path.
+        # This doc used to carry BOTH a labelled "Input ports:" and a labelled
+        # "Output ports:" section. Since #186 that pair is recognised as an
+        # AUTHORITATIVE COMPLETE port enumeration, and the additive synonym is
+        # then correctly suppressed — adding `rst_n` beside a documented N-port
+        # contract would be a phantom port that spec_conformance_check FAILs.
+        # Correct, and it leaves NO additive port and therefore no tri pull.
+        # MEASURED, one RTL, four doc/code cells:
+        #                labelled in+out            input-only
+        #   before #186  additive kept,  tri1=2     additive kept, tri1=2
+        #   with   #186  SUPPRESSED,     tri1=0     additive kept, tri1=2
+        # Dropping the "Output ports:" section makes the enumeration INCOMPLETE,
+        # which is exactly the state the additive path is for, and it no longer
+        # depends on the detector failing to recognise a complete one.
         "# counter — 8-bit up counter\n\n"
         "Input ports:\n    clk: clock input\n"
         "    resetn: active-low synchronous reset\n"
-        "Output ports:\n    cnt: 8-bit count value\n\n"
+        "\nThe module drives an 8-bit count output.\n\n"
         "On every rising edge of clk, if resetn is low the count clears to 0,\n"
         "otherwise it increments by 1.\n")
     (proj / "phase2" / "stage1" / "rtl" / "counter.v").write_text(
