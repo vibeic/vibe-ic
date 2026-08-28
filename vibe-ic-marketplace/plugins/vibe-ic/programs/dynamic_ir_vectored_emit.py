@@ -74,7 +74,9 @@ import subprocess
 import sys as _sys
 from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parent))
-import _watchdog as _wd            # noqa: E402  progress supervision
+import _docker_watchdog as _dw    # noqa: E402  the canonical supervised
+# `docker exec` primitive: identity-stamped reap, container-side ceiling, and
+# the IN-CONTAINER CPU probe this call site cannot do without (see `emit`).
 
 #: How long the openroad transient solve may be COMPLETELY IDLE — no CPU, no
 #: I/O, no log growth — before it is called wedged. NOT a bound on how long a
@@ -560,6 +562,32 @@ def _discover_via_res(tech_lef: Optional[Path]) -> Dict[str, float]:
     return out
 
 
+def _supervisor_note(err: str) -> str:
+    """The supervisor's own last line (`WATCHDOG_STALLED: ...`), for the payload
+    reason. Quoted rather than re-worded so the reason names what the watchdog
+    actually reported and cannot drift from it."""
+    for line in reversed((err or "").splitlines()):
+        if line.startswith("WATCHDOG_"):
+            return line.strip()
+    return "(no supervisor line)"
+
+
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 15
+                     ) -> Tuple[int, str, str]:
+    """Bounded, UNSUPERVISED `docker exec` — for the watchdog's OWN short
+    control-plane probes (identity-stamp read, CPU `ps`, TERM/KILL signal),
+    never for the openroad run itself. `_docker_watchdog.run_docker_supervised`
+    is the only caller; this is its injected `docker_exec_raw`."""
+    try:
+        cp = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
+                            capture_output=True, text=True, timeout=timeout)
+        return cp.returncode, cp.stdout or "", cp.stderr or ""
+    except subprocess.TimeoutExpired:
+        return 124, "", f"probe timed out after {timeout}s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 126, "", f"{type(exc).__name__}: {exc}"
+
+
 def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
          macro_lefs: List[Path], sdc: Optional[Path], out_json: Path,
          power_net: Optional[str], container: str, metal_prefix: str,
@@ -589,30 +617,48 @@ def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
     cmd = (f"export PATH={_TOOLS}/openroad/bin:{_TOOLS}/bin:$PATH && "
            f"openroad -no_init -exit {tcl_path} 2>&1 | "
            f"tee {out_json.parent}/dynamic_ir.log")
-    argv = ["docker", "exec", container, "bash", "-lc", cmd]
     try:
         # PROGRESS, NOT RUNTIME. A transient PSM solve on a large die is exactly
         # the honest long work a 1800 s cap murders, and relabelling that kill
         # NOT_MEASURED — which this file briefly did — left the solve just as
-        # dead. The tee'd log is watched for growth alongside CPU and I/O, so a
-        # solver that is emitting anything at all runs to completion.
-        res = _wd.run_host_supervised(
-            argv, stall_grace_s=_IR_STALL_GRACE_S,
+        # dead.
+        #
+        # AND THE PROGRESS MUST BE READ INSIDE THE CONTAINER (v1.12.29). This
+        # launch is a `docker exec`, so the host's /proc sees only the exec
+        # CLIENT: openroad runs under containerd-shim and is never a ppid-chain
+        # descendant of the client, so the client's CPU and I/O sit flat for the
+        # whole solve. Supervising this argv with `run_host_supervised` leaves
+        # exactly one live signal — growth of the tee'd log — and any run that
+        # buffers, or whose log is not on a shared mount, is then
+        # indistinguishable from a hang. `run_docker_supervised` reads the CPU
+        # of the job's process TREE inside the container, and reaps by identity
+        # stamp rather than by pattern.
+        grace = float(_IR_STALL_GRACE_S)
+        # `run_docker_supervised` does NOT derive its poll cadence from the
+        # grace the way `run_host_supervised` does; it defaults to a flat 30 s.
+        # Deriving it here keeps a declared grace actually observed. Sampling
+        # more often can only make a hang be NOTICED sooner — it can never kill
+        # a working job earlier — so this is an observation cadence, not a bound.
+        rc, out, err = _dw.run_docker_supervised(
+            container, cmd, tcl_path.name,
+            docker_exec_raw=_docker_exec_raw,
+            stall_grace_s=grace,
+            poll_s=max(0.25, min(_dw.DEFAULT_POLL_S, grace / 4.0)),
             log_path=out_json.parent / "dynamic_ir.log")
-        if res.outcome in ("stalled", "ceiling"):
+        if rc in (_dw.RC_STALLED, _dw.RC_CEILING):
             payload = {
                 "status": "ERROR_TOOL",
                 "dynamic_ir_report_emitted": False,
                 "reason": (f"the openroad transient run made no forward "
-                           f"progress — no CPU, no I/O, no log growth — for "
-                           f"{_IR_STALL_GRACE_S}s and was stopped after "
-                           f"{res.elapsed_s:.0f}s. openroad was WEDGED. That is "
-                           f"a measured fact about the tool, not a finding "
-                           f"about the design's IR drop.")}
+                           f"progress — no in-container CPU, no I/O, no log "
+                           f"growth — for {_IR_STALL_GRACE_S}s and was "
+                           f"stopped. openroad was WEDGED. That is a measured "
+                           f"fact about the tool, not a finding about the "
+                           f"design's IR drop. Supervisor said: "
+                           f"{_supervisor_note(err)}")}
             out_json.write_text(json.dumps(payload, indent=2) + "\n")
             return 1, payload
-        proc = _wd.completed_process(argv, res)
-        log = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        log = (out or "") + "\n" + (err or "")
     except (FileNotFoundError, OSError) as e:
         payload = {"status": "ERROR_TOOL", "dynamic_ir_report_emitted": False,
                    "reason": f"openroad run failed: {e}"}

@@ -201,28 +201,23 @@ def test_build_result_exceeds_static_vs_external_static():
 def _emit_on_log(tmp_path, log_text, static_json=None):
     """Run E.emit() with the openroad launch replaced by a canned PSM stdout.
 
-    The injection point is `_wd.run_host_supervised`, not `subprocess.run`:
-    `emit` no longer bounds openroad by RUNTIME — a transient PSM solve over a
-    large die is exactly the honest long work a 1800 s cap destroys — and now
-    launches it under progress supervision instead. Nothing these tests assert
-    has changed; they are about the V->mV conversion at the emit seam, and the
-    canned log is still the only input and the payload still the only output.
+    The injection point is `_dw.run_docker_supervised`, not `subprocess.run`
+    and not `_wd.run_host_supervised`: `emit` no longer bounds openroad by
+    RUNTIME — a transient PSM solve over a large die is exactly the honest long
+    work a 1800 s cap destroys — and it is a `docker exec`, so the progress it
+    is supervised by has to be read INSIDE the container (v1.12.29); the host
+    sees only the exec client. Nothing these tests assert has changed; they are
+    about the V->mV conversion at the emit seam, and the canned log is still the
+    only input and the payload still the only output.
     """
-    class _Res:
-        rc = 0
-        out = log_text
-        err = ""
-        outcome = "natural"
-        elapsed_s = 0.1
-
     def _fake_supervised(*_a, **_kw):
-        return _Res()
+        return 0, log_text, ""
 
     def_file = tmp_path / "routed.def"
     def_file.write_text("SPECIALNETS 1 ;\n    - VDD ( * VDD ) + USE POWER\nEND SPECIALNETS\n")
     out_json = tmp_path / "reports" / "dynamic_ir.json"
-    real_run = E._wd.run_host_supervised
-    E._wd.run_host_supervised = _fake_supervised
+    real_run = E._dw.run_docker_supervised
+    E._dw.run_docker_supervised = _fake_supervised
     try:
         rc, payload = E.emit(
             def_file=def_file, tech_lef=tmp_path / "t.lef",
@@ -231,7 +226,7 @@ def _emit_on_log(tmp_path, log_text, static_json=None):
             container="none", metal_prefix="Metal", static_json=static_json,
             budget_pct=15.0, period_ns=10.0, steps=100, decap_cap=None)
     finally:
-        E._wd.run_host_supervised = real_run
+        E._dw.run_docker_supervised = real_run
     return rc, payload
 
 
