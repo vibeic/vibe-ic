@@ -199,29 +199,57 @@ class TestDriftIsDetected:
     hand-typed total the page's masthead warns about.
     """
 
-    def test_check_fails_when_the_page_block_no_longer_matches(self, tmp_path):
-        reality = REALITY
-        report = json.loads(reality.read_text())
+    def test_drift_detection_is_reachable_when_the_program_may_publish(self):
+        """The drift arms still work — they are just no longer reachable here.
+
+        This used to drive `--check` through a page carrying an installed block
+        and assert rc 0, then edit one figure and assert rc 1. Both arms are
+        now unreachable on this tree, because `premise_refusal()` exits 2 before
+        `--check` is consulted at all: the shipped report describes a 63-step
+        flow against a 68-step one, and the block's populations are typed into
+        its own rendering strings.
+
+        Asserting rc 0 here would demand the program publish a block it has
+        measured itself unable to publish, so the assertion is moved to the
+        SPLICE/RENDER layer, which is what the drift arms actually exercised.
+        The end-to-end refusal is pinned in
+        `tools/tests/test_gen_flow_gate_d9_premise.py`.
+        """
+        report = json.loads(REALITY.read_text())
+        page = ("<style>\n</style>\n"
+                "<!-- END GENERATED SCORE -->\n</div>\n")
+        page = gen.install(page)
+        block = gen.render(report)
+        spliced = gen.splice(page, block)
+
+        # the clean arm: what is on the page is what render() produced
+        current = (gen.BEGIN + spliced.split(gen.BEGIN, 1)[1].split(gen.END)[0]
+                   + gen.END)
+        assert current.strip() == block.strip()
+
+        # the drift arm: one figure edited to flatter the headline no longer
+        # matches, which is the comparison `--check` performs
+        drifted = spliced.replace('<div class="n">31</div>',
+                                  '<div class="n">63</div>')
+        current_drifted = (gen.BEGIN
+                           + drifted.split(gen.BEGIN, 1)[1].split(gen.END)[0]
+                           + gen.END)
+        assert current_drifted.strip() != block.strip(), (
+            "a page edited to flatter the headline compared equal")
+
+    def test_check_refuses_before_it_ever_compares(self, tmp_path):
+        """And the reason it is unreachable is itself asserted, not assumed."""
         page = tmp_path / "p.html"
         page.write_text("<style>\n</style>\n"
                         "<!-- END GENERATED SCORE -->\n</div>\n")
-        page.write_text(gen.install(page.read_text()))
-        page.write_text(gen.splice(page.read_text(), gen.render(report)))
-
-        ok = subprocess.run(
+        before = page.read_bytes()
+        r = subprocess.run(
             [sys.executable, str(TOOLS / "gen_flow_gate_d9_section.py"),
-             "--reality", str(reality), "--page", str(page), "--check"],
+             "--reality", str(REALITY), "--page", str(page), "--check"],
             capture_output=True, text=True)
-        assert ok.returncode == 0, ok.stderr
-
-        page.write_text(page.read_text().replace(
-            '<div class="n">31</div>', '<div class="n">63</div>'))
-        drifted = subprocess.run(
-            [sys.executable, str(TOOLS / "gen_flow_gate_d9_section.py"),
-             "--reality", str(reality), "--page", str(page), "--check"],
-            capture_output=True, text=True)
-        assert drifted.returncode == 1, (
-            "a page edited to flatter the headline passed --check")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "CANNOT CHECK" in r.stderr
+        assert page.read_bytes() == before
 
 
 if __name__ == "__main__":

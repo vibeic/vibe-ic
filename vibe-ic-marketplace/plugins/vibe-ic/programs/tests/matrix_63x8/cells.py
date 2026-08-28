@@ -1,9 +1,19 @@
-"""matrix_63x8.cells — the 504-cell ledger.
+"""matrix_63x8.cells — the cell ledger.
 
-63 flow steps x 8 audit dimensions = 504 cells. Every cell must end up in
-exactly one of three machine-checkable states (ENFORCED / WAIVED / NA) — see
-``README.md``. This module only *enumerates* the cells and carries the 2026-07
-audit's finding as human-readable history. It decides nothing.
+`ALL_CELLS` = `flowref.step_ids()` x `DIMENSIONS`, both read live: 68 steps x 9
+dimensions = 612 cells today. This header used to state "63 flow steps x 8 audit
+dimensions = 504 cells" while the module below defined nine dimensions and
+enumerated 612 — a typed figure sitting three lines above the live constant that
+contradicted it, in the package whose whole subject is that a stated number must
+be derived. The count is not typed here any more; ask the constants.
+
+The package keeps its `63x8` spelling: it is the campaign's name, not a count,
+and `README.md` says so.
+
+Every cell must end up in exactly one of three machine-checkable states
+(ENFORCED / WAIVED / NA) — see ``README.md``. This module only *enumerates* the
+cells and carries the 2026-07 audit's finding as human-readable history. It
+decides nothing.
 
 ====================================================================
 WHERE THE 63 COME FROM — AND WHERE THEY DELIBERATELY DO NOT

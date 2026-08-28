@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""d9_flow_gate_reality.py — how many of the 63 D9 cells actually move today.
+"""d9_flow_gate_reality.py — how many D9 cells actually move today.
+
+THE CORPUS THIS NEEDS LEFT THE REPOSITORY. `benchmark-data/` was exported to
+its own repository at v1.10.56 (e23d0be5e, 2026-08-17), so this program refuses
+here and has no option that would point it elsewhere. The report it produced,
+`tools/d9_reality/d9_reality.json`, shipped on 2026-08-18 -- INTO a tree where
+the corpus was already gone. It has been un-regenerable since the day it
+landed, and its consumer `gen_flow_gate_d9_section.py` now refuses for reasons
+of its own; see that file.
+
+The headline used to read "the 63 D9 cells". The flow has 68 steps. The count
+is not written down here any more, because a population figure that nothing
+recomputes is the defect this whole campaign removes.
 
 WHAT THE NINTH DIMENSION ASKS
 =============================
@@ -714,7 +726,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     if not BENCH.is_dir():
-        print("benchmark-data/ not found", file=sys.stderr)
+        # SAY WHERE IT WENT. "not found" reads as a broken checkout and sends a
+        # reader looking for a missing directory. It is not missing: it was
+        # EXPORTED at v1.10.56 (e23d0be5e, 2026-08-17), and this program has no
+        # option that would point it at the new home. A refusal that does not
+        # say which of those two it means costs the next reader an hour.
+        print(f"CANNOT CHECK: {BENCH} is not present. `benchmark-data/` was "
+              f"exported to its own repository at v1.10.56 (e23d0be5e, "
+              f"2026-08-17); it is not a missing directory in a broken "
+              f"checkout. This program reads the corpus from that fixed path "
+              f"and has no option to point it elsewhere, so it cannot run in "
+              f"this repository at all. NOT a pass.", file=sys.stderr)
         return 2
 
     tracked = tracked_files(REPO)

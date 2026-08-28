@@ -16,15 +16,53 @@ generators do.
 
 WHAT IT REFUSES
 ---------------
-It refuses to publish D9 as a shipped dimension.  It is not one: nothing in
-``flow/phase1_phase2_phase3.yaml`` asks the ninth question, and the block says
-so in its first line.  MEASURED-TODAY and PLANNED are rendered in visibly
-different registers and never summed.
+It refuses to publish D9 as a shipped dimension.  MEASURED-TODAY and PLANNED are
+rendered in visibly different registers and never summed.
 
-It also refuses to render the plan's target as though it were measured.  The
-only ceiling figure it prints is the one this repo can DERIVE — the count of
-dark cells whose artefact ``benchmark-data/PUBLISHING.md`` excludes from the
-corpus by construction.
+WHY THIS PROGRAM NO LONGER RENDERS
+---------------------------------
+The block is pinned to a flow that no longer exists, in a way no refresh of its
+data corrects.
+
+  * THE REPORT DESCRIBES A 63-STEP FLOW.  The flow has 68.  Every figure in the
+    block is a fraction of a population that is gone.
+  * THE FIGURES ARE TYPED, NOT DERIVED.  ``63 步``, ``上面那 504 格``,
+    ``47 / 63``, ``25 / 63`` are string literals in the rendering below, not
+    functions of the report.  A regenerated 68-step report would still print
+    63.  This is the repository's own rule turned on this file: a published
+    digit must be derived, never typed.
+  * AND THE REPORT CANNOT BE REGENERATED HERE.  ``benchmark-data/`` was
+    exported to its own repository at v1.10.56 (e23d0be5e, 2026-08-17), so
+    ``d9_flow_gate_reality.py`` exits rc 2 and has no corpus-path option.  The
+    report landed 2026-08-18, INTO a tree where the corpus was already gone: it
+    was un-regenerable the day it shipped.
+
+Separately, the LABEL moved.  #1009 measured "is the output CORRECT".  The
+dimension that ships as D9 today is ``verdict_consumed`` -- does a step's own
+FAIL survive to the process exit code -- so a block headed "D9 不是一個已經
+出貨的維度" would now sit beside a section headed "The ninth question is
+shipped".  That is a reason not to PUBLISH under this label; it is not a
+finding that the block's question was answered.
+
+WHAT IS RETIRED IS THIS PROGRAM, NOT ITS FINDING
+------------------------------------------------
+The question #1009 asked -- can anything here catch a wrong OUTPUT -- is still
+open, and the published page re-measured it on 2026-08-28: two defects that
+keep every structure intact and only decide wrong move 0 of 612 cells.  Nothing
+below should be read as retiring that.  What is retired is a 63-step rendering
+with typed digits.
+
+A NOTE ON A GUARD THAT WAS WRONG
+--------------------------------
+The first version of ``premise_refusal()`` counted ``# D9`` comment lines in the
+flow yaml and read their presence as proof this program's premise was dead.  An
+adversarial review refuted it twice, and both refutations were reproduced:
+deleting four COMMENT lines -- changing no criterion, leaving the blocking
+``step_internal_fail_bubble_up_check`` in place -- flipped the guard back to
+"publish"; and those four comments were written by the D9 campaign itself
+(e71fb63ec, 71fb4e447), so the guard read the campaign's own remediation as
+proof the campaign was wrong.  It is recorded here because the replacement is
+narrower on purpose, and a future reader may otherwise re-add it.
 
 Usage:
     python3 tools/gen_flow_gate_d9_section.py --reality <d9_reality.json> \
@@ -33,6 +71,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import html
 import json
 import re
@@ -558,6 +597,123 @@ def splice(page: str, block: str) -> str:
     raise SystemExit("markers not found; use --install to place them first")
 
 
+_FLOW_REL = ("vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml")
+
+#: A population figure typed into a rendering string: a number immediately
+#: followed by the vocabulary this block uses for steps and cells.
+_TYPED_POPULATION_RE = re.compile(r"(\d{2,4})\s*(?:步|個步驟|格|steps?|cells?)")
+
+
+def _repo_root() -> Optional[Path]:
+    for anc in Path(__file__).resolve().parents:
+        if (anc / _FLOW_REL).is_file():
+            return anc
+    return None
+
+
+def flow_step_count(root: Path) -> int:
+    """Steps the flow declares — the population every D9 figure is a fraction of."""
+    import yaml                                   # local: keep import cost off
+    data = yaml.safe_load((root / _FLOW_REL).read_text(encoding="utf-8"))
+    return len([s for s in (data or {}).get("steps") or []
+                if s.get("id") is not None])
+
+
+def typed_populations() -> Dict[int, str]:
+    """Population figures this module TYPES into its own rendering strings.
+
+    `{figure: the string it sits in}`. Read out of THIS FILE's own string
+    constants by AST, so a comment or a docstring discussing a number is not
+    mistaken for the block printing one.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    docstrings = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body:
+            first = body[0]
+            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                docstrings.add(id(first.value))
+    found: Dict[int, str] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        if id(node) in docstrings:
+            continue
+        for m in _TYPED_POPULATION_RE.finditer(node.value):
+            found.setdefault(int(m.group(1)), m.group(0).strip())
+    return found
+
+
+def premise_refusal(rep: Dict, root: Optional[Path]) -> Optional[str]:
+    """Why this program must not render, or None if it may.
+
+    TWO GATES, and NEITHER is about whether the flow "asks the ninth question".
+    An earlier version of this guard counted `# D9` comment lines in the flow
+    yaml and read their presence as proof the premise was dead. That was wrong
+    twice, and an adversarial review caught both:
+
+      * it was a DOCUMENTATION check wearing a gate's clothes -- deleting four
+        comment lines, changing no criterion and leaving the blocking
+        `step_internal_fail_bubble_up_check` in place, flipped it back to
+        "publish"; and
+      * those four comments were written by the D9 campaign itself
+        (e71fb63ec "D9 Phase 1", 71fb4e447 "D9 Phase 2"), so the guard read the
+        campaign's own remediation as proof the campaign was wrong.
+
+    What is actually decisive is smaller and does not move:
+
+    (1) THE REPORT DESCRIBES ANOTHER FLOW. It says 63 steps; the flow has 68.
+        Every figure in the block is a fraction of a population that no longer
+        exists.
+
+    (2) THE BLOCK'S FIGURES ARE TYPED, NOT DERIVED. `63 步 x 第 9 個問題`,
+        `上面那 504 格`, `47 / 63`, `25 / 63` are string literals in the
+        rendering below. They are not functions of the report, so REFRESHING
+        THE REPORT DOES NOT CORRECT THEM -- a regenerated 68-step report would
+        still print 63. This is the repo's own rule, applied to this file: a
+        published digit must be derived, never typed.
+
+    And the refresh cannot happen anyway: `benchmark-data/` was exported to its
+    own repository at v1.10.56 (e23d0be5e, 2026-08-17), so
+    `d9_flow_gate_reality.py` exits rc 2 here and has no corpus-path option.
+    The report landed 2026-08-18, INTO a tree where the corpus was already
+    gone: it was un-regenerable the day it shipped.
+
+    WHAT IS RETIRED IS THIS PROGRAM, NOT ITS FINDING. The question #1009
+    measured -- can anything here catch a wrong OUTPUT -- is still open, and the
+    published page re-measured it on 2026-08-28: two defects that keep every
+    structure intact and only decide wrong move 0 of 612 cells. The finding
+    survives in a different register; only the 63-step rendering is retired.
+    """
+    typed = typed_populations()
+    if root is None:
+        return ("this program could not locate the flow its figures are a "
+                "fraction of, so it cannot tell whether they still describe it")
+
+    steps = flow_step_count(root)
+    reasons = []
+    if rep.get("steps") not in (None, steps):
+        reasons.append(
+            f"the report describes a {rep['steps']}-step flow and the flow has "
+            f"{steps} steps, so every figure in the block is a fraction of a "
+            f"population that no longer exists")
+
+    stale_typed = {n: s for n, s in typed.items() if n not in (steps, steps * 9)}
+    if stale_typed:
+        shown = ", ".join(f"{s!r}" for _, s in sorted(stale_typed.items())[:4])
+        reasons.append(
+            f"{len(stale_typed)} population figure(s) are TYPED into this "
+            f"module's own rendering strings rather than derived from the "
+            f"report ({shown}), so refreshing the report would not correct "
+            f"them: a regenerated {steps}-step report would still print them")
+
+    if not reasons:
+        return None
+    return "; and ".join(reasons)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--reality", required=True)
@@ -570,6 +726,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     rep = json.loads(Path(args.reality).read_text())
+
+    # BEFORE ANY RENDERING. A refusal that still emitted the fragment would let
+    # the next caller install what this one declined to publish.
+    refusal = premise_refusal(rep, _repo_root())
+    if refusal:
+        print(f"CANNOT CHECK: {refusal}. Nothing was rendered, emitted or "
+              f"written. NOT a pass -- and NOT an invitation to re-install the "
+              f"markers: reconnecting this block would publish a denial of what "
+              f"the page beside it asserts. See the module docstring.",
+              file=sys.stderr)
+        return 2
+
     block = render(rep)
 
     if args.emit:
@@ -582,13 +750,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     page = page_path.read_text()
 
     if args.install:
+        # `--check` MEANS WRITE NOTHING. Passing both used to install the CSS
+        # and the markers to disk and THEN take the --check branch and exit 1,
+        # so an operator reading a non-zero code as "nothing happened" was left
+        # with a modified page. A mode that writes and a mode that promises not
+        # to cannot be satisfied at once; the parser refuses instead of picking.
+        if args.check:
+            print("--install writes and --check promises not to; pass one. "
+                  "Nothing was written.", file=sys.stderr)
+            return 2
         page = install(page)
         page_path.write_text(page)
         print(f"installed CSS + markers into {page_path}")
 
     if args.check:
         if BEGIN not in page:
-            print("D9 block absent from page", file=sys.stderr)
+            # NOT "reconnect me". The markers are absent because the page
+            # replaced this block, CSS and all, with a section asserting the
+            # opposite; the guard above is what decides whether that was right.
+            print("D9 block absent from page — the page carries its own D9 "
+                  "section instead", file=sys.stderr)
             return 1
         current = BEGIN + page.split(BEGIN, 1)[1].split(END)[0] + END
         if current.strip() != block.strip():
