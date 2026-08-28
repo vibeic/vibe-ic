@@ -47,6 +47,7 @@ PROGRAMS = PLUGIN_ROOT / "programs"
 sys.path.insert(0, str(PROGRAMS))
 import _gate_invocation as _gi  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
+import _spawn_stub  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +80,16 @@ def _buckets_from_records(records):
         v, name, msg, ev = (r["verdict"], r["name"], r["message"],
                             r["evidence"])
         if v == "FAIL":
-            fails.append(f"FAIL: {name} timed out" if "timeout_s" in ev
-                         else f"FAIL: {name} — {msg}")
+            # Mirrors `_p0_fail_line_body`: a gate the umbrella KILLED gets a
+            # sentence it wrote itself, with no em-dash. Two kill keys —
+            # `stall_grace_s` today, `timeout_s` for records published when the
+            # bound was a fixed wall clock.
+            if "timeout_s" in ev:
+                fails.append(f"FAIL: {name} timed out")
+            elif "stall_grace_s" in ev:
+                fails.append(f"FAIL: {name} {msg}")
+            else:
+                fails.append(f"FAIL: {name} — {msg}")
         elif v == "NOT_INVOCABLE":
             skips.append(_gi.format_not_invocable_entry(name, msg))
         elif v == "SKIP":
@@ -238,10 +247,11 @@ def test_round_trip_covers_the_waived_shape(tmp_path, monkeypatch):
     proj = _project_with_rtl(tmp_path)
     monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES",
                         tuple(F._THIN_INPUT_WAIVER_GATES))
-    monkeypatch.setattr(
-        F.subprocess, "run",
-        lambda argv, **kw: types.SimpleNamespace(
-            returncode=1, stdout="some gate said this first\n", stderr=""))
+    # Anchored at the SPAWN (`subprocess.Popen`) rather than on
+    # `F.subprocess.run`, so the stub survives the umbrella's launch moving
+    # between helpers — see `_spawn_stub`.
+    _spawn_stub.stub_spawn(
+        monkeypatch, lambda _s: (1, "some gate said this first\n"))
 
     records: list = []
     passed, fails, skips, waivers = F._run_structural_rtl_gates(
@@ -259,14 +269,24 @@ def test_round_trip_covers_the_waived_shape(tmp_path, monkeypatch):
         fails, skips, [w["gate"] for w in waivers])
 
 
-def test_round_trip_covers_the_timeout_and_missing_program_shapes(
+def test_round_trip_covers_the_no_progress_and_missing_program_shapes(
         tmp_path, monkeypatch):
     """Two rarely-hit branches whose prose does NOT follow the common shape.
 
-    A timeout writes ``FAIL: <gate> timed out`` with no em-dash, and a registry
-    entry with no backing program writes a SKIP naming a file. Both are exactly
-    the sort of one-off line that a prefix scraper mangles; both must round
-    trip.
+    A gate that made no forward progress writes ``FAIL: <gate> made no forward
+    progress …`` with no em-dash, and a registry entry with no backing program
+    writes a SKIP naming a file. Both are exactly the sort of one-off line that
+    a prefix scraper mangles; both must round trip.
+
+    THIS BRANCH CHANGED SHAPE, and the test follows it rather than being
+    relaxed to accept either. The umbrella used to kill a gate on a fixed 60 s
+    WALL CLOCK and record ``FAIL: <gate> timed out`` — a claim about the clock,
+    written as a verdict about the design. It now bounds NO PROGRESS: a gate
+    still moving is never killed, and one whose whole process tree is flat is
+    killed and still FAILs, with a reason that says what was observed. So the
+    stimulus is a stalled `SupervisedResult` — the shipped type, from the
+    shipped module — and not a `TimeoutExpired` that this code can no longer
+    raise.
     """
     monkeypatch.setenv("VIBE_IC_COMPLIANCE_WORKERS", "1")
     proj = _project_with_rtl(tmp_path)
@@ -275,10 +295,13 @@ def test_round_trip_covers_the_timeout_and_missing_program_shapes(
     real_gate = F._STRUCTURAL_RTL_GATES[0]
     monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES", (real_gate, phantom))
 
-    def _boom(argv, **kw):
-        raise F.subprocess.TimeoutExpired(argv, 60)
+    import _watchdog as _wd
 
-    monkeypatch.setattr(F.subprocess, "run", _boom)
+    def _stalled(cmd, **kw):
+        return _wd.SupervisedResult(_wd.RC_STALLED, "", "WATCHDOG_STALLED",
+                                    "stalled", 61.0)
+
+    monkeypatch.setattr(F._watchdog, "run_host_supervised", _stalled)
 
     records: list = []
     passed, fails, skips, waivers = F._run_structural_rtl_gates(

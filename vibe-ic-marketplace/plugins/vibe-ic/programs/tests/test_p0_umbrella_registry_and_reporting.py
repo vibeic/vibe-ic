@@ -46,7 +46,8 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _p0_umbrella_probe_flow as _probe  # noqa: E402
 import benchmark_verify_report as _bvr  # noqa: E402
-import flow_compliance_check as _flow  # noqa: E402
+import flow_compliance_check as _flow
+import _spawn_stub  # noqa: E402
 
 
 def _project_with_rtl(tmp_path: Path) -> Path:
@@ -58,12 +59,17 @@ def _project_with_rtl(tmp_path: Path) -> Path:
 
 
 def _stub_subprocess(monkeypatch, dispatched: list, rc: int = 0):
-    """Record every gate the umbrella actually spawns; return `rc` for each."""
-    def _fake_run(argv, **_kw):
-        dispatched.append(Path(argv[1]).stem)
-        return types.SimpleNamespace(returncode=rc, stdout="", stderr="")
+    """Record every gate the umbrella actually spawns; return `rc` for each.
 
-    monkeypatch.setattr(_flow.subprocess, "run", _fake_run)
+    Anchored on `subprocess.Popen` via `_spawn_stub`, NOT on
+    `_flow.subprocess.run`. The old form bound this to whichever helper the
+    umbrella called that day: when the P0 launch moved to
+    `_watchdog.run_host_supervised`, the gates still ran and this stub went
+    blind, reddening both tests below with no change in the behaviour they
+    assert. See `_spawn_stub` for the mechanism and
+    `test_matrix_d1_wiring.py` for the falsification legs.
+    """
+    _spawn_stub.stub_spawn(monkeypatch, lambda _stem: (rc, ""), dispatched)
 
 
 # ---------------------------------------------------------------------------

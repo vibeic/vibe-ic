@@ -46,6 +46,7 @@ PROGRAMS = PLUGIN_ROOT / "programs"
 sys.path.insert(0, str(PROGRAMS))
 import _gate_invocation as GI  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
+import _spawn_stub  # noqa: E402
 
 
 def _project_with_rtl(tmp_path: Path) -> Path:
@@ -236,11 +237,9 @@ def test_the_real_waiver_shapes_round_trip(tmp_path, monkeypatch):
     proj = _project_with_rtl(tmp_path)
     monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES",
                         tuple(F._THIN_INPUT_WAIVER_GATES))
-    monkeypatch.setattr(
-        F.subprocess, "run",
-        lambda argv, **kw: type("R", (), {"returncode": 1,
-                                          "stdout": "gate first line\n",
-                                          "stderr": ""})())
+    # Anchored at the SPAWN (`subprocess.Popen`), so this keeps working
+    # whichever helper the umbrella launches through — see `_spawn_stub`.
+    _spawn_stub.stub_spawn(monkeypatch, lambda _s: (1, "gate first line\n"))
     records: list = []
     _passed, _fails, _skips, waivers = F._run_structural_rtl_gates(
         proj, allow_thin_input=True, records_out=records)

@@ -6876,13 +6876,20 @@ def _p0_fail_line_body(record: Dict[str, Any]) -> str:
     written by the umbrella and re-derived by a scrape; now they are the same
     string from the same function.
 
-    The timeout branch is the one FAIL whose prose is a whole sentence the
-    umbrella wrote itself (``<gate> timed out``) rather than the callee's first
-    output line after an em-dash, and ``timeout_s`` in the evidence is the
-    machine-readable fact that says so.
+    The killed-gate branch is the one FAIL whose prose is a whole sentence the
+    umbrella wrote itself rather than the callee's first output line after an
+    em-dash, and a kill key in the evidence is the machine-readable fact that
+    says so. There are two, and BOTH are honoured: ``stall_grace_s`` is what
+    the umbrella writes today (it bounds NO PROGRESS), ``timeout_s`` is what it
+    wrote when the bound was a fixed wall clock. The old key is kept because a
+    record is a PUBLISHED artefact — a report emitted before that change still
+    has to render, and dropping the key would silently re-render those FAILs
+    with an em-dash they never had.
     """
     if "timeout_s" in record["evidence"]:
         return f"{record['name']} timed out"
+    if "stall_grace_s" in record["evidence"]:
+        return f"{record['name']} {record['message']}"
     return f"{record['name']} — {record['message']}"
 
 
@@ -7384,8 +7391,9 @@ def _run_structural_rtl_gates(project: Path,
             # is a claim about the GATE; "timed out" was a claim about the clock.
             return _p0_gate_record(
                 gate_name, "FAIL",
-                "made no forward progress (output, CPU and I/O all flat) — "
-                "killed as hung; this is NOT a statement that the gate was slow",
+                "made no forward progress: output, CPU and I/O were all flat, "
+                "so it was killed as hung. This is NOT a statement that the "
+                "gate was too slow",
                 {"stall_grace_s": _P0_GATE_STALL_GRACE_S,
                  "elapsed_s": round(res.elapsed_s, 1)})
         r = _watchdog.completed_process(argv, res)
