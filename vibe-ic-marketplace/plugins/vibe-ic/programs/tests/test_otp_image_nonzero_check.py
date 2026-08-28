@@ -8,9 +8,11 @@ The gate must distinguish:
 """
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAM = Path(__file__).resolve().parent.parent / "otp_image_nonzero_check.py"
 
@@ -37,8 +39,8 @@ def _scaffold(tmp_path: Path, layout: bool, image_bytes: bytes | None) -> Path:
 
 
 def _run(proj: Path) -> tuple[int, str]:
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj)],
+                        capture_output=True, text=True)
     return cp.returncode, cp.stdout + cp.stderr
 
 

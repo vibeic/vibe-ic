@@ -59,6 +59,9 @@ import waivers_schema_check as wsc  # noqa: E402
 
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 FCC = PROGRAMS / "flow_compliance_check.py"
 WSC = PROGRAMS / "waivers_schema_check.py"
 
@@ -372,9 +375,9 @@ def test_a_run_with_uncorroborated_evidence_still_produces_a_report(tmp_path):
     the waived step is present as WAIVED, and the disclosure is in it."""
     project = _project(tmp_path, _attestation())
     out = tmp_path / "report.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(FCC), str(project), "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert out.is_file(), (
         "no report at all — the #519 failure mode\n" + r.stdout + r.stderr)
     report = json.loads(out.read_text())
@@ -394,8 +397,8 @@ def test_incomplete_waiver_still_gets_its_216_advisory(tmp_path):
     displace it, and must not fire for a waiver that was never honoured."""
     project = _project(tmp_path, _attestation(evidence=[]))
     out = tmp_path / "report.json"
-    subprocess.run([sys.executable, str(FCC), str(project), "--json",
-                    str(out)], capture_output=True, text=True, timeout=60)
+    _pr.run([sys.executable, str(FCC), str(project), "--json",
+                    str(out)], capture_output=True, text=True)
     assert out.is_file(), "no report at all — the #519 failure mode"
     advisories = json.loads(out.read_text()).get("advisories") or []
 

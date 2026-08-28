@@ -60,6 +60,9 @@ from not_verified_tier import (   # noqa: E402
     skip_not_verified,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 UNITS = 1000
@@ -1734,8 +1737,8 @@ def test_the_placer_agrees_with_the_orientation_constants(tmp_path):
         tlef=tlefs[0], iolefs=f"{iolefs[0]}/*.lef", defp=defp,
         corner=corner, pad=pad))
 
-    r = subprocess.run(["openroad", "-no_init", "-exit", str(tcl)],
-                       capture_output=True, text=True, timeout=600)
+    r = _pr.run(["openroad", "-no_init", "-exit", str(tcl)],
+                       capture_output=True, text=True)
     got = {}
     for ln in r.stdout.splitlines():
         f = ln.split()
@@ -2123,8 +2126,8 @@ def _measure_placer_orientations(lib, work: Path, rot: str):
     tp.write_text(_PLACER_TCL.format(
         def_path=dp, offset=int(lib["corner_w"] / 10) or 1,
         loc=int(side / 2000 / 2), rot=rot, **lib))
-    run = subprocess.run(["openroad", "-no_init", "-exit", str(tp)],
-                         capture_output=True, text=True, timeout=900)
+    run = _pr.run(["openroad", "-no_init", "-exit", str(tp)],
+                         capture_output=True, text=True)
     got, die = {}, None
     for ln in run.stdout.splitlines():
         f = ln.split()

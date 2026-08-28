@@ -41,12 +41,14 @@ from __future__ import annotations
 
 import json
 import struct
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -138,8 +140,8 @@ def _project(tmp_path: Path, block: str = "blk1", *, gds: bytes = None,
 
 
 def _run(prog: Path, project: Path, *extra):
-    return subprocess.run([sys.executable, str(prog), str(project), *extra],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(prog), str(project), *extra],
+                          capture_output=True, text=True)
 
 
 # ── the wiring (a declaration is not an implementation) ─────────────────────

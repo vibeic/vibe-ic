@@ -31,23 +31,19 @@ code included. A test that re-states the rule in Python proves the re-statement.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = Path(__file__).resolve().parent.parent / "waiver_growth_check.py"
-
-#: Every subprocess in this file is bounded. A gate that hangs must fail the
-#: suite, not stall it.
-_TIMEOUT_S = 60
-
 
 def _run(project: Path):
     """``(returncode, report)`` from one real invocation of the gate."""
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(PROG), str(project), "--json"],
-        capture_output=True, text=True, timeout=_TIMEOUT_S,
-    )
+        capture_output=True, text=True)
     return proc.returncode, json.loads(proc.stdout)
 
 

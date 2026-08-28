@@ -8,7 +8,6 @@ Covers the SKILL.md A4 thresholds (skills/analog-output-verify/SKILL.md):
 Plus the no-false-alert / graceful-degrade contract.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +16,9 @@ import pytest
 PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
 import analog_corner_margin_check as mod  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ───────────────────────── fixtures ─────────────────────────
@@ -72,10 +74,10 @@ def _full_pvt(margin_pct=12.0):
 
 
 def run_cli(proj):
-    res = subprocess.run(
+    res = _pr.run(
         [sys.executable, str(PROG_DIR / "analog_corner_margin_check.py"),
          str(proj)],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
     return res
 
 
@@ -239,10 +241,10 @@ class TestGracefulDegrade:
 
     def test_not_a_directory_exits_2(self, tmp_path):
         bogus = tmp_path / "nope"
-        res = subprocess.run(
+        res = _pr.run(
             [sys.executable,
              str(PROG_DIR / "analog_corner_margin_check.py"), str(bogus)],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         assert res.returncode == 2
 
 
@@ -252,11 +254,11 @@ class TestJsonOutput:
     def test_json_report_written(self, tmp_path):
         proj = _write_corners(tmp_path, _full_pvt(12.0))
         out = tmp_path / "report.json"
-        res = subprocess.run(
+        res = _pr.run(
             [sys.executable,
              str(PROG_DIR / "analog_corner_margin_check.py"),
              str(proj), "--json", str(out)],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         assert res.returncode == 0
         report = json.loads(out.read_text())
         assert report["program"] == "analog_corner_margin_check"

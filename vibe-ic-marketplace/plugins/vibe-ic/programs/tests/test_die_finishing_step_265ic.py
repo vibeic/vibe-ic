@@ -32,7 +32,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -46,6 +45,9 @@ if str(_PROGRAMS) not in sys.path:
 import _klayout_launch as KL                                  # noqa: E402
 import die_finishing_check as DFC                             # noqa: E402
 import die_finishing_gen as DFG                               # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PLUGIN = _PROGRAMS.parent
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
@@ -215,8 +217,8 @@ class _LocalRunner:
     def run_argv(self, argv, env, timeout=1800):
         full = dict(os.environ)
         full.update({k: str(v) for k, v in env.items()})
-        cp = subprocess.run([str(a) for a in argv], capture_output=True,
-                            text=True, env=full, timeout=timeout)
+        cp = _pr.run([str(a) for a in argv], capture_output=True,
+                            text=True, env=full)
         return cp.returncode, cp.stdout, cp.stderr
 
     def run(self, script, env, path_keys=(), timeout=1800):

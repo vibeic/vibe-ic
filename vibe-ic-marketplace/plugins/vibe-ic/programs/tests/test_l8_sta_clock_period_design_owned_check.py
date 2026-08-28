@@ -11,11 +11,13 @@ names, invented frequencies. No real design's files are copied.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 GATE = PROGRAMS / "l8_sta_clock_period_design_owned_check.py"
@@ -66,9 +68,9 @@ WELLFORMED_L8 = {
 
 
 def _run(project: Path):
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(GATE), str(project)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
@@ -246,9 +248,9 @@ def test_gate_reuses_the_consumers_own_resolver():
 def test_json_report_is_written(tmp_path):
     project = _build(tmp_path, GUTTED_L8)
     out_json = tmp_path / "rep.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(GATE), str(project), "--json", str(out_json)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert proc.returncode == 1
     doc = json.loads(out_json.read_text())
     assert doc["verdict"] == "FAIL"

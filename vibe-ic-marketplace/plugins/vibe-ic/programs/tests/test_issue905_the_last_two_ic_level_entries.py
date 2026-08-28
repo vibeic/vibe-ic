@@ -83,7 +83,6 @@ nothing here is a detection input.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -96,6 +95,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_matrix_d3_outputs_produced as D3  # noqa: E402
 from _published_corpus import (  # noqa: E402
     SKIP_REASON, corpus_root, needs_corpus)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: The IC-level tree #905 reports, and the published cell beside it.
 _IC_LABEL = "benchmark-data/ic/u_hawaii_adc"
@@ -185,9 +187,9 @@ def _run_gate(gate: str, project: Path):
     # MEASURED before lowering, not assumed safe: the whole file runs in 0.71s
     # (`pytest --durations`, slowest call 0.15s), so 60s is ~85x the observed
     # worst case for this file and ~400x this call's share of it.
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROGRAMS / gate), str(project)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 
 

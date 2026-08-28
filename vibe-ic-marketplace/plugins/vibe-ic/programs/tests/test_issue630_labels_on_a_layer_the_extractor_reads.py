@@ -44,6 +44,11 @@ import importlib
 import os
 import pathlib
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 R = importlib.import_module("def_gds_port_power_restore")
 C = importlib.import_module("gds_port_label_check")
 G = importlib.import_module("gds_substance_check")
@@ -251,7 +256,6 @@ def test_the_gate_still_does_not_FAIL_on_an_off_layer_label():
 
     Driven on a real shipped GDS with a real PDK tech, because a synthetic
     fixture would prove only the fixture."""
-    import subprocess
     import sys as _sys
     # Derived from this file's own location, NOT typed. The docstring at the
     # top of `_TECH` says a shipped test naming one user's home cannot run
@@ -277,10 +281,10 @@ def test_the_gate_still_does_not_FAIL_on_an_off_layer_label():
         pytest.skip("needs a real shipped subservient GDS (untracked) and a PDK "
                     "tech; absent here, so there is no accept case to drive")
     out = pathlib.Path("/tmp") / "t630_gate.json"
-    r = subprocess.run(
+    r = _pr.run(
         [_sys.executable, str(_PROGRAMS / "gds_port_label_check.py"), str(base),
          "--pdk-tech", str(tech), "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     import json
     rep = json.loads(out.read_text())
     f = rep["files"][0]

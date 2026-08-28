@@ -54,11 +54,13 @@ committed in the benchmark corpus.
 """
 import importlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 mod = importlib.import_module("phase1_doc_one_shot_runner")
 pp = importlib.import_module("phase1_post_process")
@@ -87,9 +89,9 @@ def _run_cov_gate(tmp_path, l3_doc):
     (gd / "L3_CMD_PROTOCOL.json").write_text(
         json.dumps(l3_doc, ensure_ascii=False), encoding="utf-8")
     out = proj / "verdict.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(COV_GATE), str(proj), "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return cp.returncode, json.loads(out.read_text())
 
 

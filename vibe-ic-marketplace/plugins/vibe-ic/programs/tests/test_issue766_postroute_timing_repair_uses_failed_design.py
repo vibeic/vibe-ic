@@ -17,7 +17,6 @@ them assert on this file's own source text.
 """
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +27,9 @@ sys.path.insert(0, str(PROGRAMS))
 
 import phase3_one_shot_runner as p3  # noqa: E402
 import postroute_timing_repair_audit  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 TOP = "subservient"
@@ -259,8 +261,10 @@ def test_the_emitted_deck_parses_and_evaluates_in_a_real_tclsh(tmp_path,
     script.write_text('proc unknown {args} { return "" }\n'
                       + _repair_deck(proj)
                       + '\nputs "REPAIR_TCL_END"\n')
-    res = subprocess.run(["tclsh", str(script)], capture_output=True,
-                         text=True, timeout=60)
+    # UNION: this lane's unbounded `_pr.run` (60 s was recording a slow host as a
+    # defect in tclsh) with MAIN's post-v1.12.20 names -- the branch predates the
+    # rename that reserved "ECO" for physical changes.
+    res = _pr.run(["tclsh", str(script)], capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
     assert "REPAIR_TCL_END" in res.stdout
 

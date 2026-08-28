@@ -25,7 +25,6 @@ backticked children, with NO prose-word leak.
 chip-AGNOSTIC: backtick grammar + identifier legality; no chip/vendor literal.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -35,6 +34,9 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase1_doc_one_shot_runner as R  # noqa: E402
 from _hostpaths import require_corpus  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── helper units ─────────────────────────────────────────────────────────────
@@ -87,8 +89,8 @@ def test_end_to_end_exact_submodules_no_prose_leak(tmp_path):
     (proj / "input" / "docs" / "L2_architecture.md").write_text(_L2)
     (proj / "input" / "docs" / "L8_submodule_integration.md").write_text(_L8)
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
-    r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(runner), str(proj)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
     l9 = list((proj / "phase1" / "generated_docs").glob("L9*.json"))[0]
     names = {s.get("name") for s in json.loads(l9.read_text()).get(
@@ -111,8 +113,8 @@ def test_real_caravel_round3_artifact_if_present():
     (tmp / "input").mkdir(parents=True)
     shutil.copytree(base, tmp / "input" / "docs")
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
-    r = subprocess.run([sys.executable, str(runner), str(tmp)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(runner), str(tmp)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
     l9 = list((tmp / "phase1" / "generated_docs").glob("L9*.json"))[0]
     names = {s.get("name") for s in json.loads(l9.read_text()).get(

@@ -19,6 +19,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = Path(__file__).resolve().parent.parent / "doc_table_row_placement_check.py"
 #: .../<repo>/vibe-ic-marketplace/plugins/vibe-ic/programs/tests/<this file>
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -50,8 +53,8 @@ def _doc(tmp_path: Path, text: str, name: str = "d.md") -> Path:
 
 
 def _run(*args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROG), *[str(a) for a in args]],
-                          capture_output=True, text=True, timeout=600)
+    return _pr.run([sys.executable, str(PROG), *[str(a) for a in args]],
+                          capture_output=True, text=True)
 
 
 # ── the honest case ──────────────────────────────────────────────────────────
@@ -153,10 +156,9 @@ def test_reverting_the_delimiter_rule_lets_the_fragment_pass(tmp_path):
     mutant.write_text(mutant_body, encoding="utf-8")
 
     import os
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(mutant), str(bad)],
-        capture_output=True, text=True, timeout=120,
-        env={**os.environ, "PYTHONPATH": str(PROG.parent)})
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(PROG.parent)})
     assert r.returncode == RC_PASS, (
         "the mutant still refused, so the refusal does not come from the "
         "delimiter rule:\n" + r.stdout + r.stderr)

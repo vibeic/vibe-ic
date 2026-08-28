@@ -33,11 +33,13 @@ these tests exist to close, one level up.
 import importlib.util
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
@@ -212,8 +214,8 @@ def test_the_wiring_gates_state_their_denominator_on_a_clean_run(prog, args, nee
     #: MEASURED, 3 runs each on a loaded host: `gate_is_wired_check` 14.3-14.7s,
     #: `checker_execution_wiring_audit` 18.9-20.3s. 55s is ~2.7x the slowest
     #: observed and still inside the ceiling.
-    p = subprocess.run([sys.executable, str(_PROGRAMS / prog), *args],
-                       capture_output=True, text=True, timeout=55)
+    p = _pr.run([sys.executable, str(_PROGRAMS / prog), *args],
+                       capture_output=True, text=True)
     out = p.stdout + p.stderr
     assert needle in out, out[:600]
     assert re.search(r"\d", out), out[:600]

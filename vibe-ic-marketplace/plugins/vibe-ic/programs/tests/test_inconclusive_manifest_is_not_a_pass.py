@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import ast
 import json
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 VERIFY = PROGRAMS / "mcp_execution_verify.py"
@@ -40,17 +42,17 @@ def _manifest(tmp_path: Path, entries: list) -> Path:
 
 
 def _verify(manifest: Path, steps: str):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(VERIFY), "--manifest", str(manifest),
          "--require-steps", steps],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True)
     return r.returncode, json.loads(r.stdout)
 
 
 def _attest(manifest: Path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(ATTEST), "--manifest", str(manifest)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 

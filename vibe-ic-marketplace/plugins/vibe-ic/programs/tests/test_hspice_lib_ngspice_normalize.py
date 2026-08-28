@@ -28,6 +28,10 @@ from pathlib import Path
 
 import pytest
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = (Path(__file__).resolve().parent.parent
         / "hspice_lib_ngspice_normalize.py")
 
@@ -216,10 +220,10 @@ def _verbatim_container():
         except Exception:
             continue
         # ngspice present?
-        probe = subprocess.run(
+        probe = _pr.run(
             ["docker", "exec", name, "bash", "-lc",
              "command -v ngspice || ls /foss/tools/*/bin/ngspice 2>/dev/null "
-             "| head -1"], capture_output=True, text=True, timeout=60)
+             "| head -1"], capture_output=True, text=True)
         ng = ""
         for line in (probe.stdout or "").splitlines():
             line = line.strip()
@@ -259,10 +263,10 @@ def test_ngspice_fail_to_pass_incontainer(tmp_path):
             ".control\nop\nprint v(a)\n.endc\n.end\n")
 
         def _run(sp):
-            cp = subprocess.run(
+            cp = _pr.run(
                 ["docker", "exec", container, "bash", "-lc",
                  f"{ngspice} -b {sp} 2>&1; echo RC=$?"],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True)
             out = cp.stdout
             rc = 999
             for line in out.splitlines():

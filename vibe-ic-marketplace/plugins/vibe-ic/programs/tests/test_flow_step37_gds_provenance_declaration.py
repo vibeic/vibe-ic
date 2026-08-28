@@ -54,7 +54,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -70,6 +69,9 @@ for _p in (str(_PROGRAMS), str(_PLUGIN)):
 
 import flow_compliance_check as _fcc                       # noqa: E402
 import phase3_one_shot_runner as _runner                   # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 _COARSE = "provenance_check . --require-entries 1"
@@ -344,9 +346,9 @@ def test_guard_coarse_mode_remains_a_public_api(tmp_path):
     project.mkdir()
     (project / "provenance.jsonl").write_text(json.dumps(
         {"tool": "yosys", "exit_code": 0, "outputs": {}}) + "\n")
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / "provenance_check.py"), str(project),
-         "--require-entries", "1"], capture_output=True, text=True, timeout=60)
+         "--require-entries", "1"], capture_output=True, text=True)
     assert cp.returncode == 0, cp.stdout + cp.stderr
     assert "exit-0 entries OK" in cp.stdout
 

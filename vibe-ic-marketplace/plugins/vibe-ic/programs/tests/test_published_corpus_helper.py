@@ -32,6 +32,9 @@ sys.path.insert(0, str(_HERE))
 
 import _published_corpus as C  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 def _cell(root: Path, design: str = "d", ver: str = "v1.0.0_pdk") -> Path:
     """The minimum thing PUBLISHING.md calls a published cell."""
@@ -55,8 +58,8 @@ def _in_subprocess(env_value, body: str) -> subprocess.CompletedProcess:
         env.pop(C.CORPUS_ENV, None)
     else:
         env[C.CORPUS_ENV] = str(env_value)
-    return subprocess.run([sys.executable, "-c", prog], capture_output=True,
-                          text=True, timeout=60, env=env)
+    return _pr.run([sys.executable, "-c", prog], capture_output=True,
+                          text=True, env=env)
 
 
 # ══════════════════════════════════════════════════════════════════════

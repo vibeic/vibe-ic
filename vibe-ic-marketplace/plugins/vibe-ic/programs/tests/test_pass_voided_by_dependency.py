@@ -7,12 +7,14 @@ table showed the weaker one.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
 CHECK = Path(__file__).resolve().parent.parent / "flow_compliance_check.py"
 import flow_step_execution_coverage_check as cov  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _report(statuses):
@@ -48,8 +50,8 @@ def test_the_transitive_case_is_a_violation_too():
 # ---- the write-back itself, exercised through the shipped entry point --------
 
 def _run(project: Path):
-    p = subprocess.run([sys.executable, str(CHECK), str(project)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(CHECK), str(project)],
+                       capture_output=True, text=True)
     return p.stdout + p.stderr
 
 
@@ -126,9 +128,9 @@ def _run_probe(tmp_path: Path) -> str:
     # <=60s: the targeted-subset harness dies at 180s, so an inner bound above
     # the ceiling kills the SESSION instead of the test. This probe drives a
     # four-step synthetic flow over a one-file project; measured ~0.5s.
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(CHECK), str(project), "--flow-def", str(flow)],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     return p.stdout + p.stderr
 
 

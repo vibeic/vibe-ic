@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import importlib
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -31,18 +33,6 @@ if str(_PROGRAMS) not in sys.path:
 
 _FCC_PATH = _PROGRAMS / "flow_compliance_check.py"
 
-
-#: Bound for the blocking call below. Derived, not chosen:
-#: `ci_harness_timeout_ceiling_check` resolves the pytest harness bound from
-#: tools/gatekeeper-land.sh:197 (`--timeout=180 --timeout-method=thread`) and
-#: permits one blocking call at most 180 // 3 = 60 s; above that the inner
-#: bound can never fire, because pytest ends the SESSION first and every
-#: other file in the subset loses its verdict. The landed value was 600.
-#: MEASURED on this tree with `pytest --durations=0`: the whole test — this
-#: subprocess included — costs 0.35 s, so 60 s is 170x headroom and is a hang
-#: detector for a hung `flow_compliance_check`, the only way it fails to
-#: return.
-_CEILING_S = 60
 
 def _empty_project(root: Path) -> Path:
     (root / "input" / "docs").mkdir(parents=True)
@@ -59,9 +49,9 @@ def test_a_real_run_publishes_the_guard_verdict_and_it_is_clean(tmp_path):
     """
     proj = _empty_project(tmp_path / "proj")
     out = tmp_path / "report.json"
-    subprocess.run([sys.executable, str(_FCC_PATH), str(proj),
+    _pr.run([sys.executable, str(_FCC_PATH), str(proj),
                     "--json", str(out)],
-                   capture_output=True, text=True, timeout=_CEILING_S)
+                   capture_output=True, text=True)
     doc = json.loads(out.read_text())
     assert doc["blockers"], "no blocker list was produced; the guard saw nothing"
     assert "blocker_contract_violations" in doc, (

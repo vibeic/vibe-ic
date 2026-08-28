@@ -44,6 +44,10 @@ sys.path.insert(0, _PROGRAMS)
 import gshare_predictor_synth as G   # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 # Authoritative dataset (host-score gate). Tests that need it SKIP cleanly when the
 # external benchmark tree or iverilog is absent (keeps CI green off the lab host).
 _DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
@@ -71,7 +75,7 @@ def _host_score(dut_sv: str):
         c = subprocess.run(["iverilog", "-g2012", "-o", vvp, dut, _REF, _TB],
                            capture_output=True, text=True)
         assert c.returncode == 0, f"iverilog failed: {c.stderr}\n{dut_sv}"
-        r = subprocess.run(["vvp", vvp], capture_output=True, text=True, timeout=60)
+        r = _pr.run(["vvp", vvp], capture_output=True, text=True)
         out = r.stdout
         import re
         m = re.search(r"Total mismatched samples is (\d+)", out)

@@ -33,13 +33,14 @@ chip-AGNOSTIC: IEEE 1364 / 1800 reserved words and English tokens only.  No
 chip, vendor, PDK or IC-name literal participates.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import phase1_doc_one_shot_runner as R  # noqa: E402
+
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _RUNNER = _PROGRAMS / "phase1_one_shot_runner.py"
@@ -88,10 +89,10 @@ def _emitted_submodule_names(tmp_path: Path, keyword: str = "signed"):
     # fires and fails the test rather than the harness killing the session.
     # Measured: this Phase-1 invocation returns in ~1-3s, so the bound is
     # ~20x headroom, not a tight fit.
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_RUNNER), str(tmp_path), "--ic-name",
          "widget_core"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     l9 = tmp_path / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json"
     assert l9.is_file(), (
         "Phase 1 emitted no L9 (rc=%s)\n%s" % (proc.returncode, proc.stdout[-3000:]))

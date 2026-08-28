@@ -22,7 +22,6 @@ token yields none (never an illegal id); no emitted name contains `/`.
 
 chip-AGNOSTIC: pure `/`-split + identifier-legality; no chip/vendor/SKU literal.
 """
-import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +33,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import phase1_doc_one_shot_runner as R  # noqa: E402
 from _hostpaths import require_corpus  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _gfm(doc):
@@ -132,8 +134,8 @@ def test_end_to_end_final_l9_emits_two_legal_rails(tmp_path):
     (proj / "input" / "docs").mkdir(parents=True)
     (proj / "input" / "docs" / "L3_external_interface.md").write_text(_TINY_L3)
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
-    r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(runner), str(proj)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
     names = _final_l9_names(proj)
     lower = {n.lower() for n in names}

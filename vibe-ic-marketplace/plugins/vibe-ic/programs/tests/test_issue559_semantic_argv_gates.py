@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
@@ -63,14 +66,14 @@ def test_gate_still_rejects_the_umbrella_argv(gate):
     """
     path = _PROGRAMS / f"{gate}.py"
     assert path.exists(), f"{path} does not exist"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(path), "--rtl-dir", "/tmp"],
         capture_output=True, text=True,
         # 30s, not the 120s this started at: an inner bound that can
         # outlive the 180s harness kills the SESSION instead of failing the
         # test. Measured cost of these four rejections is 0.03-0.04s, so
         # 30s is still three orders of magnitude of headroom.
-        timeout=30)
+        )
     assert proc.returncode == 2 and "usage:" in (proc.stderr or ""), (
         f"{gate} no longer rejects the umbrella's argv "
         f"(rc={proc.returncode}); if it gained a default for its "
@@ -81,14 +84,14 @@ def test_gate_still_rejects_the_umbrella_argv(gate):
 @pytest.mark.parametrize("gate", sorted(REGISTER))
 def test_recorded_required_flags_match_what_argparse_asks_for(gate):
     """`requires` is checked against the program, not trusted as prose."""
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROGRAMS / f"{gate}.py"), "--rtl-dir", "/tmp"],
         capture_output=True, text=True,
         # 30s, not the 120s this started at: an inner bound that can
         # outlive the 180s harness kills the SESSION instead of failing the
         # test. Measured cost of these four rejections is 0.03-0.04s, so
         # 30s is still three orders of magnitude of headroom.
-        timeout=30)
+        )
     stderr = proc.stderr or ""
     for flag in REGISTER[gate]["requires"].split():
         assert flag in stderr, (

@@ -51,10 +51,9 @@ PROG = Path(__file__).resolve().parent.parent / \
 #: spelled as a parameter default until vibe-ic#1277, so nothing in the repo
 #: could see that one of the ten really takes 111.9-211.3 s.
 def _run(args: list, timeout: int = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG)] + args,
-        capture_output=True, text=True, timeout=timeout,
-    )
+        capture_output=True, text=True)
 
 
 def test_positive_fail_missing_project(tmp_path):
@@ -154,11 +153,10 @@ def test_need_phase1_auto_detects_prompt_input(tmp_path):
     # never have fired -- the SESSION would have died first, taking every other
     # file's verdict with it. Applicable ceiling is min(1200, 300) // 3 = 100.
     # Measured: this test's own call takes 18.3 s.
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(PROG), str(project), "--skip-phase3",
          "--skip-analog", "--ic-name", "TST_CHIP"],
-        capture_output=True, text=True, timeout=90,
-    )
+        capture_output=True, text=True)
     body = json.loads(
         (project / "reports" / "orchestrator" / "vibe_ic_one_shot.json").read_text())
     p_phase1 = next(p for p in body["phases"] if p["name"] == "phase1")
@@ -192,6 +190,9 @@ def test_edge_top_name_forwarded(tmp_path):
 import os                                                     # noqa: E402
 import stat                                                   # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 def _docker_shim(tmp_path, container_image: str, container_id: str,
                  want_id: str = "", found: bool = True) -> dict:
@@ -224,9 +225,8 @@ def _docker_shim(tmp_path, container_image: str, container_id: str,
 #: worst single call 2.414 s, so 60 s is ~25x the worst case.
 #: Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277.
 def _run_env(args: list, env: dict, timeout: int = 60):
-    return subprocess.run([sys.executable, str(PROG)] + args,
-                          capture_output=True, text=True, timeout=timeout,
-                          env=env)
+    return _pr.run([sys.executable, str(PROG)] + args,
+                          capture_output=True, text=True, env=env)
 
 
 def test_container_image_identity_is_always_recorded(tmp_path):

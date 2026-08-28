@@ -37,11 +37,13 @@ from __future__ import annotations
 import importlib.util
 import shutil
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "latency_conformance_check.py"
@@ -150,8 +152,8 @@ def _write_rtl_fixture(tmp_path, name, body):
 
 
 def _run_cli(args, env=None):
-    r = subprocess.run([sys.executable, str(_PROG), *args],
-                       capture_output=True, text=True, timeout=60, env=env)
+    r = _pr.run([sys.executable, str(_PROG), *args],
+                       capture_output=True, text=True, env=env)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -520,6 +522,6 @@ def test_source_is_chip_agnostic():
     program)."""
     guard = _PROGRAMS / "source_chip_agnostic_check.py"
     plugin_root = _PROGRAMS.parent
-    r = subprocess.run([sys.executable, str(guard), str(plugin_root)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(guard), str(plugin_root)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr

@@ -36,7 +36,6 @@ left a test asserting on the struct still green.
 from __future__ import annotations
 
 import io
-import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -50,6 +49,9 @@ sys.path.insert(0, str(PROGRAMS))
 import dead_plugin_path_check as dpp          # noqa: E402
 import shipped_path_portability_check as spp  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 #: Under `programs/`, so it is inside a scanned bundle subtree, and matched by
 #: `.gitignore` `**/tests/fixtures/synthetic_benchmark_phase1/`. This is not a
 #: contrived path: it is the real residue class that produced the 59-file gap.
@@ -60,8 +62,8 @@ _IGNORED_FIXTURE_DIR = (
 
 def _git_ignores(path: Path) -> bool:
     """Ask git, so the test cannot drift from `.gitignore`."""
-    r = subprocess.run(["git", "-C", str(PLUGIN), "check-ignore", "-q", str(path)],
-                       capture_output=True, timeout=60)
+    r = _pr.run(["git", "-C", str(PLUGIN), "check-ignore", "-q", str(path)],
+                       capture_output=True, text=False)
     return r.returncode == 0
 
 
@@ -89,10 +91,10 @@ def test_the_stimulus_is_real_and_invisible_to_the_usual_clean_check(ignored_res
     assert _git_ignores(ignored_residue), (
         "the probe file is not ignored, so it is not the residue class #546 is "
         "about — this test would prove nothing")
-    r = subprocess.run(
+    r = _pr.run(
         ["git", "-C", str(PLUGIN), "status", "--porcelain",
          "--untracked-files=all", "--", str(_IGNORED_FIXTURE_DIR)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.stdout.strip() == "", (
         "an ignored path showed up in --untracked-files=all; the whole reason "
         "#546 stayed hidden was that it does not")

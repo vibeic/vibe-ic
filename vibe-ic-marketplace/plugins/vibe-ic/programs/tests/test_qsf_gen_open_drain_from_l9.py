@@ -15,6 +15,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAM = (
     Path(__file__).resolve().parent.parent / "qsf_gen.py"
 )
@@ -40,9 +43,9 @@ def _scaffold(tmp_path: Path, port_specs: list,
 
 
 def _run(proj: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAM), str(proj)],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
 
 
 def test_l9_open_drain_flag_emits_output_open_drain(tmp_path):

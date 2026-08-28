@@ -10,12 +10,14 @@ Pins the two ORGANIC-20260605 instruction/orchestration fixes:
     `<RUNDIR>/lessons.md`, and the Shape-C blind instructions make it a
     MUST-READ, so already-captured recoveries stop recurring single-shot.
 """
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import benchmark_dispatch as bd  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
@@ -112,10 +114,10 @@ def test_setup_renders_lessons_md_end_to_end(tmp_path):
     (ds / "ProbA_prompt.txt").write_text("Build a thing.\n")
     (ds / "ProbB_prompt.txt").write_text("Build another.\n")
     run = tmp_path / "run"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PLUGIN / "programs" / "benchmark_dispatch.py"),
          "verilogeval-v2", "--setup", "--dataset", str(ds), "--run", str(run)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert (run / "lessons.md").is_file()
     assert "lessons:" in r.stdout and "MUST read" in r.stdout

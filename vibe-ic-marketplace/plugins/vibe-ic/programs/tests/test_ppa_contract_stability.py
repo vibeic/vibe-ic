@@ -30,16 +30,17 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_ppa_contract_fixtures import (  # noqa: E402
-    BUILD, CLI_TIMEOUT_S, PLUGIN_ROOT,
+    BUILD, PLUGIN_ROOT,
     base_declaration, make_run_tree, write_json,
 )
+
+import _progress_run as _pr  # noqa: E402
 
 #: Key names that would make a document differ between two identical runs. A
 #: contract carrying any of these cannot be byte-compared, and then the whole
@@ -58,11 +59,10 @@ def _build(tmp_path: Path, name: str, seed: str = "0",
                       declaration or base_declaration())
     out = tmp_path / f"{name}.contract.json"
     env = dict(os.environ, PYTHONHASHSEED=seed)
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(BUILD), "--declaration", str(decl),
          "--root", str(root), "--out", str(out), "--no-image-labels"],
-        capture_output=True, text=True, timeout=CLI_TIMEOUT_S,
-        cwd=str(PLUGIN_ROOT), env=env)
+        capture_output=True, text=True, cwd=str(PLUGIN_ROOT), env=env)
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
     return out
 

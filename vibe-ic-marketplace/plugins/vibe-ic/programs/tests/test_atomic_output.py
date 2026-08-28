@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -26,30 +25,10 @@ PLUGIN = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN / "programs"))
 import _atomic_output as AO  # noqa: E402
 
-REPO = PLUGIN.parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
-#: Inner subprocess bound for every call site in this file. vibe-ic#1241.
-#:
-#: WHY IT IS ONE NAME AND NOT TWO NUMBERS: the two call sites here carried 120s
-#: and 600s, and both are ABOVE the 60s harness ceiling. A bound over the
-#: ceiling can outlive the 180s harness timeout, which kills the SESSION rather
-#: than the test — so the number was a promise the harness would not keep, and
-#: the two sites could drift apart again the moment one was edited.
-#:
-#: MEASURED, not guessed — the issue is explicit that this is a per-test
-#: judgement and that lowering a bound to the ceiling and calling it fixed is
-#: not one. Observed on this tree, `pytest --durations`:
-#:
-#:     test_the_shared_report_writer_now_publishes_atomically   0.09 s  (was 600 s)
-#:     the `_sigkill_writer` sites (SIGKILL of a 6-line script) 0.02 s  (was 120 s)
-#:     whole file, 16 tests                                     0.82 s
-#:
-#: 30 s is ~330x the slowest observed call and half the ceiling, so it is a
-#: real bound with real headroom rather than a number chosen to satisfy a gate.
-#: Neither test is a candidate for the issue's other remedy — "move it out of
-#: the targeted subset if it genuinely needs longer" — because neither needs
-#: longer; they are among the fastest tests in the tree.
-_BOUND_S = 30
+REPO = PLUGIN.parents[2]
 
 # A writer that opens its target, writes a PARTIAL document, and is SIGKILLed.
 # `mode` selects which helper it uses; "direct" is the shipped idiom #1082 is
@@ -78,8 +57,8 @@ def _sigkill_writer(tmp_path: Path, mode: str, name: str = "report.json"):
     script = tmp_path / f"killer_{mode}.py"
     script.write_text(_KILLER.format(programs=str(PLUGIN / "programs")))
     target = tmp_path / name
-    r = subprocess.run([sys.executable, str(script), str(target), mode],
-                       capture_output=True, text=True, timeout=_BOUND_S)
+    r = _pr.run([sys.executable, str(script), str(target), mode],
+                       capture_output=True, text=True)
     return target, r
 
 
@@ -297,10 +276,10 @@ def test_the_shared_report_writer_now_publishes_atomically(tmp_path):
     """
     out = tmp_path / "sta.json"
     prog = PLUGIN / "programs" / "sta_report_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), str(_CELL), "--mode", "sta",
          "--json", str(out)],
-        capture_output=True, text=True, timeout=_BOUND_S)
+        capture_output=True, text=True)
     assert r.returncode == 0, (r.returncode, r.stdout[-400:], r.stderr[-400:])
     assert out.is_file() and json.loads(out.read_text()), out
     assert not list(tmp_path.glob(AO.atomic_output_tmp_glob())), \

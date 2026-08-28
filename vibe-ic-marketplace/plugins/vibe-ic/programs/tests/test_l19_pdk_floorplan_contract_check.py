@@ -12,11 +12,13 @@ foundry or part number appears anywhere.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 GATE = PROGRAMS / "l19_pdk_floorplan_contract_check.py"
@@ -40,9 +42,9 @@ OPENLANE_CFG = {
 
 
 def _run(project: Path):
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(GATE), str(project)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return proc.returncode, (proc.stdout + proc.stderr)
 
 

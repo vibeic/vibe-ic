@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from _plugin_tree import repo_resource_or_skip
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # flow #486: program_reachability_check.py is a monorepo-only audit tool
 # that is NOT shipped in the flattened install cache. Resolve it lazily via
@@ -80,7 +82,7 @@ def _build_fixture(root: Path, *,
 def _run(root: Path, *extra: str) -> dict:
     """Invoke the copied tool, write JSON, and return the parsed report."""
     out = root / "report.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [
             sys.executable,
             str(root / "vibe-ic-marketplace" / "tools"
@@ -88,8 +90,7 @@ def _run(root: Path, *extra: str) -> dict:
             "--json", str(out),
             *extra,
         ],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert cp.returncode in (0, 1), (cp.stdout, cp.stderr)
     return json.loads(out.read_text())
 

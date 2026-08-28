@@ -32,6 +32,9 @@ from typing import Any, Dict, List
 # see `_ppa_jsonschema.py` for the measurement and the doctrine.
 from _ppa_jsonschema import needs_draft_2020_12
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 PROGRAMS = PLUGIN_ROOT / "programs"
 SCHEMA_DIR = PLUGIN_ROOT / "schemas" / "ppa"
@@ -39,11 +42,6 @@ SCHEMA_DIR = PLUGIN_ROOT / "schemas" / "ppa"
 BUILD = PROGRAMS / "ppa_contract_build.py"
 CHECK = PROGRAMS / "ppa_contract_check.py"
 INTEGRITY = PROGRAMS / "ppa_problem_integrity_check.py"
-
-#: Bound for every CLI subprocess. These programs hash a handful of small files
-#: and touch no network with `--no-image-labels`; measured well under a second
-#: each. Kept far under the repo's 60 s harness ceiling.
-CLI_TIMEOUT_S = 45
 
 #: A syntactically valid digest reference that names nothing real, so no test
 #: can accidentally depend on a registry being reachable.
@@ -139,10 +137,9 @@ def run_cli(program: Path, *args: str) -> subprocess.CompletedProcess:
     verdict-to-exit-code mapping unmeasured. That gap is exactly what this
     repo's `gate_cli_mutation_probe` exists to find.
     """
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(program), *args],
-        capture_output=True, text=True, timeout=CLI_TIMEOUT_S,
-        cwd=str(PLUGIN_ROOT))
+        capture_output=True, text=True, cwd=str(PLUGIN_ROOT))
 
 
 def build_contract(tmp_path: Path, declaration: Dict[str, Any],

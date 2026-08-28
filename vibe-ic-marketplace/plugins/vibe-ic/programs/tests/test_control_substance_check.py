@@ -24,6 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import control_substance_check as CSC  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAM = Path(__file__).resolve().parent.parent / "control_substance_check.py"
 
 
@@ -39,14 +42,14 @@ def run_pytest(tmp_path: Path, name: str, body: str):
     txt = tmp_path / f"{name}.txt"
     env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, "-m", "pytest", str(d), "-q", "-p", "no:cacheprovider",
          f"--junitxml={xml}", f"--basetemp={tmp_path / ('bt_' + name)}"],
         cwd=str(tmp_path), env=env, capture_output=True, text=True,
         # Under the repo's 60 s per-call ceiling (harness bound 180 s // 3):
         # an inner bound above it can outlive the harness and kill the whole
         # session instead of the test. These inner runs measure ~3 s.
-        timeout=45)
+        )
     txt.write_text(proc.stdout + proc.stderr)
     assert xml.exists(), f"inner pytest wrote no report: {proc.stdout[-800:]}"
     return xml, txt
@@ -57,8 +60,8 @@ def counts_of(xml: Path):
 
 
 def cli(*args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROGRAM), *args],
-                          capture_output=True, text=True, timeout=30)
+    return _pr.run([sys.executable, str(PROGRAM), *args],
+                          capture_output=True, text=True)
 
 
 # The PR #856 shape: a test file that imports the module the fix introduces.

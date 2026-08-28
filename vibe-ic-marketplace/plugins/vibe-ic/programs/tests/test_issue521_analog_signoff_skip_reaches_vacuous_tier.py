@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -65,6 +64,9 @@ sys.modules["flow_compliance_check"] = _flow
 _spec.loader.exec_module(_flow)
 
 import gate_discloses_denominator_check as _gdd  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 #: The seventeen. Sixteen were confirmed by execution on a mixed-signal
@@ -110,8 +112,8 @@ def _run(gate: str, project: Path, report: Path | None = None):
     argv = [sys.executable, str(_PROGRAMS / f"{gate}.py"), str(project)]
     if report is not None:
         argv += ["--json", str(report)]
-    return subprocess.run(argv, capture_output=True, text=True,
-                          cwd=str(_PROGRAMS), timeout=60)
+    return _pr.run(argv, capture_output=True, text=True,
+                          cwd=str(_PROGRAMS))
 
 
 def _report_says_skipped(report: Path):
@@ -534,10 +536,10 @@ def test_lead_pre_awake_silence_reproduces_and_is_now_vacuous(tmp_path):
         "module top(input clk, input [7:0] cmd, output reg [7:0] rsp);\n"
         "  always @(posedge clk) rsp <= cmd;\n"
         "endmodule\n")
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(_PROGRAMS / "pre_awake_silence_check.py"),
          "--rtl-dir", str(rtl)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
+        capture_output=True, text=True, cwd=str(_PROGRAMS))
     doc = json.loads(p.stdout)
     assert doc["summary"]["skipped"] is True
     assert p.returncode == _vx.RC_VACUOUS, (p.returncode, p.stderr[-300:])
@@ -562,10 +564,10 @@ def test_lead_pre_awake_silence_still_fails_an_ungated_dispatcher(tmp_path):
         "    endcase\n"
         "  end\n"
         "endmodule\n")
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(_PROGRAMS / "pre_awake_silence_check.py"),
          "--rtl-dir", str(rtl)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
+        capture_output=True, text=True, cwd=str(_PROGRAMS))
     assert p.returncode == _vx.RC_FAIL, (p.returncode, p.stdout[-400:])
 
 
@@ -574,10 +576,10 @@ def test_lead_warn_acceptance_policy_reproduces_and_is_now_vacuous(tmp_path):
     addressed" holds only because no WARN was ever loaded."""
     proj = tmp_path / "no_reports"
     proj.mkdir()
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(_PROGRAMS / "warn_acceptance_policy_check.py"),
          "--project-dir", str(proj)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
+        capture_output=True, text=True, cwd=str(_PROGRAMS))
     doc = json.loads(p.stdout)
     assert doc["summary"]["skipped"] is True
     assert p.returncode == _vx.RC_VACUOUS, (p.returncode, p.stderr[-300:])
@@ -593,10 +595,10 @@ def test_lead_warn_acceptance_policy_keeps_its_honest_pass(tmp_path):
     (proj / "reports").mkdir(parents=True)
     (proj / "reports" / "gate.json").write_text(json.dumps(
         {"program": "some_check", "findings": []}))
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(_PROGRAMS / "warn_acceptance_policy_check.py"),
          "--project-dir", str(proj)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
+        capture_output=True, text=True, cwd=str(_PROGRAMS))
     assert p.returncode == _vx.RC_PASS, (p.returncode, p.stdout[-400:])
     assert "skipped" not in json.loads(p.stdout)["summary"]
 

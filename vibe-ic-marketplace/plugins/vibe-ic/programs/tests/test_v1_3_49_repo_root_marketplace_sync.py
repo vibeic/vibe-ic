@@ -29,6 +29,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = (
     Path(__file__).resolve().parents[2]
     / "programs"
@@ -89,11 +92,10 @@ def _make_nested_tree(tmp_path: Path,
 
 
 def _run(marketplace_dir: Path, *extra: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG),
          "--marketplace-dir", str(marketplace_dir), *extra],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
 
 
 def test_root_manifest_mismatch_fails_even_when_maintained_matches(tmp_path):

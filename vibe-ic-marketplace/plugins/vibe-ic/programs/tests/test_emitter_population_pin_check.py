@@ -161,6 +161,9 @@ import sys
 import pytest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = (Path(__file__).resolve().parent.parent
         / "emitter_population_pin_check.py")
 PROGRAMS_DIR = PROG.parent
@@ -202,10 +205,10 @@ def _tree(tmp_path: Path, emitter: str = EMITTER, pin: str = TEST_PIN) -> tuple:
 
 
 def _run(progs: Path, tests: Path, *extra) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--programs", str(progs),
          "--tests", str(tests), *[str(x) for x in extra]],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True)
 
 
 # ── the honest case ──────────────────────────────────────────────────────────
@@ -231,10 +234,10 @@ def test_an_emitter_that_agrees_with_itself_and_its_pin_passes(tmp_path):
 @pytest.fixture(scope="module")
 def real_run(tmp_path_factory):
     out = tmp_path_factory.mktemp("realrun") / "r.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), "--programs", str(PROGRAMS_DIR),
          "--tests", str(TESTS_DIR), "--json", str(out)],
-        capture_output=True, text=True, timeout=900)
+        capture_output=True, text=True)
     return r, json.loads(out.read_text())
 
 
@@ -1109,8 +1112,8 @@ def test_the_polarity_baseline_refuses_to_grow(tmp_path):
     prog = str(PROGRAMS_DIR / "prose_polarity_consulted_check.py")
 
     def run(*extra):
-        return subprocess.run([sys.executable, prog, "--root", str(root), *extra],
-                              capture_output=True, text=True, timeout=120)
+        return _pr.run([sys.executable, prog, "--root", str(root), *extra],
+                              capture_output=True, text=True)
 
     assert run("--write-baseline").returncode == 0
     assert G.scan(root) == ["one::extract"]
@@ -3365,16 +3368,16 @@ def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
 # ── the bad invocation tier ──────────────────────────────────────────────────
 
 def test_a_programs_directory_that_does_not_exist_is_rc3(tmp_path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), "--programs", str(tmp_path / "nope")],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True)
     assert r.returncode == RC_USAGE, r.stdout + r.stderr
     assert "USAGE_ERROR:" in r.stderr, r.stderr
 
 
 def test_an_unknown_flag_is_rc3_not_argparse_2():
-    r = subprocess.run([sys.executable, str(PROG), "--not-a-flag"],
-                       capture_output=True, text=True, timeout=120)
+    r = _pr.run([sys.executable, str(PROG), "--not-a-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == RC_USAGE, r.stdout + r.stderr
 
 
@@ -3404,11 +3407,10 @@ def test_reverting_the_comparison_lets_the_disagreement_pass(tmp_path):
     mutant = tmp_path / "mutant.py"
     mutant.write_text(mutant_body, encoding="utf-8")
 
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(mutant), "--programs", str(progs),
          "--tests", str(tests)],
-        capture_output=True, text=True, timeout=600,
-        env={**os.environ, "PYTHONPATH": str(PROGRAMS_DIR)})
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(PROGRAMS_DIR)})
     assert r.returncode == RC_PASS, (
         "the mutant still refused, so the refusal does not come from the "
         "comparisons this test names:\n" + r.stdout + r.stderr)

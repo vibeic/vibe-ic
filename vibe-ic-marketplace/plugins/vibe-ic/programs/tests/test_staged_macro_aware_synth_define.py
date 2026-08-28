@@ -43,6 +43,10 @@ import pytest
 import phase3_one_shot_runner as p3
 import synth_frontend as sf
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # --- fixture RTL: a storage cell with a behavioural arm and a macro arm -----
 RTL_OTP = """\
@@ -308,10 +312,10 @@ def test_conditional_walker_agrees_with_a_real_preprocessor(
 
     f = tmp_path / "c.v"
     f.write_text(src)
-    ref = subprocess.run(
+    ref = _pr.run(
         ["iverilog", "-E", "-o", "/dev/stdout"]
         + [f"-D{d}" for d in sorted(defines)] + [str(f)],
-        capture_output=True, text=True, timeout=60).stdout
+        capture_output=True, text=True).stdout
     assert _insts(sf._reachable_text(src, defines)) == _insts(ref), (
         f"walker disagrees with iverilog -E for defines={sorted(defines)}\n"
         f"src:\n{src}\niverilog:\n{ref}")
@@ -427,12 +431,12 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
 
     tag = f"/tmp/vibeic_macrodef_{os.getpid()}_{int(stage_macro)}"
     try:
-        subprocess.run(["docker", "exec", container, "sh", "-c",
+        _pr.run(["docker", "exec", container, "sh", "-c",
                         f"rm -rf {tag} && mkdir -p {tag}"],
-                       check=True, capture_output=True, timeout=60)
+                       check=True, capture_output=True, text=False)
         for f in sorted(tmp_path.iterdir()):
-            subprocess.run(["docker", "cp", str(f), f"{container}:{tag}/"],
-                           check=True, capture_output=True, timeout=60)
+            _pr.run(["docker", "cp", str(f), f"{container}:{tag}/"],
+                           check=True, capture_output=True, text=False)
         libread = ""
         if stage_macro:
             libread = (f"read_liberty -lib -ignore_miss_dir -setattr blackbox "
@@ -442,14 +446,14 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
                   f"read_verilog -sv {d}{tag}/otp_mem.v; "
                   f"hierarchy -check -top chip_top; proc; flatten; "
                   f"tribuf -logic; synth -top chip_top -flatten; clean; stat")
-        out = subprocess.run(
+        out = _pr.run(
             ["docker", "exec", container, "sh", "-c",
              f"PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH; "
              f"cd {tag} && yosys -p '{script}'"],
-            capture_output=True, text=True, timeout=60).stdout
+            capture_output=True, text=True).stdout
     finally:
-        subprocess.run(["docker", "exec", container, "sh", "-c",
-                        f"rm -rf {tag}"], capture_output=True, timeout=60)
+        _pr.run(["docker", "exec", container, "sh", "-c",
+                        f"rm -rf {tag}"], capture_output=True, text=False)
     stat = out.split("=== chip_top ===")[-1]
 
     if expect == "macro":

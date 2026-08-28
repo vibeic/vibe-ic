@@ -45,6 +45,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 mod = importlib.import_module("phase3_one_shot_runner")
 
 tclsh = shutil.which("tclsh")
@@ -885,8 +888,7 @@ def _tcl_evals(tmp_path, body, name):
     # The parse is a `tclsh` syntax check over one file and measures well
     # under a second; 30 s is two orders of magnitude of headroom and stays
     # under the harness's per-call ceiling (bound/3).
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=30)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "PNR_TCL_END" in r.stdout
 

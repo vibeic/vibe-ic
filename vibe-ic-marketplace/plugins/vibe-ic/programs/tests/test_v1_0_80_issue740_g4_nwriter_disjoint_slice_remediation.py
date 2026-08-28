@@ -29,7 +29,6 @@ by programs/source_chip_agnostic_check.py).
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -40,6 +39,9 @@ PROGRAMS = PLUGIN / "programs"
 sys.path.insert(0, str(PROGRAMS))
 
 import rtl_hygiene_lint as HY  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 G4_PROG = PROGRAMS / "rtl_hygiene_lint.py"
 
@@ -66,9 +68,9 @@ OVERLAP_MD = (
 def _run_lint_warn(tmp_path, rtl: str, name: str = "d.sv"):
     p = tmp_path / name
     p.write_text(rtl)
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(G4_PROG), "--severity", "WARN", str(p)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 # ───────────────────────── REMEDIATION: caseE silent ────────────────────────
@@ -115,9 +117,9 @@ def test_caseE_verilator_ground_truth_zero_multidriven(tmp_path):
     matches the external oracle."""
     p = tmp_path / "caseE.sv"
     p.write_text(CASE_E)
-    out = subprocess.run(
+    out = _pr.run(
         ["verilator", "--lint-only", "-Wall", str(p)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert "MULTIDRIVEN" not in (out.stdout + out.stderr)
 
 
@@ -186,8 +188,8 @@ def test_guard_different_clock_domains_still_warns_pure():
 # ─────────────────────────── chip-AGNOSTIC source guard ─────────────────────
 def test_chip_agnostic_source():
     guard = PROGRAMS / "source_chip_agnostic_check.py"
-    r = subprocess.run([sys.executable, str(guard), str(PLUGIN)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(guard), str(PLUGIN)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

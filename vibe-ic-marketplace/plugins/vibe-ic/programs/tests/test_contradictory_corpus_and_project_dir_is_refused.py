@@ -35,11 +35,13 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 CHECK = PLUGIN_ROOT / "programs" / "step_internal_fail_bubble_up_check.py"
@@ -77,8 +79,8 @@ def _reachable_corpus(root: Path) -> Path:
 
 
 def _run(*argv):
-    p = subprocess.run([sys.executable, str(CHECK), *argv],
-                       capture_output=True, text=True, timeout=55)
+    p = _pr.run([sys.executable, str(CHECK), *argv],
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 

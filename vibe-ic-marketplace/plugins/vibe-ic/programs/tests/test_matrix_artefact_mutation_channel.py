@@ -105,17 +105,8 @@ from matrix_63x8 import flowref as F
 #: them runs exactly as before — and can still fail.
 from _published_corpus import needs_corpus  # noqa: E402
 
-#: Bound for the two git launches in this file. NOT a round number picked by
-#: feel, and not the 120 s the first draft used — `ci_harness_timeout_ceiling_check`
-#: (BLOCKING) resolves the pytest harness bound from `tools/gatekeeper-land.sh`
-#: (`--timeout=180`, `--timeout-method=thread`) and permits any ONE blocking call
-#: at most `180 // 3` = 60 s. Above that the inner bound can never fire: pytest
-#: reaches 180 s first and takes the whole SESSION down, so `--maxfail` stops
-#: counting and every other file in the subset loses its verdict.
-#: MEASURED here: `git status --porcelain` over the named run is 0.01 s and
-#: `git ls-files --error-unmatch` is under 0.01 s, three runs each. 30 s is
-#: ~3000x the measured cost and half the permitted ceiling.
-_GIT_TIMEOUT_S = 30
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: Per-replay bound for the ARTEFACT channel. `L.replay_many` forwards it to the
 #: `subprocess.run` inside `L.replay_artefact`, so it IS a real process bound —
@@ -542,14 +533,12 @@ def test_the_replay_never_mutates_the_published_run():
     their JSON reports into the run they audit, and eight published artefacts
     were truncated through the shared inodes before ``git status`` caught it.
     """
-    import subprocess
     runs = sorted({m.run_dir for m in L.ARTEFACT_MUTATIONS})
     assert runs, "no runs named; this control is measuring nothing"
     replay_results()          # force the replays before looking
     paths = [str((L.benchmark_data_root() / r)) for r in runs]
-    proc = subprocess.run(["git", "status", "--porcelain", "--", *paths],
-                          cwd=str(L.REPO_ROOT), capture_output=True, text=True,
-                          timeout=_GIT_TIMEOUT_S)
+    proc = _pr.run(["git", "status", "--porcelain", "--", *paths],
+                          cwd=str(L.REPO_ROOT), capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert not proc.stdout.strip(), (
         f"replaying the artefact ledger modified the PUBLISHED corpus:\n"
@@ -751,12 +740,11 @@ def test_the_canary_run_is_never_written_by_this_repository():
     A mutation ledger whose evidence is a fixture it wrote itself measures its
     own fixture. Checked by asking git whether the run is tracked.
     """
-    import subprocess
     for run in sorted({m.run_dir for m in L.ARTEFACT_MUTATIONS}):
         rel = (L.benchmark_data_root() / run).relative_to(L.REPO_ROOT)
-        proc = subprocess.run(["git", "ls-files", "--error-unmatch", str(rel)],
+        proc = _pr.run(["git", "ls-files", "--error-unmatch", str(rel)],
                               cwd=str(L.REPO_ROOT), capture_output=True,
-                              text=True, timeout=_GIT_TIMEOUT_S)
+                              text=True)
         assert proc.returncode == 0 and proc.stdout.strip(), (
             f"{run} is not tracked in git, so it is not a PUBLISHED run and "
             f"this channel would be measuring a local fixture")

@@ -30,6 +30,10 @@ from pathlib import Path
 
 import pytest
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SCRIPT = Path(__file__).resolve().parents[1] / "reset_clock_variant_alias.py"
 
 
@@ -168,7 +172,7 @@ def test_additive_wrapper_reset_matrix_behaves(tmp_path, bind_face, pol):
          str(tmp_path / "w.sv"), str(tmp_path / "c.sv"), str(tmp_path / "tb.sv")],
         capture_output=True, text=True)
     assert c.returncode == 0, c.stderr
-    r = subprocess.run(["vvp", binp], capture_output=True, text=True, timeout=60)
+    r = _pr.run(["vvp", binp], capture_output=True, text=True)
     assert "OKAY" in r.stdout, (bind_face, pol, r.stdout, r.stderr)
 
 
@@ -232,17 +236,17 @@ def test_sv2v_with_dyosys_strips_tri_from_wrapper(tmp_path):
         subprocess.run(["docker", "cp", str(tmp_path / "w.v"),
                         f"{container}:{tag}/w.v"], check=True,
                        capture_output=True)
-        r = subprocess.run(["docker", "exec", container, "sh", "-c",
+        r = _pr.run(["docker", "exec", container, "sh", "-c",
                             f"PATH=/foss/tools/bin:$PATH "
                             f"sv2v -DSIMULATION -DYOSYS {tag}/w.v"],
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         assert "tri0" not in r.stdout and "tri1" not in r.stdout, (
             "-DYOSYS must select the plain-combine arm (yosys-safe)")
-        r2 = subprocess.run(["docker", "exec", container, "sh", "-c",
+        r2 = _pr.run(["docker", "exec", container, "sh", "-c",
                              f"PATH=/foss/tools/bin:$PATH "
                              f"sv2v -DSIMULATION {tag}/w.v"],
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True)
         assert "tri0" in r2.stdout, (
             "without -DYOSYS the sim arm keeps the tri pull (iverilog path)")
     finally:

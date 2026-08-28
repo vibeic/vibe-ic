@@ -38,8 +38,11 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import subprocess
 import sys
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _SCANNER = _PROGRAMS / "nda_diff_scan_check.py"
@@ -55,8 +58,8 @@ except SystemExit:
 
 def _repo(tmp_path):
     def g(*a, **kw):
-        return subprocess.run(["git", "-C", str(tmp_path), *a],
-                              capture_output=True, text=True, timeout=30, **kw)
+        return _pr.run(["git", "-C", str(tmp_path), *a],
+                              capture_output=True, text=True, **kw)
     g("init", "-q", "-b", "main", ".")
     g("config", "user.email", "t@t")
     g("config", "user.name", "T")
@@ -85,9 +88,9 @@ def test_a_new_branch_range_resolves_to_the_branchs_own_commits(tmp_path):
     # code. What matters is that the resolution covers exactly what `rev-list`
     # selects, and that the branch's own line is in it.
     assert "a line only this branch has" in "\n".join(added), diff
-    sel = subprocess.run(["git", "-C", str(tmp_path), "rev-list",
+    sel = _pr.run(["git", "-C", str(tmp_path), "rev-list",
                           head, "--not", "--remotes"],
-                         capture_output=True, text=True, timeout=30).stdout.split()
+                         capture_output=True, text=True).stdout.split()
     got = N.resolve_diffable_range(tmp_path, f"{head} --not --remotes")
     assert len(got) in (1, 2), got
     assert sel, "the fixture selected no commit"
@@ -118,8 +121,8 @@ def test_a_root_commit_is_scanned_against_the_empty_tree(tmp_path):
     """A first-ever commit has no parent. Refusing there would leave the one
     push where every path is an added path unscanned."""
     def g(*a):
-        return subprocess.run(["git", "-C", str(tmp_path), *a],
-                              capture_output=True, text=True, timeout=30)
+        return _pr.run(["git", "-C", str(tmp_path), *a],
+                              capture_output=True, text=True)
     g("init", "-q", "-b", "main", ".")
     g("config", "user.email", "t@t")
     g("config", "user.name", "T")

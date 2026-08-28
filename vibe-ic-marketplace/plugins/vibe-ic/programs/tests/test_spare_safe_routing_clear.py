@@ -15,12 +15,15 @@ These tests EXECUTE the generated Tcl under a real tclsh with stubbed odb/ord,
 verifying behaviour rather than string shape.
 """
 from __future__ import annotations
-import shutil, subprocess, sys
+import shutil, sys
 from pathlib import Path
 import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase3_one_shot_runner as p3  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 _TCLSH = shutil.which("tclsh")
 _needs_tcl = pytest.mark.skipif(_TCLSH is None, reason="tclsh not installed")
 
@@ -52,7 +55,7 @@ proc odb::dbWire_destroy {w} { lappend ::destroyed $w }
 def _run(tcl_body: str, tmp_path) -> str:
     f = tmp_path / "t.tcl"
     f.write_text(_STUB + tcl_body + '\nputs "DESTROYED: $::destroyed"\n')
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True, timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
 

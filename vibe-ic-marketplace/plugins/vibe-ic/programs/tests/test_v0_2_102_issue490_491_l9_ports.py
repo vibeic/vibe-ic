@@ -56,6 +56,9 @@ from programs.phase1_one_shot_runner import (  # noqa: E402
     gen_l9_integration_spec,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 GATE_PROG = PROGRAMS / "l9_rtl_pin_consistency_check.py"
 RUNNER = PROGRAMS / "phase1_one_shot_runner.py"
 _GEN = Path("phase1") / "generated_docs"
@@ -386,9 +389,9 @@ def test_full_e2e_l3_table_to_l9_canonical_key_then_gate_pass(tmp_path):
     (docs / "L3_external_interface.md").write_text(_L3_DOC)
 
     # 1) REAL promoter via the runner (gen_l9 path).
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(RUNNER), str(proj), "--ic-name", "blk32"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
 
     l9 = json.loads(

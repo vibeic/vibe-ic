@@ -54,12 +54,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -118,10 +120,10 @@ def test_the_audit_exits_zero_and_names_this_gate_as_neither_kind_of_debt(
     (180s harness session bound // 3); a bound above it can outlive the session
     and take every other file in the subset down with it."""
     out = tmp_path / "audit.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / "flow_gate_enforcement_audit.py"),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert cp.returncode == 0, (
         f"rc={cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-2000:]}")
     rep = json.loads(out.read_text())
@@ -149,9 +151,9 @@ def test_the_gate_still_exits_nonzero_when_the_report_is_missing(tmp_path):
     gd = p / "phase1" / "generated_docs"
     gd.mkdir(parents=True)
     (gd / "L1_DATASHEET.json").write_text('{"x": 1}')
-    rc = subprocess.run(
+    rc = _pr.run(
         [sys.executable, str(_PROGRAMS / f"{_GATE}.py"), str(p)],
-        capture_output=True, text=True, timeout=60).returncode
+        capture_output=True, text=True).returncode
     assert rc != 0, (
         "Phase 1 ran and the coverage report is absent, yet the gate passed — "
         "`ENFORCEMENT: advisory` describes the wiring; it must not soften the "

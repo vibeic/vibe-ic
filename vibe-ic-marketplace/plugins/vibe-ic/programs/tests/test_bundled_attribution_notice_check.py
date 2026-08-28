@@ -11,7 +11,6 @@ the gate can SEE a file, which a stub cannot answer.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -22,7 +21,8 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import bundled_attribution_notice_check as bc  # noqa: E402
 
-_T = 55
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _OURS = """Vibe-IC
 Copyright 2026 VibeIC.AI Contributors
@@ -181,9 +181,9 @@ def test_the_report_names_every_holder_and_its_licence(tmp_path):
 
 def test_it_runs_as_a_cli(tmp_path):
     root = _tree(tmp_path, _OURS, {"vendor/aes.sv": _THIRD_PARTY_RTL})
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "bundled_attribution_notice_check.py"),
-         str(root)], capture_output=True, text=True, timeout=_T)
+         str(root)], capture_output=True, text=True)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "lowRISC" in r.stdout, r.stdout
 

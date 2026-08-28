@@ -75,7 +75,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -90,7 +89,8 @@ sys.path.insert(0, str(PROGRAMS))
 import flow_compliance_check as fcc  # noqa: E402
 import flow_condition_reachability_check as fcr  # noqa: E402
 
-_T = 120
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: One real clause, verbatim from the shipped flow, so this test cannot pass
 #: against a shape the flow does not actually use.
@@ -148,8 +148,8 @@ def _origin_main_fcc():
         repo = repo.parent
     rel = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
            "flow_compliance_check.py")
-    r = subprocess.run(["git", "-C", str(repo), "show", f"{_BASE_REV}:{rel}"],
-                       capture_output=True, text=True, timeout=_T)
+    r = _pr.run(["git", "-C", str(repo), "show", f"{_BASE_REV}:{rel}"],
+                       capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout:
         pytest.skip(f"{_BASE_REV} not present in this checkout")
     with tempfile.TemporaryDirectory() as td:
@@ -287,10 +287,10 @@ def test_every_shipped_optional_clause_declares_its_not_applicable():
 
 # ── A7 — the declaration is itself gated, and the gate discriminates ──────
 def _run_reachability(flow_path: Path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "flow_condition_reachability_check.py"),
          str(flow_path), "--baseline", ""],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     return r
 
 
@@ -330,10 +330,10 @@ def test_static_gate_passes_the_shipped_flow_and_fails_an_undeclared_one(tmp_pat
 
 def test_static_gate_reports_the_undeclared_set_in_its_json(tmp_path):
     out = tmp_path / "r.json"
-    subprocess.run(
+    _pr.run(
         [sys.executable, str(PROGRAMS / "flow_condition_reachability_check.py"),
          str(FLOW_YAML), "--json", str(out)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     doc = json.loads(out.read_text(encoding="utf-8"))
     assert "undeclared_not_applicable" in doc, (
         "a consumer must be able to read the set without parsing prose")
@@ -550,10 +550,10 @@ def test_every_shipped_conditioned_advisory_clause_declares_its_not_applicable()
 def test_static_gate_covers_the_advisory_surface_too():
     out_dir = tempfile.mkdtemp()
     out = Path(out_dir) / "r.json"
-    subprocess.run(
+    _pr.run(
         [sys.executable, str(PROGRAMS / "flow_condition_reachability_check.py"),
          str(FLOW_YAML), "--json", str(out)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     doc = json.loads(out.read_text(encoding="utf-8"))
     surfaces = {c["surface"] for c in doc["conditions"]}
     assert "advisory" in surfaces, (

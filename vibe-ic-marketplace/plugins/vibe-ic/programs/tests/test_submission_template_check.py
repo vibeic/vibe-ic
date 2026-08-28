@@ -35,7 +35,6 @@ import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -47,6 +46,9 @@ sys.path.insert(0, str(PROGRAMS))
 import _submission_template as ST         # noqa: E402
 import submission_template_ingest as ING  # noqa: E402
 import submission_template_check as CHK   # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 SLOT_A = """\
@@ -558,8 +560,7 @@ def test_the_program_runs_as_the_flow_spawns_it(prog, clean):
     argv = [sys.executable, str(PROGRAMS / f"{prog}.py"), "."]
     if prog == "submission_template_check":
         argv += ["--json", ST.REPORT_REL]
-    r = subprocess.run(argv, cwd=proj, env=env, capture_output=True, text=True,
-                       timeout=180)
+    r = _pr.run(argv, cwd=proj, env=env, capture_output=True, text=True)
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     assert prog in r.stdout
 

@@ -34,6 +34,9 @@ if str(_PROGRAMS) not in sys.path:
 import comb_advanced_synth as C  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
 
@@ -404,7 +407,7 @@ def test_host_score_zero_mismatch(prob, tmp_path):
         ["iverilog", "-g2012", "-o", str(vvp), str(dut), str(ref), str(tb)],
         capture_output=True, text=True)
     assert comp.returncode == 0, f"{prob} compile failed:\n{comp.stderr}"
-    run = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True, timeout=60)
+    run = _pr.run(["vvp", str(vvp)], capture_output=True, text=True)
     out = run.stdout + run.stderr
     m = re.search(r"Mismatches:\s*(\d+)\b", out)
     assert m is not None, f"no Mismatches line in vvp output:\n{out}"

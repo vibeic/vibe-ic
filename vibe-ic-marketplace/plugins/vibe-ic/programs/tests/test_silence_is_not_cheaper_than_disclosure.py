@@ -47,6 +47,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
@@ -125,8 +128,8 @@ def _project(root: Path, design_content, blocks=("blk_alpha",)) -> Path:
 
 
 def _run(prog: Path, project: Path, *args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(prog), str(project), *args],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(prog), str(project), *args],
+                          capture_output=True, text=True)
 
 
 # ═══ 1. THE GATE OF RECORD — the measured inversion, closed ════════════════

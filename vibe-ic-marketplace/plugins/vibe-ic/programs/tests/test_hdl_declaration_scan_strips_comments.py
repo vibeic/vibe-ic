@@ -12,7 +12,6 @@ Both are driven here against the real git objects, not a fixture.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -21,6 +20,9 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import hdl_declaration_scan_strips_comments_check as G  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _FIX_COMMIT_SUBJECT = "read code, not comments"
 _REL = "vibe-ic-marketplace/plugins/vibe-ic/programs/fmeda_fault_injection_coverage.py"
@@ -35,15 +37,15 @@ def _repo() -> Path:
 
 
 def _blob(rev: str) -> str:
-    r = subprocess.run(["git", "show", f"{rev}:{_REL}"], cwd=_repo(),
-                       capture_output=True, text=True, timeout=55)
+    r = _pr.run(["git", "show", f"{rev}:{_REL}"], cwd=_repo(),
+                       capture_output=True, text=True)
     return r.stdout if r.returncode == 0 else ""
 
 
 def _fix_sha() -> str:
-    r = subprocess.run(["git", "log", "-1", "--format=%H", "--grep",
+    r = _pr.run(["git", "log", "-1", "--format=%H", "--grep",
                         _FIX_COMMIT_SUBJECT], cwd=_repo(),
-                       capture_output=True, text=True, timeout=55)
+                       capture_output=True, text=True)
     return r.stdout.strip()
 
 

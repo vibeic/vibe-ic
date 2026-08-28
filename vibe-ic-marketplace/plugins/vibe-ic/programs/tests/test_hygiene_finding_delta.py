@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import copy
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -145,10 +144,10 @@ def _write(tmp_path, name, doc):
 
 def _run(base, cand, base_host=_HOST, cand_host=_HOST, extra=()):
     """Invoke the CLI and return (rc, stdout). rc is the program's, not a shell's."""
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROG), "--base", str(base), "--candidate", str(cand),
          "--base-host", base_host, "--candidate-host", cand_host, *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return cp.returncode, cp.stdout + cp.stderr
 
 
@@ -996,6 +995,9 @@ def test_a_refusal_still_carries_both_corpus_lists():
 # ══════════════════════════════════════════════════════════════════════
 
 import toolchain_profile as _TC  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _profile(*, iverilog: bool):

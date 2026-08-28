@@ -25,13 +25,15 @@ that still holds: a prompt's content is never LOST to an empty (.gitkeep-only)
 docs/ — it is carried through the render-bridge. The legacy engine path stays
 reachable only via an explicit `--mode prompt`.
 """
-import subprocess
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import vibe_ic_one_shot_runner as ORCH  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 ENGINE_PARENT = PROG.parent / "tools"
 
@@ -126,12 +128,11 @@ def test_run_all_honors_ic_name_end_state(tmp_path):
     (docs / "design_description.md").write_text(
         "# my crypto block\nIt accelerates a cipher.\n")
     out = tmp_path / "out"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, "-m", "phase1_engine.cli", "run-all",
          str(docs), str(out), "--ic-name", "crypto_periph",
          "--allow-underspec"],
-        capture_output=True, text=True, timeout=60,
-        cwd=str(ENGINE_PARENT.parent.parent.parent.parent),
+        capture_output=True, text=True, cwd=str(ENGINE_PARENT.parent.parent.parent.parent),
         env={**__import__("os").environ,
              "PYTHONPATH": str(ENGINE_PARENT)},
     )

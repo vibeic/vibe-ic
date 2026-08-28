@@ -33,6 +33,9 @@ import mealy_sequence_synth as M  # noqa: E402
 import behavioral_fsm_synth as B  # noqa: E402
 from _hostpaths import corpus_path  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _HAVE_IV = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 _RT = corpus_path("_extbench/RTLLM/Control/Finite State Machine")
 _VE = str(corpus_path("_extbench/verilog-eval"))
@@ -225,8 +228,8 @@ def _host_pass(synmod, design, top):
                              "testbench.v", str(dut)],
                             capture_output=True, text=True, cwd=str(d))
         assert ce.returncode == 0, ce.stderr[:300]
-        r = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True,
-                           timeout=60, cwd=str(d))
+        r = _pr.run(["vvp", str(vvp)], capture_output=True, text=True,
+                           cwd=str(d))
         assert "passed" in (r.stdout + r.stderr).lower(), (r.stdout + r.stderr)[:300]
 
 

@@ -9,7 +9,6 @@ active-low name.
 chip-AGNOSTIC: only generic reset/clock spelling sets are baked in.
 """
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +17,9 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import reset_clock_variant_alias as V  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── polarity classification ─────────────────────────────────────────────
@@ -158,10 +160,10 @@ def test_emit_and_tb_variant_elaborates(tmp_path):
         "  reg clk=0, rst_n=0; reg [3:0] d=0; wire [3:0] q;\n"
         "  mycore_top dut(.clk(clk), .rst_n(rst_n), .d(d), .q(q));\n"
         "endmodule\n")
-    r = subprocess.run(
+    r = _pr.run(
         [iv, "-g2012", "-s", "tb", "-o", str(tmp_path / "tb.out"),
          str(core_rtl), str(wrap_f), str(tb)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 
@@ -229,10 +231,10 @@ def test_step_wired_binding_repro_elaborates(tmp_path):
         "module tb; reg clk=0,rst_n=0,data_in=0; wire detected;"
         " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
         ".data_in(data_in),.detected(detected)); endmodule\n")
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb),
          str(rtl / "sequence_detector.v")],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -268,9 +270,9 @@ def test_step_parameterized_top_forwards_params(tmp_path):
     tb.write_text(
         "module tb; reg clk=0,rst_n=0; reg [7:0] d=0; wire [7:0] q;"
         " core #(.W(8)) dut(.clk(clk),.rst_n(rst_n),.d(d),.q(q)); endmodule\n")
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "c"), str(tb),
-         str(rtl / "core.v")], capture_output=True, text=True, timeout=60)
+         str(rtl / "core.v")], capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -344,9 +346,9 @@ def test_step_thin_wrapper_parent_still_aliases_and_rewires(tmp_path):
     iv = shutil.which("iverilog")
     if not iv:
         pytest.skip("iverilog not on this host")
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "d"), str(rtl / "design.v")],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -387,9 +389,9 @@ def test_step_round3_multimodule_top_aliases_and_tb_elaborates(tmp_path):
         ".data_in(data_in),.detected(detected)); endmodule\n")
     # compile the WHOLE work dir + TB (the TB targets the canonical wrapper).
     vfiles = [str(p) for p in sorted(rtl.glob("*.v"))]
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb), *vfiles],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -417,10 +419,10 @@ def test_step_round4_runner_chip_top_name_resolves_author_leaf(tmp_path):
         "module tb; reg clk=0,rst_n=0,data_in=0; wire detected;"
         " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
         ".data_in(data_in),.detected(detected)); endmodule\n")
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb),
          str(rtl / "sequence_detector.v")],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -463,9 +465,9 @@ def test_step_round4_real_workdir_shape_with_chip_top_present(tmp_path):
         " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
         ".data_in(data_in),.detected(detected)); endmodule\n")
     vfiles = [str(p) for p in sorted(rtl.glob("*.v"))]
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb), *vfiles],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -541,10 +543,10 @@ def test_step_round4_authored_chip_top_still_aliases_directly(tmp_path):
     tb.write_text("module tb; reg clk=0,rst_n=0; wire q1,q2;"
                   " chip_top dut(.clk(clk),.rst_n(rst_n),.q1(q1),.q2(q2));"
                   " endmodule\n")
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "d"), str(tb),
          *[str(p) for p in sorted(rtl.glob("*.v"))]],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -613,9 +615,9 @@ def test_step_comment_module_header_does_not_eat_rename(tmp_path):
     tb = tmp_path / "tb.v"
     tb.write_text("module tb; reg clk=0,rst_n=0; wire q;"
                   " core dut(.clk(clk),.rst_n(rst_n),.q(q)); endmodule\n")
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "d"), str(tb),
-         str(rtl / "core.v")], capture_output=True, text=True, timeout=60)
+         str(rtl / "core.v")], capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
 
 
@@ -691,8 +693,8 @@ def test_step_skips_when_top_is_genuine_leaf_submodule(tmp_path):
     iv = shutil.which("iverilog")
     if not iv:
         pytest.skip("iverilog not on this host")
-    res = subprocess.run(
+    res = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "d"),
          *[str(p) for p in sorted(rtl.glob("*.v"))]],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert res.returncode == 0, res.stderr

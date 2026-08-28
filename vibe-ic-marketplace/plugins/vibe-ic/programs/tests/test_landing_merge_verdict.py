@@ -60,6 +60,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import landing_merge_verdict as V  # noqa: E402
 import _watchdog  # noqa: E402
 
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "landing_merge_verdict.py"
 _REPO_ROOT = _PROGRAMS.parents[3]
@@ -893,7 +895,7 @@ def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
            "--base-junit", str(bj), "--candidate-junit", str(cj),
            "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
            "--json", str(tmp_path / "v.json"), *extra]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=_T)
+    r = _pr.run(cmd, capture_output=True, text=True)
     doc = json.loads((tmp_path / "v.json").read_text())
     return r, doc
 
@@ -1210,7 +1212,7 @@ def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path)
     (tmp_path / "sel.txt").write_text("\n".join(_SEL2) + "\n")
     (tmp_path / "sel_base.txt").write_text("\n".join(_SEL2) + "\n")
     cj = _junit(tmp_path, _CASE_SILENCED_CAND, "cand.xml")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROG),
          "--base-sha", SHA, "--base-tree", TREE,
          "--head-sha", SHA, "--verified-sha", SHA,
@@ -1223,7 +1225,7 @@ def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path)
          "--candidate-junit", str(cj),
          "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
          "--json", str(tmp_path / "v.json")],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     doc = json.loads((tmp_path / "v.json").read_text())
     assert r.returncode != 0, r.stdout + r.stderr
     assert doc["dropped_base_selected_files"] == sorted(_SEL2)
@@ -1301,7 +1303,7 @@ def test_cli_returns_one_on_a_new_failure(tmp_path):
 def test_cli_returns_two_when_the_candidate_report_is_absent(tmp_path):
     (tmp_path / "land.log").write_text(_GOOD_LOG)
     (tmp_path / "sel.txt").write_text("programs/tests/test_thing.py\n")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROG), "--base-sha", SHA, "--base-tree", TREE,
          "--head-sha", SHA,
          "--verified-sha", SHA, "--rebase-status", "ok",
@@ -1311,7 +1313,7 @@ def test_cli_returns_two_when_the_candidate_report_is_absent(tmp_path):
          "--base-junit", str(tmp_path / "nope.xml"),
          "--candidate-junit", str(tmp_path / "nope.xml"),
          "--protected-transition-receipt", str(_protected_receipt(tmp_path))],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert r.returncode == 2, r.stdout + r.stderr
 
 
@@ -1493,18 +1495,18 @@ def test_a_missing_receipt_quotes_the_arms_own_refusal_not_only_the_symptom(
         "[NORECORD] hermetic landing arm receipt: cannot resolve runner "
         "receipt: [Errno 2] No such file or directory\n")
 
-    absent = subprocess.run(
+    absent = _pr.run(
         ["bash", str(driver), str(run), str(record_log)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert "b1-runner.log" in absent.stderr, absent.stderr
     assert "did not even start" in absent.stderr, absent.stderr
 
     (run / "b1-runner.log").write_text(
         "[NORECORD] hermetic candidate: subject would expose the host HOME "
         "to the candidate\n")
-    quoted = subprocess.run(
+    quoted = _pr.run(
         ["bash", str(driver), str(run), str(record_log)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert "would expose the host HOME" in quoted.stderr, quoted.stderr
     assert "cannot resolve runner receipt" in quoted.stderr, quoted.stderr
 
@@ -1544,10 +1546,10 @@ def test_reading_one_arms_exit_code_cannot_byte_compile_the_shared_runtime(
         + _shell_function(_VERIFY.read_text(encoding="utf-8"),
                           "validated_arm_exit")
         + 'validated_arm_exit "$1" "$2"\n')
-    subprocess.run(
+    _pr.run(
         ["bash", str(driver), str(runtime / "hermetic_landing_arm_receipt.py"),
          str(tmp_path / "no-such-record.json")],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
 
     assert sorted(path.name for path in runtime.iterdir()) == before, \
         "reading an arm's exit code changed the runtime tree it read from"
@@ -1598,10 +1600,10 @@ def test_the_version_deferral_still_refuses_a_backwards_version():
     have traded an unsatisfiable gate for an unguarded one."""
     src = _LAND.read_text(encoding="utf-8")
     assert "--version-by-gatekeeper" in src
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "version_bump_monotonic_check.py"),
          "--current", "1.0.0", "--previous", "2.0.0", "--version-by-gatekeeper"],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert r.returncode != 0, r.stdout + r.stderr
 
 
@@ -1884,8 +1886,8 @@ def test_value_is_one():
 
 
 def _git(repo, *args, **kw):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                          text=True, timeout=_T, **kw)
+    return _pr.run(["git", "-C", str(repo), *args], capture_output=True,
+                          text=True, **kw)
 
 
 _BENCHMARK_TEST: dict[str, Path] = {}
@@ -2103,11 +2105,10 @@ def sandbox(tmp_path_factory):
 
 def _verify(repo, ref, tmp_path, *extra, env_extra=None):
     out = tmp_path / f"v_{ref}.json"
-    r = subprocess.run(
+    r = _pr.run(
         ["bash", str(_VERIFY), "--ref", ref, "--base", "main",
          "--repo", str(repo), "--no-fetch", "--json", str(out), *extra],
-        capture_output=True, text=True, timeout=_T,
-        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+        capture_output=True, text=True, env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
              "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
              "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
              "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
@@ -2168,8 +2169,8 @@ def _routed_activation_repo(sandbox, tmp_path, base_already_expanded=False):
     BASE too, which is the post-activation world where no transition is due.
     """
     repo = tmp_path / "routed-activation-repo"
-    cloned = subprocess.run(["git", "clone", "-q", str(sandbox), str(repo)],
-                            capture_output=True, text=True, timeout=_T)
+    cloned = _pr.run(["git", "clone", "-q", str(sandbox), str(repo)],
+                            capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -2357,9 +2358,9 @@ def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
     tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
     """
     repo = tmp_path / "wrong-head-repo"
-    cloned = subprocess.run(
+    cloned = _pr.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -2429,9 +2430,9 @@ def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
     tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
     """
     repo = tmp_path / "hidden-dirty-repo"
-    cloned = subprocess.run(
+    cloned = _pr.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -2496,9 +2497,9 @@ def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
     tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
     """
     repo = tmp_path / "replace-ref-repo"
-    cloned = subprocess.run(
+    cloned = _pr.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -2563,9 +2564,9 @@ def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
         sandbox, tmp_path):
     """Same-uid candidate arms cannot prewrite a reusable base exemption."""
     repo = tmp_path / "cache-repo"
-    cloned = subprocess.run(
+    cloned = _pr.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -3141,9 +3142,9 @@ def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
     in tools/ci/test_hermetic_candidate_runner.py.
     """
     repo = tmp_path / "corpus-tamper-repo"
-    cloned = subprocess.run(
+    cloned = _pr.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -3241,10 +3242,9 @@ def _assert_interruption_cleans_every_parallel_arm(
     remove all four temporary worktrees.
     """
     repo = tmp_path / "interrupt-repo"
-    cloned = subprocess.run(
+    cloned = _pr.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True, timeout=_T,
-    )
+        capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -3400,10 +3400,10 @@ def test_pid_only_term_kills_a_term_ignoring_b2_and_removes_worktrees(
 
 
 def _reassert(sandbox, path):
-    return subprocess.run(
+    return _pr.run(
         ["bash", str(_VERIFY), "--reassert", str(path), "--base", "main",
          "--repo", str(sandbox), "--no-fetch"],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
 
 
 def test_reassert_refuses_when_the_base_moved(sandbox, tmp_path):
@@ -3436,9 +3436,9 @@ def _repacked_commit(repo, source, branch, message="repack identical tree"):
     """One new commit, parented directly on main, with SOURCE's exact tree."""
     tree = _git(repo, "rev-parse", f"{source}^{{tree}}").stdout.strip()
     base = _git(repo, "rev-parse", "main").stdout.strip()
-    made = subprocess.run(
+    made = _pr.run(
         ["git", "-C", str(repo), "commit-tree", tree, "-p", base],
-        input=message + "\n", capture_output=True, text=True, timeout=_T)
+        input=message + "\n", capture_output=True, text=True)
     assert made.returncode == 0, made.stderr
     head = made.stdout.strip()
     assert _git(repo, "branch", "-f", branch, head).returncode == 0
@@ -3446,11 +3446,11 @@ def _repacked_commit(repo, source, branch, message="repack identical tree"):
 
 
 def _rebind(sandbox, old_verdict, ref, out):
-    return subprocess.run(
+    return _pr.run(
         ["bash", str(_VERIFY), "--rebind", str(old_verdict),
          "--ref", ref, "--base", "main", "--repo", str(sandbox),
          "--no-fetch", "--json", str(out)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
 
 
 def test_identical_tree_repack_rebinds_without_rerunning_expensive_arms(
@@ -3507,9 +3507,9 @@ def test_actual_push_shape_is_refused_before_any_expensive_arm(
     checker must still answer before merge-tree/rebase or A1/A2/B1/B2 starts.
     """
     repo = tmp_path / "push-shape-repo"
-    cloned = subprocess.run(
+    cloned = _pr.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert cloned.returncode == 0, cloned.stderr
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -3536,11 +3536,10 @@ def test_actual_push_shape_is_refused_before_any_expensive_arm(
                 "retract most of it and weaken the checker").returncode == 0
 
     out = tmp_path / "push-shape.json"
-    run = subprocess.run(
+    run = _pr.run(
         ["bash", str(_VERIFY), "--ref", "bad_push_shape", "--base", "main",
          "--repo", str(repo), "--no-fetch", "--json", str(out)],
-        capture_output=True, text=True, timeout=_T,
-        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": ""})
+        capture_output=True, text=True, env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": ""})
     assert run.returncode == 1, run.stdout + run.stderr
     assert "PUSH PREFLIGHT: REFUSE" in run.stderr
     assert "landing_collateral_revert_check.py" in run.stderr

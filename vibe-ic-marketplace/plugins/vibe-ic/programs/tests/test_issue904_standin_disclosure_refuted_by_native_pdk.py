@@ -37,14 +37,15 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = (Path(__file__).resolve().parent.parent
         / "analog_corner_lib_realism_lint.py")
 
-_TIMEOUT_S = 60          # harness ceiling
 _TARGET = "fabnode9x"    # invented family — matches no real foundry
 
 
@@ -121,8 +122,8 @@ def _run(proj: Path, pdks_root: Path | None):
     env.pop("VIBEIC_PDKS_ROOT", None)
     if pdks_root is not None:
         env["VIBEIC_PDKS_ROOT"] = str(pdks_root)
-    r = subprocess.run(cmd, capture_output=True, text=True,
-                       timeout=_TIMEOUT_S, env=env)
+    r = _pr.run(cmd, capture_output=True, text=True,
+                       env=env)
     return r, json.loads(out.read_text())
 
 

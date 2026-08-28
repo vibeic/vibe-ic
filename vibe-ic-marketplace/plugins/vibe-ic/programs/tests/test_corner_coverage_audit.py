@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for corner_coverage_audit.py"""
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -9,6 +8,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import corner_coverage_audit as cca
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def run_cli(tmp_path, files_dict):
@@ -23,7 +25,7 @@ def run_cli(tmp_path, files_dict):
     cmd = [sys.executable,
            str(Path(__file__).resolve().parent.parent / "corner_coverage_audit.py"),
            "--project-dir", str(proj), "--out-dir", str(out)]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    res = _pr.run(cmd, capture_output=True, text=True)
     report_file = out / "corner_coverage_audit_report.json"
     report = json.loads(report_file.read_text()) if report_file.exists() else None
     return res, report

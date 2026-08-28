@@ -38,6 +38,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _HERE = Path(__file__).resolve().parent
 _PROGRAMS = _HERE.parent
 _CHECK = _PROGRAMS / "citation_routing_is_true_check.py"
@@ -48,8 +51,8 @@ _CONTRACT = "PUBLISHING.md"   # hand-spelled: a fixture built from the module
 
 
 def _git(root: Path, *argv: str) -> None:
-    subprocess.run(["git", "-C", str(root), *argv], check=True,
-                   capture_output=True, text=True, timeout=60)
+    _pr.run(["git", "-C", str(root), *argv], check=True,
+                   capture_output=True, text=True)
 
 
 def _checkout(root: Path, *, is_corpus: bool) -> Path:
@@ -77,8 +80,8 @@ def _checkout(root: Path, *, is_corpus: bool) -> Path:
 def _run(pointer: Path, root: Path) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["VIBE_IC_BENCHMARK_DATA"] = str(pointer)
-    return subprocess.run([sys.executable, str(_CHECK), "--root", str(root)],
-                          capture_output=True, text=True, timeout=300, env=env)
+    return _pr.run([sys.executable, str(_CHECK), "--root", str(root)],
+                          capture_output=True, text=True, env=env)
 
 
 def test_the_real_corpus_tracking_none_is_not_called_a_wrong_pointer(tmp_path):

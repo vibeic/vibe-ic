@@ -24,11 +24,13 @@ against an `audit()` whose body had been deleted.
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PROG = PROGRAMS / "landing_unselectable_pytest_corpus.py"
@@ -146,8 +148,8 @@ def test_the_shipped_roster_faults_nothing_on_this_tree():
     # pytest kills the SESSION first and every other file in the subset loses
     # its verdict. MEASURED on this tree: `--repo <root> --audit` partitions
     # 2,734 tracked test files in 0.04 s, so 60 s is ~1500x the observed cost.
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(PROG), "--repo", str(REPO), "--audit"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert out.returncode == 0, (
         f"the shipped exclusion roster is stale again:\n{out.stdout}\n{out.stderr}")

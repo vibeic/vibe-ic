@@ -25,6 +25,9 @@ import fmeda_fault_injection_coverage as fi          # noqa: E402
 import fmeda_coverage_check as gate                  # noqa: E402
 import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _REPO_ROOT = ceiling_check.find_repo_root()
 
 
@@ -500,14 +503,13 @@ def test_the_vacuous_token_line_survives_the_consumers_stdout_window(tmp_path):
     bucket. Measured on `UNMEASURED_NO_RTL_READ`, whose reason is longer than
     the window.
     """
-    import subprocess
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True)
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(PROG_DIR / "fmeda_fault_injection_coverage.py"),
          str(tmp_path), "--rtl-dir", "phase2/stage1/rtl", "--asil", "D",
          "--json", str(tmp_path / "r.json")],
-        capture_output=True, text=True, timeout=INNER_TIMEOUT_S)
+        capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     window = (proc.stdout[-300:] + "\n" + proc.stderr[-300:]).strip()
     assert any(ln.lstrip().startswith("VACUOUS_PASS")

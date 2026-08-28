@@ -44,10 +44,13 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import re
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
@@ -112,9 +115,8 @@ def test_a_zero_file_scan_now_refuses(gate, tmp_path):
     # the programs directory, so a bare invocation from an empty cwd still
     # scanned 1063 files and the first version of this test failed on its own
     # driving rather than on the fix.
-    r = subprocess.run([sys.executable, str(_PROGRAMS / f"{gate}.py"), "."],
-                       cwd=str(tmp_path), capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([sys.executable, str(_PROGRAMS / f"{gate}.py"), "."],
+                       cwd=str(tmp_path), capture_output=True, text=True)
     assert r.returncode == 2, (
         f"{gate} exits {r.returncode} over an empty directory: "
         f"{(r.stdout + r.stderr)[-200:]}")
@@ -126,9 +128,8 @@ def test_a_zero_file_scan_now_refuses(gate, tmp_path):
 def test_the_real_population_still_passes(gate):
     """THE ACCEPT CASE. A refusal that also fires on the real repo is the same
     gate switched off from the other end."""
-    r = subprocess.run([sys.executable, str(_PROGRAMS / f"{gate}.py"), "."],
-                       cwd=str(_PROGRAMS), capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([sys.executable, str(_PROGRAMS / f"{gate}.py"), "."],
+                       cwd=str(_PROGRAMS), capture_output=True, text=True)
     assert r.returncode == 0, (r.stdout + r.stderr)[-300:]
 
 
@@ -143,10 +144,10 @@ def test_it_publishes_its_own_denominator():
 
 
 def test_an_empty_population_refuses_rather_than_passing(tmp_path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "gate_zero_denominator_refuses_check.py"),
          "--programs-dir", str(tmp_path)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == G.RC_CANNOT_PROBE, r.stdout + r.stderr
 
 

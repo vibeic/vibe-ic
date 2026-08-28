@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
@@ -53,6 +52,10 @@ sys.path.insert(0, str(_PROGRAMS))
 PROG = _PROGRAMS / "phase1_layer_demand_probe.py"
 
 import phase1_layer_demand_probe as P  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -157,8 +160,8 @@ def _l21(res):
 
 
 def _run(project, *extra):
-    return subprocess.run([sys.executable, str(PROG), str(project), *extra],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(PROG), str(project), *extra],
+                          capture_output=True, text=True)
 
 
 # ── FIRE: the defect ─────────────────────────────────────────────────────────

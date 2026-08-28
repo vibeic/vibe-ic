@@ -12,11 +12,13 @@ or part number appears anywhere.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 GATE = PROGRAMS / "l21_macro_supply_rail_declared_check.py"
@@ -187,9 +189,9 @@ WELLFORMED_L21 = {
 
 
 def _run(project: Path):
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(GATE), str(project)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
@@ -337,9 +339,9 @@ def test_isolation_and_level_shifter_typed_shape(tmp_path):
 def test_json_report_is_written(tmp_path):
     project = _build(tmp_path, GUTTED_L21)
     out_json = tmp_path / "rep.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(GATE), str(project), "--json", str(out_json)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert proc.returncode == 1
     doc = json.loads(out_json.read_text())
     assert doc["verdict"] == "FAIL"
@@ -392,9 +394,9 @@ def test_untyped_abstract_degrades_to_a_partial_check_not_a_louder_skip(
     project = _build(tmp_path, GUTTED_L21, macro_lef=MAGIC_WRITTEN_LEF,
                      macro_lib=MACRO_LIB)
     out_json = tmp_path / "rep.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(GATE), str(project), "--json", str(out_json)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     out = proc.stdout + proc.stderr
     assert proc.returncode == 1, f"rc={proc.returncode}\n{out}"
 
@@ -443,9 +445,9 @@ def test_an_abstract_that_types_its_pins_and_has_no_supply_still_skips(
     evidence, and it must keep SKIPping — otherwise 'everything now FAILs'."""
     project = _build(tmp_path, GUTTED_L21, macro_lef=SIGNAL_ONLY_LEF)
     out_json = tmp_path / "rep.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(GATE), str(project), "--json", str(out_json)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     out = proc.stdout + proc.stderr
     assert proc.returncode == 2, (
         f"an affirmatively-typed abstract MUST SKIP. rc={proc.returncode}\n{out}")

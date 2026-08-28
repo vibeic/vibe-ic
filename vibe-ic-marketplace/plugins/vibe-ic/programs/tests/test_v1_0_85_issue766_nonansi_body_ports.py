@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -42,6 +41,9 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import reset_clock_variant_alias as V  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _LCC = _PROGRAMS / "latency_conformance_check.py"
 
@@ -170,8 +172,8 @@ endmodule
 
 
 def _run_lcc(args):
-    cp = subprocess.run([sys.executable, str(_LCC), *args],
-                        capture_output=True, text=True, timeout=60)
+    cp = _pr.run([sys.executable, str(_LCC), *args],
+                        capture_output=True, text=True)
     return cp.returncode, cp.stdout + cp.stderr
 
 

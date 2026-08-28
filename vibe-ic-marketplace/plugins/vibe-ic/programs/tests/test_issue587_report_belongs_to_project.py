@@ -34,10 +34,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
-import subprocess
 import sys
 
 from _published_corpus import corpus_root, needs_corpus
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "report_belongs_to_project_check.py"
@@ -65,8 +68,8 @@ def _report(project: pathlib.Path, claims: str, verdict: str = "PASS",
 
 
 def _run(project):
-    return subprocess.run([sys.executable, str(PROG), str(project)],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(PROG), str(project)],
+                          capture_output=True, text=True)
 
 
 # ── the defect ───────────────────────────────────────────────────────────────

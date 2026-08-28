@@ -28,13 +28,15 @@ Pins:
     still never promotes a bogus pin.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import phase1_doc_one_shot_runner as P1  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # ── REAL table rows, embedded VERBATIM (all rows of both tables from
 #    the real L3 external-interface doc; #491-r4 / #501 doctrine:
@@ -138,18 +140,18 @@ def test_e2e_real_rows_optional_pin_gate_passes(tmp_path):
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True)
     (rtl / "chip_top.v").write_text(_RTL)
-    r1 = subprocess.run(
+    r1 = _pr.run(
         [sys.executable, str(PROGRAMS / "phase1_doc_one_shot_runner.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=60)
+         str(tmp_path)], capture_output=True, text=True)
     assert r1.returncode == 0, r1.stdout[-1500:] + r1.stderr[-500:]
     l9 = json.loads((tmp_path / "phase1" / "generated_docs"
                      / "L9_INTEGRATION_SPEC.json").read_text())
     opt = {p["name"]: p.get("optional")
            for p in (l9.get("top_ports") or [])}
     assert opt.get("i_gpio") is True, opt
-    r2 = subprocess.run(
+    r2 = _pr.run(
         [sys.executable, str(PROGRAMS / "l9_rtl_pin_consistency_check.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=60)
+         str(tmp_path)], capture_output=True, text=True)
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert "i_gpio" in r2.stdout and "WARN" in r2.stdout, r2.stdout
 
@@ -163,12 +165,12 @@ def test_e2e_required_pin_missing_still_fails(tmp_path):
     rtl.mkdir(parents=True)
     (rtl / "chip_top.v").write_text(
         _RTL.replace("  output wire o_sram_we,\n", ""))
-    r1 = subprocess.run(
+    r1 = _pr.run(
         [sys.executable, str(PROGRAMS / "phase1_doc_one_shot_runner.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=60)
+         str(tmp_path)], capture_output=True, text=True)
     assert r1.returncode == 0, r1.stdout[-1500:] + r1.stderr[-500:]
-    r2 = subprocess.run(
+    r2 = _pr.run(
         [sys.executable, str(PROGRAMS / "l9_rtl_pin_consistency_check.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=60)
+         str(tmp_path)], capture_output=True, text=True)
     assert r2.returncode == 1, r2.stdout + r2.stderr
     assert "o_sram_we" in r2.stdout, r2.stdout

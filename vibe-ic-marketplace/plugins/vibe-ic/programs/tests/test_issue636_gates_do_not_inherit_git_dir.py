@@ -16,6 +16,10 @@ from pathlib import Path
 
 import pytest
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[5]
 HOOK = REPO / "tools" / "git-hooks" / "pre-push"
 
@@ -71,10 +75,10 @@ def test_the_premise_holds_a_real_gate_IS_git_dir_sensitive():
     # ceiling that matters is the harness's 180 s — an inner bound above 60 s
     # can outlive it and kill the SESSION instead of the test, which
     # `ci_harness_timeout_ceiling_check` failed this file on at merge.
-    ok = subprocess.run(argv, capture_output=True, text=True, cwd=str(REPO),
-                        env=clean, timeout=30)
-    bad = subprocess.run(argv, capture_output=True, text=True, cwd=str(REPO),
-                         env=dirty, timeout=30)
+    ok = _pr.run(argv, capture_output=True, text=True, cwd=str(REPO),
+                        env=clean)
+    bad = _pr.run(argv, capture_output=True, text=True, cwd=str(REPO),
+                         env=dirty)
     if ok.returncode != 0:
         pytest.skip(f"gate does not pass cleanly here: {ok.stdout.strip()[:120]}")
     assert bad.returncode != 0, (

@@ -117,6 +117,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[5]
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN / "programs"
@@ -184,9 +187,9 @@ def _subjects(checker: str, corpus: Path):
 
 
 def _run(checker: str, argv) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAMS / checker), *[str(a) for a in argv]],
-        capture_output=True, text=True, timeout=600, cwd=str(PROGRAMS))
+        capture_output=True, text=True, cwd=str(PROGRAMS))
 
 
 def _counts(text: str):

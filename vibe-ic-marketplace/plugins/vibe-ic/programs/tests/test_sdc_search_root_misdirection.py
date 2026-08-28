@@ -75,6 +75,9 @@ for _p in (str(_PROGRAMS), str(_PLUGIN)):
 
 import flow_compliance_check as _fcc                      # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = _PROGRAMS / "sdc_validator_check.py"
 FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
@@ -115,8 +118,8 @@ def _project(tmp_path: Path, name: str = "proj", *, constraints=None,
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROG)] + args,
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(PROG)] + args,
+                          capture_output=True, text=True)
 
 
 # ── discriminators ───────────────────────────────────────────────────────────

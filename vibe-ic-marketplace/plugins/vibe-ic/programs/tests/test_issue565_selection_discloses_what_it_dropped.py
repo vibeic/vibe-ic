@@ -27,9 +27,11 @@ THE SELECTION IS UNCHANGED. This adds a sentence, not a test.
 from __future__ import annotations
 
 import importlib
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 C = importlib.import_module("ci_targeted_test_select")
 
@@ -37,16 +39,9 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
 
 
-#: MEASURED: this whole file runs in ~8 s and one CLI invocation is ~4 s (the
-#: import-edge index over the tests tree dominates). 60 is the harness ceiling
-#: for an inner subprocess bound — above it the bound outlives the 180 s harness
-#: and kills the SESSION instead of the test.
-_BUDGET_S = 60
-
-
 def _git(repo, *a):
-    subprocess.run(["git", "-C", str(repo), *a], capture_output=True,
-                   timeout=_BUDGET_S)
+    _pr.run(["git", "-C", str(repo), *a], capture_output=True,
+                   text=False)
 
 
 def _tree(tmp_path):
@@ -141,11 +136,10 @@ def test_a_non_python_change_contributes_nothing(tmp_path):
 # ── the CLI prints it, on stderr, with the next move ───────────────────────
 def _cli(extra=()):
     """Against the REAL plugin, because that is the only tree the CLI reads."""
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_PROGRAMS / "ci_targeted_test_select.py"),
          "--base", "HEAD~1", *extra],
-        cwd=str(_PLUGIN.parents[1]), capture_output=True, text=True,
-        timeout=_BUDGET_S)
+        cwd=str(_PLUGIN.parents[1]), capture_output=True, text=True)
 
 
 def test_the_report_reaches_stderr_not_stdout():

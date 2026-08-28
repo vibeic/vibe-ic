@@ -5,19 +5,21 @@ step.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 GATE = Path(__file__).resolve().parent.parent / "flow_step_can_fail_check.py"
 yaml = pytest.importorskip("yaml")
 
 
 def _run(flow: Path):
-    p = subprocess.run([sys.executable, str(GATE), "--flow", str(flow)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(GATE), "--flow", str(flow)],
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 

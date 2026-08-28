@@ -46,6 +46,9 @@ LOCK_NAME = ".runner.lock"
 sys.path.insert(0, str(PROGRAMS_DIR))
 import _runner_lock  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # --------------------------------------------------------------------------
 # A dead pid: spawn a trivial child, wait for it, then reuse its pid. The
@@ -170,10 +173,10 @@ def test_pid_alive_self_true_and_dead_false(tmp_path):
 def _run_runner(project: Path, timeout: int = 60):
     """Invoke the runner verbatim: python3 programs/vibe_ic_one_shot_runner.py
     <proj> --skip-phase1 --skip-analog --skip-phase3."""
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(RUNNER), str(project),
          "--skip-phase1", "--skip-analog", "--skip-phase3"],
-        capture_output=True, text=True, timeout=timeout, cwd=str(PROGRAMS_DIR),
+        capture_output=True, text=True, cwd=str(PROGRAMS_DIR),
     )
 
 

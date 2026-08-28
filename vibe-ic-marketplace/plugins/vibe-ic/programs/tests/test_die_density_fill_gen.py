@@ -42,7 +42,6 @@ Every test below breaks something the change defends and requires the failure:
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -53,6 +52,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import die_density_fill_gen as DDF                            # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _RUNNER = _PROGRAMS / "phase3_one_shot_runner.py"
 _DRIVER = _PROGRAMS / "density_fill" / "pdk_fill_driver.rb"
@@ -386,9 +388,9 @@ def test_the_program_is_pdk_agnostic():
 
 
 def test_the_program_runs_standalone_and_refuses_without_a_project():
-    cp = subprocess.run([sys.executable,
+    cp = _pr.run([sys.executable,
                          str(_PROGRAMS / "die_density_fill_gen.py")],
-                        capture_output=True, text=True, timeout=120)
+                        capture_output=True, text=True)
     assert cp.returncode != 0
 
 

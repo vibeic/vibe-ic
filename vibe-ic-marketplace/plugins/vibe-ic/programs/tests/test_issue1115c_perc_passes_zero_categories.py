@@ -28,7 +28,6 @@ the corroboration this gate exists for did not happen — so it now rides in the
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -38,12 +37,12 @@ GATE = PROGRAMS / "perc_signoff_check.py"
 sys.path.insert(0, str(PROGRAMS))
 from flow_compliance_check import _stdout_signals_vacuous  # noqa: E402
 
-_T = 55
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _run(project: Path):
-    p = subprocess.run([sys.executable, str(GATE), str(project)],
-                       capture_output=True, text=True, timeout=_T)
+    p = _pr.run([sys.executable, str(GATE), str(project)],
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 

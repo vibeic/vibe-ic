@@ -33,6 +33,10 @@ import pytest
 
 from _hostpaths import require_corpus
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SCRIPT = (Path(__file__).resolve().parents[2]
           / "benchmark" / "score_cocotb_mcp.py")
 
@@ -247,11 +251,11 @@ def _find_encoder_project():
 def test_priority_encoder_functional_pass_with_coverage_gate_flagged(tmp_path):
     _need_iic_eda()
     proj = _find_encoder_project()
-    r = subprocess.run(
+    r = _pr.run(
         ["python3", str(SCRIPT), "--project", str(proj),
          "--top", "priority_encoder_8x3",
          "--mount-root", str(require_corpus())],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     score_json = proj / "reports" / "cocotb_score.json"
     assert score_json.is_file(), r.stdout + r.stderr
     d = json.loads(score_json.read_text())

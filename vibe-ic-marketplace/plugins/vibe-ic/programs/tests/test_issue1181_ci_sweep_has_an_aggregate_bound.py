@@ -21,7 +21,6 @@ driven past a budget in a second or two without depending on the real gate set.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -32,6 +31,9 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import gate_discloses_denominator_check as G  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROG = PROGRAMS / "gate_discloses_denominator_check.py"
 
@@ -141,9 +143,9 @@ def test_the_cli_exits_2_on_a_truncated_sweep(tmp_path):
     what it examined'. Over a truncated sweep that is a claim about how far the
     loop got."""
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROG), str(root), "--budget", "3"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 2, (r.returncode, r.stderr[-400:])
     assert "NOT CHECKED" in r.stderr
     assert "aggregate budget" in r.stderr or "NOT PROBED" in r.stderr
@@ -153,9 +155,9 @@ def test_the_json_record_discloses_truncation(tmp_path):
     import json
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
     out = tmp_path / "rec.json"
-    subprocess.run(
+    _pr.run(
         [sys.executable, str(_PROG), str(root), "--budget", "3",
-         "--json", str(out)], capture_output=True, text=True, timeout=60)
+         "--json", str(out)], capture_output=True, text=True)
     rec = json.loads(out.read_text())
     assert rec["truncated"] is True, rec
     assert rec["gates_probed"] < rec["gates_declared"], rec

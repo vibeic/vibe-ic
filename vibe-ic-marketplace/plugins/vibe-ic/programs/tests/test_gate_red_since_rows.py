@@ -30,6 +30,9 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import gate_red_since_check as G  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 REPO = PROGRAMS.parents[3]
 LEDGER = REPO / G.LEDGER_REL
 HYGIENE = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
@@ -734,10 +737,10 @@ def test_the_review_passes_both_halves_from_the_base(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 def _cli(repo, record, *extra):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAMS / "gate_red_since_check.py"),
          "--record", str(record), "--repo", str(repo), *extra],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True)
 
 
 def _rec_file(tmp_path, states):

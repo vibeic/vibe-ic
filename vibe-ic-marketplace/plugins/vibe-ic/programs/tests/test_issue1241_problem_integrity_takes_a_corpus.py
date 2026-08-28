@@ -52,9 +52,11 @@ chip-AGNOSTIC: no design, PDK, vendor or node literal.
 """
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN / "programs"
@@ -241,10 +243,10 @@ def test_an_internal_error_is_never_rc_1(tmp_path):
         doc["identities"]["analysis"] = "sha256:" + "c" * 8   # a STRING
         doc["contract_digest"] = C.contract_digest_of(doc)
         _write(tmp_path / name / "contract.json", doc)
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(PROGRAMS / "ppa_problem_integrity_check.py"),
          "--corpus", str(tmp_path)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True)
     assert "Traceback (most recent call last)" not in out.stderr, (
         f"a traceback escaped; §1 reserves 1 for a finding and a crash must "
         f"never publish itself as one\n{out.stderr[-700:]}")

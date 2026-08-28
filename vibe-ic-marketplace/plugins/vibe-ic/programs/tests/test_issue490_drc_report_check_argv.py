@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -49,6 +48,9 @@ sys.path.insert(0, str(PROGRAMS))
 import _report_check_argv as argv_helper  # noqa: E402
 import drc_report_check as wrapper  # noqa: E402
 import eda_report_audit as era  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # Padding that clears the drc byte floor (MIN_REPORT_BYTES['drc'] == 2048)
 # without carrying any design-specific content.
@@ -86,8 +88,8 @@ _POWER_RPT = (
 
 
 def _run(args, cwd=None):
-    return subprocess.run([sys.executable, str(PROG)] + [str(a) for a in args],
-                          capture_output=True, text=True, timeout=60, cwd=cwd)
+    return _pr.run([sys.executable, str(PROG)] + [str(a) for a in args],
+                          capture_output=True, text=True, cwd=cwd)
 
 
 def _project(tmp_path, *, drc=_CLEAN_DRC, power=False):
@@ -613,10 +615,10 @@ def test_the_docstring_does_not_claim_an_enforcement_tier_it_lacks(tmp_path):
     phase3_one_shot_runner carries sta/em, not drc — so the docstring must not
     claim otherwise. Driven, not read."""
     out = tmp_path / "enf.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "flow_gate_enforcement_audit.py"),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-800:]
     gates = {g["gate"]: g for g in json.loads(out.read_text())["gates"]}
     assert gates["drc_report_check"]["enforcement"] == "AUDIT_ONLY"

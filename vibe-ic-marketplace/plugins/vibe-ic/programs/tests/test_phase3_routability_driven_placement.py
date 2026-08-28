@@ -29,7 +29,6 @@ errors only with `GPL-0130 No rows defined` — a runtime "no design" error, not
 """
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -38,6 +37,9 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 tclsh = shutil.which("tclsh")
 needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
@@ -195,8 +197,8 @@ def test_full_tcl_parses_in_tclsh(tmp_path, kw):
     tcl = _build(**kw).replace("\nexit\n", "\nputs PNR_TCL_END\n")
     script = tmp_path / "pnr.tcl"
     script.write_text(_STUB + tcl)
-    res = subprocess.run([tclsh, str(script)], capture_output=True,
-                         text=True, timeout=60)
+    res = _pr.run([tclsh, str(script)], capture_output=True,
+                         text=True)
     assert res.returncode == 0, res.stderr
     assert "missing close-bracket" not in res.stderr
     assert "PNR_TCL_END" in res.stdout
@@ -262,10 +264,10 @@ def test_default_only_adds_routability_flag_vs_plain():
 def test_openroad_accepts_routability_driven_flag():
     """When openroad is reachable (inside the iic-osic-tools container CI),
     assert `help global_placement` advertises the exact flags we emit."""
-    res = subprocess.run(
+    res = _pr.run(
         ["openroad", "-no_init", "-exit"],
         input="help global_placement\n",
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     out = res.stdout + res.stderr
     assert "-routability_driven" in out
     assert "-timing_driven" in out

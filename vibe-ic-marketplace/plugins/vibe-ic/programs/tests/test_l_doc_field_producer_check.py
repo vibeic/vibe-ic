@@ -12,11 +12,13 @@ is indistinguishable from a clean one.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 from _published_corpus import corpus_root, needs_corpus
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "l_doc_field_producer_check.py"
@@ -39,10 +41,10 @@ def _mk_doc(corpus: Path, rel: str, fields: dict):
 
 
 def _run(corpus: Path, progs: Path, bl: Path, *extra):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_PROG), str(corpus), "--programs", str(progs),
          "--baseline", str(bl), *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def test_reader_with_no_producer_fails(tmp_path):
@@ -148,8 +150,8 @@ def test_shipped_tree_passes_against_its_recorded_debt():
     the published one, wherever it is, and where there is none the honest answer
     is a skip rather than a verdict about a register nobody could re-derive.
     """
-    r = subprocess.run([sys.executable, str(_PROG), str(corpus_root() / "ic")],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_PROG), str(corpus_root() / "ic")],
+                       capture_output=True, text=True)
     if r.returncode == 2:
         return
     assert r.returncode == 0, r.stdout + r.stderr

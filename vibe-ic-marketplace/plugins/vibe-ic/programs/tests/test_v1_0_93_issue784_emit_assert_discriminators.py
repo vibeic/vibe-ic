@@ -26,7 +26,6 @@ chip-AGNOSTIC: fixtures use generic TopModule / din / dout / wave shapes only.
 import json
 import shutil
 import pytest
-import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import (extract_spec_contract, parse_rtl_ports,  # noqa: E402
                              strip_comments)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: The repo's existing tool gate. Without it this module raises
 #: FileNotFoundError on a host that lacks the tool, instead of
@@ -576,10 +578,10 @@ def _run_cli(tmp_path, spec_text, rtl, suffix=".md"):
     rtl_f = tmp_path / "dut.v"
     rtl_f.write_text(rtl)
     out_json = tmp_path / "findings.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAM), "--spec", str(spec_f),
          "--top", "TopModule", "--json", str(out_json), str(rtl_f)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     findings = json.loads(out_json.read_text()) if out_json.is_file() else []
     return r, findings
 
@@ -639,11 +641,11 @@ def _stage(tmp_path, prompt_text, sample_body):
 
 
 def _run_gate(ds, run):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(GATES), "--prob", "ProbP",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def _block_rules(run):

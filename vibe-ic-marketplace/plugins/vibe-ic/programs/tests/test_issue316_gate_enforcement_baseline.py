@@ -13,9 +13,11 @@ The class stops growing without the audit quietly setting enforcement policy.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "flow_gate_enforcement_audit.py"
@@ -31,8 +33,7 @@ def _run(*extra, baseline=None, flow=None, programs=None, extra_kw=()):
         cmd += ["--flow", str(flow)]
     if programs is not None:
         cmd += ["--programs", str(programs)]
-    return subprocess.run(cmd + list(extra), capture_output=True, text=True,
-                          timeout=60)
+    return _pr.run(cmd + list(extra), capture_output=True, text=True)
 
 
 def _tree_with_one_contradiction(tmp_path):

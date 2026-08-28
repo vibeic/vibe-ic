@@ -47,6 +47,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
@@ -133,8 +136,8 @@ def _run(gate: Path, project: Path, *args) -> subprocess.CompletedProcess:
     # this file: the slowest test is 0.22s wall and every `_run` launches a gate
     # over a tmp_path tree of a few hundred bytes. 55s is the bound the repo
     # already uses for this shape.
-    return subprocess.run([sys.executable, str(gate), str(project), *args],
-                          capture_output=True, text=True, timeout=55)
+    return _pr.run([sys.executable, str(gate), str(project), *args],
+                          capture_output=True, text=True)
 
 
 def _both(cp) -> str:

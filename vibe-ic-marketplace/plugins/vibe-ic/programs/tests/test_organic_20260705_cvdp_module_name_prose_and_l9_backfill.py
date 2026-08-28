@@ -36,7 +36,6 @@ Run: python3 -m pytest programs/tests/test_organic_20260705_cvdp_module_name_pro
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -47,6 +46,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_doc_one_shot_runner as P   # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -150,8 +152,8 @@ def test_end_to_end_phase1_populates_l9_top_module_and_ports(tmp_path):
     (proj / "input").mkdir(parents=True)
     (proj / "input" / "phase1_prompt.md").write_text(PRIORITY_ENCODER_PROMPT)
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
-    r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(runner), str(proj)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-800:]
     l9 = json.loads((proj / "phase1" / "generated_docs"
                      / "L9_INTEGRATION_SPEC.json").read_text())

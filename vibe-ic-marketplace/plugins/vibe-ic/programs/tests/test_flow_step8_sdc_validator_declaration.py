@@ -58,7 +58,6 @@ skipping at exit 0.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -73,6 +72,9 @@ for _p in (str(_PROGRAMS), str(_PLUGIN)):
         sys.path.insert(0, _p)
 
 import flow_compliance_check as _fcc                      # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 PROG = _PROGRAMS / "sdc_validator_check.py"
@@ -182,8 +184,8 @@ def test_shipped_gate_command_positional_is_the_project_root(gate_cmd):
 # ── the pre-fix invocation, pinned as the defect it was ─────────────────────
 
 def _run_prog(args):
-    return subprocess.run([sys.executable, str(PROG)] + args,
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(PROG)] + args,
+                          capture_output=True, text=True)
 
 
 def test_the_prefix_positional_still_reaches_no_sdc_but_no_longer_hides_it(

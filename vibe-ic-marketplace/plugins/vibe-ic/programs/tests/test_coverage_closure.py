@@ -47,12 +47,14 @@ PROG = Path(__file__).resolve().parent.parent / "coverage_closure.py"
 sys.path.insert(0, str(PROG.parent))
 from verilator_coverage_measure import COVERAGE_MEASUREMENT_REL  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 def _run(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG)] + args,
-        capture_output=True, text=True, timeout=timeout,
-    )
+        capture_output=True, text=True)
 
 
 def _write_cov(project: Path, body) -> None:

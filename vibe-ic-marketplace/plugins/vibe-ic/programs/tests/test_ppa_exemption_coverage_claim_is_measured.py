@@ -34,11 +34,13 @@ finds no number-stating PPA corpus row at all, that is a FAILURE — the rows
 exist, so a parser that stopped matching them has gone dark, not gone clean.
 """
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[5]
 PROGRAMS = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
@@ -226,8 +228,8 @@ def test_every_stated_coverage_number_is_the_one_the_gate_reports():
     wrong, noted = [], list(f"corpus not in this checkout, not checked: {m}"
                             for m in missing)
     for label, claimed, unit, argv, _ex in rows:
-        proc = subprocess.run([sys.executable] + argv, capture_output=True,
-                              text=True, timeout=600)
+        proc = _pr.run([sys.executable] + argv, capture_output=True,
+                              text=True)
         # The roll-up line names the corpus it walked; per-record chatter does
         # not. Anchoring here keeps an incidental number in a finding from
         # standing in for the population.
@@ -312,8 +314,8 @@ def test_a_declaration_that_says_it_passes_is_on_a_gate_that_passes():
     wrong, noted = [], list(f"corpus not in this checkout, not checked: {m}"
                             for m in missing)
     for label, _claimed, _unit, argv, exemption in rows:
-        rc = subprocess.run([sys.executable] + argv, capture_output=True,
-                            text=True, timeout=600).returncode
+        rc = _pr.run([sys.executable] + argv, capture_output=True,
+                            text=True).returncode
         says_pass = "PASSES today" in exemption
         if says_pass and rc != 0:
             wrong.append(f"{label}: declaration says 'PASSES today', gate exits {rc}")

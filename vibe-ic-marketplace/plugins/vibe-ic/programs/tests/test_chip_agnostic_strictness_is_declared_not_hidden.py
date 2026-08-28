@@ -45,12 +45,14 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -65,9 +67,6 @@ _VENDOR = {"tsmc", "samsung", "globalfound", "globalfoundries", "umc",
 #: Open PDK names. Their presence in a ban is what makes it STRICTER than the
 #: repo-wide gate, which permits them.
 _OPEN = {"sky130", "gf180", "sg13g2", "sg13", "asap7", "nangate", "ihp"}
-
-_TIMEOUT = 60
-
 
 def _gate_mod():
     """A private copy, so a sibling test's `sys.modules` entry cannot decide
@@ -295,9 +294,9 @@ def test_the_gate_discloses_them_on_the_pass_path(tmp_path):
     to be on the PASS path — not only in a report nobody opens, and not only on
     the FAIL path, which already sends the reader to a file."""
     out = tmp_path / "r.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_GATE), str(_PLUGIN), "--json", str(out)],
-        capture_output=True, text=True, timeout=_TIMEOUT * 5)
+        capture_output=True, text=True)
     assert cp.returncode == 0, (cp.stdout[-3000:], cp.stderr[-2000:])
     assert "DISCLOSURE" in cp.stdout, cp.stdout[-2000:]
     assert "is not their verdict" in cp.stdout, cp.stdout[-2000:]
@@ -348,8 +347,8 @@ def test_the_control_the_disclosure_does_not_fire_when_nothing_declares(
     verdict, _ = mod.audit(root)
     assert verdict == "PASS"
     assert dict(mod.DECLARED_STRICT) == {}
-    cp = subprocess.run([sys.executable, str(_GATE), str(root)],
-                        capture_output=True, text=True, timeout=_TIMEOUT)
+    cp = _pr.run([sys.executable, str(_GATE), str(root)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, (cp.stdout, cp.stderr)
     assert "DISCLOSURE" not in cp.stdout, cp.stdout
 

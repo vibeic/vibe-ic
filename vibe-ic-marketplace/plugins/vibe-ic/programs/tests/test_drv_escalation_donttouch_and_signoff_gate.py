@@ -48,7 +48,6 @@ cell or net literal anywhere.
 """
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -57,6 +56,9 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 tclsh = shutil.which("tclsh")
 needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
@@ -306,8 +308,7 @@ def test_dont_touch_restore_protects_tie_driver_and_locked_insts(tmp_path):
     script.write_text(stub + R._build_dont_touch_restore_tcl() +
                       "\nputs \"INSTS: $::touched\"\n"
                       "puts \"NETS: $::touched_nets\"\n")
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     insts = re.search(r"INSTS: (.*)", r.stdout).group(1)
     nets = re.search(r"NETS: (.*)", r.stdout).group(1)
@@ -333,7 +334,6 @@ def test_restore_fragment_is_valid_tcl_standalone(tmp_path):
     script = tmp_path / "parse.tcl"
     script.write_text("proc unknown {args} { return {} }\n"
                       + R._build_dont_touch_restore_tcl())
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "SHIP_ESC_DONT_TOUCH_RESTORED" in r.stdout

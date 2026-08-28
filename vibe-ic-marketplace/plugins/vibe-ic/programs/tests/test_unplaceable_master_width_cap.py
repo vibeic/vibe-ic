@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import inspect
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +50,9 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase3_one_shot_runner as p3  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TCLSH = shutil.which("tclsh")
 _needs_tcl = pytest.mark.skipif(_TCLSH is None, reason="tclsh not installed")
@@ -215,8 +217,7 @@ def _run_cap(setup: str, tmp_path) -> str:
     f = tmp_path / "cap.tcl"
     f.write_text(_STUB + setup + p3._build_unplaceable_master_cap_tcl()
                  + '\nputs "DONTUSE: $::DONTUSE"\n')
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr + r.stdout
     return r.stdout
 
@@ -384,8 +385,7 @@ def test_a_broken_odb_degrades_to_the_prior_behaviour(tmp_path):
                  "{ error \"no block linked\" } }\n"
                  + p3._build_unplaceable_master_cap_tcl()
                  + '\nputs "SURVIVED"\n')
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "UNPLACEABLE_MASTERS_NONFATAL" in r.stdout
     assert "SURVIVED" in r.stdout
@@ -398,8 +398,7 @@ def test_negative_control_the_recovery_is_not_the_stubs(tmp_path):
     tests above measure therefore comes from the emitted block."""
     f = tmp_path / "prefix.tcl"
     f.write_text(_STUB + _OBSTRUCTED + '\nputs "DONTUSE: $::DONTUSE"\n')
-    out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                         timeout=60).stdout
+    out = _pr.run([_TCLSH, str(f)], capture_output=True, text=True).stdout
     assert "PLACEABLE_WIDTH_BOUND" not in out
     assert _excluded(out) == []
 
@@ -484,8 +483,7 @@ def _run_ladder(fail_cond: str, tmp_path) -> str:
     f.write_text((_LADDER_STUB % fail_cond)
                  + p3._build_escalating_legalize_tcl("T", "_t")
                  + '\nputs "NCALLS: [llength $::calls]"\n')
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -541,8 +539,7 @@ def _run_cap_named(setup: str, tmp_path, cts) -> str:
     f.write_text(_STUB + setup
                  + p3._build_unplaceable_master_cap_tcl(cts)
                  + '\nputs "DONTUSE: $::DONTUSE"\n')
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr + r.stdout
     return r.stdout
 

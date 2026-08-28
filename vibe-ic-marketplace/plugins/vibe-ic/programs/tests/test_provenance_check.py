@@ -5,16 +5,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 LOGGER = Path(__file__).parent.parent / "provenance_logger.py"
 CHECKER = Path(__file__).parent.parent / "provenance_check.py"
 assert LOGGER.exists() and CHECKER.exists()
 
 
 def _run_check(*args) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(CHECKER), *args],
-        capture_output=True, text=True, timeout=15,
-    )
+        capture_output=True, text=True)
 
 
 def _sha(path: Path) -> str:

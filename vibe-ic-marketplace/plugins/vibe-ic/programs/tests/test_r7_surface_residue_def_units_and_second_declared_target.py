@@ -38,11 +38,13 @@ port/module names; no chip, foundry SKU, vendor or design literal appears.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
@@ -90,9 +92,9 @@ def _sdc_project(tmp_path: Path, l9_pins) -> Path:
 
 
 def _run_sdc_gen(proj: Path):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAMS / "sdc_gen.py"), str(proj), "--force"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def _emitted_sdc(proj: Path) -> str:
@@ -220,10 +222,10 @@ def _pdk_project(tmp_path: Path, alternates, loaded_lib: str,
 
 
 def _run_pdk_gate(proj: Path):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable,
          str(PROGRAMS / "declared_pdk_is_the_pdk_used_check.py"), str(proj)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 @pytest.mark.parametrize("alternates,loaded,want_rc", [

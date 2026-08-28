@@ -37,6 +37,9 @@ sys.path.insert(0, str(PROGRAMS))
 import magic_illegal_overlap_check as M  # noqa: E402
 import step_metrics as SM  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 RUNNER = PROGRAMS / "phase3_one_shot_runner.py"
 PA_EXTRACT = PROGRAMS / "lvs_power_aware_extract_tcl.py"
@@ -355,9 +358,9 @@ def test_real_magic_writes_a_dump_this_parser_reads(tmp_path):
         '(types do not connect)"\n'
         'feedback save dirty.txt\n'
         'quit -noprompt\n')
-    cp = subprocess.run(["magic", "-dnull", "-noconsole", "-rcfile",
+    cp = _pr.run(["magic", "-dnull", "-noconsole", "-rcfile",
                          "/dev/null", "mk.tcl"], capture_output=True,
-                        text=True, check=False, cwd=tmp_path, timeout=180)
+                        text=True, check=False, cwd=tmp_path)
     assert "Wrong number of arguments" not in (cp.stdout + cp.stderr), \
         f"magic rejected the feedback commands: {(cp.stdout + cp.stderr)[-400:]}"
     assert clean.is_file(), "feedback save must CREATE the file for 0 areas"

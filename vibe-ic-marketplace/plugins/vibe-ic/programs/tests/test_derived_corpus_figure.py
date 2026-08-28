@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import ast
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -31,21 +30,8 @@ sys.path.insert(0, str(PROGRAMS))
 import _derived_corpus_figure as seam            # noqa: E402
 import derived_corpus_figure_check as guard      # noqa: E402
 
-#: Bound for the one launch in this file. NOT a round number picked by feel:
-#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
-#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
-#: `--timeout-method=thread` — and permits any ONE blocking call at most
-#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
-#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
-#: and every other file in the subset loses its verdict, including files that
-#: had already passed.
-#: The landed value was 900 — five times the harness, so it could never fire.
-#: MEASURED here: the sweep walks the >3000 `.py` under `programs/` that the
-#: test below asserts a denominator for, and takes 9.02 s. This is the slowest
-#: bounded call in this batch that still fits, so the headroom is stated rather
-#: than assumed: 60 s is 6.6x measured, and the figure grows with the tree.
-_SWEEP_TIMEOUT_S = 60
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # --------------------------------------------------------------------------
 # helpers — deliberately independent of the module under test
@@ -252,10 +238,10 @@ def test_the_sweep_reaches_the_whole_programs_tree():
     """Disclose the denominator (vibe-ic#447): a narrowed sweep must not read as full."""
     swept = sum(1 for _ in PROGRAMS.rglob("*.py"))
     assert swept > 3000, swept
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(PROGRAMS / "derived_corpus_figure_check.py"),
          "--no-evaluate"],
-        capture_output=True, text=True, timeout=_SWEEP_TIMEOUT_S)
+        capture_output=True, text=True)
     assert str(swept) in out.stdout, out.stdout[:400]
 
 

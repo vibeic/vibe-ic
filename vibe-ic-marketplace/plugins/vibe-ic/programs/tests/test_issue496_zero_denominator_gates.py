@@ -23,7 +23,6 @@ into what they audit, and gate outcomes are path-sensitive.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +33,9 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _gate_denominator as GD  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # The eight gates #496 is about. Value = the extra argv each needs beyond
@@ -52,9 +54,9 @@ ISSUE_496_GATES = (
 
 
 def _run(gate: str, rtl_dir: Path):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAMS / f"{gate}.py"), "--rtl-dir", str(rtl_dir)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def _summary(gate: str, rtl_dir: Path) -> dict:
@@ -67,10 +69,10 @@ def _summary(gate: str, rtl_dir: Path) -> dict:
     assert "Traceback" not in r.stderr, f"{gate} crashed:\n{r.stderr[-800:]}"
     if gate == "transient_signal_latch_check":
         out = rtl_dir.parent / "_rep"
-        r2 = subprocess.run(
+        r2 = _pr.run(
             [sys.executable, str(PROGRAMS / f"{gate}.py"),
              "--rtl-dir", str(rtl_dir), "--out-dir", str(out)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         assert "Traceback" not in r2.stderr, r2.stderr[-800:]
         return json.loads((out / f"{gate}.json").read_text())
     return json.loads(r.stdout)["summary"]
@@ -452,10 +454,10 @@ def test_l12_reports_a_real_denominator_when_given_its_input(tmp_path):
         "    case (1'b1) default: ;\n    endcase\n  end\nendmodule\n"))
     l12 = tmp_path / "L12.json"
     l12.write_text(json.dumps({"behavioral_sequences": [{"id": "CC_RESET_700MS"}]}))
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "l12_sequence_implementation_check.py"),
          "--rtl-dir", str(rtl), "--l12-json", str(l12)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     d = json.loads(r.stdout)["summary"][GD.DENOMINATOR_KEY]
     assert d["examined"] == 1, r.stdout
     assert d["not_applicable_reason"] == ""

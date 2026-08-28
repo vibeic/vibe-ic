@@ -41,7 +41,6 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import shutil
-import subprocess
 import sys
 import textwrap
 
@@ -51,6 +50,10 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import phase3_one_shot_runner as R  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TCLSH = shutil.which("tclsh")
 
@@ -86,8 +89,7 @@ def _run_tcl(tmp_path, mode: str) -> str:
     block = _emit(tmp_path)
     h = tmp_path / "harness.tcl"
     h.write_text(_HARNESS.format(mode=mode, block=block), encoding="utf-8")
-    proc = subprocess.run([_TCLSH, str(h)], capture_output=True, text=True,
-                          timeout=45)
+    proc = _pr.run([_TCLSH, str(h)], capture_output=True, text=True)
     return proc.stdout
 
 
@@ -151,8 +153,8 @@ def test_the_emitted_block_is_syntactically_complete(tmp_path):
         set f [open [lindex $argv 0] r]; set body [read $f]; close $f
         puts [expr {[info complete $body] ? "COMPLETE" : "INCOMPLETE"}]
     """), encoding="utf-8")
-    proc = subprocess.run([_TCLSH, str(chk), str(block)],
-                          capture_output=True, text=True, timeout=45)
+    proc = _pr.run([_TCLSH, str(chk), str(block)],
+                          capture_output=True, text=True)
     assert "COMPLETE" in proc.stdout, proc.stdout + proc.stderr
 
 

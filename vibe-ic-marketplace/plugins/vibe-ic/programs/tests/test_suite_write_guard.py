@@ -47,13 +47,8 @@ _GUARD = _PROGRAMS / "suite_write_guard.py"
 sys.path.insert(0, str(_PROGRAMS))
 import suite_write_guard as swg  # noqa: E402
 
-#: Every nested session below runs a handful of trivial tests against a
-#: throwaway repo. This only stops a hung one from taking the outer session
-#: down (#542); it must stay under the 60 s ceiling
-#: `ci_harness_timeout_ceiling_check` enforces, or pytest kills the whole
-#: session at 180 s first and the bound can never fire as a TEST failure.
-_T = 55
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _repo(tmp_path: Path) -> Path:
     """A throwaway git repo with one tracked file and a gitignored cache dir."""
@@ -127,8 +122,7 @@ def _nested_pytest(repo: Path, test_file: Path, *extra: str, env: dict | None = 
     argv = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
             "-p", "suite_write_guard",
             "--write-guard-repo", str(repo), str(test_file), *extra]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=_T,
-                          cwd=str(repo.parent), env=env or _child_env())
+    return _pr.run(argv, capture_output=True, text=True, cwd=str(repo.parent), env=env or _child_env())
 
 
 # --------------------------------------------------------------------------
@@ -273,10 +267,10 @@ def test_bytecode_noise_is_counted_not_listed(tmp_path):
 
 def test_cannot_look_exits_2_and_never_0(tmp_path):
     """rc=2 is NOT CHECKED. It must never be folded into a pass."""
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(_GUARD), "--repo", str(tmp_path),
          "--compare", str(tmp_path / "no_such_baseline.json")],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert p.returncode == swg.RC_NOT_CHECKED, (p.returncode, p.stdout, p.stderr)
     assert "WRITE_GUARD_NOT_CHECKED" in p.stderr, p.stderr
     assert "NOT a pass" in p.stdout, p.stdout
@@ -295,10 +289,10 @@ def test_turning_the_guard_off_announces_itself(tmp_path):
 def test_a_non_repo_is_not_checked_rather_than_clean(tmp_path):
     plain = tmp_path / "not_a_repo"
     plain.mkdir()
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(_GUARD), "--repo", str(plain),
          "--snapshot", str(tmp_path / "out.json")],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     assert p.returncode == swg.RC_NOT_CHECKED, (p.returncode, p.stdout)
 
 
@@ -312,18 +306,18 @@ def test_cli_snapshot_then_compare_names_the_writer(tmp_path):
     repo = _repo(tmp_path)
     base = tmp_path / "base.json"
 
-    p = subprocess.run([sys.executable, str(_GUARD), "--repo", str(repo),
+    p = _pr.run([sys.executable, str(_GUARD), "--repo", str(repo),
                         "--snapshot", str(base)],
-                       capture_output=True, text=True, timeout=_T)
+                       capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
     assert json.loads(base.read_text()) == {}
 
     (repo / "pkg" / "shipped.txt").write_text("mutated by something\n")
 
     rep = tmp_path / "report.json"
-    p = subprocess.run([sys.executable, str(_GUARD), "--repo", str(repo),
+    p = _pr.run([sys.executable, str(_GUARD), "--repo", str(repo),
                         "--compare", str(base), "--json", str(rep)],
-                       capture_output=True, text=True, timeout=_T)
+                       capture_output=True, text=True)
     assert p.returncode == swg.RC_WROTE, p.stdout + p.stderr
     assert "pkg/shipped.txt" in p.stdout
     assert [f["path"] for f in json.loads(rep.read_text())["blocking"]] \
@@ -581,10 +575,10 @@ def test_a_detached_copy_inside_an_ambient_repo_is_NOT_CHECKED_not_blocked(tmp_p
     env["PYTHONPATH"] = str(mirror / "programs")
 
     before = swg.snapshot(ambient)
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
          "-p", "suite_write_guard", str(tf)],
-        capture_output=True, text=True, timeout=_T, cwd=str(mirror), env=env)
+        capture_output=True, text=True, cwd=str(mirror), env=env)
     out = p.stdout + p.stderr
     after = swg.snapshot(ambient)
 
@@ -636,10 +630,10 @@ def test_the_SAME_discovery_door_still_reddens_a_real_checkout(tmp_path):
 
     env = _child_env()
     env["PYTHONPATH"] = str(r / "programs")
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
          "-p", "suite_write_guard", str(tf)],
-        capture_output=True, text=True, timeout=_T, cwd=str(r), env=env)
+        capture_output=True, text=True, cwd=str(r), env=env)
     out = p.stdout + p.stderr
     assert p.returncode == 1, (
         "the guard discovered a REAL checkout and let a tracked write through:"

@@ -53,6 +53,10 @@ import sys
 
 import pytest
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "waveform_artifact_hygiene_check.py"
 
@@ -62,8 +66,8 @@ _spec.loader.exec_module(WH)
 
 
 def _run(root) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROG), str(root)],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(PROG), str(root)],
+                          capture_output=True, text=True)
 
 
 # ── fixtures: real formats, from their real producers ───────────────────────

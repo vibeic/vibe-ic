@@ -35,7 +35,6 @@ PDK, foundry or process identifier appears.
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -46,8 +45,8 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import benchmark_evidence_structure_check as besc  # noqa: E402
 
-_TIMEOUT = 60  # every subprocess in this file is bounded well under the cap
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Fixture: a synthetic benchmark-data tree, built on the filesystem so the
@@ -102,10 +101,10 @@ def stray_tree(tmp_path):
 
 
 def _run(*args):
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(_PROGRAMS / "benchmark_evidence_structure_check.py"),
          *args],
-        capture_output=True, text=True, timeout=_TIMEOUT)
+        capture_output=True, text=True)
     return out.returncode, out.stdout + out.stderr
 
 
@@ -252,8 +251,8 @@ def test_guard_no_ic_level_finding_when_a_single_cell_is_named(clean_tree, tmp_p
 # --------------------------------------------------------------------------
 
 def _git(repo: Path, *args):
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, timeout=_TIMEOUT)
+    return _pr.run(["git", "-C", str(repo), *args],
+                          capture_output=True, text=True)
 
 
 @pytest.fixture()
@@ -279,10 +278,10 @@ def test_guard_legacy_strays_are_grandfathered_by_changed_since(repo_with_legacy
     _make_cell(repo / "benchmark-data" / "ic" / "ic_alpha" / "v1.4.0_pdka")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "publish a new conforming cell")
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(_PROGRAMS / "benchmark_evidence_structure_check.py"),
          "--tree", str(repo / "benchmark-data"), "--changed-since", "HEAD~1"],
-        capture_output=True, text=True, timeout=_TIMEOUT, cwd=str(repo))
+        capture_output=True, text=True, cwd=str(repo))
     combined = out.stdout + out.stderr
     assert out.returncode == 0, (
         f"a conforming publish was failed by pre-existing strays\n{combined}")
@@ -300,10 +299,10 @@ def test_bug_newly_added_ic_level_output_is_caught_by_changed_since(repo_with_le
     (new / "out.json").write_text("{}", encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "dump run output at the IC level")
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(_PROGRAMS / "benchmark_evidence_structure_check.py"),
          "--tree", str(repo / "benchmark-data"), "--changed-since", "HEAD~1"],
-        capture_output=True, text=True, timeout=_TIMEOUT, cwd=str(repo))
+        capture_output=True, text=True, cwd=str(repo))
     combined = out.stdout + out.stderr
     assert out.returncode == 1, (
         f"newly-added IC-level run output was not caught\n{combined}")

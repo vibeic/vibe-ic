@@ -42,6 +42,9 @@ from programs.phase1_one_shot_runner import (  # noqa: F401
 )
 import phase1_doc_one_shot_runner as RUNNER
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(RUNNER.__file__).resolve().parent
 
 
@@ -372,9 +375,9 @@ def _project_with_unreadable_document(tmp_path: Path) -> Path:
 
 
 def _run(prog: str, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_PROGRAMS / prog), *args],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 @pytest.fixture(scope="module")

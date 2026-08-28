@@ -53,15 +53,12 @@ HYGIENE = REPO_ROOT / "tools" / "ci" / "repo_hygiene_gates.sh"
 sys.path.insert(0, str(PROGRAMS))
 import input_doc_pdk_claim_vs_installed_pdk_check as C  # noqa: E402
 
-# <= 60s: `ci_harness_timeout_ceiling_check` derives the per-call ceiling from
-# the harness bound as 180 // 3. Every subprocess below drives the CLI over an
-# EMPTY tree with no backend, so it is vacuous and answers in under a second.
-_BOUND_S = 55
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _cli(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(CHECK), *args],
-                          capture_output=True, text=True, timeout=_BOUND_S)
+    return _pr.run([sys.executable, str(CHECK), *args],
+                          capture_output=True, text=True)
 
 
 def test_the_checker_offers_the_mechanism_its_sibling_already_uses():

@@ -265,7 +265,9 @@ def test_a_narrower_root_still_narrows_the_population(tmp_path):
     assert len(one) == 1, [str(p) for p in one]
     assert one[0].name == "clean_run_v1_20200101"
 
-import subprocess
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 PROG = Path(__file__).resolve().parents[1] / 'step_internal_fail_bubble_up_check.py'
 
 
@@ -280,34 +282,12 @@ def _fail_report(root, ic: str, run: str, name: str):
                     "detail": "unacknowledged"}) + "\n", encoding="utf-8")
 
 
-#: Every inner subprocess bound in this file. MEASURED, not tuned (#1241).
-#:
-#: The harness runs pytest at `--timeout=180` and kills the SESSION, not the
-#: test, so any inner bound above the per-call ceiling of 60s (= 180 // 3, a
-#: figure `ci_harness_timeout_ceiling_check` DERIVES from the workflows rather
-#: than a convention) is a promise the harness will not keep: the session dies
-#: first and takes every other test with it.
-#:
-#: The number comes from a run, not from picking something comfortably small:
-#: the whole 19-test file completes in 1.03s and its slowest test is 0.17s
-#: (`test_the_shipped_register_agrees_with_the_shipped_corpus`, the only one
-#: that sweeps the real corpus). 30s is ~175x the slowest observed call and
-#: still less than the ceiling.
-#:
-#: That corpus test is fast because the sweep walks PUBLISHED RUN TREES, not
-#: all 17216 tracked files under `benchmark-data` — verified real rather than
-#: assumed: 13 run trees, 3 carrying a `reports/` tree, 5 findings, 0.161s. A
-#: sweep that found nothing because it looked at nothing would also be fast.
-_BOUND_S = 30
-
-
 def _sweep(corpus, baseline, *extra):
-    import subprocess
     prog = Path(__file__).resolve().parents[1] / "step_internal_fail_bubble_up_check.py"
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(prog), "--corpus", str(corpus),
          "--baseline", str(baseline), *extra],
-        capture_output=True, text=True, timeout=_BOUND_S)
+        capture_output=True, text=True)
 
 
 def test_a_baseline_that_still_claims_a_PAID_debt_fails(tmp_path):
@@ -409,11 +389,10 @@ def test_the_shipped_register_agrees_with_the_shipped_corpus():
     `test_the_recorded_population_is_the_one_the_ci_gate_sweeps` pins that the
     recorded root is the CI root, so this is the gate's own population.
     """
-    import subprocess
     prog, repo, pop, corpus = _shipped_population()
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), "--corpus", str(corpus)],
-        capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))
+        capture_output=True, text=True, cwd=str(repo))
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -429,13 +408,12 @@ def test_a_sweep_of_a_DIFFERENT_root_is_refused_not_answered():
     verdict over a population the number was not measured on is NOT CHECKED.
     rc 2, never 0 and never 1.
     """
-    import subprocess
     prog, repo, pop, corpus = _shipped_population()
     other = corpus.parent
     assert other != corpus and other.is_dir(), other
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), "--corpus", str(other)],
-        capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))
+        capture_output=True, text=True, cwd=str(repo))
     assert r.returncode == 2, (
         f"a sweep over '{other}' answered rc={r.returncode} against a baseline "
         f"recorded over '{pop}'\n{r.stdout}{r.stderr}")

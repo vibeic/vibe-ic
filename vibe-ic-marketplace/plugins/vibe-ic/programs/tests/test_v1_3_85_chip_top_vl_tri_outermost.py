@@ -25,6 +25,10 @@ from pathlib import Path
 
 import pytest
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = Path(__file__).resolve().parents[1]
 
 
@@ -201,8 +205,8 @@ def test_autoemit_moves_pull_to_outermost_face_end_to_end(tmp_path):
                  str(proj / "phase2" / "stage1" / "rtl" / "counter.v")],
                 capture_output=True, text=True)
             assert c.returncode == 0, c.stderr
-            r = subprocess.run(["vvp", str(binp)], capture_output=True,
-                               text=True, timeout=60)
+            r = _pr.run(["vvp", str(binp)], capture_output=True,
+                               text=True)
             assert "RESET_OK" in r.stdout, (sp, r.stdout)
 
 
@@ -248,14 +252,14 @@ def test_two_level_chain_resets_under_verilator(tmp_path):
                 "    $finish;\n  end\nendmodule\n")
             subprocess.run(["docker", "cp", str(tb), f"{container}:{tag}/tb_{sp}.v"],
                            check=True, capture_output=True)
-            r = subprocess.run(
+            r = _pr.run(
                 ["docker", "exec", container, "bash", "-c",
                  f"export PATH=/foss/tools/bin:$PATH; cd {tag} && "
                  f"rm -rf vobj_{sp} && verilator --binary --timing -Wno-fatal "
                  f"-Wno-WIDTH -Mdir vobj_{sp} --top-module tb tb_{sp}.v "
                  f"chip_top.v counter.v >vl.log 2>&1 && "
                  f"timeout 60 vobj_{sp}/Vtb 2>&1"],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True)
             assert "RESET_OK" in r.stdout, (sp, r.stdout[-300:], r.stderr[-200:])
     finally:
         subprocess.run(["docker", "exec", container, "sh", "-c",

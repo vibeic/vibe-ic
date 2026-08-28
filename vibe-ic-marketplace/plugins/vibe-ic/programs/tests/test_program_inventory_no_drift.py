@@ -25,13 +25,15 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from _plugin_tree import plugin_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 GEN = plugin_path("programs", "gen_program_inventory.py")
 INV = plugin_path("programs", "PROGRAM_INVENTORY.json")
@@ -165,9 +167,9 @@ def test_an_untracked_stray_module_does_not_move_any_count(monkeypatch):
     assert after["programs_top_level"]["count"] == before["programs_top_level"]["count"] + 1
     assert after["programs_tree_all_py"]["count"] == before["programs_tree_all_py"]["count"] + 1
     # ...and the real listing does not carry anything git calls untracked.
-    out = subprocess.run(["git", "-C", str(GEN.parent.parent), "ls-files", "-o",
+    out = _pr.run(["git", "-C", str(GEN.parent.parent), "ls-files", "-o",
                           "--exclude-standard", "--", "."],
-                         capture_output=True, text=True, timeout=180)
+                         capture_output=True, text=True)
     if out.returncode == 0:
         untracked = {l for l in out.stdout.split("\n") if l.endswith(".py")}
         assert not (untracked & set(real)), sorted(untracked & set(real))[:5]
@@ -236,8 +238,8 @@ def test_stated_counts_in_the_documents_match_the_tree():
 
 def test_check_mode_exits_zero_on_the_committed_tree():
     """The CLI is the form CI and a human both run; exercise it end to end."""
-    r = subprocess.run([sys.executable, str(GEN), "--check"],
-                       capture_output=True, text=True, timeout=600)
+    r = _pr.run([sys.executable, str(GEN), "--check"],
+                       capture_output=True, text=True)
     assert r.returncode == 0, (
         f"`gen_program_inventory.py --check` exited {r.returncode}\n"
         f"{r.stdout}\n{r.stderr}")

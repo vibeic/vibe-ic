@@ -46,18 +46,16 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _HERE = Path(__file__).resolve().parent
 _PROGRAMS = _HERE.parent
 
-#: Comfortably under the 60 s per-call ceiling (180 s harness // 3): a bound at
-#: or above it promises time the harness will not give (#542).
-_TIMEOUT_S = 50
-
-
 def _run(control: Path, target: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(control), str(target)],
-        capture_output=True, text=True, timeout=_TIMEOUT_S)
+        capture_output=True, text=True)
 
 
 #: ``(control, program, perturb)`` — perturb returns the PRE-FIX source text.

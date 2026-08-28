@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -59,6 +58,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import phase1_expert_parse_track as T          # noqa: E402
 import _path_layout as _pl                     # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────
@@ -179,9 +181,9 @@ _ANSWER_IN_ANOTHER_SCHEMA = {
 def _run_track(project: Path):
     env = dict(os.environ)
     env["VIBE_IC_DISABLE_LLM_CONFIRM"] = "1"     # force the no-backend path
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / "phase1_expert_parse_track.py"),
-         str(project)], capture_output=True, text=True, timeout=60, env=env)
+         str(project)], capture_output=True, text=True, env=env)
     return cp.returncode, cp.stdout, cp.stderr
 
 

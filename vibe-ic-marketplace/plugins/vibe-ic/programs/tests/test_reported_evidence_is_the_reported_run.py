@@ -49,6 +49,9 @@ A3_GATE = PROGRAMS / "analog_a3_netlist_gen_check.py"
 from _analog_producer_fixture import (            # noqa: E402
     A1, A2, A3, block, make_project, run_prog, bdir, read_json)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 LDO_SPEC = [{"name": "Vout", "target": 1.8, "unit": "V"},
             {"name": "Vin", "target": 3.0, "unit": "V"}]
 
@@ -56,8 +59,8 @@ TALLY = "**Flow compliance: PASS=27 FAIL=11 MISSING=12 WAIVED-DEFERRED=2**"
 
 
 def _run(prog: Path, project: Path, *args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(prog), str(project), *args],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(prog), str(project), *args],
+                          capture_output=True, text=True)
 
 
 # ═══ (a) a document that contradicts the evidence it sits in ══════════════

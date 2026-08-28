@@ -45,16 +45,15 @@ PROBED, counted — never how long it took.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 import matrix_63x8.flowref as F
 import test_matrix_d6_skip_discipline as D6
 
-#: Inner-subprocess ceiling for this repo's harness: `--timeout=180` with
-#: `180 // 3`. `ci_harness_timeout_ceiling_check` is BLOCKING on it.
-_NESTED_PYTEST_TIMEOUT_S = 60
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: A pytest plugin that replaces `_probe_step` with a counter and writes the
 #: step ids it was asked for. Installed with `-p`, so it is loaded before any
@@ -244,12 +243,12 @@ def _probes_a_real_session_builds(tmp_path, *nodeids: str) -> List[str]:
     env["D6_PROBE_LOG"] = str(log)
     env["PYTHONPATH"] = (str(plugin_dir) + os.pathsep
                          + env.get("PYTHONPATH", ""))
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, "-m", "pytest", *nodeids, "-q", "--no-header",
          "-p", "no:randomly", "-p", "no:cacheprovider",
          "-p", "d6_probe_counter"],
         cwd=str(F.PLUGIN_ROOT), capture_output=True, text=True,
-        timeout=_NESTED_PYTEST_TIMEOUT_S, env=env)
+        env=env)
     assert log.is_file(), (
         f"the counter plugin never wrote its log, so this measured NOTHING — "
         f"an absent file is not a count of zero probes. rc={proc.returncode}\n"

@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -36,6 +35,9 @@ import design_input_digest as did  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _shipped_version import shipped_plugin_version  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 FCC = PROGRAMS / "flow_compliance_check.py"
 AUDIT_REL = Path("reports/audit/phase23_completion_audit.json")
@@ -434,18 +436,11 @@ def test_every_flow_compliance_option_is_classified_as_ruler_or_not():
 # ─────────────────── the published artefact ──────────────────────────
 
 
-#: Under the 60s ceiling `ci_harness_timeout_ceiling_check` derives from the
-#: 180s harness bound: an inner call that can outlive the harness kills the
-#: SESSION instead of the test. The projects here are three files; the whole
-#: 32-test suite runs in ~20s.
-_SUBPROC_TIMEOUT = 55
-
-
 def _run_fcc(project: Path, *extra):
     env = dict(os.environ)
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(FCC), str(project), "--phase", "all", *extra],
-        capture_output=True, text=True, env=env, timeout=_SUBPROC_TIMEOUT)
+        capture_output=True, text=True, env=env)
 
 
 def _read_audit(project: Path):
@@ -566,8 +561,8 @@ def test_the_audit_survives_a_digest_that_cannot_be_computed(tmp_path,
         "sys.modules['design_input_digest'] = None;"
         "import flow_compliance_check as f;"
         f"sys.exit(f.main([{str(root)!r}, '--phase', 'all']))")
-    subprocess.run([sys.executable, "-c", code],
-                   capture_output=True, text=True, timeout=_SUBPROC_TIMEOUT)
+    _pr.run([sys.executable, "-c", code],
+                   capture_output=True, text=True)
     audit = _read_audit(root)
     assert audit.get("step_counts") is not None
     assert audit.get("verdict")

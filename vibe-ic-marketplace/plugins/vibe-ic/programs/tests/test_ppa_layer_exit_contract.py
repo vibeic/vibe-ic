@@ -51,10 +51,13 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TESTS = pathlib.Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -66,8 +69,8 @@ PPA_PROGRAMS = sorted(p.name for p in _PROGRAMS.glob("ppa_*.py"))
 
 
 def _run(args, timeout=120):
-    return subprocess.run([sys.executable, *args], capture_output=True,
-                          text=True, timeout=timeout, cwd=str(_PROGRAMS))
+    return _pr.run([sys.executable, *args], capture_output=True,
+                          text=True, cwd=str(_PROGRAMS))
 
 
 def test_the_program_set_is_not_empty():

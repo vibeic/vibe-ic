@@ -21,10 +21,13 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN = pathlib.Path(__file__).resolve().parents[2]
 CLI = PLUGIN / "programs" / "ppa_closure_run.py"
@@ -40,8 +43,8 @@ DECK_CLEAN = ("set_wire_rc -layer met3\nestimate_parasitics -placement\n"
 
 
 def run(*args, **kw):
-    return subprocess.run([sys.executable, str(CLI), *[str(a) for a in args]],
-                          capture_output=True, text=True, timeout=300, **kw)
+    return _pr.run([sys.executable, str(CLI), *[str(a) for a in args]],
+                          capture_output=True, text=True, **kw)
 
 
 def _impl(tmp_path, deck: str, name="impl") -> pathlib.Path:

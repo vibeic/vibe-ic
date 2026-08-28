@@ -46,12 +46,14 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import re
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _IC = _PROGRAMS.parents[3] / "benchmark-data" / "ic"
@@ -80,9 +82,9 @@ def _cell(name: str) -> Path:
 
 
 def _run(gate: str, project: Path):
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROGRAMS / gate), str(project)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 
 

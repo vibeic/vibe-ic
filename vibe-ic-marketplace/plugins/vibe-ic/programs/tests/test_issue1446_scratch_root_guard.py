@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -43,6 +42,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import scratch_root_guard as G  # noqa: E402
+
+import _progress_run as _pr  # noqa: E402
 
 #: Half the 60 s inner ceiling. See the module docstring.
 _BOUND = 30
@@ -96,8 +97,8 @@ def _a_work_tree(tmp_path: Path) -> Path:
     """
     repo = tmp_path / "a_repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True,
-                   capture_output=True, timeout=_BOUND)
+    _pr.run(["git", "init", "-q"], cwd=repo, check=True,
+                   capture_output=True, text=False)
     inside = repo / "scratch"
     inside.mkdir()
     return inside
@@ -127,10 +128,10 @@ def _run_pytest(root: Path, basetemp: Path, *extra: str, env_extra=None):
     env.pop("VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO", None)
     if env_extra:
         env.update(env_extra)
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
          f"--basetemp={basetemp}", *extra, "test_mini.py"],
-        cwd=root, capture_output=True, text=True, timeout=_BOUND, env=env)
+        cwd=root, capture_output=True, text=True, env=env)
 
 
 # ── the refusal ─────────────────────────────────────────────────────────────
@@ -270,15 +271,15 @@ def test_the_cli_preflight_answers_the_same_question_as_the_hook(tmp_path):
     env = dict(os.environ)
     env.pop("VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO", None)
 
-    ok = subprocess.run([sys.executable, prog, "--scratch-root",
+    ok = _pr.run([sys.executable, prog, "--scratch-root",
                          str(_outside(tmp_path))],
-                        capture_output=True, text=True, timeout=_BOUND, env=env)
+                        capture_output=True, text=True, env=env)
     assert ok.returncode == 0, f"{ok.stdout}{ok.stderr}"
     assert "[PASS]" in ok.stdout, ok.stdout
 
     inside = _a_work_tree(tmp_path)
-    bad = subprocess.run([sys.executable, prog, "--scratch-root", str(inside)],
-                         capture_output=True, text=True, timeout=_BOUND, env=env)
+    bad = _pr.run([sys.executable, prog, "--scratch-root", str(inside)],
+                         capture_output=True, text=True, env=env)
     # RENUMBERED from 2 to 1, deliberately, and pinned here rather than
     # loosened: rc 2 in this repo is the disclosed-SKIP convention
     # (`_vacuous_exit`: "rc 2 -> VACUOUS_PASS ... the gate examined NOTHING"),
@@ -289,10 +290,9 @@ def test_the_cli_preflight_answers_the_same_question_as_the_hook(tmp_path):
         f"{bad.stdout}{bad.stderr}")
     assert str(inside) in bad.stdout, bad.stdout
 
-    waived = subprocess.run([sys.executable, prog, "--scratch-root",
+    waived = _pr.run([sys.executable, prog, "--scratch-root",
                              str(inside), "--allow"],
-                            capture_output=True, text=True, timeout=_BOUND,
-                            env=env)
+                            capture_output=True, text=True, env=env)
     assert waived.returncode == 0, f"{waived.stdout}{waived.stderr}"
     assert "[ALLOWED]" in waived.stdout, waived.stdout
 
@@ -364,8 +364,8 @@ def _cli(*args, env_extra=None):
     env.pop("VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO", None)
     if env_extra:
         env.update(env_extra)
-    return subprocess.run([sys.executable, prog, *args], capture_output=True,
-                          text=True, timeout=_BOUND, env=env)
+    return _pr.run([sys.executable, prog, *args], capture_output=True,
+                          text=True, env=env)
 
 
 def _a_root_under_the_home(tmp_path: Path) -> Path:

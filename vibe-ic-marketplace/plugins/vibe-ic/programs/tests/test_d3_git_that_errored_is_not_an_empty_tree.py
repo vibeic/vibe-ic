@@ -35,6 +35,9 @@ PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs" / "tests"))
 import test_matrix_d3_outputs_produced as D  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def _no_cache():
@@ -46,8 +49,8 @@ def _no_cache():
 
 def _git_fails_here(root: Path) -> None:
     """Precondition: the real git really does fail under *root*."""
-    proc = subprocess.run(["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
-                          cwd=str(root), capture_output=True, timeout=60)
+    proc = _pr.run(["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
+                          cwd=str(root), capture_output=True, text=False)
     assert proc.returncode != 0, (
         f"this fixture is meaningless unless git actually fails under {root}")
 

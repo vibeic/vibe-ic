@@ -40,9 +40,11 @@ DIRECTION-1 GUARDS (`test_d1_*`) hold on the pre-fix tree too.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "spef_extraction_check.py"
@@ -101,9 +103,9 @@ def _project(tmp: Path, text: str) -> Path:
 
 def _run(proj: Path):
     out = proj / "out.json"
-    r = subprocess.run([sys.executable, str(_PROG), str(proj),
+    r = _pr.run([sys.executable, str(_PROG), str(proj),
                         "--json", str(out)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     return r, json.loads(out.read_text())
 
 
@@ -194,8 +196,8 @@ def test_late_metadata_is_no_longer_a_false_missing_metadata(tmp_path):
 # DIRECTION-1 GUARDS — hold on the pre-fix tree too
 # ===========================================================================
 def test_d1_missing_extracted_dir_still_fails(tmp_path):
-    r = subprocess.run([sys.executable, str(_PROG), str(tmp_path)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_PROG), str(tmp_path)],
+                       capture_output=True, text=True)
     assert r.returncode == 1
 
 

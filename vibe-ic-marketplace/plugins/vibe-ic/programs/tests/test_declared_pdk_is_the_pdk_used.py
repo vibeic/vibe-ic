@@ -6,7 +6,6 @@ under test is about agreement between two records, not about any one PDK.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,8 +17,8 @@ def _run(run_dir: Path):
     # 60s because the harness itself dies at 180 — a bound above the ceiling
     # kills the SESSION instead of the test. MEASURED: 0.03s per call, so 30
     # leaves three orders of magnitude of headroom.
-    p = subprocess.run([sys.executable, str(GATE), str(run_dir)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(GATE), str(run_dir)],
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -151,8 +150,8 @@ def test_the_refusal_is_machine_readable(tmp_path):
     rec = tmp_path / "rec.json"
     r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
             staged=["zq42k3_sc.lib"], loaded=[])
-    p = subprocess.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
+                       capture_output=True, text=True)
     assert p.returncode == 2, p.stdout + p.stderr
     d = json.loads(rec.read_text())
     assert d["verdict"] == "NOT CHECKED"
@@ -194,8 +193,8 @@ def test_a_wrong_pdk_still_reports_a_wrong_pdk(tmp_path):
     rec = tmp_path / "rec.json"
     r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
             staged=["zq42k3_sc.lib"], loaded=["othernode_fd_sc_hd.lef"])
-    p = subprocess.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
+                       capture_output=True, text=True)
     assert p.returncode == 1, p.stdout + p.stderr
     assert "was not the one used" in p.stdout
     d = json.loads(rec.read_text())
@@ -207,8 +206,8 @@ def test_a_pass_records_the_field_too(tmp_path):
     rec = tmp_path / "rec.json"
     r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
             staged=["zq42k3_sc.lib"], loaded=["zq42k3_sc.lef"])
-    p = subprocess.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
+                       capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
     assert json.loads(rec.read_text())["no_library_load_recorded"] is False
 
@@ -216,8 +215,11 @@ def test_a_pass_records_the_field_too(tmp_path):
 # ── vibe-ic#709 / #713 — a partial match is not a declaration ───────────────
 # Synthetic names throughout: no real PDK, foundry or part number appears.
 
-import subprocess as _sp, sys as _sys, tempfile as _tf, json as _json
+import sys as _sys, tempfile as _tf, json as _json
 from pathlib import Path as _P
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _FAMILY = "abc123xy456"
 _LOADED = [f"{_FAMILY}_5lm_tech_v56.lef", f"{_FAMILY}_macro_v56.lef"]
@@ -239,8 +241,8 @@ def _run_decl(declared: str):
         f"[INFO ODB-0227] LEF file: /run/input/pdk/{n}, created 1 layers\n"
         for n in _LOADED))
     out = root / "rec.json"
-    r = _sp.run([_sys.executable, str(_GATE), str(root), "--json", str(out)],
-                capture_output=True, text=True, timeout=55)
+    r = _pr.run([_sys.executable, str(_GATE), str(root), "--json", str(out)],
+                capture_output=True, text=True)
     rec = _json.loads(out.read_text()) if out.is_file() else {}
     return r.returncode, rec
 

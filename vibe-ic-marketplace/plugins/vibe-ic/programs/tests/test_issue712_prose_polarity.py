@@ -1,7 +1,7 @@
 """vibe-ic#712 — a denied value must not be published as a declaration."""
 from __future__ import annotations
 
-import ast, json, random, re, subprocess, sys, tempfile
+import ast, json, random, re, sys, tempfile
 from pathlib import Path
 
 import pytest
@@ -10,6 +10,9 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import _prose_polarity as PP            # noqa: E402
 import prose_polarity_consulted_check as G  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── the shared vocabulary ───────────────────────────────────────────────────
@@ -323,9 +326,9 @@ def count(text, rec):
 
 def test_no_baseline_is_CANNOT_DETERMINE_not_a_pass(tmp_path):
     _tree(tmp_path, _BLIND)
-    r = subprocess.run([sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py"),
+    r = _pr.run([sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py"),
                         "--root", str(tmp_path)],
-                       capture_output=True, text=True, timeout=55)
+                       capture_output=True, text=True)
     assert r.returncode == 2
     assert "NOT a pass" in (r.stdout + r.stderr)
 
@@ -333,12 +336,12 @@ def test_no_baseline_is_CANNOT_DETERMINE_not_a_pass(tmp_path):
 def test_a_NEW_polarity_blind_extractor_FAILS(tmp_path):
     root = _tree(tmp_path, "")
     prog = str(PROGRAMS / "prose_polarity_consulted_check.py")
-    assert subprocess.run([sys.executable, prog, "--root", str(root),
+    assert _pr.run([sys.executable, prog, "--root", str(root),
                            "--write-baseline"], capture_output=True,
-                          text=True, timeout=55).returncode == 0
+                          text=True).returncode == 0
     (root / "programs" / "some_extract.py").write_text(_BLIND)
-    r = subprocess.run([sys.executable, prog, "--root", str(root)],
-                       capture_output=True, text=True, timeout=55)
+    r = _pr.run([sys.executable, prog, "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 1
     assert "some_extract::extract" in r.stdout
 
@@ -360,9 +363,9 @@ def test_an_exemption_removes_the_name_without_touching_the_baseline(tmp_path):
     root = _tree(tmp_path, "")
     (root / "programs" / "some_extract.py").write_text(_BLIND)
     prog = str(PROGRAMS / "prose_polarity_consulted_check.py")
-    assert subprocess.run([sys.executable, prog, "--root", str(root),
+    assert _pr.run([sys.executable, prog, "--root", str(root),
                            "--write-baseline"], capture_output=True,
-                          text=True, timeout=55).returncode == 0
+                          text=True).returncode == 0
     before = json.loads((root / "programs"
                          / "prose_polarity_baseline.json").read_text())
     assert before["known"] == ["some_extract::extract"]
@@ -689,8 +692,8 @@ def test_the_gate_is_GREEN_on_the_tree_that_ships():
     """The end of it. Read on the pristine base this exits 1 naming two
     functions of `policy_direction_pin_check`; a verdict nobody can reproduce
     green is the thing this repo is closing."""
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py")],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[PASS]" in r.stdout

@@ -36,6 +36,9 @@ if str(_PROGRAMS) not in sys.path:
 import l_doc_structured_field_count_check as G  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = _PROGRAMS / "l_doc_structured_field_count_check.py"
 
 
@@ -186,10 +189,9 @@ def test_other_layer_floor_also_honors_sidecar_L9_ports():
 
 
 def test_chip_agnostic_guard():
-    import subprocess as sp
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
-    r = sp.run([sys.executable, str(prog), str(_PROGRAMS.parent)],
-               capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(prog), str(_PROGRAMS.parent)],
+               capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 

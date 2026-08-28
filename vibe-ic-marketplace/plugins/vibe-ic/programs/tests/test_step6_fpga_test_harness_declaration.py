@@ -41,12 +41,14 @@ names this program.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _FLOW_YAML = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
@@ -107,9 +109,9 @@ def test_premise_program_writes_one_wrapper_under_the_rtl_dir(tmp_path):
     """Run it: the artefact is <rtl_dir>/fpga_test_harness.sv, nothing else."""
     project = tmp_path / "proj"
     project.mkdir()
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / f"{PROGRAM}.py"), str(project)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stdout + cp.stderr
     wrapper = _emitted_wrapper(project)
     assert wrapper.is_file(), f"no wrapper at {wrapper}; stdout={cp.stdout}"
@@ -130,9 +132,9 @@ def test_premise_template_is_fixed_and_reads_nothing_from_the_project(tmp_path):
         (project / "phase2" / "stage1" / "rtl").mkdir(parents=True)
         (project / "phase2" / "stage1" / "rtl" / "chip_top.v").write_text(
             f"module chip_top({ports}); endmodule\n")
-        subprocess.run(
+        _pr.run(
             [sys.executable, str(_PROGRAMS / f"{PROGRAM}.py"), str(project)],
-            capture_output=True, text=True, timeout=60, check=True)
+            capture_output=True, text=True, check=True)
         outs.append(_emitted_wrapper(project).read_text())
     assert outs[0] == outs[1], "the template is not fixed after all"
 

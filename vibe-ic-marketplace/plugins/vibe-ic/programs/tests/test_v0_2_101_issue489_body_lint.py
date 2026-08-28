@@ -13,9 +13,11 @@ Pins (incl. the issue's verbatim ## 驗收):
   * the filing wiring is documented in community-backlog-submit +
     field-agent-loop.
 """
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 PROG = PROGRAMS / "organic_issue_body_lint.py"
@@ -47,8 +49,8 @@ _BODY_NO_ACCEPTANCE_NO_ARTIFACT = """## 現象
 
 def _run(stdin_text=None, path=None, *extra):
     cmd = [sys.executable, str(PROG), path or "-", *extra]
-    return subprocess.run(cmd, input=stdin_text, capture_output=True,
-                          text=True, timeout=30)
+    return _pr.run(cmd, input=stdin_text, capture_output=True,
+                          text=True)
 
 
 def test_acceptance_verbatim_narrative_stdin_named_warning():

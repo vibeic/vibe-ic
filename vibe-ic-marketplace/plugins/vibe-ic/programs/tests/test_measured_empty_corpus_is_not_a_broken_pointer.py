@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -54,6 +53,9 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 import _published_corpus as C  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 #: SPELLED AS A LITERAL, NOT AS `C.CORPUS_CONTRACT`, AND THAT IS THE POINT.
@@ -177,8 +179,8 @@ def test_a_correct_pointer_no_longer_kills_collection(tmp_path):
             "print(C.corpus_state()[0])\n")
     env = dict(os.environ)
     env[C.CORPUS_ENV] = str(tmp_path)
-    r = subprocess.run([sys.executable, "-c", prog], capture_output=True,
-                       text=True, timeout=60, env=env)
+    r = _pr.run([sys.executable, "-c", prog], capture_output=True,
+                       text=True, env=env)
     assert r.returncode == 0, (
         "importing the helper with a correct pointer at an empty published corpus "
         f"still fails, so every module that imports it stays dark: {r.stderr[-600:]}")
@@ -281,8 +283,8 @@ def test_a_corpus_that_carries_cells_is_unchanged(tmp_path):
 # ══════════════════════════════════════════════════════════════════════
 
 def _git(root: Path, *argv: str) -> None:
-    subprocess.run(["git", "-C", str(root), *argv], check=True,
-                   capture_output=True, text=True, timeout=60)
+    _pr.run(["git", "-C", str(root), *argv], check=True,
+                   capture_output=True, text=True)
 
 
 def _committed_corpus(root: Path) -> Path:

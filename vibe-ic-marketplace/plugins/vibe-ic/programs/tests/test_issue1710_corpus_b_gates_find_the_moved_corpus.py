@@ -46,7 +46,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -67,12 +66,8 @@ if str(PROGRAMS) not in sys.path:
 
 import cross_layer_reference_check as CL      # noqa: E402
 
-#: vibe-ic#1711 — the harness runs pytest at `--timeout=180` and kills the
-#: SESSION, so any inner bound above 180 // 3 = 60 s is a promise it cannot
-#: keep. MEASURED here: the slowest case builds a two-cell git corpus and makes
-#: one gate call, well under two seconds of wall time.
-_GATE_TIMEOUT_S = 60
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _run(prog: Path, *args: str, env_tree: str | None = None):
     """Invoke a gate the way CI does — as a process, reading only its rc.
@@ -86,13 +81,13 @@ def _run(prog: Path, *args: str, env_tree: str | None = None):
     env.pop(ENV, None)                      # never inherit the developer's own
     if env_tree is not None:
         env[ENV] = env_tree
-    r = subprocess.run([sys.executable, str(prog), *args], env=env,
-                       capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
+    r = _pr.run([sys.executable, str(prog), *args], env=env,
+                       capture_output=True, text=True)
     return r.returncode, (r.stdout + r.stderr)
 
 
 def _git(cwd: Path, *a: str) -> None:
-    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=60,
+    _pr.run(["git", "-C", str(cwd), *a], check=True, text=False,
                    capture_output=True)
 
 

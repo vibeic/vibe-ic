@@ -29,11 +29,13 @@ No real design, PDK, vendor or part number appears anywhere.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 GATE = PROGRAMS / "macro_non_seq_arc_contract_check.py"
@@ -193,7 +195,7 @@ def _run(project: Path, out: Path | None = None):
     # tmp_path tree of a few hundred bytes. 55s is the bound the repo already
     # uses for exactly this shape (9 other test modules), and it leaves ~170x
     # headroom over the measured worst case.
-    return subprocess.run(argv, capture_output=True, text=True, timeout=55)
+    return _pr.run(argv, capture_output=True, text=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -590,7 +592,7 @@ def _run_hold(proj: Path, out: Path | None = None):
         argv += ["--json", str(out)]
     # 55s for the same reason as `_run` above: an inner bound over the 60s
     # per-call ceiling (180s harness / 3) cannot fire before the harness does.
-    return subprocess.run(argv, capture_output=True, text=True, timeout=55)
+    return _pr.run(argv, capture_output=True, text=True)
 
 
 def test_post_cts_hold_still_fails_and_now_names_the_non_sequential_arc(

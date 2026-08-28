@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -49,6 +48,9 @@ for _p in (str(_PROGRAMS), str(_HERE)):
 import _hostpaths                                   # noqa: E402
 import _pdk_revision_fixture as _fix                # noqa: E402
 import pdk_revision_resolve as prr                  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PUBLISH = _PROGRAMS / "benchmark_evidence_publish.py"
 RESOLVE = _PROGRAMS / "pdk_revision_resolve.py"
@@ -140,10 +142,10 @@ def test_a_tree_that_states_no_revision_is_not_determined_and_exits_1(tmp_path):
     (bare / "libs.ref").mkdir(parents=True)
     (bare / "libs.ref" / "x.lib").write_text("//\n")
 
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(RESOLVE), "--tree", str(bare),
          "--json", str(tmp_path / "rec.json")],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "NOT DETERMINED" in (proc.stdout + proc.stderr)
 
@@ -283,11 +285,11 @@ def _converged_run(base: Path) -> Path:
 
 
 def _publish(run: Path, dest_root: Path):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PUBLISH), "--run-dir", str(run),
          "--ic", "widgetmul", "--pdk", "openpdkx",
          "--plugin-version", "9.9.9", "--dest-root", str(dest_root)],
-        capture_output=True, text=True, timeout=180)
+        capture_output=True, text=True)
 
 
 def test_publish_refuses_a_run_that_records_no_pdk_revision(tmp_path):

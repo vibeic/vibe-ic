@@ -59,9 +59,13 @@ from __future__ import annotations
 import importlib
 import os
 import pathlib
-import subprocess
 
 import pytest
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 ESC = importlib.import_module("benchmark_evidence_structure_check")
 RUN = importlib.import_module("benchmark_run_manifest")
@@ -71,18 +75,11 @@ _PLUGIN = _PROGRAMS.parent
 _REPO = _PROGRAMS.parents[3]
 _HOOK = _REPO / "tools" / "git-hooks" / "pre-push"
 
-# 30 s: the whole fixture (init + config + add + commit on a two-file repo)
-# measures at 0.01 s. Kept well under the harness's own ceiling so a hang kills
-# the test and not the session.
-_GIT_TIMEOUT = 30
-
-
 def _repo(tmp_path: pathlib.Path) -> pathlib.Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     def g(*a):
-        return subprocess.run(["git", "-C", str(tmp_path), *a],
-                              capture_output=True, text=True,
-                              timeout=_GIT_TIMEOUT)
+        return _pr.run(["git", "-C", str(tmp_path), *a],
+                              capture_output=True, text=True)
     g("init", "-q", ".")
     g("config", "user.email", "t@t")
     g("config", "user.name", "t")
@@ -138,10 +135,10 @@ def test_REVERSE_a_present_tree_with_nothing_changed_still_passes(tmp_path):
     tree = repo / "benchmark-data" / "ic" / "spm" / "v1.0.0_sky130A"
     tree.mkdir(parents=True)
     (tree / "RESULT.md").write_text("# result\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"],
-                   capture_output=True, timeout=_GIT_TIMEOUT)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "publish"],
-                   capture_output=True, timeout=_GIT_TIMEOUT)
+    _pr.run(["git", "-C", str(repo), "add", "-A"],
+                   capture_output=True, text=False)
+    _pr.run(["git", "-C", str(repo), "commit", "-q", "-m", "publish"],
+                   capture_output=True, text=False)
     rc = _run_main(ESC, ["--tree", "benchmark-data", "--changed-since", "HEAD"],
                    repo)
     assert rc == 0, ("a determinable change set with nothing to enforce must "
@@ -253,9 +250,9 @@ def _drive_hook(hook: pathlib.Path, cwd: pathlib.Path):
     """Invoke a pre-push hook the way git does: argv = <remote> <url>, and the
     ref line on stdin."""
     stdin = f"HEAD {'a' * 40} refs/heads/probe {'0' * 40}\n"
-    return subprocess.run(["bash", str(hook), "origin", str(cwd)],
+    return _pr.run(["bash", str(hook), "origin", str(cwd)],
                           input=stdin, capture_output=True, text=True,
-                          cwd=str(cwd), timeout=60)
+                          cwd=str(cwd))
 
 
 @pytest.mark.skipif(not _HOOK.is_file(), reason="hook not present in this tree")

@@ -12,7 +12,6 @@ skipped test and a passing test print the same colour.
 """
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
@@ -20,6 +19,10 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from _ppa import canonical_json as cj              # noqa: E402
 from _ppa.backends import openroad as B            # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── specimens ───────────────────────────────────────────────────────────────
@@ -345,9 +348,9 @@ def test_negative_one_refuses_to_pick_a_winner_from_a_conflict(tmp_path):
 
 # ── vacuous: missing input gives rc=2 with a marker ─────────────────────────
 def _cli(*args, cwd):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, "-m", "_ppa.backends.openroad", *args],
-        capture_output=True, text=True, cwd=str(cwd), timeout=120)
+        capture_output=True, text=True, cwd=str(cwd))
 
 
 @pytest.fixture(scope="module")

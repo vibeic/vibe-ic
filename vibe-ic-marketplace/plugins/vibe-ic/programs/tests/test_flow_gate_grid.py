@@ -4,7 +4,6 @@ Synthetic flows — the rules are about declaration shape, not any real step.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +12,9 @@ import pytest
 GRID = Path(__file__).resolve().parent.parent / "flow_gate_grid.py"
 yaml = pytest.importorskip("yaml")
 import importlib.util  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("fgg", GRID)
 fgg = importlib.util.module_from_spec(_spec)
@@ -27,9 +29,9 @@ def _flow(tmp: Path, steps) -> Path:
 
 
 def _run(flow: Path, programs: Path):
-    p = subprocess.run([sys.executable, str(GRID), "--flow", str(flow),
+    p = _pr.run([sys.executable, str(GRID), "--flow", str(flow),
                         "--programs", str(programs)],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -320,8 +322,8 @@ def _shipped_run(root, sta_body):
 
 
 def _grid(*args):
-    p = subprocess.run([sys.executable, str(GRID), *args],
-                       capture_output=True, text=True, timeout=900)
+    p = _pr.run([sys.executable, str(GRID), *args],
+                       capture_output=True, text=True)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 

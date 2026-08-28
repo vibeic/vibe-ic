@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -60,6 +59,9 @@ import published_record_staleness_check as P  # noqa: E402
 import si_mcf_sta_check as SI              # noqa: E402
 
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _REPO = _PROGRAMS.parents[3]
 #: The CLI's DEFAULT corpus argument — still this path, whatever it holds. Used
@@ -120,7 +122,7 @@ def _run(root: Path, *args, programs_dir: Path = None) -> tuple:
     """Drive the real CLI in a subprocess; return (rc, stdout, stderr)."""
     argv = [sys.executable, str(_CLI), str(root),
             "--programs-dir", str(programs_dir or _PROGRAMS), *args]
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    r = _pr.run(argv, capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -478,10 +480,10 @@ def test_re_reviewing_the_rules_clears_the_drift(tmp_path):
         return src
 
     altered = _gate_copy(tmp_path, add_a_rule_and_re_review)
-    new = subprocess.run(
+    new = _pr.run(
         [sys.executable, str(_CLI), "--programs-dir", str(altered),
          "--print-decision-digest", "si_mcf_sta_check"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert new.returncode == 0, new.stderr
     digest = new.stdout.strip().split("digest=")[1]
 
@@ -702,7 +704,7 @@ def test_the_shipped_register_is_current(tmp_path):
     # before a 120 s bound can fire, taking every other file's verdict with it.
     # MEASURED against a real 28,166-file clone of `vibeic/benchmark-data`:
     # 1.45 s wall, 267 published records adjudicated. 60 s is 41x that.
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    r = _pr.run(argv, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -721,9 +723,9 @@ def test_adjudicator_agrees_with_what_the_real_gate_emits(tmp_path, fixture):
     import shutil
     work = tmp_path / fixture
     shutil.copytree(_FIXTURES / fixture, work)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "si_mcf_sta_check.py"), "."],
-        cwd=str(work), capture_output=True, text=True, timeout=60)
+        cwd=str(work), capture_output=True, text=True)
     assert r.returncode in (0, 2), r.stderr
     emitted = json.loads(
         (work / "reports" / "phase3" / "si_mcf_sta_check.json").read_text())
@@ -1039,13 +1041,13 @@ def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
 @pytest.mark.skipif(not _CORPUS.is_dir(), reason="no published corpus here")
 def test_the_real_corpus_is_not_written_to(tmp_path):
     """READ-ONLY is a property of the program, asserted on the real tree."""
-    before = subprocess.run(
+    before = _pr.run(
         ["git", "-C", str(_REPO), "status", "--porcelain", "--", "benchmark-data"],
-        capture_output=True, text=True, timeout=60).stdout
+        capture_output=True, text=True).stdout
     _rc, _rep, _se = _report(_CORPUS, tmp_path)
-    after = subprocess.run(
+    after = _pr.run(
         ["git", "-C", str(_REPO), "status", "--porcelain", "--", "benchmark-data"],
-        capture_output=True, text=True, timeout=60).stdout
+        capture_output=True, text=True).stdout
     assert after == before
 
 

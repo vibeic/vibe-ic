@@ -29,14 +29,17 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import evidence_citation_resolves_check as E  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROG = _PROGRAMS / "evidence_citation_resolves_check.py"
 
 
 def _run(root: Path, baseline: Path, *extra) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_PROG), str(root), "--baseline", str(baseline),
          *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def _doc(root: Path, rel: str, body: str) -> Path:
@@ -170,8 +173,8 @@ def test_shipped_baseline_matches_the_shipped_tree():
     is that the shipped tree could not be looked at (skip), not that it is
     green (pass) and not that it is broken (fail)."""
     root = corpus_root() / "ic"
-    r = subprocess.run([sys.executable, str(_PROG), str(root)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_PROG), str(root)],
+                       capture_output=True, text=True)
     if r.returncode == 2:
         pytest.skip("no benchmark-data tree in this checkout")
     if E._working_tree_dirt(root):
@@ -185,8 +188,8 @@ def test_out_of_scope_tree_is_disclosed_not_silently_dropped():
     its measured size, or 'not scanned' reads as 'clean'."""
     assert E._DISCLOSED_OUT_OF_SCOPE[0]
     assert "unresolved" in E._DISCLOSED_OUT_OF_SCOPE[1]
-    r = subprocess.run([sys.executable, str(_PROG)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_PROG)],
+                       capture_output=True, text=True)
     if r.returncode != 2:
         assert "NOT scanned" in r.stdout
 
@@ -217,8 +220,8 @@ def test_baseline_never_stores_the_paths_it_lists(tmp_path):
 # certificate this gate exists to remove.
 
 def _git(root: Path, *args):
-    subprocess.run(["git", "-C", str(root), *args],
-                   capture_output=True, check=True, timeout=60)
+    _pr.run(["git", "-C", str(root), *args],
+                   capture_output=True, check=True, text=False)
 
 
 def _repo(tmp_path) -> Path:

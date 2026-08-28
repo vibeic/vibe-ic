@@ -13,8 +13,11 @@ These tests run the actual bash scripts through subprocess to lock the identity
 content + the fire / no-fire boundary, and pin the wiring in hooks.json.
 """
 import json
-import subprocess
 from pathlib import Path
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 SESSION = _HOOKS / "ic-expert-identity-session.sh"
@@ -23,9 +26,9 @@ REMINDER = _HOOKS / "ic-expert-identity-reminder.sh"
 
 def _run(script: Path, prompt: str | None = None) -> str:
     envelope = None if prompt is None else json.dumps({"prompt": prompt}) + "\n"
-    proc = subprocess.run(
+    proc = _pr.run(
         ["bash", str(script)],
-        input=envelope, capture_output=True, text=True, timeout=5)
+        input=envelope, capture_output=True, text=True)
     return proc.stdout
 
 

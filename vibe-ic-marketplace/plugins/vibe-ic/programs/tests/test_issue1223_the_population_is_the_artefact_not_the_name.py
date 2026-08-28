@@ -58,17 +58,12 @@ if str(PROGRAMS) not in sys.path:
 
 import step_internal_fail_bubble_up_check as M  # noqa: E402
 
-#: vibe-ic#1241 — the harness runs pytest at `--timeout=180` and kills the
-#: SESSION, so any inner bound above 180 // 3 = 60s is a promise it will not
-#: keep. MEASURED, not snapped to the ceiling: the slowest case here builds
-#: four run trees and makes three gate calls, well under a second of wall time.
-_GATE_TIMEOUT_S = 30
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _run(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True,
-                          timeout=_GATE_TIMEOUT_S)
+    return _pr.run([sys.executable, str(GATE), *args],
+                          capture_output=True, text=True)
 
 
 def _mk_run(corpus: Path, rel: str, n_findings: int = 0) -> Path:

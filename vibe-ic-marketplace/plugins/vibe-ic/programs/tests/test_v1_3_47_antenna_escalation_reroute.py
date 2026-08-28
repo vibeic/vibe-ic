@@ -19,7 +19,6 @@ These tests pin the emitted-TCL control logic + verdict on SYNTHETIC before/afte
 antenna reports (FAIL->PASS), so a blind run auto-covers the escalation.
 """
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -29,6 +28,9 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 tclsh = shutil.which("tclsh")
 needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
@@ -55,8 +57,8 @@ def _run_tclsh(script_text: str):
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "ant.tcl"
         p.write_text(script_text)
-        return subprocess.run([tclsh, str(p)],
-                              capture_output=True, text=True, timeout=60)
+        return _pr.run([tclsh, str(p)],
+                              capture_output=True, text=True)
 
 
 # ── emitted-shape assertions ─────────────────────────────────────────────────

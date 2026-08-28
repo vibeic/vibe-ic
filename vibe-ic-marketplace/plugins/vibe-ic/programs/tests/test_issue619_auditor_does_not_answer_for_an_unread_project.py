@@ -30,8 +30,11 @@ from __future__ import annotations
 
 import importlib
 import pathlib
-import subprocess
 import sys
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _GATE = _PROGRAMS / "gate_zero_denominator_refuses_check.py"
@@ -46,8 +49,8 @@ _BUDGET = 60
 
 
 def _run(*args, timeout=_BUDGET):
-    r = subprocess.run([sys.executable, str(_GATE), *args],
-                       capture_output=True, text=True, timeout=timeout)
+    r = _pr.run([sys.executable, str(_GATE), *args],
+                       capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 

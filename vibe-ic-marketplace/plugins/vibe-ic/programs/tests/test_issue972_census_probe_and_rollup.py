@@ -69,6 +69,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import gate_discloses_denominator_check as G  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _REPO = _PROGRAMS.parents[3]
 _CI_SCRIPT = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 _GEN = _REPO / "tools" / "gen_matrix_63x8_census.py"
@@ -272,8 +275,8 @@ def test_an_empty_tree_is_refused_as_a_zero_denominator_and_refused_fast(
     for where, raw_argv in launches:
         argv = _retargeted(raw_argv, tmp_path)
         t0 = time.monotonic()
-        r = subprocess.run(argv, cwd=str(scratch), capture_output=True,
-                           text=True, timeout=60)
+        r = _pr.run(argv, cwd=str(scratch), capture_output=True,
+                           text=True)
         elapsed = time.monotonic() - t0
         out = (r.stdout or "") + (r.stderr or "")
         _assert_refuses_an_empty_tree(where, argv, r.returncode, out, elapsed)

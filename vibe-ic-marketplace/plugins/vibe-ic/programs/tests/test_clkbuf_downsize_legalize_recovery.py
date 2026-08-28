@@ -27,7 +27,6 @@ design then legalizes) rather than matching strings in the emitter.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -36,6 +35,9 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase3_one_shot_runner as p3  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TCLSH = shutil.which("tclsh")
 _needs_tcl = pytest.mark.skipif(_TCLSH is None, reason="tclsh not installed")
@@ -98,8 +100,7 @@ def _run(builder_tcl: str, tmp_path) -> str:
            + 'foreach h $::insts { puts "IM: $h $::im($h)" }\n')
     f = tmp_path / "recovery.tcl"
     f.write_text(tcl)
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -156,8 +157,7 @@ def test_no_op_when_default_window_legalizes(tmp_path):
         "POST_HOLD", "_ph", clk_sink_buf=_SINK))
     f = tmp_path / "noop.tcl"
     f.write_text(tcl)
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "POST_HOLD_LEGALIZE_OK disp=default" in r.stdout
     assert "CLKBUF_DOWNSIZE" not in r.stdout
@@ -225,8 +225,7 @@ def test_downsize_diagnostic_speaks_when_the_swap_throws(tmp_path):
                                                clk_sink_buf=_SINK))
     f = tmp_path / "recovery_throws.tcl"
     f.write_text(tcl)
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     out = r.stdout
     assert "POST_HOLD_CLKBUF_DOWNSIZE_NONFATAL: findMaster: no such master" in out, out

@@ -33,7 +33,11 @@ from __future__ import annotations
 
 import pathlib
 import re
-import subprocess
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
@@ -91,9 +95,9 @@ def test_the_removal_path_uses_it_too():
 def test_it_resolves_to_a_real_directory_here(tmp_path):
     """RUN, not read: whatever this repo is checked out as — main clone or
     worktree — the expression must name a directory that can be written."""
-    d = subprocess.run(["git", "-C", str(_REPO), "rev-parse",
+    d = _pr.run(["git", "-C", str(_REPO), "rev-parse",
                         "--absolute-git-dir"],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True)
     assert d.returncode == 0, d.stderr
     p = pathlib.Path(d.stdout.strip())
     assert p.is_dir(), f"{p} is not a directory"
@@ -104,9 +108,8 @@ def test_a_worktree_gets_its_own_stamp_not_a_shared_one():
     stamp would let a gate run in one worktree authorise a push of a DIFFERENT
     commit from another."""
     def _rp(flag):
-        out = subprocess.run(["git", "-C", str(_REPO), "rev-parse", flag],
-                             capture_output=True, text=True,
-                             timeout=30).stdout.strip()
+        out = _pr.run(["git", "-C", str(_REPO), "rev-parse", flag],
+                             capture_output=True, text=True).stdout.strip()
         # RESOLVE BOTH. `--git-common-dir` answers RELATIVE (".git") in a main
         # checkout while `--absolute-git-dir` is absolute, so comparing the raw
         # strings says "these differ" about one directory — and this test then

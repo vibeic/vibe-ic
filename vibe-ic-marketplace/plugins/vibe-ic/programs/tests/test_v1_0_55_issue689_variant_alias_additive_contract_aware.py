@@ -36,7 +36,6 @@ spelling set; no chip/vendor/SKU literal.
 """
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -46,6 +45,9 @@ PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import reset_clock_variant_alias as V  # noqa: E402
 import design_one_shot_runner as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -250,9 +252,9 @@ def test_step_facet1_contract_declares_reset_skips_and_elaborates(tmp_path):
             f" wire [15:0] p; wire rdy;\n"
             f" multi_booth_8bit dut(.clk(clk), .{bind}({bind}), .a(a), .b(b),"
             f" .p(p), .rdy(rdy));\nendmodule\n")
-        return subprocess.run(
+        return _pr.run(
             [iv, "-g2012", "-s", "tb", "-o", str(tmp_path / f"{bind}.out"),
-             str(f), str(tb)], capture_output=True, text=True, timeout=60)
+             str(f), str(tb)], capture_output=True, text=True)
     # NO-REGRESSION: the contract `.reset` binding still elaborates.
     assert _elab("reset").returncode == 0
     # #792 RESCUE: the canonical `.rst` binding now ALSO elaborates.
@@ -284,9 +286,9 @@ def test_step_facet2_up_down_counter_contract_preserves_reset(tmp_path):
             f"module tb; reg clk=0,{bind}=0,up_down=0; wire [15:0] count;"
             f" up_down_counter dut(.clk(clk),.{bind}({bind}),.up_down(up_down),"
             f".count(count)); endmodule\n")
-        return subprocess.run(
+        return _pr.run(
             [iv, "-g2012", "-o", str(tmp_path / f"{bind}.out"), str(tb), str(f)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
     assert _elab("reset").returncode == 0    # no regression
     assert _elab("rst").returncode == 0      # #792 rescue
 
@@ -324,9 +326,9 @@ def test_step_facet1_clock_shape_contract_preserves_clock(tmp_path):
             f"module tb; reg clock=0,{rbind}=0,d=0; wire q;"
             f" dut_clk dut(.clock(clock),.{rbind}({rbind}),.d(d),.q(q));"
             f" endmodule\n")
-        return subprocess.run(
+        return _pr.run(
             [iv, "-g2012", "-o", str(tmp_path / f"{rbind}.out"), str(tb), str(f)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
     assert _elab("reset").returncode == 0    # no regression (clock + spec reset)
     assert _elab("rst").returncode == 0      # #792 rescue (clock + canon reset)
 
@@ -368,9 +370,9 @@ def test_noleak_step_no_contract_legit_alias_still_fires(tmp_path):
         "module tb; reg clk=0,rst_n=0,data_in=0; wire detected;"
         " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
         ".data_in(data_in),.detected(detected)); endmodule\n")
-    r = subprocess.run(
+    r = _pr.run(
         [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb), str(f)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 

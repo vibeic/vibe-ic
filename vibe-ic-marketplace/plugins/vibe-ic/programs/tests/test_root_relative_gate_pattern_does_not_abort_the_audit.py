@@ -37,7 +37,6 @@ feature.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -49,6 +48,9 @@ CHECK = PLUGIN_ROOT / "programs" / "flow_compliance_check.py"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "programs"))
 import flow_compliance_check as F  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _ROOT_FILE = "root_relative_gate_probe.flag"
 
@@ -74,10 +76,10 @@ def _run(tmp_path: Path, seed: bool):
     # A subprocess, not `main()` in-process: the defect is an exception
     # escaping the thread pool, and only a real process boundary shows that it
     # takes the exit code and the report with it.
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(CHECK), str(proj), "--json", str(out),
          "--flow-def", str(flow), "--lenient"],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     return p, (json.loads(out.read_text()) if out.exists() else None)
 
 

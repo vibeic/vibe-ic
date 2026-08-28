@@ -40,8 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import generated_artifact_conflict_resolve as G  # noqa: E402
 
-TIMEOUT = 60
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # ─── a synthetic derived artefact, so the tests stay fast ───────────
 GEN_SRC = '''#!/usr/bin/env python3
@@ -89,17 +89,15 @@ FAKE_REGISTRY = (ART,)
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         ("git", "-C", str(repo)) + args,
-        capture_output=True, text=True, timeout=TIMEOUT,
-    )
+        capture_output=True, text=True)
 
 
 def _regen(repo: Path) -> None:
-    cp = subprocess.run(
+    cp = _pr.run(
         ("python3", "gen.py"), cwd=str(repo),
-        capture_output=True, text=True, timeout=TIMEOUT,
-    )
+        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
 
 
@@ -199,8 +197,8 @@ def test_green_derived_only_conflict_is_resolved(repo: Path):
     assert "- aab" in body and "- aac" in body
     # and the merge can now be completed
     assert _run(repo, "commit", "-q", "--no-edit").returncode == 0
-    chk = subprocess.run(("python3", "gen.py", "--check"), cwd=str(repo),
-                         capture_output=True, text=True, timeout=TIMEOUT)
+    chk = _pr.run(("python3", "gen.py", "--check"), cwd=str(repo),
+                         capture_output=True, text=True)
     assert chk.returncode == 0, chk.stderr
 
 

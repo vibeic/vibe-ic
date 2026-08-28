@@ -68,6 +68,9 @@ import sta_signoff_rigor_check as G         # noqa: E402
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
 from not_verified_tier import skip_not_verified  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
@@ -84,9 +87,6 @@ _CONTAINER_IMAGE_HINT = "vibeic-eda"
 # with it. Worst case for the live probe is ps + cp + exec = 100s < 180s, and
 # measured on a warm container the whole probe is ~0.2s.
 _DOCKER_PS_TIMEOUT_S = 10
-_DOCKER_CP_TIMEOUT_S = 30
-_DOCKER_EXEC_TIMEOUT_S = 60
-_TCLSH_TIMEOUT_S = 60
 
 # ── layer 1: the report_checks argument contract ────────────────────────────
 # OpenSTA 3.1.0's `report_checks` keyword set (the subset any emitter here could
@@ -209,8 +209,7 @@ def _run_tcl(tmp_path: Path, fragment: str, rpt: Path) -> str:
     script = tmp_path / "frag.tcl"
     script.write_text(_STA_STUB.replace("%%ACCEPTED%%", accepted) + fragment)
     rpt.write_text("worst slack max -19.83\n")     # the slack line always lands
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=_TCLSH_TIMEOUT_S)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return rpt.read_text()
 
@@ -326,19 +325,18 @@ def test_report_checks_contract_matches_the_real_opensta(tmp_path):
         'set rc [catch {report_worst_slack -max} m]\n'
         'puts "WS rc=$rc msg=$m"\n')
     dest = "/tmp/vibeic_issue540_probe.tcl"
-    cp = subprocess.run(["docker", "cp", str(probe), f"{container}:{dest}"],
-                        capture_output=True, text=True,
-                        timeout=_DOCKER_CP_TIMEOUT_S)
+    cp = _pr.run(["docker", "cp", str(probe), f"{container}:{dest}"],
+                        capture_output=True, text=True)
     if cp.returncode != 0:
         skip_not_verified(
             f"cannot stage probe into {container}: {cp.stderr}",
             RUN_REMEDY)
-    r = subprocess.run(
+    r = _pr.run(
         ["docker", "exec", "-e", "IIC_OSIC_TOOLS_QUIET=1", container,
          "bash", "-lc",
          f"export PATH=/foss/tools/openroad/bin:/foss/tools/bin:$PATH && "
          f"sta -no_init -exit {dest} 2>&1"],
-        capture_output=True, text=True, timeout=_DOCKER_EXEC_TIMEOUT_S)
+        capture_output=True, text=True)
     out = r.stdout
     if "OLD rc=" not in out:
         skip_not_verified(

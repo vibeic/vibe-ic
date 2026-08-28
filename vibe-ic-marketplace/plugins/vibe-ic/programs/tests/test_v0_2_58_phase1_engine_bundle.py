@@ -23,7 +23,6 @@ BARE cache-shaped layout (plugin dir only, no repo-root tools/).
 import hashlib
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -35,6 +34,9 @@ BUNDLED = PLUGIN / "tools" / "phase1_engine"
 
 sys.path.insert(0, str(PROGRAMS))
 import phase1_one_shot_runner as p1r  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # repo-root master copy (absent on an installed cache — tests then skip
 # the drift comparison, which only matters in the checkout)
@@ -130,12 +132,12 @@ def test_the_unmirrored_set_is_exactly_the_self_naming_rule_file():
 def test_bundled_class_kb_resolves_self_anchored():
     # importing the BUNDLED gap_detect must resolve class_kb to the
     # plugin's own agents/class_kb without any cwd assumption
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, "-c",
          "import sys; sys.path.insert(0, %r); "
          "from phase1_engine import gap_detect; "
          "print(gap_detect.DEFAULT_CLASS_KB)" % str(PLUGIN / "tools")],
-        capture_output=True, text=True, cwd="/", timeout=60)
+        capture_output=True, text=True, cwd="/")
     assert r.returncode == 0, r.stderr
     kb = Path(r.stdout.strip())
     assert kb == PLUGIN / "agents" / "class_kb"
@@ -187,10 +189,10 @@ def test_install_smoke_bare_cache_layout(tmp_path):
         "Reset is asynchronous active low.\n")
     env = dict(os.environ)
     env.pop("CLAUDE_PLUGIN_ROOT", None)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(cache / "programs" / "phase1_one_shot_runner.py"),
          str(proj), "--ic-name", "pulse_div"],
-        capture_output=True, text=True, timeout=60, cwd=str(tmp_path),
+        capture_output=True, text=True, cwd=str(tmp_path),
         env=env)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
     gd = proj / "phase1" / "generated_docs"

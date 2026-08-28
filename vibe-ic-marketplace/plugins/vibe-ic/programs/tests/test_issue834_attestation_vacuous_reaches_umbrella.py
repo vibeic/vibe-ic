@@ -52,24 +52,15 @@ if str(_PROGRAMS) not in sys.path:
 import _vacuous_exit as _vx  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _GATE = _PROGRAMS / "agent_report_sha256_attestation_check.py"
 _GATE_NAME = "agent_report_sha256_attestation_check"
 
-#: Bound for the launch in `_run_gate`, and it is NOT a round number picked by
-#: feel. `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest
-#: harness bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
-#: `--timeout-method=thread` — and permits any one blocking call at most
-#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
-#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
-#: and every other file in the subset loses its verdict, including files that
-#: had already passed.
-_GATE_TIMEOUT_S = 60
-
-
 def _run_gate(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(_GATE), str(project)],
-                          capture_output=True, text=True,
-                          timeout=_GATE_TIMEOUT_S)
+    return _pr.run([sys.executable, str(_GATE), str(project)],
+                          capture_output=True, text=True)
 
 
 def _report(project: Path, body: str) -> None:

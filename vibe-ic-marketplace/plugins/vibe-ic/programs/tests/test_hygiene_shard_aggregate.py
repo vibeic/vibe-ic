@@ -21,6 +21,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = Path(__file__).resolve().parent.parent / "hygiene_shard_aggregate.py"
 LABELS = ["gate a", "gate b", "gate c"]
 
@@ -43,8 +46,8 @@ def _record(tmp: Path, name: str, shard: int, gates, seconds: int = 10) -> Path:
 
 
 def _run(*args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROG), *[str(a) for a in args]],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(PROG), *[str(a) for a in args]],
+                          capture_output=True, text=True)
 
 
 # ── the honest case ──────────────────────────────────────────────────────────

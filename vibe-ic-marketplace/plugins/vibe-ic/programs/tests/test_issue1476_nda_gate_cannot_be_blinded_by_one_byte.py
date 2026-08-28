@@ -46,7 +46,6 @@ already does, so the guard does not catch its own regression test.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -57,6 +56,9 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import _commercial_pdk as _cpdk                      # noqa: E402
 import source_chip_agnostic_check as C               # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PLUGIN_ROOT = _PROGRAMS.parent
 
@@ -242,10 +244,10 @@ def test_the_pass_banner_names_the_NDA_denominator(tmp_path: Path) -> None:
     root = tmp_path / "banner"
     (root / "programs").mkdir(parents=True)
     (root / "programs" / "widget.py").write_bytes(b"def widget():\n    return 1\n")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"),
          str(root)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
     assert "PASS (1 file(s) scanned)" in out, out
@@ -267,10 +269,10 @@ def test_an_unreadable_file_is_not_a_pass(tmp_path: Path) -> None:
     try:
         if C._read_for_scan(locked) is not None:
             pytest.skip("running as a user that can read mode-000 files")
-        r = subprocess.run(
+        r = _pr.run(
             [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"),
              str(root)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
     finally:
         locked.chmod(0o644)          # so tmp_path cleanup works
     out = r.stdout + r.stderr

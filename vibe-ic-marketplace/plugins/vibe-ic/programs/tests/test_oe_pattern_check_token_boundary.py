@@ -46,7 +46,6 @@ CONTROLS BELOW ARE BIDIRECTIONAL:
 from __future__ import annotations
 
 import pathlib
-import subprocess
 import sys
 
 import pytest
@@ -56,6 +55,10 @@ PROG = _PROGRAMS / "oe_pattern_check.py"
 
 sys.path.insert(0, str(_PROGRAMS))
 import oe_pattern_check as oe  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── the false positives this fix removes ────────────────────────────────────
@@ -98,10 +101,10 @@ def test_genuine_oe_names_still_match(name):
 
 
 def _run(files, out_dir):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--rtl-files", *[str(f) for f in files],
          "--out-dir", str(out_dir)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 # A design shaped like the one the defect was measured on: a bus-request enable

@@ -31,10 +31,13 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "oe_pattern_check.py"
@@ -47,10 +50,10 @@ endmodule
 
 
 def _run(files, out_dir):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--rtl-files", *[str(f) for f in files],
          "--out-dir", str(out_dir)],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
 
 
 def test_no_readable_file_is_not_a_pass(tmp_path):

@@ -17,13 +17,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from _plugin_tree import plugin_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 TOOL = plugin_path("programs", "atomic_write_pr_attribution.py")
 #: The path a PR tree carries its programs at -- the fixture repos below are
@@ -119,8 +121,8 @@ def md5(text: str) -> str:
 # fixture repository
 # --------------------------------------------------------------------------
 def git(repo: Path, *args: str) -> str:
-    r = subprocess.run(["git", *args], cwd=str(repo), capture_output=True,
-                       text=True, timeout=45)
+    r = _pr.run(["git", *args], cwd=str(repo), capture_output=True,
+                       text=True)
     assert r.returncode == 0, f"git {args}: {r.stderr}"
     return r.stdout
 
@@ -170,7 +172,7 @@ def run(repo: Path, prs, cache: Path, *extra):
     for p in prs:
         argv += ["--pr", str(p)]
     argv += list(extra)
-    return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    return _pr.run(argv, capture_output=True, text=True)
 
 
 # --------------------------------------------------------------------------

@@ -17,7 +17,6 @@ chip-AGNOSTIC: fixtures use a generic clock-divider prompt only.
 """
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +33,9 @@ for anc in (PLUGIN, *PLUGIN.parents):
 
 import pytest  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 pytestmark = pytest.mark.skipif(
     _ENGINE is None, reason="tools/phase1_engine not present in this checkout")
 
@@ -48,11 +50,10 @@ def _run_engine(src: Path, out_dir: Path):
     repo_root = pkg_parent.parent               # repo root (has vibe-ic-marketplace/)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(pkg_parent) + os.pathsep + env.get("PYTHONPATH", "")
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, "-m", "phase1_engine.cli", "run-all",
          str(src), str(out_dir), "--ic-name", "pulse_div"],
-        capture_output=True, text=True, timeout=60,
-        cwd=str(repo_root), env=env)
+        capture_output=True, text=True, cwd=str(repo_root), env=env)
 
 
 def _mk_docs(tmp_path: Path) -> Path:
@@ -92,10 +93,10 @@ def test_runner_prompt_mode_emits_flat_and_precheck_passes(tmp_path):
     proj = tmp_path / "proj"
     (proj / "input").mkdir(parents=True)
     (proj / "input" / "phase1_prompt.md").write_text(_PROMPT)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
          str(proj), "--ic-name", "pulse_div"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     gd = proj / "phase1" / "generated_docs"
     n = len(list(gd.glob("L*.json")))
@@ -103,10 +104,10 @@ def test_runner_prompt_mode_emits_flat_and_precheck_passes(tmp_path):
     assert not (gd / "generated_docs").exists(), \
         "no nested generated_docs/generated_docs"
     # phase2's precheck must count them (dry-run stops after the plan print)
-    r2 = subprocess.run(
+    r2 = _pr.run(
         [sys.executable, str(PROGRAMS / "design_one_shot_runner.py"),
          str(proj), "--dry-run"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert f"{n}/13 L docs present" in r2.stdout, r2.stdout + r2.stderr
 
 
@@ -118,10 +119,10 @@ def test_precheck_names_nested_path_explicitly(tmp_path):
     nested.mkdir(parents=True)
     for i in (1, 2, 3):
         (nested / f"L{i}_X.json").write_text("{}")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "design_one_shot_runner.py"),
          str(proj)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 1
     rpt = json.loads(
         (proj / "reports" / "orchestrator" / "phase2_one_shot.json").read_text())

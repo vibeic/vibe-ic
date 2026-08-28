@@ -33,11 +33,13 @@ from __future__ import annotations
 
 import importlib.util
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _PLUGIN = _PROGRAMS.parent
@@ -47,12 +49,6 @@ _LAND = _REPO / "tools" / "gatekeeper-land.sh"
 
 # The stage this issue adds. Named once; every assertion below reads it.
 _STAGE = "run_unselectable_pytest"
-
-# Every inner subprocess in this file is bounded well under the harness's own
-# --timeout=180 / 3 ceiling (programs/ci_harness_timeout_ceiling_check.py), so
-# a hang here fails ONE test instead of taking the session down unnamed.
-_BOUND = 60
-
 
 def _mod():
     name = "landing_unselectable_pytest_corpus_under_test"
@@ -80,9 +76,9 @@ def land_text() -> str:
 
 
 def _run(args, cwd=None):
-    return subprocess.run([sys.executable, str(_PROG), *args],
+    return _pr.run([sys.executable, str(_PROG), *args],
                           capture_output=True, text=True,
-                          timeout=_BOUND, cwd=str(cwd) if cwd else None)
+                          cwd=str(cwd) if cwd else None)
 
 
 # ── the property ────────────────────────────────────────────────────────────

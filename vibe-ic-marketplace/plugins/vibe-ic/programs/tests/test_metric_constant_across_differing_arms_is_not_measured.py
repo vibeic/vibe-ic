@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import re
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _count(out: str, label: str) -> int:
     """The integer on the population line `label`, or -1 if absent.
@@ -48,8 +50,8 @@ def _tree(rows) -> Path:
 
 
 def _run(root: Path):
-    return subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                          capture_output=True, text=True, timeout=300)
+    return _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                          capture_output=True, text=True)
 
 
 def test_a_constant_axis_over_differing_arms_is_refused():
@@ -105,14 +107,14 @@ def test_the_metric_names_live_in_a_field_not_a_key():
 
 
 def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = subprocess.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
+                       capture_output=True, text=True)
     assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_a_bad_invocation_is_rc_3():
-    r = subprocess.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
@@ -126,8 +128,8 @@ def test_the_shipped_tree_is_RED_and_names_the_corroborated_axis():
     root = Path(__file__).resolve().parents[5]
     if not (root / "ppa-e2e" / "search" / "trials.json").is_file():
         pytest.skip("no committed arm set in this checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=900)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}"
     assert "power.total_w" in r.stdout
     assert "0.000306" in r.stdout, (

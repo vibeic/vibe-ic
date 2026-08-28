@@ -22,7 +22,6 @@ document will find a different one.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -38,6 +37,9 @@ from _electrical_mention import (               # noqa: E402
     has_electrical_mention,
     scan_electrical_mentions,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── Direction 1: a sentence boundary is not part of a number ─────────
@@ -265,8 +267,8 @@ def _project(doc_text: str, l1: dict) -> Path:
 
 
 def _rc(proj: Path):
-    r = subprocess.run([sys.executable, str(_GATE), str(proj)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_GATE), str(proj)],
+                       capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 

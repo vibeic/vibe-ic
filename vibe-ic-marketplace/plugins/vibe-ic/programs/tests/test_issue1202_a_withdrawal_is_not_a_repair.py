@@ -56,21 +56,16 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN_ROOT / "programs"
 GATE = PROGRAMS / "step_internal_fail_bubble_up_check.py"
 
-#: vibe-ic#1241 — the inner ceiling is 60s, below the harness's 180s, so this
-#: call's own timeout fires before the harness kills the SESSION. MEASURED, not
-#: snapped to the ceiling: the slowest case here builds 3 run trees and makes 4
-#: gate calls, 0.5s wall total. 60s is ~100x that.
-_GATE_TIMEOUT_S = 60
-
-
 def _run(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True,
-                          timeout=_GATE_TIMEOUT_S)
+    return _pr.run([sys.executable, str(GATE), *args],
+                          capture_output=True, text=True)
 
 
 def _mk_run(corpus: Path, rel: str, n_findings: int) -> Path:

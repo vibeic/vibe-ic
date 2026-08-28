@@ -30,11 +30,13 @@ chip-AGNOSTIC: it reasons about the gate wiring, not about any design.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _PLUGIN = _PROGRAMS.parent
@@ -44,32 +46,11 @@ _HYGIENE = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 
 _CHECKER = "vendored_attribution_retained_check.py"
 
-#: vibe-ic#1241's own rule: an inner bound must be under harness_bound/3 = 60s,
-#: derived in `test_three_orphan_checkers_have_a_machine_runner` from
-#: tools/gatekeeper-land.sh:197 (`pytest ... --timeout=180`). The rule gives 60;
-#: this file additionally halved it to 30 for no recorded reason, and 30 is
-#: BELOW what the call it bounds actually costs.
-#:
-#: MEASURED on this tree, `checker_execution_wiring_audit.py --json`, three runs
-#: on an idle 32-core host at load 3-6:  28.1 s / 27.8 s / 25.9 s.  The audit's
-#: own report says why it grew -- it sweeps 4593 files and the population it
-#: reports is now `656 checker-shaped program(s) of 1298`, against the `580 of
-#: 1128` the sibling module's note was measured at.
-#:
-#: A bound of 30 s over a 26-28 s call is not a hang detector; it is a coin
-#: flip, and it fires on healthy work. It cost 3 red cases in this file on the
-#: full-suite sweep of ae5cc4dbfc -- two of them SETUP errors, so the tests they
-#: gate never ran at all. 60 s restores the rule's own value, keeps 2.1x headroom
-#: over the slowest measured run, and still fires long before pytest's 180 s
-#: takes the whole session down.
-_CEILING_S = 60
-
-
 @pytest.fixture(scope="module")
 def audit_report(tmp_path_factory):
     out = tmp_path_factory.mktemp("wiring1241") / "audit.json"
-    subprocess.run([sys.executable, str(_AUDIT), "--json", str(out)],
-                   capture_output=True, text=True, timeout=_CEILING_S)
+    _pr.run([sys.executable, str(_AUDIT), "--json", str(out)],
+                   capture_output=True, text=True)
     return json.loads(out.read_text())
 
 
@@ -106,6 +87,6 @@ def test_the_hygiene_script_declares_it_as_a_blocking_gate():
 
 def test_the_audit_returns_a_clean_verdict():
     """The gate itself, by exit code — not by re-deriving its rule here."""
-    r = subprocess.run([sys.executable, str(_AUDIT)],
-                       capture_output=True, text=True, timeout=_CEILING_S)
+    r = _pr.run([sys.executable, str(_AUDIT)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr

@@ -21,7 +21,6 @@ Measured on v1.7.66 before the fix, on the fixtures below:
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +33,9 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _report_check_argv as argv_helper  # noqa: E402
 import lvs_report_check as wrapper  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # An AUTHENTIC netgen sign-off transcript: tool signature, a mismatch-category
 # keyword, the terminal MATCH token, and enough per-cell body to clear the
@@ -62,8 +64,8 @@ _POWER_RPT = (
 
 
 def _run(args, cwd=None):
-    return subprocess.run([sys.executable, str(PROG)] + list(args),
-                          capture_output=True, text=True, timeout=60, cwd=cwd)
+    return _pr.run([sys.executable, str(PROG)] + list(args),
+                          capture_output=True, text=True, cwd=cwd)
 
 
 def _project(tmp_path, *, lvs=True, power=False):

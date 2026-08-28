@@ -27,7 +27,6 @@ the SAME completeness verdict.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -42,13 +41,16 @@ import cvdp_atomic_bridge as B  # noqa: E402
 import cvdp_complete_extract as CE  # noqa: E402
 import verilog_width_resolve as W  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # --------------------------------------------------------------------------- #
 # iverilog helpers (defined first — used by a collection-time skipif decorator)
 # --------------------------------------------------------------------------- #
 def _have_iverilog() -> bool:
     try:
-        subprocess.run(["iverilog", "-V"], capture_output=True, timeout=10)
+        _pr.run(["iverilog", "-V"], capture_output=True, text=False)
         return True
     except Exception:
         return False
@@ -61,11 +63,11 @@ def _iverilog_run(rtl: str, tb: str) -> str:
         vvp = Path(d) / "a.vvp"
         dut.write_text(rtl)
         tbf.write_text(tb)
-        c = subprocess.run(["iverilog", "-g2012", "-o", str(vvp), str(dut), str(tbf)],
-                           capture_output=True, text=True, timeout=60)
+        c = _pr.run(["iverilog", "-g2012", "-o", str(vvp), str(dut), str(tbf)],
+                           capture_output=True, text=True)
         if c.returncode != 0:
             return "COMPILE_ERROR:\n" + c.stderr
-        r = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True, timeout=60)
+        r = _pr.run(["vvp", str(vvp)], capture_output=True, text=True)
         return r.stdout + r.stderr
 
 

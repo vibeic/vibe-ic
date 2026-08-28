@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import shutil
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = (Path(__file__).resolve().parents[1]
         / "layer_membership_is_declared_not_inferred_from_a_filename_prefix.py")
@@ -62,8 +64,8 @@ def _tree(*, glob_named: int, outside: int, outside_executable: bool = True,
 
 
 def _run(root: Path):
-    return subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                          capture_output=True, text=True, timeout=300)
+    return _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                          capture_output=True, text=True)
 
 
 def test_a_layer_member_outside_the_glob_is_refused():
@@ -108,14 +110,14 @@ def test_a_test_star_glob_is_test_discovery_not_a_layer():
 
 
 def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = subprocess.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
+                       capture_output=True, text=True)
     assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_a_bad_invocation_is_rc_3():
-    r = subprocess.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
@@ -129,8 +131,8 @@ def test_the_shipped_tree_is_RED_and_that_is_the_point():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=1800)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 1, (
         f"the ppa layer gap is GONE (rc={r.returncode}). If the two suites were "
         f"repaired, delete this assertion and assert rc 0 — do not weaken the "
@@ -181,8 +183,8 @@ def test_no_test_files_read_is_undetermined_not_a_pass():
         (root / ".git").mkdir()
         (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
          / "tests").mkdir(parents=True)
-        r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                           capture_output=True, text=True, timeout=900)
+        r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                           capture_output=True, text=True)
         assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}"
         assert "0 test files were read" in r.stdout, r.stdout
         assert "[PASS]" not in r.stdout, r.stdout

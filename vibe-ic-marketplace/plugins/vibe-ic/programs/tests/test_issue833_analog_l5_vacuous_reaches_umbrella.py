@@ -77,20 +77,16 @@ import _vacuous_exit as _vx  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
 import gate_skip_routing_check as GSR  # noqa: E402
 
-# The gatekeeper harness runs pytest under `--timeout=180` (tools/gatekeeper-land.sh),
-# and `ci_harness_timeout_ceiling_check` requires every inner blocking call to be
-# bounded at or under 180 // 3 = 60s. A larger inner bound can outlive the harness,
-# and what then dies is the SESSION, not the test. Named so the ceiling is visible
-# at authoring time -- this defect was written five separate times in one session.
-_GATE_TIMEOUT_S = 60
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _GATE_NAME = "analog_content_detected_must_emit_l5_check"
 _GATE = _PROGRAMS / f"{_GATE_NAME}.py"
 
 
 def _run(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(_GATE), str(project)],
-                          capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
+    return _pr.run([sys.executable, str(_GATE), str(project)],
+                          capture_output=True, text=True)
 
 
 def _doc(project: Path, name: str, body: str) -> None:

@@ -44,6 +44,9 @@ RUNNER = PROGRAMS / "design_one_shot_runner.py"
 sys.path.insert(0, str(PROGRAMS))
 import verilator_coverage_measure as gate  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 needs_verilator = pytest.mark.skipif(
     shutil.which("verilator") is None,
     reason="verilator not on PATH — the measurement cannot be taken here")
@@ -103,10 +106,10 @@ def _project(tmp_path: Path, dut_src: str) -> Path:
 
 def _measure(project: Path) -> tuple[int, dict, str]:
     out = project / "reports" / "phase2" / "coverage" / "coverage_verilator.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(SCRIPT), "measure-tb",
          "--project", str(project), "--out", str(out)],
-        capture_output=True, text=True, timeout=900)
+        capture_output=True, text=True)
     payload = json.loads(out.read_text()) if out.is_file() else {}
     return r.returncode, payload, r.stdout + r.stderr
 

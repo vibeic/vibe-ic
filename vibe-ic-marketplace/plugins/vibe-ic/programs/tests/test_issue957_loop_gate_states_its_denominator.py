@@ -76,7 +76,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
-import subprocess
 import sys
 import tempfile
 import textwrap
@@ -89,17 +88,14 @@ from pathlib import Path
 #: module rather than the module itself keeps the two from shadowing.
 from _published_corpus import needs_corpus
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
 _REPO = _PROGRAMS.parents[3]
 _SCRIPT = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
-
-#: Every fixture gate returns instantly, and the real script's `--list` is
-#: measured at 0.03 s. This only stops a hung one from taking the pytest
-#: session down, and stays under the 60 s ceiling
-#: `ci_harness_timeout_ceiling_check` enforces.
-_T = 55
 
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
@@ -139,9 +135,9 @@ def _published_corpus() -> list:
     the producer keeps the original property instead of re-copying its glob
     here, which would be the second registry the scrape existed to avoid.
     """
-    out = subprocess.run(
+    out = _pr.run(
         ["python3", str(_CORPUS_PRODUCER), "--repo", str(_REPO)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     # rc 2 is "I could not look", which this file never lets read as an empty
     # corpus; the caller's `@needs_corpus` mark is what covers the absent one.
     assert out.returncode == 0, out.stderr
@@ -166,9 +162,9 @@ def _list_run(script: Path, cwd: Path):
     """(stdout, stderr, record) for `--list`, which drives the REAL dispatch."""
     with tempfile.TemporaryDirectory() as td:
         rec = Path(td) / "record.json"
-        out = subprocess.run(
+        out = _pr.run(
             ["bash", str(script), "--list", "--summary-json", str(rec)],
-            cwd=str(cwd), capture_output=True, text=True, timeout=_T)
+            cwd=str(cwd), capture_output=True, text=True)
         assert out.returncode == 0, out.stdout + out.stderr
         return out.stdout, out.stderr, json.loads(rec.read_text())
 
@@ -277,9 +273,9 @@ def _fixture(root: Path, body: str) -> Path:
 
 def _run_fixture(root: Path, body: str):
     rec = root / "rec.json"
-    out = subprocess.run(
+    out = _pr.run(
         ["bash", str(_fixture(root, body)), "--summary-json", str(rec)],
-        cwd=str(root), capture_output=True, text=True, timeout=_T)
+        cwd=str(root), capture_output=True, text=True)
     doc = json.loads(rec.read_text()) if rec.is_file() else {}
     return out, doc
 

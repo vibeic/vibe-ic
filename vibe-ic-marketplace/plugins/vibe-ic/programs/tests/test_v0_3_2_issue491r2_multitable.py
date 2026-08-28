@@ -48,6 +48,9 @@ for _p in (str(PROGRAMS), str(PLUGIN_ROOT)):
 
 import phase1_doc_one_shot_runner as DOC  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 DOC_RUNNER = PROGRAMS / "phase1_doc_one_shot_runner.py"
 GATE_PROG = PROGRAMS / "l9_rtl_pin_consistency_check.py"
 _GEN = Path("phase1") / "generated_docs"
@@ -56,17 +59,15 @@ _RTL = Path("phase2") / "stage1" / "rtl"
 
 # ── helpers ────────────────────────────────────────────────────────
 def _run_doc_runner(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(DOC_RUNNER), str(project)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 def _run_gate(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(GATE_PROG), str(project)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 def _l1(project: Path) -> dict:

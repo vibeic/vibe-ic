@@ -35,11 +35,14 @@ cannot outlive its truth. If the advisory leg is demoted back to `optional_`,
 from __future__ import annotations
 
 import pathlib
-import subprocess
 import sys
 
 import pytest
 import yaml
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PLUGIN = pathlib.Path(__file__).resolve().parents[2]
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
@@ -235,8 +238,8 @@ def test_nothing_examined_exits_2_and_declares_a_visible_skip(gate, tmp_path):
     # inner bound to 60s (= the 180s pytest harness // 3), because a subprocess
     # that outlives the harness kills the SESSION instead of the test. Each of
     # these three runs a single argparse-and-exit path in well under a second.
-    proc = subprocess.run([sys.executable, str(_PROGRAMS / f"{gate}.py"), *argv],
-                          capture_output=True, text=True, timeout=30)
+    proc = _pr.run([sys.executable, str(_PROGRAMS / f"{gate}.py"), *argv],
+                          capture_output=True, text=True)
     assert proc.returncode == 2, (
         f"{gate} exits {proc.returncode} on nothing; rc 2 is the disclosed-skip "
         f"tier, rc 0 is a pass\n{proc.stderr}")

@@ -12,9 +12,11 @@ failing to run are the same defect to whoever tries it.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PROG = PROGRAMS / "benchmark_evidence_index.py"
@@ -33,10 +35,10 @@ def _run(repo: Path, corpus: Path | None):
     env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
     if corpus is not None:
         env["VIBE_IC_BENCHMARK_DATA"] = str(corpus.parent)
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--check", "--root", str(repo),
          "--corpus-may-be-absent"],
-        capture_output=True, text=True, env=env, timeout=60)
+        capture_output=True, text=True, env=env)
 
 
 def _fix_line(r, what: str) -> str:

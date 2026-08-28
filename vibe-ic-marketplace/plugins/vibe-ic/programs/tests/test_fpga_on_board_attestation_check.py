@@ -1,19 +1,20 @@
 """Unit tests for fpga_on_board_attestation_check.py."""
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 SCRIPT = Path(__file__).parent.parent / "fpga_on_board_attestation_check.py"
 assert SCRIPT.exists()
 
 
 def _run(project: Path):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(SCRIPT), str(project)],
-        capture_output=True, text=True, timeout=15,
-    )
+        capture_output=True, text=True)
 
 
 def _sha(b: bytes) -> str:

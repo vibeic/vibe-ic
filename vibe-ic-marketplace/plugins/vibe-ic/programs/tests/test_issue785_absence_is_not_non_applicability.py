@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -45,6 +44,9 @@ if str(PROGRAMS) not in sys.path:
 
 import hardmacro_supply_intent as H          # noqa: E402
 import nvm_program_supply_intent as N        # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 SYNTH = PROGRAMS / "l21_macro_supply_rail_synth.py"
 DECLARED = PROGRAMS / "l21_macro_supply_rail_declared_check.py"
@@ -203,17 +205,10 @@ def _project(tmp_path: Path, *, lef: str | None = None, lib: str | None = None,
     return p
 
 
-#: Under the harness's 180s ceiling / 3 (`ci_harness_timeout_ceiling_check`), so
-#: this call's OWN timeout fires before the harness kills the whole session.
-#: Every gate driven here is a JSON/LEF/Liberty walk over a few kilobytes and
-#: returns in well under a second; the bound exists for a hang, not for the work.
-_GATE_TIMEOUT_S = 60
-
-
 def _run(prog: Path, *args) -> tuple[int, str]:
-    pr = subprocess.run([sys.executable, str(prog), *args],
+    pr = _pr.run([sys.executable, str(prog), *args],
                         capture_output=True, text=True,
-                        timeout=_GATE_TIMEOUT_S, cwd=str(PROGRAMS))
+                        cwd=str(PROGRAMS))
     return pr.returncode, pr.stdout + pr.stderr
 
 

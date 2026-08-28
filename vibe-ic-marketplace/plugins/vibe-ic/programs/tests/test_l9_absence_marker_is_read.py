@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "l9_completeness_check.py"
@@ -39,9 +42,9 @@ PROG = _PROGRAMS / "l9_completeness_check.py"
 def _run(doc: dict, tmp_path: pathlib.Path):
     f = tmp_path / "L9_INTEGRATION_SPEC.json"
     f.write_text(json.dumps(doc), encoding="utf-8")
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(PROG), "--l9-file", str(f)],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
     try:
         return json.loads(proc.stdout), proc.returncode
     except ValueError:

@@ -39,11 +39,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PORTABILITY = PROGRAMS / "tracked_symlink_portability_check.py"
@@ -71,8 +73,8 @@ def _run(prog: Path, *args: str, env_tree: str | None = None):
     env.pop(ENV, None)                      # never inherit the developer's own
     if env_tree is not None:
         env[ENV] = env_tree
-    r = subprocess.run([sys.executable, str(prog), *args], env=env,
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(prog), *args], env=env,
+                       capture_output=True, text=True)
     return r.returncode, (r.stdout + r.stderr)
 
 
@@ -81,7 +83,7 @@ def _run(prog: Path, *args: str, env_tree: str | None = None):
 # second each; a bound of 120 could only ever be reached after the 180 s session
 # clock had already killed the run.
 def _git(cwd: Path, *a: str) -> None:
-    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=60,
+    _pr.run(["git", "-C", str(cwd), *a], check=True, text=False,
                    capture_output=True)
 
 
@@ -371,8 +373,8 @@ def _corpus_with_one_absolute_symlink(base, as_git_checkout):
         for args in (["init", "-q"], ["add", "-A"],
                      ["-c", "user.email=t@t", "-c", "user.name=t",
                       "commit", "-q", "-m", "x"]):
-            subprocess.run(["git", "-C", str(c), *args],
-                           capture_output=True, timeout=60)
+            _pr.run(["git", "-C", str(c), *args],
+                           capture_output=True, text=False)
     return c
 
 

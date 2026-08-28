@@ -44,6 +44,10 @@ import pathlib
 import subprocess
 import sys
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -78,8 +82,8 @@ _SUPPRESSING = {"OUT_OF_PUBLISHED_SCOPE", "UNFOLLOWABLE_ABSOLUTE"}
 
 
 def _git(cwd, *args):
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
-                          text=True, timeout=60)
+    return _pr.run(["git", *args], cwd=str(cwd), capture_output=True,
+                          text=True)
 
 
 def _cell(tmp_path, *, gitignore: str | None, force_add: bool = False,

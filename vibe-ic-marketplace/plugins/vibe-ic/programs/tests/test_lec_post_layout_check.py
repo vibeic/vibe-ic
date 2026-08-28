@@ -29,6 +29,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import lec_post_layout_check as L  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # ---- recipe ---------------------------------------------------------------
 def test_recipe_has_equiv_engine_and_blackbox():
@@ -159,10 +162,10 @@ def _container_sees(root: Path) -> bool:
     try:
         probe = root / ".lec_container_probe"
         probe.write_text("ok")
-        r = subprocess.run(
+        r = _pr.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc",
              f"test -f {probe} && cat {probe}"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         probe.unlink(missing_ok=True)
         return r.returncode == 0 and "ok" in (r.stdout or "")
     except (subprocess.SubprocessError, OSError):
@@ -189,8 +192,8 @@ def _run_equiv_in_container(ys_text: str, ys_path: Path) -> dict:
     ys_path.write_text(ys_text)
     cmd = (f"export PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH && "
            f"yosys -s {ys_path} 2>&1")
-    r = subprocess.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
+                       capture_output=True, text=True)
     log = "\n".join(ln for ln in (r.stdout or "").splitlines()
                     if not ln.lstrip().startswith("[INFO]"))
     return L.parse_equiv_log(log)

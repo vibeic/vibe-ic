@@ -14,7 +14,6 @@ is what yosys wrote for `assign zero = 1'b0` on the same image.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -24,6 +23,9 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import flow_output_substance as S  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── The real defect, verbatim ───────────────────────────────────────────────
@@ -364,8 +366,8 @@ def test_every_emitted_code_is_in_the_declared_vocabulary():
 
 # ── The CLI contract ────────────────────────────────────────────────────────
 def _cli(*args):
-    p = subprocess.run([sys.executable, str(PROGRAMS / "flow_output_substance.py"), *args],
-                       capture_output=True, text=True, timeout=600)
+    p = _pr.run([sys.executable, str(PROGRAMS / "flow_output_substance.py"), *args],
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 

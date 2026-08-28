@@ -46,7 +46,6 @@ exists, in the words a promise uses) and `test_a_fullstop_is_not_an_adverb`
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -56,6 +55,9 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import p0_disposition_backing_check as B  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 REPO_ROOT = PROGRAMS.parents[3]
 PLUGIN_REL = "vibe-ic-marketplace/plugins/vibe-ic"
@@ -278,10 +280,10 @@ def test_a_parked_gate_is_neither_backed_nor_unbacked(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _run(root: Path, out: Path):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAMS / "p0_disposition_backing_check.py"),
          "--repo-root", str(root), "--json", str(out)],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
 
 
 def test_a_newly_unbacked_claim_fails(tmp_path, monkeypatch):

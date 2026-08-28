@@ -74,6 +74,10 @@ import sys
 
 import pytest
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -178,11 +182,10 @@ def test_a_genuinely_absent_port_is_still_reported(tmp_path):
         "module tb;\n  sha256 u_dut (\n    .clk(clk),\n"
         "    .reset_n(reset_n),\n    .ready(ready)\n  );\nendmodule\n",
         encoding="utf-8")
-    import subprocess
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROGRAMS / "module_port_audit.py"),
          "--rtl-dir", str(tmp_path)],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
     combined = proc.stdout + proc.stderr
     assert proc.returncode == 1, combined[:500]
     assert "reset_n" in combined
@@ -280,10 +283,9 @@ def test_the_multi_dimensional_port_is_the_one_a_real_mismatch_is_caught_on(tmp_
     (tmp_path / "core.sv").write_text(
         "module core;\n  sub u_sub (\n    .data_iX(x),\n    .clk_i(clk_i)\n  );\n"
         "endmodule\n", encoding="utf-8")
-    import subprocess
-    r = subprocess.run([sys.executable, str(_PROGRAMS / "module_port_audit.py"),
+    r = _pr.run([sys.executable, str(_PROGRAMS / "module_port_audit.py"),
                         "--rtl-dir", str(tmp_path)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "data_iX" in r.stdout, r.stdout
 

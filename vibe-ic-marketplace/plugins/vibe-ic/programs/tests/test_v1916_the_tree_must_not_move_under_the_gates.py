@@ -35,7 +35,6 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import re
-import subprocess
 import sys
 
 import pytest
@@ -64,21 +63,21 @@ def _repo(tmp_path):
     for cmd in (["init", "-q", "-b", "main"],
                 ["config", "user.email", "t@t"],
                 ["config", "user.name", "t"]):
-        subprocess.run(["git", "-C", str(tmp_path), *cmd], check=True,
-                       capture_output=True, timeout=60)
+        _pr.run(["git", "-C", str(tmp_path), *cmd], check=True,
+                       capture_output=True, text=False)
     d = tmp_path / "tools"
     d.mkdir()
     (d / "a.sh").write_text("echo a\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "tools/a.sh"],
-                   check=True, capture_output=True, timeout=60)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"],
-                   check=True, capture_output=True, timeout=60)
+    _pr.run(["git", "-C", str(tmp_path), "add", "tools/a.sh"],
+                   check=True, capture_output=True, text=False)
+    _pr.run(["git", "-C", str(tmp_path), "commit", "-qm", "base"],
+                   check=True, capture_output=True, text=False)
     return tmp_path
 
 
 def _run(repo, *extra):
-    return subprocess.run([sys.executable, str(PROG), str(repo), *extra],
-                          capture_output=True, text=True, timeout=30)
+    return _pr.run([sys.executable, str(PROG), str(repo), *extra],
+                          capture_output=True, text=True)
 
 
 # ── the fingerprint answers "is this the same tree" ──────────────────────────
@@ -110,8 +109,8 @@ def test_a_new_commit_moves_it(tmp_path):
     r = _repo(tmp_path)
     before = M.fingerprint(r)
     (r / "tools" / "a.sh").write_text("echo b\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(r), "commit", "-qam", "x"], check=True,
-                   capture_output=True, timeout=60)
+    _pr.run(["git", "-C", str(r), "commit", "-qam", "x"], check=True,
+                   capture_output=True, text=False)
     assert M.fingerprint(r) != before
 
 
@@ -123,18 +122,18 @@ def test_it_is_stable_across_a_pytest_run(tmp_path):
     r = _repo(tmp_path)
     (r / "tools" / "t.py").write_text("def test_x():\n    assert True\n",
                                       encoding="utf-8")
-    subprocess.run(["git", "-C", str(r), "add", "tools/t.py"], check=True,
-                   capture_output=True, timeout=60)
-    subprocess.run(["git", "-C", str(r), "commit", "-qm", "t"], check=True,
-                   capture_output=True, timeout=60)
+    _pr.run(["git", "-C", str(r), "add", "tools/t.py"], check=True,
+                   capture_output=True, text=False)
+    _pr.run(["git", "-C", str(r), "commit", "-qm", "t"], check=True,
+                   capture_output=True, text=False)
     (r / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(r), "add", ".gitignore"], check=True,
-                   capture_output=True, timeout=60)
-    subprocess.run(["git", "-C", str(r), "commit", "-qm", "ignore"], check=True,
-                   capture_output=True, timeout=60)
+    _pr.run(["git", "-C", str(r), "add", ".gitignore"], check=True,
+                   capture_output=True, text=False)
+    _pr.run(["git", "-C", str(r), "commit", "-qm", "ignore"], check=True,
+                   capture_output=True, text=False)
     before = M.fingerprint(r)
-    subprocess.run([sys.executable, "-m", "pytest", "-q", "tools/t.py"],
-                   cwd=str(r), capture_output=True, timeout=60)
+    _pr.run([sys.executable, "-m", "pytest", "-q", "tools/t.py"],
+                   cwd=str(r), capture_output=True, text=False)
     assert M.fingerprint(r) == before
 
 
@@ -154,8 +153,8 @@ def test_expect_after_the_tree_moved_refuses(tmp_path):
     fp = tmp_path / "fp.txt"
     _run(r, "--emit-fingerprint", str(fp))
     (r / "tools" / "a.sh").write_text("echo moved\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(r), "commit", "-qam", "mid-run"],
-                   check=True, capture_output=True, timeout=60)
+    _pr.run(["git", "-C", str(r), "commit", "-qam", "mid-run"],
+                   check=True, capture_output=True, text=False)
     assert _run(r).returncode == RC_OK, "the tree is clean, so the old rule passes"
     got = _run(r, "--expect-fingerprint", str(fp))
     assert got.returncode == RC_DIRTY, got.stdout + got.stderr
@@ -202,6 +201,10 @@ def test_the_pre_existing_dirty_rule_is_unchanged(tmp_path):
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 from gate_is_wired_check import executable_text  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -325,14 +328,13 @@ def test_the_stamp_path_expression_RESOLVES_and_is_per_worktree(land_sh, tmp_pat
     (tmp_path / "main").mkdir()
     r = _repo(tmp_path / "main")
     wt = tmp_path / "wt"
-    subprocess.run(["git", "-C", str(r), "worktree", "add", "-q", "--detach",
+    _pr.run(["git", "-C", str(r), "worktree", "add", "-q", "--detach",
                     str(wt), "HEAD"], check=True, capture_output=True,
-                   timeout=60)
+                   text=False)
 
     def _resolve(where):
-        out = subprocess.run(["bash", "-c", f'ROOT="{where}"; printf "%s" "{expr}"'],
-                             cwd=str(where), capture_output=True, text=True,
-                             timeout=60)
+        out = _pr.run(["bash", "-c", f'ROOT="{where}"; printf "%s" "{expr}"'],
+                             cwd=str(where), capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
         return out.stdout.strip()
 

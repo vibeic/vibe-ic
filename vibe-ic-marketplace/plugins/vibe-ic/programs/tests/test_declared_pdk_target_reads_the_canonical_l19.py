@@ -70,6 +70,10 @@ import declared_pdk_is_the_pdk_used_check as GATE     # noqa: E402
 import _path_layout as _pl                            # noqa: E402
 import phase1_post_process as _pp                     # noqa: E402
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PLACEHOLDER = "placeholder_process_a"
 
 
@@ -249,11 +253,10 @@ def test_a_non_object_document_does_not_crash(tmp_path):
 
 def _gate(run: pathlib.Path):
     """rc and the JSON record, for one run directory."""
-    import subprocess
     gate = _PROGRAMS / "declared_pdk_is_the_pdk_used_check.py"
     rec = run / "rec.json"
-    p = subprocess.run([sys.executable, str(gate), str(run), "--json", str(rec)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(gate), str(run), "--json", str(rec)],
+                       capture_output=True, text=True)
     return p.returncode, (json.loads(rec.read_text()) if rec.is_file() else {}), \
         p.stdout + p.stderr
 

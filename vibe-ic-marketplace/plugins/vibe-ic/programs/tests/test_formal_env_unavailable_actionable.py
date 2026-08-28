@@ -33,6 +33,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _FORMAL = _PROGRAMS / "formal_property_run.py"
 _COMPLIANCE = _PROGRAMS / "flow_compliance_check.py"
@@ -76,12 +79,11 @@ def _mk_design(root: Path) -> tuple[Path, Path]:
 
 def _run_formal(project: Path, container: str):
     rtl, harness = _mk_design(project)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_FORMAL), str(project),
          "--harness", str(harness), "--rtl", str(rtl),
          "--top", "formal_ctr", "--container", container],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -93,10 +95,9 @@ def _docker_container_running(name: str) -> bool:
     if shutil.which("docker") is None:
         return False
     try:
-        r = subprocess.run(
+        r = _pr.run(
             ["docker", "ps", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
-            capture_output=True, text=True, timeout=60,
-        )
+            capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError):
         return False
     return name in (r.stdout or "").split()
@@ -190,8 +191,8 @@ def test_absent_env_gate_fails_but_names_the_gap(tmp_path):
     "nothing claims a proof"."""
     _run_formal(tmp_path, _ABSENT_CONTAINER)
     gate = _PROGRAMS / "formal_proof_evidence_check.py"
-    r = subprocess.run([sys.executable, str(gate), str(tmp_path)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(gate), str(tmp_path)],
+                       capture_output=True, text=True)
     report = json.loads(r.stdout)
 
     assert report["verdict"] == "FAIL"
@@ -272,11 +273,10 @@ def _write_waivers(project: Path, entries) -> None:
 
 
 def _compliance(project: Path, out_json: Path):
-    rc = subprocess.run(
+    rc = _pr.run(
         [sys.executable, str(_COMPLIANCE), str(project), "--strict",
          "--json", str(out_json)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
     return rc.returncode, json.loads(out_json.read_text())
 
 

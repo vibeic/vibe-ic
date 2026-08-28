@@ -65,6 +65,9 @@ import _tapeout_declaration as TD          # noqa: E402
 import flow_compliance_check as FCC        # noqa: E402
 import tapeout_readiness_check as TRC      # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PLUGIN = PROGRAMS.parent
 FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
@@ -465,13 +468,11 @@ def _gate_commands(sid: str) -> list:
 def _run_gate(project: Path, command: str) -> int:
     """Run one declared gate command against a project, and return its rc."""
     import shlex
-    import subprocess
     toks = shlex.split(command)
     prog = PROGRAMS / (toks[0] + ".py")
     assert prog.is_file(), f"gate names {toks[0]!r}, which is not a program"
-    proc = subprocess.run([sys.executable, str(prog)] + toks[1:],
-                          cwd=str(project), capture_output=True, text=True,
-                          timeout=600)
+    proc = _pr.run([sys.executable, str(prog)] + toks[1:],
+                          cwd=str(project), capture_output=True, text=True)
     return proc.returncode
 
 
@@ -1061,15 +1062,14 @@ def _drive_step_0_5ic(root: Path, *, deliverable: str) -> Path:
     this repository that hand-writes a router file agrees with whichever
     producer the fixture's author had in mind, and the two producers disagree.
     """
-    import subprocess
     root.mkdir(parents=True, exist_ok=True)
     answers = root.parent / "answers.json"
     answers.write_text(json.dumps({"deliverable": deliverable}))
 
     def run(prog, *args):
-        return subprocess.run(
+        return _pr.run(
             [sys.executable, str(PROGRAMS / (prog + ".py")), ".", *args],
-            cwd=str(root), capture_output=True, text=True, timeout=300)
+            cwd=str(root), capture_output=True, text=True)
 
     # A template path that was SEARCHED and is not there — a declared absence.
     # "Nobody looked" is a different fact and its own refusal.

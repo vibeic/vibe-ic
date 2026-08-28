@@ -24,10 +24,13 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
@@ -75,7 +78,7 @@ def test_recorded_gate_still_rejects_the_umbrella_argv(gate):
     with tempfile.TemporaryDirectory() as tmp:
         probe = pathlib.Path(tmp)
         argv = F._structural_gate_argv(gate, probe, rtl_dir=probe)
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        proc = _pr.run(argv, capture_output=True, text=True)
     # A gate that rejects the umbrella argv exits 2 with argparse's usage block,
     # OR hand-rolls the same complaint (Rule B in _gate_invocation). Either way
     # it did NOT run and did NOT return a 0/1 verdict about the probe.
@@ -162,8 +165,7 @@ def test_the_round7_four_are_rule_b_and_would_be_invisible_to_rule_a():
         with tempfile.TemporaryDirectory() as tmp:
             probe = pathlib.Path(tmp)
             argv = F._structural_gate_argv(gate, probe, rtl_dir=probe)
-            proc = subprocess.run(argv, capture_output=True, text=True,
-                                  timeout=60)
+            proc = _pr.run(argv, capture_output=True, text=True)
         assert proc.returncode == 2, gate
         assert "usage:" not in (proc.stderr or ""), (
             f"{gate} now prints an argparse usage block, so it is a Rule-A "

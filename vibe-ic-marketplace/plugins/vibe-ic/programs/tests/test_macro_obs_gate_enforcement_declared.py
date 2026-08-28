@@ -39,12 +39,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -116,10 +118,10 @@ def test_the_audit_exits_zero_and_names_neither_gate_as_debt(tmp_path):
     # number is not free to choose. Measured cost of this exact call on a
     # loaded build host (load avg 13.9): 17.2-21.2s over 5 runs, so 60s is
     # ~3x the observed worst case.
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / "flow_gate_enforcement_audit.py"),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert cp.returncode == 0, (
         f"rc={cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-2000:]}")
     rep = json.loads(out.read_text())

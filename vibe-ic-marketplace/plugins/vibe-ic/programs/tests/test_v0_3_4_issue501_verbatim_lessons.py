@@ -30,6 +30,9 @@ TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 import _plugin_tree as PT  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SKILL = PT.plugin_path("skills", "core-agent-loop", "SKILL.md")
 AGENT = PT.plugin_path("agents", "ic-expert-agent.md")
 
@@ -118,7 +121,6 @@ def test_touched_skill_compliance_tests_green():
     if rr is None:
         pytest.skip("cache tree — compliance pin runs on the source tree")
     import os
-    import subprocess
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
@@ -177,10 +179,9 @@ def test_touched_skill_compliance_tests_green():
     # the exact failure mode that cost #1417 a bisection.
     skills_root = SKILL.parents[1]
     before = {str(q) for q in skills_root.rglob("*.pyc")}
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True, env=env, timeout=60,
-    )
+        capture_output=True, text=True, env=env)
     leaked = sorted(str(q) for q in skills_root.rglob("*.pyc")
                     if str(q) not in before)
     assert r.returncode == 0, (

@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from typing import Dict
 
@@ -54,6 +53,10 @@ from _plugin_tree import plugin_path, repo_path_or_missing
 from matrix_63x8 import substitution as SUB
 
 import test_matrix_63x8_coverage as CV
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 GEN = repo_path_or_missing("tools", "gen_matrix_63x8_census.py")
 README = plugin_path("programs", "tests", "matrix_63x8", "README.md")
@@ -110,44 +113,6 @@ def test_the_census_block_is_present_and_marked_generated():
     block = _block()
     assert "DO NOT EDIT BY HAND" in block
 
-
-#: Bound for the generator CLI probe below. NOT a round number picked by feel:
-#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
-#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
-#: `--timeout-method=thread` — and permits any ONE blocking call at most
-#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
-#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
-#: and every other file in the subset loses its verdict.
-#:
-#: The landed value was 1800 on a `gen_matrix_63x8_census.py --check` launch,
-#: and simply lowering it was NOT available. MEASURED on this tree, that launch
-#: takes 119.13 s idle / 136.67 s under load, and `cProfile` says where: of
-#: 115.70 s total, 97.54 s is `cell_outcomes()` — all eight dimension modules
-#: re-run inside a nested pytest. That work is real and it is not this change's
-#: to remove, so capping the launch at 60 s would not have fixed a defect; it
-#: would have made a working test fail on the clock.
-#:
-#: So the call is SPLIT along the seam the measurement exposes:
-#:
-#:   * `test_the_census_block_is_fresh` asserts exactly what `--check` asserts
-#:     — committed text == splice(render(census_rows())) — IN-PROCESS, where
-#:     every process launch underneath is a per-dimension outcome run that
-#:     `test_matrix_63x8_coverage` bounds at 60 s each (measured worst module:
-#:     35.18 s). It also stops one census being computed twice per session.
-#:     MEASURED, this file: 136.75 s -> 116.56 s, because the sibling
-#:     `test_the_published_total_equals_the_live_census` was paying 16.87 s for
-#:     its own state/substitution census beside the subprocess's and now reads
-#:     the `lru_cache` this test filled. The 504-cell outcome run itself still
-#:     happens exactly once, as it did before.
-#:   * `test_the_generator_cli_can_go_red_and_green` keeps the CLI itself under
-#:     test — `main()`, `--check`, the exit codes, the stale message — in a
-#:     subprocess, and makes it CHEAP by handing the generator a synthetic
-#:     census through `sys.modules`.
-#:
-#: The count of readable bounds this gate keeps a denominator of is HELD: one
-#: bound left this file, one replaced it. A green earned by making a call
-#: invisible to the check is the failure this gate family exists to prevent.
-_CLI_TIMEOUT_S = 60
 
 #: Runs the real generator CLI over a SYNTHETIC census. The stub is installed
 #: in `sys.modules` before `_load()` runs, so the generator's own `import
@@ -298,9 +263,9 @@ def test_the_generator_cli_can_go_red_and_green(tmp_path):
                       encoding="utf-8")
 
     def run(mode):
-        return subprocess.run(
+        return _pr.run(
             [sys.executable, "-c", _CLI_PROBE, str(gen), str(readme), mode],
-            capture_output=True, text=True, timeout=_CLI_TIMEOUT_S)
+            capture_output=True, text=True)
 
     wrote = run("write")
     assert wrote.returncode == 0, wrote.stdout + wrote.stderr

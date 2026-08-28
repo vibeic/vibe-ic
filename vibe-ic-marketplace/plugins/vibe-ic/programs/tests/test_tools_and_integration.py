@@ -26,6 +26,9 @@ import skill_compliance_check as scc  # noqa: E402
 import suite_write_guard as _swg  # noqa: E402
 import bootstrap_compliance as bc      # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Write into a COPY, never into the shipped tree (vibe-ic#1029)
@@ -227,10 +230,10 @@ class TestEndToEndAllSkills:
         for y in (PLUGIN / "skills").glob("*/compliance.yaml"):
             out = tmp_path / f"{y.parent.name}.md"
             out.write_text("")
-            res = subprocess.run(
+            res = _pr.run(
                 [sys.executable, str(DRIVER),
                  "--requirements", str(y), str(out)],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True)
             if res.returncode != 1:
                 failures.append(
                     f"{y.parent.name}: exit={res.returncode} "

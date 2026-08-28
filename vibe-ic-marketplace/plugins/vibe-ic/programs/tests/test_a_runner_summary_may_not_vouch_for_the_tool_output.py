@@ -51,7 +51,6 @@ reason and would keep passing it if the fix were removed.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -59,7 +58,8 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import eda_report_audit as E  # noqa: E402
 
-_CLI_BOUND_S = 60
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: Modelled on the published cell's own `reports/phase3/ir_drop.json`, and
 #: modelled CLOSELY on purpose: it must be a document that CAN vouch, or the
@@ -120,10 +120,10 @@ def _project(root: Path, tamper: bool) -> Path:
 
 
 def _audit(project: Path) -> dict:
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "ir_drop_report_check.py"), ".",
          "--mode", "ir_drop"],
-        cwd=str(project), capture_output=True, text=True, timeout=_CLI_BOUND_S)
+        cwd=str(project), capture_output=True, text=True)
     try:
         doc = json.loads(r.stdout)
     except ValueError:

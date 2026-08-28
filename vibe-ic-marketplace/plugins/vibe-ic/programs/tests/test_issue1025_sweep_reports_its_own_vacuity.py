@@ -50,10 +50,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
@@ -77,14 +79,6 @@ GR = _load("gatekeeper_review")
 #: still a real ISO date the dispatcher's comparison treats exactly as it
 #: treats a live one.
 _FUTURE = "2999-01-01"
-
-#: Inner bound. The harness runs `--timeout=180 --timeout-method=thread`, and a
-#: thread-based timeout cannot interrupt a subprocess wait — so a bound at or
-#: above it would take the SESSION down instead of failing one test. Every
-#: fixture here is six trivial python probes and measured under 4s; 60s is the
-#: house ceiling and leaves three times the headroom.
-_BOUND_S = 60
-
 
 # --------------------------------------------------------------------------
 # fixtures — a throwaway hygiene script sourcing the REAL dispatch library, so
@@ -115,9 +109,9 @@ def _run(root: Path, gate_lines: str, *args: str):
         gate_dispatch_init "$@"
         """) + gate_lines + "\ngate_dispatch_finish\n")
     rec = root / "record.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         ["bash", str(script), "--summary-json", str(rec), *args],
-        cwd=str(root), capture_output=True, text=True, timeout=_BOUND_S)
+        cwd=str(root), capture_output=True, text=True)
     doc = json.loads(rec.read_text()) if rec.is_file() else None
     return proc, doc
 

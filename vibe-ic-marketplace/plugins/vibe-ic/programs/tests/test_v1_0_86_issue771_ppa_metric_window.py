@@ -19,7 +19,6 @@ a true "both" spec must stay `both`.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +27,9 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import ppa_area_threshold_check as P  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _clauses(txt):
@@ -84,9 +86,9 @@ def _container_up(container: str = "vibeic-eda") -> bool:
     if shutil.which("docker") is None:
         return False
     try:
-        cp = subprocess.run(
+        cp = _pr.run(
             ["docker", "inspect", "--type=container", "-f", "{{.State.Running}}", container],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True)
         return cp.returncode == 0 and cp.stdout.strip() == "true"
     except Exception:  # noqa: BLE001
         return False

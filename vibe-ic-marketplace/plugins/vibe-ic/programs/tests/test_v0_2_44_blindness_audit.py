@@ -10,13 +10,15 @@ a front-door gate when `<RUNDIR>/transcripts/` is exported.
 chip-AGNOSTIC: synthetic transcripts use generic Prob/design names only.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
 from _entry_guard_fixture import write_prompt_report  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 DISPATCH = PLUGIN / "programs" / "benchmark_dispatch.py"
@@ -103,8 +105,8 @@ def test_explicit_globs_override():
 # ── CLI exit codes ────────────────────────────────────────────────────────
 
 def _run_cli(args):
-    return subprocess.run([sys.executable, str(AUDIT)] + args,
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(AUDIT)] + args,
+                          capture_output=True, text=True)
 
 
 def test_cli_clean_rc0(tmp_path):
@@ -152,20 +154,20 @@ def _stage_run(tmp_path, with_violation: bool):
 
 def test_score_front_door_refuses_on_violation(tmp_path):
     ds, run = _stage_run(tmp_path, with_violation=True)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode != 0
     assert "blindness audit FAILed" in (r.stdout + r.stderr)
 
 
 def test_score_front_door_passes_audit_then_proceeds(tmp_path):
     ds, run = _stage_run(tmp_path, with_violation=False)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     # the audit must PASS and the gate must NOT be the failure reason;
     # the scorer itself then runs (and may fail on the empty synthetic run).
     out = r.stdout + r.stderr

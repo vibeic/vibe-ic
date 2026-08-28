@@ -27,13 +27,17 @@ import sys
 
 import pytest
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "waveform_artifact_hygiene_check.py"
 
 
 def _run(root) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROG), str(root)],
-                          capture_output=True, text=True, timeout=45)
+    return _pr.run([sys.executable, str(PROG), str(root)],
+                          capture_output=True, text=True)
 
 
 def test_absent_tree_refuses(tmp_path):

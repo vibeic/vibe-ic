@@ -21,6 +21,9 @@ import sys
 from pathlib import Path
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAM = (
     Path(__file__).resolve().parent.parent / "aid_class_rtl_gen.py"
 )
@@ -33,10 +36,9 @@ def _write(project: Path, rel: str, body: dict) -> None:
 
 
 def _run(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAM), str(project)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 def _evidence(label: str) -> dict:

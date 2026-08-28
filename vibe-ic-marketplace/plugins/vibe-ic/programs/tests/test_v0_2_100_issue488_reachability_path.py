@@ -12,7 +12,6 @@ Pins:
   * the flattened cache tree (no repo root) still yields the legitimate
     NAMED not-shipped skip, required_on_source notwithstanding.
 """
-import subprocess
 import sys
 from pathlib import Path
 
@@ -21,6 +20,9 @@ import pytest
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 import _plugin_tree as PT  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def test_tool_rel_resolves_on_source_tree():
@@ -35,11 +37,10 @@ def test_reachability_tests_run_not_skip_on_source():
     # 驗收①: SOURCE 樹 pytest test_program_reachability_check → 4 passed（非 skip）
     if PT.repo_root() is None:
         pytest.skip("cache tree — acceptance pin runs on the source tree")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, "-m", "pytest", "-q",
          str(TESTS / "test_program_reachability_check.py")],
-        capture_output=True, text=True, timeout=60,
-        cwd=str(PT.plugin_root()))
+        capture_output=True, text=True, cwd=str(PT.plugin_root()))
     assert "4 passed" in r.stdout, r.stdout + r.stderr
     assert "skipped" not in r.stdout, r.stdout
 

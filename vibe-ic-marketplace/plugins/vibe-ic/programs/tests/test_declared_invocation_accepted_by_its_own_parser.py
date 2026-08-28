@@ -7,12 +7,14 @@ parser is driven instead.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = (Path(__file__).resolve().parents[1]
         / "declared_invocation_accepted_by_its_own_parser.py")
@@ -98,10 +100,10 @@ def _tree(programs: dict, clauses: list, inventory=None) -> Path:
 
 
 def _run(root: Path, inventory: Path = None):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--root", str(root), "--jobs", "2",
          "--inventory", str(inventory or (root / "inventory.json"))],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True)
 
 
 def test_a_declared_vector_the_parser_refuses_is_refused():
@@ -178,14 +180,14 @@ def test_a_stale_inventory_row_is_a_failure():
 
 
 def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = subprocess.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
+                       capture_output=True, text=True)
     assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_a_bad_invocation_is_rc_3():
-    r = subprocess.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
@@ -208,8 +210,8 @@ def test_the_shipped_tree_passes_its_own_rule():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=1800)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, (
         f"the rule now fires on the tree that ships it (rc={r.returncode}). "
         f"Narrow it or record the finding -- do not relax the assertion.\n"

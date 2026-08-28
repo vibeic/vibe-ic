@@ -35,6 +35,9 @@ import conway_2d_synth as C  # noqa: E402
 import cellular_automaton_synth as C1D  # noqa: E402  (mutual-exclusion partner)
 from _hostpaths import corpus_path  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 _PROB144 = "Prob144_conwaylife"
 
@@ -289,8 +292,7 @@ def test_host_score_prob144_zero_mismatch(tmp_path):
         ["iverilog", "-g2012", "-o", str(vvp), str(dut), str(ref), str(tb)],
         capture_output=True, text=True)
     assert comp.returncode == 0, f"compile failed:\n{comp.stderr}"
-    run = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True,
-                         timeout=60)
+    run = _pr.run(["vvp", str(vvp)], capture_output=True, text=True)
     out = run.stdout + run.stderr
     m = re.search(r"mismatched samples is (\d+)", out)
     assert m is not None, f"no mismatch line in vvp output:\n{out}"
@@ -360,8 +362,7 @@ endmodule
         ["iverilog", "-g2012", "-o", str(vvp), str(dut), str(tmp_path / "tb.sv")],
         capture_output=True, text=True)
     assert comp.returncode == 0, f"compile failed:\n{comp.stderr}"
-    run = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True,
-                         timeout=60)
+    run = _pr.run(["vvp", str(vvp)], capture_output=True, text=True)
     out = run.stdout + run.stderr
     assert "Total mismatched samples is 0" in out, \
         f"generality 4x4 B3/S23 mismatched:\n{out}"

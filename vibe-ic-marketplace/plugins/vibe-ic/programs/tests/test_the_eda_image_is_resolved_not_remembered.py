@@ -61,7 +61,6 @@ import os
 import pathlib
 import re
 import shutil
-import subprocess
 import sys
 
 import pytest
@@ -71,6 +70,10 @@ _PLUGIN = _PROGRAMS.parent
 sys.path.insert(0, str(_PROGRAMS))
 import _eda_image as M  # noqa: E402
 import not_verified_tier as NV  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PINNED = re.compile(r"vibeic-eda:\d+\.\d+\.\d+")
 
@@ -736,8 +739,8 @@ def _stage(tmp_path, *, label=_FIXTURE_LABEL, sta_has=True,
 
 def _run_gate(prog, argv, tmp_path, **kw):
     programs, env = _stage(tmp_path, **kw)
-    r = subprocess.run([sys.executable, str(pathlib.Path(programs) / prog), *argv],
-                       capture_output=True, text=True, env=env, timeout=300)
+    r = _pr.run([sys.executable, str(pathlib.Path(programs) / prog), *argv],
+                       capture_output=True, text=True, env=env)
     return r
 
 

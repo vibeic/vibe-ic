@@ -45,7 +45,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import subprocess
 import sys
 from pathlib import Path
 
@@ -55,6 +54,9 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import design_one_shot_runner as dosr  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: Simulation bound handed to the stage helpers below. Every one of these tests
 #: monkeypatches both launchers, so nothing is really spawned; the value is kept
@@ -326,8 +328,8 @@ def test_902_version_probe_reads_a_banner_written_to_stderr(monkeypatch,
     def _real_shell(argv, cwd=None, timeout=600, _env=None, **_k):
         # execute the PROGRAM's script; `-c` instead of `-lc` only so a login
         # profile cannot rewrite PATH out from under the test.
-        cp = subprocess.run(["bash", "-c", argv[-1]], capture_output=True,
-                            text=True, timeout=_T, env=env)
+        cp = _pr.run(["bash", "-c", argv[-1]], capture_output=True,
+                            text=True, env=env)
         return cp.returncode, cp.stdout, cp.stderr
 
     monkeypatch.setattr(dosr, "_run", _real_shell)

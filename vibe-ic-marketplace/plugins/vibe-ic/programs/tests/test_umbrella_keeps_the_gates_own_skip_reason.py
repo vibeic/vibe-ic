@@ -41,11 +41,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 
@@ -167,9 +169,9 @@ def _run_gate(gate: str, project: Path, env_extra=None):
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.update(env_extra or {})
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAMS / f"{gate}.py"), str(project)],
-        capture_output=True, text=True, timeout=120, env=env)
+        capture_output=True, text=True, env=env)
 
 
 def test_l3_response_template_gate_still_fails_a_project_that_has_the_flaw(

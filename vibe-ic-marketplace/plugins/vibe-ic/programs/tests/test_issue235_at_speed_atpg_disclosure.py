@@ -53,6 +53,9 @@ import phase3_one_shot_runner as R          # noqa: E402
 import path_delay_coverage_check as PDF     # noqa: E402
 import sdd_coverage_check as SDD            # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 DT_ALL = ("DT1", "DT2", "DT3")
 
 
@@ -631,10 +634,10 @@ def _dt_subflow(tmp_path: Path) -> Path:
 
 def _fcc(project: Path, flow_def: Path) -> Tuple[int, dict]:
     rep = project / "_fcc.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(FCC_PY), str(project),
          "--flow-def", str(flow_def), "--strict", "--json", str(rep)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     doc = json.loads(rep.read_text())
     doc["_stdout"] = proc.stdout
     return proc.returncode, doc

@@ -41,11 +41,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PROG = PROGRAMS / "benchmark_evidence_structure_check.py"
@@ -64,9 +66,8 @@ def _run(*args: str, env_tree: str | None = None, cwd: Path | None = None):
     env.pop(ENV, None)
     if env_tree is not None:
         env[ENV] = env_tree
-    out = subprocess.run([sys.executable, str(PROG), *args],
-                         capture_output=True, text=True, timeout=60,
-                         cwd=str(cwd) if cwd else None, env=env)
+    out = _pr.run([sys.executable, str(PROG), *args],
+                         capture_output=True, text=True, cwd=str(cwd) if cwd else None, env=env)
     return out.returncode, (out.stdout + out.stderr)
 
 

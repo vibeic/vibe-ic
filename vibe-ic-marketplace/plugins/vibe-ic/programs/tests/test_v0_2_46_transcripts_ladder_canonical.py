@@ -18,7 +18,6 @@ canonical_samples/ access is itself blindness-audited (V3).
 import json
 import shutil
 import pytest
-import subprocess
 import sys
 from pathlib import Path
 
@@ -33,6 +32,9 @@ SKILL = PLUGIN / "skills" / "open-benchmark-methodology" / "SKILL.md"
 
 sys.path.insert(0, str(HARNESS))
 import score_iverilog_tb as sit  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: The repo's existing tool gate. Without it this module raises
 #: FileNotFoundError on a host that lacks the tool, instead of disclosing a
@@ -49,10 +51,10 @@ def _setup_run(tmp_path):
     ds = tmp_path / "ds"; ds.mkdir()
     (ds / "Prob001_prompt.txt").write_text("Build a thing.\n")
     run = tmp_path / "run"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--setup",
          "--dataset", str(ds), "--run", str(run)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     # Use the producer-derived prompt envelope so this downstream transcripts
     # test does not depend on a self-authored existence marker.
     write_prompt_report(run)
@@ -67,10 +69,10 @@ def test_setup_precreates_transcripts_and_prints_requirement(tmp_path):
 
 
 def _score(ds, run):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def test_empty_transcripts_dir_takes_notice_with_disclosure(tmp_path):

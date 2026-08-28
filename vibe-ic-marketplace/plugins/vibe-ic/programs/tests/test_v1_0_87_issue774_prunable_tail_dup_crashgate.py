@@ -26,13 +26,15 @@ defect the relaxation must NOT mask — a reachable-closure duplicate — is
 STILL caught as DUPLICATE (no #639 regression). Distinct from #639
 (reachable-only): this is the advisory-prunable-tail facet. Bucket A.
 """
-import subprocess
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import catalog_glue_closure_resolver as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _RESOLVER = PROG / "catalog_glue_closure_resolver.py"
 
@@ -226,11 +228,11 @@ def test_endstate_real_program_subprocess_returncode(tmp_path):
         (vendor / name).write_text(text)
     json_out = tmp_path / "closure.json"
 
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_RESOLVER),
          "--top", "chip_top", str(vendor),
          "--json", str(json_out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
     # END-STATE 1: returncode == 1 (real defect; 0=PASS, 2=arg/empty error).
     assert proc.returncode == 1, (
@@ -257,9 +259,9 @@ def test_endstate_clean_program_subprocess_returncode_zero(tmp_path):
     (vendor / "leaf.sv").write_text(
         "module leaf (input a, output b); assign b = ~a; endmodule\n")
 
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_RESOLVER), "--top", "top", str(vendor)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
     assert proc.returncode == 0, (
         f"rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}")

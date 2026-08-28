@@ -20,13 +20,15 @@ vocabulary):
   * non-port CJK tables (no direction column) still classify None.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import phase1_doc_one_shot_runner as P1  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _DOC = """# 外部介面
 
@@ -95,16 +97,16 @@ def test_e2e_real_vocab_docs_to_l9_gate_pass(tmp_path):
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True)
     (rtl / "chip_top.v").write_text(_RTL)
-    r1 = subprocess.run(
+    r1 = _pr.run(
         [sys.executable, str(PROGRAMS / "phase1_doc_one_shot_runner.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=60)
+         str(tmp_path)], capture_output=True, text=True)
     assert r1.returncode == 0, r1.stdout[-1500:] + r1.stderr[-500:]
     l9 = json.loads((tmp_path / "phase1" / "generated_docs"
                      / "L9_INTEGRATION_SPEC.json").read_text())
     flat = json.dumps(l9)
     for p in ("i_clk", "i_rst", "o_gpio", "mem_addr", "mem_rdata"):
         assert p in flat, f"{p} missing from L9"
-    r2 = subprocess.run(
+    r2 = _pr.run(
         [sys.executable, str(PROGRAMS / "l9_rtl_pin_consistency_check.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=60)
+         str(tmp_path)], capture_output=True, text=True)
     assert r2.returncode == 0, r2.stdout + r2.stderr

@@ -28,6 +28,9 @@ import pytest
 
 from _plugin_tree import repo_resource_or_skip
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SCRIPT_REL = "tools/ci/check_version_sync_with_commit.sh"
 
 
@@ -72,11 +75,10 @@ def _stage_repo(tmp_path: Path, plugin_ver: str, market_ver: str) -> Path:
 def _run(repo: Path, commit_msg: str) -> subprocess.CompletedProcess:
     msg_path = repo / ".git" / "COMMIT_EDITMSG"
     msg_path.write_text(commit_msg)
-    return subprocess.run(
+    return _pr.run(
         ["bash", str(repo / SCRIPT_REL)],
         cwd=str(repo),
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
 
 
 # (a)

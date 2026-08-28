@@ -29,7 +29,6 @@ line. Neither makes the flow see anything.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -41,8 +40,8 @@ sys.path.insert(0, str(PROGRAMS))
 
 import fork_downgrade_visibility_check as C  # noqa: E402
 
-_T = 45
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def test_the_registry_is_not_empty():
     """FALSIFIABILITY ANCHOR. Everything below is vacuous over an empty
@@ -90,16 +89,16 @@ def test_a_matcher_is_accepted_where_a_mention_is_not(tmp_path):
 
 def test_the_program_runs_and_passes_on_the_shipped_tree():
     """Driven through the CLI, because rc is what a gate reads."""
-    r = subprocess.run([sys.executable, str(PROGRAMS / "fork_downgrade_visibility_check.py"),
-                        str(PLUGIN)], capture_output=True, text=True, timeout=_T)
+    r = _pr.run([sys.executable, str(PROGRAMS / "fork_downgrade_visibility_check.py"),
+                        str(PLUGIN)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "registered fork downgrade" in r.stdout
 
 
 def test_the_pass_line_discloses_that_the_registry_is_the_scope():
     """It cannot discover an unregistered downgrade, and must not imply it can."""
-    r = subprocess.run([sys.executable, str(PROGRAMS / "fork_downgrade_visibility_check.py"),
-                        str(PLUGIN)], capture_output=True, text=True, timeout=_T)
+    r = _pr.run([sys.executable, str(PROGRAMS / "fork_downgrade_visibility_check.py"),
+                        str(PLUGIN)], capture_output=True, text=True)
     assert "registry only" in r.stdout, (
         "the PASS line does not say the scope is the registry, so a reader "
         "could take it as 'no unwired downgrade exists'")

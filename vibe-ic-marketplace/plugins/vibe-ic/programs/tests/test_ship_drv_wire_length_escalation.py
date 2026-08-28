@@ -42,7 +42,6 @@ setup/DRC did not hold, matching the §4.05 "never fabricate a PASS" doctrine.
 """
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +50,9 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 tclsh = shutil.which("tclsh")
 needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
@@ -101,8 +103,8 @@ _OPENROAD_STUB = (
 
 
 def _run_tclsh(script_path: Path):
-    return subprocess.run([tclsh, str(script_path)],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([tclsh, str(script_path)],
+                          capture_output=True, text=True)
 
 
 def _emit_escalation(tmp_path: Path) -> str:

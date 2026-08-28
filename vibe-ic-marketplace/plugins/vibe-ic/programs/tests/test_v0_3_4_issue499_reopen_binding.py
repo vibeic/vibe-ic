@@ -44,6 +44,9 @@ _PROG = _PROGRAMS / "acceptance_evidence_in_fix_comment_check.py"
 sys.path.insert(0, str(_PROGRAMS))
 import acceptance_evidence_in_fix_comment_check as ACC  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # --------------------------------------------------------------------------
 # Synthetic, chip-AGNOSTIC fixtures
@@ -174,7 +177,7 @@ def _run(issue_body: Path, comment: Path,
         argv += ["--reopen-comment-file", str(reopen)]
     if json_out is not None:
         argv += ["--json", str(json_out)]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    return _pr.run(argv, capture_output=True, text=True)
 
 
 # ==========================================================================
@@ -336,12 +339,12 @@ def test_json_report_carries_reopen_fields(tmp_path):
 def test_missing_reopen_file_is_usage_error(tmp_path):
     issue = _write(tmp_path, "issue.md", _ISSUE_BODY)
     comment = _write(tmp_path, "comment.md", _FIX_QUOTES_REOPEN)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROG),
          "--issue-body-file", str(issue),
          "--comment-file", str(comment),
          "--reopen-comment-file", str(tmp_path / "nope.md")],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
     assert r.returncode == 2
 
 

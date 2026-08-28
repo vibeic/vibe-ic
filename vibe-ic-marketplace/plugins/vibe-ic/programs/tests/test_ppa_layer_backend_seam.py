@@ -53,10 +53,13 @@ a population of zero -- this file's own subject matter.
 from __future__ import annotations
 
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TESTS = pathlib.Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -67,8 +70,8 @@ BACKENDS = sorted(p.stem for p in _BACKENDS_DIR.glob("*.py")
 
 
 def _run(args, timeout=120):
-    return subprocess.run([sys.executable, *args], capture_output=True,
-                          text=True, timeout=timeout, cwd=str(_PROGRAMS))
+    return _pr.run([sys.executable, *args], capture_output=True,
+                          text=True, cwd=str(_PROGRAMS))
 
 
 def test_the_backend_package_is_populated():

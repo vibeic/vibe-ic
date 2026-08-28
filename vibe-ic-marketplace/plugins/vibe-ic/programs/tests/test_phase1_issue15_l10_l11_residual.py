@@ -40,6 +40,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 REPO = Path(__file__).resolve().parents[2]
 RUNNER = REPO / "programs" / "phase1_doc_one_shot_runner.py"
@@ -51,10 +54,9 @@ def _seed_thin_input(project: Path, readme: str) -> None:
 
 
 def _run_runner(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(RUNNER), str(project)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 def _read_l(project: Path, name: str) -> dict:

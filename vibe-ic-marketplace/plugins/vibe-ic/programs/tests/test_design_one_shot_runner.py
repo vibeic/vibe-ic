@@ -42,10 +42,9 @@ PROG = Path(__file__).resolve().parent.parent / \
 #: Was invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277 —
 #: the bound is a parameter default, which the gate could not read.
 def _run(args: list, timeout: int = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG)] + args,
-        capture_output=True, text=True, timeout=timeout,
-    )
+        capture_output=True, text=True)
 
 
 def _seed_l_docs(project: Path, n: int = 13) -> None:
@@ -138,6 +137,9 @@ def test_edge_top_name_forwarded(tmp_path):
 # Fault ATPG ran `--clock clock` on a design with no such port → 0 scan flops
 # → DT1 (transition-fault ATPG) hard-FAIL.
 import importlib.util as _ilu
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _load_derive_clock():

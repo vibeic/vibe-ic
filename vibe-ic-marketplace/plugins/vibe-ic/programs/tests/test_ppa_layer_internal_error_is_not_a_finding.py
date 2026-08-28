@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
@@ -58,6 +57,10 @@ sys.path.insert(0, str(_TESTS))
 from _ppa_jsonschema import HAVE_DRAFT_2020_12, REASON  # noqa: E402
 sys.path.insert(0, str(_PROGRAMS))
 from not_verified_tier import not_verified_reason  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 #: Why this file's "validator unavailable" arm does not run on a normal host.
@@ -77,8 +80,8 @@ _UNREACHABLE_REASON = not_verified_reason(
 
 
 def _run(args, timeout=120, env=None):
-    return subprocess.run([sys.executable, *args], capture_output=True,
-                          text=True, timeout=timeout, cwd=str(_PROGRAMS),
+    return _pr.run([sys.executable, *args], capture_output=True,
+                          text=True, cwd=str(_PROGRAMS),
                           env=env)
 
 

@@ -24,9 +24,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parent.parent / "fpga_on_board_attestation_check.py"
 assert SCRIPT.is_file()
@@ -35,10 +37,9 @@ _MANIFEST = "reports/phase2/fpga/on_board_pass.json"
 
 
 def _run(project: Path, *extra: str):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(SCRIPT), str(project), *extra],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 def _write(path: Path, payload) -> None:

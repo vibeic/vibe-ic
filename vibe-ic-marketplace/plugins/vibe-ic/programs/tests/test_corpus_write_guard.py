@@ -20,6 +20,9 @@ import sys
 import textwrap
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
@@ -32,22 +35,6 @@ _HYGIENE = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 #: read as "the fan-out lost its coverage".
 _CORPUS_PRODUCER = _REPO / "tools" / "ci" / "routed_def_corpus.py"
 _CORPUS_LOCATION = _PROGRAMS / "_corpus_location.py"
-
-#: Every fixture gate returns instantly; this only stops a hung one from taking
-#: the pytest session down (#542). It must stay UNDER the 60 s ceiling
-#: `ci_harness_timeout_ceiling_check` enforces, or the bound cannot fire as a
-#: TEST failure — pytest kills the whole session at 180 s first, taking every
-#: other file in the subset with it. Measured on this tree: the slowest call
-#: below is the hygiene script's `--list` at 0.03 s, so 55 keeps ~1800x
-#: headroom.
-_T = 55
-
-#: The two corpus-scanning gates driven for real in the write audit below.
-#: MEASURED at 0.15 s and 0.09 s over the whole published corpus; the 600 s I
-#: first wrote was decoration, and decoration above the ceiling is a bound that
-#: can never fire.
-_CORPUS_GATE_T = 55
-
 
 def _corpus_repo(tmp_path: Path, *, gitignore: str = "") -> Path:
     """A throwaway repo with a `benchmark-data/` corpus and one tracked file."""
@@ -80,8 +67,7 @@ def _run(root: Path, gate_lines: str, record: Path = None):
     argv = ["bash", str(_script(root, gate_lines))]
     if record is not None:
         argv += ["--summary-json", str(record)]
-    return subprocess.run(argv, cwd=str(root), capture_output=True, text=True,
-                          timeout=_T)
+    return _pr.run(argv, cwd=str(root), capture_output=True, text=True)
 
 
 def _writer(root: Path, name: str, rel: str) -> Path:
@@ -231,18 +217,17 @@ def test_the_real_hygiene_lane_writes_nothing_into_benchmark_data():
     leave the tree exactly as they found it.
     """
     def state():
-        return subprocess.run(
+        return _pr.run(
             ["git", "-C", str(_REPO), "status", "--porcelain",
              "--ignored=traditional", "--", "benchmark-data"],
-            capture_output=True, text=True, timeout=_T).stdout
+            capture_output=True, text=True).stdout
     before = state()
     for prog, args in (("cross_layer_reference_check",
                         ["--corpus", str(_REPO / "benchmark-data" / "ic")]),
                        ("step_internal_fail_bubble_up_check",
                         ["--corpus", str(_REPO / "benchmark-data" / "ic")])):
-        subprocess.run([sys.executable, str(_PROGRAMS / f"{prog}.py"), *args],
-                       cwd=str(_REPO), capture_output=True, text=True,
-                       timeout=_CORPUS_GATE_T)
+        _pr.run([sys.executable, str(_PROGRAMS / f"{prog}.py"), *args],
+                       cwd=str(_REPO), capture_output=True, text=True)
         assert state() == before, (
             f"{prog} modified benchmark-data/ while auditing it")
 
@@ -277,10 +262,9 @@ def test_the_hygiene_lane_declares_a_host_independent_number_of_gates():
 
         def declared() -> int:
             rec = Path(td) / "rec.json"
-            subprocess.run(["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"),
+            _pr.run(["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"),
                             "--list", "--summary-json", str(rec)],
-                           cwd=str(clone), capture_output=True, text=True,
-                           timeout=_T)
+                           cwd=str(clone), capture_output=True, text=True)
             return json.loads(rec.read_text())["declared"]
 
         base = declared()
@@ -345,16 +329,16 @@ def test_the_tracked_cells_are_still_reached():
         subprocess.run(["git", "-C", str(clone), "commit", "-qm", "b"],
                        check=True)
 
-        out = subprocess.run(
+        out = _pr.run(
             ["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"), "--list"],
-            cwd=str(clone), capture_output=True, text=True, timeout=_T)
+            cwd=str(clone), capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
         percell = [ln for ln in out.stdout.splitlines()
                    if ln.startswith("macro OBS not crossed")]
-        tracked = subprocess.run(
+        tracked = _pr.run(
             ["git", "-C", str(clone), "ls-files", "--",
              "benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def"],
-            capture_output=True, text=True, timeout=_T).stdout.split()
+            capture_output=True, text=True).stdout.split()
 
     assert len(tracked) == 2, (
         "the fixture did not track the two cells it planted, so the assertion "

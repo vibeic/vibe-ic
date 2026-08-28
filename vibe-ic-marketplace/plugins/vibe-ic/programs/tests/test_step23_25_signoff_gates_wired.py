@@ -63,6 +63,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
@@ -115,9 +118,8 @@ _RELEASING = ("PASS", "PASS_WITH_WAIVERS", "PASS_WITH_OPEN_SOURCE_CONSTRAINTS")
 
 
 def _run(prog: str, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(_PROGRAMS / prog), *args],
-                          capture_output=True, text=True,
-                          timeout=_INNER_TIMEOUT_S)
+    return _pr.run([sys.executable, str(_PROGRAMS / prog), *args],
+                          capture_output=True, text=True)
 
 
 def _project(tmp: Path) -> Path:

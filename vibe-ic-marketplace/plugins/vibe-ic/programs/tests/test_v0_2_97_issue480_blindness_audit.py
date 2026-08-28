@@ -34,13 +34,15 @@ ACCEPTANCE (issue ## 驗收, executed end-to-end below):
 chip-AGNOSTIC: synthetic Prob* names + tmp_path datasets only.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
 from _entry_guard_fixture import write_prompt_report  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 AUDIT = PLUGIN / "programs" / "blindness_audit.py"
@@ -149,8 +151,8 @@ def test_non_json_legacy_text_lines_still_scanned(tmp_path):
 # ── CLI exit codes: clean / violation / AUDIT_ERROR ─────────────────────────
 
 def _run_cli(args):
-    return subprocess.run([sys.executable, str(AUDIT)] + args,
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(AUDIT)] + args,
+                          capture_output=True, text=True)
 
 
 def test_cli_legit_jsonl_rc0(tmp_path):
@@ -238,10 +240,10 @@ def _stage_run(tmp_path, transcript_body: str):
 
 
 def _score(ds, run):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def test_dispatch_legit_jsonl_passes_audit_then_proceeds(tmp_path):

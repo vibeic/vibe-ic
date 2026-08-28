@@ -23,12 +23,14 @@ chain-level tests live beside them, not instead of them.
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
@@ -52,11 +54,11 @@ pytestmark = pytest.mark.skipif(
 def solved():
     """Run the REAL front door once; every test reads the same run."""
     td = tempfile.mkdtemp(prefix="vibeic-solve-e2e-")
-    rc = subprocess.run(
+    rc = _pr.run(
         [sys.executable, str(_PROGRAMS / "benchmark_dispatch.py"),
          "verilogeval-v2", "--solve", "--dataset", str(_VE),
          "--run", td, "--limit", str(_LIMIT)],
-        capture_output=True, text=True, timeout=3600)
+        capture_output=True, text=True)
     rep = Path(td) / "solve_report.json"
     if not rep.is_file():
         pytest.fail(f"--solve wrote no report (rc={rc.returncode})\n"

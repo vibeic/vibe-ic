@@ -62,7 +62,6 @@ import hashlib
 import inspect
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -73,6 +72,9 @@ if str(_PROGRAMS) not in sys.path:
 import _path_layout as PL             # noqa: E402
 import clock_plan_check as C          # noqa: E402
 import phase3_one_shot_runner as R    # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _SDC = "create_clock -name clk -period 10.0 [get_ports clk]\n"
 _SDC_REL = "phase3/stage3/pnr/constraint.sdc"
@@ -349,10 +351,10 @@ def test_the_step16_block_actually_calls_the_producer_under_test():
 # GATE — the advisory disclosure
 # ===========================================================================
 def _run_gate(proj: Path, out: Path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "clock_plan_check.py"), str(proj),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return r, json.loads(out.read_text())
 
 

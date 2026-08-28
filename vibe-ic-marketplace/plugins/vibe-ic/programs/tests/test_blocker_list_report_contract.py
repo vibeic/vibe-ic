@@ -28,30 +28,16 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _FCC = _PROGRAMS / "flow_compliance_check.py"
-
-#: Bound for every `flow_compliance_check` launch in this file. NOT a round
-#: number picked by feel: `ci_harness_timeout_ceiling_check` (BLOCKING)
-#: resolves the pytest harness bound from `tools/gatekeeper-land.sh` —
-#: `--timeout=180`, `--timeout-method=thread` — and permits any ONE blocking
-#: call at most `180 // 3` = 60 s. Above that the inner bound can never fire:
-#: pytest reaches 180 s first and takes the whole SESSION down, so `--maxfail`
-#: stops counting and every other file in the subset loses its verdict,
-#: including files that had already passed.
-#: The landed value was 300 at all three call sites. MEASURED here: every one
-#: of them drives the producer over a THREE-STEP invented flow declared in this
-#: file, on a tmp_path project holding at most one JSON file — 0.14 s worst of
-#: six calls. 60 s is ~400x headroom, and this file's slowest test makes two of
-#: these calls, which the `// 3` divisor exists to leave room for.
-_FCC_TIMEOUT_S = 60
-
 
 _TINY_FLOW = {
     "version": "test",
@@ -82,11 +68,10 @@ def _run_probe(tmp_path, make_step1_pass: bool):
     flow = tmp_path / "probe_flow.yaml"
     flow.write_text(yaml.safe_dump(_TINY_FLOW))
     out = proj / "report.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_FCC), str(proj), "--flow-def", str(flow),
          "--json", str(out)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS),
-        timeout=_FCC_TIMEOUT_S)
+        capture_output=True, text=True, cwd=str(_PROGRAMS))
     return proc, json.loads(out.read_text())
 
 
@@ -166,7 +151,7 @@ def test_no_classification_can_move_a_verdict(tmp_path):
     flow.write_text(yaml.safe_dump(_TINY_FLOW))
     out = proj / "report.json"
     env_path = f"{sitecustomize}:{_PROGRAMS}"
-    proc_boom = subprocess.run(
+    proc_boom = _pr.run(
         [sys.executable, "-c",
          "import sys; sys.path.insert(0, %r); import usercustomize; "
          "sys.argv = ['flow_compliance_check.py', %r, '--flow-def', %r, "
@@ -174,7 +159,6 @@ def test_no_classification_can_move_a_verdict(tmp_path):
          "import runpy; runpy.run_path(%r, run_name='__main__')"
          % (str(sitecustomize), str(proj), str(flow), str(out), str(_FCC))],
         capture_output=True, text=True, cwd=str(_PROGRAMS),
-        timeout=_FCC_TIMEOUT_S,
         env={"PYTHONPATH": env_path, "PATH": "/usr/bin:/bin"})
     doc_boom = json.loads(out.read_text())
 
@@ -250,11 +234,10 @@ def test_membership_in_the_oss_table_alone_does_not_make_a_blocker_a_missing_cap
     flow = tmp_path / "member_flow.yaml"
     flow.write_text(yaml.safe_dump(_OSS_MEMBER_FLOW))
     out = proj / "report.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_FCC), str(proj), "--flow-def", str(flow),
          "--json", str(out)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS),
-        timeout=_FCC_TIMEOUT_S)
+        capture_output=True, text=True, cwd=str(_PROGRAMS))
     doc = json.loads(out.read_text())
     assert "blockers" in doc, "the report publishes no classified blocker list"
     by_id = {b["step_id"]: b for b in doc["blockers"]}

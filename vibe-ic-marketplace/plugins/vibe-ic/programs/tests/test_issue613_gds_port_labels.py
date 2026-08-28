@@ -46,11 +46,14 @@ import importlib
 import json
 import pathlib
 import struct
-import subprocess
 import sys
 
 import pytest
 import yaml
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
@@ -174,10 +177,10 @@ def _project(tmp_path, design, pins, top_labels, layer="Metal2", declared=None):
 
 def _run(project, extra=()):
     out = project / "cen.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "gds_port_label_check.py"),
          str(project), "--json", str(out), *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     rep = json.loads(out.read_text()) if out.is_file() else {}
     return r.returncode, (r.stdout + r.stderr), rep
 

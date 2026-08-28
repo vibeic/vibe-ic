@@ -56,7 +56,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -69,6 +68,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _flow_verdict_tiers as TIERS                              # noqa: E402
 import test_silence_is_not_cheaper_than_disclosure as THIN       # noqa: E402
 import test_two_gates_over_one_artefact_cannot_disagree as FULL  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 FLOW_COMPLIANCE = PROGRAMS / "flow_compliance_check.py"
 
@@ -89,7 +91,7 @@ def _flow_audit(project: Path, *extra: str) -> dict:
     env = dict(os.environ)
     env["PHASE23_ANALOG_FPGA_STUB"] = "1"
     out = project / "_audit.json"
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(FLOW_COMPLIANCE), str(project),
          "--phase", "2", "--strict-structural", "--allow-thin-input",
          *extra, "--json", str(out)],
@@ -98,7 +100,7 @@ def _flow_audit(project: Path, *extra: str) -> dict:
         # matters is the harness's 180 s — an inner bound above 60 s can outlive
         # it and kill the SESSION instead of the test, which
         # `ci_harness_timeout_ceiling_check` failed this file on at merge.
-        capture_output=True, text=True, timeout=45, env=env)
+        capture_output=True, text=True, env=env)
     rep = json.loads(out.read_text())
     # The runner's own substring test, in its own order (`PASS` is a prefix
     # of `PASS_WITH_WAIVERS`). This is the value that becomes the runner's

@@ -5,11 +5,13 @@ Synthetic flows — the rule is about graph shape, not about any real step.
 from __future__ import annotations
 
 import importlib
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -26,8 +28,8 @@ _ROOTS = sorted(
 
 
 def _run(flow: Path):
-    p = subprocess.run([sys.executable, str(GATE), "--flow", str(flow)],
-                       capture_output=True, text=True, timeout=30)
+    p = _pr.run([sys.executable, str(GATE), "--flow", str(flow)],
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 

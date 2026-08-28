@@ -45,10 +45,13 @@ zero shown to be a real clean rather than an accept-everything parser.
 from __future__ import annotations
 
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "module_port_audit.py"
@@ -81,8 +84,8 @@ endmodule
 
 def _run(tmp_path, src, name="a.v"):
     (tmp_path / name).write_text(src, encoding="utf-8")
-    return subprocess.run([sys.executable, str(PROG), "--rtl-dir", str(tmp_path)],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(PROG), "--rtl-dir", str(tmp_path)],
+                          capture_output=True, text=True)
 
 
 def test_a_width_bound_to_the_net_type_is_parsed(tmp_path):

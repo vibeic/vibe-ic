@@ -28,7 +28,6 @@ chip-AGNOSTIC: pure prompt-prose + RTL structure; no chip / vendor / SKU literal
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -39,6 +38,9 @@ PROGRAMS = PLUGIN / "programs"
 PROG = PROGRAMS / "iface_conformance_v2.py"
 sys.path.insert(0, str(PROGRAMS))
 import iface_conformance_v2 as M  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── 驗收 fixtures (the exact acceptance shape) ──────────────────────────────
@@ -64,7 +66,7 @@ def _run_cli(tmp_path, rtl, prompt, rid=None, strict=False):
         cmd += ["--id", rid]
     if strict:
         cmd.append("--strict")
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return _pr.run(cmd, capture_output=True, text=True)
 
 
 # ── POSITIVE: 驗收 END-STATE ────────────────────────────────────────────────
@@ -194,10 +196,10 @@ def test_gate_is_blind_opens_only_prompt_and_rtl(tmp_path):
     # plant an oracle/hidden-TB decoy in the same dir; it must NOT be read
     (tmp_path / "testbench.sv").write_text("module tb; endmodule\n")
     (tmp_path / "verified_findfasterclock.v").write_text("ORACLE\n")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), "--id", ACCEPT_ID, "--prompt", str(pp),
          "--rtl", str(rp), "--json", str(jp)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0
     import json
     rep = json.loads(jp.read_text())
@@ -210,9 +212,9 @@ def test_empty_rtl_refused_rc2(tmp_path):
     pp = tmp_path / "p.txt"
     rp.write_text("   \n")
     pp.write_text(ACCEPT_PROMPT)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), "--prompt", str(pp), "--rtl", str(rp)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 2
 
 
@@ -263,9 +265,9 @@ def test_extract_prompt_iface_table_directions():
 def test_chip_agnostic_source():
     """The new program must pass the chip-AGNOSTIC source guard."""
     guard = PROGRAMS / "source_chip_agnostic_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(guard), str(PLUGIN)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

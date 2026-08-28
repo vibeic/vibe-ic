@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import ast
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -40,6 +39,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import not_verified_tier as NV  # noqa: E402
+
+import _progress_run as _pr  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN = TESTS_DIR.parents[1]
@@ -75,10 +76,10 @@ def _run_probe(tmp_path, body: str, env_extra=None):
         + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     env.pop(NV.REQUIRE_ENV, None)
     env.update(env_extra or {})
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
          "-p", "not_verified_tier", str(test)],
-        capture_output=True, text=True, cwd=str(tmp_path), timeout=55, env=env)
+        capture_output=True, text=True, cwd=str(tmp_path), env=env)
 
 
 # ---------------------------------------------------------------------------

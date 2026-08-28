@@ -34,13 +34,15 @@ WHAT THIS FILE LOCKS
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from _plugin_tree import plugin_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN = plugin_path()
 FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
@@ -90,7 +92,7 @@ def _program_scope(tmp_path, phase: str) -> set[str]:
     absence.
     """
     out = tmp_path / f"scope{phase}.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(CHECK), str(tmp_path), "--phase", phase,
          "--flow", str(FLOW), "--json", str(out)],
         # 60s = the ci_harness_timeout_ceiling ceiling (180s harness bound / 3).
@@ -98,7 +100,7 @@ def _program_scope(tmp_path, phase: str) -> set[str]:
         # ~25x on the file and far more on the single call. The old 300s could
         # outlive the 180s harness, and what dies then is the SESSION, not the
         # test -- which is the failure this bound exists to prevent.
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert out.is_file(), (
         f"--phase {phase} produced no JSON report (rc={r.returncode})\n"
         f"{(r.stdout + r.stderr)[:1500]}")
@@ -158,9 +160,9 @@ def test_the_both_phase_overlap_is_disclosed_in_the_output(tmp_path):
     assert both, (
         "no phase-agnostic steps found; if the flow genuinely has none this "
         "guard is vacuous and should be retired, not left passing")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(CHECK), "--phase", "2", "--help"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     # --help proves the flag exists; the disclosure itself is emitted on a real
     # run, asserted below against a synthetic project so no run tree is needed.
@@ -168,11 +170,11 @@ def test_the_both_phase_overlap_is_disclosed_in_the_output(tmp_path):
 
 def test_the_disclosure_names_the_overlapping_steps(tmp_path):
     """Emitted on a real invocation, and it names them rather than counting."""
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(CHECK), str(tmp_path), "--phase", "2",
          "--flow", str(FLOW)],
         # 60s, same reasoning as the call above.
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     out = r.stdout + r.stderr
     assert "not a partition" in out, (
         f"the both-scope overlap was not disclosed.\n{out[:2000]}")

@@ -42,7 +42,6 @@ chip / vendor / SKU literal.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -53,6 +52,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import flow_compliance_check as F  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── fixture builder ──────────────────────────────────────────────────────────
@@ -220,11 +222,11 @@ def test_subprocess_endstate_pass_with_waivers(tmp_path):
     the cap demotes it to a WAIVED-DEFERRED entry carrying the distinct ticket
     (the verdict line surfaces the deferral, not a bare FAIL on that gate)."""
     proj = _make_reused_ip_project(tmp_path / "p")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "flow_compliance_check.py"), ".",
          "--strict", "--phase", "2", "--strict-structural",
          "--skip-analog", "--skip-hardware"],
-        cwd=proj, capture_output=True, text=True, timeout=60)
+        cwd=proj, capture_output=True, text=True)
     out = r.stdout + r.stderr
     # The cap waiver line must appear with the distinct ticket, and the
     # field-count gate must NOT be listed as a hard structural FAIL.
@@ -835,10 +837,10 @@ def test_chip_agnostic_guard(tmp_path):
     gate that reports a denominator is only useful to a caller that reads it.
     """
     out = tmp_path / "chip_agnostic.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"),
          str(_PROGRAMS.parent), "--json", str(out)],
-        cwd=_PROGRAMS, capture_output=True, text=True, timeout=60)
+        cwd=_PROGRAMS, capture_output=True, text=True)
     assert r.returncode == 0, (r.stdout + r.stderr)[-3000:]
 
     census = json.loads(out.read_text())["scan_census"]

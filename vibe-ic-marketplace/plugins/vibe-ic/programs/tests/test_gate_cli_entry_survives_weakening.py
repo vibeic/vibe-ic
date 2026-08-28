@@ -41,6 +41,9 @@ FLOW_YAML = PLUGIN_ROOT / "flow" / "phase1_phase2_phase3.yaml"
 sys.path.insert(0, str(PROGRAMS_DIR))
 import gate_cli_mutation_probe as PROBE  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _GATE_CLAUSES = ("program_exit_zero", "advisory_program_exit_zero",
                  "optional_program_exit_zero")
 
@@ -193,16 +196,14 @@ def test_the_default_run_never_touches_the_shipped_programs_tree(tmp_path):
     the presence of a `--programs-root` flag: the flag existing proves nothing
     about which path the default takes.
     """
-    import subprocess as sp
     def dirt():
-        r = sp.run(["git", "status", "--porcelain", "programs"],
-                   cwd=PLUGIN_ROOT, capture_output=True, text=True, timeout=60)
+        r = _pr.run(["git", "status", "--porcelain", "programs"],
+                   cwd=PLUGIN_ROOT, capture_output=True, text=True)
         return r.stdout
     before = dirt()
-    r = sp.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
+    r = _pr.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
                 "spec_declaration_emit"],
-               cwd=PLUGIN_ROOT, capture_output=True, text=True,
-               timeout=_PROBE_TIMEOUT_S)
+               cwd=PLUGIN_ROOT, capture_output=True, text=True)
     assert dirt() == before, (
         "the probe modified the shipped programs tree; while a gate is neutered "
         "any concurrent reader of it gets an unearned PASS\n" + dirt())
@@ -383,11 +384,9 @@ def test_there_is_no_flag_that_mutates_the_shipped_tree():
     Driven through argparse rather than read out of the source: a flag can be
     removed from the help text and still be accepted.
     """
-    import subprocess as sp
-    r = sp.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
+    r = _pr.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
                 "--in-place", "spec_declaration_emit"],
-               cwd=str(PLUGIN_ROOT), capture_output=True, text=True,
-               timeout=_PROBE_TIMEOUT_S)
+               cwd=str(PLUGIN_ROOT), capture_output=True, text=True)
     assert r.returncode == 2 and "unrecognized arguments" in r.stderr, (
         "the probe still accepts a flag that mutates the shipped tree; there "
         "is no crash-safe version of that, which is why it was removed:\n"
@@ -398,7 +397,7 @@ def test_the_probe_can_still_report_SILENT(tmp_path):
     """CONTROL. Without this, CAUGHT on every real gate is indistinguishable
     from a probe that always says CAUGHT. Same gate, a copy whose test file
     keeps the NAME (so it is still selected) but has been blunted."""
-    import shutil, subprocess as sp
+    import shutil
     root = tmp_path / "programs"
     shutil.copytree(PROGRAMS_DIR, root,
                     ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
@@ -409,10 +408,9 @@ def test_the_probe_can_still_report_SILENT(tmp_path):
                          "def test_placeholder():\n    assert True\n")
             hit += 1
     assert hit, "no test file names the program — the control is vacuous"
-    r = sp.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
+    r = _pr.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
                 "spec_declaration_emit", "--programs-root", str(root)],
-               cwd=PLUGIN_ROOT, capture_output=True, text=True,
-               timeout=_PROBE_TIMEOUT_S)
+               cwd=PLUGIN_ROOT, capture_output=True, text=True)
     assert "SILENT" in r.stdout, (
         "a gate whose tests cannot see it was neutered still reported CAUGHT — "
         "the probe is asserting, not measuring:\n" + r.stdout + r.stderr)

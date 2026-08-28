@@ -17,7 +17,6 @@ These fixtures embed real netgen terminal-verdict lines; the dominant
 mismatch case reproduces the exact spm_e2e defect shape. Chip-AGNOSTIC.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +24,9 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import eda_report_audit as ERA  # noqa: E402
 from _hostpaths import require_corpus  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # A realistic netgen footer carrying mismatch categories + signature
 # (and padded past the lvs byte-size authenticity floor, ~1536 B) so the
@@ -122,10 +124,10 @@ def test_e2e_real_spm_artifact_fails_with_json(tmp_path):
         pytest.skip("real spm_e2e_v034 artifact upgraded to a unique LVS "
                     "match — do-not-match e2e covered by synthetic fixtures")
     out = tmp_path / "x.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "lvs_report_check.py"),
          str(real), "--mode", "lvs", "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode != 0, r.stdout[-500:]
     assert json.loads(out.read_text())["passed"] is False
 
@@ -135,9 +137,9 @@ def test_wrapper_forwards_json_flag(tmp_path):
     # written (it hard-coded argv pre-#507).
     proj = _write_lvs(tmp_path, "Final result: Circuits match uniquely.\n")
     out = tmp_path / "v.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "lvs_report_check.py"),
          str(proj), "--mode", "lvs", "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-500:] + r.stderr[-300:]
     assert json.loads(out.read_text())["passed"] is True

@@ -41,8 +41,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
-import subprocess
 import sys
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -165,7 +168,7 @@ def test_the_three_signoff_steps_consult_it():
 
 # ── step 38, the most expensive form ──────────────────────────────────────
 def _handoff(project):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_PROGRAMS / "foundry_handoff_pack_gen.py"),
          str(project)],
         # 30s: `ci_harness_timeout_ceiling_check` caps an inner bound at 60,
@@ -173,7 +176,7 @@ def _handoff(project):
         # rather than the call. MEASURED at 0.04s per invocation. This test
         # tripped that ceiling on its first landing — the third time in this one
         # batch, which is why the ceiling is a gate and not a convention.
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
 
 
 def test_the_handoff_pack_refuses_on_an_unrouted_layout(tmp_path):

@@ -20,15 +20,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = Path(__file__).resolve().parent.parent / \
     "bringup_plan_gen.py"
 
 
 def _run(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG)] + args,
-        capture_output=True, text=True, timeout=timeout,
-    )
+        capture_output=True, text=True)
 
 
 def _write_l13(project: Path, body: dict | str) -> None:

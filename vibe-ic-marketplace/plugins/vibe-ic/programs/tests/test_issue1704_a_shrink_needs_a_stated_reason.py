@@ -58,6 +58,9 @@ if str(PROGRAMS) not in sys.path:
 import _corpus_location as _cloc  # noqa: E402
 import step_internal_fail_bubble_up_check as SIFBU  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 #: A reason long enough for the gate's own minimum. Written out rather than
 #: generated, so a reader sees the kind of sentence the rule asks for.
 REASON = ("the run trees this register named left the published corpus by a "
@@ -99,8 +102,8 @@ def _run(*args: str) -> subprocess.CompletedProcess:
     """
     env = {k: v for k, v in os.environ.items()
            if k != _cloc.CORPUS_ENV and k != _cloc.BOUND_SHA_ENV}
-    return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True, timeout=60, env=env)
+    return _pr.run([sys.executable, str(GATE), *args],
+                          capture_output=True, text=True, env=env)
 
 
 def _mk_run(corpus: Path, rel: str, n_findings: int) -> Path:

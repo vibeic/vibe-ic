@@ -27,14 +27,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _REPO = _PROGRAMS.parents[3]
 
 
 def _run(prog: str, *args: str):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / prog), *args],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return r.returncode, (r.stdout + r.stderr)
 
 
@@ -93,9 +96,9 @@ def test_an_all_zero_sha_still_refuses(tmp_path):
 def test_empty_STDIN_is_still_allowed(tmp_path):
     """Scoped on purpose: `--stdin` with no diff is a caller who genuinely has
     none, and refusing there would fire on legitimate use."""
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "nda_diff_scan_check.py"), "--stdin"],
-        input="", capture_output=True, text=True, timeout=60)
+        input="", capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

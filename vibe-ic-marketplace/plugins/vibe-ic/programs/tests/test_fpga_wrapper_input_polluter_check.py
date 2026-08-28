@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAM = Path(__file__).parent.parent / "fpga_wrapper_input_polluter_check.py"
 
 
 def _run(args: list[str]) -> tuple[int, dict]:
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAM), *args, "--json"],
-        capture_output=True, text=True, timeout=20)
+        capture_output=True, text=True)
     try:
         out = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -31,18 +33,18 @@ def _write(path: Path, body: str) -> Path:
 # -------------------------------------------------------------------------
 
 def test_help_works():
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAM), "--help"],
-        capture_output=True, text=True, timeout=10)
+        capture_output=True, text=True)
     assert r.returncode == 0
     assert "fpga" in r.stdout.lower()
     assert "inout" in r.stdout.lower()
 
 
 def test_missing_rtl_arg_returns_2():
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAM)],
-        capture_output=True, text=True, timeout=10)
+        capture_output=True, text=True)
     assert r.returncode == 2
     assert "--rtl" in r.stderr
 

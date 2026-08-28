@@ -12,15 +12,16 @@ and the answers must differ. Delete the green read and it goes red.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[5]
 _TOOL = _REPO / "tools" / "vacuous_exit_corpus_census.py"
 _PLUGIN_REL = "vibe-ic-marketplace/plugins/vibe-ic"
-_T = 55
 
 
 def _tree(root: Path, clause_rc: dict, runs=("ic/alpha", "ic/beta")) -> Path:
@@ -38,8 +39,8 @@ def _tree(root: Path, clause_rc: dict, runs=("ic/alpha", "ic/beta")) -> Path:
 
 
 def _run(*args):
-    return subprocess.run([sys.executable, str(_TOOL), *args],
-                          capture_output=True, text=True, timeout=_T)
+    return _pr.run([sys.executable, str(_TOOL), *args],
+                          capture_output=True, text=True)
 
 
 def test_a_moved_verdict_is_counted_and_its_transition_named(tmp_path):

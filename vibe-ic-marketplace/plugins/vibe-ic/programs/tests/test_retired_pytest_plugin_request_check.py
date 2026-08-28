@@ -17,7 +17,6 @@ retirement -- what it must NOT call a hit.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,9 +27,11 @@ sys.path.insert(0, str(PROGRAMS))
 
 import retired_pytest_plugin_request_check as R                  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROG = PROGRAMS / "retired_pytest_plugin_request_check.py"
 _NAME = "pytest" + "_timeout"     # never a literal here; see the module doc
-_T = 60
 
 
 def _tree(tmp_path: Path, files: dict, name: str = "tree") -> Path:
@@ -44,8 +45,8 @@ def _tree(tmp_path: Path, files: dict, name: str = "tree") -> Path:
 
 
 def _run(root: Path, *extra):
-    return subprocess.run([sys.executable, str(_PROG), str(root), *extra],
-                          capture_output=True, text=True, timeout=_T)
+    return _pr.run([sys.executable, str(_PROG), str(root), *extra],
+                          capture_output=True, text=True)
 
 
 # ── what it MUST catch ───────────────────────────────────────────────────────

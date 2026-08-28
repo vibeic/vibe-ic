@@ -49,8 +49,11 @@ for an unguarded one.
 from __future__ import annotations
 
 import pathlib
-import subprocess
 import sys
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
@@ -121,16 +124,15 @@ def test_the_push_range_is_passed_to_git_unquoted():
 def test_a_multi_token_range_really_does_break_git_when_quoted():
     """The claim above, MEASURED rather than asserted from memory — otherwise
     this file pins a spelling whose reason nobody can check."""
-    head = subprocess.run(["git", "-C", str(_REPO), "rev-parse", "HEAD"],
-                          capture_output=True, text=True, timeout=30)
+    head = _pr.run(["git", "-C", str(_REPO), "rev-parse", "HEAD"],
+                          capture_output=True, text=True)
     if head.returncode != 0:
         return
     rng = f"{head.stdout.strip()} --not --remotes"
-    quoted = subprocess.run(["git", "-C", str(_REPO), "log", "--format=%B", rng],
-                            capture_output=True, text=True, timeout=30)
-    split = subprocess.run(["git", "-C", str(_REPO), "log", "--format=%B",
-                            *rng.split()], capture_output=True, text=True,
-                           timeout=30)
+    quoted = _pr.run(["git", "-C", str(_REPO), "log", "--format=%B", rng],
+                            capture_output=True, text=True)
+    split = _pr.run(["git", "-C", str(_REPO), "log", "--format=%B",
+                            *rng.split()], capture_output=True, text=True)
     assert quoted.returncode != 0, "the quoted form no longer breaks git"
     assert split.returncode == 0, split.stderr[-200:]
 
@@ -150,10 +152,10 @@ def test_the_checker_passes_unchanged_and_still_refuses_a_REGRESSION():
         return
 
     def run(cur, prev, *extra):
-        return subprocess.run(
+        return _pr.run(
             [sys.executable, str(prog), "--current", cur, "--previous", prev,
              *extra],
-            capture_output=True, text=True, timeout=55, cwd=str(_REPO)).returncode
+            capture_output=True, text=True, cwd=str(_REPO)).returncode
 
     assert run("1.9.51", "1.9.51") == 1, "unchanged must fail WITHOUT the flag"
     assert run("1.9.51", "1.9.51", "--version-by-gatekeeper") == 0, (

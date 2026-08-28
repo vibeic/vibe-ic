@@ -30,6 +30,10 @@ from pathlib import Path
 
 import pytest
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SCRIPT = (Path(__file__).resolve().parents[2]
           / "benchmark" / "score_iverilog_tb.py")
 
@@ -158,12 +162,11 @@ def test_both_audits_share_the_alias_helper(tmp_path):
 
 
 def test_chip_agnostic_guard():
-    import subprocess
     import sys
     prog = (Path(__file__).resolve().parents[1] / "source_chip_agnostic_check.py")
-    r = subprocess.run([sys.executable, str(prog),
+    r = _pr.run([sys.executable, str(prog),
                         str(Path(__file__).resolve().parents[1].parent)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 

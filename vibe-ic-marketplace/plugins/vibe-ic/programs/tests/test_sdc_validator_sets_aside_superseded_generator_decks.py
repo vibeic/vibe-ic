@@ -58,16 +58,11 @@ it becomes "grade fewer files until step 8 goes green", or "delete"):
     this by deleting the orphan rather than declining to grade it.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
-# The gatekeeper harness runs pytest under `--timeout=180` (tools/gatekeeper-land.sh),
-# and `ci_harness_timeout_ceiling_check` requires every inner blocking call to be
-# bounded at or under 180 // 3 = 60s. A larger inner bound can outlive the harness,
-# and what then dies is the SESSION, not the test. Named so the ceiling is visible
-# at authoring time -- this defect was written five separate times in one session.
-_GATE_TIMEOUT_S = 60
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 VALIDATOR = PROGRAMS / "sdc_validator_check.py"
@@ -144,7 +139,7 @@ def _validate(proj: Path, report: Path = None):
     cmd = [sys.executable, str(VALIDATOR), str(proj)]
     if report is not None:
         cmd += ["--json", str(report)]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
+    return _pr.run(cmd, capture_output=True, text=True)
 
 
 # ----- FORWARD -------------------------------------------------------
@@ -334,8 +329,8 @@ def test_the_generator_banner_the_consumer_looks_for_is_the_one_it_writes(
 
     proj = _scaffold(tmp_path, l9_top="chip_top")
     _fpga(proj)
-    cp = subprocess.run([sys.executable, str(SDC_GEN), str(proj), "--force"],
-                        capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
+    cp = _pr.run([sys.executable, str(SDC_GEN), str(proj), "--force"],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, f"{cp.stdout}\n{cp.stderr}"
     written = _fpga(proj) / "chip_top.sdc"
     assert written.is_file(), cp.stdout

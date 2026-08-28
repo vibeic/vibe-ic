@@ -32,7 +32,6 @@ POSITIVE:
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -41,6 +40,9 @@ PROGRAMS = PLUGIN / "programs"
 PROG = PROGRAMS / "spec_coverage_check.py"
 sys.path.insert(0, str(PROGRAMS))
 import spec_coverage_check as M  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -56,7 +58,7 @@ def _run(args, strict=False, failure=None):
         cmd.append("--strict")
     if failure is not None:
         cmd += ["--failure", failure]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return _pr.run(cmd, capture_output=True, text=True)
 
 
 # ── 驗收 fixtures (verbatim from the issue) ──────────────────────────────────

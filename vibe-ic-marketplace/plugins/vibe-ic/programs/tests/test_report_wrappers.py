@@ -4,13 +4,15 @@ Updated 2026-04-22 after BENCH-A v0.47 pilot to reflect tightened anti-fabricati
 gates: report fixtures must now include a tool-signature string AND meet a
 min-size threshold. Hand-typed <500B stubs are rejected.
 """
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _gdsii  # noqa: E402
 import _si_signoff_fixture  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
 # declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
@@ -26,9 +28,9 @@ _PADDING = "# " + ("=" * 78 + "\n") * 40  # ~3.2 KB
 
 
 def _run_wrapper(name: str, project_dir: str) -> int:
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(PROGRAMS_DIR / name), project_dir],
-        capture_output=True, text=True, timeout=10
+        capture_output=True, text=True, 
     )
     return result.returncode
 

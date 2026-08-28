@@ -23,10 +23,13 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "fpga_qsf_lint.py"
@@ -42,10 +45,10 @@ RTL = "module top(input wire clk, output wire q);\nendmodule\n"
 
 
 def _run(qsf, rtl_dir, out_dir):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--qsf-file", str(qsf),
          "--rtl-dir", str(rtl_dir), "--out-dir", str(out_dir)],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
 
 
 @pytest.fixture

@@ -68,6 +68,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import l_doc_generator_stamp as g  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 RUNNER = _PROGRAMS / "phase1_doc_one_shot_runner.py"
 
 # A minimal, chip-AGNOSTIC design. Everything in it is technology
@@ -92,10 +95,9 @@ def _make_project(tmp_path: Path, spec: str = _FIXTURE_SPEC) -> Path:
 
 
 def _run_phase1(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(RUNNER), str(project)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 def _emitted_docs(project: Path):
@@ -485,8 +487,8 @@ def test_no_l_document_write_escapes_the_chokepoint(tmp_path):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(site) + os.pathsep + env.get("PYTHONPATH", "")
     env["LDOC_WRITE_LOG"] = str(log)
-    cp = subprocess.run([sys.executable, str(RUNNER), str(project)],
-                        capture_output=True, text=True, timeout=60, env=env)
+    cp = _pr.run([sys.executable, str(RUNNER), str(project)],
+                        capture_output=True, text=True, env=env)
     assert cp.returncode == 0, cp.stdout[-2000:] + cp.stderr[-2000:]
     assert log.is_file(), (
         "the probe recorded no write at all — it is not observing the "

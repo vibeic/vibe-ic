@@ -8,15 +8,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SCRIPT = Path(__file__).parent.parent / "provenance_logger.py"
 assert SCRIPT.exists()
 
 
 def _run_logger(*args) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(SCRIPT), *args],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
 
 
 def test_logs_successful_run(tmp_path):

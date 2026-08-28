@@ -26,7 +26,6 @@ Run: python3 -m pytest programs/tests/test_issue312_expert_parse_track_nvm_progr
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -40,6 +39,9 @@ import nvm_program_supply_intent as N          # noqa: E402
 import phase1_expert_parse_track as T          # noqa: E402
 import ic_expert_db_consistency_check as DBC   # noqa: E402
 import _path_layout as _pl                     # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _track_report(project: Path) -> Path:
@@ -374,9 +376,9 @@ def _run_track(project: Path, env_extra=None):
     env["VIBE_IC_DISABLE_LLM_CONFIRM"] = "1"     # force the offline path
     if env_extra:
         env.update(env_extra)
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / "phase1_expert_parse_track.py"),
-         str(project)], capture_output=True, text=True, timeout=60, env=env)
+         str(project)], capture_output=True, text=True, env=env)
     return cp.returncode, cp.stdout, cp.stderr
 
 

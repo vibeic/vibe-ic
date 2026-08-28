@@ -5,12 +5,14 @@ ADVISORY by design, so the red is proved through `--strict`.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = (Path(__file__).resolve().parents[1]
         / "wall_clock_bound_standing_in_for_a_verdict.py")
@@ -96,9 +98,9 @@ def _tree(body: str) -> Path:
 
 
 def _run(root: Path, *extra):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--root", str(root), *extra],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True)
 
 
 def test_a_sub_second_deadline_reported_as_a_finding_is_refused():
@@ -146,14 +148,14 @@ def test_a_non_positive_floor_is_undetermined_not_a_pass():
 
 
 def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = subprocess.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
+                       capture_output=True, text=True)
     assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_a_bad_invocation_is_rc_3():
-    r = subprocess.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
@@ -161,8 +163,8 @@ def test_the_shipped_tree_runs_advisory_and_states_its_denominator():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=1800)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "modules that spawn:" in r.stdout
 
@@ -183,8 +185,8 @@ def test_an_empty_population_is_undetermined_not_a_pass():
         (root / ".git").mkdir()
         (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
          / "tests").mkdir(parents=True)
-        r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                           capture_output=True, text=True, timeout=900)
+        r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                           capture_output=True, text=True)
         assert r.returncode == 2, (
             f"an empty population returned rc={r.returncode}; it must be "
             f"UNDETERMINED, not a pass\n{r.stdout}")

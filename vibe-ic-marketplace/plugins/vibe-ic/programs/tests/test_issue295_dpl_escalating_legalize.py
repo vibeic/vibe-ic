@@ -22,7 +22,6 @@ strings in the emitter.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -31,6 +30,9 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase3_one_shot_runner as p3  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TCLSH = shutil.which("tclsh")
 _needs_tcl = pytest.mark.skipif(_TCLSH is None, reason="tclsh not installed")
@@ -53,8 +55,7 @@ def _run(dpl_fail_cond: str, check_body: str = "return", tmp_path=None) -> str:
            + '\nputs "CALLS: $::calls"\n')
     f = tmp_path / "leg.tcl"
     f.write_text(tcl)
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -81,8 +82,7 @@ def test_295_negative_control_pre_fix_behaviour_would_not_recover(tmp_path):
            + pre_fix + 'puts "CALLS: $::calls"\n')
     f = tmp_path / "prefix.tcl"
     f.write_text(tcl)
-    out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                         timeout=60).stdout
+    out = _pr.run([_TCLSH, str(f)], capture_output=True, text=True).stdout
     assert "PRE_FIX_NONFATAL: swallowed" in out
     assert "LEGALIZE_OK" not in out       # never becomes legal
     assert "CALLS: default" in out and " 20" not in out   # never retried
@@ -123,8 +123,7 @@ def test_295_generated_tcl_is_syntactically_valid(tmp_path):
            .replace("repair_timing", "list"))
     f = tmp_path / "emit.tcl"
     f.write_text(tcl)
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 
@@ -202,8 +201,7 @@ def _run_fulldie(dpl_fail_cond: str, gda: str, tmp_path) -> str:
            + '\nputs "CALLS: $::calls"\n')
     f = tmp_path / "fd.tcl"
     f.write_text(tcl)
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -260,8 +258,7 @@ def test_337_common_path_never_reaches_the_full_die_rung(tmp_path):
            + '\nputs "CALLS: $::calls"\n')
     f = tmp_path / "cp.tcl"
     f.write_text(tcl)
-    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "TEST_LEGALIZE_OK disp=default" in r.stdout
     assert r.stdout.rstrip().endswith("CALLS: default")
@@ -279,7 +276,6 @@ def test_296_emitted_post_hold_ladder_executes_and_recovers(tmp_path):
     f = tmp_path / "ph.tcl"
     f.write_text(_STUB % ('$disp eq "default" || $disp < 20', "return")
                  + m.group(0) + '\nputs "CALLS: $::calls"\n')
-    out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
-                         timeout=60)
+    out = _pr.run([_TCLSH, str(f)], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert "POST_HOLD_LEGALIZE_OK disp=20" in out.stdout

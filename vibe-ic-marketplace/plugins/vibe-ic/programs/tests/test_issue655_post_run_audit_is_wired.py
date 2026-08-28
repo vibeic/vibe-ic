@@ -24,8 +24,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
-import subprocess
 import sys
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -66,10 +69,10 @@ def test_it_runs_and_writes_a_report(tmp_path):
     prog, rel, _kind = P._POST_RUN_AUDITS[0]
     out = P._pl.reports_phase3_dir(tmp_path) / rel.rsplit("/", 1)[-1]
     out.parent.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / prog), str(tmp_path),
          "--json", str(out)],
-        timeout=55, capture_output=True, text=True)
+        capture_output=True, text=True)
     assert out.is_file(), r.stdout[-400:] + r.stderr[-400:]
     assert r.returncode in (0, 1, 2)
 
@@ -80,10 +83,10 @@ def test_an_unreadable_run_is_not_a_green_report(tmp_path):
     prog, rel, _kind = P._POST_RUN_AUDITS[0]
     out = P._pl.reports_phase3_dir(tmp_path) / rel.rsplit("/", 1)[-1]
     out.parent.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / prog), str(tmp_path),
          "--json", str(out)],
-        timeout=55, capture_output=True, text=True)
+        capture_output=True, text=True)
     assert r.returncode == 2
     assert json.loads(out.read_text()).get("verdict") == "NOT CHECKED"
 

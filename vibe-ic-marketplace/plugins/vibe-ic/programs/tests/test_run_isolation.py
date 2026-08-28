@@ -24,6 +24,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _run_isolation as I  # noqa: E402
+
+import _progress_run as _pr  # noqa: E402
 #: WHY THESE TWO SKIP, and why `needs_corpus` was the WRONG instrument for them.
 #:
 #: `_run_isolation` hardcodes CORPUS = "benchmark-data" and runs
@@ -43,23 +45,6 @@ _SUBJECT_MOVED = (
     "the published corpus moved to vibeic/benchmark-data; _run_isolation still "
     "hardcodes a local benchmark-data/ path, so this cannot measure anything here. "
     "suite_write_guard covers the tree-wide property. Tracked in vibe-ic#1703.")
-
-#: Bound for the two CLI launches at the bottom of this file. NOT a round number
-#: picked by feel: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the
-#: pytest harness bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
-#: `--timeout-method=thread` — and permits any ONE blocking call at most
-#: `180 // 3` = 60 s. The landed value was 120, which is ABOVE that and so could
-#: never fire: pytest reaches 180 s first and the thread method takes the whole
-#: SESSION down instead of the test, so `--maxfail` stops counting and every
-#: other file in the subset loses its verdict.
-#:
-#: The full 60 and not less, because each of the two tests below makes exactly
-#: ONE bounded call — this is the single-call shape the ceiling is stated for.
-#: MEASURED here, three runs each: the PASS arm walks this whole checkout's
-#: `git status --porcelain` and costs 0.31 s cold / 0.08 s warm; the refusal arm
-#: costs 0.04 s. 60 s is ~190x the cold worst case.
-_CLI_TIMEOUT_S = 60
-
 
 def _run(tmp: Path, files=(("a.txt", "one"), ("d/b.txt", "two"))) -> Path:
     """A published run, small enough to reason about and >1 file."""
@@ -359,16 +344,16 @@ def test_the_tripwire_runs_against_this_repository(tmp_path):
 # ══════════════════════════════════════════════════════════════════════
 @pytest.mark.skip(reason=_SUBJECT_MOVED)
 def test_the_cli_reports_pass_with_its_denominator():
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(Path(I.__file__))],
-        capture_output=True, text=True, timeout=_CLI_TIMEOUT_S)
+        capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "[PASS]" in out.stdout and "tracked file(s)" in out.stdout, out.stdout
 
 
 def test_the_cli_refuses_a_subpath_it_cannot_see():
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(Path(I.__file__)), "no-such-corpus-dir"],
-        capture_output=True, text=True, timeout=_CLI_TIMEOUT_S)
+        capture_output=True, text=True)
     assert out.returncode == 1, out.stdout + out.stderr
     assert "zero denominator" in out.stdout, out.stdout

@@ -44,7 +44,6 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -54,7 +53,8 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase3_one_shot_runner as R  # noqa: E402
 
-_CLI_BOUND_S = 60
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: The PnR log shape the in-session antenna path keys on. `ANTENNA_POSTROUTE_DONE`
 #: selects the authoritative post-repair branch, which needs no container.
@@ -135,9 +135,8 @@ def _sha(p: Path):
 
 def _gate(prog: str, root: Path, extra=()) -> dict:
     """The gate's own CLI and exit code — the flow reads exit codes."""
-    r = subprocess.run([sys.executable, str(_PROGRAMS / prog), ".", *extra],
-                       cwd=str(root), capture_output=True, text=True,
-                       timeout=_CLI_BOUND_S)
+    r = _pr.run([sys.executable, str(_PROGRAMS / prog), ".", *extra],
+                       cwd=str(root), capture_output=True, text=True)
     try:
         doc = json.loads(r.stdout)
     except ValueError:

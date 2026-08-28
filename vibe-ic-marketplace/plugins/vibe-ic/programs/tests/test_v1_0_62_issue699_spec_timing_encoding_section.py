@@ -17,6 +17,10 @@ chip-AGNOSTIC: universal RTL spec-reading disciplines, no design literal.
 """
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _AGENT_MD = (Path(__file__).resolve().parents[2]
              / "agents" / "ic-expert-agent.md")
 
@@ -53,12 +57,11 @@ def test_section_is_697_companion_not_duplicate():
 
 def test_chip_agnostic_no_design_literal():
     """The appended section carries no chip/SKU literal — universal disciplines."""
-    import subprocess
     import sys
     prog = (Path(__file__).resolve().parents[1] / "source_chip_agnostic_check.py")
-    r = subprocess.run([sys.executable, str(prog),
+    r = _pr.run([sys.executable, str(prog),
                         str(Path(__file__).resolve().parents[1].parent)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-500:]
 
 

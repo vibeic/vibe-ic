@@ -29,7 +29,6 @@ so the cause (wrong root / missing subtree) is visible without a second run.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -37,14 +36,17 @@ _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import source_chip_agnostic_check as C  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PLUGIN_ROOT = _PROGRAMS.parent
 
 
 def _run(root: Path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"),
          str(root)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return r.returncode, (r.stdout + r.stderr)
 
 

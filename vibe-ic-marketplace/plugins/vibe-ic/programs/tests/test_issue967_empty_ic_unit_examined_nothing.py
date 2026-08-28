@@ -50,7 +50,6 @@ design, PDK, foundry or process identifier appears.
 """
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -61,8 +60,8 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import benchmark_evidence_structure_check as besc  # noqa: E402
 
-_TIMEOUT = 60
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Fixtures. The allowed-entry vocabulary is READ OFF THE PROGRAM, never typed:
@@ -130,17 +129,16 @@ def mixed_tree(tmp_path):
 
 
 def _run(*args, cwd=None):
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(_PROGRAMS / "benchmark_evidence_structure_check.py"),
          *args],
-        capture_output=True, text=True, timeout=_TIMEOUT,
-        cwd=str(cwd) if cwd else None)
+        capture_output=True, text=True, cwd=str(cwd) if cwd else None)
     return out.returncode, out.stdout + out.stderr
 
 
 def _git(repo: Path, *args):
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, timeout=_TIMEOUT)
+    return _pr.run(["git", "-C", str(repo), *args],
+                          capture_output=True, text=True)
 
 
 # --------------------------------------------------------------------------

@@ -23,6 +23,9 @@ sys.path.insert(0, str(SCRIPT.parent))
 import lec_run  # noqa: E402
 import lec_equivalence_check as gate  # noqa: E402  (downstream consumer)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Captured real Yosys 0.66 output (tails; the parser only needs these lines).
@@ -811,9 +814,9 @@ def _mounted_workdir(tmp_path):
         try:
             p = root / ".probe"
             p.write_text("ok")
-            r = subprocess.run(
+            r = _pr.run(
                 ["docker", "exec", "vibeic-eda", "bash", "-lc", f"cat {p}"],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True)
             p.unlink(missing_ok=True)
             return r.returncode == 0 and "ok" in (r.stdout or "")
         except (subprocess.SubprocessError, OSError):
@@ -832,8 +835,8 @@ def _mounted_workdir(tmp_path):
 def _yosys(script_path):
     cmd = (f"export PATH=/foss/tools/yosys/bin:$PATH && "
            f"yosys -s {script_path} 2>&1")
-    return subprocess.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-                          capture_output=True, text=True, timeout=60).stdout or ""
+    return _pr.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
+                          capture_output=True, text=True).stdout or ""
 
 
 # ---------------------------------------------------------------------------
@@ -903,10 +906,10 @@ def test_urandom_simblock_plus_async_reaches_verdict_via_synthesis_define(tmp_pa
     if work is None:
         pytest.skip("vibeic-eda container not available / path not bind-mounted")
     try:
-        chk = subprocess.run(
+        chk = _pr.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc",
              f"test -f {_SKY130_HD_LIB} && echo ok"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         if "ok" not in (chk.stdout or ""):
             pytest.skip("sky130_hd Liberty not present in container")
         (work / "dut.sv").write_text(_AES_LIKE_RTL)
@@ -960,10 +963,10 @@ def test_async_reset_reaches_verdict_on_slang_path_in_container(tmp_path):
     try:
         (work / "dff_ar.v").write_text(_ASYNC_RTL)
         # is the sky130_hd lib present in the container?
-        chk = subprocess.run(
+        chk = _pr.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc",
              f"test -f {_SKY130_HD_LIB} && echo ok"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         if "ok" not in (chk.stdout or ""):
             pytest.skip("sky130_hd Liberty not present in container")
         # synth+map the async-reset RTL to sky130 → a dfrtp ($_DFF_PN0_) gate.
@@ -1121,10 +1124,10 @@ def test_widened_trigger_still_reports_a_corrupted_sv_design_as_not_equivalent(
     if work is None:
         pytest.skip("vibeic-eda container not available / path not bind-mounted")
     try:
-        chk = subprocess.run(
+        chk = _pr.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc",
              f"test -f {_SKY130_HD_LIB} && echo ok"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         if "ok" not in (chk.stdout or ""):
             pytest.skip("sky130_hd Liberty not present in container")
 

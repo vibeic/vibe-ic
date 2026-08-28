@@ -35,8 +35,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
-import subprocess
 import sys
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
@@ -68,10 +71,10 @@ def _run_gate(project):
     version of these tests asserted on stdout, which prints only the verdict,
     so they were reading a channel the message never travels on."""
     out = project / "gate.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "mixed_signal_merge_check.py"),
          str(project), "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     rep = json.loads(out.read_text()) if out.is_file() else {}
     return r.returncode, rep
 

@@ -34,9 +34,11 @@ the clause is appended after it so every one of those assertions still holds.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 _PROGRAMS = _HERE.parent
@@ -57,8 +59,8 @@ def _tree(root: Path, *, cells: int) -> Path:
 
 
 def _rollup(tree: Path) -> str:
-    r = subprocess.run([sys.executable, str(_CHECK), "--tree", str(tree)],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(_CHECK), "--tree", str(tree)],
+                       capture_output=True, text=True)
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("benchmark_evidence_structure_check: "):
             return line

@@ -28,11 +28,13 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 yaml = pytest.importorskip("yaml")
 
@@ -41,14 +43,11 @@ _PROG = _PLUGIN / "programs" / "flow_stage_membership_single_declaration_check.p
 _CONSUMER = _PLUGIN / "programs" / "phase1_planned_consumer_starved_check.py"
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
-_TIMEOUT = 60  # ci_harness_timeout_ceiling_check: inner timeouts stay <= 60s
-
-
 def _run(flow: Path, out: Path):
     """The program, as CI runs it. Returns (CompletedProcess, record|None)."""
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROG), "--flow", str(flow), "--json", str(out)],
-        capture_output=True, text=True, timeout=_TIMEOUT)
+        capture_output=True, text=True)
     rec = json.loads(out.read_text()) if out.is_file() else None
     return r, rec
 
@@ -232,8 +231,8 @@ def test_a_zero_denominator_refuses_rather_than_passing(tmp_path):
     assert "NOT CHECKED" in r.stdout
 
     missing = tmp_path / "does_not_exist.yaml"
-    r2 = subprocess.run([sys.executable, str(_PROG), "--flow", str(missing)],
-                        capture_output=True, text=True, timeout=_TIMEOUT)
+    r2 = _pr.run([sys.executable, str(_PROG), "--flow", str(missing)],
+                        capture_output=True, text=True)
     assert r2.returncode == 2 and "NOT CHECKED" in r2.stdout, r2.stdout
 
 
@@ -265,10 +264,10 @@ def test_the_only_stages_consumer_is_indifferent_to_the_roster(tmp_path):
         (gd / "L12_behavioral_sequences.json").write_text(json.dumps(empty))
         (gd / "L8_timing_waveform.json").write_text(json.dumps(full))
         out = tmp_path / f"consumer_{tag}.json"
-        r = subprocess.run(
+        r = _pr.run(
             [sys.executable, str(_CONSUMER), str(proj),
              "--flow", str(flow), "--json", str(out)],
-            capture_output=True, text=True, timeout=_TIMEOUT)
+            capture_output=True, text=True)
         assert out.is_file(), f"{tag}: no record written\n{r.stdout}\n{r.stderr}"
         body = out.read_text().replace(f"proj_{tag}", "PROJ")
         records[tag] = json.loads(body)

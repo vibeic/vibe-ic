@@ -36,12 +36,14 @@ is broken, not that it discriminates.
 import importlib.util
 import json
 import re
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
@@ -105,9 +107,9 @@ def _run(root: Path, gate_lines: str, *args: str):
     """Run a fixture script; return (proc, record-or-None)."""
     script = _fixture_script(root, gate_lines)
     rec = root / "record.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         ["bash", str(script), "--summary-json", str(rec), *args],
-        cwd=str(root), capture_output=True, text=True, timeout=60)
+        cwd=str(root), capture_output=True, text=True)
     doc = json.loads(rec.read_text()) if rec.is_file() else None
     return proc, doc
 
@@ -307,8 +309,8 @@ def test_an_unreadable_clock_refuses_rather_than_making_exemptions_immortal(tmp_
                              + _refusing_gate())
     import os
     env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}")
-    proc = subprocess.run(["bash", str(script)], cwd=str(root), env=env,
-                          capture_output=True, text=True, timeout=60)
+    proc = _pr.run(["bash", str(script)], cwd=str(root), env=env,
+                          capture_output=True, text=True)
     text = proc.stdout + proc.stderr
     assert proc.returncode == 2, (
         "an unreadable clock let a long-expired exemption through — every "
@@ -417,9 +419,9 @@ def test_the_real_hygiene_script_declares_every_tolerance_it_takes():
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         rec = Path(td) / "record.json"
-        out = subprocess.run(
+        out = _pr.run(
             ["bash", str(_SCRIPT), "--list", "--summary-json", str(rec)],
-            cwd=str(_REPO), capture_output=True, text=True, timeout=60)
+            cwd=str(_REPO), capture_output=True, text=True)
         assert out.returncode == 0, (
             "the shipped hygiene script is mis-wired:\n"
             f"{out.stdout}\n{out.stderr}")

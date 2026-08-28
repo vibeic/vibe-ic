@@ -71,6 +71,9 @@ import _gdsii  # noqa: E402
 # cell readable here?" answer and the single skip reason.
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _DECLARED_GDS = "phase3/stage4/gds/top.gds"
 # Read through `getattr` on purpose. Bound at MODULE scope, a hard
 # `sa._SI_REPORT_REL` turns "the production change was reverted" into a single
@@ -1358,9 +1361,8 @@ def _run_si_gate(project: Path) -> tuple:
     """Run the shipped SI gate with NO ``--json``, so it writes its report to
     its own default path — which IS the slot the tapeout gate reads. Nothing
     between the producer and the consumer is hand-written."""
-    import subprocess
-    r = subprocess.run([sys.executable, str(_SI_GATE), str(project)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_SI_GATE), str(project)],
+                       capture_output=True, text=True)
     report = project / _SI_REPORT
     assert report.is_file(), (
         f"the gate wrote no report to {_SI_REPORT}\n{r.stdout}\n{r.stderr}")

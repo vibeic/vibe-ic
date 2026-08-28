@@ -38,7 +38,6 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -47,6 +46,9 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import gatekeeper_review as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 REPO = PROGRAMS.parents[3]
 
@@ -139,10 +141,10 @@ def test_the_flag_is_rejected_by_the_shipped_program(flag):
     # `--base`/`--head` are required, and argparse reports a missing required
     # argument BEFORE it reports an unrecognized one — without them this test
     # would pass on a tree that accepts the flag.
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(PROGRAMS / "gatekeeper_review.py"),
          "--base", "origin/main", "--head", "HEAD", flag, "/dev/null"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert out.returncode != 0
     assert "unrecognized arguments" in (out.stderr + out.stdout), (
         f"{flag} was accepted: {out.stderr[:300]}")

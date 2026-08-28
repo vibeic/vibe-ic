@@ -47,6 +47,9 @@ import design_one_shot_runner as p2  # noqa: E402
 import cross_design_identity_check as cdi  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 CDI_PROG = PROGRAMS / "cross_design_identity_check.py"
 COV_GATE = PROGRAMS / "l3_opcode_name_coverage_check.py"
 
@@ -91,10 +94,10 @@ def _build_phase1_reports(project: Path, ic_name: str) -> None:
     #    runner does, then stamp via the runner's helper.
     cov_report = _pl.report_path(project, "phase1/l3_opcode_name_coverage.json")
     cov_report.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    _pr.run(
         [sys.executable, str(COV_GATE), str(project),
          "--json", str(cov_report)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     p1._stamp_design_identity(project, cov_report)
     # 3) protocol_dispatch_skipped signal — exercise the runner's stamp path
     #    using a deterministic unreachable-class signal shape.

@@ -11,13 +11,15 @@ term, an ambiguous leaf, and short abbreviations must NOT false-fire.
 chip-AGNOSTIC: only generic hardware-term roots are baked in; no chip literal.
 """
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import leaf_typo_alias_emit as L  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── detection: positive (typo) cases ────────────────────────────────────
@@ -159,10 +161,10 @@ def test_emit_alias_and_both_spellings_elaborate(tmp_path):
         pytest.skip("iverilog not on this host — structural checks only")
     # BOTH spellings must elaborate as a top.
     for top in (leaf, canonical):
-        r = subprocess.run(
+        r = _pr.run(
             [iv, "-g2012", "-s", top, "-o", str(tmp_path / f"{top}.out"),
              str(rtl), str(wrap_f)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         assert r.returncode == 0, f"{top} failed: {r.stderr}"
 
 
@@ -228,9 +230,9 @@ def test_parameterized_wrapper_elaborates_both_spellings(tmp_path):
         import pytest
         pytest.skip("iverilog not on this host")
     for top in ("substractor", "subtractor"):
-        r = subprocess.run(
+        r = _pr.run(
             [iv, "-g2012", "-s", top, "-o", str(tmp_path / f"{top}.out"),
-             str(rtl), str(wrap)], capture_output=True, text=True, timeout=60)
+             str(rtl), str(wrap)], capture_output=True, text=True)
         assert r.returncode == 0, f"{top}: {r.stderr}"
 
 

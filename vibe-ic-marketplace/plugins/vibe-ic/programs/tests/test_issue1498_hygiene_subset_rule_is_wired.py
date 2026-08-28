@@ -47,7 +47,6 @@ import hashlib
 import importlib.util
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -56,12 +55,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import landing_merge_verdict as V  # noqa: E402
 import gate_process_attestation as A  # noqa: E402
 
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "landing_merge_verdict.py"
 _REPO_ROOT = _PROGRAMS.parents[3]
 _VERIFY = _REPO_ROOT / "tools" / "gatekeeper-verify-merge.sh"
 _LAND = _REPO_ROOT / "tools" / "gatekeeper-land.sh"
-_T = 55
 
 _PROTECTED_SPEC = importlib.util.spec_from_file_location(
     "_protected_landing_transition_for_issue1498",
@@ -543,7 +543,7 @@ def _cli(tmp_path, hyg_base: Path, hyg_cand: Path, tag: str):
     sel = tmp_path / "sel.txt"
     sel.write_text("programs/tests/test_x.py\n", encoding="utf-8")
     out = tmp_path / f"v_{tag}.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROG),
          "--base-sha", SHA, "--base-tree", TREE,
          "--head-sha", SHA, "--verified-sha", SHA,
@@ -556,7 +556,7 @@ def _cli(tmp_path, hyg_base: Path, hyg_cand: Path, tag: str):
          "--base-hygiene-host", _HOST, "--candidate-hygiene-host", _HOST,
          "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     # THE PROGRAM THAT NEVER STARTED MUST SAY SO.
     #
     # `--base-tree` became a REQUIRED argument at 7c376e348 (v1.10.69) and this
@@ -618,7 +618,7 @@ def test_end_to_end_the_record_says_when_it_was_not_asked(tmp_path):
     sel = tmp_path / "sel.txt"
     sel.write_text("programs/tests/test_x.py\n", encoding="utf-8")
     out = tmp_path / "v.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROG),
          "--base-sha", SHA, "--base-tree", TREE,
          "--head-sha", SHA, "--verified-sha", SHA,
@@ -629,7 +629,7 @@ def test_end_to_end_the_record_says_when_it_was_not_asked(tmp_path):
          "--candidate-junit", str(junit),
          "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=_T)
+        capture_output=True, text=True)
     # Exit code and the subject's own words BEFORE the record it may never have
     # written -- see `_cli` above for the six-version silence this ordering cost.
     assert cp.returncode == 0, cp.stdout + cp.stderr

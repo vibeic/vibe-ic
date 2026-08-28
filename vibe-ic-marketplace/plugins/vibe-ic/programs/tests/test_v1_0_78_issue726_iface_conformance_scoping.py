@@ -33,7 +33,6 @@ chip-AGNOSTIC: pure prompt-prose + RTL structure; no chip / vendor / SKU literal
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -44,6 +43,9 @@ PROGRAMS = PLUGIN / "programs"
 PROG = PROGRAMS / "iface_conformance_v2.py"
 sys.path.insert(0, str(PROGRAMS))
 import iface_conformance_v2 as M  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _run_cli(tmp_path, rtl, prompt, rid=None, strict=False, context=None):
@@ -60,7 +62,7 @@ def _run_cli(tmp_path, rtl, prompt, rid=None, strict=False, context=None):
         cmd += ["--context", str(cp)]
     if strict:
         cmd.append("--strict")
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return _pr.run(cmd, capture_output=True, text=True)
 
 
 # ── 驗收 (the exact acceptance shape) ───────────────────────────────────────
@@ -177,10 +179,10 @@ def test_context_does_not_appear_in_files_read_unless_passed(tmp_path):
     rp.write_text("module dut(input clk);\nendmodule\n")
     pp.write_text("| `clk` | input |\n")
     cp.write_text("module ctx(input clk);\nendmodule\n")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), "--prompt", str(pp), "--rtl", str(rp),
          "--context", str(cp), "--json", str(jp)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     rep = json.loads(jp.read_text())
     assert set(rep["files_read"]) == {str(pp), str(rp), str(cp)}
@@ -237,9 +239,9 @@ def test_noleak_missing_sub_module_port_not_anywhere_still_flagged(tmp_path):
 # ── chip-AGNOSTIC source guard ──────────────────────────────────────────────
 def test_chip_agnostic_source():
     guard = PROGRAMS / "source_chip_agnostic_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(guard), str(PLUGIN)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

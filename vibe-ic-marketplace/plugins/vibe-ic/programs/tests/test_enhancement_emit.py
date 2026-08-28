@@ -14,7 +14,6 @@ Eight cases cover the four-bucket routing + per-step target resolution:
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -32,12 +31,11 @@ def run(tmp_path: Path, records: list) -> dict:
     rec_file = tmp_path / "recoveries.json"
     rec_file.write_text(json.dumps(records))
     out_dir = tmp_path / "candidates"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(SCRIPT),
          "--records", str(rec_file),
          "--out-dir", str(out_dir)],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert r.returncode == 0, f"emit failed: {r.stderr}\n{r.stdout}"
     summary = json.loads((out_dir / "summary.json").read_text())
     return {"out_dir": out_dir, "summary": summary}
@@ -681,10 +679,10 @@ def _run_capture(tmp_path, records):
     rec_file = tmp_path / "recoveries.json"
     rec_file.write_text(json.dumps(records))
     out_dir = tmp_path / "candidates"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(SCRIPT), "--records", str(rec_file),
          "--out-dir", str(out_dir)],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
     spath = out_dir / "summary.json"
     summary = json.loads(spath.read_text()) if spath.is_file() else None
     return r, summary, out_dir
@@ -791,6 +789,9 @@ import datetime as _dt
 import importlib as _importlib
 import re as _re
 import time as _time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 if str(_PROGRAMS_DIR) not in sys.path:

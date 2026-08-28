@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = (Path(__file__).resolve().parents[1]
         / "content_pinned_authority_verified_only_at_merge.py")
@@ -43,9 +45,9 @@ def _tree(files: dict, pins: dict) -> Path:
 
 
 def _run(root: Path, *extra):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--root", str(root), *extra],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True)
 
 
 _A = b"authority body A\n"
@@ -122,8 +124,8 @@ def test_an_unreadable_manifest_is_undetermined_not_a_pass():
 
 
 def test_a_bad_invocation_is_rc_3():
-    r = subprocess.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
@@ -131,8 +133,8 @@ def test_the_shipped_tree_runs_advisory_and_states_its_denominator():
     root = Path(__file__).resolve().parents[5]
     if not (root / "tools" / "ci" / "protected_landing_transition.json").is_file():
         pytest.skip("no manifest in this checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=900)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "pinned paths:" in r.stdout, (
         "an advisory that cannot say how many paths it hashed has not hashed "

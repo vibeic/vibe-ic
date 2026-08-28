@@ -41,7 +41,6 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
@@ -60,24 +59,23 @@ from test_ppa_feasibility import (  # noqa: E402
 )
 from test_ppa_pareto import CONTRACT as PARETO_CONTRACT, cand  # noqa: E402
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 CONTRACT_GATE = PROGRAMS / "ppa_contract_check.py"
 MEASUREMENT_GATE = PROGRAMS / "ppa_measurement_check.py"
 FEASIBILITY_GATE = PROGRAMS / "ppa_feasibility_check.py"
 PARETO_GATE = PROGRAMS / "ppa_pareto_check.py"
 INTEGRITY_GATE = PROGRAMS / "ppa_problem_integrity_check.py"
 
-#: Every corpus subprocess here reads a handful of tiny synthetic documents.
-#: Bounded well under the repo's 60 s harness ceiling.
-CLI_TIMEOUT_S = 90
-
-
 def gate(program, *args, env=None):
     """Drive the REAL entry point. Deliberately not `main(argv)` in-process:
     the flow acts on the EXIT CODE, and a test that calls a function leaves the
     verdict-to-exit-code mapping unmeasured."""
-    return subprocess.run([sys.executable, str(program), *args],
+    return _pr.run([sys.executable, str(program), *args],
                           capture_output=True, text=True,
-                          timeout=CLI_TIMEOUT_S, env=env)
+                          env=env)
 
 
 def put(path: pathlib.Path, obj) -> pathlib.Path:

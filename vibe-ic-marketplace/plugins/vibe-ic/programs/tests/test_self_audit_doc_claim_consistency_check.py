@@ -14,6 +14,9 @@ import sys
 from pathlib import Path
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = (Path(__file__).resolve().parent.parent / "self_audit_doc_claim_consistency_check.py")
 
 
@@ -46,10 +49,9 @@ def _stage_with_benchmark(tmp: Path, *,
 
 
 def _run(plugin_root: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), str(plugin_root)],
-        capture_output=True, text=True, timeout=10,
-    )
+        capture_output=True, text=True)
 
 
 # ---------------------------------------------------------------
@@ -57,17 +59,16 @@ def _run(plugin_root: Path) -> subprocess.CompletedProcess:
 # ---------------------------------------------------------------
 
 def test_help_works():
-    r = subprocess.run([sys.executable, str(PROG), "--help"],
-                       capture_output=True, text=True, timeout=10)
+    r = _pr.run([sys.executable, str(PROG), "--help"],
+                       capture_output=True, text=True)
     assert r.returncode == 0
     assert "benchmark" in r.stdout.lower()
 
 
 def test_invalid_path_returns_2(tmp_path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), str(tmp_path / "nope")],
-        capture_output=True, text=True, timeout=10,
-    )
+        capture_output=True, text=True)
     assert r.returncode == 2
 
 

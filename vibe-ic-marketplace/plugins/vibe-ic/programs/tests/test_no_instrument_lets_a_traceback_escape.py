@@ -26,12 +26,14 @@ import ast
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -122,9 +124,9 @@ def test_no_traceback_escapes_on_a_hostile_tree(prog: Path):
         # Two shapes are in use for --root: the repository root and the plugin
         # root. Try both so every program is given the one it understands.
         for candidate in (root, plugin):
-            r = subprocess.run(
+            r = _pr.run(
                 [sys.executable, str(prog), "--root", str(candidate)],
-                capture_output=True, text=True, timeout=900)
+                capture_output=True, text=True)
             blob = r.stdout + r.stderr
             assert "Traceback (most recent call last)" not in blob, (
                 f"{prog.name} let a traceback escape on a hostile tree "

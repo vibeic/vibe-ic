@@ -33,7 +33,6 @@ in-edge proven by REAL iverilog elaboration of BOTH bindings.
 chip-AGNOSTIC: standard reset spellings + port-decl grammar; no chip literal.
 """
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -45,6 +44,9 @@ sys.path.insert(0, str(PROGRAMS))
 import reset_clock_variant_alias as V        # noqa: E402
 import design_one_shot_runner as R           # noqa: E402
 import _path_layout as PL                     # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _IV = shutil.which("iverilog")
 _VVP = shutil.which("vvp")
@@ -134,11 +136,11 @@ def test_792_rescue_sequence_detector_canonical_binding_now_elaborates(tmp_path)
         "  $finish; end\nendmodule\n")
     rd = PL.rtl_dir(proj)
     srcs = [str(p) for p in sorted(rd.glob("*.v"))]
-    r = subprocess.run([_IV, "-g2012", "-o", str(tmp_path / "b"), *srcs,
-                        str(tb)], capture_output=True, text=True, timeout=60)
+    r = _pr.run([_IV, "-g2012", "-o", str(tmp_path / "b"), *srcs,
+                        str(tb)], capture_output=True, text=True)
     assert r.returncode == 0, (r.stdout + r.stderr)   # was: port 'rst_n' not found
-    v = subprocess.run([_VVP, str(tmp_path / "b")], capture_output=True,
-                       text=True, timeout=60)
+    v = _pr.run([_VVP, str(tmp_path / "b")], capture_output=True,
+                       text=True)
     out = v.stdout + v.stderr
     assert "OK" in out and "FAIL" not in out, out      # undriven reset_n != X
 
@@ -174,9 +176,8 @@ def test_792_noregression_spec_binding_and_canon_rescue(
             f".{out_port}({out_port}));\nendmodule\n")
         rd = PL.rtl_dir(proj)
         srcs = [str(p) for p in sorted(rd.glob("*.v"))]
-        return subprocess.run([_IV, "-g2012", "-o", str(tmp_path / f"{rbind}.b"),
-                               *srcs, str(tb)], capture_output=True, text=True,
-                              timeout=60)
+        return _pr.run([_IV, "-g2012", "-o", str(tmp_path / f"{rbind}.b"),
+                               *srcs, str(tb)], capture_output=True, text=True)
     # spec binding: NO REGRESSION (this is the #689 case that must stay green).
     r_spec = _elab(reset)
     assert r_spec.returncode == 0, (r_spec.stdout + r_spec.stderr)
@@ -237,11 +238,11 @@ def test_792_additive_wrapper_synth_reads_under_yosys(tmp_path):
                      _al_core("sequence_detector", "reset_n"))
     _run_step(proj)
     rd = PL.rtl_dir(proj)
-    r = subprocess.run(
+    r = _pr.run(
         [_YOSYS, "-q", "-p",
          f"read_verilog {rd}/sequence_detector.v; "
          f"hierarchy -top sequence_detector; proc; opt; synth"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, (r.stdout + r.stderr)   # tri1 never reaches yosys
 
 

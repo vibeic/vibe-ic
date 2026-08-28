@@ -54,7 +54,6 @@ PDK, foundry or process identifier appears.
 """
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -65,7 +64,9 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import benchmark_evidence_structure_check as besc  # noqa: E402
 
-_TIMEOUT = 60  # every subprocess in this file is bounded well under the cap
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _CHECK = _PROGRAMS / "benchmark_evidence_structure_check.py"
 
 
@@ -76,8 +77,8 @@ _CHECK = _PROGRAMS / "benchmark_evidence_structure_check.py"
 # --------------------------------------------------------------------------
 
 def _git(repo: Path, *args):
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, timeout=_TIMEOUT)
+    return _pr.run(["git", "-C", str(repo), *args],
+                          capture_output=True, text=True)
 
 
 def _make_cell(cell: Path) -> None:
@@ -121,9 +122,8 @@ def legacy_repo(tmp_path):
 
 
 def _run(repo: Path, *args):
-    out = subprocess.run([sys.executable, str(_CHECK), *args],
-                         capture_output=True, text=True, timeout=_TIMEOUT,
-                         cwd=str(repo))
+    out = _pr.run([sys.executable, str(_CHECK), *args],
+                         capture_output=True, text=True, cwd=str(repo))
     return out.returncode, out.stdout + out.stderr
 
 

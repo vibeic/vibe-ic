@@ -61,6 +61,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAMS = Path(__file__).resolve().parent.parent
 
 # gate -> (hardcoded default dir that must no longer be written,
@@ -397,8 +400,7 @@ def test_umbrella_argv_produces_no_tmp_artifact(tmp_path):
     assert "--out-dir" not in argv, (
         "the umbrella does not opt in to a report, so the gate must not "
         f"write one: {argv}")
-    r = subprocess.run(argv, cwd=project, capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run(argv, cwd=project, capture_output=True, text=True)
 
     assert r.returncode in (0, 1), (
         f"umbrella argv rc={r.returncode}\n{r.stdout}\n{r.stderr}")

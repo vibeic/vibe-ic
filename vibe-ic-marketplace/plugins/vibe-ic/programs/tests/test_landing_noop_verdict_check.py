@@ -18,17 +18,20 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = Path(__file__).resolve().parent.parent / "landing_noop_verdict_check.py"
 
 RC_PASS, RC_FAIL, RC_VACUOUS, RC_USAGE = 0, 1, 2, 3
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         ["git", "-C", str(repo),
          "-c", "user.email=t@example.invalid", "-c", "user.name=t",
          "-c", "commit.gpgsign=false", *args],
-        capture_output=True, text=True, timeout=120, check=False)
+        capture_output=True, text=True, check=False)
 
 
 def _write(repo: Path, rel: str, text: str) -> None:
@@ -63,9 +66,8 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def _run(*args, cwd: Path = None) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROG), *[str(a) for a in args]],
-                          capture_output=True, text=True, timeout=300,
-                          cwd=str(cwd) if cwd else None)
+    return _pr.run([sys.executable, str(PROG), *[str(a) for a in args]],
+                          capture_output=True, text=True, cwd=str(cwd) if cwd else None)
 
 
 # ── the honest case ──────────────────────────────────────────────────────────
@@ -287,11 +289,10 @@ def test_reverting_the_refusal_makes_the_partial_land_pass(tmp_path):
     mutant = tmp_path / "mutant.py"
     mutant.write_text(mutant_body, encoding="utf-8")
 
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(mutant), "--repo", str(repo),
          "--branch", "lane", "--target", "trunk"],
-        capture_output=True, text=True, timeout=300,
-        env={**__import__("os").environ,
+        capture_output=True, text=True, env={**__import__("os").environ,
              "PYTHONPATH": str(PROG.parent)})
     assert r.returncode == RC_PASS, (
         "the mutant still refused, so the refusal does not come from the rule "

@@ -34,11 +34,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PROG = PROGRAMS / "landing_is_one_commit_check.py"
@@ -56,8 +58,8 @@ L = _load()
 
 
 def _git(repo: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(repo), *args],
-                         capture_output=True, text=True, timeout=30)
+    out = _pr.run(["git", "-C", str(repo), *args],
+                         capture_output=True, text=True)
     assert out.returncode == 0, f"git {' '.join(args)} -> {out.returncode}: {out.stderr}"
     return out.stdout
 
@@ -99,9 +101,9 @@ def repo_with_one_unsquashed_landing(tmp_path: Path) -> Path:
 
 
 def _run(repo: Path, *extra: str):
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(PROG), str(repo), *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     return out.returncode, out.stderr
 
 

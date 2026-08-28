@@ -21,7 +21,6 @@ residual still surfaces VIOLATED — it never masks the floor.
 chip/PDK-AGNOSTIC: standard OpenROAD APIs + the active PDK's max captable.
 """
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -30,6 +29,9 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 tclsh = shutil.which("tclsh")
 needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
@@ -144,8 +146,7 @@ def test_convergence_loop_parses_and_bounds_iterations(tmp_path):
     tcl = _emit(tmp_path)
     script = tmp_path / "s.tcl"
     script.write_text(_STUB + tcl + "\nputs SHIP_END\n")
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "SHIP_END" in r.stdout
     assert "can't use empty string as operand" not in r.stderr
@@ -190,8 +191,7 @@ def test_convergence_loop_iterates_when_slack_stays_negative(tmp_path):
     )
     script = tmp_path / "s2.tcl"
     script.write_text(stub + tcl + "\nputs \"RD_CALLS: $::rd\"\n")
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     line = [ln for ln in r.stdout.splitlines() if ln.startswith("RD_CALLS:")][0]
     # >5: the pre-reroute loop (5) plus at least one convergence pass (5 more).
@@ -218,8 +218,7 @@ def test_noop_guard_skips_the_reroute_when_the_repair_changed_nothing(tmp_path):
     )
     script = tmp_path / "s3.tcl"
     script.write_text(stub + tcl + "\nputs \"RD_CALLS: $::rd\"\n")
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "SHIP_REPAIR_NOOP: 1" in r.stdout, r.stdout
     line = [ln for ln in r.stdout.splitlines() if ln.startswith("RD_CALLS:")][0]

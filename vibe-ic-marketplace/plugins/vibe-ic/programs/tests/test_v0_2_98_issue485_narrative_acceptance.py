@@ -12,13 +12,15 @@ sides of the loop:
     bites (rc 1 unquoted / rc 0 compliant), and a no-acceptance issue
     is still a SKIP.
 """
-import subprocess
 import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import acceptance_evidence_in_fix_comment_check as ACC  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _ISSUE_NARRATIVE = """## 現象
 某 gate 在特定輸入下誤判。
@@ -73,11 +75,11 @@ def _run(tmp_path, issue_body, comment_body):
     cp = tmp_path / "comment.md"
     ip.write_text(issue_body)
     cp.write_text(comment_body)
-    return subprocess.run(
+    return _pr.run(
         [sys.executable,
          str(PROGRAMS / "acceptance_evidence_in_fix_comment_check.py"),
          "--issue-body-file", str(ip), "--comment-file", str(cp)],
-        capture_output=True, text=True, timeout=30)
+        capture_output=True, text=True)
 
 
 # ── #485 fixed path: narrative-only → NAMED warning, not silent SKIP ──

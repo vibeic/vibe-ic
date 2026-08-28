@@ -222,6 +222,9 @@ from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers as W
 from matrix_63x8.cells import cells_for
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 DIM = 6
 
 FCC_PY = F.PLUGIN_ROOT / "programs" / "flow_compliance_check.py"
@@ -817,11 +820,10 @@ def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
                 encoding="utf-8",
             )
         report = tmp / "_report.json"
-        proc = subprocess.run(
+        proc = _pr.run(
             [sys.executable, str(FCC_PY), str(project),
              "--flow-def", str(flow), "--json", str(report)],
-            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S,
-        )
+            capture_output=True, text=True)
         status: Optional[str] = None
         reasons: Tuple[str, ...] = ()
         advisories: Tuple[str, ...] = ()
@@ -1285,10 +1287,9 @@ def _reachability() -> Dict[str, Any]:
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_reach_"))
     try:
         out = tmp / "reach.json"
-        subprocess.run(
+        _pr.run(
             [sys.executable, str(REACH_PY), str(F.FLOW_YAML), "--json", str(out)],
-            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S,
-        )
+            capture_output=True, text=True)
         if not out.is_file():  # pragma: no cover - defensive
             return {}
         return json.loads(out.read_text(encoding="utf-8"))
@@ -1967,10 +1968,10 @@ def _headline_and_counts(checker: Path, flow: Path, project: Path,
     env = dict(os.environ)
     env["PYTHONPATH"] = (str(F.PROGRAMS_DIR) + os.pathsep
                          + env.get("PYTHONPATH", ""))
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(checker), str(project),
          "--flow-def", str(flow), "--json", str(report)],
-        capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S, env=env)
+        capture_output=True, text=True, env=env)
     m = _HEADLINE_RE.search(proc.stdout or "")
     doc = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else {}
     counts = {str(k): int(v) for k, v in (doc.get("counts") or {}).items()}

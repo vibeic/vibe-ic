@@ -34,7 +34,6 @@ thing nobody checked.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -42,12 +41,12 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 from flow_compliance_check import _stdout_signals_vacuous  # noqa: E402
 
-_T = 55
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _run(prog: str, *args: str):
-    p = subprocess.run([sys.executable, str(PROGRAMS / prog), *args],
-                       capture_output=True, text=True, timeout=_T)
+    p = _pr.run([sys.executable, str(PROGRAMS / prog), *args],
+                       capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 

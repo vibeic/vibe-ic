@@ -31,7 +31,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -44,6 +43,9 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import gate_skip_routing_check as gsrc  # noqa: E402
 import _vacuous_exit as _vx  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "flow_compliance_check", _PROGRAMS / "flow_compliance_check.py")
@@ -209,9 +211,9 @@ def test_a_flag_only_gate_is_enumerated_exactly_like_a_positional_one(tmp_path):
         ''')
 
     # (a) the probe shape both sweeps used cannot drive it.
-    probe = subprocess.run(
+    probe = _pr.run(
         [sys.executable, str(root / "programs" / "flag_only_check.py"), "."],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=60)
+        cwd=str(tmp_path), capture_output=True, text=True)
     assert probe.returncode == 2, probe.stderr
     assert "usage:" in probe.stderr, (
         "the rejection must be argparse's self-identifying protocol, so this "
@@ -594,9 +596,9 @@ def test_a_new_gate_with_an_unrouted_skip_fails_the_shipped_check(tmp_path):
             sys.exit(main())
         '''), encoding="utf-8")
     try:
-        r = subprocess.run(
+        r = _pr.run(
             [sys.executable, str(_PROGRAMS / "gate_skip_routing_check.py"),
-             str(_PLUGIN)], capture_output=True, text=True, timeout=60)
+             str(_PLUGIN)], capture_output=True, text=True)
         assert r.returncode == 1, r.stdout
         assert "_i528_planted_unrouted_check" in r.stdout
         assert "RATCHET-NOT IN THE INVENTORY" in r.stdout
@@ -605,9 +607,9 @@ def test_a_new_gate_with_an_unrouted_skip_fails_the_shipped_check(tmp_path):
 
 
 def test_the_shipped_tree_is_clean_under_the_ratchet():
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "gate_skip_routing_check.py"),
-         str(_PLUGIN)], capture_output=True, text=True, timeout=60)
+         str(_PLUGIN)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.startswith("[PASS]")
 
@@ -619,10 +621,10 @@ def test_the_published_residual_is_not_zero_and_says_so():
     somebody would have to have fixed 52 gates, and this assertion is the place
     that notices the alternative — a predicate that stopped firing.
     """
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "gate_skip_routing_check.py"),
          str(_PLUGIN), "--json", "-"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     payload = json.loads(r.stdout)
     assert payload["ratchet"]["measured_paths"] > 0
     assert payload["ratchet"]["measured_paths"] == \
@@ -632,10 +634,10 @@ def test_the_published_residual_is_not_zero_and_says_so():
 
 
 def test_strict_mode_fails_on_the_residual():
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "gate_skip_routing_check.py"),
          str(_PLUGIN), "--strict"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 1
     assert "unrouted-skip-exit" in r.stdout
 
@@ -681,9 +683,9 @@ def _tier(project: Path, cmd: str) -> str:
 
 def test_marketplace_sync_missing_manifest_reaches_rc_two(tmp_path):
     prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=60)
+        cwd=str(tmp_path), capture_output=True, text=True)
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert "no .claude-plugin/marketplace.json" in r.stdout
 
@@ -694,9 +696,9 @@ def test_marketplace_sync_manifest_without_plugins_array_reaches_rc_two(
     (tmp_path / ".claude-plugin" / "marketplace.json").write_text(
         json.dumps({"name": "x", "plugins": "not-a-list"}), encoding="utf-8")
     prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=60)
+        cwd=str(tmp_path), capture_output=True, text=True)
     assert r.returncode == 2, (r.stdout, r.stderr)
 
 
@@ -722,9 +724,9 @@ def test_marketplace_sync_zero_comparisons_reaches_rc_two(tmp_path, manifest):
     (tmp_path / ".claude-plugin" / "marketplace.json").write_text(
         json.dumps(manifest), encoding="utf-8")
     prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=60)
+        cwd=str(tmp_path), capture_output=True, text=True)
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert "no version was compared" in r.stdout, r.stdout
     snippet = (r.stdout[-300:] + "\n" + r.stderr[-300:]).strip()
@@ -747,9 +749,9 @@ def test_marketplace_sync_still_passes_when_it_compares_something(tmp_path):
     (pj / "plugin.json").write_text(json.dumps({"version": "1.2.3"}),
                                     encoding="utf-8")
     prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=60)
+        cwd=str(tmp_path), capture_output=True, text=True)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "1 plugin entr(ies)" in r.stdout, r.stdout
 
@@ -771,9 +773,9 @@ def test_marketplace_sync_still_fails_on_real_drift(tmp_path):
     (pj / "plugin.json").write_text(json.dumps({"version": "1.2.3"}),
                                     encoding="utf-8")
     prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True, timeout=60)
+        cwd=str(tmp_path), capture_output=True, text=True)
     assert r.returncode == 1, (r.stdout, r.stderr)
 
 
@@ -848,8 +850,8 @@ def test_marketplace_sync_landing_usages_are_unaffected(cwd, args):
     tree where the manifest exists, so the changed branch never fires there.
     """
     prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = subprocess.run([sys.executable, str(prog), *args], cwd=str(cwd),
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(prog), *args], cwd=str(cwd),
+                       capture_output=True, text=True)
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 

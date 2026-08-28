@@ -22,6 +22,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 MOD = PROGRAMS / "gatekeeper_prepare_landing.py"
 ATOMIC = PROGRAMS / "_atomic_artefact.py"
@@ -344,9 +347,8 @@ def landing_repo(tmp_path):
 def _land(repo: Path, *args: str):
     # 55s, under the 60s inner-bound ceiling the 180s harness implies. Measured
     # at 0s; the bound is insurance against a hang, not a budget.
-    return subprocess.run(["bash", "tools/gatekeeper-land.sh", *args],
-                          cwd=str(repo), capture_output=True, text=True,
-                          timeout=55)
+    return _pr.run(["bash", "tools/gatekeeper-land.sh", *args],
+                          cwd=str(repo), capture_output=True, text=True)
 
 
 def test_the_prepare_flag_REACHES_the_real_program_and_its_refusal_stops_the_landing(

@@ -27,6 +27,9 @@ sys.path.insert(0, str(_PROGRAMS))
 import phase1_doc_one_shot_runner as R  # noqa: E402
 from _hostpaths import require_corpus  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 def test_project_name_declaration_is_used():
     doc = {"L1.md": "# Spec\n\n- **Project name:** foo_chip\n"
@@ -69,7 +72,6 @@ def test_end_to_end_phase1_uses_declaration(tmp_path):
     folder leaf that differs) and assert the FINAL L1.ic_name end-state is the
     DECLARED project name, never None / a macro / the bare folder leaf."""
     import json
-    import subprocess
     proj = tmp_path / "some_folder_leaf"
     (proj / "input" / "docs").mkdir(parents=True)
     (proj / "input" / "docs" / "L1_product_metadata.md").write_text(
@@ -79,8 +81,8 @@ def test_end_to_end_phase1_uses_declaration(tmp_path):
         "## External Interface\n\n| Signal | Direction | Width |\n"
         "|---|---|---|\n| clk_i | input | 1 |\n")
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
-    r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(runner), str(proj)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
     # NOTE: the canonical L1 doc is L1_DATASHEET.json — a `L1*.json` glob would
     # spuriously match L10..L23 (e.g. L17_CHANNEL_SIGNAL_CATALOG.json), so we

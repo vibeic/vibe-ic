@@ -11,7 +11,6 @@ legitimately use the idiom it flags.
 """
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -156,11 +155,11 @@ def _stage(tmp_path, sample_body: str):
 
 
 def _run_gate(ds, run):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(GATES), "--prob", "ProbT",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 @_needs_gate
@@ -201,6 +200,9 @@ def test_gate_emits_after_fix(tmp_path):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import rtl_hygiene_lint as rhl  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def test_fold_or_form_is_error_xor_and_form_are_warn():
@@ -244,11 +246,11 @@ def _stage_fold(tmp_path, prompt_text, sample_body):
 
 
 def _run_fold_gate(ds, run):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(GATES), "--prob", "ProbF",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 @_needs_gate

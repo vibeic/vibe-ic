@@ -43,6 +43,10 @@ import sys
 
 import pytest
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "atpg_untestable_fault_classify.py"
 _REPO = _PROGRAMS.parents[3]
@@ -92,8 +96,7 @@ def _run(tmp_path, netlist, lib=_LIB, extra=()):
         p = tmp_path / "l.lib"
         p.write_text(lib, encoding="utf-8")
         args += ["--liberty", str(p)]
-    return subprocess.run(args + list(extra), capture_output=True, text=True,
-                          timeout=60)
+    return _pr.run(args + list(extra), capture_output=True, text=True)
 
 
 # ── liberty: directions come from the file, never from a pin name ───────────
@@ -202,9 +205,9 @@ def test_a_liberty_that_matches_nothing_refuses(tmp_path):
 
 
 def test_an_unreadable_netlist_refuses(tmp_path):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), "--netlist", str(tmp_path / "nope.v")],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == M.RC_CANNOT_CLASSIFY
 
 
@@ -236,8 +239,8 @@ def _sky130_liberty(tmp_path):
                       capture_output=True, text=True).returncode != 0:
         return None
     out = tmp_path / "sky130.lib"
-    r = subprocess.run(["docker", "run", "--rm", "--entrypoint", "cat", img,
-                        _LIB_REL], capture_output=True, text=True, timeout=60)
+    r = _pr.run(["docker", "run", "--rm", "--entrypoint", "cat", img,
+                        _LIB_REL], capture_output=True, text=True)
     if r.returncode != 0 or len(r.stdout) < 1000:
         return None
     out.write_text(r.stdout, encoding="utf-8")
@@ -256,10 +259,10 @@ def test_the_sha256_cut_netlist_classifies_a_small_minority(tmp_path):
         pytest.skip("sky130 liberty unreachable (host and image) — NOT run")
     import json
     out = tmp_path / "o.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), "--netlist", str(nl),
          "--liberty", str(lib), "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     got = json.loads(out.read_text())
     frac = got["untestable_count"] / max(got["nets"], 1)

@@ -43,21 +43,12 @@ from pathlib import Path
 
 import _vacuous_exit as _vx
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _GATE = _PROGRAMS / "agent_report_sha256_attestation_check.py"
-
-#: Bound for every subprocess launch below, and it is NOT a round number
-#: picked by feel. `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the
-#: pytest harness bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
-#: `--timeout-method=thread` — and permits any one blocking call at most
-#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
-#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
-#: and every other file in the subset loses its verdict, including files that
-#: had already passed. Spelled once, as a named constant, so lowering it is one
-#: edit rather than one per call site.
-_GATE_TIMEOUT_S = 60
-
 
 def _load():
     spec = importlib.util.spec_from_file_location(
@@ -251,10 +242,9 @@ def test_reverse_gate_still_exits_1_for_an_unattested_real_netlist(tmp_path):
         {"phase2/stage2/synth/netlist_yosys.v": _REAL_NETLIST},
         _REPORT_NO_TABLE,
     )
-    import subprocess
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_GATE), str(proj)],
-        capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
+        capture_output=True, text=True)
     assert r.returncode == 1, (
         f"unattested real netlist must still FAIL; got rc={r.returncode}\n"
         f"{r.stdout}\n{r.stderr}")
@@ -313,10 +303,9 @@ def test_gate_exits_vacuous_when_only_the_intermediate_is_present(tmp_path):
         {"phase2/stage2/synth/top_sv2v.v": _SV2V_INTERMEDIATE},
         _REPORT_NO_TABLE,
     )
-    import subprocess
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_GATE), str(proj)],
-        capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
+        capture_output=True, text=True)
     assert r.returncode == _vx.RC_VACUOUS, (
         f"a pre-output project must not be told to attest a synthesis "
         f"input (rc 1), and must not be credited as an executed PASS "

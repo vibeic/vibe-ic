@@ -51,10 +51,13 @@ from test_a4_consumes_design_netlist import (      # noqa: E402
     _project, _sweep, _record, _decks_on_disk, _sidecar,
     STRUCTURE_ONLY, SIZED)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 def _run(prog: Path, project: Path, *args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(prog), str(project), *args],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(prog), str(project), *args],
+                          capture_output=True, text=True)
 
 
 # ═══ 1. the sweep republishes what its netlist said it contained ═══════════

@@ -41,6 +41,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SCRIPT = Path(__file__).resolve().parent.parent / "enhancement_emit.py"
 assert SCRIPT.exists(), f"missing program: {SCRIPT}"
 
@@ -85,10 +88,10 @@ def _emit(tmp_path: Path, records: list) -> subprocess.CompletedProcess:
     rec_file = tmp_path / "recoveries.json"
     rec_file.write_text(json.dumps(records))
     out_dir = tmp_path / "candidates"
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(SCRIPT),
          "--records", str(rec_file), "--out-dir", str(out_dir)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 # ── BEHAVIOURAL: the flips ──────────────────────────────────────────────────

@@ -13,8 +13,11 @@ compound path (benchmark / benchmark_phase1 / benchmark_external).
 These tests run the actual bash script through a subprocess to lock the
 trigger / non-trigger boundary.
 """
-import subprocess
 from pathlib import Path
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 HOOK = (Path(__file__).resolve().parents[2]
          / "hooks" / "benchmark-keyword-skill-reminder.sh")
@@ -23,10 +26,9 @@ HOOK = (Path(__file__).resolve().parents[2]
 def _run_with_prompt(prompt: str) -> str:
     """Send a JSON envelope on stdin; return the hook's stdout."""
     envelope = f'{{"prompt": "{prompt}"}}\n'
-    proc = subprocess.run(
+    proc = _pr.run(
         ["bash", str(HOOK)],
-        input=envelope, capture_output=True, text=True, timeout=5,
-    )
+        input=envelope, capture_output=True, text=True)
     return proc.stdout
 
 
@@ -149,8 +151,7 @@ class TestSensitivity:
         envelope = ('{"prompt": "are the 3 places synced?", '
                     '"tool_result": "vibe-ic benchmark VerilogEval ran; '
                     'benchmark_phase1 fixtures present"}\n')
-        proc = subprocess.run(
+        proc = _pr.run(
             ["bash", str(HOOK)],
-            input=envelope, capture_output=True, text=True, timeout=5,
-        )
+            input=envelope, capture_output=True, text=True)
         assert "<system-reminder>" not in proc.stdout

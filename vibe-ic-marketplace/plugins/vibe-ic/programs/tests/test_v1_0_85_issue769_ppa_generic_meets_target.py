@@ -39,11 +39,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -65,9 +67,9 @@ def _container_up(container="vibeic-eda") -> bool:
     if shutil.which("docker") is None:
         return False
     try:
-        cp = subprocess.run(
+        cp = _pr.run(
             ["docker", "inspect", "-f", "{{.State.Running}}", container],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True)
         return cp.returncode == 0 and cp.stdout.strip() == "true"
     except Exception:
         return False

@@ -12,11 +12,13 @@ absent).
 chip-AGNOSTIC: pure TCL/odb API compatibility; no chip literal.
 """
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
@@ -59,8 +61,7 @@ proc _rch {bb} {
 puts "new [_rcw rect_new]x[_rch rect_new]"
 puts "old [_rcw rect_old]x[_rch rect_old]"
 """)
-    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
-                       timeout=30)
+    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "new 100x50" in r.stdout
     assert "old 100x50" in r.stdout

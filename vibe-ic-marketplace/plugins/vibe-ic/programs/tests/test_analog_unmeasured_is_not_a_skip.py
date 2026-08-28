@@ -17,9 +17,11 @@ is a real finding, not a hypothetical.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 ENOB = PROGRAMS / "analog_adc_enob_corner_check.py"
@@ -36,8 +38,8 @@ def _project(tmp: Path, spec: dict) -> Path:
 
 
 def _rc(gate: Path, project: Path) -> int:
-    return subprocess.run([sys.executable, str(gate), str(project)],
-                          capture_output=True, text=True, timeout=55).returncode
+    return _pr.run([sys.executable, str(gate), str(project)],
+                          capture_output=True, text=True).returncode
 
 
 def test_a_declared_enob_target_with_no_corner_data_is_rc2(tmp_path):

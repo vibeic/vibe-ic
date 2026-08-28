@@ -21,6 +21,9 @@ from typing import Dict, List
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _ROOT = Path(__file__).resolve().parents[5]
 _AGG = _ROOT / "tools" / "ci" / "shard_aggregate.py"
 
@@ -43,8 +46,8 @@ def _write(p: Path, doc: Dict) -> Path:
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(_AGG), *args],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable, str(_AGG), *args],
+                          capture_output=True, text=True)
 
 
 @pytest.fixture

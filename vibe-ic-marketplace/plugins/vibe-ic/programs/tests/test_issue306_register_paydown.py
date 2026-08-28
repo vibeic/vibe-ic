@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import json
 import struct
-import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +50,9 @@ _BASELINE = _PROGRAMS / "flow_gate_enforcement_baseline.json"
 
 sys.path.insert(0, str(_PROGRAMS))
 import flow_gate_enforcement_audit as AUDIT  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # The two entries THIS change pays down. Both live in phase3_one_shot_runner.
 _PAID = (
@@ -91,9 +93,9 @@ def test_306_paid_gates_left_the_register(gate):
 
 def test_306_shipped_tree_is_green_against_its_register():
     """An audit that ships red blocks nothing — the failure mode it names."""
-    r = subprocess.run([sys.executable,
+    r = _pr.run([sys.executable,
                         str(_PROGRAMS / "flow_gate_enforcement_audit.py")],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

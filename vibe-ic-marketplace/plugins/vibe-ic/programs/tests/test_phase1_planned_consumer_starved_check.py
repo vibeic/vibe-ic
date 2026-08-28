@@ -38,7 +38,6 @@ inputs — the gate keys on no name appearing here.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +50,9 @@ _REPO = _PROGRAMS.parents[3]
 sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_planned_consumer_starved_check as P  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: The layer the shipped flow conditions three separate consumers on, and its
 #: sibling under the same layer CODE. Spelled as flow artefacts, not as design
@@ -95,10 +97,9 @@ def _mkproject(tmp_path: Path, docs: dict) -> Path:
 
 
 def _run(project: Path):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_PROG), str(project)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
 
 
 # ---------------------------------------------------------------------------

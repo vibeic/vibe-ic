@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 PLUGIN = Path(__file__).resolve().parents[2]
@@ -58,8 +60,7 @@ def test_tb_owned_reserved_word_retries_g2005_and_requires_marker(
     cp, dialect = scorer._compile_with_tb_dialect([dut, tb], tb, str(binp))
     assert cp.returncode == 0, cp.stderr
     assert dialect == "g2005"
-    run = subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
-                         timeout=30)
+    run = _pr.run(["vvp", str(binp)], capture_output=True, text=True)
     assert "OFFICIAL PASS" in run.stdout + run.stderr
 
 

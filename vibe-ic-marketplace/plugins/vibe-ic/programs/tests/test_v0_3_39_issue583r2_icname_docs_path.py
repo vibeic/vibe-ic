@@ -10,9 +10,11 @@ dispatcher default is not a statement); the subprocess fallback reuses
 the same argv shape.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = Path(__file__).resolve().parent.parent
 
@@ -29,11 +31,10 @@ def _run_dispatcher(tmp_path: Path, *cli) -> Path:
     proj = tmp_path / "proj"
     (proj / "input" / "docs").mkdir(parents=True)
     (proj / "input" / "docs" / "datasheet.md").write_text(_DOC)
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(PROG / "phase1_one_shot_runner.py"),
          str(proj), "--mode", "docs", *cli],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
     assert result.returncode == 0, result.stdout[-1500:] + result.stderr[-800:]
     return proj
 

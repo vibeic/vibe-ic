@@ -14,6 +14,10 @@ import pytest
 
 from _plugin_tree import plugin_path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 # flow #486: skills/ is a SHIPPED in-plugin dir (plugin-root resolver); the
 # audit tool tools/wave76_*.py is a repo-root-only tool NOT shipped in the
 # flattened cache and is resolved lazily inside the test that needs it.
@@ -120,7 +124,6 @@ def test_audit_tool_runs_clean(tmp_path):
     is only the write target. The exit-status assertion below is
     unchanged and still the thing being tested.
     """
-    import subprocess
     from _plugin_tree import repo_path_or_missing
     tool = repo_path_or_missing("tools", "wave76_skill_md_chip_agnostic_audit.py")
     if not tool.exists():
@@ -129,10 +132,9 @@ def test_audit_tool_runs_clean(tmp_path):
             f"BANNER + INSTRUCTION_FIXED invariants are checked above"
         )
     report = tmp_path / "wave76_skill_md_audit.json"
-    r = subprocess.run(
+    r = _pr.run(
         ["python3", str(tool), "--report", str(report)],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert r.returncode == 0, (
         f"audit tool exited {r.returncode}\nstdout:\n{r.stdout}\n"
         f"stderr:\n{r.stderr}"

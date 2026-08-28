@@ -30,11 +30,13 @@ Chip-, PDK- and vendor-AGNOSTIC: the fixture names no foundry, node or SKU.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -50,10 +52,10 @@ PROSE_WITH_A_SLASH = ("same solve as the count metric, as the worst J/Jmax "
 
 
 def _run(argv):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_PROGRAMS / "ppa_feasibility_check.py"),
          *[str(a) for a in argv]],
-        capture_output=True, text=True, timeout=600, cwd=str(_PROGRAMS))
+        capture_output=True, text=True, cwd=str(_PROGRAMS))
 
 
 def _doc():

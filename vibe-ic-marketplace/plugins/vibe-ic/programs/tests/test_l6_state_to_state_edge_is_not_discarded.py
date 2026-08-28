@@ -46,11 +46,13 @@ direction notation. No chip, vendor, PDK, process or protocol literal
 participates.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _RUNNER = _PROGRAMS / "phase1_one_shot_runner.py"
@@ -94,8 +96,8 @@ def _run_phase1(tmp_path: Path, docs: dict) -> dict:
     # Measured at ~3s for this input; the 60s bound is the harness ceiling
     # (`ci_harness_timeout_ceiling_check`), i.e. ~20x headroom, so THIS call
     # fails the test on a hang rather than the harness killing the session.
-    proc = subprocess.run([sys.executable, str(_RUNNER), str(tmp_path)],
-                          capture_output=True, text=True, timeout=60)
+    proc = _pr.run([sys.executable, str(_RUNNER), str(tmp_path)],
+                          capture_output=True, text=True)
     l6 = tmp_path / "phase1" / "generated_docs" / "L6_CONTROL_LOGIC.json"
     assert l6.is_file(), (
         "Phase 1 emitted no L6 (rc=%s)\n%s"

@@ -39,11 +39,13 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # ─── locate the program-under-test ───────────────────────────────────────────
 _ENV = os.environ.get("VIBE_PROGRAMS")
@@ -177,8 +179,7 @@ def _run_gate(gate: Path, rtl: Path, top: str, event: str, output: str,
     # explicitly add the programs dir so a copied-out gate still imports them).
     env["PYTHONPATH"] = (str(PROGRAMS_DIR) + os.pathsep
                          + env.get("PYTHONPATH", ""))
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60,
-                          env=env)
+    return _pr.run(cmd, capture_output=True, text=True, env=env)
 
 
 # ─── POSITIVE ────────────────────────────────────────────────────────────────

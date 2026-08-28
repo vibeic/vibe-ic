@@ -38,6 +38,9 @@ from level_hysteresis_flag_oracle_check import (  # noqa: E402
     parse_interface, parse_band_table, anchor_filter, find_relative_sentence,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 HAVE_IVERILOG = shutil.which("iverilog") is not None
 
 PROMPT = """
@@ -121,7 +124,7 @@ def run(prompt: str, rtl: str, top="TopModule", json_out=None):
                 "--rtl", str(td / "r.sv"), "--top", top]
         jp = td / "ev.json"
         args += ["--json", str(jp)]
-        c = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        c = _pr.run(args, capture_output=True, text=True)
         ev = json.loads(jp.read_text()) if jp.is_file() else {}
         return c.returncode, c.stdout + c.stderr, ev
 

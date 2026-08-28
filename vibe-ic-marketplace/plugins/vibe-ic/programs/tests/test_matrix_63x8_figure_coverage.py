@@ -52,13 +52,15 @@ Run::
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from _plugin_tree import plugin_path, repo_path_or_missing
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 GEN = repo_path_or_missing("tools", "gen_matrix_63x8_census.py")
 README = plugin_path("programs", "tests", "matrix_63x8", "README.md")
@@ -117,9 +119,9 @@ def _load_generator():
 
 
 def _run(args, timeout=_CLI_TIMEOUT_S):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_gen_or_skip()), *args],
-        capture_output=True, text=True, timeout=timeout)
+        capture_output=True, text=True)
 
 
 def _corpus(tmp_path: Path, body: str) -> Path:

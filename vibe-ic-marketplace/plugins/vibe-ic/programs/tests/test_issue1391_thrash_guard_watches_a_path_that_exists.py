@@ -39,18 +39,16 @@ it cannot be satisfied by agreeing with the thing it is checking.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
 import picker_fixture_thrash_guard as mod
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _PROG = Path(__file__).resolve().parent.parent / "picker_fixture_thrash_guard.py"
-
-#: Bounded well under the 60 s inner-subprocess ceiling (180 s harness // 3).
-_GIT_TIMEOUT = 20
-
 
 def _git(*args: str, cwd: Path = _REPO_ROOT) -> str:
     """Run git, and FAIL LOUDLY rather than return an empty string.
@@ -58,8 +56,8 @@ def _git(*args: str, cwd: Path = _REPO_ROOT) -> str:
     An empty result here is not a zero -- it is 'could not look', and this
     whole file exists because those two were once recorded the same way.
     """
-    out = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
-                         text=True, timeout=_GIT_TIMEOUT)
+    out = _pr.run(["git", *args], cwd=str(cwd), capture_output=True,
+                         text=True)
     assert out.returncode == 0, (
         f"git {' '.join(args)} failed rc={out.returncode}; this is NOT evidence "
         f"of an empty result, it is evidence the check could not run.\n"
@@ -139,10 +137,10 @@ def test_a_real_staged_flip_is_rejected(tmp_path):
 
     msg = tmp_path / "COMMIT_MSG"
     msg.write_text("no acknowledgment line here\n")
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(_PROG), "--repo-root", str(repo),
          "--commit-msg-file", str(msg)],
-        capture_output=True, text=True, timeout=_GIT_TIMEOUT)
+        capture_output=True, text=True)
 
     assert out.returncode == 1, (
         f"an unacknowledged `aes: AES -> AES-XTS` flip was staged at the real "
@@ -171,10 +169,10 @@ def test_an_acknowledged_flip_is_still_allowed(tmp_path):
 
     msg = tmp_path / "COMMIT_MSG"
     msg.write_text("bump\n\nfixture-flip-acknowledged: aes: AES -> AES-XTS\n")
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(_PROG), "--repo-root", str(repo),
          "--commit-msg-file", str(msg)],
-        capture_output=True, text=True, timeout=_GIT_TIMEOUT)
+        capture_output=True, text=True)
 
     assert out.returncode == 0, (
         f"an ACKNOWLEDGED flip must pass; rc={out.returncode}\n{out.stdout}")

@@ -33,11 +33,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 MOD = PROGRAMS / "_corpus_location.py"
@@ -63,8 +65,8 @@ def _no_inherited_pointer(monkeypatch):
 
 
 def _git(repo: Path, *args: str):
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, timeout=60)
+    return _pr.run(["git", "-C", str(repo), *args],
+                          capture_output=True, text=True)
 
 
 # ---------------------------------------------------------------------------

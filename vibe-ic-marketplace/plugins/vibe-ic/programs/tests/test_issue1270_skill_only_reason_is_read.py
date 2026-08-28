@@ -28,13 +28,15 @@ that cannot fail.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent / "checker_execution_wiring_audit.py"
 sys.path.insert(0, str(PROG.parent))
 import checker_execution_wiring_audit as M  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: A reason long enough to clear `_MIN_DECISION_REASON`, written the way a real
 #: entry is: it names what was measured and what would change the answer.
@@ -45,12 +47,6 @@ MEASURED = (
     "over nothing. It becomes wireable the moment the corpus is produced by "
     "the flow rather than by an agent."
 )
-
-#: Same helper bound as the sibling suite: the harness runs --timeout=180
-#: --timeout-method=thread, and #1241 puts the per-call ceiling at 180/3 = 60s.
-#: These fixtures are a handful of files; 30s is half the ceiling.
-_CLI_S = 30
-
 
 def _tree(root: Path, reasons=None, checkers=("sample_check.py",)) -> Path:
     """A repo whose only checker(s) are SKILL-only.
@@ -90,9 +86,9 @@ def _cli(root: Path):
     """
     bl = root / "bl.json"
     bl.write_text(json.dumps({"known": []}) + "\n")
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--repo-root", str(root),
-         "--baseline", str(bl)], capture_output=True, text=True, timeout=_CLI_S)
+         "--baseline", str(bl)], capture_output=True, text=True)
 
 
 # ── the classifier ─────────────────────────────────────────────────────────

@@ -44,7 +44,6 @@ longer mistake zero examined testbenches for an ordinary PASS.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -55,7 +54,9 @@ from flow_compliance_check import (  # noqa: E402
     _stdout_signals_vacuous,
 )
 
-_T = 55
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _GATE = "vacuous_testbench_check.py"
 #: the clause verbatim as `flow/phase1_phase2_phase3.yaml` writes it, so the
 #: JSON channel is probed at the path the FLOW names rather than one this test
@@ -96,8 +97,8 @@ endmodule
 def _run(project: Path):
     """Run the gate through the clause the FLOW declares, cwd=project."""
     argv = [sys.executable, str(PROGRAMS / _GATE)] + _CLAUSE.split()[1:]
-    p = subprocess.run(argv, cwd=str(project), capture_output=True,
-                       text=True, timeout=_T)
+    p = _pr.run(argv, cwd=str(project), capture_output=True,
+                       text=True)
     return p.returncode, p.stdout + p.stderr
 
 

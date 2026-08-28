@@ -20,7 +20,6 @@ below — the callers that offer the flag must still be told about it, and the
 callers that do not must not be.
 """
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
@@ -29,6 +28,9 @@ PROGRAMS = PLUGIN / "programs"
 sys.path.insert(0, str(PROGRAMS))
 
 import _corpus_location as CL  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 FLAG = "--corpus-may-be-absent"
 
@@ -126,14 +128,14 @@ def test_no_program_tells_the_reader_to_pass_a_flag_it_does_not_have():
     wrong, checked = [], 0
     for prog in _reaches_the_corpus_refusal():
         path = PROGRAMS / prog
-        helptext = subprocess.run(
+        helptext = _pr.run(
             [sys.executable, str(path), "--help"], capture_output=True,
-            text=True, timeout=120).stdout
+            text=True).stdout
         if "--corpus" not in helptext:
             continue            # no corpus mode: it cannot print this refusal
-        out = subprocess.run(
+        out = _pr.run(
             [sys.executable, str(path), "--corpus", "/nonexistent-xyz"],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True)
         checked += 1
         if FLAG in (out.stderr + out.stdout) and FLAG not in helptext:
             wrong.append(f"{prog} tells the reader to pass {FLAG} and its "
@@ -150,9 +152,8 @@ def test_the_gate_that_does_offer_the_flag_still_names_it():
     absent-corpus refusal is the rc 2 branch — the one that names the flag. If
     the repair had simply deleted the sentence everywhere, this goes red.
     """
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(PROGRAMS / "ppa_head_to_head_check.py"),
-         "--corpus", "/nonexistent-xyz"], capture_output=True, text=True,
-        timeout=120)
+         "--corpus", "/nonexistent-xyz"], capture_output=True, text=True)
     assert out.returncode == 2
     assert FLAG in out.stderr

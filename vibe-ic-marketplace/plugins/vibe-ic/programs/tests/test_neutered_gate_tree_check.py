@@ -8,7 +8,6 @@ the repo looked.  Everything here drives the checker on a real tree.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -22,17 +21,13 @@ if str(PROGRAMS) not in sys.path:
 import gate_cli_mutation_probe as PROBE  # noqa: E402
 import neutered_gate_tree_check as N     # noqa: E402
 
-#: Under the 60 s ceiling `ci_harness_timeout_ceiling_check` enforces: a bound
-#: at or above it cannot fire as a TEST failure, because pytest kills the whole
-#: session at 180 s first. MEASURED: the checker scans 3400 modules in ~2 s and
-#: the hygiene script's `--list` takes 0.03 s.
-_CLI_TIMEOUT_S = 45
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _cli(*args):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROGRAMS / "neutered_gate_tree_check.py"), *args],
-        capture_output=True, text=True, timeout=_CLI_TIMEOUT_S)
+        capture_output=True, text=True)
 
 
 def _tree(root: Path, body: str = "def main():\n    return 1\n") -> Path:
@@ -160,8 +155,8 @@ def test_the_checker_is_wired_into_the_hygiene_lane():
     grepping it: the label has to reach the dispatch record, which is what the
     merge gate reads.
     """
-    out = subprocess.run(["bash", str(HYGIENE), "--list"], cwd=str(REPO),
-                         capture_output=True, text=True, timeout=_CLI_TIMEOUT_S)
+    out = _pr.run(["bash", str(HYGIENE), "--list"], cwd=str(REPO),
+                         capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert "no gate is left neutered" in out.stdout, (
         "the checker is not declared by the hygiene lane, so nothing runs "

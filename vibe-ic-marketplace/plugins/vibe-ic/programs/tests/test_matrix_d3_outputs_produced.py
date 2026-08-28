@@ -546,6 +546,9 @@ from benchmark_evidence_structure_check import _NAME_RE as _PUBLISHED_NAME_RE  #
 # the self-certification defect `SELF_CERTIFYING_AUDIT_PROBE` exists to pin.
 import step_write_ledger as _swl  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 DIM = 3
 
 MANIFEST_PATH = Path(__file__).resolve().parent / "fixtures" / "matrix_d3_output_manifest.json"
@@ -1044,9 +1047,9 @@ def tracked_under(root: Path) -> frozenset:
     archive), which correctly makes nothing there admissible as evidence.
     """
     try:
-        proc = subprocess.run(
+        proc = _pr.run(
             ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
-            cwd=str(root), capture_output=True, timeout=60,
+            cwd=str(root), capture_output=True, text=False,
         )
     except FileNotFoundError as exc:  # pragma: no cover - git is always present
         raise AssertionError(
@@ -1617,10 +1620,9 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
                 f"in those words). A non-empty absence record is not a "
                 f"produced artefact"
             )
-        proc = subprocess.run(
+        proc = _pr.run(
             [sys.executable, str(prog_file), *argv],
-            cwd=dst, capture_output=True, text=True, timeout=60,
-        )
+            cwd=dst, capture_output=True, text=True)
         if not target.is_file():
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
             # rc=2 is the plugin-wide "the capability itself is absent" code.
@@ -3745,9 +3747,9 @@ def test_d3_the_compliance_audit_does_not_create_declared_outputs():
             dst = Path(td) / "proj"
             shutil.copytree(rr.path, dst, symlinks=True)
             before = {p.relative_to(dst) for p in dst.rglob("*") if p.is_file()}
-            subprocess.run(
+            _pr.run(
                 [sys.executable, str(fcc_path), str(dst)],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True)
             after = {p.relative_to(dst) for p in dst.rglob("*") if p.is_file()}
             created = after - before
             hits = set()
@@ -4956,12 +4958,11 @@ def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
     _pdk_fixture.write_run_pdk_revision(run)
 
     dest_root = tmp_path / "benchmark-data"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(F.PROGRAMS_DIR / "benchmark_evidence_publish.py"),
          "--run-dir", str(run), "--ic", "probeic", "--pdk", "probepdk",
          "--plugin-version", "0.0.0", "--dest-root", str(dest_root)],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
     assert proc.returncode == 0, (
         f"the publish probe did not stage a cell (rc={proc.returncode}); this "
         f"guard cannot say what the contract carries from a run it refused.\n"

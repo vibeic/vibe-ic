@@ -31,6 +31,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import phase1_doc_one_shot_runner as R  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # ── (1) the helper unit ──────────────────────────────────────────────────────
 
@@ -88,10 +91,9 @@ def test_end_to_end_single_io_in_row_no_phantoms(tmp_path):
         "| Signal | Direction | Width | Description |\n|---|---|---|---|\n"
         "| `clk_i` | input | 1 | clock |\n"
         "| `io_in` | in | 38 | User GPIO inputs (`io_in[37:0]`) |\n")
-    import subprocess
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
-    r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(runner), str(proj)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
     names = _final_l9_names(proj)
     import re

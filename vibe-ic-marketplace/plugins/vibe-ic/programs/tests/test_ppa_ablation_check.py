@@ -40,10 +40,13 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 TESTS = pathlib.Path(__file__).resolve().parent
 PROGRAMS = TESTS.parent
@@ -52,9 +55,6 @@ GATE = PROGRAMS / "ppa_ablation_check.py"
 SCHEMA_DIR = PROGRAMS.parent / "schemas" / "ppa"
 DISPATCHER = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 
-#: Every subprocess here reads a handful of tiny synthetic documents.
-CLI_TIMEOUT_S = 90
-
 KIND = "vibeic.ppa.ablation.v1"
 
 
@@ -62,9 +62,8 @@ def run(*args):
     """Drive the REAL entry point. Deliberately not `main(argv)` in-process:
     the dispatcher acts on the EXIT CODE, and a test that calls a function
     leaves the verdict-to-exit-code mapping unmeasured."""
-    return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True,
-                          timeout=CLI_TIMEOUT_S)
+    return _pr.run([sys.executable, str(GATE), *args],
+                          capture_output=True, text=True)
 
 
 def arm(role, tuned=True):
@@ -386,10 +385,10 @@ def test_a_bound_landing_redirects_the_corpus_and_says_so(tmp_path):
     env = dict(os.environ)
     env["GATEKEEPER_BENCHMARK_DATA_SHA"] = "0" * 40
     env["VIBE_IC_BENCHMARK_DATA"] = str(clone)
-    r = subprocess.run([sys.executable, str(GATE), "--corpus",
+    r = _pr.run([sys.executable, str(GATE), "--corpus",
                         str(REPO / "ppa-crosslayer")],
                        capture_output=True, text=True,
-                       timeout=CLI_TIMEOUT_S, env=env)
+                       env=env)
     assert r.returncode == 2, r.stdout + r.stderr
     assert "binds the landing corpus" in r.stderr
     assert "VACUOUS" in r.stderr

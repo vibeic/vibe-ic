@@ -22,6 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = Path(__file__).resolve().parent.parent / "generated_test_list_min_guard.py"
 
 RC_PASS, RC_FAIL, RC_VACUOUS, RC_USAGE = 0, 1, 2, 3
@@ -44,8 +47,8 @@ def _list(tmp_path: Path, lines, name: str = "sel.txt") -> Path:
 
 
 def _run(*args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(PROG), *[str(a) for a in args]],
-                          capture_output=True, text=True, timeout=120)
+    return _pr.run([sys.executable, str(PROG), *[str(a) for a in args]],
+                          capture_output=True, text=True)
 
 
 NAMES = [f"tests/test_{i}.py" for i in range(5)]
@@ -171,10 +174,9 @@ def test_reverting_the_minimum_to_an_emptiness_test_lets_the_shrunken_list_pass(
     mutant.write_text(mutant_body, encoding="utf-8")
 
     import os
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(mutant), str(sel), "--min", "5", "--root", str(root)],
-        capture_output=True, text=True, timeout=120,
-        env={**os.environ, "PYTHONPATH": str(PROG.parent)})
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(PROG.parent)})
     assert r.returncode == RC_PASS, (
         "the mutant still refused, so the refusal does not come from the "
         "minimum:\n" + r.stdout + r.stderr)

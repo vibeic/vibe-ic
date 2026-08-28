@@ -11,6 +11,9 @@ import pytest
 import rtl_hygiene_lint as lint
 from _hostpaths import require_repo
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 _BLOCKING_FIXTURE_PARTS = (
     "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
@@ -89,8 +92,8 @@ def test_fix_changes_only_toggle_operator_and_is_idempotent(tmp_path):
 def test_cli_fix_wires_the_repair_into_the_canonical_emit_path(tmp_path):
     rtl = tmp_path / "oscillator.v"
     rtl.write_text(_blocking_fixture())
-    cp = subprocess.run([sys.executable, lint.__file__, "--fix", str(rtl)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, lint.__file__, "--fix", str(rtl)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
     assert "rewrote 1 delayed oscillator self-toggle(s) to NBA" in cp.stdout
     assert "#(PERIOD/2) wave <= ~wave;" in rtl.read_text()
@@ -234,12 +237,11 @@ endmodule
 
     def run(tag: str) -> str:
         binp = tmp_path / f"{tag}.vvp"
-        cp = subprocess.run(
+        cp = _pr.run(
             ["iverilog", "-g2012", "-o", str(binp), str(rtl), str(tb)],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         assert cp.returncode == 0, cp.stderr
-        sim = subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
-                             timeout=30)
+        sim = _pr.run(["vvp", str(binp)], capture_output=True, text=True)
         return sim.stdout + sim.stderr
 
     assert "OFFICIAL FAIL" in run("blocking")

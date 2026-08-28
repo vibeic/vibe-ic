@@ -19,7 +19,6 @@ Three of these are not fixture-only:
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +27,9 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent / "artefact_defect_close_check.py"
 sys.path.insert(0, str(PROG.parent))
 import artefact_defect_close_check as M  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 ART = "benchmark-data/ic/demo/reports/gates/some_report.json"
 CHECKER = "vibe-ic-marketplace/plugins/vibe-ic/programs/some_evidence_check.py"
@@ -186,8 +188,8 @@ def test_every_finding_names_the_issue_and_the_range():
 # real git repository + MUTATION CONTROL
 # --------------------------------------------------------------------------
 def _git(root, *args):
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                          text=True, timeout=60)
+    return _pr.run(["git", "-C", str(root), *args], capture_output=True,
+                          text=True)
 
 
 def _seed_repo(root: Path) -> str:
@@ -219,11 +221,11 @@ def _close_commit(root: Path, *, also_fix_artefact: bool) -> str:
 
 
 def _run(root: Path, issue_file: Path, rng: str, extra=()):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--issue-number", "366", "--range", rng,
          "--offline", "--repo-root", str(root), "--issue-file", str(issue_file),
          *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def test_mutation_control_the_verdict_flips_when_the_artefact_is_repaired(tmp_path):
@@ -303,9 +305,9 @@ def test_a_sweep_without_an_issue_corpus_says_skipped_not_pass(tmp_path):
     root = tmp_path / "a"
     root.mkdir()
     _seed_repo(root)
-    r = subprocess.run([sys.executable, str(PROG), "--recent", "5", "--offline",
+    r = _pr.run([sys.executable, str(PROG), "--recent", "5", "--offline",
                         "--repo-root", str(root)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 0
     assert "[SKIPPED]" in r.stdout and "NOT a PASS" in r.stdout
     assert "[PASS]" not in r.stdout
@@ -319,8 +321,8 @@ def _toplevel() -> Path:
     as a repository subtree and as a linked worktree, where `.git` is a file
     and a hard-coded depth is wrong in one of the two."""
     here = Path(__file__).resolve().parent
-    r = subprocess.run(["git", "-C", str(here), "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run(["git", "-C", str(here), "rev-parse", "--show-toplevel"],
+                       capture_output=True, text=True)
     return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else here
 
 
@@ -410,10 +412,10 @@ def test_real_history_the_sweep_is_quiet_on_this_repo(tmp_path):
     rows = [{"number": n, "labels": [], "body": s}
             for n, s in enumerate(r.stdout.splitlines()[:400], start=1)]
     corpus.write_text(json.dumps(rows), encoding="utf-8")
-    out = subprocess.run(
+    out = _pr.run(
         [sys.executable, str(PROG), "--recent", "400", "--offline",
          "--repo-root", str(_REPO_ROOT), "--issues-json", str(corpus)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "[FAIL]" not in out.stdout
 

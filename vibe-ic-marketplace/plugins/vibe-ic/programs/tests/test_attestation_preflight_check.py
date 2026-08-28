@@ -22,6 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = (Path(__file__).resolve().parent.parent
         / "attestation_preflight_check.py")
 #: .../<repo>/vibe-ic-marketplace/plugins/vibe-ic/programs/tests/<this file>
@@ -33,11 +36,11 @@ CLEAN_ENV = {"PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         ["git", "-C", str(repo),
          "-c", "user.email=t@example.invalid", "-c", "user.name=t",
          "-c", "commit.gpgsign=false", *args],
-        capture_output=True, text=True, timeout=120, check=False)
+        capture_output=True, text=True, check=False)
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -54,8 +57,8 @@ def _run(*args, env_extra=None) -> subprocess.CompletedProcess:
     env = {**os.environ, **CLEAN_ENV}
     if env_extra is not None:
         env.update(env_extra)
-    return subprocess.run([sys.executable, str(PROG), *[str(a) for a in args]],
-                          capture_output=True, text=True, timeout=600, env=env)
+    return _pr.run([sys.executable, str(PROG), *[str(a) for a in args]],
+                          capture_output=True, text=True, env=env)
 
 
 # ── the honest case ──────────────────────────────────────────────────────────
@@ -92,9 +95,9 @@ def test_the_flag_is_read_from_the_environment_not_from_this_interpreter(tmp_pat
     assert ok.returncode == RC_PASS, "control arm is not green:\n" + ok.stdout
 
     env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, "-B", str(PROG), "--repo", str(repo), str(repo / "src")],
-        capture_output=True, text=True, timeout=600, env=env)
+        capture_output=True, text=True, env=env)
     assert r.returncode == RC_FAIL, \
         "a run that will write bytecode into the snapshot passed:\n" + r.stdout
     assert "-B" in r.stdout and "not inherited" in r.stdout, r.stdout
@@ -210,10 +213,9 @@ def test_reverting_the_residue_walk_lets_the_stray_bytecode_pass(tmp_path):
     mutant = tmp_path / "mutant.py"
     mutant.write_text(mutant_body, encoding="utf-8")
 
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(mutant), "--repo", str(repo), str(repo / "src")],
-        capture_output=True, text=True, timeout=600,
-        env={**os.environ, **CLEAN_ENV, "PYTHONPATH": str(PROG.parent)})
+        capture_output=True, text=True, env={**os.environ, **CLEAN_ENV, "PYTHONPATH": str(PROG.parent)})
     assert r.returncode == RC_PASS, (
         "the mutant still refused, so the refusal does not come from the "
         "residue walk:\n" + r.stdout + r.stderr)

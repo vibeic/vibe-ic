@@ -56,6 +56,9 @@ sys.path.insert(0, str(_PROGRAMS))
 import reset_clock_variant_alias as V       # noqa: E402
 import design_one_shot_runner as R          # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _HAS_IVERILOG = shutil.which("iverilog") is not None
 
 # The dominant RTLLM/VerilogEval port contract: a colon list under headings. The
@@ -192,12 +195,12 @@ def test_runner_gate_arstn_design_elaborates_against_hidden_tb(tmp_path):
     with tempfile.TemporaryDirectory() as td:
         binp = Path(td) / "b"
         srcs = [str(p) for p in sorted(rtl_dir.glob("*.v"))]
-        r = subprocess.run(
+        r = _pr.run(
             ["iverilog", "-g2012", "-o", str(binp), *srcs, str(tb)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         assert r.returncode == 0, (r.stdout + r.stderr)
-        v = subprocess.run(["vvp", str(binp)], capture_output=True,
-                           text=True, timeout=60)
+        v = _pr.run(["vvp", str(binp)], capture_output=True,
+                           text=True)
     assert "Your Design Passed" in (v.stdout + v.stderr), (v.stdout + v.stderr)
 
 

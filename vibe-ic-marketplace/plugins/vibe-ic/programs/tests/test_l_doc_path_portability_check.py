@@ -42,6 +42,9 @@ from l_doc_path_portability_check import (  # noqa: E402
     scan_tree,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _CHECK = _PROGRAMS / "l_doc_path_portability_check.py"
 _RUNNER_SRC = _PROGRAMS / "phase1_doc_one_shot_runner.py"
 
@@ -338,9 +341,9 @@ def test_the_gate_speaks_the_cli_the_runner_loop_uses(tmp_path):
               {"fields": {"coverage_goals": [
                   {"source": "/var/lib/ci/b/design/phase1/input_doc/v.txt"}]}})
     out = tmp_path / "reports" / "phase1" / "l_doc_path_portability.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_CHECK), str(tmp_path), "--json", str(out)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert cp.returncode == 1, (
         f"the runner treats rc==1 as blocking; got {cp.returncode}")
     assert out.is_file(), "the runner writes the report path it passes in"

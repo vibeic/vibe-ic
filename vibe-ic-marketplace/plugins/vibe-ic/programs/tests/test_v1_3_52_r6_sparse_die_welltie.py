@@ -54,6 +54,9 @@ import phase3_one_shot_runner as r  # noqa: E402
 from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
                                probe_skip_reason)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 class _Pdk:
     tapcell_master = "sky130_fd_sc_hd__tapvpwrvgnd_1"
@@ -275,10 +278,10 @@ def test_live_emitted_block_ties_wells_and_prunes():
                         f"cat > {dst}"], input=text, text=True, check=True)
     _cp(vlog, "/tmp/_r6_sparse_top.v")
     _cp(tcl, "/tmp/_r6_live.tcl")
-    p = subprocess.run(
+    p = _pr.run(
         ["docker", "exec", "vibeic-eda", "bash", "-lc",
          "cd /tmp && openroad -exit _r6_live.tcl 2>&1"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     out = p.stdout
     assert "SPARSE_DIE_TAPCELL_BOUNDED" in out, out[-2000:]
     # placed-cell wells tied

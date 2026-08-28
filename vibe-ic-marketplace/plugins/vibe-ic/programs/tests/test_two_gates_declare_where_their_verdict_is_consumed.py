@@ -48,12 +48,14 @@ import ast
 import importlib.util
 import json
 import re
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -88,12 +90,6 @@ _BATCH73_INLINE_BLOCKERS = (
     "pad_ring_check",
     "tapeout_docs_gen",
 )
-
-#: 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` enforces (the
-#: 180s harness session bound // 3): a bound above it can outlive the session and
-#: take the rest of the subset down with it.
-_TIMEOUT = 60
-
 
 def _audit_mod():
     """A private copy, so a sibling test's `sys.modules` entry cannot decide
@@ -179,9 +175,9 @@ def test_the_audit_exits_zero_and_names_neither_gate(tmp_path):
     the OTHER register rather than removing it, and both registers fail.
     """
     out = tmp_path / "audit.json"
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_AUDIT), "--json", str(out)],
-        capture_output=True, text=True, timeout=_TIMEOUT)
+        capture_output=True, text=True)
     assert cp.returncode == 0, (
         f"rc={cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-2000:]}")
     rep = json.loads(out.read_text())
@@ -370,8 +366,8 @@ def test_the_area_gate_reaches_only_incomplete_through_its_own_flow_clause(
     # `.` in the clause is the project root the flow runs the gate from.
     argv = [str(_PROGRAMS / "area_total_vs_budget_check.py")] + [
         str(proj) if a == "." else a for a in argv[1:]]
-    cp = subprocess.run([sys.executable] + argv, cwd=str(proj),
-                        capture_output=True, text=True, timeout=_TIMEOUT)
+    cp = _pr.run([sys.executable] + argv, cwd=str(proj),
+                        capture_output=True, text=True)
     blob = (cp.stdout or "") + (cp.stderr or "")
     assert cp.returncode == 2, (
         f"the step-9 clause now returns rc={cp.returncode} on a project that "
@@ -390,9 +386,9 @@ def test_the_area_gate_itself_is_not_vacuous():
     assert mod._UM2_SPELLINGS, "the gate no longer recognises any um^2 spelling"
     # The refusal is keyed on the unit, not on the comparison being impossible:
     # a caller carrying the requirement outside the artefact establishes it.
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / "area_total_vs_budget_check.py"),
-         "--help"], capture_output=True, text=True, timeout=_TIMEOUT)
+         "--help"], capture_output=True, text=True)
     assert "--area-unit-um2" in cp.stdout, cp.stdout
 
 
@@ -560,14 +556,14 @@ def test_the_gate_reaches_a_real_verdict_once_the_unit_is_established(tmp_path):
 
     prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
     over = _project(tmp_path / "over", "10x10")          # 100 um^2, far too small
-    cp = subprocess.run([sys.executable, prog, str(over)],
-                        capture_output=True, text=True, timeout=_TIMEOUT)
+    cp = _pr.run([sys.executable, prog, str(over)],
+                        capture_output=True, text=True)
     assert cp.returncode == 1, (cp.returncode, cp.stdout[-800:])
     assert "AREA_TOTAL_OVER_DECLARED_DIE" in cp.stdout
 
     fits = _project(tmp_path / "fits", "1000x1000")      # 1e6 um^2, roomy
-    cp2 = subprocess.run([sys.executable, prog, str(fits)],
-                         capture_output=True, text=True, timeout=_TIMEOUT)
+    cp2 = _pr.run([sys.executable, prog, str(fits)],
+                         capture_output=True, text=True)
     assert cp2.returncode == 0, (cp2.returncode, cp2.stdout[-800:])
 
 
@@ -627,10 +623,10 @@ def test_the_document_generator_carries_a_verdict_not_only_documents(tmp_path):
         (proj / "phase3" / "final" / "metrics.json").write_text(
             json.dumps(metrics))
         out = proj / "reports" / "phase3" / "docs"
-        cp = subprocess.run(
+        cp = _pr.run(
             [sys.executable, prog, "--project", str(proj),
              "--out-dir", str(out)],
-            capture_output=True, text=True, timeout=_TIMEOUT)
+            capture_output=True, text=True)
         return cp, sorted(p.name for p in out.glob("*.html")) if out.is_dir() else []
 
     ok, ok_docs = _run(clean, "clean")
@@ -678,11 +674,11 @@ def test_canonical_37_5ic_consumes_the_document_verdict_in_a_blocking_slot():
 
 def test_the_inline_signoff_table_still_cannot_call_the_document_generator():
     """The old generic table remains incompatible; 37.5ic is a dedicated path."""
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_PROGRAMS / "tapeout_docs_gen.py"),
          "/nonexistent/project", "--json", "/nonexistent/out.json",
          "--out-dir", "/nonexistent/docs"],
-        capture_output=True, text=True, timeout=_TIMEOUT)
+        capture_output=True, text=True)
     assert cp.returncode == 2 and "unrecognized arguments" in cp.stderr, (
         cp.returncode, cp.stdout[-800:], cp.stderr[-800:])
 
@@ -849,13 +845,13 @@ def test_the_verdict_the_wiring_consumes_really_is_rc_one(tmp_path):
             json.dumps({"fields": {"die_area_budget_um": budget}}))
         return root
     prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
-    over = subprocess.run(
+    over = _pr.run(
         [sys.executable, prog, str(_project(tmp_path / "o", "10x10"))],
-        capture_output=True, text=True, timeout=_TIMEOUT)
+        capture_output=True, text=True)
     assert over.returncode == 1, (over.returncode, over.stdout[-600:])
-    fits = subprocess.run(
+    fits = _pr.run(
         [sys.executable, prog, str(_project(tmp_path / "f", "1000x1000"))],
-        capture_output=True, text=True, timeout=_TIMEOUT)
+        capture_output=True, text=True)
     assert fits.returncode == 0, (fits.returncode, fits.stdout[-600:])
 
 

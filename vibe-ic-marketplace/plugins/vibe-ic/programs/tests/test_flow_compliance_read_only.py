@@ -13,19 +13,15 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _FCC = _PROGRAMS / "flow_compliance_check.py"
-
-#: Measured at 0.3 s on the fixture below and ~40 s on a real published tree;
-#: stays under the 60 s harness ceiling `ci_harness_timeout_ceiling_check`
-#: enforces, so a hang fails THIS test instead of killing the session (#542).
-_T = 55
-
 
 def _manifest(root: Path) -> dict:
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -42,9 +38,8 @@ def _project(tmp_path: Path) -> Path:
 
 
 def _drive(project: Path, *flags):
-    return subprocess.run([sys.executable, str(_FCC), str(project), *flags],
-                          cwd=str(project), capture_output=True, text=True,
-                          timeout=_T)
+    return _pr.run([sys.executable, str(_FCC), str(project), *flags],
+                          cwd=str(project), capture_output=True, text=True)
 
 
 def test_the_default_run_writes_into_the_project(tmp_path):
@@ -150,9 +145,8 @@ def test_read_only_refuses_rather_than_falling_back_to_writing(tmp_path):
     try:
         before = {k: v for k, v in _manifest(p).items()
                   if not k.startswith("unreadable")}
-        r = subprocess.run([sys.executable, str(_FCC), str(p), "--read-only"],
-                           cwd=str(p), capture_output=True, text=True,
-                           timeout=_T)
+        r = _pr.run([sys.executable, str(_FCC), str(p), "--read-only"],
+                           cwd=str(p), capture_output=True, text=True)
         assert r.returncode == 2, (
             "a failed copy did not refuse:\n" + r.stdout + r.stderr)
         assert "--read-only could not copy" in r.stderr, r.stderr

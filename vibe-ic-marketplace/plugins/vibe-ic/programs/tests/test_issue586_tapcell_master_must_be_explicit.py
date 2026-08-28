@@ -56,6 +56,10 @@ import pytest
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
 from not_verified_tier import skip_not_verified  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
@@ -103,10 +107,10 @@ def _run_gate(registry_path):
     failing. Measured at 0.06s image-free, so 30s is a ceiling, not a budget.
     """
     env = dict(os.environ, VIBEIC_EDA_IMAGE="ghcr.io/vibeic/no-such-image:0")
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(_GATE), "--registry", str(registry_path),
          "--container", "__no_such_container__"],
-        capture_output=True, text=True, timeout=30, env=env)
+        capture_output=True, text=True, env=env)
 
 
 def test_the_gate_passes_on_the_shipped_registry():
@@ -234,10 +238,10 @@ def test_the_declared_master_exists_in_that_pdks_own_lef(entry):
             f"image {img} not present; this half was NOT checked",
             PULL_REMEDY)
     cell = entry["tapcell_master"]
-    r = subprocess.run(
+    r = _pr.run(
         ["docker", "run", "--rm", "--entrypoint", "bash", img, "-lc",
          f"grep -rl 'MACRO {cell}' {entry['container_path']} 2>/dev/null | head -1"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.stdout.strip(), (
         f"{entry['name']} declares tapcell_master={cell!r}, which is not a "
         f"MACRO anywhere under {entry['container_path']}")

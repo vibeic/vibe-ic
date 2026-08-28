@@ -21,11 +21,13 @@ before it ships.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).parent.parent.parent
 ROUTING = PLUGIN_ROOT / "benchmark" / "CAPTURE_ROUTING.json"
@@ -132,11 +134,10 @@ def test_end_to_end_emit_smoke(tmp_path):
     rec_file = tmp_path / "recoveries.json"
     rec_file.write_text(json.dumps(recs))
     out_dir = tmp_path / "out"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(EMIT_PROGRAM),
          "--records", str(rec_file), "--out-dir", str(out_dir)],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert r.returncode == 0, f"emit failed: {r.stderr}\n{r.stdout}"
     summary = json.loads((out_dir / "summary.json").read_text())
 
@@ -171,9 +172,9 @@ def test_bucket_t_emit_and_gate(tmp_path):
            "backlog_type": "bug", "severity": "P1", "component": "forked-openroad",
            "session_context": "commercial DRC closure"}]
     rf = tmp_path / "ok.json"; rf.write_text(json.dumps(ok))
-    r = subprocess.run([sys.executable, str(EMIT_PROGRAM), "--records", str(rf),
+    r = _pr.run([sys.executable, str(EMIT_PROGRAM), "--records", str(rf),
                         "--out-dir", str(tmp_path / "o")],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     yamls = list((tmp_path / "o" / "bucket_T_forked_tool").glob("*.yaml"))
     assert yamls, "bucket_T backlog not emitted"
@@ -184,7 +185,7 @@ def test_bucket_t_emit_and_gate(tmp_path):
     # missing required field -> refused
     bad = [{k: v for k, v in ok[0].items() if k != "tool"}]
     rf2 = tmp_path / "bad.json"; rf2.write_text(json.dumps(bad))
-    r2 = subprocess.run([sys.executable, str(EMIT_PROGRAM), "--records", str(rf2),
+    r2 = _pr.run([sys.executable, str(EMIT_PROGRAM), "--records", str(rf2),
                          "--out-dir", str(tmp_path / "o2")],
-                        capture_output=True, text=True, timeout=30)
+                        capture_output=True, text=True)
     assert r2.returncode == 1 and "BUCKET-T GATE" in r2.stderr

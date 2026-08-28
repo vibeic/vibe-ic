@@ -1,9 +1,11 @@
 """Smoke tests for qsf_gen.py (Wave 72; renamed Wave 73 / v0.128)."""
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAM = Path(__file__).resolve().parent.parent / "qsf_gen.py"
 
@@ -49,8 +51,8 @@ def _scaffold(tmp_path: Path, with_wrapper: bool = False) -> Path:
 
 def test_qsf_gen_l9_only(tmp_path):
     proj = _scaffold(tmp_path, with_wrapper=False)
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
     qsf = proj / "phase2" / "stage1" / "fpga" / "chip_top.qsf"
     assert qsf.is_file()
@@ -70,8 +72,8 @@ def test_qsf_gen_l9_only(tmp_path):
 
 def test_qsf_gen_with_wrapper(tmp_path):
     proj = _scaffold(tmp_path, with_wrapper=True)
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
     # Wrapper picked as top
     qsf = proj / "phase2" / "stage1" / "fpga" / "de10lite_top.qsf"
@@ -90,8 +92,8 @@ def test_qsf_skip_when_same_name_present(tmp_path):
     fpga.mkdir(parents=True, exist_ok=True)
     # Same name as the would-be output → SKIP
     (fpga / "chip_top.qsf").write_text("# existing\n")
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0
     assert "SKIP" in cp.stdout
     assert (fpga / "chip_top.qsf").read_text() == "# existing\n"
@@ -102,8 +104,8 @@ def test_qsf_force_overwrites(tmp_path):
     fpga = proj / "phase2" / "stage1" / "fpga"
     fpga.mkdir(parents=True, exist_ok=True)
     (fpga / "chip_top.qsf").write_text("# existing\n")
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj), "--force"],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj), "--force"],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
     assert "PASS" in cp.stdout
     assert "PIN_P11" in (fpga / "chip_top.qsf").read_text()

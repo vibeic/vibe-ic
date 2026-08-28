@@ -3,11 +3,13 @@
 to the SHIPPED phase3 functions, the systemic summary counts, and the no-DEF honest absence.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import perc_corpus_sweep as s
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 _CORE_MACRO_DEF = """VERSION 5.8 ;
@@ -117,8 +119,8 @@ def test_summarize_systemic_counts(tmp_path):
 # ---------------------------------------------------------------- CLI
 def test_cli_json_array(tmp_path):
     _mk_design(tmp_path, _CORE_MACRO_DEF, name="a")
-    r = subprocess.run([sys.executable, str(Path(s.__file__)), "--json", str(tmp_path / "a")],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(Path(s.__file__)), "--json", str(tmp_path / "a")],
+                       capture_output=True, text=True)
     assert r.returncode == 0
     data = json.loads(r.stdout)
     assert data[0]["welltap"]["status"] == "WELLTAP_GAP"
@@ -232,9 +234,9 @@ def test_summary_counts_vintage(tmp_path):
 def test_cli_vintage_only_flag(tmp_path):
     pnr = _mk_pnr(tmp_path, {"placed.def": _big_def(300, n_tap=0),
                              "routed.def": _big_def(300, n_tap=0)})
-    r = subprocess.run([sys.executable, str(Path(s.__file__)),
+    r = _pr.run([sys.executable, str(Path(s.__file__)),
                         "--vintage", str(pnr / "routed.def")],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 0
     data = json.loads(r.stdout)
     assert data["verdict"] == "STALE_PRE_TAPCELL"

@@ -44,11 +44,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "latency_conformance_check.py"
@@ -174,8 +176,8 @@ def _write(tmp_path, name, body):
 
 
 def _run_cli(args):
-    r = subprocess.run([sys.executable, str(_PROG), *args],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_PROG), *args],
+                       capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -342,11 +344,11 @@ def test_478_endstate_fp_passes_via_subprocess(tmp_path):
     rtl = tmp_path / "bus_arbiter.sv"
     rtl.write_text(_RTL_ARBITER)           # direct artifact write
     out_json = tmp_path / "endstate.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROG), "--rtl", str(rtl), "--top", "bus_arbiter",
          "--event", "req0", "--output", "grant0", "--expect", "1",
          "--json", str(out_json)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     rep = json.loads(out_json.read_text())
     assert rep["verdict"] == "PASS"
@@ -361,11 +363,11 @@ def test_478_endstate_unreachable_still_blocks_via_subprocess(tmp_path):
     one-hot retry does NOT rescue a real bug)."""
     rtl = tmp_path / "bus_arbiter_dead.sv"
     rtl.write_text(_RTL_ARBITER_DEAD)
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROG), "--rtl", str(rtl), "--top",
          "bus_arbiter_dead", "--event", "req0", "--output", "grant0",
          "--expect", "1"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert proc.returncode == 1, (proc.stdout, proc.stderr)
     assert "LATENCY-TIMEOUT" in proc.stdout, proc.stdout
 

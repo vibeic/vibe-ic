@@ -53,9 +53,11 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
@@ -78,9 +80,9 @@ _SIGNOFF_DRC = (
 
 
 def _run(*args):
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "drc_report_check.py"), *args],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     try:
         return r.returncode, json.loads(r.stdout)
     except ValueError:

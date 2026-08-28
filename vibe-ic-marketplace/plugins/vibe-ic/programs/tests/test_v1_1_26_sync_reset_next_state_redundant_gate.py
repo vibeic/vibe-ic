@@ -19,7 +19,6 @@ chip-AGNOSTIC: fixtures use generic TopModule/clk/resetn/state shapes only.
 """
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -29,6 +28,9 @@ from _specrtl_common import (extract_spec_contract, parse_rtl_ports,  # noqa: E4
                              strip_comments)
 
 import pytest  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
 #: Without iverilog the gate refuses to run — correctly — and writes no report,
@@ -308,11 +310,11 @@ def _stage(tmp_path, prompt_text, sample_body):
 
 
 def _run_gate(ds, run):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(GATES), "--prob", "ProbP",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def _block_rules(run):

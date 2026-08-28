@@ -38,7 +38,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -52,15 +51,11 @@ if str(PROGRAMS) not in sys.path:
 
 import flow_compliance_check as F  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 FCC = PROGRAMS / "flow_compliance_check.py"
 FLOW_YAML = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
-
-#: <= 60s. `ci_harness_timeout_ceiling_check` derives a 60s per-call ceiling
-#: from the 180s harness bound; an inner timeout above it can only fire after
-#: the session has already been killed. Measured worst case for one audit over
-#: these fixtures is ~2s.
-_CALL_TIMEOUT = 55
-
 
 # ────────────────────────────── fixtures ──────────────────────────────────
 _SYNTH = '''#!/usr/bin/env python3
@@ -125,10 +120,10 @@ def _audit(project: Path, flow_def: Path):
     re-derivation of the rule: rc, stdout and the `--json` document only."""
     project.mkdir(parents=True, exist_ok=True)
     report = project / "i901_audit_report.json"
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(FCC), ".", "--flow-def", str(flow_def),
          "--json", str(report)],
-        cwd=project, capture_output=True, text=True, timeout=_CALL_TIMEOUT)
+        cwd=project, capture_output=True, text=True)
     doc = json.loads(report.read_text())
     return r.returncode, (r.stdout or "") + (r.stderr or ""), doc
 

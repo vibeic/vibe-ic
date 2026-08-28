@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -37,6 +36,9 @@ _DENY_PATH = (
 # (decoded, at runtime) from the encoded store so this test carries no literal.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _commercial_pdk as _cpdk  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 _PDK_SKU = next((t for t in _cpdk.nda_tokens() if t.lower().startswith("m18")), "")
 
 _CODENAME_TOKEN_RE = re.compile(r"^[a-z]{2,5}\d{3,}[a-z]*$")  # e.g. "xx3616"
@@ -88,9 +90,9 @@ TESTER_NAME = _TOKENS["tester_hyphen"][0] if _TOKENS["tester_hyphen"] else ""
 
 
 def _run(args: list[str], cwd: Path | None = None) -> tuple[int, dict]:
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAM), *args, "--json"],
-        capture_output=True, text=True, cwd=cwd, timeout=20)
+        capture_output=True, text=True, cwd=cwd)
     try:
         out = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -106,9 +108,9 @@ def _write(tmp: Path, name: str, body: str) -> Path:
 
 
 def test_help_works():
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAM), "--help"],
-        capture_output=True, text=True, timeout=10)
+        capture_output=True, text=True)
     assert r.returncode == 0
     assert "PRACTICAL_NOTES" in r.stdout
 
@@ -237,9 +239,9 @@ def test_default_scan_runs_on_plugin_dir():
 
 
 def test_invalid_path_errors():
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAM), "--paths", "/no/such/dir/__nonexistent__"],
-        capture_output=True, text=True, timeout=10)
+        capture_output=True, text=True)
     assert r.returncode == 2
 
 

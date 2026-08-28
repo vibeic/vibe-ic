@@ -24,10 +24,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PROGRAMS = os.path.dirname(_HERE)
@@ -322,9 +325,9 @@ def _drive(tmp_path, def_text: str, tag: str):
     (cell / "phase3/stage3/pnr/routed.def").write_text(def_text)
     (cell / "input/pdk/macro.lef").write_text(LEF)
     prog = os.path.join(_PROGRAMS, "macro_obs_geometry_intersect_check.py")
-    r = subprocess.run([sys.executable, prog, str(cell),
+    r = _pr.run([sys.executable, prog, str(cell),
                         "--json", str(cell / "rep.json")],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr, json.loads(
         (cell / "rep.json").read_text())
 

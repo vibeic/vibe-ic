@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _HYGIENE = (_PROGRAMS.parents[3] / "tools" / "ci" / "repo_hygiene_gates.sh")
@@ -68,9 +71,9 @@ def test_gate_does_not_accept_a_project_positional(gate):
     If one of these ever learns to take a project it belongs back in the
     ordinary triage, not here.
     """
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROGRAMS / f"{gate}.py"), "/tmp"],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
     assert proc.returncode == 2 and "usage:" in (proc.stderr or ""), (
         f"{gate} accepted a project positional (rc={proc.returncode}); it is "
         f"no longer 'not a project gate'")
@@ -89,9 +92,9 @@ def test_ready_gates_are_actually_wired(gate):
 @pytest.mark.parametrize("gate", READY)
 def test_ready_gates_pass_from_the_plugin_directory(gate):
     """Wired gates must be green, or every landing breaks on the next push."""
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROGRAMS / f"{gate}.py")],
-        cwd=str(_PROGRAMS.parent), capture_output=True, text=True, timeout=45)
+        cwd=str(_PROGRAMS.parent), capture_output=True, text=True)
     assert proc.returncode == 0, (
         f"{gate} is wired into the landing ladder and exits "
         f"{proc.returncode}:\n{(proc.stdout + proc.stderr)[:600]}")

@@ -30,6 +30,9 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import design_one_shot_runner as R          # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _NEUTRALIZED_WRAPPER = """\
 module counter (
     input clk,
@@ -143,6 +146,6 @@ def test_reemit_restores_pull_and_design_resets(tmp_path):
              str(proj / "phase2" / "stage1" / "rtl" / "counter.v")],
             capture_output=True, text=True)
         assert c.returncode == 0, c.stderr
-        rr = subprocess.run(["vvp", str(binp)], capture_output=True,
-                            text=True, timeout=60)
+        rr = _pr.run(["vvp", str(binp)], capture_output=True,
+                            text=True)
         assert "RESET_OK" in rr.stdout, (sp, rr.stdout)

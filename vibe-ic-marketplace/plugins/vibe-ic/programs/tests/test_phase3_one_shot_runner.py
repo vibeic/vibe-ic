@@ -61,6 +61,9 @@ PROG = Path(os.environ.get(
 sys.path.insert(0, str(PROG.parent))
 import phase3_one_shot_runner as RUNNER  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # v1.4.62 — these control-flow tests exercise the DEFAULT (`--pdk auto`)
 # resolution, which lands on the container's OSS enablement. On a host that has
@@ -86,10 +89,9 @@ _ACK_OSS = "--allow-oss-pdk-fallback"
 def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:
     if args and not args[0].startswith("-") and _ACK_OSS not in args:
         args = args + [_ACK_OSS]
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG)] + args,
-        capture_output=True, text=True, timeout=timeout,
-    )
+        capture_output=True, text=True)
 
 
 def test_positive_fail_missing_project(tmp_path):

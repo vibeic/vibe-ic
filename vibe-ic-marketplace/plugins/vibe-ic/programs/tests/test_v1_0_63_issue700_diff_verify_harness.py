@@ -34,11 +34,13 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "diff_verify_harness.py"
@@ -67,8 +69,8 @@ def _write(tmp_path, name, body):
 
 
 def _run_cli(args):
-    r = subprocess.run([sys.executable, str(_PROG), *args],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_PROG), *args],
+                       capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -274,8 +276,8 @@ def test_bad_inputs_rc2(tmp_path):
 # ── chip-AGNOSTIC guard ──────────────────────────────────────────────────────
 def test_chip_agnostic_source_guard():
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
-    r = subprocess.run([sys.executable, str(prog), str(_PLUGIN_ROOT)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(prog), str(_PLUGIN_ROOT)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-500:]
 
 

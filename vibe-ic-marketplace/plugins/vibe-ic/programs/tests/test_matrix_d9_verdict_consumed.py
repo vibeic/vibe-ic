@@ -143,7 +143,6 @@ from __future__ import annotations
 
 import ast
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -156,6 +155,9 @@ from matrix_63x8 import cells as C, flowref as F, waivers as W
 
 sys.path.insert(0, str(F.PLUGIN_ROOT / "programs"))
 import flow_compliance_check as FCC  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 DIM = 9
 
@@ -177,8 +179,6 @@ FAIL_GATE: Dict[str, object] = {"files_exist": [_GATE_ABSENT]}
 def _gateless_steps() -> Tuple[str, ...]:
     return tuple(F.normalize_id(s) for s in F.step_ids() if not F.gate_clauses(s))
 
-
-_SUBPROCESS_TIMEOUT_S = 900
 
 #: RTL good enough for the structural umbrella to have something to read.
 _P0_RTL = ("phase2/stage1/rtl/top.v", "module top; endmodule\n")
@@ -341,11 +341,10 @@ def _run_checker(step_id, gate: Optional[Dict[str, object]], root: Path,
     flow = root / "flow.yaml"
     _write_flow(step_id, flow, gate)
     report = root / "report.json"
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(FCC_PY), str(project),
          "--flow-def", str(flow), "--json", str(report), "--strict"],
-        capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S,
-    )
+        capture_output=True, text=True)
     status = overall = None
     if report.is_file():
         doc = json.loads(report.read_text(encoding="utf-8"))

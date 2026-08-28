@@ -56,6 +56,9 @@ import benchmark_evidence_index as bei  # noqa: E402
 
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Fixture construction
@@ -104,9 +107,9 @@ def tree(tmp_path: Path) -> Path:
 
 
 def _run(root: Path, *args) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--root", str(root), *args],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 # ─────────────────────────────────────────────────────────────────────

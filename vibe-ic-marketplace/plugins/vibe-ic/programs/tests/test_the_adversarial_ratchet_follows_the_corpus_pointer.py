@@ -36,7 +36,6 @@ without one, which is the property the thing it guards lost.
 from __future__ import annotations
 
 import importlib
-import subprocess
 import sys
 from pathlib import Path
 
@@ -46,6 +45,9 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 import _published_corpus as PC  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: The three run trees the recorded finding set names. Spelled here so a rename
 #: on either side is a failure rather than a silent skip.
@@ -150,8 +152,8 @@ def test_the_generator_refuses_rather_than_publishing_an_empty_finding_set(
     if PC.corpus_root() is not None:
         pytest.skip("this checkout carries a corpus; the no-corpus path is "
                     "not reachable here")
-    r = subprocess.run([sys.executable, str(gen), str(PC._PLUGIN)],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(gen), str(PC._PLUGIN)],
+                       capture_output=True, text=True)
     out = r.stdout + r.stderr
     assert r.returncode != 0, (
         "the generator exited 0 with no corpus to measure. Whatever it wrote, "

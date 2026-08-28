@@ -34,7 +34,6 @@ WHAT EACH TEST BELOW IS FOR
 Fixtures are PUBLIC (sky130 cell names) or invented grammar. No PDK under NDA.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -44,6 +43,9 @@ import _gate_denominator as gd
 import _sweep_reach as sr
 import _vacuous_exit as vx
 import perc_corpus_sweep as perc
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(perc.__file__).resolve().parent
 CHECK = PROGRAMS / "sweep_reach_check.py"
@@ -93,8 +95,8 @@ def _run(args, cwd=PROGRAMS):
     # from the 180s CI harness bound. A child allowed to outlive the harness
     # kills the SESSION instead of the test, and every child driven here is a
     # sub-second CLI over a three-module corpus.
-    return subprocess.run([sys.executable] + [str(a) for a in args],
-                          cwd=str(cwd), capture_output=True, text=True, timeout=60)
+    return _pr.run([sys.executable] + [str(a) for a in args],
+                          cwd=str(cwd), capture_output=True, text=True)
 
 
 def _sentinel_lines(proc) -> int:

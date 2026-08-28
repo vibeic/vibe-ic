@@ -14,12 +14,14 @@ the mirror is a derived artefact (the source-of-truth tree always has
 the generator + an up-to-date INDEX).
 """
 from __future__ import annotations
-import subprocess
 import sys
 from pathlib import Path
 import pytest
 
 from _plugin_tree import plugin_path, repo_path_or_missing
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # flow #486: INDEX.md is a SHIPPED in-plugin artefact (resolve via the
 # plugin-root resolver); the generator tools/gen_programs_index.py is a
@@ -50,10 +52,9 @@ def test_index_is_fresh():
             f"generator not present at {GEN} (mirror tree); freshness "
             f"is enforced in the source-of-truth tree only"
         )
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(GEN), "--check"],
-        capture_output=True, text=True, timeout=60,
-    )
+        capture_output=True, text=True)
     assert r.returncode == 0, (
         f"INDEX.md is stale — re-run `python3 tools/gen_programs_index.py`."
         f"\nstderr:\n{r.stderr}\nstdout:\n{r.stdout}"

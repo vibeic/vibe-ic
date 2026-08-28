@@ -1,9 +1,11 @@
 """Smoke tests for sdc_gen.py (Wave 72; renamed Wave 73 / v0.128)."""
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAM = Path(__file__).resolve().parent.parent / "sdc_gen.py"
 
@@ -41,8 +43,8 @@ def _scaffold(tmp_path: Path, with_wrapper: bool = False,
 
 def test_sdc_gen_l9_only(tmp_path):
     proj = _scaffold(tmp_path, with_wrapper=False, clock_mhz=50)
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
     sdc = proj / "phase2" / "stage1" / "fpga" / "chip_top.sdc"
     assert sdc.is_file()
@@ -57,8 +59,8 @@ def test_sdc_gen_l9_only(tmp_path):
 
 def test_sdc_gen_with_wrapper(tmp_path):
     proj = _scaffold(tmp_path, with_wrapper=True)
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
     sdc = proj / "phase2" / "stage1" / "fpga" / "de10lite_top.sdc"
     assert sdc.is_file()
@@ -71,8 +73,8 @@ def test_sdc_gen_with_wrapper(tmp_path):
 
 def test_sdc_period_from_clock_mhz(tmp_path):
     proj = _scaffold(tmp_path, with_wrapper=False, clock_mhz=100)
-    cp = subprocess.run([sys.executable, str(PROGRAM), str(proj)],
-                        capture_output=True, text=True, timeout=30)
+    cp = _pr.run([sys.executable, str(PROGRAM), str(proj)],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr
     sdc = proj / "phase2" / "stage1" / "fpga" / "chip_top.sdc"
     text = sdc.read_text()

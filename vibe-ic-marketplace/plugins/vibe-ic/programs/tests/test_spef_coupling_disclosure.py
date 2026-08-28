@@ -24,9 +24,11 @@ that is `si_mcf_sta_check`, pinned by
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "spef_extraction_check.py"
@@ -77,9 +79,9 @@ def _project(tmp: Path, text: str) -> Path:
 
 def _run(proj: Path):
     out = proj / "out.json"
-    r = subprocess.run([sys.executable, str(_PROG), str(proj),
+    r = _pr.run([sys.executable, str(_PROG), str(proj),
                         "--json", str(out)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     return r, json.loads(out.read_text())
 
 

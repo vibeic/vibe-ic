@@ -33,10 +33,9 @@ set_output_delay -clock clk 2 [get_ports LEDR[0]]
 
 
 def _run(args: list, timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG)] + args,
-        capture_output=True, text=True, timeout=timeout,
-    )
+        capture_output=True, text=True)
 
 
 def _seed_sdc(project: Path, name: str, body: str) -> None:
@@ -130,6 +129,9 @@ def test_edge_multiple_files_one_broken(tmp_path):
 #      reported `[PASS] sdc_validator_check: 2 SDC file(s) OK`, rc=0.
 # ===========================================================================
 import json  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _write_l8(project: Path, doc: dict) -> Path:

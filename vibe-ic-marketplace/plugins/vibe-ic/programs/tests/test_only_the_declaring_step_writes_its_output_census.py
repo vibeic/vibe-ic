@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import re
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _count(out: str, label: str) -> int:
@@ -97,10 +99,10 @@ def _tree(files: dict, flow: str = _FLOW, inventory=None) -> Path:
 
 
 def _run(root: Path, *extra, inventory: Path = None):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--root", str(root), "--inventory",
          str(inventory or (root / "inventory.json")), *extra],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True)
 
 
 def test_two_writers_for_one_declared_path_is_refused():
@@ -159,9 +161,8 @@ def test_self_test_passes_on_the_shipped_flow():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root),
-                        "--self-test"], capture_output=True, text=True,
-                       timeout=1800)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root),
+                        "--self-test"], capture_output=True, text=True)
     assert "self-test" in r.stdout, f"{r.stdout}\n{r.stderr}"
 
 
@@ -177,14 +178,14 @@ def test_a_stale_inventory_row_is_a_failure():
 
 
 def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = subprocess.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
+                       capture_output=True, text=True)
     assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_a_bad_invocation_is_rc_3():
-    r = subprocess.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
@@ -192,8 +193,8 @@ def test_the_shipped_tree_passes_its_own_rule():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=1800)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "with a write this scan resolves:" in r.stdout, (
         "the run must disclose how much of its population it can see")
@@ -209,8 +210,8 @@ def test_the_census_never_blocks_by_default():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=1800)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, (
         f"the census refused by default (rc={r.returncode}); it must report\n"
         f"{r.stdout}\n{r.stderr}")

@@ -15,9 +15,11 @@ The rules here are the contract, and the reverse cases are the load-bearing
 half: a project with only pre-layout evidence must be COMPLETELY unaffected.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = Path(__file__).resolve().parent.parent / "sta_corner_record_completeness_check.py"
 STA = "phase3/stage3/sta/"
@@ -57,8 +59,8 @@ def _run(tmp_path, files):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body)
     out = proj / "out.json"
-    res = subprocess.run([sys.executable, str(PROG), ".", "--json", str(out)],
-                         cwd=str(proj), capture_output=True, text=True, timeout=60)
+    res = _pr.run([sys.executable, str(PROG), ".", "--json", str(out)],
+                         cwd=str(proj), capture_output=True, text=True)
     rows = {}
     if out.exists():
         for c in json.loads(out.read_text()).get("corners", []):

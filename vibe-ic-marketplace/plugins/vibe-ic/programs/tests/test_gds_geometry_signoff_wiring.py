@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -33,6 +32,9 @@ FILL_GATE = PROGRAMS / "metal_fill_emit.py"
 
 sys.path.insert(0, str(PROGRAMS))
 import _klayout_launch as klaunch  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # The antenna fixture is a poly gate of area 1.0 um^2 joined to a met1 wire
 # 0.5 um wide and L um long, so ratio = 0.5*L. These are the hand-computed
@@ -165,8 +167,8 @@ def test_flow_condition_paths_match_the_programs_discovery_paths(flow):
 # ---------------------------------------------------------------------------
 def _run(prog, *args, env=None):
     full = dict(os.environ, **(env or {}))
-    return subprocess.run([sys.executable, str(prog), *map(str, args)],
-                          capture_output=True, text=True, env=full, timeout=60)
+    return _pr.run([sys.executable, str(prog), *map(str, args)],
+                          capture_output=True, text=True, env=full)
 
 
 @pytest.mark.parametrize("prog", [ANTENNA_GATE, FILL_GATE])

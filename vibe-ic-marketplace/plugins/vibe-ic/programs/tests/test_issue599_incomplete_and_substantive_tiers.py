@@ -28,10 +28,13 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
@@ -179,9 +182,9 @@ def test_d1_discloses_incomplete_only_when_the_ai_half_did_not_read():
 def test_the_yosys_gate_still_runs_and_says_something(tmp_path):
     """End-to-end on an empty project: no `.ys`, no synth log — the
     `_unconfirmed` tier, which must NOT carry the disclosure."""
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "yosys_hilomap_required_check.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=60)
+         str(tmp_path)], capture_output=True, text=True)
     out = r.stdout + r.stderr
     assert "VACUOUS_PASS" in out, out
     assert "SUBSTANTIVE_PASS" not in out, (

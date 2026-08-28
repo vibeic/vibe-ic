@@ -27,10 +27,13 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import re
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 GATE = "fpga_wrapper_input_polluter_check"
@@ -65,7 +68,7 @@ F = _load_flow()
 
 def _run_via_umbrella(rtl_dir: pathlib.Path):
     argv = F._structural_gate_argv(GATE, rtl_dir, rtl_dir=rtl_dir)
-    return subprocess.run(argv, capture_output=True, text=True, timeout=45)
+    return _pr.run(argv, capture_output=True, text=True)
 
 
 def test_gate_is_registered_with_an_adapter():
@@ -111,9 +114,9 @@ def test_without_strict_the_same_input_passes(tmp_path):
     trusting.
     """
     (tmp_path / "wrap.v").write_text(POLLUTER_RTL, encoding="utf-8")
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_PROGRAMS / f"{GATE}.py"), "--rtl", str(tmp_path)],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
     assert proc.returncode == 0
     assert re.search(r"Warnings\s*:\s*[1-9]", proc.stdout), (
         "expected the polluter to be DETECTED but not blocking without "

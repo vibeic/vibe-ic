@@ -11,17 +11,19 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "tracked_symlink_portability_check.py"
 
 
 def _git(root: Path, *a):
-    subprocess.run(["git", "-C", str(root), *a], capture_output=True,
-                   check=True, timeout=60)
+    _pr.run(["git", "-C", str(root), *a], capture_output=True,
+                   check=True, text=False)
 
 
 def _repo(p: Path) -> Path:
@@ -40,9 +42,9 @@ def _run(root: Path, out: Path):
     # a tree they never built.
     env = dict(os.environ)
     env.pop("VIBE_IC_BENCHMARK_DATA", None)
-    return subprocess.run([sys.executable, str(_PROG), str(root),
+    return _pr.run([sys.executable, str(_PROG), str(root),
                            "--json", str(out)], env=env,
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True)
 
 
 def test_371_absolute_target_fails(tmp_path):
@@ -111,8 +113,8 @@ def test_371_shipped_tree_is_clean():
     """The gate must be GREEN on main as landed."""
     env = dict(os.environ)
     env.pop("VIBE_IC_BENCHMARK_DATA", None)
-    r = subprocess.run([sys.executable, str(_PROG)], env=env,
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(_PROG)], env=env,
+                       capture_output=True, text=True)
     if r.returncode == 2:
         return
     assert r.returncode == 0, r.stdout + r.stderr

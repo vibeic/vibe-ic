@@ -54,7 +54,6 @@ skip_by_the_flow` drives exactly that state through the umbrella.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -65,6 +64,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import si_mcf_sta as M            # noqa: E402
 import si_mcf_sta_check as G      # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _HEAD = """*SPEF "ieee 1481-1999"
 *DESIGN "t"
@@ -171,9 +173,9 @@ def _project(root: Path, *, spef_text: str = _SPEF_COUPLED,
 def _run(proj: Path):
     """Drive the real CLI. rc is read off the BARE invocation — never a pipe."""
     out = proj / "gate_out.json"
-    r = subprocess.run([sys.executable, str(_PROG), str(proj),
+    r = _pr.run([sys.executable, str(_PROG), str(proj),
                         "--json", str(out)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     return r, json.loads(out.read_text())
 
 

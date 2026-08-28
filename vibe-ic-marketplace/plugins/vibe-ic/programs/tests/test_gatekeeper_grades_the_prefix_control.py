@@ -22,22 +22,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 _GK = importlib.import_module("gatekeeper_review")
-
-
-#: Bound for the pytest-in-a-subprocess below. Derived from the harness it
-#: runs under: `ci_harness_timeout_ceiling_check` reads
-#: tools/gatekeeper-land.sh:197 (`--timeout=180 --timeout-method=thread`) and
-#: permits one blocking call at most 180 // 3 = 60 s. A 300 s bound cannot
-#: fire — pytest kills the SESSION at 180 s, so `--maxfail` stops counting and
-#: every other file in the subset silently loses its verdict.
-#: MEASURED on this tree with `pytest --durations=0`: the two tests that spend
-#: this call cost 0.23 s and 0.19 s END TO END, so 60 s is >250x headroom.
-_CEILING_S = 60
 
 
 def _control_report(tmp_path: Path, name: str, body: str) -> Path:
@@ -47,9 +39,9 @@ def _control_report(tmp_path: Path, name: str, body: str) -> Path:
     (d / f"test_{name}.py").write_text(body)
     xml = tmp_path / f"{name}.xml"
     env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
-    subprocess.run([sys.executable, "-m", "pytest", str(d), "-q",
+    _pr.run([sys.executable, "-m", "pytest", str(d), "-q",
                     "-p", "no:cacheprovider", f"--junitxml={xml}"],
-                   capture_output=True, text=True, timeout=_CEILING_S, env=env,
+                   capture_output=True, text=True, env=env,
                    cwd=str(tmp_path))
     assert xml.is_file(), "the control produced no report to grade"
     return xml

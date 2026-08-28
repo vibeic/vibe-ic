@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import adversarial_agent as AA  # noqa: E402
 from _published_corpus import SKIP_REASON as CORPUS_SKIP_REASON  # noqa: E402
 from _published_corpus import named_cell as _corpus_cell  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # THE RATCHET RESOLVES ITS CORPUS THROUGH THE ONE HELPER, and did not always.
 # These four names were `REPO / "benchmark-data" / "ic" / ...` until the corpus
@@ -76,26 +78,6 @@ OLDER = _corpus_cell("sha256", "clean_run_v1422_20260715")
 #: comparison.
 FORGEABLE = ("antenna_report_check", (".", "--mode", "antenna"))
 DEFENDING = ("drc_report_check", (".",))
-
-#: The bound on every CLI subprocess below (vibe-ic#1241).
-#:
-#: WHY NOT 1500. `--timeout-method=thread` kills the SESSION rather than
-#: the test, so an inner bound above the harness's own can never fire:
-#: pytest ends the run at 180 s first and every other file in the subset
-#: loses its verdict. `ci_harness_timeout_ceiling_check` resolves the
-#: ceiling from the workflow bounds as `180 // 3` = 60 s. 1500 s was 25x
-#: the harness itself.
-#:
-#: WHY 45 AND NOT 60. Chosen from the clock, not by lowering 1500 until
-#: the gate went quiet — these tests DO real work (the CLI runs
-#: `FORGEABLE` over a published cell), so the measurement is the point.
-#: Measured twice, on two hosts: the whole 21-test file runs in 33.57 s
-#: and 29.25 s, and its slowest bounded call is 9.28 s and 7.70 s, so
-#: 45 s is ~5x the slowest measurement. It stays clear of the ceiling
-#: rather than sitting on it: the `// 3` divisor exists so one file can
-#: afford more than a single bounded call, and a bound placed exactly AT
-#: the ceiling is one workflow edit away from being a violation again.
-_CLI_BOUND_S = 45
 
 #: The reason is the SUITE'S one reason, not a private spelling of it. A reader
 #: who greps for why corpus checks are quiet finds this one with the other 54.
@@ -317,9 +299,9 @@ def test_the_adversary_never_writes_into_the_repository():
 @_corpus
 def test_the_cli_reports_the_forgery_and_exits_1():
     """The shipped CLI, in a subprocess, because the exit code is the product."""
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR)],
-        capture_output=True, text=True, timeout=_CLI_BOUND_S)
+        capture_output=True, text=True)
     assert r.returncode == 1, (r.returncode, r.stdout[-800:], r.stderr[-400:])
     assert "FORGED GREEN" in r.stdout, r.stdout[-800:]
     assert "P0 integrity defect" in r.stdout, r.stdout[-800:]
@@ -331,9 +313,9 @@ def test_the_cli_reports_the_forgery_and_exits_1():
 def test_the_json_report_round_trips(tmp_path):
     out = tmp_path / "r.json"
     AA.run_campaign(PLUGIN, CELL, DONOR, None, gates=(FORGEABLE,))
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR),
-         "--json", str(out)], capture_output=True, text=True, timeout=_CLI_BOUND_S)
+         "--json", str(out)], capture_output=True, text=True)
     assert r.returncode == 1, r.stdout[-400:]
     doc = json.loads(out.read_text())
     assert doc["schema"] == AA.SCHEMA

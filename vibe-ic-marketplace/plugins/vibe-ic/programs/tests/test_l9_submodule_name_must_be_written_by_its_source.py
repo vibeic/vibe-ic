@@ -64,11 +64,13 @@ against the design's own inputs. No chip, vendor, PDK, process or protocol
 literal participates.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _RUNNER = _PROGRAMS / "phase1_one_shot_runner.py"
@@ -110,8 +112,8 @@ def _run_phase1(tmp_path: Path, docs: dict) -> dict:
         (d / name).write_text(body, encoding="utf-8")
     # ~3s measured; 60s is the harness ceiling, so this call's own timeout
     # fires and fails the test rather than the harness killing the session.
-    proc = subprocess.run([sys.executable, str(_RUNNER), str(tmp_path)],
-                          capture_output=True, text=True, timeout=60)
+    proc = _pr.run([sys.executable, str(_RUNNER), str(tmp_path)],
+                          capture_output=True, text=True)
     l9 = tmp_path / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json"
     assert l9.is_file(), (
         "Phase 1 emitted no L9 (rc=%s)\n%s"

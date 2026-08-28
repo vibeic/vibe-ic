@@ -37,7 +37,6 @@ keys on STRUCTURE only (positional-vs-named instantiation, the iverilog error
 text, the TB's `#(.X(...))` overrides) — design names appear ONLY in the fixtures.
 """
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -53,6 +52,9 @@ for _p in (str(_PROGRAMS), str(_BENCH)):
 
 import port_convention_corpus as PCC  # noqa: E402
 import score_iverilog_tb as SC        # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 _iv = pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog/vvp unavailable")
@@ -91,10 +93,10 @@ def _iverilog_errors_on_unknown_param() -> bool:
             "  m #(.NO_SUCH_PARAM(16)) u(.a(a), .b(b));\n"
             "  initial #1 $finish;\nendmodule\n")
         try:
-            r = subprocess.run(
+            r = _pr.run(
                 ["iverilog", "-g2012", "-o", str(d / "out"),
                  str(d / "m.v"), str(d / "tb.v")],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True)
         except Exception:            # noqa: BLE001 - absent/unusable toolchain
             return False
         return r.returncode != 0
@@ -212,11 +214,11 @@ def test_facetA_prefix_reproduces_compile_error_pre_fix(tmp_path):
     dd = dataset / design
     with tempfile.TemporaryDirectory() as td:
         binp = Path(td) / "b"
-        r = subprocess.run(
+        r = _pr.run(
             ["iverilog", "-g2012", "-o", str(binp),
              str(_make(tmp_path, "verbatimA.v", _A_CAND_CORRECT)),
              str(dd / "testbench.v")],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
     assert r.returncode != 0, "verbatim positional bind should NOT compile"
     # iverilog phrases this positional-bind elaboration failure differently
     # across versions — older builds print "Unable to assign to unresolved
@@ -359,11 +361,11 @@ def test_facetB_prefix_reproduces_param_not_found(tmp_path):
         spec=_B_SPEC, design="shiftreg")
     with tempfile.TemporaryDirectory() as td:
         binp = Path(td) / "b"
-        r = subprocess.run(
+        r = _pr.run(
             ["iverilog", "-g2012", "-o", str(binp),
              str(_make(tmp_path, "verbatimB.v", _B_CAND_CORRECT)),
              str(dataset / design / "testbench.v")],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
     assert r.returncode != 0, "verbatim no-param bind should NOT compile"
     log = r.stdout + r.stderr
     assert PCC.iverilog_param_not_found(log) == ["STG_WIDTH"], log
@@ -482,19 +484,18 @@ def test_facetB_injected_dut_compiles_and_passes():
         dpath = Path(td) / "dut.v"; dpath.write_text(inj)
         tpath = Path(td) / "tb.v"; tpath.write_text(_B_TB)
         binp = Path(td) / "b"
-        c = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(dpath),
-                            str(tpath)], capture_output=True, text=True, timeout=60)
+        c = _pr.run(["iverilog", "-g2012", "-o", str(binp), str(dpath),
+                            str(tpath)], capture_output=True, text=True)
         assert c.returncode == 0, (c.stdout + c.stderr)
-        r = subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
-                           timeout=60)
+        r = _pr.run(["vvp", str(binp)], capture_output=True, text=True)
     assert "Your Design Passed" in (r.stdout + r.stderr), (r.stdout + r.stderr)
 
 
 # ════════════════════════ chip-AGNOSTIC source guard ═════════════════════════
 def test_chip_agnostic_guard():
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
-    r = subprocess.run([sys.executable, str(prog), str(_PLUGIN)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(prog), str(_PLUGIN)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, (r.stdout[-2000:] + r.stderr[-500:])
 
 

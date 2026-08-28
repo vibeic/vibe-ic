@@ -20,7 +20,6 @@ chip-AGNOSTIC: fixtures use generic TopModule/clk/d/q shapes only.
 """
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -32,6 +31,9 @@ HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
 
 import pytest  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
 #: Without iverilog the gate refuses to run — correctly — and writes no report,
@@ -107,11 +109,11 @@ def _stage(tmp_path, prompt_text, sample_body):
 
 
 def _run_gate(ds, run):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(GATES), "--prob", "ProbP",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
 
 
 def _block_rules(run):

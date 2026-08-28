@@ -43,6 +43,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _rtl_include_hub as hub  # noqa: E402
 import lec_run  # noqa: E402
 
+import _progress_run as _pr  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # fixtures
@@ -238,9 +240,9 @@ def test_phase2_selector_delegates_to_the_same_predicate(tmp_path):
 # ---------------------------------------------------------------------------
 def _yosys_available() -> bool:
     try:
-        r = subprocess.run(
+        r = _pr.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc", "which yosys"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True)
         return r.returncode == 0
     except (subprocess.SubprocessError, OSError):
         return False
@@ -271,9 +273,9 @@ def test_single_unit_does_not_break_a_macro_redefining_design():
         cmd = (f"export PATH=/foss/tools/yosys/bin:$PATH && "
                f"yosys -p 'read_slang --single-unit {files} --top top; "
                f"hierarchy -check -top top' 2>&1")
-        r = subprocess.run(
+        r = _pr.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         out = r.stdout or ""
         assert "Build succeeded" in out, out[-1500:]
         assert "Top module:  \\top" in out, out[-1500:]
@@ -295,9 +297,9 @@ def test_hub_design_elaborates_after_the_fix(tmp_path):
         cmd = (f"export PATH=/foss/tools/yosys/bin:$PATH && "
                f"yosys -p 'read_slang --single-unit {files} --top top; "
                f"hierarchy -check -top top' 2>&1")
-        r = subprocess.run(
+        r = _pr.run(
             ["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         out = r.stdout or ""
         assert "duplicate definition" not in out, out[-1500:]
         assert "unknown macro" not in out, out[-1500:]

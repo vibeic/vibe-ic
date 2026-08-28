@@ -63,13 +63,15 @@ IC input anywhere.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 import matrix_mutation_ledger as L
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: Bound for one synthetic pytest session. These trees hold ONE trivial test and
 #: measure at well under a second; 30 s is slack for a loaded host and is under
@@ -97,11 +99,10 @@ def _tree(tmp_path: Path, body: str, *, reddening_plugin: bool) -> Path:
 
 def _raw_pytest_rc(root: Path, nodeid: str) -> int:
     """What the OLD `_run_cell` would have scored: the process exit status."""
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, "-m", "pytest", nodeid, "-q", "-p", "no:randomly",
          "--no-header", "-rN"],
-        cwd=str(root), capture_output=True, text=True, timeout=_T,
-        env={**_child_env()})
+        cwd=str(root), capture_output=True, text=True, env={**_child_env()})
     return p.returncode
 
 

@@ -64,7 +64,6 @@ Fixtures are invented grammar (probe_*.py) with no PDK identity of any kind.
 """
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -73,6 +72,9 @@ import pytest
 import _sweep_reach as sr
 import _vacuous_exit as vx
 import sweep_reach_survey as srv
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(srv.__file__).resolve().parent
 
@@ -350,11 +352,10 @@ class TestTheCorpusLabelReachesTheReportAReaderSees:
 
     def _run(self, tmp_path, *extra):
         tree = _tree(tmp_path, probe_ok=ALWAYS_DISCLOSES)
-        return subprocess.run(
+        return _pr.run(
             [sys.executable, str(PROGRAMS / "sweep_reach_survey.py"),
              "--programs-dir", str(tree), "--timeout", "30", *extra],
-            capture_output=True, text=True, timeout=45,
-            cwd=str(PROGRAMS),
+            capture_output=True, text=True, cwd=str(PROGRAMS),
             env={**os.environ, "PYTHONPATH": str(PROGRAMS)})
 
     def test_the_populated_report_names_its_corpus(self, tmp_path):

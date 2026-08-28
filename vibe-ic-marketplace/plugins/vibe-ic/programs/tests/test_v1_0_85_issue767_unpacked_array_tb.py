@@ -35,11 +35,13 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "latency_conformance_check.py"
@@ -198,8 +200,8 @@ def test_scalar_port_is_array_false():
 # ── #478 END-STATE: real program ────────────────────────────────────────────
 
 def _run_lcc(args):
-    cp = subprocess.run([sys.executable, str(_PROG), *args],
-                        capture_output=True, text=True, timeout=60)
+    cp = _pr.run([sys.executable, str(_PROG), *args],
+                        capture_output=True, text=True)
     return cp.returncode, cp.stdout + cp.stderr
 
 

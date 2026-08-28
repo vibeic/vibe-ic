@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import ast
 import re
-import subprocess
 import tempfile
 import sys
 from pathlib import Path
@@ -31,6 +30,9 @@ _PROGRAMS = PROG.parent
 
 sys.path.insert(0, str(_PROGRAMS))
 import gate_proof_vocabulary_has_a_producer as R          # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[5]
@@ -108,14 +110,14 @@ def test_an_axis_with_a_produced_name_is_not_reported():
 
 
 def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = subprocess.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
+                       capture_output=True, text=True)
     assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_a_bad_invocation_is_rc_3():
-    r = subprocess.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True, timeout=300)
+    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
+                       capture_output=True, text=True)
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
@@ -132,8 +134,8 @@ def test_the_shipped_tree_is_GREEN_and_the_population_is_not_empty():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True, timeout=900)
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "[PASS]" in r.stdout
     assert _count(r.stdout, "axes with no produced name") == 0
@@ -194,9 +196,9 @@ def test_a_tree_whose_axis_is_produced_EXITS_ZERO():
     one outcome nobody exercised. If `[PASS]` cannot render, the discovery
     would arrive only once someone had already done the work.
     """
-    r = subprocess.run([sys.executable, str(PROG), "--root",
+    r = _pr.run([sys.executable, str(PROG), "--root",
                         str(_synthetic(produced=True))],
-                       capture_output=True, text=True, timeout=900)
+                       capture_output=True, text=True)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "[PASS]" in r.stdout
     assert _count(r.stdout, "axes with no produced name") == 0
@@ -205,9 +207,9 @@ def test_a_tree_whose_axis_is_produced_EXITS_ZERO():
 def test_the_same_tree_with_the_name_UNPRODUCED_is_refused():
     """The other arm: same fixture, one string changed, so the rc 0 above is
     the PRODUCED-ness and not the shape of the tree."""
-    r = subprocess.run([sys.executable, str(PROG), "--root",
+    r = _pr.run([sys.executable, str(PROG), "--root",
                         str(_synthetic(produced=False))],
-                       capture_output=True, text=True, timeout=900)
+                       capture_output=True, text=True)
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "alpha" in r.stdout
     assert _count(r.stdout, "axes with no produced name") == 1

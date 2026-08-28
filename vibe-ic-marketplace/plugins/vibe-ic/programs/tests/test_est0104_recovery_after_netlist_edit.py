@@ -36,7 +36,6 @@ runs, in which order, and what the caller is told), not its source text.
 """
 import os
 import shutil
-import subprocess  # nosec - fixed argv, no shell
 import sys
 import tempfile
 
@@ -44,6 +43,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import phase3_one_shot_runner as p3  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _emit(spef="/OUT/sdr_pass.spef", tag="SDR"):
@@ -59,8 +62,8 @@ def _run_tcl(script: str) -> str:
         fh.write(script)
         path = fh.name
     try:
-        out = subprocess.run([tclsh, path], capture_output=True,  # nosec
-                             text=True, timeout=60)
+        out = _pr.run([tclsh, path], capture_output=True,  # nosec
+                             text=True)
         return out.stdout + out.stderr
     finally:
         os.unlink(path)

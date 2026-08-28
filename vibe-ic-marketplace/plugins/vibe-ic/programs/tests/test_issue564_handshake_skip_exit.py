@@ -26,10 +26,13 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "handshake_livelock_result_stability_check.py"
@@ -64,9 +67,9 @@ PLAIN_RTL = "module p(input wire clk, output reg q);\nendmodule\n"
 
 
 def _run(target):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), str(target)],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
 
 
 def _status(proc):
@@ -109,9 +112,9 @@ def test_warn_only_still_suppresses(tmp_path):
     advisory output should not start getting rc 2.
     """
     (tmp_path / "p.v").write_text(PLAIN_RTL, encoding="utf-8")
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(PROG), str(tmp_path), "--warn-only"],
-        capture_output=True, text=True, timeout=45)
+        capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 

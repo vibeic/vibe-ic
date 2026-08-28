@@ -22,7 +22,6 @@ chip-AGNOSTIC: pure generator-ordering fix; no checklist-logic change, no chip
 name.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -30,13 +29,16 @@ PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import phase3_one_shot_runner as P  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROGRAMS = PLUGIN / "programs"
 _FOUNDRY_ITEMS = ("foundry_mask_spec", "foundry_wat_plan", "foundry_corner_kit")
 
 
 def _run(proj, prog, *extra):
-    subprocess.run([sys.executable, str(PROGRAMS / prog), str(proj), *extra],
-                   capture_output=True, text=True, timeout=60)
+    _pr.run([sys.executable, str(PROGRAMS / prog), str(proj), *extra],
+                   capture_output=True, text=True)
 
 
 def _foundry_present(proj):

@@ -48,7 +48,6 @@ _determined` pins that it stays a third value.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -58,9 +57,8 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import eda_report_audit as E  # noqa: E402
 
-#: The bound on every CLI subprocess here. These fixtures are a few kB and the
-#: gate is pure Python; measured at well under a second.
-_CLI_BOUND_S = 60
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _EM_HEAD = [
     "OpenROAD v2.0 electromigration analysis",
@@ -109,10 +107,10 @@ def _audit(project: Path) -> dict:
     verdict-to-exit-code mapping unmeasured, which is the hole
     `gate_cli_mutation_probe` exists for.
     """
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "em_report_check.py"), ".",
          "--mode", "em"],
-        cwd=str(project), capture_output=True, text=True, timeout=_CLI_BOUND_S)
+        cwd=str(project), capture_output=True, text=True)
     try:
         doc = json.loads(r.stdout)
     except ValueError:
@@ -234,9 +232,9 @@ def _lvs_project(root: Path, rtl_top: str, report_top: str) -> Path:
 
 
 def _lvs_audit(project: Path) -> dict:
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "lvs_report_check.py"), "."],
-        cwd=str(project), capture_output=True, text=True, timeout=_CLI_BOUND_S)
+        cwd=str(project), capture_output=True, text=True)
     try:
         doc = json.loads(r.stdout)
     except ValueError:

@@ -45,12 +45,14 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "latency_conformance_check.py"
@@ -231,7 +233,7 @@ def _run_cli(rtl: Path, top: str, event: str, output: str, expect: str,
            "--event", event, "--output", output, "--expect", expect,
            "--reset", "rst_n", "--reset-active-low", "--json", str(jpath)]
     cmd += extra or []
-    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    cp = _pr.run(cmd, capture_output=True, text=True)
     report = json.loads(jpath.read_text()) if jpath.exists() else {}
     return cp.returncode, report
 

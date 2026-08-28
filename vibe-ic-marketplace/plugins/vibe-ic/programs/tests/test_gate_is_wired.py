@@ -7,7 +7,6 @@ inside `main` cannot hide behind green unit tests of the helpers.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +17,9 @@ GATE = PROGRAMS / "gate_is_wired_check.py"
 
 sys.path.insert(0, str(PROGRAMS))
 import gate_is_wired_check as giw  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 def _tree(root: Path, *, gates=(), flow_names=(), skill_names=(), ci_names=()):
@@ -42,8 +44,8 @@ def _run(root: Path, *args):
     # the ceiling kills the SESSION instead of the test. Every case here runs
     # over a synthetic tree of a handful of files and finishes in well under a
     # second; measured worst case is ~0.4s.
-    r = subprocess.run([sys.executable, str(GATE), "--root", str(root), *args],
-                       capture_output=True, text=True, timeout=55)
+    r = _pr.run([sys.executable, str(GATE), "--root", str(root), *args],
+                       capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -329,17 +331,17 @@ def test_the_shipped_register_still_refuses_to_GROW(tmp_path):
     short = tmp_path / "short_baseline.json"
     short.write_text(json.dumps({"unwired": sorted(now)[1:]}))
 
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(GATE), "--root", str(plugin),
          "--baseline", str(short)],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     assert r.returncode == 1, r.stdout + r.stderr
     assert sorted(now)[0] in r.stdout + r.stderr
 
-    r2 = subprocess.run(
+    r2 = _pr.run(
         [sys.executable, str(GATE), "--root", str(plugin),
          "--baseline", str(short), "--write-baseline"],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     assert r2.returncode == 1, r2.stdout + r2.stderr
     assert sorted(now)[0] in r2.stdout + r2.stderr, (
         "the write path refused without naming the entry it refused")

@@ -560,6 +560,9 @@ def test_review2_batch_dir_stem_collision_refused(tmp_path):
 import json as _json
 from _hostpaths import require_corpus  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 JSON_DICT_GOOD = _json.dumps({"code": [{"rtl/foo.sv":
     "module foo(input a, output b);\n  assign b = a;\nendmodule"}]})
 JSON_DICT_BROKEN = _json.dumps({"code": [{"rtl/bad.sv":
@@ -793,12 +796,11 @@ _YOSYS_CAP: dict = {}
 
 def _yosys_probe_blob(sv_text, top):
     import re as _re_p
-    import subprocess as _sp
     import tempfile as _tf
     with _tf.TemporaryDirectory() as td:
         p = Path(td) / "probe.sv"
         p.write_text(sv_text)
-        r = _sp.run(["yosys", "-p",
+        r = _pr.run(["yosys", "-p",
                      f"read_verilog -sv {p}; synth -top {top}; stat"],
                     # 60s, NOT 300. The pytest harness runs with --timeout=180, so a
                     # bound ABOVE the harness cap is not a longer allowance — it is a
@@ -813,7 +815,7 @@ def _yosys_probe_blob(sv_text, top):
                     # failures, and `[FAIL] 1 inner bound(s) above the 60s ceiling`.
                     # The timeout named nothing because the session died; the hygiene
                     # gate is the only one that could say why.
-                    capture_output=True, text=True, timeout=60)
+                    capture_output=True, text=True)
     blob = (r.stdout or "") + "\n" + (r.stderr or "")
     assert _re_p.search(r"Yosys\s+[\d.]|Executing\s+\w+\s+pass|/----", blob), (
         "host yosys did not RUN for the capability probe — refusing to "
@@ -824,9 +826,7 @@ def _yosys_probe_blob(sv_text, top):
 
 def _host_yosys_version():
     if "ver" not in _YOSYS_CAP:
-        import subprocess as _sp
-        r = _sp.run(["yosys", "-V"], capture_output=True, text=True,
-                    timeout=60)
+        r = _pr.run(["yosys", "-V"], capture_output=True, text=True)
         line = ((r.stdout or "") + (r.stderr or "")).splitlines()
         _YOSYS_CAP["ver"] = line[0].strip() if line else "unknown"
     return _YOSYS_CAP["ver"]

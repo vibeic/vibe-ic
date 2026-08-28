@@ -81,6 +81,9 @@ for _p in (str(_PROGRAMS), str(_BENCH)):
 
 import score_iverilog_tb as SC  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _HAS_IVERILOG = shutil.which("iverilog") is not None
 pytestmark = pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
 
@@ -538,10 +541,9 @@ def test_named_binding_tb_no_permutation(tmp_path):
 
 # ── chip-AGNOSTIC guard ──────────────────────────────────────────────────────
 def test_chip_agnostic_guard():
-    import subprocess
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
-    r = subprocess.run([sys.executable, str(prog), str(_PLUGIN)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(prog), str(_PLUGIN)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 

@@ -40,7 +40,6 @@ below pin each direction separately:
   * (2)(3) fail-safe defaults are unchanged; a failed probe costs only a
     recoverable fallback.
 """
-import subprocess
 import sys
 from pathlib import Path
 
@@ -66,6 +65,9 @@ CONTAINER = "vibeic-eda"
 from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
                                probe_skip_reason)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 RUN_REMEDY = "bash tools/vibeic-eda/restart-eda.sh"
 _CONTAINER_STATE, _CONTAINER_DETAIL = probe(["docker", "exec", CONTAINER, "true"])
 
@@ -76,8 +78,8 @@ _CONTAINER_STATE, _CONTAINER_DETAIL = probe(["docker", "exec", CONTAINER, "true"
 #: calls through here, worst single call 0.579 s, so 60 s is ~100x the worst
 #: case. Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277.
 def _dexec(cmd: str, timeout: int = 60):
-    r = subprocess.run(["docker", "exec", CONTAINER, "bash", "-lc", cmd],
-                       capture_output=True, text=True, timeout=timeout)
+    r = _pr.run(["docker", "exec", CONTAINER, "bash", "-lc", cmd],
+                       capture_output=True, text=True)
     return r.returncode, (r.stdout or "") + "\n" + (r.stderr or "")
 
 

@@ -24,21 +24,23 @@ caller reading the exit code cannot otherwise distinguish a clean plugin tree
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = Path(__file__).resolve().parent.parent / "openroad_tcl_deprecation_check.py"
 
 def _run(args, **kw):
-    return subprocess.run([sys.executable, str(PROG)] + args,
+    return _pr.run([sys.executable, str(PROG)] + args,
                           capture_output=True, text=True,
                           # 45s, under the 60s ceiling: an inner bound that
                           # can outlive the 180s harness kills the SESSION
                           # rather than failing the test. The heaviest call
                           # here is the full-tree default scan, measured at
                           # 4.07s over 3592 files.
-                          timeout=45, **kw)
+                          **kw)
 
 
 def test_help():

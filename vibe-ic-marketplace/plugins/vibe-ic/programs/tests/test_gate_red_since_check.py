@@ -27,6 +27,9 @@ LEDGER = ROOT / "tools" / "ci" / "gate_red_since.json"
 sys.path.insert(0, str(PLUGIN / "programs"))
 import gate_red_since_check as G  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 SHA = "a" * 40
 
 
@@ -242,9 +245,9 @@ def _cli(tmp_path, record, ledger_rows, name="r", repo=ROOT):
     rec.write_text(json.dumps(record))
     led = tmp_path / f"{name}_ledger.json"
     led.write_text(json.dumps({"acknowledged": ledger_rows}))
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--record", str(rec), "--ledger", str(led),
-         "--repo", str(repo)], capture_output=True, text=True, timeout=60)
+         "--repo", str(repo)], capture_output=True, text=True)
 
 
 def test_cli_exits_0_when_every_red_is_new(tmp_path):

@@ -52,6 +52,9 @@ if str(_PROGRAMS) not in sys.path:
 import shape_b_sample_export as S  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _HAS_IVERILOG = shutil.which("iverilog") is not None
 pytestmark = pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
 
@@ -303,8 +306,8 @@ def test_foreign_tb_not_bound_by_autodiscovery(tmp_path):
 # ── (6) chip-AGNOSTIC guard ──────────────────────────────────────────────────
 def test_chip_agnostic_guard():
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
-    r = subprocess.run([sys.executable, str(prog), str(_PROGRAMS.parent)],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run([sys.executable, str(prog), str(_PROGRAMS.parent)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 

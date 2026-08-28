@@ -9,11 +9,13 @@
   6. L9 with wrong reference_event → R5 ERROR
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = ROOT / "programs"
@@ -45,10 +47,9 @@ endmodule
 def test_r1_dead_turnaround_constant(dead_turnaround_project):
     """R1: turnaround constant defined but 0 references → ERROR."""
     prog = PROGRAMS / "bus_turnaround_consumes_spec_constant_check.py"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(prog), str(dead_turnaround_project), "--json"],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert result.returncode == 1
     data = json.loads(result.stdout)
     assert not data["passed"]
@@ -61,10 +62,9 @@ def test_r1_dead_turnaround_constant(dead_turnaround_project):
 def test_r4_dead_timing_constant_warn(dead_turnaround_project):
     """R4: timing constant with 0 references → WARN."""
     prog = PROGRAMS / "dead_timing_constant_warn.py"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(prog), str(dead_turnaround_project), "--json"],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     data = json.loads(result.stdout)
     warns = [f for f in data["findings"] if f["severity"] == "WARNING"]
     assert len(warns) >= 1
@@ -221,10 +221,9 @@ def test_r5_missing_response_delay(l9_missing_delay):
     """R5: dispatcher module without response_delay block → ERROR."""
     prog = PROGRAMS / "l9_response_delay_schema_check.py"
     l9_file = l9_missing_delay / "L9_INTEGRATION_SPEC.json"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(prog), str(l9_file), "--json"],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert result.returncode == 1
     data = json.loads(result.stdout)
     assert not data["passed"]
@@ -259,10 +258,9 @@ def test_r5_wrong_reference_event(l9_wrong_ref_event):
     """R5: reference_event=cmd_valid (early-fire) → ERROR with hint."""
     prog = PROGRAMS / "l9_response_delay_schema_check.py"
     l9_file = l9_wrong_ref_event / "L9_INTEGRATION_SPEC.json"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(prog), str(l9_file), "--json"],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert result.returncode == 1
     data = json.loads(result.stdout)
     assert not data["passed"]
@@ -293,13 +291,12 @@ def test_t1_verdict_pass(frame_layout):
     """T1: PASS frame decodes without mismatches."""
     prog = PROGRAMS / "tester_verdict_frame_decode.py"
     layout_file = frame_layout / "frame_layout.json"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(prog),
          "--layout", str(layout_file),
          "--frame", "AA 55 01 02 03 04 B7 00",
          "--json"],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert result.returncode == 0
     data = json.loads(result.stdout)
     assert not data["has_mismatch"]
@@ -311,13 +308,12 @@ def test_t1_verdict_fail_no_response(frame_layout):
     """T1: NO_RESPONSE verdict → diagnosis hint."""
     prog = PROGRAMS / "tester_verdict_frame_decode.py"
     layout_file = frame_layout / "frame_layout.json"
-    result = subprocess.run(
+    result = _pr.run(
         [sys.executable, str(prog),
          "--layout", str(layout_file),
          "--frame", "AA 55 01 02 03 04 B7 02",
          "--json"],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
     assert result.returncode == 1
     data = json.loads(result.stdout)
     verdict_field = [f for f in data["fields"] if f["field"] == "verdict"][0]

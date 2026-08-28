@@ -48,6 +48,9 @@ sys.path.insert(0, str(PROGRAMS))
 import design_one_shot_runner as p2  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 CDI_PROG = PROGRAMS / "cross_design_identity_check.py"
 
 # The two gate-audit dirs the field agent named (and the runner now sweeps).
@@ -107,9 +110,9 @@ def _run_real_gate_checkers(project: Path) -> None:
          "--json", f"{LINT_DIR}/rom_init_lint.json"],
     ]
     for inv in invocations:
-        subprocess.run(
+        _pr.run(
             [sys.executable, str(PROGRAMS / inv[0])] + inv[1:],
-            cwd=project, capture_output=True, text=True, timeout=60)
+            cwd=project, capture_output=True, text=True)
 
 
 def _regen_with_gate_audit(project: Path, ic_name: str,

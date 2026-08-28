@@ -40,7 +40,6 @@ from __future__ import annotations
 import ast
 import json
 import os
-import subprocess
 import sys
 import types
 from pathlib import Path
@@ -57,6 +56,9 @@ import _designs_root as dr                      # noqa: E402
 import analog_real_corner_sweep as ARS          # noqa: E402
 import analog_mc_yield_run as MCY               # noqa: E402
 import shipped_path_portability_check as SPC    # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 # Assembled, never spelled: this guard must not be the thing that reintroduces
 # the name it exists to keep out, and must not match itself.
@@ -334,12 +336,12 @@ def _run_flattener(tmp_path, treedir, mounts):
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.pop("VIBEIC_DESIGNS_HOST_ROOT", None)
     env.pop("VIBEIC_DESIGNS_CONT_ROOT", None)
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_SITES["pdk_yosys_flatten_for_quartus.py"]),
          "--gate-netlist", str(d / "gate.v"), "--pdk-shim", str(d / "shim.v"),
          "--top", "chip_top", "--output", str(d / "flat.v"),
          "--container", "any-container", "--keep-tmp"],
-        capture_output=True, text=True, env=env, timeout=120)
+        capture_output=True, text=True, env=env)
     ys = d / ".tmp_flatten" / "flatten.ys"
     return cp, (ys.read_text() if ys.is_file() else None)
 

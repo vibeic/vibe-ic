@@ -43,7 +43,6 @@ keys on grammar/structure — the design name appears ONLY in the fixtures.
 """
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -59,6 +58,9 @@ for _p in (str(_PROGRAMS), str(_BENCH)):
 
 import shape_b_sample_export as SB   # noqa: E402
 import score_iverilog_tb as SC       # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _HAS_IVERILOG = (shutil.which("iverilog") is not None
                  and shutil.which("vvp") is not None)
@@ -204,12 +206,12 @@ def test_apply_order_reordered_rtl_compiles_against_positional_tb(tmp_path):
     tb.write_text(_TB)
     with tempfile.TemporaryDirectory() as td:
         binp = Path(td) / "b"
-        r = subprocess.run(
+        r = _pr.run(
             ["iverilog", "-g2012", "-o", str(binp), str(dut), str(tb)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         assert r.returncode == 0, (r.stdout + r.stderr)
-        v = subprocess.run(["vvp", str(binp)], capture_output=True,
-                           text=True, timeout=60)
+        v = _pr.run(["vvp", str(binp)], capture_output=True,
+                           text=True)
     assert "Your Design Passed" in (v.stdout + v.stderr), (v.stdout + v.stderr)
 
 
@@ -246,10 +248,10 @@ def test_prefix_inline_comment_reproduces_compile_error(tmp_path):
     dut.write_text(_CAND_CORRECT_INLINE)
     with tempfile.TemporaryDirectory() as td:
         binp = Path(td) / "b"
-        r = subprocess.run(
+        r = _pr.run(
             ["iverilog", "-g2012", "-o", str(binp), str(dut),
              str(dd / "testbench.v")],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
     assert r.returncode != 0, "verbatim positional bind should NOT compile"
     # iverilog phrases this positional-bind elaboration failure differently
     # across versions — older builds print "Unable to assign to unresolved

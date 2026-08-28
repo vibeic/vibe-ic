@@ -38,11 +38,13 @@ only difference is the slot keyword, and asserts the defect comes back.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PLUGIN = PROGRAMS.parent
@@ -92,10 +94,10 @@ def _audit(project: Path, flow_def: Path) -> str:
     # from the 180s harness bound, so an inner timeout above it can only fire
     # after the session has already been killed. Measured worst case for this
     # audit over the 4-file fixture is ~0.5s.
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(FCC), str(project), "--phase", "3", "--lenient",
          "--flow-def", str(flow_def)],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     return r.stdout + r.stderr
 
 

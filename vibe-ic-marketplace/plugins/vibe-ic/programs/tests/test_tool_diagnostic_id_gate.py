@@ -9,7 +9,6 @@ this file, so neither arm depends on which cells happen to be published.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -56,10 +55,10 @@ def _cell(root: Path, name: str, body: str, fname: str = "run.log") -> Path:
 def _run(cell: Path, acceptance: Path, today: date = TODAY):
     """Drive the SHIPPED CLI in a subprocess, so the exit code measured is the
     one an operator gets — not a return value read out of an import."""
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(GATE), str(cell), "--acceptance", str(acceptance),
          "--today", today.isoformat()],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -791,6 +790,9 @@ def test_PAIRED_the_live_finding_is_NOT_adjudicated_by_its_own_author():
 # ===========================================================================
 import step_metrics as SM  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 #: `_PREV_LOG` carries WARNING RSZ-0104, WARNING PSM-0038, `Warning 441:`
 #: (-> STA-0441), INFO ODB-0227, and one unkeyed Yosys line. Written out so a
 #: change to the fixture moves these numbers RED rather than silently.
@@ -968,16 +970,16 @@ def test_a_failed_emit_is_a_FAILURE_not_a_quiet_zero(tmp_path):
     cell = _cell(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
     blocked = tmp_path / "not-a-dir"
     blocked.write_text("i am a file")
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(GATE), str(cell), "--census-only",
          "--emit-metrics", str(blocked)],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     assert p.returncode == 1, p.stdout + p.stderr
     assert "could not emit per-step metrics" in p.stdout + p.stderr
-    ok = subprocess.run(
+    ok = _pr.run(
         [sys.executable, str(GATE), str(cell), "--census-only",
          "--emit-metrics", str(tmp_path / "fine")],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     assert ok.returncode == 0, ok.stdout + ok.stderr
     assert "emitted 8 per-step metric(s)" in ok.stdout, ok.stdout
 
@@ -992,11 +994,11 @@ def test_NO_BASELINE_still_emits_the_metric_and_still_exits_2(tmp_path):
     """
     cell = _cell(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
     project = tmp_path / "proj"
-    p = subprocess.run(
+    p = _pr.run(
         [sys.executable, str(GATE), str(cell), "--acceptance",
          str(_acc(tmp_path / "a.json", [])), "--today", TODAY.isoformat(),
          "--emit-metrics", str(project)],
-        capture_output=True, text=True, timeout=55)
+        capture_output=True, text=True)
     assert p.returncode == 2, p.stdout + p.stderr
     assert "NO_BASELINE" in p.stdout
     merged, prov = SM.collect(project)

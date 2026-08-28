@@ -31,6 +31,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 GUARD = Path(__file__).resolve().parents[1] / "sta_continue_on_error_guard.py"
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,8 +44,8 @@ VAR = "sta" + "_continue_on_error"
 
 
 def _run(*paths) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(GUARD), *[str(p) for p in paths]],
-                          capture_output=True, text=True, timeout=600)
+    return _pr.run([sys.executable, str(GUARD), *[str(p) for p in paths]],
+                          capture_output=True, text=True)
 
 
 # ─────────────────────────────── RED pole ────────────────────────────────────

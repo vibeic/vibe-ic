@@ -191,20 +191,6 @@ def test_checker_referenced_by_nothing_is_reported_separately(tmp_path):
     assert rep["test_only"] == []
 
 
-#: vibe-ic#1241. `ci_harness_timeout_ceiling_check` puts the per-call ceiling at
-#: harness_bound/3 = 180/3 = 60s. A bound ABOVE it cannot fire before the
-#: harness does, and pytest's thread-method timeout then kills the SESSION
-#: rather than the test — the invocation ends with no summary line.
-#:
-#: I wrote this helper at 600s in the SAME PR that fixes a reporting defect in
-#: this very audit, which is the honest version of how this class survives.
-#: MEASURED, `--durations`: the three tests that use `_cli` are 0.05s each. The
-#: module's 31.17s belongs to `test_real_repo_runs_and_is_deterministic`, which
-#: is pre-existing and does not go through here. 30s is ~600x the measured worst
-#: case for this helper and half the ceiling.
-_CLI_S = 30
-
-
 def _cli(root: Path, *extra):
     """Run the audit as the landing gate runs it, and return the process."""
     argv = list(extra)
@@ -215,9 +201,9 @@ def _cli(root: Path, *extra):
         baseline = root / "checker-execution-baseline.json"
         baseline.write_text(json.dumps({"known": []}) + "\n")
         argv.extend(("--baseline", str(baseline)))
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--repo-root", str(root), *argv],
-        capture_output=True, text=True, timeout=_CLI_S)
+        capture_output=True, text=True)
 
 
 def test_the_zero_is_STATED_not_left_silent(tmp_path):
@@ -384,6 +370,9 @@ def test_a_nested_worktree_copy_inside_the_repo_is_still_skipped(tmp_path):
 # because the flow runs it, whatever its name.
 # ---------------------------------------------------------------------------
 import fnmatch as _fnmatch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 _FLOW = (Path(__file__).resolve().parents[2] / "flow" / "phase1_phase2_phase3.yaml")

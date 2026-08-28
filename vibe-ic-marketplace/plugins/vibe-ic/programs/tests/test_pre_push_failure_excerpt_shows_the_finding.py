@@ -29,10 +29,13 @@ not a ban:
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 def _find_hook() -> Path:
     """Walk up to the repo root rather than counting directories.
@@ -88,13 +91,11 @@ def _extract_helper() -> str:
 
 def _run(selector_body: str) -> str:
     script = f"{selector_body}\n_gate_excerpt \"$(cat)\"\n"
-    p = subprocess.run(
+    p = _pr.run(
         ["bash", "-c", script],
         input=GATE_OUTPUT,
         capture_output=True,
-        text=True,
-        timeout=60,
-    )
+        text=True)
     assert p.returncode == 0, f"selector errored: {p.stderr}"
     return p.stdout
 
@@ -167,8 +168,8 @@ def _run_strict(selector_body: str, gate_output: str):
               f"{selector_body}\n"
               '_gate_excerpt "$(cat)"\n'
               'echo "__CONTINUED__"\n')
-    p = subprocess.run(["bash", "-c", script], input=gate_output,
-                       capture_output=True, text=True, timeout=60)
+    p = _pr.run(["bash", "-c", script], input=gate_output,
+                       capture_output=True, text=True)
     return p.returncode, p.stdout
 
 

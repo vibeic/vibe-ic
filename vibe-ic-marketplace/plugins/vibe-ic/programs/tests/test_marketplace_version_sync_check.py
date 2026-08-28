@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 PROG = (
     Path(__file__).resolve().parents[2]
     / "programs"
@@ -52,11 +55,10 @@ def _make_marketplace(tmp_path: Path,
 
 
 def _run(marketplace_root: Path, *extra: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG),
          "--marketplace-dir", str(marketplace_root), *extra],
-        capture_output=True, text=True, timeout=30,
-    )
+        capture_output=True, text=True)
 
 
 def test_pass_when_versions_match(tmp_path):

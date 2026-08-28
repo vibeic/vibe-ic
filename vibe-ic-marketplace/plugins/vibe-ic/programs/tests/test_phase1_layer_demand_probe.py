@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 import sys
 
 import pytest
@@ -30,6 +29,10 @@ sys.path.insert(0, str(_PROGRAMS))
 PROG = _PROGRAMS / "phase1_layer_demand_probe.py"
 
 import phase1_layer_demand_probe as P  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 #: A document stating its rails in a table — the shape that reaches L21 through
 #: the shipped synthesiser. Copied in form (not by import) from
@@ -80,8 +83,8 @@ def _l21(status):
 
 
 def _run(project, *extra):
-    return subprocess.run([sys.executable, str(PROG), str(project), *extra],
-                          capture_output=True, text=True, timeout=45)
+    return _pr.run([sys.executable, str(PROG), str(project), *extra],
+                          capture_output=True, text=True)
 
 
 # ── the defect the program exists for ────────────────────────────────────────

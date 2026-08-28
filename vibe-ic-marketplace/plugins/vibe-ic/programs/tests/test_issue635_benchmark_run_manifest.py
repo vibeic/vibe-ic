@@ -30,6 +30,11 @@ import importlib
 import json
 import pathlib
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 M = importlib.import_module("benchmark_run_manifest")
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
@@ -184,15 +189,14 @@ def test_an_unreadable_scorer_output_is_rc_2_not_a_manifest(tmp_path):
 
 # ── the gate mode, proven on a real git repo in both directions ────────────
 def _repo(tmp_path):
-    import subprocess
     def g(*a):
         # 30 s, MEASURED not guessed: the whole fixture (init + config + add +
         # commit on a two-file repo) runs in 0.01 s. The ceiling that matters is
         # the harness's 180 s — an inner bound above 60 s can outlive it and
         # kill the SESSION instead of the test, which
         # `ci_harness_timeout_ceiling_check` failed this file on.
-        return subprocess.run(["git", "-C", str(tmp_path), *a],
-                              capture_output=True, text=True, timeout=30)
+        return _pr.run(["git", "-C", str(tmp_path), *a],
+                              capture_output=True, text=True)
     g("init", "-q", ".")
     g("config", "user.email", "t@t")
     g("config", "user.name", "t")

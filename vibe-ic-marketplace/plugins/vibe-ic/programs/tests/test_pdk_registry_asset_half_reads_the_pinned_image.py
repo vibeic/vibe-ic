@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -45,6 +44,9 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import pdk_registry_selectable_check as C  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PINNED = "ghcr.io/vibeic/vibeic-eda:9.9.9"
 PINNED_ID = "sha256:" + "a" * 64
@@ -214,8 +216,8 @@ def test_resolution_does_not_re_probe_docker_for_every_asset(docker_stub):
 def test_the_program_still_runs_end_to_end():
     """Import-level guard: the fix added a sibling import, so prove the file
     is still executable exactly as the gate invokes it."""
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(_PROGRAMS / "pdk_registry_selectable_check.py"),
          "--help"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

@@ -91,7 +91,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -105,6 +104,9 @@ if str(_PROGRAMS) not in sys.path:
 import si_mcf_sta as M            # noqa: E402
 import _gate_denominator as _gd   # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _CASES = ("grounded_only", "coupled")
 #: The one line that is the whole experiment.
 _COUPLING_LINE = "3 ub:A ua:B 0.1\n"
@@ -117,10 +119,9 @@ def _run(project_dir: Path, out_json: Path, cwd: Path | None = None):
     """Run the shipped gate. ``--json`` ALWAYS points outside the repository:
     without it the gate writes into ``reports/phase3/`` of the project it was
     handed, and for the shipped fixture that project is tracked."""
-    r = subprocess.run([sys.executable, str(_PROG), str(project_dir),
+    r = _pr.run([sys.executable, str(_PROG), str(project_dir),
                         "--json", str(out_json)],
-                       capture_output=True, text=True, timeout=60,
-                       cwd=str(cwd) if cwd else None)
+                       capture_output=True, text=True, cwd=str(cwd) if cwd else None)
     return r, json.loads(out_json.read_text())
 
 
@@ -382,7 +383,7 @@ def test_a_dropped_fold_on_the_coupled_fixture_still_fails(tmp_path):
 def test_a_run_that_never_started_is_not_credited_as_a_skip(tmp_path):
     """rc 2 is the disclosed-skip tier and the flow credits it as a pass. A
     mis-invoked run must not land in it."""
-    r = subprocess.run([sys.executable, str(_PROG),
+    r = _pr.run([sys.executable, str(_PROG),
                         str(tmp_path / "does_not_exist")],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True)
     assert r.returncode == 1

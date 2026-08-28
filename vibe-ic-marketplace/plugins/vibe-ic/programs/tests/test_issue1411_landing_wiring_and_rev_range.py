@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -50,9 +49,10 @@ sys.path.insert(0, str(PROGRAMS))
 
 import competing_pr_claim_groups as G  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _PROG = PROGRAMS / "competing_pr_claim_groups.py"
-#: Under the harness ceiling (60 s). See the module docstring.
-_TIMEOUT_S = 30
 
 #: The EXACT filter `report()` in `tools/gatekeeper-land.sh` applies to a
 #: program's output before printing it into the landing log.
@@ -68,16 +68,16 @@ _RANGE_WITHOUT = "%s~2..%s" % (_TIP, _TIP)
 
 
 def _run(*args):
-    proc = subprocess.run([sys.executable, str(_PROG), *args],
-                          capture_output=True, text=True, timeout=_TIMEOUT_S)
+    proc = _pr.run([sys.executable, str(_PROG), *args],
+                          capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 
 
 def _repo():
     repo = require_repo(".")
-    probe = subprocess.run(["git", "-C", str(repo), "cat-file", "-e",
+    probe = _pr.run(["git", "-C", str(repo), "cat-file", "-e",
                             _TIP + "^{commit}"],
-                           capture_output=True, timeout=_TIMEOUT_S)
+                           capture_output=True, text=False)
     if probe.returncode != 0:
         pytest.skip("commit %s not in this checkout (shallow clone?)" % _TIP)
     return repo

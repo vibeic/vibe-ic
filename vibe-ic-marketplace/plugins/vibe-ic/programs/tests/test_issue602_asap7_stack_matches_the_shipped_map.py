@@ -47,6 +47,10 @@ import pytest
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
 from not_verified_tier import skip_not_verified  # noqa: E402
+
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
@@ -88,8 +92,8 @@ def _shipped_map():
     if subprocess.run(["docker", "image", "inspect", img],
                       capture_output=True, text=True).returncode != 0:
         return None
-    r = subprocess.run(["docker", "run", "--rm", "--entrypoint", "cat", img, _LYT],
-                       capture_output=True, text=True, timeout=60)
+    r = _pr.run(["docker", "run", "--rm", "--entrypoint", "cat", img, _LYT],
+                       capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout:
         return None
     return {n: (int(l), int(d)) for n, l, d in _DECL.findall(r.stdout)}

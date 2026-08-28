@@ -41,9 +41,11 @@ the corpus to be non-empty would go NOT CHECKED in exactly the state it exists
 to watch.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 GATE = PLUGIN / "programs" / "step_internal_fail_bubble_up_check.py"
@@ -59,8 +61,8 @@ _TOLERATES_RC2 = {"run_tolerating_uncheckable"}
 
 
 def _gate(*args):
-    return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True, timeout=55)
+    return _pr.run([sys.executable, str(GATE), *args],
+                          capture_output=True, text=True)
 
 
 def _corpus(root, ic="an_ic", run="clean_run_v0000_20200101", reports=None):
@@ -194,8 +196,8 @@ def _suite(tmp_path, wrapper, rc):
         f"{buy}"
         f'{wrapper} "a corpus sweep" "{tmp_path}" bash "{stub}"\n'
         "gate_dispatch_finish\n")
-    return subprocess.run(["bash", str(harness)], capture_output=True,
-                          text=True, cwd=str(tmp_path), timeout=55)
+    return _pr.run(["bash", str(harness)], capture_output=True,
+                          text=True, cwd=str(tmp_path))
 
 
 def test_the_dispatcher_fails_the_suite_on_rc_2_from_a_blocking_wrapper(tmp_path):

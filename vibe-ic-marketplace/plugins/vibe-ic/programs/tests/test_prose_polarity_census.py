@@ -9,11 +9,13 @@ really is sharper, and that it really cannot refuse.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROG = Path(__file__).resolve().parent.parent / "prose_polarity_census.py"
 PROGRAMS_DIR = PROG.parent
@@ -55,10 +57,10 @@ def extract(text):
 
 
 def _run(programs, *extra):
-    return subprocess.run(
+    return _pr.run(
         [sys.executable, str(PROG), "--programs", str(programs),
          *[str(x) for x in extra]],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True)
 
 
 def _tree(tmp_path, **files):

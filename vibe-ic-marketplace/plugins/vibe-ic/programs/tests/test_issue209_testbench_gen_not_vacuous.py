@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -44,6 +43,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import testbench_gen as TBG              # noqa: E402
 import vacuous_testbench_check as VTB    # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # A correct DUT: registers its input, so every output resolves after reset.
@@ -174,13 +176,13 @@ def _simulate(tmp_path: Path, rtl: str, tag: str):
     tb = _tb_dir(project) / "tc_alpha.v"
     rtl_f = project / "phase2" / "stage1" / "rtl" / "widget_core.v"
     vvp = tmp_path / tag / "sim.vvp"
-    build = subprocess.run(
+    build = _pr.run(
         ["iverilog", "-o", str(vvp), "-s", "tc_alpha", str(tb), str(rtl_f)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert build.returncode == 0, (
         f"emitted TB does not COMPILE against the DUT:\n{build.stderr}\n"
         f"--- TB ---\n{tb.read_text()}")
-    run = subprocess.run([str(vvp)], capture_output=True, text=True, timeout=60)
+    run = _pr.run([str(vvp)], capture_output=True, text=True)
     return run.returncode, run.stdout + run.stderr
 
 

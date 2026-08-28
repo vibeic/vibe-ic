@@ -3,17 +3,19 @@
 Covers: verbatim benchmark leaks, short-string OK, safe fields, missing file.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 SCRIPT = Path(__file__).parent.parent / "manifest_leak_check.py"
 assert SCRIPT.exists()
 
 
 def _run(*args):
-    return subprocess.run([sys.executable, str(SCRIPT), *args],
-                          capture_output=True, text=True, timeout=10)
+    return _pr.run([sys.executable, str(SCRIPT), *args],
+                          capture_output=True, text=True)
 
 
 def _write(path: Path, facts):

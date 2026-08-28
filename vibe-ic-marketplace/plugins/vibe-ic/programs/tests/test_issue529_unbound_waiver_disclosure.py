@@ -71,6 +71,9 @@ import _waiver_entries as _we  # noqa: E402
 import waiver_staleness as _ws  # noqa: E402
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 FCC = PROGRAMS / "flow_compliance_check.py"
 WSC = PROGRAMS / "waivers_schema_check.py"
 
@@ -175,9 +178,9 @@ def _run_report(project: Path, out: Path):
     2,4,4,4,4), which would make any A/B here measure the pool, not the code."""
     import os
     env = dict(os.environ, VIBE_IC_COMPLIANCE_WORKERS="1")
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(FCC), str(project), "--json", str(out)],
-        capture_output=True, text=True, timeout=60, env=env)
+        capture_output=True, text=True, env=env)
     return r, (json.loads(out.read_text()) if out.is_file() else None)
 
 
@@ -548,8 +551,8 @@ def test_the_hygiene_gates_consume_the_entry_and_ignore_its_tier(tmp_path):
         proj = tmp_path / f"t_{_seq[0]:02d}"
         proj.mkdir()
         _project(proj, _entry(verdict_tier=tier))
-        r = subprocess.run([sys.executable, str(WSC), str(proj)],
-                           capture_output=True, text=True, timeout=60)
+        r = _pr.run([sys.executable, str(WSC), str(proj)],
+                           capture_output=True, text=True)
         assert r.returncode == 0, r.stdout + r.stderr
         return r.returncode, r.stdout.replace(str(proj), "<P>")
 

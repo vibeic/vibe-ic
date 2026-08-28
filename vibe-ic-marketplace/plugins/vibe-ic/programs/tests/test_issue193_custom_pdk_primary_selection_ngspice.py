@@ -130,6 +130,9 @@ sys.path.insert(0, str(PROGS))
 
 import analog_pdk_deck_context as APDC  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 NCH = "myfoundry_x180_nch"
 PCH = "myfoundry_x180_pch"
 SECTIONS = ("ss", "tt", "ff")
@@ -343,10 +346,10 @@ def _verbatim_ngspice_container():
 
 
 def _simulate(container, ngspice, deck: Path) -> dict:
-    cp = subprocess.run(
+    cp = _pr.run(
         ["docker", "exec", container, "bash", "-lc",
          f"cd {deck.parent} && {ngspice} -b {deck.name} 2>&1; echo RC=$?"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     out = cp.stdout or ""
     rc = next((int(l[3:]) for l in out.splitlines() if l.startswith("RC=")), 999)
     low = out.lower()

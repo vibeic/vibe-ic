@@ -19,7 +19,6 @@ markdown headings lifted from the verification-plan doc. Two root causes:
 chip-AGNOSTIC: fixtures use a generic multiplier-block doc set.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +27,9 @@ PROGRAMS = PLUGIN / "programs"
 
 sys.path.insert(0, str(PROGRAMS))
 import phase1_doc_one_shot_runner as D  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 _L3_DOC = """# External Interface Specification
 
@@ -108,10 +110,10 @@ def test_path_b_project_five_ports_zero_phantom_submodules(tmp_path):
     docs.mkdir(parents=True)
     (docs / "L3_external_interface.md").write_text(_L3_DOC)
     (docs / "L7_verification_plan.md").write_text(_L7_DOC)
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
          str(proj), "--ic-name", "mul32"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-1200:] + r.stderr[-1200:]
     l9 = json.loads(
         (proj / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json")

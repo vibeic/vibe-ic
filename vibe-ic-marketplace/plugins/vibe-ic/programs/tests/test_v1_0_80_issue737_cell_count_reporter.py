@@ -38,6 +38,10 @@ import pytest
 import final_report_generate as frg
 import design_one_shot_runner as p2
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 
 # --- fixtures: the EXACT yosys stat / netlist shapes -----------------------
 
@@ -263,13 +267,6 @@ def test_phase2_never_keys_on_never_emitted_substring():
 # end-to-end against a REAL yosys synth (only when yosys is present)
 # =========================================================================
 
-#: Bound for the capability probe. Every subprocess in this file stays under
-#: the 60s inner ceiling (180s harness // 3): a bound at or above the harness
-#: bound does not fail the TEST, it outlives the harness and takes the whole
-#: session down, losing every other verdict in the run.
-_PROBE_TIMEOUT_S = 30
-
-
 def _yosys_stat_json_support(exe):
     """Does THIS yosys accept `stat -json`?
 
@@ -287,10 +284,8 @@ def _yosys_stat_json_support(exe):
     a real failure and swallowing it here would convert this file from a red
     into a silent no-op, which is strictly worse than the red.
     """
-    import subprocess
-    p = subprocess.run([exe, "-q", "-p", "stat -json"],
-                       capture_output=True, text=True,
-                       timeout=_PROBE_TIMEOUT_S)
+    p = _pr.run([exe, "-q", "-p", "stat -json"],
+                       capture_output=True, text=True)
     if p.returncode == 0:
         return True
     if "Unknown option" in (p.stdout + p.stderr):
@@ -300,7 +295,6 @@ def _yosys_stat_json_support(exe):
 
 def test_end_to_end_real_yosys(tmp_path):
     import shutil
-    import subprocess
     exe = shutil.which("yosys")
     if exe is None:
         pytest.skip("yosys not installed")
@@ -326,8 +320,8 @@ def test_end_to_end_real_yosys(tmp_path):
         + ("tee -o stat.json stat -json; stat" if has_json
            else "tee -o yosys.log stat")
     )
-    proc = subprocess.run(["yosys", "-p", script], cwd=str(sd),
-                          capture_output=True, text=True, timeout=60)
+    proc = _pr.run(["yosys", "-p", script], cwd=str(sd),
+                          capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-2000:]
     # The branch must be the one we asked for; otherwise a probe that silently
     # answered wrong would let this test pass while measuring the other path.
@@ -468,7 +462,6 @@ def test_end_to_end_real_yosys_hierarchical(tmp_path):
     equals the yosys.log `Number of cells:` total — proving the two reporters
     agree on hierarchy."""
     import shutil
-    import subprocess
     exe = shutil.which("yosys")
     if exe is None:
         pytest.skip("yosys not installed")
@@ -480,8 +473,7 @@ def test_end_to_end_real_yosys_hierarchical(tmp_path):
     # skip is auditable rather than a silent hole (vibe-ic#1371's form).
     _support = _yosys_stat_json_support(exe)
     if _support is False:
-        _v = subprocess.run([exe, "-V"], capture_output=True, text=True,
-                            timeout=_PROBE_TIMEOUT_S).stdout.strip() or "unknown"
+        _v = _pr.run([exe, "-V"], capture_output=True, text=True).stdout.strip() or "unknown"
         pytest.skip(
             f"yosys present at {exe} ({_v}) but it does not accept "
             "`stat -json` (the option arrived after 0.9). This test's subject "
@@ -511,8 +503,8 @@ def test_end_to_end_real_yosys_hierarchical(tmp_path):
         "tee -o stat.json stat -json -top top; "
         "tee -o yosys.log stat -top top"
     )
-    proc = subprocess.run(["yosys", "-q", "-p", script], cwd=str(sd),
-                          capture_output=True, text=True, timeout=60)
+    proc = _pr.run(["yosys", "-q", "-p", script], cwd=str(sd),
+                          capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr[-2000:]
     log_total = p2._parse_yosys_stat_cells(
         (sd / "yosys.log").read_text(errors="replace"))

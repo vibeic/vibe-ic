@@ -38,6 +38,9 @@ import behavioral_fsm_synth as bfsm  # noqa: E402
 import moore_fsm_table_emit as moore_emit  # noqa: E402
 from _hostpaths import corpus_path, require_repo  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 # Dataset location (host-scoring is best-effort; absent dataset -> those cases skip).
 _DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
 _HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
@@ -268,11 +271,11 @@ endmodule
     work.mkdir(parents=True)
     (work / "spec.yaml").write_text("design:\n  name: TopModule\n")
     (work / "sample.sv").write_text(wrong)
-    proc = subprocess.run(
+    proc = _pr.run(
         [sys.executable, str(_GATES), "--prob", "ProbWalker",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     gates = json.loads((work / "gates.json").read_text())
     assert gates["hard_gates_pass"] is True

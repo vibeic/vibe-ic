@@ -25,12 +25,14 @@ Defenses pinned here:
 chip-AGNOSTIC: synthetic step dicts + tmp projects only.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import flow_compliance_check as F  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 
@@ -259,10 +261,10 @@ def test_zero_byte_handoff_member_hard_fails(tmp_path):
     h.mkdir(parents=True)
     (h / "chip_top.gds").write_bytes(b"GDSII-bytes")
     (h / "chip_top.magic_merged.gds").write_bytes(b"")   # the observed rot
-    r = subprocess.run(
+    r = _pr.run(
         [sys.executable, str(PROGRAMS / "foundry_handoff_package_check.py"),
          str(tmp_path)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "FOUNDRY_HANDOFF_ZERO_BYTE_MEMBER" in r.stdout
     assert "chip_top.magic_merged.gds" in r.stdout

@@ -35,18 +35,19 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
+
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
 _FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 _AUDIT = _PROGRAMS / "flow_gate_enforcement_audit.py"
-_TIMEOUT = 60
 
 
 def _mod():
@@ -87,9 +88,9 @@ def test_the_disclosure_reaches_the_console_on_the_pass_path(tmp_path):
     """The PASS line is what gets read as "every declaration matches its
     wiring". The disclosure has to be there, not only in a report nobody opens
     — and it must not change the exit code."""
-    cp = subprocess.run(
+    cp = _pr.run(
         [sys.executable, str(_AUDIT), "--json", str(tmp_path / "r.json")],
-        capture_output=True, text=True, timeout=_TIMEOUT)
+        capture_output=True, text=True)
     assert cp.returncode == 0, (cp.returncode, cp.stdout[-2000:])
     assert "DISCLOSURE" in cp.stdout, cp.stdout[-1500:]
     assert "phase1_expert_parse_track" in cp.stdout, cp.stdout[-1500:]

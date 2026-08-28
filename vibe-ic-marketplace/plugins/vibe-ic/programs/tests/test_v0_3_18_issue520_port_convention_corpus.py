@@ -5,7 +5,6 @@ standalone-design floors WITHOUT regressing clean designs.
 chip-AGNOSTIC: only generic handshake names + genre orderings are baked in.
 """
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -14,6 +13,9 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import port_convention_corpus as C  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _progress_run as _pr  # noqa: E402
 
 
 # ── Part 1: optional handshake inference — recovery + no regression ─────
@@ -170,10 +172,10 @@ def test_graceful_idiom_elaborates_connected_and_unconnected(tmp_path):
         " core dut(.clk(clk),.rst_n(rst_n),.d(d),.q(q));"
         " endmodule\n")
     for tb, top in ((tbA, "tbA"), (tbB, "tbB")):
-        r = subprocess.run(
+        r = _pr.run(
             [iv, "-g2012", "-s", top, "-o", str(tmp_path / f"{top}.out"),
              str(core), str(tb)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         assert r.returncode == 0, f"{top}: {r.stderr}"
 
 
