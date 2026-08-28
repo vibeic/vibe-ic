@@ -51,19 +51,44 @@ cannot promote an unrelated call by itself.
 | `2` | 1 | DECLARED_ONLY | cross-layer fidelity now belongs to Step 2. Its judge rejects a bad candidate, but PRE/POST runtime spies both measured zero re-entry into `step_rtl_gen`; rejection must not be reported as an executable fallback. |
 | `3`, `5`, `8`, `9`, `10`, `13`, `14`, `20`, `24`, `25`, `26`, `27`, `28`, `31`, `33`, `A7`, `A9` | — | DECLARED_ONLY | no actuator found in any runner. |
 
-### The zero is the load-bearing number
+### The zero is the load-bearing number, and half of what it costs is now paid
 
 `ROLLBACK_PROVEN = 0`. The step-32 repair **does** implement an undo — on a
 measured setup regression it sets `timing_repair_reverted_regression` and retains the
-pre-repair artefacts — and
+pre-repair artefacts — and this section used to end there, with
 
 ```
 $ grep -rn 'timing_repair_reverted_regression' programs/tests/
 (no files)
 ```
 
-so nothing proves it works. `test_postroute_timing_repair_audit.py` tests the *audit* of an
-already-regressed record, which is a different claim.
+**That grep now returns a file.** `test_eco_fired_reverted_regression.py` proves
+the decision the branch turns on: the 12x regression that motivated the guard
+(setup `-0.68 -> -8.92 ns`, recorded as `pass` because the two figures sat
+adjacent and were never subtracted), the one-picosecond floor, both directions
+of the adopt/revert choice, and — the subtle half — that a delta measured across
+DIFFERENT parasitics is **not** charged to the repair, because a repair pass
+that changed nothing was once recorded at `repair_setup_delta_ns = -8.220` and
+failed for a regression it never made.
+
+(That module is named for the pre-v1.12.20 `eco_*` vocabulary; the identifiers
+it proves carry the current `postroute_timing_repair_*` names. The file name is
+left alone deliberately — a test's name is how the ledger finds it.)
+
+It could not be proven before because the decision had no ADDRESS:
+`_repair_regressed` was an inline expression inside a 900-line step function, so
+no test could reach it without re-implementing it — and a test that
+re-implements the thing it checks proves only that two copies agree. It is now
+`repair_result_is_a_regression`, same behaviour, one name.
+
+**The census still reads 0, and that is correct.** Its evidence registry is code,
+and the citation that would promote these two edges resolves against the real
+tree but not against the 17 synthetic trees `test_closed_loop_executable_coverage`
+builds — those model the actuate/remeasure tiers only, and every one of them
+asserts that EVERY citation resolves. Promoting the edges without teaching the
+registry that a rollback citation may live outside the runner's own file turns
+9 of that file's tests red. The number moves when that distinction is built, not
+before; a census that goes green by breaking its own prover has learned nothing.
 
 ### Three DECLARED_ONLY entries that are worth reading individually
 

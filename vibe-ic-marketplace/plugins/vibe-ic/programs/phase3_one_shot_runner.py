@@ -34539,9 +34539,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 f"measured on {_repair_after_src!r} parasitics — the two numbers "
                 "describe different implementations, so their difference is "
                 "not a repair delta")
-            _repair_regressed = bool(_repair_delta is not None
-                                  and _repair_delta < -1e-9
-                                  and _repair_delta_comparable)
+            _repair_regressed = repair_result_is_a_regression(
+                _repair_delta, _repair_delta_comparable)
             if _repair_delta is not None and _repair_delta < -1e-9 \
                     and not _repair_delta_comparable:
                 notes.append(
@@ -35546,6 +35545,43 @@ def _post_route_tns_zero(sta_rpt: Path) -> bool:
         return True
     # Conservative default: not proven to be zero.
     return False
+
+
+#: Slack is signed: MORE NEGATIVE is worse, so a negative delta is a
+#: regression. `1e-9` is one picosecond — below any real repair effect and
+#: above float noise on nanosecond quantities.
+REPAIR_REGRESSION_EPSILON_NS = 1e-9
+
+
+def repair_result_is_a_regression(delta_ns, delta_is_comparable: bool) -> bool:
+    """Did the post-route repair make setup timing measurably WORSE?
+
+    EXTRACTED SO IT CAN BE PROVEN. This decision drives
+    `timing_repair_reverted_regression`, the branch that retains the
+    pre-repair artefacts instead of adopting the repair's — the repository's
+    only rollback. It lived inline inside a 900-line step function, so nothing
+    could exercise it, and `closed_loop_executable_coverage_check` said so in
+    as many words:
+
+        grep -rn 'timing_repair_reverted_regression' programs/tests/
+          ->  no files
+
+    ...so nothing proves it works. An unproven rollback is exactly the
+    thing this census exists to keep out of a success report.
+
+    That is why the census reads ROLLBACK_PROVEN=0 while the undo exists. The
+    logic is unchanged; only its address is.
+
+    BOTH GUARDS ARE LOAD-BEARING, and the second is the subtle one.
+    `delta_is_comparable` is False when the before and after were measured on
+    DIFFERENT parasitics — a repair pass that changed nothing was recorded at
+    `repair_setup_delta_ns = -8.220` and failed for a regression it never made.
+    A delta across two implementations is not a repair delta, and charging it
+    to the repair would revert a repair that was never applied.
+    """
+    return bool(delta_ns is not None
+                and delta_ns < -REPAIR_REGRESSION_EPSILON_NS
+                and delta_is_comparable)
 
 
 def _run_postroute_timing_repair(project: Path, top: str, container: str,
