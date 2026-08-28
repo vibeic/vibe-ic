@@ -134,6 +134,19 @@ def wait_for(fh):
         time.sleep(0.25)
 '''
 
+_DEADLINE_ONLY_BREAKS_A_NESTED_LOOP = '''\
+import time
+
+
+def wait_for(shards):
+    deadline = time.monotonic() + 30.0
+    while True:
+        for s in shards:
+            if time.monotonic() >= deadline:
+                break
+        time.sleep(0.25)
+'''
+
 _COMPARED_AGAINST_A_FRESH_READING = '''\
 import time
 
@@ -152,6 +165,8 @@ def wait_for(fh):
     (_DEADLINE_CHECK_ONLY_CONTINUES, "a `continue` is not an exit"),
     (_DEADLINE_COMPUTED_INSIDE_THE_LOOP, "recomputed each pass = never expires"),
     (_COMPARED_AGAINST_A_FRESH_READING, "no pre-loop reading is in the compare"),
+    (_DEADLINE_ONLY_BREAKS_A_NESTED_LOOP,
+     "that break leaves the inner for, not the outer while"),
 ])
 def test_a_near_miss_is_not_a_bound(src, why):
     offs = _offenses(src)

@@ -675,7 +675,10 @@ def _governing_compares(loop: ast.AST):
       (i)  the `while` test itself — `while monotonic() < deadline:`
       (ii) an `if` inside the body whose taken branch exits the loop —
            `if monotonic() >= deadline: return` / `... : break`
-    An `if` that only `continue`s is NOT an exit and is not read as one.
+    An `if` that only `continue`s is NOT an exit and is not read as one, and
+    neither is a `break` belonging to a loop NESTED inside the body — so this
+    does not descend into one. A deadline checked only in a nested loop leaves
+    the outer loop flagged, which is the safe direction to be wrong in.
     """
     if isinstance(loop, ast.While):
         for n in ast.walk(loop.test):
@@ -685,7 +688,7 @@ def _governing_compares(loop: ast.AST):
     while stack:
         n = stack.pop()
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
-                          ast.ClassDef)):
+                          ast.ClassDef, ast.For, ast.AsyncFor, ast.While)):
             continue
         if isinstance(n, ast.If):
             if _branch_exits(n.body) or _branch_exits(n.orelse):
