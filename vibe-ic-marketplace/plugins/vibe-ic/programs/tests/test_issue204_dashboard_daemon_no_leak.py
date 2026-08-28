@@ -35,6 +35,7 @@ import os
 import signal
 import sys
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -70,6 +71,46 @@ _MAX_LOOKS = 200_000
 _HTTP_LOOK_S = 5.0
 #: …and with a coarser look, fewer of them make the same wedge window.
 _HTTP_STALL_LOOKS = 24
+
+
+#: CLK_TCK once — `/proc` reports thread CPU in clock ticks.
+_TICK = float(os.sysconf("SC_CLK_TCK") or 100)
+
+
+def _server_cpu_s():
+    """CPU seconds burned by every thread of this process EXCEPT this one.
+
+    THE WAITER CANNOT BE ITS OWN PROGRESS SIGNAL. The first version of this used
+    `sum(os.times()[:2])` — whole-process CPU — and that is wrong in the one
+    direction that matters: the retry loop asking "is the server done yet?" also
+    burns CPU, so the counter advances on the WAITER's account and a completely
+    wedged server keeps looking busy. The stall could then never fire and the
+    wait would run to its iteration cap — a hang introduced while removing a
+    false verdict. MEASURED: the falsification probe for this shape did not
+    terminate until the signal was narrowed to the lines below.
+
+    Excluding the calling thread leaves exactly the server's own work —
+    `serve_forever` plus the per-request thread `ThreadingHTTPServer` spawns.
+    Returns None when nothing is readable, which `ProgressMeter` carries forward
+    rather than mistaking for a reset."""
+    me = str(threading.get_native_id())
+    total = 0.0
+    seen = False
+    try:
+        tids = os.listdir("/proc/self/task")
+    except OSError:
+        return None
+    for tid in tids:
+        if tid == me:
+            continue
+        try:
+            with open(f"/proc/self/task/{tid}/stat", "rb") as fh:
+                fields = fh.read().rsplit(b")", 1)[1].split()
+            total += (int(fields[11]) + int(fields[12])) / _TICK
+            seen = True
+        except (OSError, IndexError, ValueError):
+            continue
+    return total if seen else None
 
 
 def _await(name, ready, progress_fn, alive=None):
@@ -323,13 +364,13 @@ def test_serve_records_actual_port_for_port_zero(tmp_path):
     # the "it is working" reading; a fixed 80-look budget was a reading of the
     # host instead.
     _await("serve-bind", url_f.is_file,
-           progress_fn=lambda: sum(os.times()[:2]),
+           progress_fn=_server_cpu_s,
            alive=t.is_alive)
     assert url_f.is_file(), "daemon must record its actually-bound URL"
     rec = url_f.read_text().strip()
     bound = int(rec.rsplit(":", 1)[-1])
     assert bound != 0, "port-0 must resolve to a real OS-assigned port, not :0"
-    assert _fetch(rec, lambda: sum(os.times()[:2])).status == 200
+    assert _fetch(rec, _server_cpu_s).status == 200
 
 
 if __name__ == "__main__":
