@@ -182,6 +182,16 @@ def test_ai_repair_reenters_at_validation_without_regeneration(
     refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
     assert refreshed["rtl_sha256"] != task["rtl_sha256"]
 
+    # The next resume must accept the independently reviewed repair even
+    # though rtl_gen correctly remains SKIPPED-BY-ENTRY from re-entry step 2.
+    _write_review(refreshed, _valid_review(refreshed))
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 0
+    acceptance = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
+    assert acceptance["status"] == "COMPLETE"
+    assert acceptance["accepted_ids"] == ["p1"]
+    response = json.loads(Path(refreshed["response_path"]).read_text())
+    assert "assign y = ~a" in response["completion"]
+
 
 def test_missing_review_stays_pending_and_writes_no_response(tmp_path):
     run, task, _ = _task(tmp_path)
