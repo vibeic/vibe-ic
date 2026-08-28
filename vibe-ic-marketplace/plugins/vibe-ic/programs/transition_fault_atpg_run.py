@@ -116,6 +116,8 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import _watchdog as _wd  # noqa: E402  progress-stall supervision (v1.3.47)
+
 try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
 except ImportError:  # pragma: no cover - packaged/flattened layouts
@@ -462,11 +464,11 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
     extra_mounts: additional (host, container) bind mounts — used when a
     liberty/PDK file resolves (via symlink) to a path OUTSIDE the project, so
     a fresh `docker run -v project:/work` container can still read it."""
-    # A unique --name so that if the wall fires we can REAP the container: a
-    # `subprocess.run(timeout=)` SIGKILLs only the `docker run` CLIENT, leaving
-    # the yosys process inside the container orphaned and burning a full CPU
-    # indefinitely (observed). Naming it lets the timeout handler `docker rm -f`
-    # the orphan.
+    # A unique --name so that if the watchdog's stall kill fires we can REAP
+    # the container: killing the `docker run` CLIENT leaves the yosys process
+    # inside the container orphaned and burning a full CPU indefinitely
+    # (observed). Naming it lets the kill handler `docker rm -f` the orphan by
+    # IDENTITY, never by matching a command line.
     cname = f"vibeic_tdf_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
     docker_cmd = [
         "docker", "run", "--rm", "--name", cname,
@@ -486,28 +488,45 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
         "export LD_LIBRARY_PATH=/foss/tools/iverilog/lib:${LD_LIBRARY_PATH:-} && "
     )
     docker_cmd += [_far.DOCKER_IMAGE, "-c", preamble + shell_cmd]
-    try:
-        r = subprocess.run(docker_cmd, capture_output=True, text=True,
-                           timeout=timeout)
-        return r.returncode, r.stdout, r.stderr
-    except subprocess.TimeoutExpired as exc:
-        # SALVAGE the partial stdout yosys already emitted before the wall fired
-        # so the COMPLETED-fault PREFIX can still be graded (a real, disclosed
-        # partial verdict) instead of being discarded → the false exit-124
-        # ERROR / "docker command timed out" that this producer used to book.
-        # `subprocess.run` attaches the captured-so-far output to the exception.
-        out = _as_text(getattr(exc, "stdout", "") or getattr(exc, "output", ""))
-        err = _as_text(getattr(exc, "stderr", ""))
-        # Reap the orphaned container so its yosys stops burning a CPU.
+
+    def _reap(proc, reason: str) -> None:
+        """Kill the `docker run` CLIENT *and* the orphan it leaves behind.
+
+        `run_host_supervised`'s default kill reaches only the client; the
+        yosys inside the named container survives it and burns a CPU. The
+        victim is selected by the unique `--name` this call minted, never by
+        matching a command line, so a sibling run's healthy container can
+        never be caught (see _watchdog's kill-by-IDENTITY note)."""
         try:
+            proc.kill()
+        except Exception:  # nosec — already gone
+            pass
+        try:
+            # Cleanup only: nothing is recorded from this call's outcome, so
+            # its bound cannot become a verdict about the subject.
             subprocess.run(["docker", "rm", "-f", cname],
                            capture_output=True, text=True, timeout=30)
         except Exception:
             pass
-        return 124, out, (err + "\ndocker command timed out (partial output "
-                          "salvaged)")
-    except FileNotFoundError:
+
+    # PROGRESS supervision, not a runtime guess (v1.3.47 / owner directive).
+    # `timeout` becomes the STALL GRACE: how long every forward-progress
+    # signal of the yosys tree (CPU, I/O, captured output) may sit flat before
+    # the job is called hung. A long-but-WORKING SAT solve on a large design —
+    # the case a fixed wall destroyed, booking a false exit-124 ERROR — now
+    # runs to completion however long it legitimately takes, while a genuine
+    # deadlock is still killed and reported as such under its OWN rc.
+    res = _wd.run_host_supervised(docker_cmd, stall_grace_s=float(timeout),
+                                  kill=_reap)
+    if res.outcome == "launch_error":
         return 127, "", "docker binary not found in PATH"
+    # On a stall the partial stdout yosys emitted before the kill is still
+    # SALVAGED (it is captured to a file, not lost with the exception), so the
+    # COMPLETED-fault PREFIX can still be graded. `res.rc` is then the
+    # watchdog's own distinct RC_STALLED, never the old wall-clock 124, so a
+    # reader can tell "no forward progress for the whole grace window" from
+    # "the runtime guess was too small".
+    return res.rc, res.out, res.err
 
 
 def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,

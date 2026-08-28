@@ -103,6 +103,7 @@ PathLike = Union[str, Path]
 # and per-net-pair coupling). Shared infra — si_mcf_sta only ADDS the MCF /
 # window-gating / SPEF-fold / recount layer on top. (script dir is on sys.path.)
 from si_signoff_timing_aware import parse_spef  # noqa: E402
+import _watchdog as _wd  # noqa: E402  progress-stall process supervision
 
 # ---------------------------------------------------------------------------
 # MCF constants (the whole physical model in three numbers).
@@ -727,16 +728,26 @@ def _resolve_flow_liberty(project: Path) -> Optional[str]:
 
 def _docker_exec(container: str, cmd: str, timeout: int = 1800
                  ) -> Tuple[int, str, str]:
+    """PROGRESS-supervised `docker exec`.
+
+    `timeout` is the STALL GRACE, not a runtime bound. As
+    `subprocess.run(timeout=)` its expiry returned rc 124, and `run()` reads a
+    non-zero STA rc as `_sta_failed` — which promotes the whole SI result to
+    verdict ERROR. So a fixed number of seconds could book "this design's
+    SI-aware STA failed" about a design nothing was wrong with, on nothing more
+    than how loaded the host was. OpenSTA's runtime moves with the netlist and
+    the SPEF by orders of magnitude, so no constant here can be right for two
+    designs. The watchdog kills only a job whose CPU, I/O and output have ALL
+    sat flat for the grace, and reports it under its own distinct rc.
+
+    Note this bounds the docker CLIENT, as the previous form did; the reap of
+    an orphaned in-container tool is `_docker_watchdog`'s job and is not
+    changed here."""
     full = ["docker", "exec", container, "bash", "-lc", cmd]
-    try:
-        cp = subprocess.run(full, capture_output=True, text=True, timeout=timeout)
-        return cp.returncode, cp.stdout or "", cp.stderr or ""
-    except subprocess.TimeoutExpired as e:
-        so = e.stdout or ""
-        se = e.stderr or ""
-        so = so.decode("utf-8", "replace") if isinstance(so, bytes) else so
-        se = se.decode("utf-8", "replace") if isinstance(se, bytes) else se
-        return 124, so, se
+    res = _wd.run_host_supervised(full, stall_grace_s=float(timeout))
+    if res.outcome == "launch_error":
+        return 127, "", res.err
+    return res.rc, res.out or "", res.err or ""
 
 
 _STA_PATH = ("export PATH=/foss/tools/openroad/bin:/foss/tools/bin:$PATH && ")
@@ -763,7 +774,6 @@ def _run_sta_slack(container: str, work: Path, tag: str, liberty_c: str,
     tcl_c = _to_container_path(str(tcl), container)
     rpt_c = _to_container_path(str(rpt), container)
     cmd = f"{_STA_PATH} sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
-    # watchdog-exempt: bounded OpenSTA report_checks on a fixed routed design (explicit subprocess timeout is the hard ceiling); deterministic, not an open-ended EDA generator
     rc, _out, _err = _docker_exec(container, cmd, timeout=timeout)
     body = rpt.read_text(errors="replace") if rpt.exists() else ""
     setup, hold = worst_setup_hold(body)
@@ -837,7 +847,6 @@ def _run_windows(container: str, work: Path, liberty_c: str, netlist_c: str,
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = f"{_STA_PATH} sta -no_init -exit {tcl_c} > {tcl_c}.log 2>&1"
-    # watchdog-exempt: bounded OpenSTA timing-window report on a fixed routed design (explicit subprocess timeout is the hard ceiling); deterministic, not an open-ended EDA generator
     rc, _o, _e = _docker_exec(container, cmd, timeout=timeout)
     if out_json_host.exists():
         try:

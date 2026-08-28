@@ -268,15 +268,35 @@ class MergedReport:
 Runner = Callable[[List[str], Optional[float]], Tuple[int, str, str]]
 
 
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _watchdog as _wd
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _watchdog as _wd  # type: ignore
 def default_runner(cmd: List[str], timeout: Optional[float]
                    ) -> Tuple[int, str, str]:
+    """PROGRESS-supervised delegation to a checker.
+
+    `timeout` is the STALL GRACE, not a runtime bound. As
+    `subprocess.run(timeout=)` its expiry returned rc 124 with "[timeout]",
+    which the two-arm precheck reads as the delegated checker having FAILED —
+    a verdict about the design derived from a number that describes this host.
+    A checker on a large layout, or on a machine running four other jobs, is
+    slow for reasons that say nothing about whether it would have passed. The
+    watchdog kills only a delegate whose CPU, I/O and output have ALL sat flat
+    for the grace, and says so under its own rc. `None` keeps its meaning of
+    "no bound at all"; the supervisor is then given the module default grace,
+    which still cannot end a job that is working."""
+    grace = (float(timeout) if timeout is not None
+             else _wd.DEFAULT_STALL_GRACE_S)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, p.stdout or "", p.stderr or ""
-    except subprocess.TimeoutExpired:
-        return 124, "", "[timeout]"
+        res = _wd.run_host_supervised([str(c) for c in cmd],
+                                      stall_grace_s=grace)
     except (OSError, subprocess.SubprocessError) as exc:
         return 125, "", f"[runner error] {exc!r}"
+    if res.outcome == "launch_error":
+        return 125, "", f"[runner error] {res.err}"
+    return res.rc, res.out or "", res.err or ""
 
 
 # --------------------------------------------------------------------------- #

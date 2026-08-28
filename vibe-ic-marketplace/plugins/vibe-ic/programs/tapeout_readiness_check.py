@@ -635,25 +635,37 @@ def default_image_resolver(image: str, allow_pull: bool,
     return image if p.returncode == 0 else None
 
 
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _watchdog as _wd
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _watchdog as _wd  # type: ignore
 def default_runner(cmd: List[str],
                    timeout: Optional[float]) -> Tuple[int, str, str]:
     """Run `cmd`, returning (returncode, stdout, stderr).
 
-    A timeout surfaces as rc 124 with the partial output; the caller still reads
-    the run directory, because a precheck that logged real refusals before a late
-    timeout has produced real evidence."""
+    `timeout` is the STALL GRACE, not a runtime bound. As
+    `subprocess.run(timeout=)` its expiry produced rc 124 — a shuttle precheck
+    recorded as having FAILED because a number chosen on one host expired on
+    another. A precheck's honest runtime moves with the layout it is given and
+    with what else the machine is doing, so no constant here can be right for
+    two designs. The watchdog kills only a job whose CPU, I/O and output have
+    ALL sat flat for the grace — no forward progress at all. The partial output
+    is still returned either way, because a precheck that logged real refusals
+    before it stopped has produced real evidence and the caller still reads the
+    run directory. `None` keeps its meaning of "no bound at all"; the
+    supervisor is then given the module default grace, which still cannot end a
+    job that is working."""
+    grace = (float(timeout) if timeout is not None
+             else _wd.DEFAULT_STALL_GRACE_S)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, p.stdout or "", p.stderr or ""
-    except subprocess.TimeoutExpired as e:
-        out, err = e.stdout or "", e.stderr or ""
-        if isinstance(out, bytes):
-            out = out.decode("utf-8", "replace")
-        if isinstance(err, bytes):
-            err = err.decode("utf-8", "replace")
-        return 124, out, err + "\n[timeout]"
+        res = _wd.run_host_supervised([str(c) for c in cmd],
+                                      stall_grace_s=grace)
     except (OSError, subprocess.SubprocessError) as e:  # noqa: PERF203
         return 125, "", f"[runner error] {e!r}"
+    if res.outcome == "launch_error":
+        return 125, "", f"[runner error] {res.err}"
+    return res.rc, res.out or "", res.err or ""
 
 
 # --------------------------------------------------------------------------- #

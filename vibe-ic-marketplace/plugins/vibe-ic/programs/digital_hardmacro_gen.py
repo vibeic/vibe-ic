@@ -534,15 +534,30 @@ DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
 
 
 def _sh(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
-    """Bounded subprocess. The single monkeypatch surface for the tests."""
+    """PROGRESS-SUPERVISED subprocess. The single monkeypatch surface for the
+    tests.
+
+    `timeout` is the STALL GRACE, not a runtime bound. It used to be
+    `subprocess.run(timeout=)`, whose expiry returned rc 124 — a FAILING
+    VERDICT about the subject derived from a number that describes this host,
+    not the job. `docker cp` of a multi-gigabyte GDS on a loaded machine, or a
+    `magic --version` behind a cold image pull, are slow for reasons that have
+    nothing to do with whether they would have succeeded. The watchdog kills
+    only a job whose CPU, I/O and output have ALL sat flat for `timeout`
+    seconds — a job that is genuinely making no forward progress — and reports
+    that under its own distinct rc, never as the tool's own failure."""
     try:
-        cp = subprocess.run([str(a) for a in argv], capture_output=True,
-                            text=True, errors="replace", timeout=timeout)
-        return cp.returncode, cp.stdout or "", cp.stderr or ""
-    except subprocess.TimeoutExpired:
-        return 124, "", f"timed out after {timeout}s"
+        res = _watchdog.run_host_supervised([str(a) for a in argv],
+                                            stall_grace_s=float(timeout))
     except OSError as exc:
+        # The launch itself failed (no such binary, not executable, …). The
+        # supervisor resolves FileNotFoundError to `launch_error` itself; every
+        # other OSError still arrives here, and kept its historical rc 127 so
+        # callers that read "could not start" are unchanged.
         return 127, "", str(exc)
+    if res.outcome == "launch_error":
+        return 127, "", res.err
+    return res.rc, res.out or "", res.err or ""
 
 
 def choose_magicrc(own: List[str], nested: List[str]) -> Optional[str]:
@@ -808,15 +823,26 @@ def _write_lef_here(top: str, gds: Path, def_file: Path, out_lef: Path,
                str(script)]
         # BLOCKING PROCESS POLICY: magic is a potentially long EDA run, so it
         # goes through the plugin-wide progress watchdog rather than a bare
-        # host launch with a wall-clock timeout. `timeout_s` becomes the hard
-        # ceiling; a job still making forward progress is never killed by it,
-        # and a silent+idle one is killed before it reaches the ceiling.
+        # host launch with a wall-clock timeout. `timeout_s` is the STALL
+        # GRACE — how long every forward-progress signal may sit flat — and
+        # NOT the hard ceiling it used to be. As a ceiling it was still a
+        # runtime guess producing a verdict: a magic run legitimately longer
+        # than the caller's number was killed and booked as "did not
+        # complete". Two things had to change together, because either alone
+        # is unsound:
+        #   * the bound moved off the wall clock onto forward progress, and
+        #   * the launch moved to `run_host_supervised`, which injects the
+        #     /proc CPU+I/O probe. Without it the ONLY progress signal is
+        #     captured output, so a magic that computes quietly for longer
+        #     than the grace reads as hung — a fixed-runtime kill wearing the
+        #     watchdog's name. The ceiling stays at the module default (a 24 h
+        #     pathological-loop backstop), which is what it is for.
         def _popen(argv, **kwargs):
             return subprocess.Popen(argv, cwd=str(work), **kwargs)
 
         try:
-            cp = _watchdog.run_supervised(
-                cmd, env=env, hard_ceiling_s=float(timeout_s),
+            cp = _watchdog.run_host_supervised(
+                cmd, env=env, stall_grace_s=float(timeout_s),
                 popen_factory=_popen)
         except OSError as exc:
             return False, f"magic did not complete: {exc}"

@@ -84,6 +84,12 @@ except ImportError:  # pragma: no cover - packaged/flattened layouts
     from . import _docker_memory as _dmem  # type: ignore
 
 
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _watchdog as _wd
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _watchdog as _wd  # type: ignore
+
+
 # Import the sibling parser gate the same way caravel_integration_runner imports
 # its siblings (bare import when programs/ is on sys.path, package-relative else).
 try:
@@ -231,21 +237,26 @@ def default_docker_runner(cmd: List[str],
                           timeout: Optional[float]) -> Tuple[int, str, str]:
     """Run a docker command, returning (returncode, stdout, stderr).
 
-    A timeout is surfaced as returncode 124 (conventional) with the partial
-    output; the caller then inspects the run directory to decide BLOCKED vs a
-    real verdict (a precheck that produced logs before a late timeout can still
-    be parsed)."""
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, p.stdout or "", p.stderr or ""
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout or ""
-        err = e.stderr or ""
-        if isinstance(out, bytes):
-            out = out.decode("utf-8", "replace")
-        if isinstance(err, bytes):
-            err = err.decode("utf-8", "replace")
-        return 124, out, err + "\n[timeout]"
+    `timeout` is the STALL GRACE, not a runtime bound. As
+    `subprocess.run(timeout=)` its expiry produced rc 124, which the driver
+    books as the MPW precheck's own outcome — a verdict about the design read
+    off a number that describes this host. The precheck's honest runtime moves
+    with the layout and with host load, so a constant cannot be right for two
+    designs. The watchdog kills only a container whose CPU, I/O and output have
+    ALL sat flat for the grace, and the partial output is still returned, so a
+    precheck that produced logs before it stopped is still parsed. `None` keeps
+    its meaning of "no bound at all" and gets the module default grace, which
+    still cannot end a job that is working."""
+    grace = (float(timeout) if timeout is not None
+             else _wd.DEFAULT_STALL_GRACE_S)
+    res = _wd.run_host_supervised([str(c) for c in cmd], stall_grace_s=grace)
+    if res.outcome == "launch_error":
+        # This seam used to let a missing docker binary raise FileNotFoundError
+        # out of the function; the supervisor resolves that to a result
+        # instead, so it is re-raised here and the contract its callers were
+        # written against is unchanged.
+        raise FileNotFoundError(res.err)
+    return res.rc, res.out or "", res.err or ""
 
 
 # --------------------------------------------------------------------------- #

@@ -74,6 +74,11 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 try:  # sibling module; programs/ is on sys.path when run as a script
+    import _watchdog as _wd
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _watchdog as _wd  # type: ignore
+try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
 except ImportError:  # pragma: no cover - packaged/flattened layouts
     from . import _docker_memory as _dmem  # type: ignore
@@ -106,25 +111,32 @@ class DriverResult:
 
 
 # ---------------------------------------------------------------------------
-# Shared subprocess runner (TimeoutExpired-safe: .stdout may be bytes)
+# Shared runner — PROGRESS-supervised, not wall-clock bounded
 # ---------------------------------------------------------------------------
 def default_runner(cmd, timeout: int = 3600) -> Tuple[int, str, str]:
-    """Run an argv (or shell string) and return (rc, stdout, stderr)."""
-    shell = isinstance(cmd, str)
+    """Run an argv (or shell string) and return (rc, stdout, stderr).
+
+    `timeout` is the STALL GRACE, not a runtime bound. It used to be
+    `subprocess.run(timeout=)`, whose expiry returned rc 124 — a FAILING
+    VERDICT about a Caravel harden that the caller books as the step's own
+    failure. An OpenLane harden's honest runtime spans orders of magnitude with
+    the design, so no constant here can be right for two designs; 3600 s
+    describes the host that was measured, not the wrapper being hardened. The
+    watchdog kills only a job whose CPU, I/O and output have ALL sat flat for
+    the grace — no forward progress at all — and reports that under its own
+    distinct rc."""
+    if isinstance(cmd, str):
+        # Preserve the shell semantics the string form asks for; the
+        # supervisor launches an argv, so the shell is named explicitly.
+        cmd = ["/bin/sh", "-c", cmd]
     try:
-        cp = subprocess.run(cmd, shell=shell, capture_output=True,
-                            timeout=timeout)
-        out = cp.stdout.decode("utf-8", "replace") if cp.stdout else ""
-        err = cp.stderr.decode("utf-8", "replace") if cp.stderr else ""
-        return cp.returncode, out, err
-    except FileNotFoundError as e:
+        res = _wd.run_host_supervised([str(a) for a in cmd],
+                                      stall_grace_s=float(timeout))
+    except OSError as e:
         return 127, "", str(e)
-    except subprocess.TimeoutExpired as e:  # pragma: no cover - env dependent
-        def _dec(x):
-            if x is None:
-                return ""
-            return x.decode("utf-8", "replace") if isinstance(x, bytes) else str(x)
-        return 124, _dec(e.stdout), f"timeout after {timeout}s"
+    if res.outcome == "launch_error":
+        return 127, "", res.err
+    return res.rc, res.out or "", res.err or ""
 
 
 def docker_image_available(image: str,
