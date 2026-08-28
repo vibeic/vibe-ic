@@ -44,8 +44,10 @@ import argparse
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -79,7 +81,20 @@ _MANDATORY_KEYS = (
 
 def _fetch_issue_body(repo: str, issue_number: int,
                       token: str) -> Tuple[str, dict]:
-    """Return (body, full-issue-json) for a GitHub issue."""
+    """Return (body, full-issue-json) for a GitHub issue.
+
+    `timeout=30` is a resource-contention guard, not a runtime estimate; this
+    gate ALREADY fails closed (rc 1, "block the debug agent") for any
+    unresolved input by design, so a network stall does not change WHICH
+    verdict is booked. What it changed, uncaught, was the PRESENTATION: a
+    `socket.timeout`/`URLError` propagated straight out of `main()` (no
+    handler names it) and Python's default exit code for an uncaught
+    exception is 1 — the SAME number this file's `main()` prints as
+    "FAIL: ..." for a genuinely missing field, but as a bare traceback with no
+    "FAIL:" line. Caught and re-raised as `RuntimeError` so it reaches the
+    SAME rc-1 path through the SAME message shape as every other cause this
+    gate already blocks on.
+    """
     url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
     req = urllib.request.Request(
         url,
@@ -88,8 +103,12 @@ def _fetch_issue_body(repo: str, issue_number: int,
             "Accept": "application/vnd.github+json",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        d = json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.loads(r.read())
+    except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
+        raise RuntimeError(
+            f"could not fetch issue #{issue_number}: {exc}") from exc
     return d.get("body") or "", d
 
 
