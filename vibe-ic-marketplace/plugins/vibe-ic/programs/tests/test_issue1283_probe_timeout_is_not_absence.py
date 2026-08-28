@@ -370,12 +370,6 @@ RESIDUAL_SWALLOWING: dict = {
     "test_issue193_custom_pdk_primary_selection_ngspice.py": 2,
     "test_staged_macro_aware_synth_define.py": 1,
     "test_v1_0_52_gap1_via_analyzer_sky130_unnumbered_cut.py": 1,
-    "test_v1_0_78_issue729_ppa_area_threshold.py": 1,
-    "test_v1_0_80_issue739_ppa_unreachable_target_escape.py": 1,
-    "test_v1_0_83_issue756_ppa_disjunctive_clauses.py": 1,
-    "test_v1_0_85_issue768_ppa_reachability_submission_independent.py": 1,
-    "test_v1_0_85_issue769_ppa_generic_meets_target.py": 1,
-    "test_v1_0_86_issue771_ppa_metric_window.py": 1,
 }
 
 

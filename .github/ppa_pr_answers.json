@@ -50,7 +50,7 @@
     {
       "question": 10,
       "evidence": [
-        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_closed_loop_executable_coverage.py::test_nothing_on_main_claims_rollback_proven"}
+        {"kind": "test", "ref": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_closed_loop_executable_coverage.py::test_the_rollback_tier_is_earned_and_stays_earned"}
       ]
     },
     {
