@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1220
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1220)
+- **Total programs (excluding helpers / shims):** 1226
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1226)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1211 |
+| `any` | 1217 |
 
 ## Alphabetical listing
 
@@ -279,6 +279,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `declared_basis_matches_the_session_inputs` | any | — | the stage a report claims must be the stage its own session measured. |
 | `declared_clock_period` | any | — | read the clock period the DESIGN declares for the library this run is actually building against. |
 | `declared_invocation_accepted_by_its_own_parser` | any | — | A flow-declared invocation the invoked program's own parser refuses. |
+| `declared_output_has_a_live_producer_check` | any | — | A file found in a committed corpus is not proof the flow still writes it. |
 | `declared_pdk_is_the_pdk_used_check` | any | — | the PDK that ran must be the PDK declared. |
 | `def_gds_port_power_restore` | any | — | restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p... |
 | `def_manufacturing_grid_check` | any | — | ORGANIC #597. |
@@ -352,6 +353,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
+| `every_declared_step_reaches_the_evaluator_check` | any | — | A step the evaluator never receives cannot fail — and never appears. |
 | `every_required_metric_key_has_a_producer` | any | — | an axis proves from a metric somebody actually emits. |
 | `evidence_citation_resolves_check` | any | — | a cited evidence artifact must EXIST. |
 | `explicit_argument_outranks_the_environment_pointer` | any | — | whatever a gate scanned, it says so. |
@@ -454,6 +456,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_process_attestation` | any | — | Structured process evidence for repo hygiene gates. |
 | `gate_proof_vocabulary_has_a_producer` | any | — | An axis whose whole proof vocabulary is produced by nobody. |
+| `gate_red_is_more_than_absence_census` | any | — | A red that only means "nothing was there" has not shown a gate falsifiable. |
 | `gate_red_since_check` | any | — | an acknowledged red must EXPIRE. vibe-ic#1025. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
@@ -767,6 +770,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pad_ring_check` | any | — | step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe... |
 | `pad_ring_gen` | any | — | step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without. |
 | `pad_side_constraint_check` | any | — | Gate: verify IO pin placements match the L-doc pad-side table (North/South/East/West per signal). |
+| `page_states_one_figure_twice_check` | any | — | One quantity, two numbers, one page — and nothing reads both. |
 | `parametric_spec_extractor` | any | — | deterministic baseline extractors for the PROSE PARAMETRIC element types (the design parameters a spec states in words but in a regular w... |
 | `path_delay_coverage_check` | any | — | REAL at-speed PATH-DELAY-FAULT (PDF) coverage gate for the timing-graded ATPG step (DT2). |
 | `path_delay_fault_atpg_run` | any | — | REAL at-speed TIMING-graded PATH-DELAY-FAULT (PDF) ATPG. Composes OpenSTA K-longest-path enumeration (real Liberty + SPEF timing) with th... |
@@ -1202,11 +1206,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `usb_pd_protocol_synth` | any | — | USB Power Delivery (USB-PD) protocol synth helper. |
 | `usb_protocol_synth` | any | v0.1.82 | USB-class protocol synth helper. |
 | `utilization_band_check` | any | v0.2.69 | Floorplan/placement utilization band classifier. |
+| `vacuous_disclosure_needs_a_runtime_condition_check` | any | — | A disclosure token is not a working gate — the skip must be CONDITIONED. |
 | `vacuous_testbench_check` | any | — | Phase-2 gate against VACUOUS testbenches. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vector_ops_synth` | any | — | deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables. |
 | `vendored_attribution_retained_check` | any | — | third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043. |
+| `verdict_arm_disabled_by_a_constant_check` | any | — | A verdict arm a constant switched off — every structure intact, no decision. |
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C). |
 | `verify_fail_triage` | any | — | mechanical CVDP fail-mode classifier (ORGANIC #534). |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
@@ -1292,7 +1298,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1211 programs)
+### `any` (1217 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1544,6 +1550,7 @@ _(no programs in this group)_
 - `declared_basis_matches_the_session_inputs` — the stage a report claims must be the stage its own session measured.
 - `declared_clock_period` — read the clock period the DESIGN declares for the library this run is actually building against.
 - `declared_invocation_accepted_by_its_own_parser` — A flow-declared invocation the invoked program's own parser refuses.
+- `declared_output_has_a_live_producer_check` — A file found in a committed corpus is not proof the flow still writes it.
 - `declared_pdk_is_the_pdk_used_check` — the PDK that ran must be the PDK declared.
 - `def_gds_port_power_restore` — restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p...
 - `def_manufacturing_grid_check` — ORGANIC #597.
@@ -1616,6 +1623,7 @@ _(no programs in this group)_
 - `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
+- `every_declared_step_reaches_the_evaluator_check` — A step the evaluator never receives cannot fail — and never appears.
 - `every_required_metric_key_has_a_producer` — an axis proves from a metric somebody actually emits.
 - `evidence_citation_resolves_check` — a cited evidence artifact must EXIST.
 - `explicit_argument_outranks_the_environment_pointer` — whatever a gate scanned, it says so.
@@ -1718,6 +1726,7 @@ _(no programs in this group)_
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_process_attestation` — Structured process evidence for repo hygiene gates.
 - `gate_proof_vocabulary_has_a_producer` — An axis whose whole proof vocabulary is produced by nobody.
+- `gate_red_is_more_than_absence_census` — A red that only means "nothing was there" has not shown a gate falsifiable.
 - `gate_red_since_check` — an acknowledged red must EXPIRE. vibe-ic#1025.
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
@@ -2030,6 +2039,7 @@ _(no programs in this group)_
 - `pad_ring_check` — step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe...
 - `pad_ring_gen` — step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without.
 - `pad_side_constraint_check` — Gate: verify IO pin placements match the L-doc pad-side table (North/South/East/West per signal).
+- `page_states_one_figure_twice_check` — One quantity, two numbers, one page — and nothing reads both.
 - `parametric_spec_extractor` — deterministic baseline extractors for the PROSE PARAMETRIC element types (the design parameters a spec states in words but in a regular w...
 - `path_delay_coverage_check` — REAL at-speed PATH-DELAY-FAULT (PDF) coverage gate for the timing-graded ATPG step (DT2).
 - `path_delay_fault_atpg_run` — REAL at-speed TIMING-graded PATH-DELAY-FAULT (PDF) ATPG. Composes OpenSTA K-longest-path enumeration (real Liberty + SPEF timing) with th...
@@ -2463,11 +2473,13 @@ _(no programs in this group)_
 - `usb_pd_protocol_synth` — USB Power Delivery (USB-PD) protocol synth helper.
 - `usb_protocol_synth` — USB-class protocol synth helper.  _[v0.1.82]_
 - `utilization_band_check` — Floorplan/placement utilization band classifier.  _[v0.2.69]_
+- `vacuous_disclosure_needs_a_runtime_condition_check` — A disclosure token is not a working gate — the skip must be CONDITIONED.
 - `vacuous_testbench_check` — Phase-2 gate against VACUOUS testbenches.
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vector_ops_synth` — deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder.
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables.  _[v0.119.30]_
 - `vendored_attribution_retained_check` — third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043.
+- `verdict_arm_disabled_by_a_constant_check` — A verdict arm a constant switched off — every structure intact, no decision.
 - `verdict_token_propagation_check` — META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C).
 - `verify_fail_triage` — mechanical CVDP fail-mode classifier (ORGANIC #534).
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_

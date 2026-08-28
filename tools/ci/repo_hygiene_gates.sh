@@ -1751,6 +1751,42 @@ run "invocation proved by parse not by text" "$ROOT" python3 "$PG/invocation_pro
 run "local clone does not borrow objects" "$ROOT" python3 "$PG/local_clone_does_not_borrow_objects.py" "$ROOT"
 run "measurement only artefact is not a verdict s" "$ROOT" python3 "$PG/measurement_only_artefact_is_not_a_verdict_source.py" "$ROOT"
 run "only the declaring step writes its output ce" "$ROOT" python3 "$PG/only_the_declaring_step_writes_its_output_census.py" --root "$ROOT" --self-test
+
+# THE FOUR MATRIX-DIMENSION GAPS, captured 2026-08-28 from the 68x9 mutation
+# probe (plugin v1.12.33). The probe ran a named mutation against each of the
+# nine dimensions; five reddened on their own defect class and four did not:
+#
+#   D1 wiring            MUT-B removed what hands the executor its gate dict
+#                        for step 21 -> GREEN, 86 passed, while the step
+#                        vanished from the tally and 18 blocked steps unblocked.
+#   D2 falsifiable       M2 killed the namesake verdict and left the absence
+#                        arm -> GREEN. 54 of its 121 reds were earned on EMPTY.
+#   D3 outputs_produced  MUT-B1 deleted the WRITER of A8's declared .gds ->
+#                        GREEN in every configuration; the corpus still had the
+#                        file.
+#   D6 skip_discipline   M1 made a gate stop working and say VACUOUS_PASS ->
+#                        GREEN, byte-identical to clean, while a project with
+#                        an empty clock plan moved from FAIL to VACUOUS_PASS.
+#
+# Each line below asks the half its dimension does not. They do not replace the
+# dimension modules: D1 still proves the walk INSIDE the executor is complete,
+# and this proves every step reaches it; D3 still proves the artefact once
+# existed, and this proves something still writes it.
+run "every declared step reaches the evaluator" "$ROOT" python3 "$PG/every_declared_step_reaches_the_evaluator_check.py" --root "$ROOT"
+run "a declared output has a live producer" "$ROOT" python3 "$PG/declared_output_has_a_live_producer_check.py" --root "$ROOT" --strict
+run "a disclosure token needs a runtime condition" "$ROOT" python3 "$PG/vacuous_disclosure_needs_a_runtime_condition_check.py" --root "$ROOT" --strict
+run "gate red is more than absence" "$ROOT" python3 "$PG/gate_red_is_more_than_absence_census.py" --root "$ROOT" --self-test
+
+# THE CLASS NONE OF THE NINE DIMENSIONS TRIED. The campaign closed by injecting
+# defects that leave every structure intact — file, flag, edge, declaration —
+# and change only what the gate DECIDES. A yield sign-off whose refusal arm was
+# switched off with `if False and measured + 1e-9 < target:` lets a 12.5% yield
+# pass a 90% target, and 0 of 612 matrix cells change colour. This line catches
+# the one shape of that class a source scan can decide: an arm whose condition
+# the source has already answered. It does NOT close the class — the campaign's
+# other injected defect, a sign-off gate that stopped reading its signed memo,
+# is caught by nothing in this repository.
+run "a verdict arm decided by a constant" "$ROOT" python3 "$PG/verdict_arm_disabled_by_a_constant_check.py" --root "$ROOT" --strict
 run "population guard asserts equality not a floo" "$ROOT" python3 "$PG/population_guard_asserts_equality_not_a_floor.py" --root "$ROOT"
 run "population pin without its member set" "$ROOT" python3 "$PG/population_pin_without_its_member_set.py" --root "$ROOT"
 run "prepared checkout states the revision it hol" "$ROOT" python3 "$PG/prepared_checkout_states_the_revision_it_holds.py" "$ROOT"

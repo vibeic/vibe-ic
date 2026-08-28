@@ -1,0 +1,27 @@
+{
+  "date": "2026-08-28",
+  "totals": {
+    "A": 1,
+    "B": 1,
+    "C": 0,
+    "D": 0,
+    "T": 0
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/flow_compliance_check.py"
+    ],
+    "bucket_B": [
+      "skills/open-benchmark-methodology/SKILL.md"
+    ]
+  },
+  "bucket_A_files": [
+    "/tmp/claude-1000/-home-reyerchu/4b968d04-058f-4158-87d8-380f5eedccae/scratchpad/cap2/bucket_A_programs_flow_compliance_check_rule_sketches.py"
+  ],
+  "bucket_B_files": [
+    {
+      "target": "skills/open-benchmark-methodology/SKILL.md",
+      "patch": "/tmp/claude-1000/-home-reyerchu/4b968d04-058f-4158-87d8-380f5eedccae/scratchpad/cap2/bucket_B_skills_open-benchmark-methodology_SKILL_sections.md"
+    }
+  ]
+}

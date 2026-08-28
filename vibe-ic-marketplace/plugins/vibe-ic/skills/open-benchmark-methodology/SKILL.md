@@ -1466,3 +1466,18 @@ gap is FORK-FIXABLE (route to FIX_STATUS), not a floor.
 
 Next: run `python3 programs/<suite>_tier_pipeline.py --dist` to measure, then drive
 the lever for the lowest non-empty promotable tier.
+
+
+### Skill: Reproduce an audit's venue list before contradicting its verdict
+
+**Pattern**: A hand-run grep contradicts a shipped audit; the grep's venue list is narrower than the audit's, so the 'finding' is the searcher's blind spot reported as the subject's defect.
+
+**When to apply**: Whenever a hand-run search is about to be published as evidence that a shipped audit's verdict is unearned.
+
+**What to do**: Read the audit's own venue construction and reproduce it exactly -- including the directories its comments say were ADDED after a previous miss -- before writing the contradiction down.
+
+**Worked pattern** (anonymized): MEASURED 2026-08-28. `checker_execution_wiring_audit` credits `ppa_area_threshold_check` with a PROG runner. A grep over `programs/*.py` found only a docstring sentence, and a paragraph was drafted saying the credit was 'earned on prose'. Running the audit's OWN `_py_evidence` over the audit's OWN PROG population found the real invocation one directory over: `benchmark/cvdp_gate.py:97` imports `run_ppa_area_threshold` and blocks on its verdict. The audit's source says why that directory is in scope -- a comment records the identical miss being fixed once before, for `harness_verdict_forgery_gate`. The draft was withdrawn before publication.
+
+**Why this is GENERAL**: Applies to any audit whose verdict a reader is tempted to overturn by hand: the audit's venue list is part of its claim, and a narrower search is not a refutation.
+
+_Captured by benchmark-enhancement-capture 2026-08-28._
