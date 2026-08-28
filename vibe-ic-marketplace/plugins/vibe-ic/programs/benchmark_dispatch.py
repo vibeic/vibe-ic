@@ -1557,7 +1557,11 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                         "then submit a fresh AI review for the new hash"),
                 })
             continue
-        got = bio.collect(fmt, pid, Path(str(task.get("project") or "")))
+        supplied_rtl = result.get("candidate_origin") in {
+            "AI_BACKUP", "AI_REPAIR"}
+        got = bio.collect(
+            fmt, pid, Path(str(task.get("project") or "")),
+            supplied_rtl=supplied_rtl)
         if (not got.get("ok")
                 or _sha256_text(str(got.get("completion") or ""))
                 != task.get("rtl_sha256")):
