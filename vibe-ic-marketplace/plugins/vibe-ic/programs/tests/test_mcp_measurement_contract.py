@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -404,3 +405,87 @@ def test_every_provenance_bound_step_asks_the_measurement_question():
                 (step["id"], cmd))
     assert bare == [], f"provenance_check gates that never ask: {bare}"
     assert len(wired) >= 6, wired
+
+
+# ── the boundary itself: JS writes the stamp, Python reads it ────────────
+#
+# EVERYTHING ABOVE MOCKS THE OTHER SIDE. This module hand-writes the stamps it
+# feeds the flow half, and `mcp-eda/test/test_mcp_measurement_contract.py`
+# hand-checks the record the tool half emits. Both can be green while the two
+# halves disagree about the bytes between them — which is the one failure that
+# would make the whole contract inert without reddening a single test.
+#
+# So this runs the REAL emitter out of `src/index.js` under node and feeds its
+# output to the REAL reader in `programs/_mcp_measurement.py`, for all three
+# states. A schema rename, a prefix change, or a JSON-shape drift on either
+# side fails here and nowhere else.
+_NODE = shutil.which("node")
+_INDEX_JS = (Path(__file__).resolve().parents[2] / "mcp-eda" / "src" / "index.js")
+
+
+def _emit_stamps_with_node(cases):
+    """Return one stamp line per case, produced by src/index.js itself."""
+    src = _INDEX_JS.read_text()
+    a = src.index("const MEASUREMENT_SCHEMA = ")
+    b = src.index("function measurementStamp(rec) {")
+    b = src.index("}", src.index("return MEASUREMENT_STAMP_PREFIX", b)) + 1
+    js = src[a:b] + "\nconst out=[];\n"
+    for kw in cases:
+        js += f"out.push(measurementStamp(measurementRecord({json.dumps(kw)})));\n"
+    js += "process.stdout.write(out.join(''));\n"
+    r = subprocess.run([_NODE, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return [ln for ln in r.stdout.split("\n") if ln.strip()]
+
+
+@pytest.mark.skipif(not _NODE, reason="node not available")
+@pytest.mark.parametrize("cls,exp_measured,exp_hard,exp_benign", [
+    ("TOOL_DID_NOT_RUN",   False, True,  False),
+    ("UNCONSTRAINED",      False, True,  False),
+    ("NOTHING_TO_MEASURE", False, False, True),
+    (None,                 True,  False, False),
+])
+def test_the_reader_agrees_with_the_emitter_on_every_state(
+        cls, exp_measured, exp_hard, exp_benign):
+    """All THREE states must survive the language boundary, not just the two
+    poles: if `NOTHING_TO_MEASURE` were to arrive as a hard miss, the gate
+    would refuse every combinational design; if a hard miss were to arrive as
+    benign, the fabricated 0.00 is back."""
+    kw = {"operation": "sta", "measured": exp_measured,
+          "reasonClass": cls, "reason": "measured on the boundary",
+          "toolLabel": "opensta via openroad"}
+    (stamp,) = _emit_stamps_with_node([kw])
+    got = M.from_text(stamp + "\nwns max 0.00\n", "boundary")
+    assert got.declared is True, (
+        "the reader did not recognise the emitter's own stamp as a declaration "
+        f"at all — the two halves disagree about the bytes: {stamp[:120]!r}")
+    assert got.measured is exp_measured
+    assert got.hard_miss is exp_hard
+    assert got.nothing_to_measure is exp_benign
+
+
+@pytest.mark.skipif(not _NODE, reason="node not available")
+def test_the_reader_strips_exactly_the_bytes_the_emitter_added():
+    """The stamp must not pay for the report it stamps. MEASURED: without the
+    strip, a stamped 873 B link-failure report cleared the 1024 B size floor
+    and matched the tool-signature list, and two checks that had correctly
+    refused it began passing it. An off-by-one here re-opens that by degrees.
+    """
+    (stamp,) = _emit_stamps_with_node([{
+        "operation": "sta", "measured": False,
+        "reasonClass": "TOOL_DID_NOT_RUN", "reason": "linked nothing",
+        "toolLabel": "opensta via openroad"}])
+    # `stamp` comes back without the trailing newline the emitter writes, so
+    # the stamped file is reconstructed here exactly as the tool writes it:
+    # the stamp line, its newline, then the report.
+    report = "some timing report text\nwns max 0.00\n"
+    stripped, n = M.strip_stamp(stamp + "\n" + report)
+    assert "MCP_MEASUREMENT" not in stripped, "the stamp survived the strip"
+    assert stripped == report, (
+        "the strip took report bytes with it, or left stamp bytes behind — "
+        "either way the screens below it are now reading the wrong text")
+    assert n == len(stamp) + 1, (
+        f"the byte count the size screen subtracts is {n}, but the emitter "
+        f"added {len(stamp) + 1}; a size floor is now measured against the "
+        "wrong number in one direction or the other")
