@@ -45,22 +45,46 @@ this program VERIFIES each citation against the tree rather than believing it.
     ROLLBACK_PROVEN  REMEASURED, and the program can UNDO its actuation when the
                      re-measurement is worse, AND a named test proves the undo.
 
-MEASURED AFTER FOLDING 1.6x INTO STEP 2 — the census this program prints:
+MEASURED AT v1.12.30, AFTER THE ROLLBACK WAS PROVEN — the census this program
+prints:
 
     21 declared edges
      18 DECLARED_ONLY
       0 EXECUTABLE
-      3 REMEASURED      (4 -> 1; 23 -> 32 and 32 -> 32 share one actuator)
-      0 ROLLBACK_PROVEN
+      1 REMEASURED       (4 -> 1)
+      2 ROLLBACK_PROVEN  (23 -> 32 and 32 -> 32 share one actuator and one undo)
 
-ZERO is the load-bearing number. The step-32 repair DOES implement a rollback —
-`timing_repair_reverted_regression`, which retains the pre-repair artefacts — and
+THE ZERO WAS THE LOAD-BEARING NUMBER, AND IT WAS EARNED AWAY. The step-32
+repair always implemented a rollback — `timing_repair_reverted_regression`,
+which retains the pre-repair artefacts — but
 
     grep -rn 'timing_repair_reverted_regression' programs/tests/   ->  no files
 
-so nothing proves it works. `test_postroute_timing_repair_audit.py` tests the AUDIT of an
-already-regressed record, which is a different claim. An unproven rollback is
-exactly the thing this census exists to keep out of a success report.
+so nothing proved it worked, and an unproven rollback is exactly the thing this
+census exists to keep out of a success report. (`test_postroute_timing_repair_
+audit.py` tests the AUDIT of an already-regressed record, which is a different
+claim.)
+
+WHAT WAS MISSING WAS NOT THE ROLLBACK BUT AN ADDRESS FOR ITS DECISION. The undo
+turned on an inline expression inside a 900-line step function, so no test could
+reach it without re-implementing it — and a test that re-implements the thing it
+checks proves only that two copies agree. That expression is now
+`repair_result_is_a_regression`, and
+`programs/tests/test_timing_repair_reverted_regression.py` exercises it: the 12x
+regression that motivated the guard, the one-picosecond floor, both directions
+of the adopt/revert choice, and the comparability guard that keeps a delta
+measured across different parasitics from being charged to the repair.
+
+SO EDGES 23 AND 32 CARRY `rollback` + `rollback_test` CITATIONS AND THE CENSUS
+READS 2. The promotion is earned only while the proof exists: delete the proof
+and the rollback_test citation stops resolving, which is an ERROR finding AND a
+demotion back to REMEASURED. That was run, not assumed — see
+`test_the_rollback_tier_is_earned_and_stays_earned`.
+
+`rollback_test` is also the one role whose evidence CANNOT live in the runner,
+because a runner that tests itself proves nothing. See `_tier_is_modelled` for
+how a root that models only the runner tier is told apart from a tree where the
+proof was deleted; the first is demoted in silence, the second is accused.
 
 WHY THE REGISTRY IS CODE AND NOT A JSON SIDECAR
 ===============================================
@@ -127,7 +151,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 try:
     import yaml
@@ -185,6 +209,53 @@ ROLE_CITATION_KINDS: Dict[str, Tuple[str, ...]] = {
     "rollback": ("calls", "call_in_loop"),
     "rollback_test": ("calls", "call_in_loop"),
 }
+
+#: THE ONE EVIDENCE ROLE THAT CANNOT LIVE IN THE RUNNER.
+#:
+#: `actuate`, `remeasure` and `rollback` are all facts about the runner: the
+#: runner calls the actuator, re-measures, and consults the undo decision. A
+#: `rollback_test` is different in kind — a runner that tests itself proves
+#: nothing, so this role's proof necessarily lives in the TEST tier, in a file
+#: the runner never imports.
+#:
+#: That distinction is what kept this promotion from being a line edit. The
+#: `--root` fixtures below model the RUNNER tier only: they write
+#: `programs/*.py` stubs and no `programs/tests/` at all. Under such a root the
+#: test-tier citation is not MISSING, it is UNASKED — and reporting "the proof
+#: was deleted" about a tree that was never asked to carry one is the same
+#: false-negative shape as a green from an empty denominator.
+TEST_TIER_ROLES: FrozenSet[str] = frozenset({"rollback_test"})
+TEST_TIER_DIR = "programs/tests"
+
+
+def _tier_is_modelled(role: str, cit: Dict[str, Any], root: Path) -> bool:
+    """Can THIS root be asked about this citation at all?
+
+    False in exactly one case: a test-tier role, cited under `programs/tests/`,
+    against a root that has no `programs/tests/` directory whatsoever.
+
+    DELIBERATELY THE NARROWEST POSSIBLE HOLE, because this is the one rule in
+    the file that can suppress a finding:
+
+      * it never promotes. An unmodelled role is an UNSATISFIED role, so the
+        edge falls to the highest tier whose evidence did resolve — the census
+        reports REMEASURED, never ROLLBACK_PROVEN, under such a root;
+      * it is keyed on the DIRECTORY, not the file. The moment a root carries a
+        `programs/tests/` at all it is a tree that models the test tier, and a
+        cited proof missing from it is rot, reported as CLC-EVIDENCE-MISSING
+        exactly as before. Deleting the proof from the shipped tree therefore
+        still reddens this census, which is the property that makes the
+        promotion a ratchet rather than a one-way claim.
+    """
+    if role not in TEST_TIER_ROLES:
+        return True
+    rel = str(cit.get("file") or "")
+    if not rel.startswith(TEST_TIER_DIR + "/"):
+        # A test-tier role cited somewhere else is a registry bug, not an
+        # unmodelled tier. Judge it normally so it surfaces.
+        return True
+    return (root / TEST_TIER_DIR).is_dir()
+
 
 #: A remeasurement proof is only evidence for an edge when it extends one of
 #: that edge's accepted actuation proofs.  Matching just the measurement call is
@@ -277,7 +348,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # `step_canonicalize_artefacts` fires on a multi-corner OCV violation — which
     # is step 23's own measurement — and runs the repair.
     "23": {
-        "class": REMEASURED,
+        "class": ROLLBACK_PROVEN,
         "actuation_form": "re_execute",
         "why": ("phase3_one_shot_runner.step_canonicalize_artefacts fires "
                 "_run_postroute_timing_repair on a multi-corner OCV violation and re-measures "
@@ -302,12 +373,33 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                  "actuator_callee": "_run_postroute_timing_repair",
                  "callee": "_measure_postrepair_mcorner_ocv"},
             ],
-        },
-        "not_claimed": {
-            "rollback_test": ("the runner DOES retain the pre-repair artefacts on a "
-                              "measured regression (`timing_repair_reverted_regression`), "
-                              "but no test in programs/tests exercises that branch, "
-                              "so the undo is unproven"),
+            # THE TOP TIER, EARNED. The undo is the `timing_repair_reverted_
+            # regression` branch: on a measured setup regression the repair's
+            # outputs are NOT adopted and the pre-repair artefacts are
+            # retained. The decision it turns on used to be an inline
+            # expression inside a 900-line step function, which is why this
+            # entry read `not_claimed` for two tiers — an undo nothing can call
+            # is an undo nothing can prove. It now has an address,
+            # `repair_result_is_a_regression`, and the branch consults it.
+            "rollback": [
+                {"kind": "calls",
+                 "file": "programs/phase3_one_shot_runner.py",
+                 "caller": "step_canonicalize_artefacts",
+                 "callee": "repair_result_is_a_regression"},
+            ],
+            # ...and the proof, in the TEST tier. This is the citation that
+            # made this promotion its own change rather than a line edit: a
+            # rollback proof is the one evidence role that CANNOT live in the
+            # runner, because a runner that tests itself proves nothing. See
+            # `_tier_is_modelled` for how a root that models only the runner
+            # tier is told apart from a tree where the proof was deleted.
+            "rollback_test": [
+                {"kind": "calls",
+                 "file": ("programs/tests/"
+                          "test_timing_repair_reverted_regression.py"),
+                 "caller": "_regressed",
+                 "callee": "repair_result_is_a_regression"},
+            ],
         },
     },
 
@@ -315,7 +407,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # separately because the census is per-EDGE and a shared actuator is a fact
     # about the tree, not a reason to count one edge twice or drop one.
     "32": {
-        "class": REMEASURED,
+        "class": ROLLBACK_PROVEN,
         "actuation_form": "re_execute",
         "why": ("the same auto-trigger; step 32 is where it runs, so the edge "
                 "re-enters the step that owns the actuator"),
@@ -340,9 +432,22 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                  "actuator_callee": "_run_postroute_timing_repair",
                  "callee": "_measure_postrepair_mcorner_ocv"},
             ],
-        },
-        "not_claimed": {
-            "rollback_test": ("see edge 23 — the undo exists and nothing proves it"),
+            # Same actuator, same undo, same proof — recorded again rather than
+            # cross-referenced, because the census is per-EDGE and an edge that
+            # borrows another's evidence by reference cannot be demoted alone.
+            "rollback": [
+                {"kind": "calls",
+                 "file": "programs/phase3_one_shot_runner.py",
+                 "caller": "step_canonicalize_artefacts",
+                 "callee": "repair_result_is_a_regression"},
+            ],
+            "rollback_test": [
+                {"kind": "calls",
+                 "file": ("programs/tests/"
+                          "test_timing_repair_reverted_regression.py"),
+                 "caller": "_regressed",
+                 "callee": "repair_result_is_a_regression"},
+            ],
         },
     },
 
@@ -1865,13 +1970,16 @@ def classify_edge(step_id: str, root: Path,
                 joined_to_actuation = any(
                     _remeasure_extends_actuation(cit, actuation)
                     for actuation in eligible_actuations)
+            tier_modelled = _tier_is_modelled(role, cit, root)
             eligible = (ok and structural and bound_to_fallback
-                        and bound_to_trigger and joined_to_actuation)
+                        and bound_to_trigger and joined_to_actuation
+                        and tier_modelled)
             citation_record = {
                 "role": role, "citation": cit, "resolved": ok,
                 "structural": structural,
                 "bound_to_fallback": bound_to_fallback,
                 "bound_to_trigger": bound_to_trigger,
+                "tier_modelled": tier_modelled,
                 "eligible": eligible, "reason": reason,
             }
             if role == "remeasure":
@@ -1881,10 +1989,20 @@ def classify_edge(step_id: str, root: Path,
                 eligible_actuations.append(cit)
             if not ok:
                 role_ok = False
-                rec["problems"].append(
-                    f"CLC-EVIDENCE-MISSING: edge {step_id} claims "
-                    f"{entry.get('class')} on {role} evidence that no longer "
-                    f"resolves — {reason}")
+                if tier_modelled:
+                    rec["problems"].append(
+                        f"CLC-EVIDENCE-MISSING: edge {step_id} claims "
+                        f"{entry.get('class')} on {role} evidence that no "
+                        f"longer resolves — {reason}")
+                else:
+                    # NOT ASKED, NOT MISSING. The role stays unsatisfied, so
+                    # the edge is demoted; it simply is not reported as rot.
+                    rec["problems_not_raised"] = (
+                        rec.get("problems_not_raised") or [])
+                    rec["problems_not_raised"].append(
+                        f"CLC-TIER-NOT-MODELLED: edge {step_id} cites {role} "
+                        f"evidence in {TEST_TIER_DIR}/, which this root does "
+                        f"not model at all — demoted, not reported as missing")
             if not structural:
                 role_ok = False
                 rec["problems"].append(

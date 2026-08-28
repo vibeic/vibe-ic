@@ -63,8 +63,17 @@ RC_OK, RC_FINDINGS, RC_NOT_MEASURED, RC_BAD = 0, 1, 2, 3
 #: today. Named, not searched: the day one of them changes, this file must fail
 #: loudly rather than quietly test nothing.
 DECLARED_ONLY_WITNESS = "31"     # PV -> 32; the timing repair explicitly declines
-REMEASURED_WITNESS = "32"        # the repair pass's own self-edge
+REMEASURED_WITNESS = "4"         # simulation -> spec-to-RTL; the RTL retry loop
+ROLLBACK_PROVEN_WITNESS = "32"   # the repair pass's own self-edge
 UNDECLARED_WITNESS = "19"        # a real step that declares no closed_loop
+
+#: THE WITNESS THAT MOVED, AND WHY THAT IS THE FILE WORKING.
+#: `REMEASURED_WITNESS` was "32" until edge 32 earned the top tier. The comment
+#: above promised this file would "fail loudly rather than quietly test
+#: nothing" the day one of these changed, and it did: promoting 23/32 turned
+#: this constant's test red rather than letting it keep asserting a class the
+#: edge no longer holds. Edge 4 is the REMEASURED witness now — it actuates and
+#: re-measures and has no proven undo — and 32 has become the top-tier witness.
 
 
 def _run(*extra, expect=None):
@@ -121,25 +130,96 @@ def test_an_unregistered_edge_defaults_to_declared_only(tmp_path):
     assert all(e["class"] == "DECLARED_ONLY" for e in unregistered)
     assert by[DECLARED_ONLY_WITNESS]["class"] == "DECLARED_ONLY"
     assert by[REMEASURED_WITNESS]["class"] == "REMEASURED"
+    assert by[ROLLBACK_PROVEN_WITNESS]["class"] == "ROLLBACK_PROVEN"
 
 
-def test_nothing_on_main_claims_rollback_proven(tmp_path):
-    """The load-bearing zero.
+def test_the_rollback_tier_is_earned_and_stays_earned(tmp_path):
+    """THE LOAD-BEARING ZERO, NOW A LOAD-BEARING TWO — and it ratchets BOTH ways.
 
-    The step-32 repair DOES implement an undo (`timing_repair_reverted_regression`)
-    and no test in this tree exercises it, so the top tier is unreached. If this
-    ever fails, someone earned it — update the census and say which test proves
-    the rollback.
+    This test used to assert `ROLLBACK_PROVEN == 0` and that no test in this
+    directory mentioned the undo, and it said in its own docstring that if it
+    ever failed, someone had earned it. Someone did:
+    `test_timing_repair_reverted_regression.py` proves the decision the
+    `timing_repair_reverted_regression` branch turns on, so edges 23 and 32
+    were promoted in the registry and the census now reads 2.
+
+    THE GUARD IS NOT RETIRED, IT IS TURNED AROUND. A ratchet that can only
+    advance is not a ratchet. The promotion is earned only while the proof
+    exists, so this test now fails if the census slips back to 0 (the registry
+    was quietly demoted) AND if the proof file stops exercising the undo (the
+    promotion outlived its evidence). Deleting the proof reddens this — that
+    is the falsification, and it was run.
     """
     _, rep = _report(tmp_path, expect=RC_OK)
-    assert rep["census"]["ROLLBACK_PROVEN"] == 0
     token = "timing_repair" + "_reverted_regression"   # split: this file greps for it
     proof = [p for p in _HERE.glob("test_*.py")
              if p.resolve() != Path(__file__).resolve()
              and token in p.read_text(errors="ignore")]
-    assert not proof, (
-        f"{[p.name for p in proof]} now exercises the repair undo — promote edges "
-        f"23/32 to ROLLBACK_PROVEN in the registry and update this census")
+    assert proof, (
+        "no test in this directory exercises the repair undo any more, but the "
+        "registry still claims ROLLBACK_PROVEN on edges 23/32 — either restore "
+        "the proof or demote the registry; an unproven rollback is exactly "
+        "what this census exists to keep out of a success report")
+    assert rep["census"]["ROLLBACK_PROVEN"] == 2, (
+        f"the proof exists ({[p.name for p in proof]}) but the census reads "
+        f"{rep['census']['ROLLBACK_PROVEN']} — a rollback that IS proven and "
+        "is not counted understates the tree in the other direction")
+    proven = {e["step"] for e in rep["edges"]
+              if e["class"] == "ROLLBACK_PROVEN"}
+    assert proven == {"23", "32"}, proven
+
+
+def test_the_rollback_proof_lives_outside_the_runner_it_proves(tmp_path):
+    """A runner that tests itself proves nothing.
+
+    `rollback_test` is the one evidence role whose citation must NOT be in the
+    file it vouches for, and this pins that: the cited proof is under
+    `programs/tests/`, not in `phase3_one_shot_runner.py`. Without this, the
+    promotion could be satisfied by the runner citing its own docstring.
+    """
+    for step in ("23", "32"):
+        cits = (clc.REGISTRY[step]["evidence"]["rollback_test"])
+        assert cits
+        for c in cits:
+            assert c["file"].startswith("programs/tests/"), c
+            assert "one_shot_runner" not in c["file"], c
+
+
+def test_a_root_that_models_no_test_tier_is_demoted_not_accused(tmp_path):
+    """"Could not look" is not "the proof was deleted".
+
+    The `--root` fixtures model the runner tier only. Under such a root the
+    rollback_test citation is UNASKED: the edge is demoted to REMEASURED — it
+    can never be credited — and no CLC-EVIDENCE-MISSING is raised about a tier
+    the root was never built to carry.
+    """
+    root = _mutant_root(tmp_path, loop=True, repair=True)
+    assert not (root / "programs" / "tests").exists()
+    for step in ("23", "32"):
+        rec = clc.classify_edge(step, root, "32")
+        assert rec["class"] == "REMEASURED", rec["class"]
+        assert not any("CLC-EVIDENCE-MISSING" in p for p in rec["problems"])
+        assert any("CLC-TIER-NOT-MODELLED" in p
+                   for p in rec.get("problems_not_raised") or [])
+
+
+def test_a_root_that_HAS_a_test_tier_is_still_accused_when_the_proof_is_gone(
+        tmp_path):
+    """THE NARROWNESS OF THE HOLE, PINNED.
+
+    The rule above keys on the DIRECTORY, not the file — so the moment a root
+    carries `programs/tests/` at all, a missing proof is rot and is reported.
+    Without this test, `_tier_is_modelled` would be a blanket excuse rather
+    than a distinction, and the promotion could never be falsified.
+    """
+    root = _mutant_root(tmp_path, loop=True, repair=True)
+    (root / "programs" / "tests").mkdir()          # the tier now EXISTS...
+    (root / "programs" / "tests" / "test_unrelated.py").write_text("x = 1\n")
+    for step in ("23", "32"):                      # ...but the proof is not in it
+        rec = clc.classify_edge(step, root, "32")
+        assert rec["class"] == "REMEASURED"
+        assert any("CLC-EVIDENCE-MISSING" in p and "rollback_test" in p
+                   for p in rec["problems"]), rec["problems"]
 
 
 def test_a_claim_on_a_remeasured_edge_is_accepted(tmp_path):
@@ -168,6 +248,31 @@ def test_a_claim_on_a_step_with_no_declared_loop_is_refused(tmp_path):
                      str(_claims(tmp_path, UNDECLARED_WITNESS)),
                      expect=RC_FINDINGS)
     assert {f["rule"] for f in rep["findings"]} == {"CLC-CLAIM-UNDECLARED-EDGE"}
+
+
+def _assert_runner_tier_citations_resolve(rec):
+    """Every citation the ROOT under test actually models must resolve.
+
+    These positive-control roots stub the runner's actuate/remeasure structure
+    and nothing else — no `programs/tests/`, so the `rollback_test` role is
+    UNASKED there (`clc._tier_is_modelled`), which is why they earn REMEASURED
+    rather than the shipped tree's ROLLBACK_PROVEN.
+
+    SCOPED, NOT WEAKENED: the assertion still fails the moment an actuate or
+    remeasure citation stops resolving, which is the whole point of these
+    controls. What it no longer does is demand that a root prove a tier it was
+    never built to carry.
+    """
+    modelled = [c for c in rec["citations"] if c["role"] in ("actuate",
+                                                             "remeasure")]
+    assert modelled, "the root models no runner-tier citation at all"
+    unresolved = [c for c in modelled if not c["resolved"]]
+    assert not unresolved, unresolved
+    # ...and the unmodelled tier must be UNASKED, never silently credited.
+    for c in rec["citations"]:
+        if c["role"] == "rollback_test":
+            assert c["tier_modelled"] is False
+            assert c["eligible"] is False
 
 
 def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool) -> Path:
@@ -208,13 +313,22 @@ def _mutant_root(tmp_path: Path, *, loop: bool, repair: bool) -> Path:
     compile(src, "<stub>", "exec")          # the stub must be REAL python
     (progs / "design_one_shot_runner.py").write_text(src)
 
+    # The rollback branch is part of the RUNNER tier, so this stub models it:
+    # the docstring's contract is "stubs of exactly the files the registry
+    # cites", and the registry cites `step_canonicalize_artefacts` consulting
+    # `repair_result_is_a_regression`. The TEST tier is deliberately NOT
+    # modelled here — see `_tier_is_modelled`: a root with no `programs/tests/`
+    # cannot be asked whether the undo is proven, so these roots report edges
+    # 23/32 as REMEASURED, one tier below what the shipped tree earns.
     repair_src = ("class _Decision:\n"
                "    def decide(self): return {'repair_needed': True}\n"
                "_repair_dec = _Decision()\n"
                "def _run_postroute_timing_repair(): ...\n"
                "def _measure_postrepair_mcorner_ocv(): ...\n"
+               "def repair_result_is_a_regression(d, c): ...\n"
                "def step_canonicalize_artefacts():\n"
                "    decision = _repair_dec.decide()\n"
+               "    regressed = repair_result_is_a_regression(1, True)\n"
                "    if decision['repair_needed']:\n"
                + ("        _run_postroute_timing_repair()\n"
                   "        _measure_postrepair_mcorner_ocv()\n"
@@ -1272,7 +1386,7 @@ def test_a_real_correlated_path_is_not_falsely_demoted(tmp_path, body):
 
     for step in ("23", "32"):
         rec = clc.classify_edge(step, root, "32")
-        assert all(citation["resolved"] for citation in rec["citations"])
+        _assert_runner_tier_citations_resolve(rec)
         assert rec["class"] == "REMEASURED"
 
 
@@ -1356,7 +1470,7 @@ def test_an_uncalled_nested_body_does_not_taint_the_trigger_receipt(tmp_path):
 
     for step in ("23", "32"):
         rec = clc.classify_edge(step, root, "32")
-        assert all(citation["resolved"] for citation in rec["citations"])
+        _assert_runner_tier_citations_resolve(rec)
         assert rec["class"] == "REMEASURED"
 
 

@@ -19,8 +19,8 @@ stamped above so you can tell how old it is.
 ```
 $ python3 programs/closed_loop_executable_coverage_check.py
 [PASS] closed_loop_executable_coverage_check: 21 declared closed_loop edge(s)
-       over 68 step(s); DECLARED_ONLY=18, EXECUTABLE=0, REMEASURED=3,
-       ROLLBACK_PROVEN=0
+       over 68 step(s); DECLARED_ONLY=18, EXECUTABLE=0, REMEASURED=1,
+       ROLLBACK_PROVEN=2
 ```
 
 The four classes are nested tiers, not a palette. Each subsumes the one before
@@ -46,12 +46,12 @@ cannot promote an unrelated call by itself.
 | step | fallback | class | why |
 |---|---|---|---|
 | `4` | 1 | REMEASURED | `design_one_shot_runner.main` re-runs `step_rtl_gen` on a reference-TB failure and re-runs the testbench. Bounded by `--max-rtl-repair-retries`; stops on byte-identical RTL with `FAIL_RTL_REPAIR_INERT`. |
-| `23` | 32 | REMEASURED | the post-route timing-repair trigger in `phase3_one_shot_runner.step_canonicalize_artefacts`: `_run_postroute_timing_repair` then `_measure_postrepair_mcorner_ocv`. |
-| `32` | 32 | REMEASURED | the same actuator; step 32 is where it runs. |
+| `23` | 32 | ROLLBACK_PROVEN | the post-route timing-repair trigger in `phase3_one_shot_runner.step_canonicalize_artefacts`: `_run_postroute_timing_repair` then `_measure_postrepair_mcorner_ocv`, and on a measured setup regression the pre-repair artefacts are retained — a branch `test_timing_repair_reverted_regression.py` now proves. |
+| `32` | 32 | ROLLBACK_PROVEN | the same actuator and the same undo; step 32 is where it runs. |
 | `2` | 1 | DECLARED_ONLY | cross-layer fidelity now belongs to Step 2. Its judge rejects a bad candidate, but PRE/POST runtime spies both measured zero re-entry into `step_rtl_gen`; rejection must not be reported as an executable fallback. |
 | `3`, `5`, `8`, `9`, `10`, `13`, `14`, `20`, `24`, `25`, `26`, `27`, `28`, `31`, `33`, `A7`, `A9` | — | DECLARED_ONLY | no actuator found in any runner. |
 
-### The zero is the load-bearing number, and half of what it costs is now paid
+### The zero is the load-bearing number, and it has been earned away
 
 `ROLLBACK_PROVEN = 0`. The step-32 repair **does** implement an undo — on a
 measured setup regression it sets `timing_repair_reverted_regression` and retains the
@@ -62,7 +62,7 @@ $ grep -rn 'timing_repair_reverted_regression' programs/tests/
 (no files)
 ```
 
-**That grep now returns a file.** `test_eco_fired_reverted_regression.py` proves
+**That grep now returns a file.** `test_timing_repair_reverted_regression.py` proves
 the decision the branch turns on: the 12x regression that motivated the guard
 (setup `-0.68 -> -8.92 ns`, recorded as `pass` because the two figures sat
 adjacent and were never subtracted), the one-picosecond floor, both directions
@@ -71,24 +71,38 @@ DIFFERENT parasitics is **not** charged to the repair, because a repair pass
 that changed nothing was once recorded at `repair_setup_delta_ns = -8.220` and
 failed for a regression it never made.
 
-(That module is named for the pre-v1.12.20 `eco_*` vocabulary; the identifiers
-it proves carry the current `postroute_timing_repair_*` names. The file name is
-left alone deliberately — a test's name is how the ledger finds it.)
-
 It could not be proven before because the decision had no ADDRESS:
 `_repair_regressed` was an inline expression inside a 900-line step function, so
 no test could reach it without re-implementing it — and a test that
 re-implements the thing it checks proves only that two copies agree. It is now
 `repair_result_is_a_regression`, same behaviour, one name.
 
-**The census still reads 0, and that is correct.** Its evidence registry is code,
-and the citation that would promote these two edges resolves against the real
-tree but not against the 17 synthetic trees `test_closed_loop_executable_coverage`
-builds — those model the actuate/remeasure tiers only, and every one of them
-asserts that EVERY citation resolves. Promoting the edges without teaching the
-registry that a rollback citation may live outside the runner's own file turns
-9 of that file's tests red. The number moves when that distinction is built, not
-before; a census that goes green by breaking its own prover has learned nothing.
+**The census now reads 2, and the distinction it was waiting for is built.**
+Promoting these two edges was blocked on a real gap, not on paperwork: the
+registry's evidence is verified against the tree on every run, and the
+`--root` fixtures `test_closed_loop_executable_coverage` builds model the
+RUNNER tier only — they write `programs/*.py` stubs and no `programs/tests/`
+at all. A rollback proof cannot live in the runner it vouches for, so a naive
+promotion turned 9 of that file's tests red, and editing 17 synthetic trees to
+accept the registry entry would have been bending the prover to fit the claim.
+
+What was actually missing was the distinction between **"we looked and the
+proof is gone"** and **"this root was never built to carry one"**. That is now
+`_tier_is_modelled`, and it is the narrowest possible hole:
+
+* it is keyed on the DIRECTORY. A root with no `programs/tests/` at all cannot
+  be asked the question, so the edge is **demoted in silence** to REMEASURED —
+  it can never be *credited* there;
+* the moment a root carries a `programs/tests/`, a missing proof is rot again
+  and is reported as `CLC-EVIDENCE-MISSING`. Both halves are pinned by their
+  own tests, because a rule that suppresses a finding has to be falsifiable in
+  both directions or it is just an excuse.
+
+**The promotion is earned only while the proof exists.** Deleting
+`test_timing_repair_reverted_regression.py` from the shipped tree makes the
+`rollback_test` citation stop resolving, which is an ERROR finding AND a
+demotion back to REMEASURED. That was run, restored, and the tree sha
+re-checked — a ratchet that can only advance is not a ratchet.
 
 ### Three DECLARED_ONLY entries that are worth reading individually
 

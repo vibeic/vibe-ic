@@ -35742,7 +35742,7 @@ def area_retry_is_worth_adopting(area_before, area_after, budget) -> bool:
 def repair_result_is_a_regression(delta_ns, delta_is_comparable: bool) -> bool:
     """Did the post-route repair make setup timing measurably WORSE?
 
-    EXTRACTED SO IT CAN BE PROVEN. This decision drives
+    EXTRACTED SO IT COULD BE PROVEN, AND IT NOW IS. This decision drives
     `timing_repair_reverted_regression`, the branch that retains the
     pre-repair artefacts instead of adopting the repair's — the repository's
     only rollback. It lived inline inside a 900-line step function, so nothing
@@ -35752,11 +35752,18 @@ def repair_result_is_a_regression(delta_ns, delta_is_comparable: bool) -> bool:
         grep -rn 'timing_repair_reverted_regression' programs/tests/
           ->  no files
 
-    ...so nothing proves it works. An unproven rollback is exactly the
-    thing this census exists to keep out of a success report.
+    ...so nothing proved it worked, and an unproven rollback is exactly the
+    thing that census exists to keep out of a success report. That is why it
+    read ROLLBACK_PROVEN=0 while the undo existed.
 
-    That is why the census reads ROLLBACK_PROVEN=0 while the undo exists. The
-    logic is unchanged; only its address is.
+    That grep now returns `test_timing_repair_reverted_regression.py`, which
+    exercises THIS function, and edges 23/32 carry `rollback` + `rollback_test`
+    citations: the census reads ROLLBACK_PROVEN=2. The logic here never
+    changed; only its address did.
+
+    THE PROMOTION IS EARNED ONLY WHILE THE PROOF EXISTS. Delete that test and
+    the citation stops resolving, which is a finding AND a demotion back to
+    REMEASURED — measured, not assumed.
 
     BOTH GUARDS ARE LOAD-BEARING, and the second is the subtle one.
     `delta_is_comparable` is False when the before and after were measured on

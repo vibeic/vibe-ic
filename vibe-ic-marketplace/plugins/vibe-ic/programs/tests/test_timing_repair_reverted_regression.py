@@ -25,12 +25,16 @@ under their own names for debug; they are NOT adopted as the shipped
 artefacts." Not adopting a worse result is the same guarantee as restoring a
 better one and it cannot fail half-way, which is why it is the right shape here.
 
-FILENAME NOTE. This module is named for the pre-v1.12.20 vocabulary
-(`eco_fired_reverted_regression`). The runner identifiers it proves were
-renamed to `postroute_timing_repair_*` / `timing_repair_reverted_regression`
-on main AFTER this proof was written. The name is deliberately left alone —
-a test's name is how the ledger finds it — and renaming it is the owner's call,
-not this file's.
+FILENAME NOTE. This module arrived from `ppa/area-executable-edge` as
+`test_eco_fired_reverted_regression.py`, named for the pre-v1.12.20 vocabulary.
+v1.12.20 reserved "ECO" for physical changes, and the identifier this file
+actually proves is `timing_repair_reverted_regression`. Renaming a test is how
+a ledger loses track of it, so the tree was searched first: NOTHING referenced
+the old filename — the census guard in
+`test_closed_loop_executable_coverage.py` greps for the TOKEN
+`timing_repair_reverted_regression` inside every `test_*.py`, never for a file
+name — so the rename costs no reference and the name now matches what it
+proves.
 """
 from __future__ import annotations
 
