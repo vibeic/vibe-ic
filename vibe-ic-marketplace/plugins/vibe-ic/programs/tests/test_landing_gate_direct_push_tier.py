@@ -422,3 +422,52 @@ def test_a_protected_receipt_for_another_pair_is_refused(tmp_path):
     cp, rec = _run(tmp_path, base="failed", cand="failed", receipt=other)
     assert cp.returncode == 2
     assert any("does not bind the merge verdict" in r for r in rec["reasons"])
+
+
+def test_the_manifest_lists_every_path_the_code_protects():
+    """The two protected closures are declared TWICE, and nothing compared them.
+
+    MEASURED 2026-08-28: the timeout-as-verdict lane added
+    `programs/_progress_run.py` to both `RUNTIME_PATHS` and
+    `REQUIRED_AUTHORITY_PATHS` in `protected_landing_transition.py`, and to
+    NEITHER role in `protected_landing_transition.json`. Every receipt built
+    from that manifest then omitted a file the validator required, the verdict
+    came back `RC_CANNOT_MEASURE` instead of `RC_REFUSE`, and **fourteen cases
+    in this file went red on `assert 2 == 1`** — an arithmetic-looking failure
+    five files away from a data file nobody had opened. The shipped manifest was
+    also refused outright by `parse_manifest`, so the real protected-landing
+    path was broken on main, not merely the fixture.
+
+    This guard makes the next such addition fail HERE, naming the path and the
+    role, instead of surfacing as fourteen identical assertion errors.
+    """
+    import importlib.util as _ilu, json as _json
+    repo = Path(__file__).resolve()
+    while repo != repo.parent and not (repo / "tools" / "ci").is_dir():
+        repo = repo.parent
+    py = repo / "tools" / "ci" / "protected_landing_transition.py"
+    js = repo / "tools" / "ci" / "protected_landing_transition.json"
+    assert py.is_file() and js.is_file(), (py, js)
+    spec = _ilu.spec_from_file_location("_plt_guard", py)
+    mod = _ilu.module_from_spec(spec); spec.loader.exec_module(mod)
+    manifest = _json.loads(js.read_text(encoding="utf-8"))
+
+    for role, declared in (("runtime", mod.RUNTIME_PATHS),
+                           ("authority", mod.REQUIRED_AUTHORITY_PATHS)):
+        listed = {r["path"] for r in manifest["paths"] if role in r.get("roles", [])}
+        missing = sorted(set(declared) - listed)
+        extra = sorted(listed - set(declared))
+        assert not missing, (
+            f"{py.name} protects {missing} with role {role!r} and {js.name} "
+            f"does not list it. Every receipt built from that manifest omits "
+            f"the file, the validator cannot measure the transition, and the "
+            f"verdict is RC_CANNOT_MEASURE — which reads as `assert 2 == 1` in "
+            f"every case here that expected a refusal.")
+        assert not extra, (
+            f"{js.name} lists {extra} as {role!r} and the code does not protect "
+            f"it; a receipt would carry a file no validator checks, which is a "
+            f"claim of coverage that is not there.")
+        # Neither side may be empty, or both assertions above hold trivially.
+        assert declared and listed, (
+            f"the {role!r} closure is empty on one side — this guard would pass "
+            f"while protecting nothing")

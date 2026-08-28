@@ -347,7 +347,21 @@ def parse_manifest(value: Any, oid_len: int) -> dict[str, Any]:
     runtime = {path for path, roles in role_map.items() if "runtime" in roles}
     authority = {path for path, roles in role_map.items() if "authority" in roles}
     if runtime != RUNTIME_PATHS:
-        raise Refusal("manifest runtime role set is not the exact five-file tuple")
+        # THE MESSAGE NAMES THE DIFFERENCE, NOT THE SIZE. It read "is not the
+        # exact five-file tuple" while RUNTIME_PATHS held eleven — a sentence
+        # that went stale the first time anyone protected another file and then
+        # sent its reader looking for five. MEASURED 2026-08-28: the
+        # timeout-as-verdict lane added `_progress_run.py` to RUNTIME_PATHS and
+        # not to the manifest; this refusal fired for exactly the right reason
+        # and described the wrong shape of problem, while fourteen cases of
+        # `test_landing_gate_direct_push_tier` went red behind it on
+        # `assert 2 == 1`.
+        missing = sorted(RUNTIME_PATHS - runtime)
+        extra = sorted(runtime - RUNTIME_PATHS)
+        raise Refusal(
+            "manifest runtime role set does not match RUNTIME_PATHS"
+            + (f"; the manifest OMITS {missing}" if missing else "")
+            + (f"; the manifest carries UNEXPECTED {extra}" if extra else ""))
     missing_authority = REQUIRED_AUTHORITY_PATHS - authority
     if missing_authority:
         raise Refusal("manifest omits trusted authority dependencies: "
