@@ -6,6 +6,8 @@
 # this check verifies that:
 #   - vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json `version`
 #   - vibe-ic-marketplace/.claude-plugin/marketplace.json plugins[0].version
+#   - .claude-plugin/marketplace.json plugins[0].version  (REPO ROOT — the one
+#     `/plugin update` reads as the version truth for a user)
 # both already equal that advertised version. Otherwise a "claim ahead of
 # bump" pattern slips into history (we hit this 4 times: v1.6.10, v1.6.13,
 # v1.6.16, almost v1.6.17). Bumping after the commit lands fixes the file
@@ -51,6 +53,14 @@ fi
 # 2. Locate plugin.json + marketplace.json
 PLUGIN_JSON="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
 MARKET_JSON="$PROJECT_ROOT/vibe-ic-marketplace/.claude-plugin/marketplace.json"
+# THE THIRD MANIFEST, and it is the one a USER actually reads. `/plugin update`
+# resolves the version from the marketplace.json at the REPOSITORY ROOT; the two
+# above are the ones a maintainer edits. This check verified the maintainer's
+# pair and not the user's, so a root-only desync shipped with a PASS —
+# MEASURED 2026-08-28: root set to 9.9.9, the other two left at 1.12.33, and
+# this script printed "PASS: … ↔ … ↔ …" and exited 0. The consequence is not
+# cosmetic: a user's upgrade silently resolves to the wrong version.
+ROOT_MARKET_JSON="$PROJECT_ROOT/.claude-plugin/marketplace.json"
 
 if [ ! -f "$PLUGIN_JSON" ] || [ ! -f "$MARKET_JSON" ]; then
     echo "  SKIP: plugin.json or marketplace.json not found"
@@ -148,6 +158,16 @@ else:
     print(plugins[0].get('version',''))
 " "$MARKET_JSON")
 
+ROOT_MARKET_VER=""
+if [ -f "$ROOT_MARKET_JSON" ]; then
+    ROOT_MARKET_VER=$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+plugins = d.get('plugins', [])
+print(plugins[0].get('version','') if plugins else '')
+" "$ROOT_MARKET_JSON")
+fi
+
 # 5. Compare
 ERR=0
 if [ "$PLUGIN_VER" != "$ADVERTISED" ]; then
@@ -158,11 +178,26 @@ if [ "$MARKET_VER" != "$ADVERTISED" ]; then
     echo "  ERROR: commit msg claims v$ADVERTISED but marketplace.json plugins[0].version is v$MARKET_VER — bump first"
     ERR=1
 fi
+# The ROOT manifest is checked SEPARATELY rather than folded into the line
+# above, because it fails for a different reason and is fixed in a different
+# file — and because it is the one with a user-visible consequence.
+if [ -z "$ROOT_MARKET_VER" ]; then
+    echo "  ERROR: $ROOT_MARKET_JSON is missing or states no version. It is the"
+    echo "         manifest \`/plugin update\` reads; an absent version is not a"
+    echo "         pass, it is a version nobody can resolve."
+    ERR=1
+elif [ "$ROOT_MARKET_VER" != "$ADVERTISED" ]; then
+    echo "  ERROR: commit msg claims v$ADVERTISED but the ROOT .claude-plugin/marketplace.json"
+    echo "         is v$ROOT_MARKET_VER — this is the manifest \`/plugin update\` reads as the"
+    echo "         version truth, so a user upgrading would silently resolve the wrong one."
+    ERR=1
+fi
 
 if [ $ERR -ne 0 ]; then
-    echo "  HINT: edit $PLUGIN_JSON and $MARKET_JSON, set version to $ADVERTISED, restage, and re-commit."
+    echo "  HINT: edit $PLUGIN_JSON, $MARKET_JSON and $ROOT_MARKET_JSON — all THREE —"
+    echo "        set version to $ADVERTISED, restage, and re-commit."
     exit 1
 fi
 
-echo "  PASS: commit msg v$ADVERTISED ↔ plugin.json v$PLUGIN_VER ↔ marketplace.json v$MARKET_VER"
+echo "  PASS: commit msg v$ADVERTISED ↔ plugin.json v$PLUGIN_VER ↔ marketplace.json v$MARKET_VER ↔ root marketplace.json v$ROOT_MARKET_VER"
 exit 0
