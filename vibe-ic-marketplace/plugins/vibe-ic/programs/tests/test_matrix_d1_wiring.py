@@ -618,6 +618,68 @@ class UmbrellaRun:
 # 241 real gate programs would measure dimension 2, not dimension 1).
 
 
+def _process_seams(mod) -> List:
+    """The modules *mod* actually reaches a process through, as module objects.
+
+    NOT a fixed list, and not `mod.subprocess` by name. This file's ruling is
+    that an observation point bound to a DISPATCHER can be defeated by
+    refactoring the dispatcher; naming one seam here reintroduces that defect
+    one level up. MEASURED: the timeout-as-verdict lane routed
+    `flow_compliance_check` through `_progress_run` and removed the orphaned
+    `import subprocess`, and two probes here raised AttributeError. The more
+    dangerous half is the other one — had the import merely SURVIVED UNUSED,
+    they would have stubbed an object nobody calls, recorded an empty set, and
+    reported success while the module spawned freely.
+
+    A seam qualifies by CAPABILITY, not by name: a module attribute that is
+    itself a module and carries a callable `run`. `subprocess`, `_progress_run`
+    and anything a later lane introduces all satisfy that; a helper that merely
+    RETURNS a result does not.
+    """
+    import types
+    seen, out = set(), []
+    for name in dir(mod):
+        obj = getattr(mod, name, None)
+        if (isinstance(obj, types.ModuleType)
+                and callable(getattr(obj, "run", None))
+                and id(obj) not in seen):
+            seen.add(id(obj))
+            out.append(obj)
+    assert out, (
+        f"{mod.__name__} exposes no module-valued attribute with a callable "
+        f"`run` — this probe cannot see how it reaches a process, and an empty "
+        f"seam list would make every assertion below vacuously true"
+    )
+    return out
+
+
+def _popen_bearing_seams(mod, _depth: int = 3) -> List:
+    """Every module on *mod*'s process-seam chain that exposes ``Popen``.
+
+    A seam is not required to hold the primitive itself: `_progress_run` reaches
+    a process through `_watchdog`, which reaches `subprocess.Popen`. Following
+    the chain is what lets the identity check below mean the same thing however
+    many helpers a lane inserts between the caller and the spawn. Bounded depth,
+    and cycle-safe by identity, because a seam graph may be circular.
+    """
+    import types
+    seen, out, frontier = set(), [], [mod]
+    for _ in range(_depth):
+        nxt = []
+        for m in frontier:
+            for name in dir(m):
+                obj = getattr(m, name, None)
+                if not isinstance(obj, types.ModuleType) or id(obj) in seen:
+                    continue
+                seen.add(id(obj))
+                if isinstance(getattr(obj, "Popen", None), type):
+                    out.append(obj)
+                if callable(getattr(obj, "run", None)):
+                    nxt.append(obj)
+        frontier = nxt
+    return out
+
+
 def _is_program_launch(argv: List[str]) -> bool:
     """`[python, <PROGRAMS_DIR>/<name>.py, ...]` — a gate program launch."""
     if len(argv) < 2:
@@ -1478,12 +1540,35 @@ def test_probe_umbrella_dispatch_is_recorded_from_the_real_runner():
         f"the anchor this file rests on is not in its shipped state"
     )
     # The compliance module reaches the same object; that shared identity is
-    # WHY one rebinding observes every caller's `subprocess.run`.
-    assert mod.subprocess.Popen is subprocess.Popen, (
-        f"{mod.__name__} sees a different subprocess.Popen than this module — "
-        f"the single-anchor assumption does not hold and the recorder would "
-        f"be blind to that module's spawns"
+    # WHY one rebinding observes every caller's spawns.
+    #
+    # ASKED OF WHICHEVER SEAM THE MODULE ACTUALLY USES, not of `subprocess` by
+    # name. This file's own ruling is that an observation point bound to a
+    # DISPATCHER can be defeated by refactoring the dispatcher — and hard-coding
+    # `mod.subprocess` here was doing exactly that one level up: the
+    # timeout-as-verdict conversion routed this module through `_progress_run`
+    # and deleted the orphaned `import subprocess`, so this assertion raised
+    # AttributeError rather than reporting anything. Worse, had the import
+    # merely SURVIVED UNUSED, it would have compared the right object while the
+    # module spawned somewhere else entirely — passing and proving nothing.
+    # A seam need not expose `Popen` ITSELF — `_progress_run` reaches one
+    # through `_watchdog` — so the chain is followed to every module that does,
+    # and the non-empty check below is what stops this from passing vacuously
+    # if a future refactor hides the primitive behind something this walk
+    # cannot see.
+    anchored = _popen_bearing_seams(mod)
+    assert anchored, (
+        f"no module on {mod.__name__}'s process-seam chain exposes `Popen`, so "
+        f"this assertion would hold trivially while the recorder — which is "
+        f"installed on subprocess.Popen — could be blind to every spawn"
     )
+    for seam in anchored:
+        assert seam.Popen is subprocess.Popen, (
+            f"{mod.__name__} reaches processes through {seam.__name__}, which "
+            f"sees a different subprocess.Popen than this module — the "
+            f"single-anchor assumption does not hold and the recorder would "
+            f"be blind to that module's spawns"
+        )
 
 
 def test_probe_direct_dispatch_programs_really_dispatch():
@@ -1616,18 +1701,36 @@ def test_probe_an_in_process_gate_call_is_not_a_dispatch():
     def _no_spawn_supervised(cmd, **_kw):
         return wd.SupervisedResult(0, "", "", "natural", 0.0)
 
-    real_run = mod.subprocess.run
+    # EVERY seam, DISCOVERED rather than named — and the honest note about what
+    # that is and is not doing, MEASURED here rather than assumed:
+    #
+    #   * REQUIRED: naming `mod.subprocess` raised AttributeError once the
+    #     timeout-as-verdict lane routed this module through `_progress_run` and
+    #     dropped the orphaned import. Discovery is what makes the leg run at all.
+    #   * NOT load-bearing TODAY: on this tree `_process_seams` finds exactly one
+    #     module (`_pr`), and stopping ZERO seams still leaves nothing spawning,
+    #     because `_pr.run` reaches a process THROUGH `wd.run_host_supervised`,
+    #     which is stopped below. Falsified both ways: stop no seam -> still 86
+    #     passed; leave the WATCHDOG live -> the leg's own guard fires with the
+    #     dispatched program list. The watchdog stop is the load-bearing half.
+    #
+    # The loop stays because the seam count is not fixed — a later lane that
+    # spawns without going through the watchdog would be caught by it and by
+    # nothing else — but this comment must not claim it is doing work it is not.
+    seams = _process_seams(mod)
+    real_runs = [(m, m.run) for m in seams]
     real_sup = wd.run_host_supervised
-    # A module-level `subprocess.run` rebinding is process-wide, so it is put
-    # back before any assertion can fail out from under it.
-    mod_sub = mod.subprocess
+    # A module-level `run` rebinding is process-wide, so it is put back before
+    # any assertion can fail out from under it.
     try:
-        mod_sub.run = _no_spawn_run
+        for m, _ in real_runs:
+            m.run = _no_spawn_run
         wd.run_host_supervised = _no_spawn_supervised
         _drive_umbrella.cache_clear() if hasattr(_drive_umbrella, "cache_clear") else None
         mutated = _drive_umbrella(lambda stem: (0, ""))
     finally:
-        mod_sub.run = real_run
+        for m, fn in real_runs:
+            m.run = fn
         wd.run_host_supervised = real_sup
 
     assert mutated.harness_error is None, mutated.harness_error
