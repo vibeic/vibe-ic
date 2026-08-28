@@ -98,3 +98,63 @@ def test_the_self_test_refuses_a_one_sided_population():
     """A census over a set that exercises one side of its predicate is not a pass."""
     rows = {"b_check.py": G.classify_source(_ABSENCE_ARM + "    return 0\n")}
     assert G.self_test(rows) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE REAL MUTATION. MEASURED 2026-08-29: killing the content arm of
+# `floorplan_pdn_check` — `return 1 if fail else 0` -> `return 0` — moved
+# NOTHING in this census. Two independent causes, both fixed and both pinned
+# below.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_a_red_returned_by_a_conditional_expression_is_seen():
+    """`return 1 if fail else 0` is an ast.IfExp, not a Constant."""
+    import ast
+    fn = ast.parse("def f(fail):\n    return 1 if fail else 0\n").body[0]
+    assert G._is_red(fn.body[0]), (
+        "the commonest way a gate returns its verdict was invisible to this census")
+
+
+def test_that_shape_is_common_enough_to_matter():
+    """Not a one-gate accident: it is how many gates end their main()."""
+    import ast
+    from pathlib import Path
+    hits = 0
+    for path in G.gate_files(_ROOT):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.IfExp):
+                if any(v in (1, 3) for v in G._red_constants(node.value)):
+                    hits += 1
+                    break
+    assert hits >= 10, (
+        f"only {hits} gates use `return <red> if ... else 0`; if that is now "
+        f"rare this test should be re-argued, but while it is common the "
+        f"census must read it")
+
+
+def test_an_upper_snake_absence_id_is_not_counted_as_a_verdict_red():
+    """`FLOORPLAN_DEF_UNPARSEABLE` was the ONLY red credited as that gate's
+    verdict arm. It is an unreadable-input red — absence by this file's own
+    vocabulary — and it escaped because `\\bunparse` finds no word boundary
+    after an underscore."""
+    assert G.ABSENCE_RE.search("FLOORPLAN_DEF_UNPARSEABLE: could not read")
+    assert G.ABSENCE_RE.search("PDN_STRIPES_MISSING: none found")
+    # ...but a genuine content verdict must NOT be swept in with them
+    assert not G.ABSENCE_RE.search("CLOCK_PLAN_EMPTY: the plan declares zero clocks")
+
+
+def test_the_real_gate_is_classified_honestly_now():
+    """floorplan_pdn_check can only fail on an input it could not read."""
+    from pathlib import Path
+    src = (_PROGRAMS / "floorplan_pdn_check.py")
+    if not src.is_file():                                   # pragma: no cover
+        import pytest
+        pytest.skip("floorplan_pdn_check.py is not in this tree")
+    kind = G.classify_source(src.read_text(encoding="utf-8"))["kind"]
+    assert kind == "ABSENCE-ONLY", (
+        f"expected the census to report this gate as absence-only; got {kind}. "
+        f"Before 2026-08-29 it said VERDICT-BEARING on the strength of an "
+        f"UNPARSEABLE red.")

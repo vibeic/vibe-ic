@@ -70,6 +70,13 @@ GATE_SUFFIXES = ("_check.py", "_lint.py", "_audit.py", "_guard.py")
 ABSENCE_RE = re.compile(
     r"(?i)("
     r"REQUIRED_ARTEFACT_MISSING|MISSING_[A-Z_]+|[A-Z_]+_MISSING|"
+    # An UPPER_SNAKE rule id carries no word boundary before its last word, so
+    # `\bunparse` never matched `FLOORPLAN_DEF_UNPARSEABLE` -- MEASURED: that
+    # id was the ONLY red this census credited as the verdict arm of
+    # `floorplan_pdn_check`, and it is an unreadable-input red, i.e. absence by
+    # this file's own stated vocabulary. The gate was counted falsifiable on the
+    # strength of a red that means "nothing could be read".
+    r"[A-Z][A-Z0-9_]*(?:UNPARSE[A-Z]*|UNREADABLE|NOT_FOUND|ABSENT|NO_INPUT)|"
     r"\bmissing\b|\babsent\b|\bnot found\b|\bno such\b|\bdoes not exist\b|"
     r"\bno file\b|\bno .{0,24} on disk\b|\bnever (?:written|produced|ran)\b|"
     r"\bempty\b|\bunreadable\b|\bnot valid json\b|\bcannot parse\b|"
@@ -87,11 +94,39 @@ def _rendered(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _red_constants(value: ast.AST):
+    """The literal exit codes this returned expression can produce.
+
+    MEASURED 2026-08-29, on a real mutation of `floorplan_pdn_check`: the
+    content arm of a gate is very often written
+
+        return 1 if fail else 0
+
+    which is an `ast.IfExp`, not an `ast.Constant`. Reading only Constant made
+    that arm INVISIBLE, so killing it moved nothing in this census. It is not a
+    one-gate accident: 15 of the 141 VERDICT-BEARING gates end a function with
+    exactly that shape.
+
+    Both branches are collected, and `or`/`and` chains too, because each is a
+    value this return can hand a consumer.
+    """
+    out = []
+    stack = [value]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, ast.Constant):
+            out.append(n.value)
+        elif isinstance(n, ast.IfExp):
+            stack.extend((n.body, n.orelse))
+        elif isinstance(n, ast.BoolOp):
+            stack.extend(n.values)
+    return out
+
+
 def _is_red(node: ast.AST) -> bool:
     """Does this statement hand a consumer a FAIL exit code?"""
     if isinstance(node, ast.Return):
-        v = node.value
-        return isinstance(v, ast.Constant) and v.value in (1, 3)
+        return any(v in (1, 3) for v in _red_constants(node.value))
     if isinstance(node, ast.Raise):
         exc = node.exc
         if (isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name)
