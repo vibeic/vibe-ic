@@ -306,10 +306,18 @@ def test_missing_compliance_tool_is_unknown_not_timeout(tmp_path, monkeypatch):
 
 def test_non_timeout_exception_is_unknown(tmp_path, monkeypatch):
     """REGRESSION GUARD: a non-timeout subprocess failure still degrades
-    to UNKNOWN (only a genuine TimeoutExpired maps to AUDIT_TIMEOUT)."""
+    to UNKNOWN (only a genuine STALL maps to AUDIT_TIMEOUT).
+
+    THE SEAM THE CODE ACTUALLY LAUNCHES THROUGH moved (#1444-class fix):
+    `_run_audit` no longer calls `subprocess.run` at all — it calls
+    `_watchdog.run_host_supervised`, so faking `g.subprocess.run` intercepts
+    nothing and the REAL supervisor ran the stub for real, returning its
+    actual PASS instead of exercising this exception path at all (measured:
+    this test silently went green on 'PASS' rather than red on a wrong
+    verdict, which is its own lesson about faking below the real seam)."""
     def _boom(*a, **k):
         raise RuntimeError("subprocess blew up")
-    monkeypatch.setattr(g.subprocess, "run", _boom)
+    monkeypatch.setattr(g._wd, "run_host_supervised", _boom)
     # COMPLIANCE_TOOL must exist to reach the subprocess call.
     stub = _write_fast_compliance_stub(tmp_path)
     monkeypatch.setattr(g, "COMPLIANCE_TOOL", stub)

@@ -104,6 +104,8 @@ PathLike = Union[str, Path]
 # window-gating / SPEF-fold / recount layer on top. (script dir is on sys.path.)
 from si_signoff_timing_aware import parse_spef  # noqa: E402
 import _watchdog as _wd  # noqa: E402  progress-stall process supervision
+import _docker_watchdog as _dw  # noqa: E402  the canonical docker-exec-
+# supervised primitive (identity-stamped reap, in-container CPU probe)
 
 # ---------------------------------------------------------------------------
 # MCF constants (the whole physical model in three numbers).
@@ -726,68 +728,61 @@ def _resolve_flow_liberty(project: Path) -> Optional[str]:
     return None
 
 
-def _docker_exec(container: str, cmd: str, timeout: int = 1800
-                 ) -> Tuple[int, str, str]:
-    """PROGRESS-supervised `docker exec`.
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 15
+                     ) -> Tuple[int, str, str]:
+    """Bounded, UNSUPERVISED `docker exec` — for the watchdog's OWN short
+    control-plane probes (identity stamp read, CPU `ps`, TERM/KILL signal),
+    never for the tool run itself. `_docker_watchdog.run_docker_supervised`
+    is the caller; this is its injected `docker_exec_raw`."""
+    try:
+        cp = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
+                            capture_output=True, text=True, timeout=timeout)
+        return cp.returncode, cp.stdout or "", cp.stderr or ""
+    except subprocess.TimeoutExpired:
+        return 124, "", f"probe timed out after {timeout}s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 126, "", f"{type(exc).__name__}: {exc}"
+
+
+def _docker_exec(container: str, cmd: str, timeout: int = 1800,
+                 marker: str = "sta") -> Tuple[int, str, str]:
+    """PROGRESS-supervised `docker exec`, via the repo's canonical
+    docker-exec-supervision primitive (`_docker_watchdog.run_docker_
+    supervised`) rather than a bespoke one — it already carries identity-
+    stamped reap, an in-container ceiling backstop, AND the in-container CPU
+    probe this call site cannot do without (see below), so reusing it means
+    one implementation instead of two that could drift.
 
     `timeout` is the STALL GRACE, not a runtime bound. As
     `subprocess.run(timeout=)` its expiry returned rc 124, and `run()` reads a
     non-zero STA rc as `_sta_failed` — which promotes the whole SI result to
     verdict ERROR. So a fixed number of seconds could book "this design's
-    SI-aware STA failed" about a design nothing was wrong with, on nothing more
-    than how loaded the host was. OpenSTA's runtime moves with the netlist and
-    the SPEF by orders of magnitude, so no constant here can be right for two
-    designs. The watchdog kills only a job whose CPU, I/O and output have ALL
-    sat flat for the grace, and reports it under its own distinct rc.
-
-    Note this bounds the docker CLIENT, as the previous form did; the reap of
-    an orphaned in-container tool is `_docker_watchdog`'s job and is not
-    changed here.
+    SI-aware STA failed" about a design nothing was wrong with, on nothing
+    more than how loaded the host was. OpenSTA's runtime moves with the
+    netlist and the SPEF by orders of magnitude, so no constant here can be
+    right for two designs. The watchdog kills only a job whose CPU has sat
+    flat for the grace, and reports it under its own distinct rc.
 
     A CPU probe is not optional here the way it can be elsewhere: every caller
-    of this function redirects OpenSTA's own output to a report file INSIDE
-    the container (`> {rpt_c} 2>&1`) and reads the file after exit, so the
-    `docker exec` CLIENT's captured stdout carries ZERO bytes for the entire
-    run. Output-progress, the supervisor's other default signal, therefore has
-    NOTHING to see, and (MEASURED) the CLIENT's own /proc CPU sits flat too —
-    the actual `sta` process runs under containerd-shim, never a ppid-chain
-    descendant of the exec client. Without an in-container CPU reading this
-    call has NO forward-progress signal at all, and every run — however long
-    it legitimately takes on a real routed design — would be indistinguishable
-    from a hang."""
-    full = ["docker", "exec", container, "bash", "-lc", cmd]
-
-    def _cpu_probe(_proc):
-        try:
-            r = subprocess.run(
-                ["docker", "exec", container, "sh", "-c",
-                 "cat /proc/[0-9]*/stat 2>/dev/null"],
-                capture_output=True, text=True, timeout=15)
-        except Exception:  # nosec — a probe failure is just "no reading"
-            return None
-        if r.returncode != 0 or not (r.stdout or "").strip():
-            return None
-        tck = _wd._clk_tck()
-        total, seen = 0.0, False
-        for line in r.stdout.splitlines():
-            cut = line.rfind(")")
-            if cut < 0:
-                continue
-            rest = line[cut + 2:].split()
-            if len(rest) < 13:
-                continue
-            try:
-                total += (float(rest[11]) + float(rest[12])) / tck
-                seen = True
-            except ValueError:  # nosec
-                continue
-        return total if seen else None
-
-    res = _wd.run_host_supervised(full, stall_grace_s=float(timeout),
-                                  cpu_probe=_cpu_probe)
-    if res.outcome == "launch_error":
-        return 127, "", res.err
-    return res.rc, res.out or "", res.err or ""
+    redirects OpenSTA's own output to a report file INSIDE the container
+    (`> {rpt_c} 2>&1`) and reads the file after exit, so captured stdout
+    carries ZERO bytes for the entire run — output-progress has NOTHING to
+    see. `marker` (the tcl script's basename is passed by every caller) is
+    what lets the in-container `ps` reading attribute CPU to THIS job.
+    """
+    # `run_docker_supervised` does NOT auto-derive its poll cadence from the
+    # grace the way `run_host_supervised` does — it defaults to the module's
+    # flat 30 s. MEASURED: at a 4 s grace against a 20 s hang, the first poll
+    # never happened before the (unrelated, unsupervised) job would have
+    # finished on its own, so the stall never got a chance to fire at all.
+    # Sampling more often can only make a hang be NOTICED sooner; it can never
+    # kill a working job earlier, so this is purely an observation cadence.
+    grace = float(timeout)
+    poll_s = max(0.25, min(_dw.DEFAULT_POLL_S, grace / 4.0))
+    rc, out, err = _dw.run_docker_supervised(
+        container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+        stall_grace_s=grace, poll_s=poll_s)
+    return rc, out, err
 
 
 _STA_PATH = ("export PATH=/foss/tools/openroad/bin:/foss/tools/bin:$PATH && ")
@@ -814,7 +809,8 @@ def _run_sta_slack(container: str, work: Path, tag: str, liberty_c: str,
     tcl_c = _to_container_path(str(tcl), container)
     rpt_c = _to_container_path(str(rpt), container)
     cmd = f"{_STA_PATH} sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
-    rc, _out, _err = _docker_exec(container, cmd, timeout=timeout)
+    rc, _out, _err = _docker_exec(container, cmd, timeout=timeout,
+                                  marker=tcl.name)
     body = rpt.read_text(errors="replace") if rpt.exists() else ""
     setup, hold = worst_setup_hold(body)
     return setup, hold, body, rc
@@ -887,7 +883,8 @@ def _run_windows(container: str, work: Path, liberty_c: str, netlist_c: str,
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = f"{_STA_PATH} sta -no_init -exit {tcl_c} > {tcl_c}.log 2>&1"
-    rc, _o, _e = _docker_exec(container, cmd, timeout=timeout)
+    rc, _o, _e = _docker_exec(container, cmd, timeout=timeout,
+                              marker=tcl_path.name)
     if out_json_host.exists():
         try:
             return json.loads(out_json_host.read_text()), rc
