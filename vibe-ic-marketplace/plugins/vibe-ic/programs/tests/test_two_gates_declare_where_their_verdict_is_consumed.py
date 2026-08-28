@@ -872,7 +872,14 @@ def test_the_runner_turns_that_rc_one_into_a_failed_step():
     assert "returncode == 1" in seg, (
         "the gate's exit status no longer reaches a comparison; a runner that "
         "spawns a gate and discards its status is vibe-ic#884's defect")
-    tail = seg.split("returncode == 1", 1)[1][:800]
+    # NO CHARACTER WINDOW. This used to read `[:800]`, and 800 is not a property
+    # of anything — it is a guess about how much PROSE sits between two tokens.
+    # MEASURED: at v1.12.30 `"FAIL"` sat at offset 66 and this passed; v1.12.31
+    # added a comment block above it ("THE AREA LOOP, step 9 -> 1") and the same
+    # unchanged, correct code moved the token to offset 5071, so the assertion
+    # fell off the end of its own window and reported the RUNNER as broken. The
+    # subject never changed. Searching the whole segment cannot go stale that way.
+    tail = seg.split("returncode == 1", 1)[1]
     assert '"FAIL"' in tail, (
         "rc 1 no longer returns a FAIL StepResult — the verdict is computed "
         "and dropped, which is exactly what `advisory` used to mean")
@@ -894,8 +901,18 @@ def test_only_rc_one_stops_the_step_and_the_bound_is_deliberate():
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     fn = next((n for n in ast.walk(ast.parse(src))
                if isinstance(n, ast.FunctionDef) and n.name == "step_synth"), None)
+    # NO CHARACTER WINDOW, and here the truncation was worse than a false red.
+    # These two assertions pull in OPPOSITE directions over the same slice:
+    #   * `"INCOMPLETE" in seg` is POSITIVE — a short window makes it fail
+    #     spuriously, which is loud and gets fixed;
+    #   * `"returncode != 0" not in seg` is NEGATIVE — a short window makes it
+    #     PASS, and a forbidden pattern sitting past the cut is invisible.
+    # MEASURED on this tree: the segment is 7062 characters, so `[:2000]` left
+    # 72% of it unexamined by the check that is supposed to refuse something.
+    # The pattern happens to be absent everywhere, so the assertion was true —
+    # but it was true BY LUCK, and a guard that is right by luck is not a guard.
     seg = (ast.get_source_segment(src, fn) or "").split(
-        "area_total_vs_budget_check.py", 1)[1][:2000]
+        "area_total_vs_budget_check.py", 1)[1]
     assert "returncode != 0" not in seg, (
         "the wiring now stops the step on ANY non-zero rc, which makes rc 2 "
         "INCOMPLETE — the state of nearly every published run — a failure")
