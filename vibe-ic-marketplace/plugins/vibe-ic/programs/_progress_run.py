@@ -147,6 +147,59 @@ def _measure_spawn() -> float:
 DEFAULT_POLL_S = _wd.DEFAULT_POLL_S
 
 
+#: WHERE THE OUTER WINDOW IS DECLARED. Resolved from the file that owns it,
+#: never hand-copied — a number copied into this module is a second copy that
+#: cannot notice when the original moves, which is the drift shape
+#: `ci_harness_timeout_ceiling_check` already resolves its harness bound to
+#: avoid. Parsed rather than imported: this is the process-launch primitive and
+#: it must not pull the whole session driver in behind it.
+_OUTER_SOURCE = ("pytest_per_file_junit.py", "DEFAULT_STALL_AFTER")
+
+#: The share of the outer window the INNER supervisor may spend before it has to
+#: reach a conclusion. Strictly less than 1 because the two are nested: whoever
+#: concludes second never concludes at all.
+_INNER_SHARE = 0.6
+
+_outer_cache: object = ...
+
+
+def outer_stall_window_s() -> Optional[float]:
+    """Seconds of session-wide stillness before the DRIVER kills the session.
+
+    THE NESTING IS THE POINT (measured on this branch). The per-file pytest
+    driver declares a stall window and, when the session stops producing
+    lifecycle progress for that long, takes the whole session down — which is
+    the failure `ci_harness_timeout_ceiling_check` exists to prevent, because a
+    killed session yields no per-test verdict for any file, including the files
+    that had already passed.
+
+    A child wedged inside a test is silent, so the SESSION is silent too, and
+    both supervisors start counting at the same moment. The driver's window was
+    300 s and this module's default grace is 12 looks x 30 s = 360 s, so the
+    driver would always have won: every wedged child would have been reported
+    as a dead session rather than as one stalled test. An inner supervisor that
+    concludes after the outer one has already fired is not a supervisor.
+    """
+    global _outer_cache
+    if _outer_cache is not ...:
+        return _outer_cache  # type: ignore[return-value]
+    _outer_cache = None
+    name, symbol = _OUTER_SOURCE
+    try:
+        text = (Path(__file__).resolve().parent / name).read_text(
+            encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            head, sep, tail = line.partition("=")
+            if sep and head.strip() == symbol:
+                _outer_cache = float(tail.split("#")[0].strip())
+                break
+    except (OSError, ValueError):
+        # Unresolvable is NOT zero: with no outer window known, the shipped
+        # cadence stands rather than being silently tightened to a guess.
+        _outer_cache = None
+    return _outer_cache  # type: ignore[return-value]
+
+
 def _poll_interval() -> float:
     """The cadence at which we LOOK.
 
@@ -377,6 +430,18 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
             "what gets watched")
     if poll_s is None:
         poll_s = _poll_interval()
+        # Fit INSIDE the outer supervisor when there is one. The look COUNT is
+        # untouched — `stall_looks` is still how many times we look, and a
+        # progressing child is still never killed — only the spacing tightens,
+        # so that a wedged child is reported as one stalled test instead of as
+        # a session that died with no verdict for anybody.
+        outer = outer_stall_window_s()
+        if outer:
+            budget = (outer * _INNER_SHARE) / max(1, stall_looks)
+            # Never below the measured cost of starting a process: polling
+            # faster than the host can schedule would observe "nothing moved"
+            # about a child that has not been run yet.
+            poll_s = max(min(poll_s, budget), spawn_floor_s() * 2.0)
     signals: Dict[str, bool] = {"output": capture_output, "cpu": False,
                                 "io": False}
     child_stdin, to_close = _stdin_from(input, stdin)

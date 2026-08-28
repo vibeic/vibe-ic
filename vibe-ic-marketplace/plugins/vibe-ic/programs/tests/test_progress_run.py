@@ -329,3 +329,76 @@ def test_a_missing_executable_raises_exactly_as_subprocess_does():
     # and the best-effort face must not swallow it into a plain rc either
     with pytest.raises(FileNotFoundError):
         R.run_best_effort(argv, **FAST)
+
+
+# ── 10. THE NESTING — whoever concludes second never concludes at all ────────
+def test_the_inner_grace_fits_strictly_inside_the_declared_outer_window():
+    """MEASURED on this branch, and it was inverted.
+
+    The per-file pytest driver declares a stall window and takes the whole
+    SESSION down when nothing moves for that long — the failure
+    `ci_harness_timeout_ceiling_check` exists to prevent, because a killed
+    session yields no verdict for any file, including files that had passed.
+
+    A child wedged inside a test is silent, so the session is silent too and
+    both supervisors start counting together. The driver's window is 300 s and
+    this module's shipped grace was 12 looks x 30 s = 360 s, so the driver
+    always won: every wedged child would have been reported as a dead session
+    rather than as one stalled test.
+    """
+    outer = R.outer_stall_window_s()
+    assert outer, "the outer window is declared; failing to resolve it is the bug"
+    poll = R._poll_interval()
+    budget = (outer * R._INNER_SHARE) / R.DEFAULT_STALL_LOOKS
+    effective = R.DEFAULT_STALL_LOOKS * max(min(poll, budget),
+                                            R.spawn_floor_s() * 2.0)
+    assert effective < outer, (
+        f"the inner supervisor needs {effective:.0f}s of stillness and the "
+        f"outer one fires at {outer:.0f}s — the inner one can never reach a "
+        f"conclusion, which is the shape this test was written from")
+
+
+def test_the_outer_window_is_RESOLVED_from_its_owner_not_copied_here():
+    """A number copied into this file is a second copy that cannot notice when
+    the original moves. Proved by moving it: the resolver must follow."""
+    name, symbol = R._OUTER_SOURCE
+    owner = Path(R.__file__).resolve().parent / name
+    assert owner.is_file(), f"{owner} — the declared owner is not there"
+    original = owner.read_text(encoding="utf-8")
+    assert f"{symbol} =" in original, (
+        f"{name} no longer declares {symbol}; the resolver is now reading a "
+        f"symbol that does not exist and would silently fall back")
+    try:
+        owner.write_text(
+            original.replace(f"{symbol} = 300", f"{symbol} = 999", 1),
+            encoding="utf-8")
+        R._outer_cache = ...                      # forget the cached read
+        assert R.outer_stall_window_s() == 999.0, (
+            "the value is hand-copied somewhere, not resolved")
+    finally:
+        owner.write_text(original, encoding="utf-8")
+        R._outer_cache = ...
+
+
+def test_an_unresolvable_outer_window_leaves_the_shipped_cadence_alone():
+    """Unresolvable is not zero. With no outer window known, the shipped
+    cadence stands rather than being silently tightened to a guess."""
+    saved = R._outer_cache
+    try:
+        R._outer_cache = None
+        assert R._poll_interval() >= R.DEFAULT_POLL_S
+        # and the tightening path is what produced the smaller number, so the
+        # two must actually DIFFER — otherwise this asserts nothing
+        R._outer_cache = 300.0
+        tightened = (300.0 * R._INNER_SHARE) / R.DEFAULT_STALL_LOOKS
+        assert tightened < R.DEFAULT_POLL_S
+    finally:
+        R._outer_cache = saved
+
+
+def test_tightening_the_spacing_never_kills_a_child_that_is_working():
+    """The look COUNT is what defines a stall, and it is untouched. A chatty
+    child under the tightened cadence still runs to completion."""
+    cp = R.run(_py(CHATTY_SLOW), poll_s=None, stall_looks=R.DEFAULT_STALL_LOOKS)
+    assert cp.returncode == 0
+    assert cp.stdout.count("tick") == 10, cp.stdout
