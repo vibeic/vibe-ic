@@ -107,7 +107,15 @@ def test_an_explicit_zero_disables_the_bound_and_is_not_a_failure_to_derive():
 
 # ── the bounds reach the solver, not the client ────────────────────────────
 def _drive(monkeypatch, tmp_path, rec, timeout=60, container="edа"):
-    monkeypatch.setattr(F.subprocess, "run", rec)
+    # A module reaches a process through `subprocess`, through `_pr`
+    # (`_progress_run`, the progress-supervised drop-in) or through both.
+    # Substituting on only one leaves the real launcher answering the
+    # question this test is asking about a fake one, and the test then
+    # passes or fails for a reason that has nothing to do with its subject.
+    for _launcher in (getattr(F, "subprocess", None),
+                      getattr(F, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", rec)
     monkeypatch.setattr(F, "memory_limit_kb", lambda: 32952508)
     return F._run_sby(_sby(tmp_path), tmp_path, container, timeout)
 

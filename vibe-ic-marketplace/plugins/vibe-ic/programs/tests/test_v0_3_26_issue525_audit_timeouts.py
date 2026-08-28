@@ -29,6 +29,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import _path_layout as _pl  # noqa: E402
+import _progress_run as _pr  # noqa: E402
 import design_one_shot_runner as P2  # noqa: E402
 import flow_compliance_check as FCC  # noqa: E402
 import phase23_completion_self_audit_check as SA  # noqa: E402
@@ -166,7 +167,10 @@ def test_gate_budget_honors_env(tmp_path, monkeypatch):
 def test_phase23_self_audit_timeout_no_crash(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise subprocess.TimeoutExpired(cmd="x", timeout=k.get("timeout"))
-    monkeypatch.setattr(SA.subprocess, "run", boom)
+    for _launcher in (getattr(SA, "subprocess", None),
+                      getattr(SA, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", boom)
     rc, out = SA._run_compliance(tmp_path)
     assert rc == 124
     m = SA._OVERALL_RE.search(out)

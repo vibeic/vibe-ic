@@ -290,7 +290,15 @@ def test_runner_serial_multifile_commit_rolls_back_as_one_transaction(
             raise OSError("injected declaration publication failure")
         return real_rename(src_fd, src, dst_fd, dst)
 
-    monkeypatch.setattr(runner.subprocess, "run", _observe_generator)
+    # A module reaches a process through `subprocess`, through `_pr`
+    # (`_progress_run`, the progress-supervised drop-in) or through both.
+    # Substituting on only one leaves the real launcher answering the
+    # question this test is asking about a fake one, and the test then
+    # passes or fails for a reason that has nothing to do with its subject.
+    for _launcher in (getattr(runner, "subprocess", None),
+                      getattr(runner, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", _observe_generator)
     monkeypatch.setattr(runner, "_phase1_rename_noreplace", _fail_second_top)
 
     result = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")

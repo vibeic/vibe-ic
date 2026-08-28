@@ -71,7 +71,15 @@ def _capture_argv(monkeypatch, driver):
         captured["kwargs"] = kwargs
         return _FakeCompleted(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(driver.subprocess, "run", fake_run)
+    # A module reaches a process through `subprocess`, through `_pr`
+    # (`_progress_run`, the progress-supervised drop-in) or through both.
+    # Substituting on only one leaves the real launcher answering the
+    # question this test is asking about a fake one, and the test then
+    # passes or fails for a reason that has nothing to do with its subject.
+    for _launcher in (getattr(driver, "subprocess", None),
+                      getattr(driver, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", fake_run)
     return captured
 
 

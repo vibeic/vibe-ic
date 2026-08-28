@@ -667,8 +667,17 @@ def test_local_image_probe_reports_absence_where_resolve_invents_a_pin(
 
     class _Absent:
         returncode = 1        # `docker image inspect` -> not present locally
+        stdout = ""
+        stderr = ""
 
+    # BOTH launch seams. `_local_docker_image` reaches the daemon through
+    # `_eda_image`, which is progress-supervised now, and substituting only on
+    # the shared `subprocess` module would leave the real daemon answering the
+    # question this test is asking about a fake one. `_pr.run_best_effort`
+    # delegates to `_pr.run`, so patching `run` covers both faces.
+    import _progress_run as _pr                                   # noqa: PLC0415
     monkeypatch.setattr(fi.subprocess, "run", lambda *a, **k: _Absent())
+    monkeypatch.setattr(_pr, "run", lambda *a, **k: _Absent())
 
     # WHAT CHANGED HERE, AND WHAT DID NOT. This used to read
     # `fi._IMAGE_CANDIDATES[0]` — a pinned literal list that no longer exists,

@@ -62,7 +62,15 @@ def test_a_total_blackout_answers_the_legacy_image_AND_SAYS_SO(monkeypatch, caps
     def _never_present(*a, **k):
         raise OSError("no docker in this test")
 
-    monkeypatch.setattr(far.subprocess, "run", _never_present)
+    # A module reaches a process through `subprocess`, through `_pr`
+    # (`_progress_run`, the progress-supervised drop-in) or through both.
+    # Substituting on only one leaves the real launcher answering the
+    # question this test is asking about a fake one, and the test then
+    # passes or fails for a reason that has nothing to do with its subject.
+    for _launcher in (getattr(far, "subprocess", None),
+                      getattr(far, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", _never_present)
     got = far._resolve_docker_image()
     import _eda_image as M
     assert got == M.LEGACY_IMAGE, got

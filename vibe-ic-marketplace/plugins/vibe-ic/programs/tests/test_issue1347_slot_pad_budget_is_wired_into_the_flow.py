@@ -397,7 +397,15 @@ def test_a_gate_that_COULD_NOT_RUN_is_FAIL_never_PASS(monkeypatch):
     def _boom(*a, **kw):
         raise OSError("no such executable")
 
-    monkeypatch.setattr(R.subprocess, "run", _boom)
+    # A module reaches a process through `subprocess`, through `_pr`
+    # (`_progress_run`, the progress-supervised drop-in) or through both.
+    # Substituting on only one leaves the real launcher answering the
+    # question this test is asking about a fake one, and the test then
+    # passes or fails for a reason that has nothing to do with its subject.
+    for _launcher in (getattr(R, "subprocess", None),
+                      getattr(R, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", _boom)
     sr = R.step_slot_pad_budget(_project(_HOPELESS, with_slots=True), "chip_top")
     assert sr.status == "FAIL", (
         f"a gate that could not run reported {sr.status!r} — a check that "

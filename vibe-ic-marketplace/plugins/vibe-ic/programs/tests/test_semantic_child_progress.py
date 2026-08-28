@@ -289,7 +289,15 @@ def test_semantic_l4_git_failure_cannot_fallback_to_untracked_disk_population(
 
     monkeypatch.setattr(
         _corpus_location, "not_a_checkout_reason", lambda *_a, **_k: None)
-    monkeypatch.setattr(_published_tree.subprocess, "run", expire)
+    # A module reaches a process through `subprocess`, through `_pr`
+    # (`_progress_run`, the progress-supervised drop-in) or through both.
+    # Substituting on only one leaves the real launcher answering the
+    # question this test is asking about a fake one, and the test then
+    # passes or fails for a reason that has nothing to do with its subject.
+    for _launcher in (getattr(_published_tree, "subprocess", None),
+                      getattr(_published_tree, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", expire)
     ordinary, _found, published = L4._l4_documents(root)
     assert set(ordinary) == {tracked, untracked} and published is False, (
         "the control no longer reaches the historical timeout fallback")
@@ -329,7 +337,10 @@ def test_semantic_checkout_probe_has_no_inner_duration_verdict(
         seen.append(kwargs.get("timeout"))
         raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
 
-    monkeypatch.setattr(_corpus_location.subprocess, "run", expire)
+    for _launcher in (getattr(_corpus_location, "subprocess", None),
+                      getattr(_corpus_location, "_pr", None)):
+        if _launcher is not None:
+            monkeypatch.setattr(_launcher, "run", expire)
     with pytest.raises(_corpus_location.CorpusIndexIndeterminate):
         _corpus_location.not_a_checkout_reason(
             tmp_path, "routing records", timeout=None, strict=True)
