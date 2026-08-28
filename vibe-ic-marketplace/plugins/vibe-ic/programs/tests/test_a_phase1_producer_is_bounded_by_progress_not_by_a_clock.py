@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""test_a_phase1_producer_is_bounded_by_progress_not_by_a_clock.py (kept at its
-original filename so the nodeids in the census do not move).
+"""test_a_phase1_producer_is_bounded_by_progress_not_by_a_clock.py
+
+RENAMED TO MATCH THIS TITLE. The file was authored as
+`test_a_phase1_timeout_is_undetermined_not_a_failing_verdict.py` and the
+RETRACTION corrected the title without moving the file, on the stated grounds
+that "the nodeids in the census do not move". That reason was not true — this
+file is new on this branch and no census nodeid refers to it — and
+`test_source_test_citations_resolve::test_every_module_self_title_matches_its_
+filename` refused the mismatch. The old name also carried the retracted word:
+UNDETERMINED is the relabel this branch exists to remove, and a filename is a
+published claim like any other.
 
 THE DEFECT. `phase1_one_shot_runner` dispatched its expert track and its two
 step-0.5ic producers under `subprocess.run(..., timeout=600)` and, when the
@@ -32,7 +41,7 @@ job that was still working at 600 s.
 
 No design, PDK, vendor or IP-model identifier appears anywhere in this file.
 
-Run: python3 -m pytest programs/tests/test_a_phase1_timeout_is_undetermined_not_a_failing_verdict.py -q
+Run: python3 -m pytest programs/tests/test_a_phase1_producer_is_bounded_by_progress_not_by_a_clock.py -q
 """
 from __future__ import annotations
 

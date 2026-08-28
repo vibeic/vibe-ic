@@ -103,28 +103,62 @@ def test_final_audit_pass_unchanged(tmp_path, monkeypatch):
 
 # ── flow_compliance per-gate cap: named timeout + env budget ───────────────
 
-def test_gate_timeout_message_says_not_a_verdict(tmp_path, monkeypatch):
-    def boom(*a, **k):
-        raise subprocess.TimeoutExpired(cmd="x", timeout=k.get("timeout"))
-    monkeypatch.setattr(FCC.subprocess, "run", boom)
+#: A `run_host_supervised` reporting that the gate's process tree made no
+#: forward progress. The shipped type from the shipped module, not a duck.
+def _stalled_result(cmd, **_kw):
+    return FCC._watchdog.SupervisedResult(
+        FCC._watchdog.RC_STALLED, "", "WATCHDOG_STALLED", "stalled", 61.0)
+
+
+def test_gate_stall_message_says_not_a_verdict(tmp_path, monkeypatch):
+    """THIS BRANCH CHANGED THE SHAPE, and the test follows it rather than being
+    relaxed to accept either.
+
+    It used to stub `FCC.subprocess.run` and raise `TimeoutExpired`. The gate
+    runner no longer bounds a gate by RUNTIME — a structural gate reading a
+    post-PnR netlist or hashing a multi-GB GDS is WORKING, and the old fixed
+    budget killed it and recorded the kill as a gate FAIL — so the launch moved
+    to `_watchdog.run_host_supervised` and that stub went BLIND: the real gate
+    ran, returned 0, and this test asserted `ok is False` against a genuine
+    PASS. A stub below the seam the code actually launches through does not
+    make a test lenient, it makes it MEASURE SOMETHING ELSE.
+
+    #525's reading is unchanged and is what is asserted: an unevaluated gate
+    still FAILs, the reason still says it is NOT a verdict about the design, and
+    it still names the env var that extends the allowance. What moved is the
+    OBSERVATION behind it — "it has been N seconds", which a correct gate on a
+    busy host reaches just as easily, became "this gate's tree did nothing at
+    all for N seconds", which only a wedged gate reaches.
+    """
+    monkeypatch.setattr(FCC._watchdog, "run_host_supervised", _stalled_result)
     ok, msg = FCC._check_program_exit_zero(
         tmp_path, "marketplace_version_sync_check .")
     assert ok is False
-    assert "TIMED OUT" in msg and "NOT a verdict" in msg
+    assert "STALLED" in msg and "NOT a verdict" in msg
     assert _pl.GATE_TIMEOUT_ENV in msg
+    # AND THE ACCUSING CLOCK SENTENCE IS GONE. Asserted, not assumed: the whole
+    # point of the change is that the reason stopped naming a duration.
+    assert "TIMED OUT" not in msg, msg
 
 
 def test_gate_budget_honors_env(tmp_path, monkeypatch):
+    """THE HALF THAT MUST NOT MOVE: the operator's declared number still reaches
+    the launch. It is now the STALL GRACE rather than a runtime deadline — how
+    long the gate may show no progress at all — so it is read off
+    `stall_grace_s` instead of `timeout`. The env var, the value and the fact
+    that the caller's number is honoured as given are all unchanged.
+    """
     seen = {}
 
-    def capture(*a, **k):
-        seen["timeout"] = k.get("timeout")
-        raise subprocess.TimeoutExpired(cmd="x", timeout=k.get("timeout"))
+    def capture(cmd, **kw):
+        seen["stall_grace_s"] = kw.get("stall_grace_s")
+        return _stalled_result(cmd, **kw)
+
     monkeypatch.setenv(_pl.GATE_TIMEOUT_ENV, "77")
-    monkeypatch.setattr(FCC.subprocess, "run", capture)
+    monkeypatch.setattr(FCC._watchdog, "run_host_supervised", capture)
     FCC._check_program_exit_zero(
         tmp_path, "marketplace_version_sync_check .")
-    assert seen["timeout"] == 77
+    assert seen["stall_grace_s"] == 77
 
 
 # ── phase23 self-audit: no crash, named AUDIT_TIMEOUT overall ──────────────
