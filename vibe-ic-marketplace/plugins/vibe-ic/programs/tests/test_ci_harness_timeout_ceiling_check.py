@@ -23,10 +23,14 @@ Pins, in the order the gate can be wrong:
   * FALSIFIABILITY against the real tree: inject an offender, the shipped gate
     goes rc 1 and names it; remove it, rc 0.
 
-Every bound in this file is `_T` (a synthetic tmp_path tree) or `_T_TREE` (the
-real repository tree), and the last test asserts BOTH are inside the ceiling the
-gate itself computes — a test file that policed the corpus while breaking the
-rule would be its own counter-example.
+Every DURATION bound in this file is `_T`, over a synthetic `tmp_path` tree that
+parses in well under a second. The launches over the REAL repository tree carry
+no duration at all: they go through `_gate_over_the_real_tree`, which bounds a
+LACK OF FORWARD PROGRESS, because a whole-tree parse timed on a shared host
+measures the host (see `_T_TREE`, which survives as that stall grace). The last
+test asserts both values are inside the ceiling the gate itself computes — a
+test file that policed the corpus while breaking the rule would be its own
+counter-example.
 """
 import json
 import re
@@ -41,6 +45,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import ci_harness_timeout_ceiling_check as C          # noqa: E402
+import _watchdog as W                                 # noqa: E402
 
 _PROG = _PROGRAMS / "ci_harness_timeout_ceiling_check.py"
 _LAND = _PROGRAMS.parents[3] / "tools" / "gatekeeper-land.sh"
@@ -77,14 +82,54 @@ _T = 30
 #:     its denominator. Narrowing what the sweep looks at would un-wire what
 #:     v1.11.91 wired, so it is not on the table.
 #:
-#: 60 s is not a safety margin chosen by feel: it is the CEILING this gate itself
-#: computes and publishes on this tree (`180 s harness // 3`), and
-#: `test_this_files_own_bounds_are_inside_the_ceiling` fails if any bound in this
-#: file exceeds it. So it is simultaneously the largest bound this file is
-#: permitted to declare and 1.37x the worst contended measurement above. A bound
-#: that needed more than this would have to be answered by making the gate
-#: faster, not by a larger number.
+#: …AND THEN THE NUMBER ITSELF WAS THE DEFECT (timeout-as-verdict campaign).
+#: Every line above is a measurement of DURATION, and the conclusion drawn from
+#: it was a larger duration. That is the shape the campaign exists to remove: a
+#: wall-clock bound on a whole-tree launch is a reading of THE HOST, not of the
+#: gate. When it expired the run did not report "the host was loaded" — it
+#: raised `TimeoutExpired` out of `subprocess.run` and the item went RED, in a
+#: file nobody had touched, and the fix on offer was always another number. The
+#: history above is itself the evidence: 30 was measured, defended in prose, and
+#: still exceeded at v1.11.91 by nothing but load, and 60 is only 1.37x the
+#: worst contention already observed. The next lane wider than 32 jobs takes it.
+#:
+#: So the whole-tree launches no longer carry a duration at all. They go through
+#: `_gate_over_the_real_tree` below, which bounds NO FORWARD PROGRESS instead:
+#: the gate parses 4405 modules and burns CPU from start to finish, so its
+#: `utime+stime` advances between every pair of looks however loaded the host
+#: is, and it can never be killed for being slow. A gate that genuinely wedges
+#: still dies, because a wedged parse advances neither CPU nor I/O.
+#:
+#: `_T_TREE` SURVIVES AS THAT STALL GRACE, and the reason it keeps this value is
+#: unchanged in form: 60 s is the CEILING this gate computes on this tree
+#: (`180 s harness // 3`), and `test_this_files_own_bounds_are_inside_the_ceiling`
+#: still asserts it. Holding the grace at or under the ceiling is what keeps the
+#: diagnosis THIS file's to make: a stall is named `WATCHDOG_STALLED` well
+#: before the 180 s harness could kill the session out from under it — and a
+#: killed session writes no junit, which is the record-loss #1654 measured.
+#: What it is NOT any more is a claim about how long the gate may take.
 _T_TREE = 60
+
+
+def _gate_over_the_real_tree(argv):
+    """Launch the shipped gate over the REAL tree, bounded by PROGRESS.
+
+    The honest replacement for `subprocess.run(argv, timeout=_T_TREE)` at every
+    whole-tree call site in this file. `run_host_supervised` reads forward
+    progress from `/proc` tree-wide (CPU + I/O) and kills only a job that has
+    stopped making any, so the answer this file publishes stops depending on
+    what else the host happened to be running. `hard_ceiling_s` is disabled
+    outright: a ceiling is a duration, and reinstating one here would reinstate
+    exactly the defect the block above describes.
+
+    Returns a `CompletedProcess`, so every call site keeps `.returncode` /
+    `.stdout` / `.stderr` with their existing meanings; a stall arrives as the
+    watchdog's own distinct rc with `WATCHDOG_STALLED` on stderr, never folded
+    into the rc 0/1 the gate itself uses for its verdict.
+    """
+    res = W.run_host_supervised(argv, stall_grace_s=_T_TREE,
+                                hard_ceiling_s=float("inf"))
+    return W.completed_process(argv, res)
 
 
 def _workflow(tmp_path: Path, *commands: str) -> Path:
@@ -786,8 +831,8 @@ def test_each_root_prints_its_own_file_count(tmp_path):
     if root is None:
         pytest.skip("no .github/workflows in reach")
     out = tmp_path / "r.json"
-    subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
-                   capture_output=True, text=True, timeout=_T_TREE)
+    _gate_over_the_real_tree(
+        [sys.executable, str(_PROG), str(root), "--json", str(out)])
     doc = json.loads(out.read_text())
     assert len(doc["roots"]) == 2
     assert sum(r["files"] for r in doc["roots"]) == doc["files"]
@@ -1085,8 +1130,7 @@ def test_the_shipped_tree_is_clean(tmp_path):
     root = C.find_repo_root()
     if root is None:
         pytest.skip("no .github/workflows in reach")
-    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
-                          capture_output=True, text=True, timeout=_T_TREE)
+    proc = _gate_over_the_real_tree([sys.executable, str(_PROG), str(root)])
     assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
     assert "[PASS]" in proc.stdout
 
@@ -1109,17 +1153,15 @@ def test_an_injected_offender_makes_the_shipped_program_fail(tmp_path):
     victim.write_text("import subprocess\n"
                       "subprocess.run(['true'], timeout=900)\n",
                       encoding="utf-8")
-    red = subprocess.run(
-        [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)],
-        capture_output=True, text=True, timeout=_T_TREE)
+    red = _gate_over_the_real_tree(
+        [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)])
     assert red.returncode == 1, red.stdout[-4000:]
     assert victim.name in red.stdout and "timeout=900" in red.stdout
     assert "[FAIL]" in red.stdout
 
     victim.unlink()
-    green = subprocess.run(
-        [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)],
-        capture_output=True, text=True, timeout=_T_TREE)
+    green = _gate_over_the_real_tree(
+        [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)])
     assert green.returncode == 0, green.stdout[-4000:]
 
 
@@ -1139,9 +1181,9 @@ def test_an_injected_offender_SPELLED_AS_A_PARAMETER_also_fails(tmp_path):
     def _rc(body: str):
         victim = tmp_path / "test_injected_param_offender.py"
         victim.write_text(body, encoding="utf-8")
-        p = subprocess.run(
+        p = _gate_over_the_real_tree(
             [sys.executable, str(_PROG), str(root), "--tests-root",
-             str(tmp_path)], capture_output=True, text=True, timeout=_T_TREE)
+             str(tmp_path)])
         victim.unlink()
         return p
 
@@ -1167,9 +1209,8 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
     if root is None:
         pytest.skip("no .github/workflows in reach")
     out = tmp_path / "r.json"
-    proc = subprocess.run(
-        [sys.executable, str(_PROG), str(root), "--json", str(out)],
-        capture_output=True, text=True, timeout=_T_TREE)
+    proc = _gate_over_the_real_tree(
+        [sys.executable, str(_PROG), str(root), "--json", str(out)])
     assert proc.returncode == 0, proc.stdout[-4000:]
     doc = json.loads(out.read_text())
     assert doc["passed"] is True and doc["findings"] == []
@@ -1287,8 +1328,8 @@ def test_the_advisory_residual_does_not_grow_unreviewed(tmp_path):
     if root is None:
         pytest.skip("no repo root in reach")
     out = tmp_path / "r.json"
-    subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
-                   capture_output=True, text=True, timeout=_T_TREE)
+    _gate_over_the_real_tree(
+        [sys.executable, str(_PROG), str(root), "--json", str(out)])
     doc = json.loads(out.read_text())
     unresolved = doc["unresolved_above_ceiling"]
     if doc.get("mode") == "semantic_progress":
@@ -1319,8 +1360,8 @@ def test_a_recorded_advisory_that_stopped_existing_is_deleted(tmp_path):
     if root is None:
         pytest.skip("no repo root in reach")
     out = tmp_path / "r.json"
-    subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
-                   capture_output=True, text=True, timeout=_T_TREE)
+    _gate_over_the_real_tree(
+        [sys.executable, str(_PROG), str(root), "--json", str(out)])
     doc = json.loads(out.read_text())
     if doc.get("mode") == "semantic_progress":
         assert doc["unresolved_above_ceiling"] == []
@@ -1373,9 +1414,12 @@ def test_this_files_own_bounds_are_inside_the_ceiling():
         pytest.skip("no .github/workflows in reach")
     ceiling = C.inner_timeout_ceiling(root)
     assert _T <= ceiling, (_T, ceiling)
-    # The whole-tree bound is the one that could drift, so it is asserted by
-    # name as well as by the source scan below: it was raised from 30 to the
-    # ceiling on a measurement (see `_T_TREE`), and the ceiling is the wall.
+    # `_T_TREE` is no longer a duration any call site can spend — it is the
+    # STALL GRACE of `_gate_over_the_real_tree`. It is still asserted by name,
+    # and against the same wall, for a reason that outlived the drift it used
+    # to guard: a grace at or under the ceiling is what keeps a wedged gate
+    # THIS file's finding, named `WATCHDOG_STALLED`, rather than a session the
+    # 180 s harness killed before it could write its junit (#1654).
     assert _T_TREE <= ceiling, (_T_TREE, ceiling)
     findings, unresolved, sites = C.scan_source(
         Path(__file__).read_text(), Path(__file__).name, ceiling)
