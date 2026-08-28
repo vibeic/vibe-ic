@@ -91,7 +91,15 @@ SCHEMA_VERSION = 1
 # not a rule that silently stops firing — the failure mode this whole file is
 # written against.
 CRASH_MARKER = "__CRASH_HINT__"
-TIMEOUT_MARKER = "program TIMED OUT after"
+#: The producer kills a gate on NO PROGRESS, not on a clock, and says so in
+#: these words — `flow_compliance_check`'s `_GateStalled` handler writes them
+#: and its own `out.startswith("program STALLED")` reader parses them back.
+#: It said "program TIMED OUT after" until the timeout-as-verdict conversion
+#: retired the clock. This constant kept the retired wording, so the rule
+#: below silently stopped firing and a STALLED gate fell through to
+#: DESIGN_FACT/gate-reached-verdict — a stall reported as the design's own
+#: result, which is the single reading the producer explicitly refuses.
+TIMEOUT_MARKER = "program STALLED"
 ENV_UNAVAILABLE_MARKER = "ENV_UNAVAILABLE"
 #: A gate PROGRAM ran as a subprocess and returned non-zero. Both slots, because
 #: `optional_program_exit_zero` fails its step exactly as the required slot does

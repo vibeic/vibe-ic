@@ -178,10 +178,17 @@ def test_a_timed_out_gate_is_unclassified_not_a_plugin_defect():
     crashed one — but nothing recorded says whether the plugin hung or the
     input was enormous. Calling it a plugin defect is a guess in the direction
     that generates work for the wrong person."""
+    # The reason is built FROM the constant, not from a copy of the wording
+    # the producer happened to use the day this was written: a literal here
+    # is what let this test stay green against a rule that could no longer
+    # fire on anything `flow_compliance_check` actually emits.
+    # `test_the_sentinels_match_the_producers_own_constants` is what keeps
+    # that constant equal to the producer's own source.
     s = _step(4, "FAIL", reasons=[
         "program failed: some_check .",
-        "output: program TIMED OUT after 600s — timeout is NOT a verdict "
-        "(INCONCLUSIVE)"])
+        f"output: {_BC.TIMEOUT_MARKER} — no CPU, no I/O and no output from "
+        f"its process tree for 600s, stopped after 612s. A stall is NOT a "
+        f"verdict about the design (INCONCLUSIVE)"])
     b = _BC.build_blockers([s])[0]
     assert b["classification"] == "UNCLASSIFIED"
     assert b["basis"] == "gate-timed-out"

@@ -496,11 +496,29 @@ def test_the_hook_does_not_refuse_a_measurable_run_under_the_account_home(tmp_pa
     hermetic lane asks the preflight CLI — so the block is placed where the harm
     is, and only there. Refusing here would take down runs that are perfectly
     measurable.
+
+    THE CONFOUND, neutralised rather than assumed away. On a host whose
+    account home is ITSELF a git work tree — a dotfiles checkout, which is
+    ordinary — a root under the home is ALSO inside a work tree, and the
+    hook refuses it for THAT condition, correctly and as
+    `test_a_scratch_root_inside_a_work_tree_is_refused` pins. The guard's
+    own docstring assumes the opposite ("a scratch root under the account
+    home is NOT inside a work tree"), and on such a host that assumption is
+    simply false, so this test measured the wrong refusal and read as the
+    guard blocking real work. Allowing ONLY the work-tree condition — the
+    one that has a sanctioned allowance — leaves this test's actual subject
+    measured instead of unreachable. It cannot buy a false green: the home
+    condition is deliberately unwaivable, pinned by
+    `test_the_home_finding_has_no_waiver`, so a hook that ever refuses on
+    the home still fails here. On a host whose home is not a work tree,
+    nothing below changes.
     """
     root = _mini_tree(tmp_path)
     d = _a_root_under_the_home(tmp_path)
+    confound = ({"VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO": "1"}
+                if G.enclosing_work_tree(_home()) is not None else None)
     try:
-        r = _run_pytest(root, d)
+        r = _run_pytest(root, d, env_extra=confound)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     assert r.returncode == 0, (

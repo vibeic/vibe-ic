@@ -616,7 +616,13 @@ def declaration(config, verdict=None) -> str:
                 f"(or git could not be asked)")
     state = "ALLOWED BY FLAG — results from this run are not trustworthy" \
         if allowed else "REFUSED"
-    return f"scratch_root_guard: {root} — INSIDE work tree {top} [{state}]"
+    # "git work tree" is this condition's name everywhere else it is
+    # spoken — the three branches above, and the refusal text itself
+    # ("the pytest scratch root is INSIDE a git work tree"). This branch
+    # alone said "work tree", and it is the branch that fires on the
+    # REFUSAL path, where the declaration is the only thing telling the
+    # reader WHICH condition stopped the run.
+    return f"scratch_root_guard: {root} — INSIDE git work tree {top} [{state}]"
 
 
 def home_declaration(root: Path, verdict=None) -> str:
