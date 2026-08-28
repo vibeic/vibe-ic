@@ -2206,6 +2206,8 @@ server.tool(
     pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     clock_port: z.string().default("clk"),
     clock_period_ns: z.number().default(200),
+    sdc: z.string().optional().describe("Path to the design's OWN .sdc. When given it REPLACES the synthesised single `create_clock -name clk`, which is a guess: a design whose real constraints live in an SDC was previously analysed against a constraint set nobody authored, and steps 10/23 declare an SDC as a required INPUT while this tool had no way to accept one."),
+    output_report: z.string().optional().describe("Path the timing report is WRITTEN to (e.g. /work/phase3/stage3/sta/pre_pnr_timing.rpt). Flow steps 10 and 23 name exactly such a file in required_outputs; without this the tool produced no file at all and could not be their producer. The file carries a `# MCP_MEASUREMENT:` header stating whether timing was actually measured, and is declared in the provenance record's outputs."),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
     custom_techlef: z.string().optional().describe("Path to tech LEF file (custom PDK)"),
     custom_celllef: z.string().optional().describe("Path to cell LEF file (custom PDK)"),
@@ -2218,10 +2220,11 @@ server.tool(
     container: z.string().default("vibeic-eda").describe("Docker container for OpenSTA (si_mcf_project mode)"),
     allow_unconstrained: z.boolean().default(false).describe("Deliberate opt-out for a design that legitimately has NO timing paths — a purely combinational block, a netlist with only I/O paths and no set_input_delay, or an intentionally unconstrained smoke run. Without it such a run is REFUSED (STA-9002 / STA-9003) because an unconstrained design otherwise reports a vacuous `wns max 0.00` indistinguishable from a clean one. With it the run is permitted and recorded status:\"UNCONSTRAINED\" with wns/tns null — NEVER a passing timing verdict. It does NOT relax the linkage assertion (STA-9001)."),
   },
-  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, si_mcf_project, container, allow_unconstrained }) => {
+  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, sdc, output_report, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, si_mcf_project, container, allow_unconstrained }) => {
     try {
       if (si_mcf_project === undefined) { assertSafePath(netlist, "netlist"); assertSafeIdent(top_module, "top_module"); }
       optIdent(clock_port, "clock_port");
+      optPath(sdc, "sdc"); optPath(output_report, "output_report");
       optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
@@ -2286,15 +2289,32 @@ server.tool(
     const _staLefs = [techlefPath(cfg), celllefPath(cfg)]
       .filter(pth => typeof pth === "string" && pth.length > 0 && !pth.includes("null/"));
     const _staLefReads = _staLefs.map(pth => `read_lef ${pth}`).join("\n");
+    // CONSTRAINTS. `create_clock -name clk` is a GUESS, and it was the only
+    // thing this tool could do: steps 10 and 23 both declare
+    // `phase2/stage2/constraints/*.sdc` as a required INPUT, and the tool had
+    // no parameter that could accept one. A design whose real constraints
+    // (multiple clocks, false paths, I/O delays) live in an SDC was analysed
+    // against a constraint set nobody authored, and the resulting slack
+    // answered a question no one asked. When an SDC is given it REPLACES the
+    // synthesised clock; the guess remains only for the case it was written
+    // for -- a single-clock netlist with no constraint file yet.
+    //
+    // The assertion trio below is UNCHANGED by this and does not need to be:
+    // it asks `sta::all_clocks` and `find_timing_paths` of the timer itself,
+    // so it judges the constraint set that is actually in effect regardless of
+    // which of the two authored it.
+    const _staConstrain = sdc
+      ? `read_sdc ${sdc}`
+      : `create_clock -name clk -period ${clock_period_ns} [get_ports ${clock_port}]`;
     // SITE 3/5 — item 1 (file argument) + item 2 (the assertion trio). The
-    // assertions sit AFTER create_clock and BEFORE any report, so no report is
-    // ever produced from a network that is not linked or not constrained.
+    // assertions sit AFTER the constraints and BEFORE any report, so no report
+    // is ever produced from a network that is not linked or not constrained.
     const staTcl = `${_staLefReads}
 read_liberty ${libPath(cfg)}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
 ${staEvidenceTcl()}
-create_clock -name clk -period ${clock_period_ns} [get_ports ${clock_port}]
+${_staConstrain}
 puts "STA_CLOCK_PORT_FOUND=[llength [get_ports -quiet ${clock_port}]]"
 ${staAssertionTcl({ allowUnconstrained: allow_unconstrained })}
 report_checks -path_delay max -format full
@@ -2450,6 +2470,122 @@ puts "STA_COMPLETE"`;
         + `wns/tns are null, not zero. This is NOT a passing timing verdict.`);
     }
 
+    // ── The measurement verdict, decided in one place ────────────────────
+    // RE-DERIVED ONTO MAIN'S FACTS. a444aaa99b asked the design two extra
+    // questions by scraping `puts` lines it added to the Tcl -- an
+    // `all_registers` count to tell a combinational block from a sequential
+    // one left unconstrained, and an `all_clocks` count -- and read
+    // `report_worst_slack`'s `INF` for the empty-path-set case. Main now asks
+    // the TIMER those same questions directly (`staAssertionTcl` emits
+    // linked / timing_paths / clocks / virtual_clocks / worst_slack_ns as
+    // facts), which is strictly better than a scrape: it cannot be defeated by
+    // a log-format change and it distinguishes a virtual clock from a real
+    // one. So the three scrapes and the parallel ladder built on them are NOT
+    // re-derived; the classification they fed is, off main's facts.
+    //
+    // `timing_paths === 0` is the discriminator a444 used registerCount for,
+    // and it is the sharper form of the same question: a purely COMBINATIONAL
+    // block has no timing paths and never had, which is nothing to judge; a
+    // SEQUENTIAL design left unconstrained has paths that nobody constrained,
+    // whose 0.00 would be fabricated. Ordered most-fundamental first, so the
+    // reason a reader is given is the one furthest upstream.
+    let staMeasured = false;
+    let staClass = null;
+    let staReason = "";
+    if (!staAnalysed) {
+      staClass = "TOOL_DID_NOT_RUN";
+      staReason = failedAssertion
+        ? `${failedAssertion.code}: ${failedAssertion.message}`
+        : `no timing was analysed: openroad exited ${staRun.rc}`
+          + (typeof staRun.errorCount === "number" ? ` with ${staRun.errorCount} error(s)` : "")
+          + (staCompleted ? "" : "; the script did not reach STA_COMPLETE");
+    } else if (!staEvidence.pass) {
+      // The run reached the end of its script, but the independent evidence
+      // channel refused it. `linked === false` is the tool stating its own
+      // precondition failed; anything else here is the metrics sidecar being
+      // absent or unreadable, which is a different fact and gets its own class.
+      staClass = linked === false ? "TOOL_DID_NOT_RUN" : "UNPARSEABLE";
+      staReason =
+        `the STA evidence conjunction failed (${staEvidence.failedTerms.join(", ")})`
+        + (staEvidence.reasons && staEvidence.reasons.length
+             ? `: ${staEvidence.reasons.join(" | ")}` : "")
+        + ". A slack read off this run would not be backed by evidence that the "
+        + "design linked and the timer ran.";
+    } else if (timingPaths === 0) {
+      staClass = NOT_MEASURED_BENIGN;
+      staReason =
+        `'${top_module}' has no timing paths (find_timing_paths returned 0), so `
+        + `there is nothing to constrain and nothing to judge. No slack was `
+        + `measured. This is not a defect -- but a 0.00 reported here would be `
+        + `fabricated, so wns/tns are null.`;
+    } else if (!clockConstrained) {
+      staClass = "UNCONSTRAINED";
+      staReason = sdc
+        ? `the SDC '${sdc}' left '${top_module}' unconstrained `
+          + `(${timingPaths} timing path(s), ${virtualClocks} virtual clock(s)), `
+          + `so any reported slack is vacuous.`
+        : `clock_port '${clock_port}' does not constrain '${top_module}' `
+          + `(${timingPaths} timing path(s), ${virtualClocks} virtual clock(s)). `
+          + `create_clock matched no real port and OpenSTA only WARNED (STA-0366) `
+          + `while still building a source-less clock, so the design is `
+          + `UNCONSTRAINED and its 'wns max 0.00' is a fabricated perfect score. `
+          + `wns/tns are null, not zero.`;
+    } else if (wns === null) {
+      staClass = "UNPARSEABLE";
+      staReason =
+        "the run completed and was constrained, but no worst-slack number "
+        + "could be read back out of its own output.";
+    } else {
+      staMeasured = true;
+    }
+
+    // v0.47.5 auto-provenance. HOISTED above the manifest (main defined it
+    // below): `output_report` is resolved against it.
+    const projSta = process.env.EDA_PROJECT_DIR ||
+        netlist.replace(/\/synth\/.*/, "").replace(/^\/work\//, "/host_project/");
+
+    // ── WRITE THE REPORT THE CONSUMING STEP NAMES ────────────────────────
+    // MEASURED: steps 10 and 23 name `pre_pnr_timing.rpt` /
+    // `post_route_timing.rpt` in required_outputs and name THIS tool in
+    // mcp_tools, and this tool wrote no file at all (`outputs: {}`), so the
+    // steps that name it had no producer for their own declared artefact.
+    // The report now exists, and it carries the measurement verdict in its
+    // FIRST LINE as a comment, so the gate that opens the report reads the
+    // tool's own answer without having to find the run that made it.
+    const staMeasurement = measurementRecord({
+      operation: "sta",
+      measured: staMeasured,
+      reasonClass: staClass,
+      reason: staReason,
+      read: [effectiveNetlist, libPath(cfg), ..._staLefs, ...(sdc ? [sdc] : [])],
+      wrote: output_report ? [output_report] : [],
+      toolLabel: "opensta via openroad",
+      version: getToolVersionSafe("openroad"),
+      image: containerImageIdentity().image_ref,
+    });
+    const staOutputs = {};
+    if (output_report) {
+      const hostReport = output_report.startsWith("/work/")
+        ? output_report.replace("/work/", projSta + "/") : output_report;
+      try {
+        mkdirSync(hostReport.substring(0, hostReport.lastIndexOf("/")),
+                  { recursive: true });
+        require_fs_writeFileSync(hostReport,
+          measurementStamp(staMeasurement) + (result.output || ""));
+        staOutputs[output_report] = sha256File(hostReport);
+      } catch (e) {
+        // A report we could not write is a report that does not exist; say so
+        // rather than declaring an output nothing produced.
+        staWarnings.push(`could not write output_report ${output_report}: ${e.message}`);
+      }
+    }
+    // DISCLOSE the benign state when nothing else has spoken. Main already
+    // pushes its own message for an opted-out unconstrained run, so this only
+    // fills the silence rather than doubling it.
+    if (!staMeasured && staClass === NOT_MEASURED_BENIGN && staWarnings.length === 0) {
+      staWarnings.push(staReason);
+    }
+
     if (staPass) {
       const dir = netlist.substring(0, netlist.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
@@ -2461,10 +2597,21 @@ puts "STA_COMPLETE"`;
         // whether a clock was found. The manifest is what downstream flow
         // steps read, so the violation has to reach it. `eda_pnr` has always
         // written TIMING_VIOLATED for a missed slack; STA was the outlier.
+        //
+        // RE-DERIVED: a444aaa99b keyed this on its own `staMeasured` alone,
+        // which predates main's TIMING_VIOLATED ruling and would have written
+        // PASS for a measured -12.10 ns miss. Main's ruling is KEPT and the
+        // measurement contract adds ONE state to it: a run that legitimately
+        // had nothing to measure is NOTHING_TO_MEASURE, not UNCONSTRAINED —
+        // collapsing those two is what makes a gate refuse every purely
+        // combinational design until somebody bypasses it.
         status: clockConstrained
           ? (wns !== null && wns < 0 ? "TIMING_VIOLATED" : "PASS")
-          : "UNCONSTRAINED",
+          : (staClass === NOT_MEASURED_BENIGN ? "NOTHING_TO_MEASURE"
+                                              : "UNCONSTRAINED"),
         tool: "OpenSTA",
+        measured: staMeasured,
+        not_measured_class: staClass,
         clock_port_found: clockPortFound,
         linked,
         timing_paths: timingPaths,
@@ -2479,6 +2626,8 @@ puts "STA_COMPLETE"`;
         step: "sta",
         status: staVerdict,   // FAIL, or UNMEASURED when no evidence was produced
         tool: "OpenSTA",
+        measured: staMeasured,
+        not_measured_class: staClass,
         clock_port_found: clockPortFound,
         linked,
         timing_paths: timingPaths,
@@ -2492,18 +2641,19 @@ puts "STA_COMPLETE"`;
       });
     }
 
-    // v0.47.5 auto-provenance
-    const projSta = process.env.EDA_PROJECT_DIR ||
-        netlist.replace(/\/synth\/.*/, "").replace(/^\/work\//, "/host_project/");
-    // STA doesn't write a designated report file by default — record stdout_sha as
-    // the "output fingerprint" so the run is auditable.
+    // `projSta` is declared above, hoisted so `output_report` could be
+    // resolved against it before the manifest is written.
     logProvenance({
       projectDir: projSta,
       tool: "opensta",
       version: toolIdentity("openroad", pdk, "opensta via openroad"),
-      argv: ["openroad", "-exit", `sta ${top_module} clk=${clock_period_ns}ns`],
+      argv: ["openroad", "-exit",
+             sdc ? `sta ${top_module} sdc=${sdc}`
+                 : `sta ${top_module} clk=${clock_period_ns}ns`],
       inputs: { [netlist]: sha256File(netlist.replace("/work/", projSta + "/")) },
-      outputs: {},
+      // The report this tool now WRITES, so the steps that name it in
+      // required_outputs finally have a producer to bind to.
+      outputs: staOutputs,
       // UNION, 2026-08-27. The real process status now that the Tcl is a file
       // argument — AND never a 0 for a run this tool refused. The landed form
       // was `staPass ? 0 : 1`, which existed so a reader of provenance.jsonl
@@ -2516,6 +2666,9 @@ puts "STA_COMPLETE"`;
       durationMs: durationStaMs,
       stdoutTail: result.output || "",
       stderrTail: result.error || "",
+      // Orthogonal to the exit code above: that one says whether the outcome
+      // was clean, this one says whether timing was measured at all.
+      measurement: staMeasurement,
     });
 
     return {
@@ -2538,6 +2691,16 @@ puts "STA_COMPLETE"`;
               : !staEvidence.pass ? staVerdict
               : (clockConstrained ? (wns !== null && wns < 0 ? "TIMING_VIOLATED" : "PASS")
                                   : "UNCONSTRAINED"),
+            // BESIDE the verdict, never folded into it. `success` and
+            // `timing_verdict` keep meaning exactly what they meant; `measured`
+            // answers the different question of whether the tool did its work,
+            // and it is the field the flow gates read.
+            measured: staMeasured,
+            not_measured_class: staClass,
+            not_measured_reason: staMeasured ? null : staReason,
+            measurement: staMeasurement,
+            sdc: sdc || null,
+            output_report: output_report || null,
             clock_constrained: clockConstrained,
             clock_port_found: clockPortFound,
             network_linked: linked,
