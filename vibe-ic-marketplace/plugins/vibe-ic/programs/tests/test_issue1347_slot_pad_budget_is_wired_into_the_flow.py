@@ -29,6 +29,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import flow_compliance_check as F                      # noqa: E402
 import test_slot_pad_budget_check as T                 # noqa: E402  slot fixture
+import _watchdog                                      # noqa: E402
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
 
 yaml = pytest.importorskip("yaml")
 
@@ -82,13 +105,10 @@ def _drive(rtl, with_slots: bool):
     return passed, snippet.startswith(F._VACUOUS_HINT_PREFIX), rep
 
 
-# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
-# whole PROCESS down rather than failing one test, so a subprocess bound must
-# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
-# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
-# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
-# number that can never be reached.
-_CHILD_TIMEOUT_S = 60
+# No per-call wall-clock bound: see `_supervised` below. A number chosen from
+# "the slowest child here is ~22s" is a reading of this HOST on the day it was
+# taken, and when a busier host exceeds it the resulting `TimeoutExpired` is
+# recorded as `slot_pad_budget_check` being broken.
 
 # --------------------------------------------------------------------------- #
 # the wiring exists, and it is in a slot that can fail
@@ -522,12 +542,10 @@ def test_a_malformed_clause_FAILS_and_is_not_a_disclosed_skip():
 def test_the_usage_tier_is_distinct_from_the_vacuous_one():
     """rc 3 = you called it wrong; rc 2 = there was nothing to examine. The
     program's whole contract rests on those not collapsing."""
-    import subprocess
     prog = str(PROG / "slot_pad_budget_check.py")
 
     def rc(*args):
-        return subprocess.run([sys.executable, prog, *args],
-                              capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S).returncode
+        return _supervised([sys.executable, prog, *args]).returncode
 
     assert rc("--not-a-flag") == 3          # rejected command line
     assert rc() == 3                        # missing positional
@@ -537,9 +555,8 @@ def test_the_usage_tier_is_distinct_from_the_vacuous_one():
 
 
 def test_help_still_exits_zero_so_wrappers_do_not_read_it_as_failure():
-    import subprocess
-    r = subprocess.run([sys.executable, str(PROG / "slot_pad_budget_check.py"),
-                        "--help"], capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
+    r = _supervised([sys.executable, str(PROG / "slot_pad_budget_check.py"),
+                     "--help"])
     assert r.returncode == 0 and "usage" in r.stdout.lower()
 
 

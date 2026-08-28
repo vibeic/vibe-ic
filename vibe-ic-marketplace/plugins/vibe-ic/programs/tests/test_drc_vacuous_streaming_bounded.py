@@ -39,6 +39,29 @@ SCRIPT = Path(__file__).parent.parent / "drc_vacuous_pass_check.py"
 assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 sys.path.insert(0, str(SCRIPT.parent))
 import drc_vacuous_pass_check as dvp  # noqa: E402
+import _watchdog  # noqa: E402
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
 
 
 # ---------------------------------------------------------------------------
@@ -175,12 +198,8 @@ def _write_report(path: Path, size_bytes: int) -> Path:
 
 
 def _peak_rss_kib(report_path: Path, programs_dir: Path) -> int:
-    out = subprocess.run(
-        [sys.executable, "-c", _RSS_WRAPPER, str(programs_dir), str(report_path)],
-        # One `audit()` over one report of at most a few tens of MiB; the
-        # streaming path measures in seconds. 60 s is the harness per-call
-        # ceiling (bound/3) and leaves an order of magnitude of headroom.
-        capture_output=True, text=True, timeout=60)
+    out = _supervised(
+        [sys.executable, "-c", _RSS_WRAPPER, str(programs_dir), str(report_path)])
     assert out.returncode == 0, f"checker failed: {out.stderr}"
     return int(out.stdout.strip().splitlines()[-1])
 

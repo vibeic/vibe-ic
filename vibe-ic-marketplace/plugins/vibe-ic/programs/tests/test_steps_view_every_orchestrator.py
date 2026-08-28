@@ -50,6 +50,29 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import _path_layout as _pl   # noqa: E402
+import _watchdog  # noqa: E402
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
 
 # DISCOVERED, not hand-listed: a new `*_one_shot_runner.py` front door must
 # wire the view or this control fails, instead of quietly reopening the hole
@@ -86,20 +109,13 @@ def test_orchestrator_discovery_is_not_empty_or_stale():
 
 TOP_LEVEL_GATE = PROGRAMS / "top_level_outputs_in_canonical_check.py"
 
-#: Bound for every launch in this file. NOT a round number picked by feel:
-#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
-#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
-#: `--timeout-method=thread` — and permits any ONE blocking call at most
-#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
-#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
-#: and every other file in the subset loses its verdict, including files that
-#: had already passed.
-#: The landed values were 300 (the two real orchestrator runs) and 120 (the
-#: top-level gate CLI). MEASURED here: a real `phase1_one_shot_runner` run over
-#: a tmp_path project with one staged prompt takes 1.01 s, the same run with
-#: `steps/` blocked takes 0.74 s, and the gate CLI takes 0.04 s worst of nine
-#: calls. 60 s is ~59x the slowest of them.
-_RUN_TIMEOUT_S = 60
+#: No wall-clock bound for the launches in this file. The measurements that
+#: produced one (1.01 s for a real `phase1_one_shot_runner` run, 0.04 s for the
+#: gate CLI, so "60 s is ~59x the slowest") are readings of ONE host on ONE
+#: day. A margin over a measured host is still a statement about the host: on a
+#: loaded or slower machine the bound fires, and what gets recorded is not "the
+#: box was busy" but `phase1_one_shot_runner` FAILING. The launches go through
+#: `_supervised` (below), which bounds no-forward-progress instead.
 
 
 # --------------------------------------------------------------------------
@@ -237,10 +253,9 @@ def test_real_orchestrator_run_leaves_the_tree(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
     _stage_one_input(project)
-    cp = subprocess.run(
+    cp = _supervised(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
-         str(project), "--mode", "prompt", "--ic-name", "TST"],
-        capture_output=True, text=True, timeout=_RUN_TIMEOUT_S)
+         str(project), "--mode", "prompt", "--ic-name", "TST"])
     assert cp.returncode == 0, cp.stderr
 
     idx_path = project / "steps" / "index.json"
@@ -322,10 +337,9 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
     _stage_one_input(project)
     (project / "steps").write_text("not a directory\n")
 
-    cp = subprocess.run(
+    cp = _supervised(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
-         str(project), "--mode", "prompt", "--ic-name", "TST"],
-        capture_output=True, text=True, timeout=_RUN_TIMEOUT_S)
+         str(project), "--mode", "prompt", "--ic-name", "TST"])
 
     assert cp.returncode == 0, (
         "bookkeeping killed the run:\n" + cp.stdout + cp.stderr)
@@ -341,9 +355,7 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
 # 6. REVERSE: the top-level hygiene gate still rejects what it always did
 # --------------------------------------------------------------------------
 def _gate(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(TOP_LEVEL_GATE), str(project)],
-                          capture_output=True, text=True,
-                          timeout=_RUN_TIMEOUT_S)
+    return _supervised([sys.executable, str(TOP_LEVEL_GATE), str(project)])
 
 
 def _canonical_project(tmp_path: Path, name: str) -> Path:

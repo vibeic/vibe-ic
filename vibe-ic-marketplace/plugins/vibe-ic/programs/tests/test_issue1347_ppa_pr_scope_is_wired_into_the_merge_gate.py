@@ -28,6 +28,29 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import gatekeeper_review as G  # noqa: E402
 import _hostpaths  # noqa: E402
+import _watchdog  # noqa: E402
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
 
 
 def _repo_with_a_surface() -> tuple[Path, str]:
@@ -65,13 +88,10 @@ def _answers(d: Path, doc: dict) -> None:
     (d / G._PPA_ANSWERS_REL).write_text(json.dumps(doc))
 
 
-# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
-# whole PROCESS down rather than failing one test, so a subprocess bound must
-# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
-# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
-# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
-# number that can never be reached.
-_CHILD_TIMEOUT_S = 60
+# No per-call wall-clock bound: see `_supervised` below. "The slowest child is
+# ~22s so 60 has headroom" describes the host that was measured, not
+# `ppa_pr_scope_check.py`; on a busier one the bound fires and the test reports
+# the checker as broken.
 
 # --------------------------------------------------------------------------- #
 # the verdict is actually consulted
@@ -304,9 +324,8 @@ def test_the_checker_really_exits_3_on_a_bad_invocation():
     which in this program means UNDETERMINED — the checker overrides that
     precisely so "you typed it wrong" and "the evidence was not there" stay
     apart."""
-    import subprocess as _s
-    r = _s.run([sys.executable, str(PROG / "ppa_pr_scope_check.py"),
-                "--not-a-real-flag"], capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
+    r = _supervised([sys.executable, str(PROG / "ppa_pr_scope_check.py"),
+                     "--not-a-real-flag"])
     assert r.returncode == 3, (
         f"expected rc 3 (bad invocation), got {r.returncode}")
 

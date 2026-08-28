@@ -61,6 +61,29 @@ sys.path.insert(0, str(PROGRAMS))
 
 import waivers_schema_check as wsc  # noqa: E402
 from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+import _watchdog  # noqa: E402
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
 
 FCC = PROGRAMS / "flow_compliance_check.py"
 WSC = PROGRAMS / "waivers_schema_check.py"
@@ -110,9 +133,9 @@ def _rules(findings, severity=None):
 
 
 def _run_fcc(project, report):
-    return subprocess.run(
+    return _supervised(
         [sys.executable, str(FCC), str(project), "--json", str(report)],
-        capture_output=True, text=True, timeout=60, cwd=str(project))
+        cwd=str(project))
 
 
 def _write_fixture_flow(path, ids):
@@ -288,10 +311,8 @@ def test_id_that_names_no_flow_step_is_reported_but_is_not_fatal(tmp_path, sid):
 
 def test_strict_ids_restores_the_hard_exit_for_standalone_gate_use(tmp_path):
     p = _project(tmp_path, _entry(999))
-    lenient = subprocess.run([sys.executable, str(WSC), str(p)],
-                             capture_output=True, text=True, timeout=60)
-    strict = subprocess.run([sys.executable, str(WSC), str(p), "--strict-ids"],
-                            capture_output=True, text=True, timeout=60)
+    lenient = _supervised([sys.executable, str(WSC), str(p)])
+    strict = _supervised([sys.executable, str(WSC), str(p), "--strict-ids"])
     assert lenient.returncode == 0, lenient.stdout
     assert strict.returncode == 1, strict.stdout
     assert "id-range" in strict.stdout
@@ -555,18 +576,16 @@ def _tracked_corpus_waivers():
     `>=` count can distinguish, and it cannot rot when the corpus changes size
     for a legitimate reason.
     """
-    r = subprocess.run(
-        ["git", "-C", str(_corpus_root()), "ls-files", "-z"],
-        # 10s, not the 120s this first carried. These tests run under a 180s
-        # pytest-timeout harness, so an inner bound is a slice of THAT budget --
-        # 120s was two thirds of it for a call measured at 0.00s (the whole item
-        # is 0.23s). An over-wide inner bound is the #1241 session-killer shape:
-        # enough of them and the harness dies without emitting a verdict at all,
-        # which greps as zero failures. 10s is ~43x the measured item.
-        capture_output=True, timeout=10)
+    # No inner wall-clock bound at all. A slice of the harness budget is
+    # still a budget: whatever the number, the only thing it can decide is
+    # "this host was slower than I guessed", and it reports that as `git`
+    # being broken. The supervisor watches the child's forward progress
+    # instead, so a `git ls-files` over a large corpus on a loaded box is
+    # never cut short, and a `git` that wedges on a lock still dies.
+    r = _supervised(["git", "-C", str(_corpus_root()), "ls-files", "-z"])
     if r.returncode != 0:
         return None
-    out = r.stdout.decode("utf-8", "replace")
+    out = r.stdout
     return sorted(p for p in out.split("\0")
                   if p and p.split("/")[-1] == "waivers.json")
 

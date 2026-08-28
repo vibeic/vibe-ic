@@ -38,8 +38,29 @@ _REPO = _PROGRAMS.parents[3]
 sys.path.insert(0, str(_PROGRAMS))
 
 import _docker_memory as dm  # noqa: E402
+import _watchdog  # noqa: E402
 
 _GIB = 1024 ** 3
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    Every call site below used to carry `timeout=60` / `timeout=120`. Neither
+    number is a property of `_docker_memory.py` or of an import probe — both are
+    guesses about a HOST, and when the guess is wrong on a loaded machine the
+    `TimeoutExpired` propagates out of the test and is recorded as the SUBJECT
+    being broken. That verdict is manufactured by the machine, not measured on
+    the program. `run_host_supervised` bounds NO FORWARD PROGRESS instead (CPU +
+    I/O summed over the child's /proc tree, plus the growth of its captured
+    output), so a child that is merely slow finishes however long that
+    legitimately takes, while one that is genuinely hung is still killed — and
+    arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on stderr, a code
+    none of these subjects can produce itself, so a hang can never be misread as
+    an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
 
 
 # ── the ceiling itself ──────────────────────────────────────────────────────
@@ -110,8 +131,8 @@ def _cli(*args, env=None):
     e.pop("VIBEIC_DOCKER_MEMORY", None)
     e.pop("VIBEIC_DOCKER_MEMORY_FRACTION", None)
     e.update(env or {})
-    return subprocess.run([sys.executable, str(_PROGRAMS / "_docker_memory.py"), *args],
-                          capture_output=True, text=True, timeout=60, env=e, check=False)
+    return _supervised([sys.executable, str(_PROGRAMS / "_docker_memory.py"), *args],
+                       env=e)
 
 
 def test_the_cli_prints_the_flags_one_per_line():
@@ -138,8 +159,7 @@ def test_the_cli_refuses_rather_than_printing_nothing_when_it_cannot_tell():
             f"sys.path.insert(0, {str(_PROGRAMS)!r}); "
             "import _docker_memory as m; m.physical_memory_bytes = lambda: None; "
             "sys.exit(m._main(['--flags']))")
-    r = subprocess.run([sys.executable, "-c", shim], capture_output=True,
-                       text=True, timeout=60, check=False)
+    r = _supervised([sys.executable, "-c", shim])
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert "VIBEIC_DOCKER_MEMORY" in r.stdout
 
@@ -179,11 +199,10 @@ def test_the_ceiling_is_reachable_from_every_program_that_uses_it():
              if "docker_memory_flags" in p.read_text(encoding="utf-8")]
     assert len(users) >= 8, f"expected the wiring across the plugin, found {users}"
     for path in users:
-        r = subprocess.run(
+        r = _supervised(
             [sys.executable, "-c",
              f"import sys; sys.path.insert(0, {str(_PROGRAMS)!r}); "
-             f"import {path.stem}"],
-            capture_output=True, text=True, timeout=120, check=False)
+             f"import {path.stem}"])
         assert r.returncode == 0, f"{path.name} does not import: {r.stderr[-600:]}"
 
 

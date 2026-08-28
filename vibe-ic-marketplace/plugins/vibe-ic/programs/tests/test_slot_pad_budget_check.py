@@ -25,15 +25,38 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import slot_pad_budget_check as S  # noqa: E402
+import _watchdog  # noqa: E402
 
 
-# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
-# whole PROCESS down rather than failing one test, so a subprocess bound must
-# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
-# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
-# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
-# number that can never be reached.
-_CHILD_TIMEOUT_S = 60
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
+
+
+# No per-call wall-clock bound. The reasoning that produced one ("the slowest
+# child here is ~22s, so 60 has headroom") measures a HOST, not this program:
+# the same child on a loaded box, or on a slower machine, exceeds any headroom
+# eventually, and when it does the `TimeoutExpired` is reported as
+# `slot_pad_budget_check` being broken. The children below are driven through
+# `_supervised`, which bounds NO FORWARD PROGRESS instead, so being slow is
+# never a verdict and being hung still is.
 
 # --------------------------------------------------------------------------- #
 # fixtures — a slot in BOTH shapes, built from the same pad list
@@ -922,16 +945,12 @@ def test_the_refusal_is_the_USAGE_tier_not_the_vacuous_one():
 
 def test_every_exit_code_the_program_returns_is_documented():
     import re
-    import subprocess
-
     proj = _traversal_project()
     empty = Path(tempfile.mkdtemp(prefix="nocontract_"))
     prog = str(Path(S.__file__))
 
     def rc(*argv):
-        return subprocess.run([sys.executable, prog, *argv],
-                              capture_output=True, text=True,
-                              timeout=_CHILD_TIMEOUT_S).returncode
+        return _supervised([sys.executable, prog, *argv]).returncode
 
     observed = {
         rc(str(proj)),                                  # a real verdict
@@ -961,9 +980,7 @@ def test_help_is_a_success_not_a_failure():
     """Documented alongside the usage tier, and easy to get wrong: remapping
     argparse's exit would make `--help` look like a failure to every wrapper
     that checks the code."""
-    import subprocess
-    r = subprocess.run([sys.executable, str(Path(S.__file__)), "--help"],
-                       capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
+    r = _supervised([sys.executable, str(Path(S.__file__)), "--help"])
     assert r.returncode == 0 and "usage" in r.stdout.lower()
 
 
@@ -984,12 +1001,10 @@ def test_the_undecided_line_carries_the_disclosed_skip_marker():
     The marker must appear ONLY on the undecided line: putting it on a real
     verdict would make a refusal look like a skip, which is the inverse defect
     and the more dangerous one."""
-    import subprocess
     prog = str(Path(S.__file__))
 
     def first_line(*argv):
-        r = subprocess.run([sys.executable, prog, *argv],
-                           capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
+        r = _supervised([sys.executable, prog, *argv])
         return r.returncode, (r.stdout.strip().splitlines() or [""])[0]
 
     rc, line = first_line(str(Path(tempfile.mkdtemp(prefix="nomark_"))))

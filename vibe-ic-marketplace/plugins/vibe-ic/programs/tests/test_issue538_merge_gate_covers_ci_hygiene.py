@@ -54,6 +54,30 @@ _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
+import _watchdog  # noqa: E402
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
+
 
 def _load(name: str):
     spec = importlib.util.spec_from_file_location(name, _PROGRAMS / f"{name}.py")
@@ -355,9 +379,9 @@ def _list_record(script: Path, cwd: Path):
         # A real file, not `/dev/stdout`: `--list` also prints the labels, and
         # recovering the document by slicing at the first "{" would break the
         # moment a gate label contained one.
-        out = subprocess.run(
+        out = _supervised(
             ["bash", str(script), "--list", "--summary-json", str(rec)],
-            cwd=str(cwd), capture_output=True, text=True, timeout=60)
+            cwd=str(cwd))
         assert out.returncode == 0, out.stderr
         return json.loads(rec.read_text())
 
@@ -949,9 +973,8 @@ def test_the_cli_offers_no_way_to_skip_the_hygiene_set():
     button on the one gate whose entire purpose is that it cannot be
     forgotten — which is how v1.7.92 nearly went red twice.
     """
-    out = subprocess.run([sys.executable,
-                          str(_PROGRAMS / "gatekeeper_review.py"), "--help"],
-                         capture_output=True, text=True, timeout=60)
+    out = _supervised([sys.executable,
+                       str(_PROGRAMS / "gatekeeper_review.py"), "--help"])
     assert out.returncode == 0, out.stderr
     for forbidden in ("--hygiene", "--skip-hygiene", "--no-hygiene"):
         assert forbidden not in out.stdout, (
@@ -1045,8 +1068,7 @@ def test_a_new_program_without_a_regenerated_index_is_refused():
 # ==========================================================================
 def _run_fixture_script(root: Path, gate_lines: str):
     script = _fixture_script(root, gate_lines)
-    return subprocess.run(["bash", str(script)], cwd=str(root),
-                          capture_output=True, text=True, timeout=60)
+    return _supervised(["bash", str(script)], cwd=str(root))
 
 
 def test_the_rollup_does_not_claim_all_passed_when_a_gate_refused(tmp_path):

@@ -32,19 +32,29 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 # The others capture their children's output, so nothing interleaves.
 ORCHESTRATORS = ("vibe_ic_one_shot_runner.py", "design_one_shot_runner.py")
 
-#: Bound for BOTH launches below. NOT a round number picked by feel:
-#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
-#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
-#: `--timeout-method=thread` — and permits any ONE blocking call at most
-#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
-#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
-#: and every other file in the subset loses its verdict, including files that
-#: had already passed.
-#: The landed values were 120 (the redirect probe) and 180 (the import probe).
-#: MEASURED here: the redirect probe is a five-line parent around two
-#: `print()`-only children and runs 0.06 s; the import probe imports one
-#: orchestrator module and runs 0.16 s. 60 s is ~370x the slower of the two.
-_PROBE_TIMEOUT_S = 60
+sys.path.insert(0, str(PROGRAMS))
+import _watchdog  # noqa: E402
+
+
+def _redirected_to_a_file(cmd) -> str:
+    """Run `cmd` with BOTH streams on one non-tty regular file, and return what
+    that file received — under progress supervision, with no wall-clock bound.
+
+    The redirect is the SUBJECT here: block buffering is what a child does when
+    its stdout is not a tty, and `run_host_supervised` captures into an OS temp
+    FILE, so the child sees exactly the stream shape `> run.log 2>&1` gives it.
+    `merge_stderr=True` sends stderr down the same descriptor, which is what
+    makes the recorded ORDER meaningful — separately captured streams re-order
+    under Python's own buffering and the assertion would be about the harness.
+
+    The bound this replaces was 60 s, justified by "the redirect probe runs
+    0.06 s, so 60 s is ~370x". A multiple of a measured runtime is still a
+    reading of one host: exceed it on a loaded box and the recorded result is
+    not "the machine was busy" but the orchestrator failing. Nothing here bounds
+    runtime now — only the absence of forward progress, which is the property
+    "hung" actually means."""
+    res = _watchdog.run_host_supervised(cmd, merge_stderr=True)
+    return res.out
 
 
 def _redirected_order(tmp_path: Path, preamble: str) -> list[str]:
@@ -61,9 +71,7 @@ def _redirected_order(tmp_path: Path, preamble: str) -> list[str]:
         print("=== DONE ===")
     """))
     log = tmp_path / "run.log"
-    with log.open("w") as fh:
-        subprocess.run([sys.executable, str(parent)], stdout=fh,
-                       stderr=subprocess.STDOUT, timeout=_PROBE_TIMEOUT_S)
+    log.write_text(_redirected_to_a_file([sys.executable, str(parent)]))
     return log.read_text().splitlines()
 
 
@@ -100,9 +108,7 @@ def test_each_orchestrator_line_buffers_its_own_stream(tmp_path):
             print("line_buffering=%s" % sys.stdout.line_buffering)
         """))
         log = tmp_path / f"out_{prog}.log"
-        with log.open("w") as fh:
-            subprocess.run([sys.executable, str(probe)], stdout=fh,
-                           stderr=subprocess.STDOUT, timeout=_PROBE_TIMEOUT_S)
+        log.write_text(_redirected_to_a_file([sys.executable, str(probe)]))
         out = log.read_text()
         assert "line_buffering=True" in out, f"{prog}: {out[-400:]}"
 
