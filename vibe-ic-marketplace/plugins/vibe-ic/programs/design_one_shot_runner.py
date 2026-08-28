@@ -289,7 +289,13 @@ def _rtl_repair_remediate_with_hint(project: Path,
     # UNION: this lane's EXCEPTION (a stall, not a clock -- the whole point of
     # the conversion) with MAIN's post-rename VERDICT NAME. The branch predates
     # v1.12.20, which reserved "ECO" for physical changes; taking its text whole
-    # would reinstate FAIL_ECO_INERT for a step that is an RTL repair.
+    # would reinstate the RETIRED ECO-FLAVOURED SPELLING of this verdict for a
+    # step that is an RTL repair.
+    #
+    # That retired spelling is deliberately NOT written out here.
+    # `test_repair_taxonomy_has_no_false_eco_names` substring-scans every
+    # shipped .py/.md/.json and does not strip comments, so naming the token --
+    # even to warn against it -- IS the regression it guards against.
     except _pr.Stalled as exc:
         return False, (f"phase1 regen stopped making progress ({exc}); "
                        f"leaving loop to declare FAIL_RTL_REPAIR_INERT")
