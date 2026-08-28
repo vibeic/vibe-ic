@@ -64,9 +64,9 @@ import argparse
 import json
 import os
 import re
-from typing import List, Tuple
 import sys
 from datetime import datetime
+from typing import List, Tuple
 from pathlib import Path
 
 # `_progress_run` lives in the plugin's `programs/`, which is not a sibling of
@@ -106,8 +106,57 @@ def flow_steps(flow_yaml: Path) -> tuple[int, int, int]:
     return len(entries) - len(stages), len(entries), len(stages)
 
 
+#: A page has spelled its dimension table two ways, and BOTH are it.
+#:
+#:  * the LEGACY shape, `<td class="dnum">n</td>` -- one such cell per row;
+#:  * the CURRENT shape, a label cell reading `D1`..`D9`, after the 2026-08-26
+#:    rewrite renamed the class to `num`.
+#:
+#: MEASURED 2026-08-28: keying on the legacy CLASS alone counted 0 dimensions
+#: on the rewritten page and a plain run rewrote a real `cells 612` down to
+#: `cells 0`. Replacing it with the label alone counted 0 on the legacy shape --
+#: the same defect, one spelling over, and this repo's own liveness test caught
+#: it. So both are read, and the larger is taken: a page tabulates ONE set of
+#: dimensions, and whichever marker survives its markup is evidence of the same
+#: table. A spelling this program has never seen still lands on the refusal
+#: below rather than on a silent zero.
+_DIM_LABEL_RE = re.compile(r">\s*D([1-9])\s*<")
+_DIM_LEGACY_RE = re.compile(r'<td class="dnum">\d+</td>')
+
+
 def dimension_rows(page: str) -> int:
-    return len(re.findall(r'<td class="dnum">\d+</td>', page))
+    """How many dimensions the page tabulates, over either spelling.
+
+    The label count is DISTINCT: a bilingual page writes each label twice (the
+    `data-en` copy and the rendered text), and counting occurrences would
+    multiply the cell figure by whatever the markup happened to repeat. The
+    legacy count is per-cell, which is what that shape meant.
+    """
+    return max(len(set(_DIM_LABEL_RE.findall(page))),
+               len(_DIM_LEGACY_RE.findall(page)))
+
+
+def _version_at(plugin_root: "Path", commit: str):
+    """The plugin version recorded AT `commit`, or None if it cannot be read.
+
+    None is returned for every failure -- not a working-tree fallback. A
+    fallback here would silently answer a question about one commit with a fact
+    about another, which is the defect this helper exists to prevent.
+    """
+    rel = "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
+    try:
+        out = _pr.run(["git", "show", f"{commit}:{rel}"],
+                      cwd=str(plugin_root), capture_output=True, text=True)
+    except Exception:
+        # Any failure to ASK is the same answer: this program does not know the
+        # version at that commit, and must not substitute one it does know.
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return json.loads(out.stdout)["version"]
+    except (ValueError, KeyError):
+        return None
 
 
 def run_suite(cmd: str, cwd: Path) -> str:
@@ -189,6 +238,25 @@ def main(argv=None) -> int:
     version = json.loads(
         (args.plugin_root / ".claude-plugin" / "plugin.json")
         .read_text(encoding="utf-8"))["version"]
+
+    # A VERSION BESIDE A PINNED COMMIT IS THAT COMMIT'S VERSION, not today's.
+    # MEASURED 2026-08-28: the page states `plugin v1.12.33 - source 10b9e12c3`
+    # because its figures were measured on that commit. The working tree had
+    # moved to v1.12.34, so this program reported drift and a plain run would
+    # have written `plugin v1.12.34 - source 10b9e12c3` -- a version and a
+    # commit that contradict each other, on the page whose own rule is that
+    # published digits are derived. Restamping half of a pin breaks the pin.
+    pinned = re.search(r"source <b>([0-9a-f]{7,40})</b>", page)
+    if pinned:
+        at = _version_at(args.plugin_root, pinned.group(1))
+        if at is None:
+            print(f"CANNOT CHECK: the page pins source {pinned.group(1)}, and "
+                  f"the plugin version at that commit could not be read. "
+                  f"Restamping the version beside a pin this program cannot "
+                  f"resolve would publish a contradiction. NOT a pass, and "
+                  f"nothing was written.", file=sys.stderr)
+            return 2
+        version = at
     now = args.now or datetime.now().strftime("%Y-%m-%d %H:%M")
 
     cur = {
@@ -207,6 +275,24 @@ def main(argv=None) -> int:
     _, stale_claims = rewrite_liveness_claims(page)
     for c in stale_claims:
         drift.append(f"the page still claims liveness in words: \u201c{c}\u2026\u201d")
+
+    # A COUNT OF ZERO IS NOT A MEASUREMENT. If no dimension row was found, this
+    # program did not measure the page -- it failed to READ it, and the two look
+    # identical from the outside. MEASURED 2026-08-28, on the tree as it stood:
+    # with the old cosmetic matcher against the rewritten page, `--check` printed
+    # "0 cells" as a derived figure and a plain run REWROTE a real `cells 612`
+    # down to `cells 0`. The page's whole subject is that it has 612 cells.
+    #
+    # So zero is refused at rc 2 CANNOT CHECK, in BOTH modes, before any drift
+    # is reported or anything is written. Refusing is the only outcome that
+    # cannot be mistaken for a verdict about the page.
+    if dims == 0 and cur["cells"]:
+        print(f"CANNOT CHECK: {args.page} states a cells figure "
+              f"({cur['cells'].group(1)}) but no dimension row could be read "
+              f"from it, so the derived count would be {steps} x 0 = 0. That is "
+              f"this program failing to read the page, not a measurement of it. "
+              f"NOT a pass, and nothing was written.", file=sys.stderr)
+        return 2
 
     if args.check:
         for d in drift:
