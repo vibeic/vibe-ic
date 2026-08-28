@@ -737,6 +737,8 @@ def recognize(text: str) -> Optional[Dict]:
         if A and B and gt and eq and lt and A[1] == B[1]:
             return {"op": "cmp", "A": A[0], "B": B[0], "w": A[1],
                     "gt": gt[0], "eq": eq[0], "lt": lt[0],
+                    "subtraction_architecture": bool(re.search(
+                        r"subtraction\s+operation|borrow\s+occurs", text, re.I)),
                     "ins": ins, "outs": outs}
         return None
 
@@ -807,7 +809,8 @@ def _recognize_adder(text: str, ins, outs) -> Optional[Dict]:
     # Plain N-bit adder: separate sum[N-1:0] + cout (RTLLM's form), optional cin.
     if sum_ and cout and A[1] == sum_[1]:
         spec = {"op": "adder", "a": A[0], "b": B[0], "w": A[1],
-                "sum": sum_[0], "cout": cout[0], "ins": ins, "outs": outs}
+                "sum": sum_[0], "cout": cout[0], "ins": ins, "outs": outs,
+                "prompt_text": text}
         if cin:
             spec["cin"] = cin[0]
         return spec
@@ -838,7 +841,11 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
     # Combinational multiplier (no clock): product = A*B (width from ports).
     if not clk:
         return {"op": "mult_comb", "a": a[0], "b": b[0], "prod": prod[0],
-                "pw": prod[1], "signed": signed, "ins": ins, "outs": outs}
+                "aw": a[1], "bw": b[1], "pw": prod[1], "signed": signed,
+                "shift_add": bool(re.search(
+                    r"shift(?:ing)?[-\s]*(?:and|&)??[-\s]*add|shift[-\s]*and[-\s]*add",
+                    text, re.I)),
+                "ins": ins, "outs": outs}
 
     # Sequential multipliers — the prose states a counter/handshake FSM. We
     # implement the STATED done/ready protocol with a functionally-correct
@@ -852,6 +859,7 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
 
     base = {"a": a[0], "b": b[0], "prod": prod[0], "pw": prod[1],
             "aw": a[1], "bw": b[1], "signed": signed,
+            "radix4": bool(re.search(r"radix[-\s]*4", text, re.I)),
             "rst": rst[0] if rst else None,
             "rst_active_high": bool(rst) and not _RE_RST_N.search(rst[0]),
             "clk": clk[0], "ins": ins, "outs": outs}
@@ -905,6 +913,13 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
 
 
 def _emit_adder(s, m):
+    prompt = s.get("prompt_text", "")
+    if re.search(r"bit[-\s]*level|full\s+adders?|small\s+bit[-\s]*width|"
+                 r"carry[-\s]*lookahead|\bCLA\b", prompt, re.I):
+        import arith_ext_synth as _arith_ext
+        structural = _arith_ext.synth(prompt, s["ins"], s["outs"], m)
+        if structural:
+            return structural
     h = _dia_header(m, s["ins"], s["outs"])
     rhs = f'{s["a"]} + {s["b"]}'
     if "cin" in s:
@@ -947,6 +962,17 @@ def _emit_sub(s, m):
 
 def _emit_cmp(s, m):
     h = _dia_header(m, s["ins"], s["outs"])
+    if s.get("subtraction_architecture"):
+        w = s["w"]
+        return (f"{h}\n"
+                f"    wire [{w}:0] subtraction = "
+                f"{{1'b0,{s['A']}}} + {{1'b0,~{s['B']}}} + 1'b1;\n"
+                f"    wire difference_is_zero = ~|subtraction[{w-1}:0];\n"
+                f"    wire no_borrow = subtraction[{w}];\n"
+                f"    assign {s['eq']} = difference_is_zero;\n"
+                f"    assign {s['lt']} = ~no_borrow;\n"
+                f"    assign {s['gt']} = no_borrow & ~difference_is_zero;\n"
+                f"endmodule\n")
     return (f"{h}\n"
             f"    assign {s['gt']} = ({s['A']} > {s['B']});\n"
             f"    assign {s['eq']} = ({s['A']} == {s['B']});\n"
@@ -956,6 +982,29 @@ def _emit_cmp(s, m):
 
 def _emit_mult_comb(s, m):
     h = _dia_header(m, s["ins"], s["outs"])
+    if s.get("shift_add"):
+        # The architecture is explicit: emit the bit-wise algorithm instead of
+        # asking synthesis to infer an opaque `*` operator.
+        aw, bw, pw = s["aw"], s["bw"], s["pw"]
+        return (f"{h}\n"
+                f"    reg [{pw-1}:0] accumulator;\n"
+                f"    reg [{pw-1}:0] shifted_multiplicand;\n"
+                f"    integer bit_index;\n"
+                f"    always @(*) begin\n"
+                f"        accumulator = {pw}'d0;\n"
+                f"        shifted_multiplicand = "
+                f"{{{{{pw-aw}{{1'b0}}}}, {s['a']}}};\n"
+                f"        for (bit_index = 0; bit_index < {bw}; "
+                f"bit_index = bit_index + 1) begin\n"
+                f"            if ({s['b']}[bit_index])\n"
+                f"                accumulator = accumulator + "
+                f"shifted_multiplicand;\n"
+                f"            shifted_multiplicand = "
+                f"shifted_multiplicand << 1;\n"
+                f"        end\n"
+                f"    end\n"
+                f"    assign {s['prod']} = accumulator;\n"
+                f"endmodule\n")
     if s["signed"]:
         return (f"{h}\n"
                 f"    assign {s['prod']} = "
@@ -1095,7 +1144,7 @@ def _emit_alu(s, m):
     lines = [h]
     lines.append(f"    wire signed [{rw-1}:0] sa = {a};")
     lines.append(f"    wire signed [{rw-1}:0] sb = {b};")
-    lines.append(f"    reg [{rw-1}:0] res;")
+    lines.append(f"    reg [{rw}:0] res;")
     # opcode parameters declared as named constants
     for nm, val in oc.items():
         lines.append(f"    localparam {nm} = {val};")
@@ -1103,21 +1152,22 @@ def _emit_alu(s, m):
     lines.append(f"        case ({ctl})")
     cases = []
 
-    def emit_case(names, expr):
+    def emit_case(names, expr, *, extended=False):
         present = [n for n in names if n in oc]
         if not present:
             return
         label = ", ".join(present)
-        cases.append(f"            {label}: res = {expr};")
+        rhs = expr if extended else f"{{1'b0, {expr}}}"
+        cases.append(f"            {label}: res = {rhs};")
 
-    emit_case(["ADD", "ADDU"], f"{a} + {b}")
-    emit_case(["SUB", "SUBU"], f"{a} - {b}")
+    emit_case(["ADD", "ADDU"], f"{{1'b0, {a}}} + {{1'b0, {b}}}", extended=True)
+    emit_case(["SUB", "SUBU"], f"{{1'b0, {a}}} - {{1'b0, {b}}}", extended=True)
     emit_case(["AND"], f"{a} & {b}")
     emit_case(["OR"], f"{a} | {b}")
     emit_case(["XOR"], f"{a} ^ {b}")
     emit_case(["NOR"], f"~({a} | {b})")
-    emit_case(["SLT"], f"(sa < sb) ? {{{rw}{{1'b0}}}} | 1 : 0")
-    emit_case(["SLTU"], f"({a} < {b}) ? 1 : 0")
+    emit_case(["SLT"], f"{{{{{rw}{{1'b0}}}}, (sa < sb)}}", extended=True)
+    emit_case(["SLTU"], f"{{{{{rw}{{1'b0}}}}, ({a} < {b})}}", extended=True)
     emit_case(["SLL"], f"{b} << {a}")
     emit_case(["SRL"], f"{b} >> {a}")
     emit_case(["SRA"], f"sb >>> {a}")
@@ -1126,18 +1176,36 @@ def _emit_alu(s, m):
     emit_case(["SRAV"], f"sb >>> {a}[4:0]")
     emit_case(["LUI"], f"{{{a}[15:0], 16'b0}}")
     lines.extend(cases)
-    lines.append(f"            default: res = 0;")
+    lines.append(f"            default: res = {{{rw+1}{{1'bz}}}};")
     lines.append(f"        endcase")
     lines.append(f"    end")
-    lines.append(f"    assign {r} = res;")
-    # flags (best-effort, only the result r is checked by the tb; emit sane flags)
+    lines.append(f"    assign {r} = res[{rw-1}:0];")
+    # Every advertised status output is part of the public contract.
     for n, w in s["outs"]:
         if n == r:
             continue
         if n in ("zero",):
-            lines.append(f"    assign {n} = (res == 0);")
+            lines.append(f"    assign {n} = ({r} == 0);")
         elif n in ("negative",):
-            lines.append(f"    assign {n} = res[{rw-1}];")
+            lines.append(f"    assign {n} = {r}[{rw-1}];")
+        elif n in ("carry",):
+            lines.append(f"    assign {n} = res[{rw}];")
+        elif n in ("overflow",):
+            add = have("ADD")
+            sub = have("SUB")
+            add_expr = (f"({ctl} == {add}) ? "
+                        f"(~({a}[{rw-1}] ^ {b}[{rw-1}]) & "
+                        f"({r}[{rw-1}] ^ {a}[{rw-1}])) : ") if add else ""
+            sub_expr = (f"({ctl} == {sub}) ? "
+                        f"(({a}[{rw-1}] ^ {b}[{rw-1}]) & "
+                        f"({r}[{rw-1}] ^ {a}[{rw-1}])) : ") if sub else ""
+            lines.append(f"    assign {n} = {add_expr}{sub_expr}1'b0;")
+        elif n in ("flag",):
+            slt = have("SLT")
+            sltu = have("SLTU")
+            selected = [x for x in (slt, sltu) if x]
+            cond = " || ".join(f"({ctl} == {x})" for x in selected) or "1'b0"
+            lines.append(f"    assign {n} = ({cond}) ? 1'b1 : 1'bz;")
         else:
             lines.append(f"    assign {n} = 1'b0;")
     lines.append("endmodule\n")
@@ -1186,23 +1254,19 @@ def _emit_fixed_sub(s, m):
         f"    reg [N-1:0] res;\n"
         f"    always @(*) begin\n"
         f"        if ({s['a']}[N-1] == {s['b']}[N-1]) begin\n"
-        f"            if ({s['a']}[N-2:0] >= {s['b']}[N-2:0]) begin\n"
+        f"            if ({s['a']}[N-2:0] >= {s['b']}[N-2:0])\n"
         f"                res[N-2:0] = {s['a']}[N-2:0] - {s['b']}[N-2:0];\n"
-        f"                res[N-1]   = {s['a']}[N-1];\n"
-        f"            end else begin\n"
+        f"            else\n"
         f"                res[N-2:0] = {s['b']}[N-2:0] - {s['a']}[N-2:0];\n"
-        f"                res[N-1]   = ~{s['a']}[N-1];\n"
-        f"            end\n"
+        f"            res[N-1] = (res[N-2:0] == 0) ? 1'b0 : {s['a']}[N-1];\n"
         f"        end else begin\n"
-        f"            if ({s['a']}[N-2:0] > {s['b']}[N-2:0]) begin\n"
-        f"                res[N-2:0] = {s['a']}[N-2:0] - {s['b']}[N-2:0];\n"
-        f"                res[N-1]   = {s['a']}[N-1];\n"
-        f"            end else if ({s['a']}[N-2:0] < {s['b']}[N-2:0]) begin\n"
-        f"                res[N-2:0] = {s['b']}[N-2:0] - {s['a']}[N-2:0];\n"
-        f"                res[N-1]   = {s['b']}[N-1];\n"
-        f"            end else begin\n"
-        f"                res = 0;\n"
-        f"            end\n"
+        f"            res[N-2:0] = {s['a']}[N-2:0] + {s['b']}[N-2:0];\n"
+        f"            if (res[N-2:0] == 0)\n"
+        f"                res[N-1] = 1'b0;\n"
+        f"            else if ({s['a']}[N-2:0] > {s['b']}[N-2:0])\n"
+        f"                res[N-1] = {s['a']}[N-1];\n"
+        f"            else\n"
+        f"                res[N-1] = {s['b']}[N-1];\n"
         f"        end\n"
         f"    end\n"
         f"    assign {s['c']} = res;\n"
@@ -1231,19 +1295,34 @@ def _emit_mult_seq_done(s, m):
     if clear_at is not None:
         done_lines.append(f"            else if (i == {clear_at}) done_r <= 0;")
     body_done = "\n".join(done_lines)
+    aw, bw = s["aw"], s["bw"]
     return (f"{h}\n"
             f"    reg [{cnt_w-1}:0] i;\n"
             f"    reg done_r;\n"
+            f"    reg [{aw-1}:0] areg;\n"
+            f"    reg [{bw-1}:0] breg;\n"
             f"    reg [{pw-1}:0] yout_r;\n"
             f"    always @(posedge {s['clk']} or {edge}) begin\n"
             f"        if ({rst_test}) begin\n"
-            f"            i <= 0; done_r <= 0; yout_r <= 0;\n"
+            f"            i <= 0; done_r <= 0;\n"
             f"        end else if ({s['start']}) begin\n"
-            f"            if (i == 0) yout_r <= {s['a']} * {s['b']};\n"
             f"            if (i < {bound}) i <= i + 1;\n"
             f"{body_done}\n"
             f"        end else begin\n"
             f"            i <= 0; done_r <= 0;\n"
+            f"        end\n"
+            f"    end\n"
+            f"    always @(posedge {s['clk']} or {edge}) begin\n"
+            f"        if ({rst_test}) begin\n"
+            f"            areg <= 0; breg <= 0; yout_r <= 0;\n"
+            f"        end else if ({s['start']}) begin\n"
+            f"            if (i == 0) begin\n"
+            f"                areg <= {s['a']}; breg <= {s['b']}; yout_r <= 0;\n"
+            f"            end else if (i <= {aw}) begin\n"
+            f"                if (areg[i-1])\n"
+            f"                    yout_r <= yout_r + "
+            f"({{{{{pw-bw}{{1'b0}}}}, breg}} << (i-1));\n"
+            f"            end\n"
             f"        end\n"
             f"    end\n"
             f"    assign {s['prod']} = yout_r;\n"
@@ -1265,6 +1344,44 @@ def _emit_mult_seq_rdy(s, m):
     # ctr==bound). At least one is guaranteed present (else this op is deferred).
     raise_n = s["raise_at"] if s["raise_at"] is not None else s["bound"]
     cnt_w = max(2, (raise_n + 1).bit_length())
+    if s.get("radix4"):
+        # Two-bit Booth recoding is the architecture named by the prompt. Four
+        # recode steps consume an 8-bit multiplier; the externally specified
+        # ready count is preserved by waiting after the datapath is complete.
+        aw = s["aw"]
+        extw = s["pw"] + 2
+        return (f"{h}\n"
+                f"    reg [{cnt_w-1}:0] ctr;\n"
+                f"    reg rdy_r;\n"
+                f"    reg signed [{extw-1}:0] accumulator;\n"
+                f"    reg signed [{extw-1}:0] multiplicand;\n"
+                f"    reg signed [{aw+1}:0] multiplier;\n"
+                f"    always @(posedge {s['clk']} or posedge {rst}) begin\n"
+                f"        if ({rst}) begin\n"
+                f"            ctr <= 0; rdy_r <= 0; accumulator <= 0;\n"
+                f"            multiplicand <= "
+                f"{{{{{extw-aw}{{{s['a']}[{aw-1}]}}}}, {s['a']}}};\n"
+                f"            multiplier <= "
+                f"{{{s['b']}[{aw-1}], {s['b']}, 1'b0}};\n"
+                f"        end else begin\n"
+                f"            if (ctr < {aw//2}) begin\n"
+                f"                case (multiplier[2:0])\n"
+                f"                  3'b001,3'b010: accumulator <= accumulator + multiplicand;\n"
+                f"                  3'b011: accumulator <= accumulator + (multiplicand <<< 1);\n"
+                f"                  3'b100: accumulator <= accumulator - (multiplicand <<< 1);\n"
+                f"                  3'b101,3'b110: accumulator <= accumulator - multiplicand;\n"
+                f"                  default: accumulator <= accumulator;\n"
+                f"                endcase\n"
+                f"                multiplicand <= multiplicand <<< 2;\n"
+                f"                multiplier <= multiplier >>> 2;\n"
+                f"            end\n"
+                f"            if (ctr < {raise_n}) ctr <= ctr + 1'b1;\n"
+                f"            else rdy_r <= 1'b1;\n"
+                f"        end\n"
+                f"    end\n"
+                f"    assign {s['prod']} = accumulator[{s['pw']-1}:0];\n"
+                f"    assign {s['rdy']} = rdy_r;\n"
+                f"endmodule\n")
     return (f"{h}\n"
             f"    reg [{cnt_w-1}:0] ctr;\n"
             f"    reg rdy_r;\n"
@@ -1318,18 +1435,14 @@ def _emit_mult_pipe_en(s, m):
 
 
 def _emit_mult_pipe_plain(s, m):
-    # Registered pipeline multiplier (multi_pipe_4bit shape): mul_out is valid
-    # `stages` clocks after the inputs are applied. The depth is PARSED from the
-    # prose ('two levels of registers'), never assumed.
+    # Registered partial-product multiplier. The first level registers the sum
+    # of a generated partial-product array; the second registers the output.
+    # No fixed [0:3] references are emitted, so a stated size parameter remains
+    # a real parameter instead of a default-only decoration.
     rst = s["rst"]
     edge = "negedge " + rst
-    st = s["stages"]
-    # pipeline-register stages p[0..st-1]: p[0] takes the product, each later
-    # stage shifts the previous, mul_out is the last stage.
     pn = s.get("param_name")
     if pn:
-        # parameterized: ports size off the stated parameter (testbench binds it
-        # by name, e.g. #(.size(4))).
         pd = s["param_default"]
         body = [
             f"module {m} #(parameter {pn} = {pd}) (",
@@ -1337,24 +1450,55 @@ def _emit_mult_pipe_plain(s, m):
             f"    input {rst},",
             f"    input [{pn}-1:0] {s['a']},",
             f"    input [{pn}-1:0] {s['b']},",
-            f"    output [2*{pn}-1:0] {s['prod']}",
+            f"    output reg [2*{pn}-1:0] {s['prod']}",
             ");",
-            f"    reg [2*{pn}-1:0] p [0:{st-1}];",
+            f"    wire [2*{pn}-1:0] a_ext = {{{{{pn}{{1'b0}}}}, {s['a']}}};",
+            f"    wire [2*{pn}-1:0] partial_product [0:{pn}-1];",
+            f"    wire [2*{pn}-1:0] sum_chain [0:{pn}];",
+            f"    assign sum_chain[0] = {{2*{pn}{{1'b0}}}};",
+            f"    genvar gi;",
+            f"    generate for (gi=0; gi<{pn}; gi=gi+1) begin : gen_pp",
+            f"        assign partial_product[gi] = {s['b']}[gi] ? "
+            f"(a_ext << gi) : {{2*{pn}{{1'b0}}}};",
+            f"        assign sum_chain[gi+1] = sum_chain[gi] + partial_product[gi];",
+            f"    end endgenerate",
+            f"    reg [2*{pn}-1:0] partial_sum;",
         ]
+        prod_target = s["prod"]
     else:
         h = _dia_header(m, s["ins"], s["outs"])
         pw = s["pw"]
-        body = [h, f"    reg [{pw-1}:0] p [0:{st-1}];"]
-    body.append("    integer k;")
+        aw = s["aw"]
+        body = [
+            h,
+            f"    wire [{pw-1}:0] a_ext = {{{{{pw-aw}{{1'b0}}}}, {s['a']}}};",
+            f"    wire [{pw-1}:0] partial_product [0:{aw-1}];",
+            f"    wire [{pw-1}:0] sum_chain [0:{aw}];",
+            f"    assign sum_chain[0] = {pw}'d0;",
+            "    genvar gi;",
+            f"    generate for (gi=0; gi<{aw}; gi=gi+1) begin : gen_pp",
+            f"        assign partial_product[gi] = {s['b']}[gi] ? "
+            f"(a_ext << gi) : {pw}'d0;",
+            "        assign sum_chain[gi+1] = sum_chain[gi] + partial_product[gi];",
+            "    end endgenerate",
+            f"    reg [{pw-1}:0] partial_sum;",
+            f"    reg [{pw-1}:0] {s['prod']}_r;",
+        ]
+        prod_target = f"{s['prod']}_r"
     body.append(f"    always @(posedge {s['clk']} or {edge}) begin")
     body.append(f"        if (!{rst}) begin")
-    body.append(f"            for (k = 0; k < {st}; k = k + 1) p[k] <= 0;")
+    body.append(f"            partial_sum <= 0;")
+    body.append(f"            {prod_target} <= 0;")
     body.append("        end else begin")
-    body.append(f"            p[0] <= {s['a']} * {s['b']};")
-    body.append(f"            for (k = 1; k < {st}; k = k + 1) p[k] <= p[k-1];")
+    if pn:
+        body.append(f"            partial_sum <= sum_chain[{pn}];")
+    else:
+        body.append(f"            partial_sum <= sum_chain[{s['aw']}];")
+    body.append(f"            {prod_target} <= partial_sum;")
     body.append("        end")
     body.append("    end")
-    body.append(f"    assign {s['prod']} = p[{st-1}];")
+    if not pn:
+        body.append(f"    assign {s['prod']} = {prod_target};")
     body.append("endmodule\n")
     return "\n".join(body)
 

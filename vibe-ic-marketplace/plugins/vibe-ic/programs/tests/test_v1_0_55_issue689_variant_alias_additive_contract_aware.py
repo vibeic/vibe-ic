@@ -172,6 +172,30 @@ def test_contract_reader_empty_project_is_empty(tmp_path):
     assert V.design_contract_ports(tmp_path) == set()
 
 
+def test_free_prompt_explicit_port_sections_are_authoritative(tmp_path):
+    """A complete Input/Output ports list is an exact interface, not prose."""
+    (tmp_path / "input").mkdir()
+    (tmp_path / "input" / "phase1_prompt.md").write_text(
+        "Module name:\n  generic_counter\n\n"
+        "Input ports:\n"
+        "  clk: clock\n"
+        "  reset: active-high reset\n"
+        "  direction: count direction\n\n"
+        "Output ports:\n"
+        "  value [15:0]: current value\n\n"
+        "Reset is synchronous.\n")
+    assert V.authoritative_contract_ports(tmp_path) == {
+        "clk", "reset", "direction", "value"}
+
+
+def test_free_prompt_fullwidth_colon_sections_are_authoritative(tmp_path):
+    (tmp_path / "input").mkdir()
+    (tmp_path / "input" / "phase1_prompt.md").write_text(
+        "Input ports：\n  clk：clock\n  arstn：reset A\n\n"
+        "Output ports：\n  q：registered output\n")
+    assert V.authoritative_contract_ports(tmp_path) == {"clk", "arstn", "q"}
+
+
 # ════════════════════════════════════════════════════════════════════════
 # Runner step end-to-end — FACET 1 over-fire: the repro now elaborates
 # ════════════════════════════════════════════════════════════════════════
@@ -421,3 +445,28 @@ def test_noleak_l9_guard_518_still_works(tmp_path):
     assert res.status == "SKIP", (res.status, res.detail)
     assert "L9 declares native port spelling" in res.detail
     assert f.read_text() == before
+
+
+def test_explicit_prompt_interface_does_not_gain_reset_synonym(tmp_path):
+    """AI-confirmed public contracts stay exact after Program generation."""
+    rtl = (
+        "module generic_counter(input clk, input reset, input direction, "
+        "output reg [15:0] value);\n"
+        "always @(posedge clk) if (reset) value<=0; "
+        "else if(direction) value<=value+1; else value<=value-1;\n"
+        "endmodule\n")
+    f = _stage_rtl(tmp_path, rtl, "generic_counter.v")
+    (tmp_path / "input").mkdir(exist_ok=True)
+    (tmp_path / "input" / "phase1_prompt.md").write_text(
+        "Input ports:\n"
+        "  clk: system clock\n"
+        "  reset: synchronous reset\n"
+        "  direction: count direction\n\n"
+        "Output ports:\n"
+        "  value [15:0]: counter value\n")
+    before = f.read_text()
+    res = R.step_reset_clock_variant_aliases(tmp_path, "generic_counter")
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert f.read_text() == before
+    assert " rst" not in f.read_text()
+    assert "__rcvar_inner" not in f.read_text()

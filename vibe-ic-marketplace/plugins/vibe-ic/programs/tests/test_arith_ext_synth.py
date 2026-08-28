@@ -120,15 +120,20 @@ def test_names_come_from_the_declared_interface_not_from_a_design_name():
                   [("result", 8), ("Co", 1)], "some_other_block")
     assert rtl is not None
     assert "module some_other_block (" in rtl
-    assert "assign {Co, result} = x + y + carry_in;" in rtl
+    assert "some_other_block_full_adder" in rtl
+    assert ".a(x[i])" in rtl and ".b(y[i])" in rtl
+    assert "assign carry[0] = carry_in;" in rtl
+    assert "assign Co = carry[8];" in rtl
 
 
 def test_an_absent_carry_in_is_allowed_and_not_invented():
     rtl = A.synth(_prompt(8).replace("    cin: 1-bit carry in.\n", ""),
                   [("a", 8), ("b", 8)], [("sum", 8), ("cout", 1)], "TopModule")
     assert rtl is not None
-    assert "assign {cout, sum} = a + b;" in rtl
-    assert "cin" not in rtl
+    assert "assign carry[0] = 1'b0;" in rtl
+    top_header = rtl.split("module TopModule (", 1)[1].split(");", 1)[0]
+    assert "input cin" not in top_header
+    assert "TopModule_full_adder" in rtl
 
 
 # --------------------------------------------------------------------------- #

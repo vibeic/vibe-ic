@@ -169,7 +169,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `can_protocol_synth` | any | v0.1.81 | CAN-class protocol synth helper. |
 | `canfd_protocol_synth` | any | v0.1.84 | CAN-FD-class protocol synth helper. |
 | `canonical_path_symlink_forbid_check` | any | — | generalised symlink ban for canonical deliverable trees. |
-| `canonical_primitive_synth` | any | — | ONE deterministic SOLVER that emits verified-correct RTL for NINE canonical RTLLM design shapes, keyed on STATED STRUCTURE. |
+| `canonical_primitive_synth` | any | — | ONE deterministic SOLVER that emits prompt-derived RTL for SIXTEEN canonical design shapes, keyed on STATED STRUCTURE. |
 | `canopen_protocol_synth` | any | — | CANopen (CiA 301) protocol synth helper (protocol #70). |
 | `caravel_integration_runner` | any | v0.1.51 | Caravel chipignite integration runner (B2 from spm pilot). |
 | `caravel_wrapper_emit` | any | v0.1.51 | Caravel user_project_wrapper emitter (B3 from spm pilot). |
@@ -1436,7 +1436,7 @@ _(no programs in this group)_
 - `can_protocol_synth` — CAN-class protocol synth helper.  _[v0.1.81]_
 - `canfd_protocol_synth` — CAN-FD-class protocol synth helper.  _[v0.1.84]_
 - `canonical_path_symlink_forbid_check` — generalised symlink ban for canonical deliverable trees.
-- `canonical_primitive_synth` — ONE deterministic SOLVER that emits verified-correct RTL for NINE canonical RTLLM design shapes, keyed on STATED STRUCTURE.
+- `canonical_primitive_synth` — ONE deterministic SOLVER that emits prompt-derived RTL for SIXTEEN canonical design shapes, keyed on STATED STRUCTURE.
 - `canopen_protocol_synth` — CANopen (CiA 301) protocol synth helper (protocol #70).
 - `caravel_integration_runner` — Caravel chipignite integration runner (B2 from spm pilot).  _[v0.1.51]_
 - `caravel_wrapper_emit` — Caravel user_project_wrapper emitter (B3 from spm pilot).  _[v0.1.51]_

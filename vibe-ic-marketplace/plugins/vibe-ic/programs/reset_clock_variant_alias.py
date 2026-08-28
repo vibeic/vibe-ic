@@ -221,10 +221,10 @@ _CONTRACT_PHRASE_RE = re.compile(
 # prose elsewhere never over-suppresses (no-leak). The section runs from its
 # heading to the next blank line / next `*** ports:` heading / EOF.
 _CONTRACT_PORTSECTION_HDR_RE = re.compile(
-    r"^[ \t>*#-]*\b(?:input|output|inout|i/o|in|out)\b[ \t]*ports?\s*:?\s*$",
+    r"^[ \t>*#-]*\b(?:input|output|inout|i/o|in|out)\b[ \t]*ports?\s*[：:]?\s*$",
     re.IGNORECASE | re.MULTILINE)
 _CONTRACT_COLON_LINE_RE = re.compile(
-    rf"^[ \t>*#-]*`?\s*({_CONTRACT_NAME_TOKENS})\s*`?\s*:",
+    rf"^[ \t>*#-]*`?\s*({_CONTRACT_NAME_TOKENS})\s*`?\s*[：:]",
     re.IGNORECASE | re.MULTILINE)
 
 
@@ -418,6 +418,9 @@ _AUTHORITATIVE_DOC_GLOBS = (
 _MD_DIRECTIONS = frozenset({"input", "output", "inout"})
 _MD_TABLE_ROW_RE = re.compile(r"^[ \t]*\|(.+)\|[ \t]*$", re.MULTILINE)
 _MD_NAME_CELL_RE = re.compile(r"^[`*_\s]*([A-Za-z_]\w*)")
+_ANY_COLON_PORT_LINE_RE = re.compile(
+    r"^[ \t>*#-]*`?\s*([A-Za-z_]\w*)\s*`?\s*(?:\[[^\]]+\]\s*)?[：:]",
+    re.MULTILINE)
 
 
 def _all_port_names_from_port_table(text: str) -> Optional[set]:
@@ -445,6 +448,38 @@ def _all_port_names_from_port_table(text: str) -> Optional[set]:
         if bare and bare not in _MD_DIRECTIONS:
             found.add(bare)
     return found if len(found) >= 2 else None
+
+
+def _all_port_names_from_explicit_sections(text: str) -> Optional[set]:
+    """Return a COMPLETE interface from explicit Input/Output ports sections.
+
+    Free-form prose is not authoritative, but a document that labels both its
+    input and output sections and enumerates ``name: description`` rows is an
+    exact public-interface contract.  Treating that as "loose prose" caused the
+    alias pass to append undocumented reset ports after a correct generator had
+    already honored the prompt.
+    """
+    hdrs = list(_CONTRACT_PORTSECTION_HDR_RE.finditer(text))
+    if not hdrs:
+        return None
+    kinds = set()
+    found: set = set()
+    for k, header in enumerate(hdrs):
+        label = header.group(0).lower()
+        if "i/o" in label or "inout" in label:
+            kinds.update(("input", "output"))
+        elif "output" in label or re.search(r"\bout\b", label):
+            kinds.add("output")
+        else:
+            kinds.add("input")
+        stop = hdrs[k + 1].start() if k + 1 < len(hdrs) else len(text)
+        body = text[header.end():stop]
+        blank = re.search(r"\n[ \t]*\n", body)
+        if blank:
+            body = body[:blank.start()]
+        for match in _ANY_COLON_PORT_LINE_RE.finditer(body):
+            found.add(match.group(1).lower())
+    return found if len(found) >= 2 and kinds == {"input", "output"} else None
 
 
 def authoritative_contract_ports(project: Path) -> Optional[set]:
@@ -495,6 +530,26 @@ def authoritative_contract_ports(project: Path) -> Optional[set]:
                 except OSError:
                     continue
                 got_names = _all_port_names_from_port_table(raw)
+                if got_names:
+                    names |= got_names
+                    got = True
+    # A benchmark/free-text prompt is authoritative only when it carries an
+    # explicit, complete Input-ports + Output-ports enumeration. Loose prose,
+    # one-off `reset` mentions, and incomplete sections remain non-authoritative
+    # and preserve the legacy alias rescue path.
+    if not got:
+        for pat in ("input/phase1_prompt.md", "phase1/input_prompt/*",
+                    "input/docs/design_description*"):
+            for f in sorted(project.glob(pat)):
+                rp = f.resolve()
+                if rp in seen or not f.is_file():
+                    continue
+                seen.add(rp)
+                try:
+                    raw = f.read_text(errors="replace")
+                except OSError:
+                    continue
+                got_names = _all_port_names_from_explicit_sections(raw)
                 if got_names:
                     names |= got_names
                     got = True
