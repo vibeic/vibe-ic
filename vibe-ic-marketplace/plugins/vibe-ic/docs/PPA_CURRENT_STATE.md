@@ -53,9 +53,10 @@ cannot promote an unrelated call by itself.
 
 ### The zero is the load-bearing number, and it has been earned away
 
-`ROLLBACK_PROVEN = 0`. The step-32 repair **does** implement an undo — on a
-measured setup regression it sets `timing_repair_reverted_regression` and retains the
-pre-repair artefacts — and this section used to end there, with
+This section read `ROLLBACK_PROVEN = 0` until the proof landed, and the census
+now re-derives **2**. The step-32 repair always **did** implement an undo — on a
+measured setup regression it sets `timing_repair_reverted_regression` and retains
+the pre-repair artefacts — and this section used to end there, with
 
 ```
 $ grep -rn 'timing_repair_reverted_regression' programs/tests/
@@ -120,6 +121,71 @@ re-checked — a ratchet that can only advance is not a ratchet.
   and its gate REFUSES with rc 2 when `L19.power_budget_uw` is undeclared, so on
   a design that declares no budget the edge is not merely untaken — it is
   unreachable, honestly.
+
+### `EXECUTABLE = 0` is not a wiring backlog, and a program now says so
+
+The three entries above were read by hand. That reading is now a program —
+`closed_loop_metric_reaches_its_producer` — wired advisory at step 37.5ic beside
+`every_required_metric_key_has_a_producer`, which asks the same question one
+layer in.
+
+Two programs already read these declarations and neither asks this one:
+
+| program | question |
+|---|---|
+| `closed_loop_edge_check` | is the declaration WELL-FORMED? |
+| `closed_loop_executable_coverage_check` | does something ACTUALLY re-enter? |
+| `closed_loop_metric_reaches_its_producer` | COULD anything? |
+
+The predicate is one sentence: a closed-loop edge is a repair, so the step being
+re-entered has to be able to SEE the quantity its trigger names. If it cannot,
+re-entering reproduces what it produced before and the loop is inert by
+construction — which the repair loop already detects and calls
+`FAIL_ECO_INERT`.
+
+```
+$ python3 programs/closed_loop_metric_reaches_its_producer.py .
+21 declared edge(s); REACHABLE=0, UNREACHABLE=2, UNSTATED=19
+```
+
+So the 18 `DECLARED_ONLY` edges are not eighteen edges nobody got round to
+wiring. **Both edges that name a metric are UNREACHABLE for the same reason:**
+no producer at the fallback step reads it. `L19.die_area_budget_um` reaches
+`floorplan_contract` and a set of checkers and stops; `power__total` reaches
+nothing at step 17 either.
+
+Reading that number as a backlog cost three separate attempts to close the area
+edge (9 -> 1) in one session, each abandoned after discovering by hand what this
+program answers in a second. The census refused the third attempt in its own
+words — `CLC-ACTUATION-NOT-FALLBACK-REENTRY: edge 9 falls back to step 1, but
+its actuator calls step_synth; expected one of [step_rtl_gen]` — because the
+flow's trigger says *"the structure has to change"*, and re-running synthesis is
+a different edge.
+
+**Three verdicts, not two, and the third keeps the number honest.** `UNSTATED` —
+the trigger names no metric at all — is NOT a lesser `UNREACHABLE`. An edge
+reading *"CDC/RDC violation requires RTL change"* may well be closeable; the
+question simply cannot be put until the declaration names what is out of bounds.
+Folding them together would report 21 unreachable edges and make the flow look
+worse than it is. **19 of 21 are UNSTATED, and that ratio is itself the
+finding:** a closed-loop declaration naming no quantity cannot be reasoned about
+by any program, including the two that already read them.
+
+WHAT CLOSING 9 -> 1 ACTUALLY NEEDS, measured rather than estimated:
+
+* an L-doc that carries an area constraint the **RTL layer** reads — today
+  `die_area_budget_um` reaches only the floorplan;
+* at least one emitter in `deterministic_emit_chain` that **responds** to it —
+  none of the six takes an area parameter;
+* area as a remediable hint kind whose regeneration genuinely differs —
+  `_HINT_KINDS_REMEDIABLE_BY_PHASE1` accepts two kinds, both wiring defects.
+
+`step_rtl_gen` is deterministic (no random, no timestamp), so without all three
+a re-entry returns byte-identical RTL. **The repair loop is a RETRY executor,
+not a candidate-rewrite executor:** it re-runs a deterministic generator and
+depends on outside state having changed to make the next pass different. That
+distinction is the whole feasibility question, and this file was wrong about it
+until the measurement was made.
 
 ### A real loop that serves no declared edge
 
