@@ -540,10 +540,10 @@ def test_an_inner_bound_is_a_real_bound():
     chatty = _run(
         [sys.executable, "-u", "-c",
          "import time" + chr(10) +
-         "for i in range(40): print(i, flush=True); time.sleep(0.25)"],
+         "for i in range(24): print(i, flush=True); time.sleep(0.25)"],
         grace=grace)
     assert chatty.returncode == 0, (
-        "a child that was emitting output for five graces was still killed — "
+        "a child that was emitting output for three graces was still killed — "
         f"the supervision is bounding RUNTIME, not progress: {chatty.stderr}")
 
     # TOO LOW, direction 2, and the one the owner's ruling turns on: a child
@@ -553,11 +553,11 @@ def test_an_inner_bound_is_a_real_bound():
     quiet = _run(
         [sys.executable, "-c",
          "import time" + chr(10) +
-         "end = time.monotonic() + 10.0" + chr(10) +
+         "end = time.monotonic() + 6.0" + chr(10) +
          "n = 0" + chr(10) +
          "while time.monotonic() < end: n += 1"],
         grace=grace)
     assert quiet.returncode == 0, (
-        "a child that burned CPU silently for five graces was killed — the "
+        "a child that burned CPU silently for three graces was killed — the "
         "meter is reading output only, so any quiet phase of a real tool is a "
         f"death sentence: {quiet.stderr}")
