@@ -98,30 +98,6 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # rather than merely discouraged. Wired here because a source guard that only
 # its own test runs has never run on anything that shipped.
 run "OpenSTA error-abort left armed" "$ROOT" python3 "$PG/sta_continue_on_error_guard.py" "$ROOT"
-# Its exact twin one incident over, and wired for the identical reason the
-# comment above gives: `checker_execution_wiring_audit` named
-# `unanchored_process_kill_check` as THE checker that nothing but its own test
-# ran — "a fixture the author wrote proves the logic, never the artefacts" —
-# and that audit has been RED on main for exactly this one name.
-#
-# The subject is SHIPPED SOURCE, so this surface and not the flow: it parses
-# every `*.py` under the root and asks whether a process is chosen for
-# signalling by matching a command line. `$ROOT` and not `$PLUGIN` on purpose —
-# the checker's own docstring records that a real pattern kill lived under
-# `mcp-eda/test`, and scoping this to the plugin would put a directory-naming
-# accident in charge of whether a site is examined.
-#
-# MEASURED BEFORE WIRING, so this adds a gate that PASSES rather than a new red
-# (#1253: wiring a red gate turns "unverified" into "blocking", which is a
-# different repair and not this one). At ae5cc4dbf, root scope: 1712 python
-# files walked, 6 carrying `pkill`/`killall` at all and therefore AST-examined,
-# 0 invocations, rc=0 in 0.6 s. The denominator is stated because a guard that
-# passes over an empty population certifies nothing: the six are
-# `_docker_watchdog`, `_watchdog`, `loop_watchdog_compliance_check`,
-# `phase3_one_shot_runner`, the checker itself, and one `mcp-eda/test` module —
-# i.e. every file that carried the defect this gate was written for, now
-# examined on every run instead of never.
-run "no pattern-based process kill" "$ROOT" python3 "$PG/unanchored_process_kill_check.py" --root "$ROOT"
 # vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
 # READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
@@ -523,12 +499,31 @@ run_tolerating_uncheckable "container login-banner parses" "$ROOT" python3 "$PG/
 # "container exec deadlines" above there is no pre-existing pile to bless and
 # no reason to run advisory.
 #
-# `--root "$PG"` NAMES THE INPUT rather than letting the checker default to its
-# own location. A gate whose input is fixed to where it lives cannot be shown
-# to fail -- `gate_mutation_fixtures.invoke` redirects $ROOT and nothing else --
-# and naming the input is what keeps the CAN-FAIL direction reachable, the same
-# reasoning as "closed-loop executable census" below.
-run "no pattern-based process kill" "$ROOT" python3 "$PG/unanchored_process_kill_check.py" --root "$PG"
+# `--root "$ROOT"` NAMES THE INPUT rather than letting the checker default to
+# its own location, and it must be $ROOT and not $PG. The intent of naming the
+# input is to keep the CAN-FAIL direction reachable, and only $ROOT does that:
+# `ROOT="${VIBEIC_SUBJECT_ROOT:-$RUNTIME_ROOT}"` FOLLOWS the redirect that
+# `gate_mutation_fixtures.invoke` performs, while `PG="$RUNTIME_ROOT/..."` is
+# pinned to the runtime tree and does not. MEASURED 2026-08-28, both
+# directions: aimed at a constructed subject carrying one `pkill -f` call the
+# checker returns rc 1 and names the file and line, so the gate can fail; but
+# declared as `--root "$PG"` with VIBEIC_SUBJECT_ROOT pointed at that same
+# subject it returns rc 0 over the untouched runtime tree -- i.e. the $PG form
+# was the one that could NOT be shown to fail, which is the reverse of what
+# this paragraph asserted before.
+#
+# $ROOT IS ALSO THE WIDER AND CORRECT POPULATION. Measured the same day on this
+# tree: root scope walks 1715 python files, $PG scope 1335. The 380-file
+# difference is not empty -- it contains
+# `mcp-eda/test/test_exec_timeout_kills_the_tool_in_the_container.py`, which
+# carries `pkill`, and which is exactly the site the checker's own docstring
+# records as the real historical pattern kill. Scoping to the plugin would put
+# a directory-naming accident in charge of whether that site is examined.
+#
+# STILL A GATE THAT PASSES, not a new red: at root scope on this tree the
+# checker reports rc 0 over all 1715 files. The denominator is stated because a
+# guard that passes over an empty population certifies nothing.
+run "no pattern-based process kill" "$ROOT" python3 "$PG/unanchored_process_kill_check.py" --root "$ROOT"
 # vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
 # still be visible to the gate that needs it. Every downgrade moves a
 # condition out of the error-matching sets BY CONSTRUCTION, so the
