@@ -53,11 +53,15 @@ EXIT CODES
                             TB. BOTH are MEASURED: the tool ran to completion
                             and said no. A timeout is rc 2, never this.
   2  CANNOT ADJUDICATE     — verilator not on PATH, an argument / file error,
-                            OR the build / sim did not FINISH (a wall clock
-                            fired). In every case the FLOOR-D stands and no
-                            claim is made about the golden. A run that did not
-                            finish is not a run that failed, and rc 1 is
-                            reserved for what was actually observed.
+                            OR the build / sim was STALLED (its process tree
+                            made no forward progress at all across the grace).
+                            In every case the FLOOR-D stands and no claim is
+                            made about the golden. A run that was wedged is not
+                            a run that failed, and rc 1 is reserved for what was
+                            actually observed. NOTE: neither the build nor the
+                            sim is bounded by RUNTIME. A build or a simulation
+                            that is still working runs to completion, however
+                            long that legitimately takes.
 
 chip-AGNOSTIC: reasons over a TB, a golden, module names, and sim output tokens.
 """
@@ -71,6 +75,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _watchdog as _wd            # noqa: E402  progress supervision
 from typing import List
 
 # Defaults MIRROR the authoritative official RTLLM scorer
@@ -84,6 +91,12 @@ from typing import List
 # scorer). §4.05: the pass token is the specific phrase (word-boundary, not a
 # generic "PASS"/"successful" that matches "bypass"/"unsuccessful"). A non-RTLLM
 # benchmark supplies its own --pass-token / --fail-token.
+#: Grace windows: how long the tree may be COMPLETELY IDLE, never how long the
+#: work may take. Reusing the numbers the old runtime caps used means this can
+#: only ever kill LESS than they did — a strict subset.
+_STALL_GRACE_S = 300
+_SIM_STALL_GRACE_S = 120
+
 _DEFAULT_PASS = ("Your Design Passed",)
 _DEFAULT_FAIL = ("Test failed", "Your Design Failed")
 
@@ -127,24 +140,31 @@ def adjudicate(tb: Path, golden: Path, tb_top: str, dut_name: str,
             for f in data_dir.iterdir():
                 if f.suffix.lower() in (".txt", ".dat", ".mem", ".hex", ".data", ".bin") and f.is_file():
                     shutil.copy(f, work / f.name)
-        try:
-            build = subprocess.run(
-                ["verilator", "--binary", "--timing", "-Wno-fatal", "-Wno-lint",
-                 "-Wno-PINNOTFOUND", "-Wno-WIDTH", "--top-module", tb_top,
-                 "golden.v", "testbench.v", "-o", "sim"],
-                cwd=work, capture_output=True, text=True, timeout=300)
-        except subprocess.TimeoutExpired:
-            # rc 2, not rc 1. This file's own exit-code table says rc 1 means
-            # "golden FAILS its own TB under Verilator" — a MEASURED claim about
-            # the golden — and rc 2 means "cannot adjudicate". The message on
-            # the next line already says "cannot adjudicate"; only the code
-            # disagreed with it, and it spent the code that accuses the golden.
-            # A build that did not FINISH is not a build that FAILED.
-            # The conservative direction is untouched: the FLOOR-D still stands,
-            # so no non-real floor can be recovered and no number inflated.
-            return 2, ("VERILATOR_BUILD_TIMEOUT: the Verilator build did not "
-                       "finish within 300s → cannot adjudicate; the FLOOR-D "
-                       "stands. This is NOT a finding about the golden.")
+        # SUPERVISED BY PROGRESS, never by runtime. A 300 s cap on a Verilator
+        # build kills a build that is compiling — on a large golden, or on a
+        # loaded host — and no relabelling of that kill helps: the work is
+        # destroyed either way. `run_host_supervised` reads CPU and I/O out of
+        # /proc across the whole tree, so a build that is doing anything runs to
+        # completion, and 300 becomes the grace: how long the tree may be
+        # entirely idle before it is called wedged.
+        build_argv = ["verilator", "--binary", "--timing", "-Wno-fatal",
+                      "-Wno-lint", "-Wno-PINNOTFOUND", "-Wno-WIDTH",
+                      "--top-module", tb_top, "golden.v", "testbench.v",
+                      "-o", "sim"]
+        _res = _wd.run_host_supervised(build_argv, stall_grace_s=_STALL_GRACE_S,
+                                       cwd=str(work))
+        if _res.outcome in ("stalled", "ceiling"):
+            # rc 2 is this file's "cannot adjudicate", and after the watchdog
+            # that is a MEASURED statement rather than a shrug: the adjudicator
+            # itself is wedged, so it made no finding about the golden. rc 1
+            # would have accused the golden of failing a build that never ran.
+            return 2, (f"VERILATOR_BUILD_STALLED: the Verilator build made no "
+                       f"forward progress — no CPU, no I/O anywhere in its "
+                       f"process tree — for {_STALL_GRACE_S}s and was stopped "
+                       f"after {_res.elapsed_s:.0f}s. It was not slow; it was "
+                       f"doing nothing. Cannot adjudicate; the FLOOR-D stands. "
+                       f"This is NOT a finding about the golden.")
+        build = _wd.completed_process(build_argv, _res)
         if build.returncode != 0:
             tailerr = "\n".join(
                 ln for ln in build.stderr.splitlines() if "%Error" in ln)[:400]
@@ -155,17 +175,20 @@ def adjudicate(tb: Path, golden: Path, tb_top: str, dut_name: str,
             # some verilator versions place the -o binary at work/sim
             alt = work / "sim"
             simbin = alt if alt.exists() else simbin
-        try:
-            run = subprocess.run([str(simbin)], cwd=work, capture_output=True,
-                                 text=True, timeout=120)
-        except subprocess.TimeoutExpired:
-            # Same correction. "The TB did not finish within 120s" is exactly
-            # the observation that does NOT distinguish an unfaithful golden
-            # from a loaded host, and rc 1 asserted the first of those.
-            return 2, ("VERILATOR_SIM_TIMEOUT: the golden's TB did not finish "
-                       "within 120s under Verilator → cannot adjudicate; the "
-                       "FLOOR-D stands. This is NOT a finding about the "
-                       "golden: a TB that did not finish did not fail.")
+        # Same replacement as the build above. A TB that is SIMULATING is
+        # progressing however many cycles it has left; only one that is wedged
+        # has stopped, and only that is a fact worth acting on.
+        _res = _wd.run_host_supervised([str(simbin)],
+                                       stall_grace_s=_SIM_STALL_GRACE_S,
+                                       cwd=str(work))
+        if _res.outcome in ("stalled", "ceiling"):
+            return 2, (f"VERILATOR_SIM_STALLED: the golden's TB made no forward "
+                       f"progress under Verilator for {_SIM_STALL_GRACE_S}s and "
+                       f"was stopped after {_res.elapsed_s:.0f}s. It was not "
+                       f"slow; it was doing nothing. Cannot adjudicate; the "
+                       f"FLOOR-D stands. This is NOT a finding about the "
+                       f"golden: a TB that was wedged did not fail.")
+        run = _wd.completed_process([str(simbin)], _res)
         out = run.stdout + run.stderr
         # §4.05 — the DANGEROUS direction is FALSE-FAITHFUL (declare a golden a
         # pass when it did not cleanly pass → recover a NON-real floor → inflate

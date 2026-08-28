@@ -410,35 +410,9 @@ def _read_report(p: Path) -> Dict[str, Any]:
         return {"verdict": "FAIL", "error": f"parse failed: {p}"}
 
 
-#: A phase that was KILLED before it decided. It is NOT a pass tier and NOT a
-#: FAIL: no measurement was made, so there is nothing to attribute to the
-#: design. Phase 1 emits it when a track or producer it dispatched was stopped
-#: mid-run (see `phase1_one_shot_runner.VERDICT_UNDETERMINED`); phase 2 and 3
-#: do not emit it yet, and the plumbing here is written so that the day they do
-#: it lands on the non-green side by default rather than by a later edit.
-VERDICT_UNDETERMINED = "UNDETERMINED"
-
-
-def _is_halting(verdict: str) -> bool:
-    """Verdicts a phase must not be continued past.
-
-    UNDETERMINED halts for the same reason FAIL does, and it is the direction
-    that matters: before this word existed a killed Phase-1 track was reported
-    as FAIL and stopped the run. Adding a third word without adding it HERE
-    would have converted that stop into a silent continue — the guard would
-    have stopped refusing, which is a deletion and not a fix.
-    """
-    return verdict in ("FAIL", VERDICT_UNDETERMINED)
-
-
 def _aggregate(verdicts: List[str]) -> str:
     if any(v == "FAIL" for v in verdicts):
         return "FAIL"
-    # BEFORE the waiver tier, not after. A phase nobody could measure must not
-    # be summarised with a word from the passing family: `_aggregate` feeds
-    # `overall`, and `overall` decides this program's exit code.
-    if any(v == VERDICT_UNDETERMINED for v in verdicts):
-        return VERDICT_UNDETERMINED
     # v0.3.7 — ORGANIC #505: COVERAGE-INCOMPLETE is a non-gating advisory
     # tier (a demoted coverage-only phase1 failure in the standalone-design
     # shape). It does NOT fail the run but DOES surface as PASS_WITH_WAIVERS
@@ -894,14 +868,7 @@ def main() -> int:
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase1", verdict, rc))
         reports["phase1"] = rep
-        if verdict == VERDICT_UNDETERMINED:
-            # Not demotable. The #505 demotion below reads a doc-extraction
-            # COVERAGE sidecar to decide a FAIL was orthogonal to the RTL
-            # deliverable; there is no such reading of "nothing was measured",
-            # and guessing one would be the same wall clock deciding a chip is
-            # fine that used to decide it was broken.
-            halted_at = "phase1"
-        elif verdict == "FAIL":
+        if verdict == "FAIL":
             # v0.3.7 — ORGANIC #505: in the standalone-design shape
             # (--skip-phase3 → the RTL is the deliverable, no silicon
             # backend), a phase1 failure that is PURELY doc-extraction
@@ -988,7 +955,7 @@ def main() -> int:
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase2", verdict, rc))
         reports["phase2"] = rep
-        if _is_halting(verdict):
+        if verdict == "FAIL":
             halted_at = "phase2"
     else:
         plan.append(("phase2", "SKIPPED", 0))
@@ -1058,7 +1025,7 @@ def main() -> int:
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase3", verdict, rc))
         reports["phase3"] = rep
-        if _is_halting(verdict):
+        if verdict == "FAIL":
             halted_at = "phase3"
     else:
         plan.append(("phase3", "SKIPPED", 0))
@@ -1235,14 +1202,7 @@ def main() -> int:
               f"stop with: kill {dash_pid}")
     print(f"{'='*72}")
     lock.release()  # explicit; atexit/signal handlers are the backstop
-    # rc 2 carries UNDETERMINED out to the caller rather than spending rc 1 —
-    # the repo's own convention, and the whole point of the word: a run that
-    # could not decide must not exit with the code that means it decided the
-    # design was bad. Non-zero either way, so nothing that treated a failing
-    # run as failing changes behaviour.
-    if overall in ("PASS", "PASS_WITH_WAIVERS"):
-        return 0
-    return 2 if overall == VERDICT_UNDETERMINED else 1
+    return 0 if overall in ("PASS", "PASS_WITH_WAIVERS") else 1
 
 
 if __name__ == "__main__":

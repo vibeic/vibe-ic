@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
+import _watchdog as _wd  # progress supervision — never a runtime bound
 import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 # THE L-document write chokepoint — records the producing release on the
 # L1 / L4 / L8 documents this runner back-fills from a prompt.
@@ -108,49 +109,14 @@ def _preflight_refusal(name: str):
 # refusal status; `FAIL` is this runner's pre-existing one, unchanged.
 _FAIL_STATUSES = ("FAIL", _spf.REFUSAL_STATUS)
 
+#: How long a dispatched Phase-1 producer may be COMPLETELY IDLE — no CPU, no
+#: I/O, no output anywhere in its process tree — before it is called wedged.
+#: This is NOT a runtime bound. The number is the one the old
+#: `subprocess.run(timeout=600)` used, reinterpreted: every job that bound let
+#: through, this lets through, and it additionally lets through every job that
+#: was still working at 600s. It can only ever kill LESS.
+_TRACK_STALL_GRACE_S = 600
 
-# ── the rc a component returns when it could not be evaluated ───────────────
-#
-# THE REPO'S OWN CONVENTION, unchanged: rc 2 is UNDETERMINED — "this did not
-# decide", never "this decided the subject is bad". `gatekeeper_review`,
-# `_corpus_location`, `ppa_search_run` and a dozen sibling checks already use
-# it; the landing gate maps a review killed at its budget onto it for exactly
-# this reason: a review that could not decide must never reach the stamp as a
-# review that decided nothing was wrong.
-#
-# It is NOT a pass. Every combination below keeps it non-zero, so a track that
-# was not evaluated still stops Phase 1 from reporting PASS.
-RC_UNDETERMINED = 2
-
-#: The verdict word that goes in `reports/phase1_one_shot.json` for it. The
-#: readers of that file (`run_status`, `vibe_ic_entry_guard`) relay the string
-#: and green only on the exact word `PASS`, so a new word is safe and a
-#: `FAIL` here would be a claim about the DESIGN that nobody measured.
-VERDICT_UNDETERMINED = "UNDETERMINED"
-
-
-def _worst_rc(*rcs: int) -> int:
-    """The rc Phase 1 should report given several component rcs.
-
-    `max()` was correct while every component was 0 or 1. It is NOT once 2
-    exists, because `max(1, 2) == 2` would report a MEASURED failure as "could
-    not decide" — the opposite error, and the more dangerous one: it launders a
-    real red into an inconclusive. The precedence is therefore explicit:
-
-        a measured failure (1, or any other non-zero that is not 2)
-          beats  UNDETERMINED (2)
-          beats  PASS (0)
-
-    Total over every int, so an rc this runner does not yet emit still lands on
-    the "measured failure" side rather than falling through to 0.
-    """
-    vals = [int(rc or 0) for rc in rcs]
-    measured_fail = [v for v in vals if v not in (0, RC_UNDETERMINED)]
-    if measured_fail:
-        return max(measured_fail)
-    if RC_UNDETERMINED in vals:
-        return RC_UNDETERMINED
-    return 0
 
 
 def _aggregate_verdict(plan: List[StepResult]) -> str:
@@ -162,26 +128,6 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     if any(s.status in ("WAIVED", "SKIP") for s in plan):
         return "PASS_WITH_WAIVERS"
     return "PASS"
-
-
-def _delegated_verdict(rc: int) -> str:
-    """The docs-branch verdict for a delegate's rc. `"PASS" if rc == 0 else
-    "FAIL"` had no word for "the delegate was killed before it decided", so
-    every such run was published as a Phase-1 FAILURE of the design."""
-    if rc == 0:
-        return "PASS"
-    return VERDICT_UNDETERMINED if rc == RC_UNDETERMINED else "FAIL"
-
-
-def _step_0_5ic_note(rc_route: int) -> str:
-    """The summary line for step 0.5ic. "FAILED to run" is true of rc 1 and
-    false of rc 2 — the producer was not undispatched by a fault of its own,
-    it was killed mid-dispatch and nothing was measured."""
-    if rc_route == 0:
-        return "ran"
-    if rc_route == RC_UNDETERMINED:
-        return "NOT MEASURED — timed out before it could write its record"
-    return "FAILED to run"
 
 
 # ── Input-mode detection ────────────────────────────────────────────
@@ -355,8 +301,23 @@ def step_ingest_render(project: Path, ic_name: str) -> StepResult:
         if (anc / "vibe-ic-marketplace").is_dir():
             repo_root = anc
             break
-    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
-                        cwd=str(repo_root), env=env)
+    # THE SAME REPLACEMENT as the two dispatch sites below, and this one was not
+    # even handled: `subprocess.run(timeout=600)` RAISES, so the bound firing on
+    # the doc-extraction engine escaped this function as a `TimeoutExpired`
+    # traceback and reached the caller as a crash — a Phase-1 failure attributed
+    # to the design, on a host that was merely busy. Doc extraction over a large
+    # vendor corpus is exactly the honest long work a runtime bound murders.
+    res = _wd.run_host_supervised(cmd, stall_grace_s=_TRACK_STALL_GRACE_S,
+                                  cwd=str(repo_root), env=env)
+    if res.outcome in ("stalled", "ceiling"):
+        return StepResult("phase1_ingest_render", "FAIL",
+                          time.time() - t0,
+                          f"the ingest engine STALLED — no CPU, no I/O and no "
+                          f"output from its process tree for the "
+                          f"{_TRACK_STALL_GRACE_S}s grace, after "
+                          f"{res.elapsed_s:.0f}s. It was not slow; it was doing "
+                          f"nothing.")
+    cp = _wd.completed_process(cmd, res)
     if cp.returncode != 0:
         return StepResult("phase1_ingest_render", "FAIL",
                           time.time() - t0,
@@ -589,21 +550,30 @@ def _run_expert_track(project: Path) -> int:
               f"({exc}) — its freshness could not be established",
               file=sys.stderr)
         return 1
-    try:
-        cp = subprocess.run(
-            [sys.executable, str(prog), str(project)],
-            capture_output=True, text=True, timeout=600, check=False)
-    except subprocess.TimeoutExpired:
-        # The diagnosis on the next line was already right; only the exit code
-        # disagreed with it. `return 1` said "the expert track examined this
-        # design and found it wanting" — a claim about the DESIGN that this
-        # branch is, by construction, the one place we know was never made.
-        # rc 2 says what actually happened. It is still non-zero, so an
-        # unevaluated track still cannot pass.
-        print("      ERROR: the expert track timed out — a timeout is not a "
-              "verdict, and an unevaluated track cannot pass",
-              file=sys.stderr)
-        return RC_UNDETERMINED
+    # NOT `subprocess.run(..., timeout=600)`. Ending the track because a clock
+    # expired does not make sense at any label: the run may have been one second
+    # from finishing, and the same design gets a different answer on a fast host
+    # than on a loaded one. Relabelling that kill NOT_MEASURED would have made
+    # the report honest and left the behaviour just as broken — the kill IS the
+    # defect.
+    #
+    # `run_host_supervised` bounds NO PROGRESS, never runtime. Progress is read
+    # out of /proc over the whole process tree — CPU (utime+stime), I/O
+    # (read_bytes+write_bytes) — plus the captured output growing. Any signal
+    # moving resets the grace, so a track that is working runs to completion
+    # however long that legitimately takes. Nothing moving at all across the
+    # grace is a MEASURED finding: the track is wedged, and that is a real
+    # verdict about the track rather than a shrug about the clock.
+    argv = [sys.executable, str(prog), str(project)]
+    res = _wd.run_host_supervised(argv, stall_grace_s=_TRACK_STALL_GRACE_S)
+    if res.outcome in ("stalled", "ceiling"):
+        print(f"      ERROR: the expert track STALLED — its whole process tree "
+              f"made no forward progress (no CPU, no I/O, no output) for the "
+              f"{_TRACK_STALL_GRACE_S}s grace, after {res.elapsed_s:.0f}s, and "
+              f"was stopped. It was not slow; it was doing nothing. An "
+              f"unevaluated track cannot pass.", file=sys.stderr)
+        return 1
+    cp = _wd.completed_process(argv, res)
     for line in (cp.stdout or "").strip().splitlines():
         print(f"      {line}")
     # 0 = ran, 2 = ran and nothing applied. Anything else — including a crash
@@ -750,18 +720,16 @@ def _run_step_0_5ic(project: Path) -> int:
 
     for argv in (ingest, declare):
         name = Path(argv[1]).name
-        try:
-            cp = subprocess.run(argv, capture_output=True, text=True,
-                                timeout=600, check=False)
-        except subprocess.TimeoutExpired:
-            # Same one-line correction as `_run_expert_track`: the producer was
-            # killed before it could write its record, so nothing was learned
-            # about the route this design is on. Non-zero (it did not pass),
-            # but not a finding against the design.
-            print(f"      ERROR: {name} timed out — a timeout is not a "
-                  f"verdict, and an undispatched producer cannot pass",
+        # Same replacement as `_run_expert_track`, same reason. See there.
+        res = _wd.run_host_supervised(argv, stall_grace_s=_TRACK_STALL_GRACE_S)
+        if res.outcome in ("stalled", "ceiling"):
+            print(f"      ERROR: {name} STALLED — no CPU, no I/O and no output "
+                  f"from its process tree for the {_TRACK_STALL_GRACE_S}s "
+                  f"grace, after {res.elapsed_s:.0f}s. It was not slow; it was "
+                  f"doing nothing. An undispatched producer cannot pass.",
                   file=sys.stderr)
-            return RC_UNDETERMINED
+            return 1
+        cp = _wd.completed_process(argv, res)
         for line in (cp.stdout or "").strip().splitlines():
             print(f"      {line}")
         if cp.returncode != 0:
@@ -792,7 +760,7 @@ def run_phase1_second_track(project: Path, rc_in: int) -> int:
     run, and a backend failure is never masked by the track passing."""
     print("[phase1] expert track (second track) ...")
     rc_track = _run_expert_track(project)
-    return _worst_rc(rc_in, rc_track)
+    return max(int(rc_in or 0), rc_track)
 
 
 # ── Top-level dispatcher ───────────────────────────────────────────
@@ -871,7 +839,7 @@ def main() -> int:
         reports = project / "reports"
         reports.mkdir(parents=True, exist_ok=True)
         verdict = (_aggregate_verdict([_pf]) if refused
-                   else _delegated_verdict(rc))
+                   else ("PASS" if rc == 0 else "FAIL"))
         summary = {
             "phase": 1,
             "mode": "docs",
@@ -893,10 +861,10 @@ def main() -> int:
         # A, the vendor-document front door) without a steps tree.
         summary["steps_view"] = _pl.emit_steps_view(
             project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
-        summary["step_0_5ic"] = _step_0_5ic_note(rc_route)
+        summary["step_0_5ic"] = "ran" if rc_route == 0 else "FAILED to run"
         (reports / "phase1_one_shot.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-        return _worst_rc(rc, rc_route)
+        return max(rc, rc_route)
 
     # Prompt mode: original phase1_engine path
     plan: List[StepResult] = []
@@ -930,7 +898,7 @@ def main() -> int:
         "steps": [asdict(s) for s in plan],
         "verdict": _aggregate_verdict(plan),
         "second_track": "not run — D1 was REFUSED" if _refused else "ran",
-        "step_0_5ic": _step_0_5ic_note(rc_route),
+        "step_0_5ic": "ran" if rc_route == 0 else "FAILED to run",
     }
     if _refused:
         summary["preflight_ledger"] = _spf.LEDGER_REL
@@ -947,8 +915,7 @@ def main() -> int:
     print(f"verdict: {summary['verdict']}")
     for s in plan:
         print(f"  {s.status:6} {s.name:24} {s.detail[:120]}")
-    return _worst_rc(0 if summary["verdict"] != "FAIL" else 1,
-                     rc_second, rc_route)
+    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second, rc_route)
 
 
 if __name__ == "__main__":

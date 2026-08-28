@@ -71,6 +71,15 @@ import argparse
 import json
 import re
 import subprocess
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import _watchdog as _wd            # noqa: E402  progress supervision
+
+#: How long the openroad transient solve may be COMPLETELY IDLE — no CPU, no
+#: I/O, no log growth — before it is called wedged. NOT a bound on how long a
+#: PSM solve over a large die may legitimately take.
+_IR_STALL_GRACE_S = 1800
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -580,28 +589,30 @@ def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
     cmd = (f"export PATH={_TOOLS}/openroad/bin:{_TOOLS}/bin:$PATH && "
            f"openroad -no_init -exit {tcl_path} 2>&1 | "
            f"tee {out_json.parent}/dynamic_ir.log")
+    argv = ["docker", "exec", container, "bash", "-lc", cmd]
     try:
-        proc = subprocess.run(
-            ["docker", "exec", container, "bash", "-lc", cmd],
-            capture_output=True, text=True, timeout=1800)
+        # PROGRESS, NOT RUNTIME. A transient PSM solve on a large die is exactly
+        # the honest long work a 1800 s cap murders, and relabelling that kill
+        # NOT_MEASURED — which this file briefly did — left the solve just as
+        # dead. The tee'd log is watched for growth alongside CPU and I/O, so a
+        # solver that is emitting anything at all runs to completion.
+        res = _wd.run_host_supervised(
+            argv, stall_grace_s=_IR_STALL_GRACE_S,
+            log_path=out_json.parent / "dynamic_ir.log")
+        if res.outcome in ("stalled", "ceiling"):
+            payload = {
+                "status": "ERROR_TOOL",
+                "dynamic_ir_report_emitted": False,
+                "reason": (f"the openroad transient run made no forward "
+                           f"progress — no CPU, no I/O, no log growth — for "
+                           f"{_IR_STALL_GRACE_S}s and was stopped after "
+                           f"{res.elapsed_s:.0f}s. openroad was WEDGED. That is "
+                           f"a measured fact about the tool, not a finding "
+                           f"about the design's IR drop.")}
+            out_json.write_text(json.dumps(payload, indent=2) + "\n")
+            return 1, payload
+        proc = _wd.completed_process(argv, res)
         log = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    except subprocess.TimeoutExpired as e:
-        # SEPARATED FROM THE TOOL-ERROR ARM, because "openroad run failed" is a
-        # sentence about the RUN and it is false here: openroad did not fail, it
-        # did not finish. The two were caught together, so a bound firing on a
-        # large die published the same status word as a missing binary and the
-        # same reason as a solver error, and the reader of this report had no
-        # way to separate "the analysis says something" from "there was no
-        # analysis". The payload is what survives — this program's caller in
-        # phase3 does not read the rc at all, only whether the file exists.
-        payload = {"status": "NOT_MEASURED",
-                   "dynamic_ir_report_emitted": False,
-                   "reason": (f"the openroad transient run did not finish "
-                              f"within its bound ({e}). NOT MEASURED: this is "
-                              f"a fact about this host, not a finding about "
-                              f"the design's IR drop.")}
-        out_json.write_text(json.dumps(payload, indent=2) + "\n")
-        return 2, payload
     except (FileNotFoundError, OSError) as e:
         payload = {"status": "ERROR_TOOL", "dynamic_ir_report_emitted": False,
                    "reason": f"openroad run failed: {e}"}

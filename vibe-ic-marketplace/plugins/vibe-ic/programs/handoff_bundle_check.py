@@ -171,6 +171,10 @@ import argparse
 import json
 import re
 import subprocess
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import _watchdog as _wd            # noqa: E402  progress supervision
 import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -328,26 +332,35 @@ def check_root_causes(man: dict) -> Tuple[bool, str, List[str]]:
 
 # ── (2) candidate patch applies clean ───────────────────────────────────────
 
+#: How long `git apply --check` may be COMPLETELY IDLE before it is called
+#: wedged. Not a runtime bound: a check that is reading objects is working, and
+#: on a large repository or a loaded host it may legitimately take longer than
+#: any constant somebody picks.
+_APPLY_STALL_GRACE_S = 60
+
+
 def _git_apply_check(repo_root: Path, patch: Path) -> Tuple[bool, str]:
+    argv = ["git", "-C", str(repo_root), "apply", "--check", str(patch)]
     try:
-        out = subprocess.run(
-            ["git", "-C", str(repo_root), "apply", "--check", str(patch)],
-            capture_output=True, text=True, timeout=60)
+        # PROGRESS, NOT RUNTIME. The first attempt at this fix relabelled the
+        # 60 s kill INCONCLUSIVE, which is the last-resort shape used as a first
+        # resort: the check was still killed while it was working, and the field
+        # agent whose bundle it rejected still lost the answer. The kill is the
+        # defect. `run_host_supervised` reads CPU and I/O from /proc, so a check
+        # that is doing anything runs to completion.
+        res = _wd.run_host_supervised(argv, stall_grace_s=_APPLY_STALL_GRACE_S)
     except FileNotFoundError:
         return False, "git not available to run `git apply --check`"
-    except subprocess.TimeoutExpired:
-        # THE SAME SHAPE `check_root_cause_verdict` ALREADY USES for a composed
-        # program that dies, and for the same reason. "does not apply" is a
-        # finding about the PATCH; a `git apply --check` that was killed made no
-        # finding about the patch at all. The old text spent the accusing
-        # sentence on a slow host, and the field agent whose bundle it rejected
-        # had no way to tell that from a patch that genuinely conflicts.
-        # Fail-closed is preserved — the item is NOT green and the bundle is
-        # NOT admitted — but it now says which of the two happened.
-        return False, ("INCONCLUSIVE — `git apply --check` did not finish "
-                       "within 60s. That is not a finding that the patch "
-                       "conflicts; the bundle is NOT admitted, but this item "
-                       "was never judged. Re-run it.")
+    if res.outcome in ("stalled", "ceiling"):
+        # A MEASURED finding, and about GIT rather than about the patch:
+        # fail-closed (the bundle is not admitted) with the reason named.
+        return False, (f"INCONCLUSIVE — `git apply --check` made no forward "
+                       f"progress (no CPU, no I/O) for "
+                       f"{_APPLY_STALL_GRACE_S}s and was stopped. git was "
+                       f"wedged; that is not a finding that the patch "
+                       f"conflicts. The bundle is NOT admitted, but this item "
+                       f"was never judged. Re-run it.")
+    out = _wd.completed_process(argv, res)
     if out.returncode == 0:
         return True, "applies clean"
     err = (out.stderr or out.stdout or "").strip().splitlines()

@@ -60,6 +60,10 @@ import argparse
 import json
 import re
 import subprocess
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import _watchdog as _wd            # noqa: E402  progress supervision
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,20 +85,26 @@ _BUG_PREFIX_RE = re.compile(
 #: really a slow or missing git. See `_resolve_repo_root`.
 _GIT_UNUSABLE_RC = 127
 
+#: How long git may be COMPLETELY IDLE before it is called wedged. Not a bound
+#: on how long a `git log` over a deep history may legitimately take.
+_GIT_STALL_GRACE_S = 30
+
 
 def _git(args: list[str], cwd: Path) -> tuple[int, str]:
     try:
-        r = subprocess.run(
-            ["git"] + args, cwd=cwd, capture_output=True, text=True,
-            timeout=30,
-        )
+        # PROGRESS, NOT RUNTIME — a `git log` over a large history is WORKING,
+        # and a 30 s cap on it kills the measurement rather than taking it. The
+        # number is now the grace: how long git may be entirely idle.
+        res = _wd.run_host_supervised(["git"] + args, cwd=str(cwd),
+                                      stall_grace_s=_GIT_STALL_GRACE_S)
     except FileNotFoundError as exc:
         return _GIT_UNUSABLE_RC, f"git is not on PATH ({exc})"
-    except subprocess.TimeoutExpired:
+    if res.outcome in ("stalled", "ceiling"):
         return _GIT_UNUSABLE_RC, (
-            f"`git {' '.join(args)}` did not finish within 30s — NOT "
-            f"MEASURED. Nothing was learned about this project.")
-    return r.returncode, r.stdout
+            f"`git {' '.join(args)}` made no forward progress (no CPU, no I/O) "
+            f"for {_GIT_STALL_GRACE_S}s and was stopped — git was wedged. "
+            f"Nothing was learned about this project.")
+    return res.rc, res.out
 
 
 def _resolve_repo_root(path: Path) -> tuple[Path | None, str]:

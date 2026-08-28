@@ -1,49 +1,44 @@
 #!/usr/bin/env python3
-"""test_a_phase1_timeout_is_undetermined_not_a_failing_verdict.py
+"""test_a_phase1_producer_is_bounded_by_progress_not_by_a_clock.py (kept at its
+original filename so the nodeids in the census do not move).
 
-THE DEFECT. `phase1_one_shot_runner` had TWO handlers that caught a subprocess
-timeout, printed the correct diagnosis at the scene —
+THE DEFECT. `phase1_one_shot_runner` dispatched its expert track and its two
+step-0.5ic producers under `subprocess.run(..., timeout=600)` and, when the
+bound fired, printed the right diagnosis —
 
     "a timeout is not a verdict, and an unevaluated track cannot pass"
-    "a timeout is not a verdict, and an undispatched producer cannot pass"
 
-— and then `return 1`. The prose and the exit code disagreed, and the exit code
-is the half every machine reads. Phase 1 published `verdict: FAIL` about a
-design whose expert track it had just killed mid-run: a wall clock decided that
-a chip was bad.
+— and returned a failure. The first attempt at this fixed the SENTENCE, moving
+the exit code to the repo's rc 2 UNDETERMINED. THAT WAS THE WRONG FIX AND IT IS
+RETRACTED: a timeout that returns NOT_MEASURED still kills a track that was one
+second from finishing. It stops lying about why and leaves the behaviour just as
+broken. Ending work because a clock expired does not make sense at any label.
 
-THE FIX is one line each — the repo's own rc 2 UNDETERMINED convention, already
-in use by `gatekeeper_review`, `_corpus_location` and the landing gate, which
-maps a review killed at its budget onto exactly this because "a review that
-could not decide must never reach the stamp as a review that decided nothing
-was wrong".
+THE KILL WAS THE DEFECT. These sites now run under `_watchdog.run_host_supervised`,
+which bounds NO PROGRESS and never runtime: CPU (`utime+stime`) and I/O
+(`read_bytes+write_bytes`) are read out of `/proc` across the whole process tree,
+and the captured output is watched for growth. Any signal moving resets the
+grace. So:
 
-BOTH DIRECTIONS ARE ASSERTED HERE, because a guard that stopped refusing is a
-deletion and not a fix:
+  * a producer that is WORKING runs to completion however long that takes, and a
+    fast host and a loaded host give the same answer about the same design;
+  * a producer whose entire tree is idle across the grace is STALLED — which is
+    a MEASURED finding about the producer, with evidence, and therefore a real
+    verdict rather than a shrug.
 
-  * REFUSES STILL — a track that never finished still stops Phase 1. rc is
-    non-zero, the verdict is not PASS, and nothing downstream can read the run
-    as clean. `test_a_killed_track_still_stops_phase1` and
-    `test_the_undetermined_rc_is_not_a_pass_anywhere_it_is_combined`.
-  * NO LONGER ACCUSES — the rc and the published verdict say "not measured",
-    not "failed". `test_a_killed_track_is_not_recorded_as_a_design_failure`.
+600 is now the STALL GRACE, not a runtime. It can only ever kill LESS than the
+old bound: every job the old bound let through, this lets through, plus every
+job that was still working at 600 s.
 
-AND THE LAUNDERING DIRECTION, which introducing a second non-zero rc creates:
-`max()` combined the component rcs, and `max(1, 2) == 2` would have turned a
-MEASURED Phase-1 failure into "could not decide" — a worse defect than the one
-being fixed, in the opposite direction.
-`test_a_measured_failure_is_never_laundered_into_undetermined` is that control.
-
-Every fixture is synthesised here from neutral parts. No design, PDK, vendor or
-IP-model identifier appears anywhere in this file.
+No design, PDK, vendor or IP-model identifier appears anywhere in this file.
 
 Run: python3 -m pytest programs/tests/test_a_phase1_timeout_is_undetermined_not_a_failing_verdict.py -q
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
+import time
 import unittest.mock as mock
 from pathlib import Path
 
@@ -54,17 +49,8 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_one_shot_runner as R              # noqa: E402
-import _path_layout as _pl                      # noqa: E402
+import _watchdog as W                           # noqa: E402
 
-
-# ── the constructed violation ───────────────────────────────────────────────
-#
-# A track program that never returns. `subprocess.run(..., timeout=600)` is
-# what the runner does with it, so rather than wait ten minutes for the real
-# bound we make the SAME exception the real bound raises. The subject under
-# test is the HANDLER, not the clock: what the runner does once it has been
-# told "this did not finish" is the entire question, and it is answered
-# identically however that fact arrived.
 
 def _project(tmp_path: Path, name: str = "proj") -> Path:
     p = tmp_path / name
@@ -73,212 +59,172 @@ def _project(tmp_path: Path, name: str = "proj") -> Path:
     return p
 
 
-def _a_track_that_never_finishes(tmp_path: Path) -> Path:
-    """A PROGRAMS_DIR whose expert track is a real, real-slow program."""
+def _programs_dir_running(tmp_path: Path, body: str) -> Path:
+    """A PROGRAMS_DIR whose expert track is a real program with `body`."""
     d = tmp_path / "programs"
     d.mkdir()
-    (d / R._EXPERT_TRACK).write_text(
-        "import time\nwhile True:\n    time.sleep(3600)\n")
+    (d / R._EXPERT_TRACK).write_text(body, encoding="utf-8")
     return d
 
 
-def _timing_out(*_a, **_kw):
-    raise subprocess.TimeoutExpired(cmd="the track", timeout=600)
+# ── direction 1: a slow-but-working producer is no longer killed ────────────
+
+def test_a_track_that_is_working_outlives_its_old_bound(tmp_path, monkeypatch):
+    """THE FIX, and the half the retracted version did not deliver.
+
+    The subject runs far past the grace it is given and is NEVER stopped,
+    because it is burning CPU and writing the whole time. Under
+    `subprocess.run(timeout=N)` — and equally under a version of that which
+    merely relabels the kill — it is dead at N with Phase 1 reporting a failure
+    about a design nothing examined.
+    """
+    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
+    p = _project(tmp_path)
+    report = R._pl.report_path(p, "phase1/expert_parse_track.json")
+    body = (
+        "import json, pathlib, sys, time\n"
+        "end = time.monotonic() + 3.0\n"
+        "x = 0\n"
+        "while time.monotonic() < end:\n"
+        "    x += 1\n"                       # CPU: the tree is progressing
+        "    if x % 200000 == 0:\n"
+        "        print('still working', flush=True)\n"   # and so is the output
+        f"p = pathlib.Path({str(report)!r})\n"
+        "p.parent.mkdir(parents=True, exist_ok=True)\n"
+        "p.write_text(json.dumps({'verdict': 'PASS', 'findings': []}))\n"
+        "sys.exit(0)\n")
+    started = time.monotonic()
+    with mock.patch.object(R, "PROGRAMS_DIR", _programs_dir_running(tmp_path, body)):
+        rc = R._run_expert_track(p)
+    took = time.monotonic() - started
+    assert rc == 0, "a track that finished cleanly was not credited"
+    # NON-VACUITY: it really did outlive the grace it was given, so this is not
+    # passing because the subject happened to be fast.
+    assert took > 2.0, (
+        f"the track finished in {took:.1f}s against a 1s grace — it never "
+        f"outlived the bound, so this proves nothing")
 
 
-# ── direction 1: it still refuses ───────────────────────────────────────────
+# ── direction 2: a genuinely wedged producer is still caught ───────────────
 
-def test_a_killed_track_still_stops_phase1(tmp_path):
-    """THE HALF THAT MUST NOT MOVE. An unevaluated second track is not a pass,
-    and this test is what stands between the fix and a deletion."""
+def test_a_track_that_is_doing_nothing_is_still_stopped(tmp_path, monkeypatch):
+    """THE HALF THAT MUST NOT MOVE. Idle and silent across the whole grace,
+    process still alive: STALLED, stopped, and Phase 1 still refuses. A guard
+    that stopped refusing would be a deletion, not a fix."""
+    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
+    p = _project(tmp_path)
+    body = "import time\ntime.sleep(600)\n"
+    started = time.monotonic()
+    with mock.patch.object(R, "PROGRAMS_DIR", _programs_dir_running(tmp_path, body)):
+        rc = R._run_expert_track(p)
+    took = time.monotonic() - started
+    assert rc != 0, "a wedged track reported a clean run"
+    assert took < 60, (
+        f"the wedged track took {took:.0f}s to be noticed — the watchdog is "
+        f"not sampling inside its own grace")
+
+
+def test_the_stall_is_reported_as_a_measurement_not_as_a_clock(
+        tmp_path, monkeypatch, capsys):
+    """A real verdict, with evidence. "timed out after 600s" is equally
+    reachable by a correct track on a busy host; "no CPU, no I/O and no output
+    across the grace" is not."""
+    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
     p = _project(tmp_path)
     with mock.patch.object(R, "PROGRAMS_DIR",
-                           _a_track_that_never_finishes(tmp_path)), \
-            mock.patch.object(R.subprocess, "run", _timing_out):
-        rc = R._run_expert_track(p)
-    assert rc != 0, (
-        "a track that never finished reported a clean run — the timeout stopped "
-        "refusing, which is a deletion of the guard and not a fix")
+                           _programs_dir_running(tmp_path, "import time\ntime.sleep(600)\n")):
+        R._run_expert_track(p)
+    err = capsys.readouterr().err
+    assert "STALLED" in err, err
+    assert "no forward progress" in err, err
+    assert "It was not slow; it was doing nothing." in err, err
+    assert "timed out" not in err, (
+        "the clock sentence is still being published as the reason")
 
 
-def test_a_killed_producer_still_stops_phase1(tmp_path):
-    """The same half for step 0.5ic's producers."""
+def test_the_step_0_5ic_producers_get_the_same_supervision(tmp_path, monkeypatch):
+    """The second site, asserted separately — the fix was applied twice and a
+    correct handler in an unreached branch is not a fix."""
+    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
     p = _project(tmp_path)
-    with mock.patch.object(R.subprocess, "run", _timing_out):
-        rc = R._run_step_0_5ic(p)
+    calls = []
+
+    def _stalled(argv, **kw):
+        calls.append(argv)
+        return W.SupervisedResult(
+            rc=W.RC_STALLED, out="", err="WATCHDOG_STALLED", outcome="stalled",
+            elapsed_s=1.0)
+
+    monkeypatch.setattr(R._wd, "run_host_supervised", _stalled)
+    rc = R._run_step_0_5ic(p)
     assert rc != 0, "an undispatched route producer reported a clean run"
+    assert calls, "the producer was never dispatched through the supervisor"
 
 
-def test_the_undetermined_rc_is_not_a_pass_anywhere_it_is_combined(tmp_path):
-    """Every site that folds a component rc into Phase 1's own must keep it
-    non-zero. A 2 that any combiner flattened to 0 would be the same green run
-    by a longer route."""
-    assert R._worst_rc(0, R.RC_UNDETERMINED) == R.RC_UNDETERMINED
-    assert R._worst_rc(R.RC_UNDETERMINED, 0) == R.RC_UNDETERMINED
-    assert R._worst_rc(R.RC_UNDETERMINED, R.RC_UNDETERMINED) != 0
-    assert R._worst_rc(0, 0) == 0, "and a clean run is still clean"
+# ── the shape of the change, asserted so it cannot quietly regress ──────────
 
+def test_no_runtime_bound_remains_at_either_dispatch_site():
+    """Both sites must be supervised, and neither may carry a `timeout=`.
 
-# ── direction 2: it no longer accuses ───────────────────────────────────────
-
-def test_a_killed_track_is_not_recorded_as_a_design_failure(tmp_path):
-    """THE FIX. The exit code now agrees with the sentence printed beside it."""
-    p = _project(tmp_path)
-    with mock.patch.object(R, "PROGRAMS_DIR",
-                           _a_track_that_never_finishes(tmp_path)), \
-            mock.patch.object(R.subprocess, "run", _timing_out):
-        rc = R._run_expert_track(p)
-    assert rc == R.RC_UNDETERMINED, (
-        f"rc {rc}: a track that was KILLED is being reported with the same "
-        f"code as a track that RAN and found the design wanting")
-
-
-def test_a_killed_producer_is_not_recorded_as_a_design_failure(tmp_path):
-    p = _project(tmp_path)
-    with mock.patch.object(R.subprocess, "run", _timing_out):
-        assert R._run_step_0_5ic(p) == R.RC_UNDETERMINED
-
-
-def test_the_published_verdict_has_a_word_for_not_measured(tmp_path):
-    """`reports/phase1_one_shot.json` is what a human and every downstream
-    reader see. "PASS if rc == 0 else FAIL" had no word for "the delegate was
-    killed", so it used the one that blames the design."""
-    assert R._delegated_verdict(0) == "PASS"
-    assert R._delegated_verdict(1) == "FAIL"
-    assert R._delegated_verdict(R.RC_UNDETERMINED) == R.VERDICT_UNDETERMINED
-    assert R._delegated_verdict(R.RC_UNDETERMINED) != "FAIL", (
-        "the published verdict still accuses the design of failing a check "
-        "that never ran")
-    # And the step-0.5ic summary line, same defect one field over.
-    assert R._step_0_5ic_note(0) == "ran"
-    assert R._step_0_5ic_note(1) == "FAILED to run"
-    assert "NOT MEASURED" in R._step_0_5ic_note(R.RC_UNDETERMINED)
-
-
-def test_a_track_that_actually_failed_is_still_a_failure(tmp_path):
-    """NON-VACUITY. The new code must not have turned every non-zero exit into
-    UNDETERMINED — a track that RAN and returned 3 examined the design and did
-    not complete, and that is a measured failure."""
-    p = _project(tmp_path)
-    d = tmp_path / "programs"
-    d.mkdir()
-    (d / R._EXPERT_TRACK).write_text(
-        "import sys; sys.stderr.write('boom\\n'); sys.exit(3)\n")
-    with mock.patch.object(R, "PROGRAMS_DIR", d):
-        assert R._run_expert_track(p) == 1
-
-
-# ── the laundering control ──────────────────────────────────────────────────
-
-def test_a_measured_failure_is_never_laundered_into_undetermined():
-    """THE DANGER THE SECOND RC INTRODUCES, and the reason `max()` had to go.
-
-    `max(1, 2) == 2`. Every combination site used `max`, so the first run with
-    both a REAL Phase-1 failure and a killed second track would have published
-    "could not decide" over the top of a measured red. That is the same defect
-    as the one being fixed, pointing the other way, and it is worse: it hides a
-    finding somebody actually made.
+    Read from source rather than behaviour because the failure mode being
+    guarded is a future edit putting one back — a `subprocess.run(timeout=N)`
+    added beside the supervisor would pass every behavioural test above while
+    reintroducing exactly the defect.
     """
-    assert R._worst_rc(1, R.RC_UNDETERMINED) == 1
-    assert R._worst_rc(R.RC_UNDETERMINED, 1) == 1
-    assert R._worst_rc(0, 1, R.RC_UNDETERMINED) == 1
-    # And the shape a plain `max` would have got right by accident, so the
-    # control is not satisfied by the old code either way.
-    assert max(1, R.RC_UNDETERMINED) == R.RC_UNDETERMINED, (
-        "if this ever stops being true the control above has lost its point")
+    import ast
+    src = Path(R.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    # AST, NOT grep. The first draft of this check searched the source text for
+    # `timeout=600` and matched the COMMENT above the grace constant, which
+    # quotes the call it replaced — a published selector matching its own
+    # published copy. The question is whether a CALL passes a runtime bound, and
+    # only the tree can answer it.
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = (f.attr if isinstance(f, ast.Attribute) else
+                getattr(f, "id", ""))
+        if name not in ("run", "check_output", "call", "Popen"):
+            continue
+        if any(k.arg == "timeout" for k in node.keywords):
+            offenders.append(getattr(node, "lineno", "?"))
+    assert offenders == [], (
+        f"a runtime bound is back on a subprocess call at line(s) {offenders} "
+        f"— the kill is the defect, and a bigger constant is the same defect "
+        f"restated")
+    assert src.count("run_host_supervised") >= 2, (
+        "one of the two dispatch sites is not supervised")
+    assert "_TRACK_STALL_GRACE_S" in src
 
 
-def test_worst_rc_is_total_over_codes_this_runner_does_not_emit_yet():
-    """An rc nobody planned for lands on the MEASURED-FAILURE side, never on 0.
-    A combiner that fell through to a green on an unrecognised code would be
-    the failure mode this whole file is about, one refactor later."""
-    assert R._worst_rc(0, 7) == 7
-    assert R._worst_rc(R.RC_UNDETERMINED, 7) == 7
-    assert R._worst_rc(None, 0) == 0
+def test_the_grace_can_only_kill_less_than_the_bound_it_replaced():
+    """The safety argument for reusing 600, stated as a test.
 
-
-# ── the pre-fix control ─────────────────────────────────────────────────────
-
-def test_this_file_would_have_failed_against_the_pre_fix_runner():
-    """THE CONTROL, written so the PRE-FIX tree can RUN it and answer wrongly.
-
-    `getattr` rather than a direct reference: against the old module
-    `RC_UNDETERMINED` and `_worst_rc` do not exist, and an AttributeError is a
-    test that observed nothing. The old runner HAD `max` at every combination
-    site and `return 1` in both handlers, so it answers this question — and the
-    answer is the defect.
+    A stall grace of N kills a strict subset of what a runtime bound of N kills:
+    both stop a job idle for N, and only the runtime bound stops a job that is
+    working at N. So no job that used to complete can start failing.
     """
-    rc_undetermined = getattr(R, "RC_UNDETERMINED", None)
-    combine = getattr(R, "_worst_rc", max)
-    assert rc_undetermined == 2, (
-        "the pre-fix runner has no rc for 'not measured' at all; every timeout "
-        "is spelled the same as a finding")
-    assert combine(1, 2) == 1, (
-        "this is `max`: the pre-fix combiner laundered a measured failure into "
-        "an inconclusive as soon as a second rc existed")
+    assert R._TRACK_STALL_GRACE_S == 600, (
+        "the grace moved; re-check that it is still >= the runtime bound it "
+        "replaced, or this argument no longer holds")
 
 
-# ── the hole the new word opened, and its closure ───────────────────────────
-#
-# THE NEAR-MISS THAT MADE THIS SECTION. Adding a third verdict word to Phase 1
-# was not free. `vibe_ic_one_shot_runner` halts the whole flow on
-# `verdict == "FAIL"` and aggregates with "FAIL else waivers else PASS" — so
-# the moment Phase 1 could say UNDETERMINED, a killed Phase-1 track stopped
-# halting the run AND aggregated to a clean overall PASS.
-#
-# That is strictly worse than the defect being fixed. The old code at least
-# stopped. This is the "a guard that stopped refusing is a deletion" case,
-# arriving through the fix rather than around it, and these are the tests that
-# would have caught it.
+# ── the retraction itself ──────────────────────────────────────────────────
 
-import vibe_ic_one_shot_runner as O                # noqa: E402
+def test_the_not_measured_relabel_is_gone(tmp_path):
+    """THE RETRACTION, pinned.
 
-
-def test_an_undetermined_phase_never_aggregates_to_a_pass():
-    """THE FALSE GREEN. `_aggregate` decides `overall`, and `overall` decides
-    this program's exit code and the word a human reads."""
-    assert O._aggregate([O.VERDICT_UNDETERMINED]) != "PASS"
-    assert O._aggregate(["PASS", O.VERDICT_UNDETERMINED]) != "PASS"
-    assert O._aggregate([O.VERDICT_UNDETERMINED]) == O.VERDICT_UNDETERMINED
-    # And it outranks the waiver tier — a phase nobody measured must not be
-    # summarised with a word from the passing family.
-    assert O._aggregate(["PASS_WITH_WAIVERS",
-                         O.VERDICT_UNDETERMINED]) == O.VERDICT_UNDETERMINED
-    # NON-VACUITY, both ends: a real failure still outranks it, and a genuinely
-    # clean run is still clean.
-    assert O._aggregate(["FAIL", O.VERDICT_UNDETERMINED]) == "FAIL"
-    assert O._aggregate(["PASS", "PASS"]) == "PASS"
-
-
-def test_an_undetermined_phase_still_halts_the_flow():
-    """The other half. Phase 2 must not run on a Phase 1 that was killed
-    mid-track — which is exactly what happened before, when the same condition
-    was spelled FAIL."""
-    assert O._is_halting(O.VERDICT_UNDETERMINED)
-    assert O._is_halting("FAIL")
-    assert not O._is_halting("PASS")
-    assert not O._is_halting("PASS_WITH_WAIVERS")
-
-
-def test_the_pre_fix_orchestrator_would_have_greened_the_killed_run():
-    """THE CONTROL, again written so the pre-fix tree can RUN it.
-
-    The old `_aggregate` was `FAIL -> waivers -> PASS` with no third arm, so an
-    UNDETERMINED verdict fell through the bottom and came out PASS. This
-    reconstructs that function EXACTLY and asserts it gives the wrong answer,
-    so the test states the defect rather than merely asserting the fix.
+    An earlier version of this fix converted the expiry to rc 2 UNDETERMINED and
+    left the 600 s kill in place. That is the last-resort shape, used as a first
+    resort, and it destroys work that was progressing while reporting honestly
+    that it did so. Nothing here may reintroduce it.
     """
-    def _pre_fix_aggregate(verdicts):
-        if any(v == "FAIL" for v in verdicts):
-            return "FAIL"
-        if any(v in ("PASS_WITH_WAIVERS", "WAIVED", "COVERAGE-INCOMPLETE")
-               for v in verdicts):
-            return "PASS_WITH_WAIVERS"
-        return "PASS"
-
-    assert _pre_fix_aggregate(["UNDETERMINED"]) == "PASS", (
-        "if this stops being true the control has lost its subject")
-    assert O._aggregate(["UNDETERMINED"]) != _pre_fix_aggregate(["UNDETERMINED"])
-    # and the pre-fix halt condition, which is the same shape
-    assert ("UNDETERMINED" == "FAIL") is False
-    assert O._is_halting("UNDETERMINED") is True
+    assert not hasattr(R, "RC_UNDETERMINED"), (
+        "the relabel machinery is back; the kill is the defect, not the label")
+    assert not hasattr(R, "_delegated_verdict")
+    src = Path(R.__file__).read_text(encoding="utf-8")
+    assert "NOT MEASURED" not in src, (
+        "a NOT_MEASURED verdict is being produced by a bound firing again")

@@ -29,6 +29,7 @@ Progress Display:
 """
 
 import argparse
+import importlib.util
 import glob
 import json
 import os
@@ -91,6 +92,62 @@ class PipelineResult:
 # Utility Functions
 # ============================================================================
 
+# ── progress supervision, borrowed from the plugin ──────────────────────────
+#
+# `subprocess.run(..., timeout=N)` ends work because a clock expired, which does
+# not make sense: the job may have been one second from finishing, and the same
+# input gets a different answer on a fast host than on a loaded one. The plugin
+# already owns the honest replacement — `programs/_watchdog.py`, which bounds NO
+# PROGRESS (CPU and I/O read from /proc across the whole tree, plus output
+# growth) and never runtime. It is LOADED rather than re-implemented, so there
+# is one supervisor in this repository and not two that can drift.
+def _load_watchdog():
+    for cand in (SCRIPT_DIR.parent / "vibe-ic-marketplace" / "plugins" /
+                 "vibe-ic" / "programs" / "_watchdog.py",
+                 SCRIPT_DIR.parent.parent / "vibe-ic-marketplace" / "plugins" /
+                 "vibe-ic" / "programs" / "_watchdog.py"):
+        if cand.is_file():
+            spec = importlib.util.spec_from_file_location("_vibeic_watchdog", cand)
+            mod = importlib.util.module_from_spec(spec)
+            # REGISTERED BEFORE exec: `_watchdog` defines a @dataclass, and
+            # dataclasses resolves `cls.__module__` through `sys.modules` while
+            # the class body is being processed. Without this the import dies
+            # with `'NoneType' object has no attribute '__dict__'` and the
+            # fallback below silently reinstates the runtime bound.
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+_WATCHDOG = _load_watchdog()
+
+
+class _StalledSynth(RuntimeError):
+    """yosys was alive and doing nothing at all across the grace."""
+
+
+def _supervised(argv, grace_s, stalled_exc, **kw):
+    """Run `argv` bounded by NO PROGRESS. Raises `stalled_exc` on a stall.
+
+    Falls back to the old runtime bound ONLY when the plugin's watchdog cannot
+    be located — a `tools/` script shipped away from the plugin. That fallback
+    is named here rather than left implicit, because it is the one path on which
+    a working job can still be killed.
+    """
+    if _WATCHDOG is None:
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=grace_s, **kw)
+        return proc
+    res = _WATCHDOG.run_host_supervised(argv, stall_grace_s=grace_s, **kw)
+    if res.outcome in ("stalled", "ceiling"):
+        raise stalled_exc(
+            f"no forward progress — no CPU, no I/O, no output from the whole "
+            f"process tree — for {grace_s}s; stopped after {res.elapsed_s:.0f}s. "
+            f"It was not slow; it was doing nothing.")
+    return _WATCHDOG.completed_process(argv, res)
+
+
 def _run_tool(tool_path: str, args: list, timeout: int = 120) -> Tuple[int, str, str]:
     """Run a Python tool and capture output."""
     cmd = [sys.executable, str(tool_path)] + args
@@ -137,9 +194,13 @@ def _count_sva(filepath: str) -> int:
 
 
 #: Marker shared by `_run_yosys_synth` and its one caller, so the producer and
-#: the reader of "this did not finish" cannot drift apart into a synthesis that
-#: is reported as failed at one end and not-measured at the other.
-_SYNTH_NOT_MEASURED = "SYNTH_NOT_MEASURED"
+#: the reader of "yosys was wedged" cannot drift apart.
+_SYNTH_NOT_MEASURED = "SYNTH_STALLED"
+
+#: How long yosys may be COMPLETELY IDLE before it is called wedged. NOT a bound
+#: on how long a synthesis may legitimately take: a large netlist is exactly the
+#: honest long work a runtime cap destroys.
+_SYNTH_STALL_GRACE_S = 120
 
 
 def _run_yosys_synth(rtl_path: str, ic_dir: str) -> Tuple[bool, Optional[int], str]:
@@ -158,10 +219,8 @@ def _run_yosys_synth(rtl_path: str, ic_dir: str) -> Tuple[bool, Optional[int], s
         f.write(f"stat\n")
 
     try:
-        proc = subprocess.run(
-            ['yosys', '-s', synth_script],
-            capture_output=True, text=True, timeout=120
-        )
+        proc = _supervised(['yosys', '-s', synth_script],
+                           _SYNTH_STALL_GRACE_S, _StalledSynth)
         log = proc.stdout + proc.stderr
 
         # Save log
@@ -179,17 +238,13 @@ def _run_yosys_synth(rtl_path: str, ic_dir: str) -> Tuple[bool, Optional[int], s
 
     except FileNotFoundError:
         return False, 0, "Yosys not found in PATH"
-    except subprocess.TimeoutExpired:
-        # NOT "Synthesis failed". This file ALREADY distinguishes "could not
-        # run" from "ran and failed" one branch down, for the yosys-not-found
-        # case; a synthesis that was KILLED belongs on that same side. The old
-        # text sent it to the other one, where the pipeline recorded
-        # `Synthesis failed` and a cell count of 0 — and 0 cells is a
-        # MEASUREMENT, published about a design nothing ever measured.
-        return False, None, _SYNTH_NOT_MEASURED + (
-            ": the yosys run did not finish inside its bound. That is a fact "
-            "about this host, not about the RTL — re-run it before reading "
-            "anything into it.")
+    except _StalledSynth as exc:
+        # A MEASURED statement about yosys, reached only when its whole process
+        # tree was idle across the grace. The first attempt at this fix kept the
+        # runtime kill and merely relabelled it, which left a working synthesis
+        # just as dead. Still NOT "Synthesis failed" and still no cell count:
+        # 0 cells is a MEASUREMENT, and none was taken.
+        return False, None, _SYNTH_NOT_MEASURED + f": {exc}"
 
 
 # ============================================================================
@@ -414,10 +469,11 @@ def run_phase2(ic_dir: str, ic_name: str, auto: bool = False) -> PhaseResult:
     if not synth_success:
         # Check if it's a Yosys-not-found issue vs actual synthesis error
         if synth_log.startswith(_SYNTH_NOT_MEASURED):
-            metrics['synth_note'] = 'synthesis NOT MEASURED (run did not finish)'
+            metrics['synth_note'] = 'yosys was WEDGED (no forward progress)'
             errors.append(
-                'Yosys synthesis did not finish -- NOT MEASURED, not a '
-                'synthesis failure; nothing here is a finding about the RTL')
+                'Yosys made no forward progress and was stopped -- a measured '
+                'fact about the tool, not a synthesis failure; nothing here is '
+                'a finding about the RTL')
         elif 'not found' in synth_log.lower():
             metrics['synth_note'] = 'Yosys not installed'
             errors.append('Yosys not found -- synthesis skipped')
