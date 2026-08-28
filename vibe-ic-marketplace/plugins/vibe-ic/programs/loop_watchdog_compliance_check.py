@@ -38,6 +38,19 @@ OFFENSE CLASSES
     and is NEVER flagged (the spec: "a bounded for over a fixed list stays a
     plain loop"); any long sub-process inside it is judged by class (a).
 
+    A MONOTONIC-DEADLINE BOUND IS A BOUND (v1.12.25). ``loop_guard`` is not the
+    only way to stop a loop spinning forever: a loop whose exit is governed by a
+    monotonic clock compared against a deadline computed BEFORE it terminates by
+    the wall clock and is not class (b). Both idioms are read —
+    ``deadline = time.monotonic() + wait`` then ``while monotonic() < deadline``
+    or ``if monotonic() >= deadline: break/return`` — and so is
+    ``t0 = time.monotonic()`` with ``monotonic() - t0`` compared later. The
+    recognition is STRUCTURAL: no identifier spelling is matched, only the role
+    each expression plays, so it neither can be earned by naming a variable
+    ``deadline`` nor lost by renaming it. See `_deadline_bounded`. A clock that
+    can jump (``time.time``, ``datetime.now``) does NOT bound a loop and is not
+    accepted. Anything still inside such a loop is judged by class (a) as usual.
+
 (c) An OPAQUE SHELL-RUNNER that the gate cannot AST-inspect (v1.3.53 — SURFACES
     the v1.3.48 documented boundary instead of missing it silently):
       * a ``subprocess.{run,Popen,call,check_output,check_call}`` (or a
@@ -68,6 +81,8 @@ every loop):
   * ``argv[0]`` that is a benign short host command (docker, which, git, cat,
     ls, ps, pkill, rm, mkdir, python, …) — never a long generator.
   * a ``for`` loop over a finite iterable (bounded by construction).
+  * a loop bounded by a MONOTONIC DEADLINE computed before it (class (b) above)
+    — bounded by construction too, just by the clock instead of a count.
   * an inline ``# watchdog-exempt: <reason>`` annotation on the offending
     statement (anywhere in its source span, or the line immediately above).
     The reason after the colon must be non-empty — a bare tag does not exempt.
@@ -114,6 +129,16 @@ BENIGN_ARGV0 = frozenset({
 # itertools iterators with no natural bound.
 INFINITE_ITERS = frozenset({"count", "cycle", "repeat"})
 EXEMPT_TAG = "# watchdog-exempt:"
+
+# v1.12.25 — the MONOTONIC-DEADLINE bound (see offense class (b)). These are the
+# stdlib clocks that cannot run backwards, so a comparison against a reading
+# taken before the loop is a real wall-clock bound. This is the ONE lexicon the
+# structural probe needs: a deadline VARIABLE can be spelled any way at all and
+# is matched by shape, but the clock is an API, and a loop compared against a
+# clock that can jump (``time.time``, ``datetime.now``) is not bounded by it.
+MONOTONIC_CLOCKS = frozenset({
+    "monotonic", "monotonic_ns", "perf_counter", "perf_counter_ns",
+})
 
 # v1.3.53 — OFFENSE CLASS (c): opaque shell-runners. `bash`/`sh` as argv[0]
 # is a BENIGN short launcher, but `bash <script>.sh` runs an OPAQUE script the
@@ -503,6 +528,192 @@ def _for_iter_is_infinite(node: ast.For) -> bool:
     return False
 
 
+# ── the MONOTONIC-DEADLINE bound (v1.12.25) ────────────────────────────────
+#
+# WHY THIS EXISTS. Class (b) asks one question: can this loop spin forever? It
+# answered it with a SHAPE — "a while that sleeps and is not a loop_guard
+# for-loop" — and `loop_guard` was the only bound it could see. A loop whose
+# exit is governed by a monotonic clock compared against a deadline computed
+# before it CANNOT spin forever; flagging it says "unbounded" about a bounded
+# loop, which is a false statement, and the campaign that converts helpers to
+# that idiom would earn a fresh false positive on every conversion.
+#
+# MEASURED (2026-08-28): `gate_host_independence_check.py::_CheckoutClaim.
+# __enter__` is a non-blocking flock acquire — `deadline = time.monotonic() +
+# self.wait_s`, then `if time.monotonic() >= deadline: return` with `held=False`
+# and a reason. It reddened four tests. It is bounded, and the gate carried no
+# occurrence of `monotonic` or `deadline` anywhere: it structurally could not
+# see the bound it was asserting about.
+#
+# THE PROBE IS STRUCTURAL, NOT NAME-BASED. Nothing here matches an identifier
+# spelling: `deadline`, `wait_s`, `t0` and every other name are matched by their
+# ROLE in the AST, so renaming a variable neither creates nor destroys the bound
+# (a ruler anyone can defeat by renaming is not a ruler). The single lexicon is
+# `MONOTONIC_CLOCKS`, the stdlib clock API itself — which is the thing that
+# makes the bound real, and which an alias (`_now = time.monotonic`) is followed
+# through.
+#
+# KNOWN RESIDUAL BOUNDARY (stated, not silent): the pre-loop reading must be
+# assigned in the SAME scope as the loop. A deadline computed in `__init__` and
+# reached as `self._deadline` from a method is not seen, and that loop is still
+# flagged — a false positive the author annotates, never a false negative.
+
+
+def _monotonic_aliases(scope: ast.AST) -> set:
+    """Names bound to a monotonic clock FUNCTION OBJECT (`_now = time.monotonic`).
+
+    Without this, moving the clock behind a local alias would hide the bound —
+    the same extract-a-name blindness that has bitten static rules here before.
+    """
+    out: set = set()
+    for n in ast.walk(scope):
+        if not isinstance(n, ast.Assign) or len(n.targets) != 1:
+            continue
+        t, v = n.targets[0], n.value
+        if not isinstance(t, ast.Name):
+            continue
+        nm = (v.attr if isinstance(v, ast.Attribute)
+              else v.id if isinstance(v, ast.Name) else None)
+        if nm in MONOTONIC_CLOCKS:
+            out.add(t.id)
+    return out
+
+
+def _is_monotonic_call(node: ast.AST, aliases: set) -> bool:
+    """A CALL that reads a monotonic clock: `time.monotonic()`, `monotonic()`
+    (from-import), or an alias bound to one."""
+    if not isinstance(node, ast.Call):
+        return False
+    f = node.func
+    if isinstance(f, ast.Attribute):
+        return f.attr in MONOTONIC_CLOCKS
+    if isinstance(f, ast.Name):
+        return f.id in MONOTONIC_CLOCKS or f.id in aliases
+    return False
+
+
+def _reads_monotonic(node: ast.AST, aliases: set) -> bool:
+    return any(_is_monotonic_call(n, aliases) for n in ast.walk(node))
+
+
+def _target_paths(node: ast.AST) -> List[str]:
+    """The assignable paths a target names: `d`, `self._d`, `a, b = ...`."""
+    out: List[str] = []
+    if isinstance(node, ast.Name):
+        out.append(node.id)
+    elif isinstance(node, ast.Attribute):
+        try:
+            out.append(ast.unparse(node))
+        except Exception:                        # noqa: BLE001 — best effort
+            pass
+    elif isinstance(node, (ast.Tuple, ast.List)):
+        for e in node.elts:
+            out.extend(_target_paths(e))
+    return out
+
+
+def _predeadline_paths(scope: ast.AST, before_line: int, aliases: set) -> set:
+    """Paths assigned from a monotonic READING strictly before the loop.
+
+    Both idioms are the same structure and both land here:
+      * `deadline = time.monotonic() + wait`   (an absolute instant)
+      * `t0 = time.monotonic()`                (an origin, subtracted later)
+    """
+    out: set = set()
+    for n in ast.walk(scope):
+        if isinstance(n, ast.Assign):
+            targets, value = n.targets, n.value
+        elif isinstance(n, (ast.AnnAssign, ast.AugAssign)) and n.value is not None:
+            targets, value = [n.target], n.value
+        else:
+            continue
+        if (n.end_lineno or n.lineno) >= before_line:
+            continue
+        if not _reads_monotonic(value, aliases):
+            continue
+        for t in targets:
+            out.update(_target_paths(t))
+    return out
+
+
+def _expr_paths(node: ast.AST) -> set:
+    """Every Name / attribute path appearing in an expression."""
+    out: set = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name):
+            out.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            try:
+                out.add(ast.unparse(n))
+            except Exception:                    # noqa: BLE001 — best effort
+                pass
+    return out
+
+
+def _branch_exits(stmts: List[ast.stmt]) -> bool:
+    """Does taking this branch LEAVE the loop? `return`/`raise` always do; a
+    `break` does unless it belongs to a loop nested inside the branch."""
+    stack = list(stmts)
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.Return, ast.Raise)):
+            return True
+        if isinstance(n, ast.Break):
+            return True
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                          ast.ClassDef, ast.For, ast.AsyncFor, ast.While)):
+            # a `break`/`return` in here is not this loop's exit
+            continue
+        stack.extend(ast.iter_child_nodes(n))    # type: ignore[arg-type]
+    return False
+
+
+def _governing_compares(loop: ast.AST):
+    """Comparisons whose truth decides whether this loop keeps going.
+
+    Two shapes, and only two, because only these two END the loop:
+      (i)  the `while` test itself — `while monotonic() < deadline:`
+      (ii) an `if` inside the body whose taken branch exits the loop —
+           `if monotonic() >= deadline: return` / `... : break`
+    An `if` that only `continue`s is NOT an exit and is not read as one.
+    """
+    if isinstance(loop, ast.While):
+        for n in ast.walk(loop.test):
+            if isinstance(n, ast.Compare):
+                yield n
+    stack = list(loop.body)
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                          ast.ClassDef)):
+            continue
+        if isinstance(n, ast.If):
+            if _branch_exits(n.body) or _branch_exits(n.orelse):
+                for c in ast.walk(n.test):
+                    if isinstance(c, ast.Compare):
+                        yield c
+        stack.extend(ast.iter_child_nodes(n))    # type: ignore[arg-type]
+
+
+def _deadline_bounded(loop: ast.AST, scope: Optional[ast.AST]) -> bool:
+    """The loop's exit is governed by a monotonic clock compared against a
+    deadline computed before it — however the identifiers are spelled."""
+    if scope is None:
+        return False
+    aliases = _monotonic_aliases(scope)
+    pre = _predeadline_paths(scope, loop.lineno, aliases)
+    if not pre:
+        return False
+    for cmp_node in _governing_compares(loop):
+        operands = [cmp_node.left] + list(cmp_node.comparators)
+        fresh = any(_reads_monotonic(o, aliases) for o in operands)
+        if not fresh:
+            continue
+        if any(_expr_paths(o) & pre for o in operands):
+            return True
+    return False
+
+
 # ── the file scanner ───────────────────────────────────────────────────────
 def scan_file(path: Path) -> List[Offense]:
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -619,7 +830,8 @@ def scan_file(path: Path) -> List[Offense]:
         # ── class (b): loops ─────────────────────────────────────────────
         elif isinstance(node, ast.While):
             subp, sleep = _loop_body_signals(node)
-            if (subp or sleep) and not _annotated(lines, node):
+            if (subp or sleep) and not _annotated(lines, node) \
+                    and not _deadline_bounded(node, enclosing(node.lineno)):
                 why = ("launches a sub-process" if subp
                        else "sleeps (poll)")
                 offenses.append(Offense(
@@ -637,7 +849,8 @@ def scan_file(path: Path) -> List[Offense]:
                 continue
             if _for_iter_is_infinite(node):
                 subp, sleep = _loop_body_signals(node)
-                if (subp or sleep) and not _annotated(lines, node):
+                if (subp or sleep) and not _annotated(lines, node) \
+                        and not _deadline_bounded(node, fn):
                     offenses.append(Offense(
                         path.name, node.lineno, "for",
                         "for-loop over an INFINITE iterator with a "
