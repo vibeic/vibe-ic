@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -28,6 +29,56 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 LANDER = ROOT / "tools" / "gatekeeper-land.sh"
+
+sys.path.insert(
+    0, str(ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"))
+import _watchdog                                              # noqa: E402
+
+#: How long a driver may be COMPLETELY IDLE before it is called hung.
+#:
+#: This replaces the `subprocess.run(..., timeout=60)` the three drivers below
+#: carried. Their comment already conceded what the number was -- "this is a
+#: backstop and not a runtime" -- but `subprocess.run` cannot express that
+#: distinction: it counts ELAPSED seconds, so a bash driver that was working
+#: and merely slow (a loaded host, 32 lanes on the box) raised
+#: `TimeoutExpired`, and pytest recorded that as a RED test about the LANDER.
+#: It is not one. Nothing about `run_gatekeeper_review` is established by a
+#: driver the clock ran out on.
+#:
+#: `stall_grace_s` is the tolerance for SILENCE, not for duration: the whole
+#: process tree -- output bytes, CPU seconds, I/O bytes -- must be flat across
+#: the window before the kill fires. A driver that is genuinely working runs to
+#: completion however long that legitimately takes; one that has stopped moving
+#: is still stopped, so the hang these drivers can produce is still caught.
+#:
+#: 60 remains `ci_harness_timeout_ceiling_check.inner_timeout_ceiling` for this
+#: tree, and the number is kept so no bound in this file rose. The stubs here
+#: are killed by the script's own `GK_REVIEW_BUDGET_S`, which is the budget
+#: under test and is untouched.
+_STALL_GRACE_S = 60
+
+
+def _bash(script: Path) -> subprocess.CompletedProcess:
+    """Run a driver script under progress-stall supervision.
+
+    A stall is raised rather than returned: a driver that never finished has no
+    `RC=` line, and letting the caller parse one out of a truncated stdout
+    would invent a verdict. The raised message says the run made NO PROGRESS,
+    which is a statement about the driver -- never that the lander was slow.
+    """
+    # stdout and stderr stay SEPARATE, as `subprocess.run` left them: two
+    # callers below read only `.stdout` and merging would change what they
+    # parse, which a supervision change has no business doing.
+    res = _watchdog.run_host_supervised(
+        ["bash", str(script)], stall_grace_s=_STALL_GRACE_S)
+    if res.outcome in ("stalled", "ceiling"):
+        raise AssertionError(
+            f"the driver made NO forward progress for {_STALL_GRACE_S}s -- "
+            f"nothing in its process tree (output, CPU or I/O) advanced, so it "
+            f"was stopped as hung. This is NOT a statement that the lander is "
+            f"slow, and no verdict about `run_gatekeeper_review` was reached."
+            f"\n{(res.out + res.err)[-2000:]}")
+    return _watchdog.completed_process(["bash", str(script)], res)
 
 
 def _extract(name: str) -> str:
@@ -56,12 +107,7 @@ def _drive(tmp_path, stub_body: str, budget: str = "240"):
         + _extract("run_gatekeeper_review")
         + 'run_gatekeeper_review; echo "RC=$?"\n',
         encoding="utf-8")
-    # 60 s is `ci_harness_timeout_ceiling_check.inner_timeout_ceiling`, which
-    # polices `tools/test_*.py`: a bound above it can hide a hang rather than
-    # report one. The longest stub here is killed by the script's own 1 s
-    # budget, so this is a backstop and not a runtime.
-    r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _bash(script)
     rc = int(re.search(r"RC=(-?\d+)", r.stdout).group(1))
     return rc, r.stdout
 
@@ -205,12 +251,7 @@ def _drive_through_run(tmp_path, stub_body: str, budget: str = "240"):
           'run_gatekeeper_review\n'
           'echo "FAILED=$FAILED"\n',
         encoding="utf-8")
-    # 60 s is `ci_harness_timeout_ceiling_check.inner_timeout_ceiling`, which
-    # polices `tools/test_*.py`: a bound above it can hide a hang rather than
-    # report one. The longest stub here is killed by the script's own 1 s
-    # budget, so this is a backstop and not a runtime.
-    r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _bash(script)
     failed = re.search(r"FAILED=(\d+)", r.stdout)
     return (int(failed.group(1)) if failed else None), r.stdout + r.stderr
 
@@ -302,8 +343,7 @@ def _review_argv(tmp_path, range_n=None):
         + _extract("run_gatekeeper_review")
         + 'run_gatekeeper_review; echo "RC=$?"\n',
         encoding="utf-8")
-    r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
-                       timeout=60)
+    r = _bash(script)
     m = re.search(r"RC=(-?\d+)", r.stdout)
     rc = int(m.group(1)) if m else None
     argv = (argv_file.read_text(encoding="utf-8").splitlines()

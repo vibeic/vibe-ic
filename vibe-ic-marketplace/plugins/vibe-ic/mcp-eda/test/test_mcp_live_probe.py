@@ -52,6 +52,40 @@ from typing import Any, Dict, List, Optional
 _HERE = Path(__file__).resolve().parent
 _SERVER = _HERE.parent / "src" / "index.js"
 
+# ── THE DEFECT THIS SECTION REMOVES ─────────────────────────────────────────
+#
+# HOST-SIDE, not in-container: the server is a `node` child of THIS process,
+# spoken to over stdio. There is no docker in this file.
+#
+# `recv` used to be `select.select([stdout], [], [], 10.0)` and returned None on
+# expiry. Every caller reads that None as a FAILING STEP —
+# `p.record("initialize", "FAIL", {"error": "no init response"})`,
+# `p.record("tools/list", "FAIL", …)` — and `_summarize` turns a FAIL into
+# exit 1, which this module's docstring publishes as "server misbehaviour".
+#
+# So a server that was merely SLOW to answer — a cold node start, a loaded box,
+# a `resources/read` reaching real hardware over USBTMC — was recorded as a
+# server that MISBEHAVED. Ten seconds is not a property of the server; it is a
+# property of the machine the probe happened to run on.
+#
+# The replacement waits on FORWARD PROGRESS instead. The server's own process
+# tree (CPU seconds and I/O bytes, via the plugin's `_watchdog.host_tree_progress`)
+# is sampled between looks, and the wait is extended for as long as the tree is
+# ADVANCING. A server that is working is waited on however long it legitimately
+# takes; one whose tree is completely FLAT across the grace has stopped, and
+# THAT is a real finding about the server — which is the only thing the FAIL
+# steps below are now ever recorded from.
+sys.path.insert(0, str(_HERE.parents[1] / "programs"))
+import _watchdog                                              # noqa: E402
+
+#: Tolerance for a COMPLETELY FLAT server tree. Not a response-time budget.
+_STALL_GRACE_S = 10.0
+
+#: How often the wait looks. Four looks per grace: the loop cannot notice a
+#: stall sooner than it looks, and sampling more often never abandons a working
+#: server sooner. N is how many times we LOOKED, not how long we waited.
+_POLL_S = _STALL_GRACE_S / 4.0
+
 
 class MCPProbe:
     def __init__(self, server_path: Path):
@@ -76,6 +110,11 @@ class MCPProbe:
         except Exception:
             pass
         try:
+            # NOT A VERDICT, and deliberately left an elapsed bound. This is
+            # teardown after stdin was closed: the expiry escalates a polite
+            # exit to `kill()` and nothing is recorded either way. No step is
+            # scored from it and no exit code depends on it, so there is no
+            # verdict here for a clock to decide.
             self.proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             self.proc.kill()
@@ -85,11 +124,36 @@ class MCPProbe:
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
 
-    def recv(self, timeout: float = 10.0) -> Optional[Dict[str, Any]]:
+    def recv(self, grace: float = _STALL_GRACE_S) -> Optional[Dict[str, Any]]:
+        """Wait for one response for as long as the server is still WORKING.
+
+        Returns None only when the server's whole process tree went flat — no
+        CPU, no I/O — for `grace`, or when it closed its stdout. Both are
+        statements about the server. Being slow is not one of them: every look
+        that finds the tree advancing extends the wait, so there is no duration
+        at which an honest server is abandoned.
+        """
         assert self.proc and self.proc.stdout
-        r, _, _ = select.select([self.proc.stdout], [], [], timeout)
-        if not r:
-            return None
+        meter = _watchdog.ProgressMeter(
+            cpu_fn=lambda: _watchdog.host_tree_progress(self.proc.pid))
+        last = meter.sample()
+        idle = 0.0
+        while True:
+            r, _, _ = select.select([self.proc.stdout], [], [], _POLL_S)
+            if r:
+                break
+            if self.proc.poll() is not None:
+                return None            # the server exited; nothing is coming
+            token = meter.sample()
+            # `ProgressMeter` carries an unavailable reading forward, so a
+            # momentarily unreadable /proc can never look like progress and a
+            # process exiting can never look like a reset.
+            if token > last:
+                last, idle = token, 0.0
+            else:
+                idle += _POLL_S
+            if idle >= grace:
+                return None            # flat for the whole grace: it is stuck
         line = self.proc.stdout.readline()
         if not line:
             return None
@@ -99,12 +163,12 @@ class MCPProbe:
             return {"_parse_error": str(e), "_raw": line[:500]}
 
     def request(self, method: str, params: Optional[Dict[str, Any]] = None,
-                timeout: float = 10.0) -> Optional[Dict[str, Any]]:
+                grace: float = _STALL_GRACE_S) -> Optional[Dict[str, Any]]:
         mid = self._next_id
         self._next_id += 1
         self.send({"jsonrpc": "2.0", "id": mid, "method": method,
                    "params": params or {}})
-        return self.recv(timeout=timeout)
+        return self.recv(grace=grace)
 
     def notify(self, method: str, params: Optional[Dict[str, Any]] = None) -> None:
         self.send({"jsonrpc": "2.0", "method": method, "params": params or {}})
@@ -171,7 +235,10 @@ def check_resource_read(p: MCPProbe, uri: str, live: bool) -> None:
     if not live:
         p.record("resources/read", "SKIP", {"reason": "--no-live"})
         return
-    resp = p.request("resources/read", {"uri": uri}, timeout=30)
+    # A longer SILENCE tolerance, not a longer deadline: this one can reach real
+    # hardware over USBTMC, which is quiet for longer stretches than the pure
+    # in-process calls above.
+    resp = p.request("resources/read", {"uri": uri}, grace=30.0)
     if not resp or "result" not in resp:
         p.record("resources/read", "FAIL", {"uri": uri, "resp": resp})
         return

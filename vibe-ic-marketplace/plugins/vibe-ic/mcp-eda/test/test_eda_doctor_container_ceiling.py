@@ -18,6 +18,7 @@ the tool is a shape, not a behaviour.
 import json
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -25,6 +26,22 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 INDEX_JS = HERE.parent / "src" / "index.js"
+
+# THIS FILE'S ONE LAUNCH IS ON THE HOST, NOT IN THE CONTAINER. `_run` below
+# execs `node -e` over a STUB `_spawnSync` — no docker is involved at all, so
+# there is no container-level kill here to confuse with an in-tool one; the only
+# thing that could stop the child was the `timeout=60` this replaces.
+sys.path.insert(0, str(HERE.parents[1] / "programs"))
+import _watchdog                                              # noqa: E402
+
+#: How long the node child may be COMPLETELY FLAT — no output, no CPU, no I/O
+#: anywhere in its tree — before it is called hung. NOT a runtime budget. The
+#: helper under test is a pure function over a stubbed spawn and returns in
+#: milliseconds; what the old `timeout=60` actually bounded was the HOST, and on
+#: a loaded one it raised `TimeoutExpired`, which pytest recorded as this file
+#: FAILING — an assertion about `_containerMemoryCeiling` that no measurement
+#: supported.
+_STALL_GRACE_S = 60
 
 GIB = 1024 * 1024 * 1024
 
@@ -50,8 +67,13 @@ def _run(stdout: str, status: int = 0) -> dict:
         {_helper_source()}
         console.log(JSON.stringify(_containerMemoryCeiling()));
     """)
-    run = subprocess.run([node, "-e", script], capture_output=True, text=True,
-                         timeout=60)
+    argv = [node, "-e", script]
+    res = _watchdog.run_host_supervised(argv, stall_grace_s=_STALL_GRACE_S)
+    assert res.outcome not in ("stalled", "ceiling"), (
+        f"the node child made NO forward progress for {_STALL_GRACE_S}s — "
+        f"nothing in its process tree advanced, so it was stopped as hung. "
+        f"Nothing about the ceiling helper was measured.\n{res.out}{res.err}")
+    run = _watchdog.completed_process(argv, res)
     assert run.returncode == 0, run.stdout + run.stderr
     return json.loads(run.stdout.strip().splitlines()[-1])
 

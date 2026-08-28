@@ -30,6 +30,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -42,6 +43,46 @@ SRC = INDEX_JS.read_text()
 _NODE = shutil.which("node")
 _DOCKER = shutil.which("docker")
 _CONTAINER = "vibeic-eda"
+
+# ── TWO KINDS OF TIMEOUT LIVE IN THIS FILE, AND ONLY ONE OF THEM IS A DEFECT ─
+#
+# IN-CONTAINER (`timeout -k 5 3 …` inside `docker exec`, and the `timeout=4`
+# client-kill arm) is THE SUBJECT UNDER TEST. This whole file exists to prove
+# that the kill happens inside the container rather than on the client, so those
+# bounds MUST fire; they are untouched, and a test that proves a bound fires
+# needs a bound to fire.
+#
+# HOST-SIDE (`subprocess.run(..., timeout=N)` on the python side, wrapping the
+# node harness and the `docker ps` / `docker exec` probes) is the defect. It
+# bounds ELAPSED seconds on this box, so on a loaded host it raised
+# `TimeoutExpired`, and pytest recorded that as this file FAILING — an assertion
+# about where the container kills its tools, decided by how busy the machine
+# was. Those are the five sites moved to progress supervision below; each is
+# marked HOST-SIDE at its call.
+sys.path.insert(0, str(MCP_ROOT.parent / "programs"))
+import _watchdog                                              # noqa: E402
+
+#: Host-side tolerance for a process tree that is COMPLETELY FLAT — no output,
+#: no CPU, no I/O. Never a runtime budget: a `docker exec` that is still moving
+#: bytes runs to completion however long it legitimately takes.
+_HOST_STALL_GRACE_S = 30
+
+
+def _host_run(argv, *, grace: int = _HOST_STALL_GRACE_S, text: bool = True):
+    """HOST-SIDE launch under progress-stall supervision.
+
+    Returns a `CompletedProcess`. A stall raises, because a probe that never
+    answered has no answer to hand back and a caller parsing its empty stdout
+    would read "0 processes alive" out of a run that counted nothing.
+    """
+    res = _watchdog.run_host_supervised(argv, stall_grace_s=float(grace))
+    if res.outcome in ("stalled", "ceiling"):
+        raise AssertionError(
+            f"a host-side probe made NO forward progress for {grace}s — nothing "
+            f"in its process tree advanced, so it was stopped as hung. This is "
+            f"NOT a statement about the container's own timeout, and nothing "
+            f"this file asserts was measured.\n{res.out}{res.err}")
+    return _watchdog.completed_process(argv, res)
 
 
 def _slice_function(name: str) -> str:
@@ -100,9 +141,9 @@ def _drive(tmp_path, **scenario):
     scenario.setdefault("status", 0)
     script = tmp_path / "drive.mjs"
     script.write_text(_HARNESS.replace("__DOCKER_EXEC__", _slice_function("dockerExec")))
-    proc = subprocess.run(
-        [_NODE, str(script), json.dumps(scenario)],
-        capture_output=True, text=True, timeout=60, check=False)
+    # HOST-SIDE. The harness stubs `_spawnSync` and fakes the clock; no docker
+    # runs here at all.
+    proc = _host_run([_NODE, str(script), json.dumps(scenario)], grace=60)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 
@@ -182,12 +223,25 @@ def test_an_image_without_timeout_degrades_instead_of_failing_everything(tmp_pat
 # ── the premise, on real docker ─────────────────────────────────────────────
 
 def _container_up() -> bool:
+    """HOST-SIDE, and the worst-placed of the five: this runs at COLLECTION
+    time, inside a `skipif` argument. `subprocess.run(..., timeout=30)` raising
+    there did not redden one test — it ERRORED the whole module, so a wedged
+    docker daemon on the host deleted every verdict in this file, including the
+    seven that never touch docker.
+
+    A daemon that will not answer is indistinguishable, for this file's purpose,
+    from a daemon that is not there: either way the container cannot be probed,
+    which is precisely what the `_DOCKER is None` arm above already reports by
+    returning False. So a stall now takes that same arm and the module keeps its
+    other verdicts, instead of trading them for a collection error."""
     if _DOCKER is None:
         return False
-    out = subprocess.run(
-        [_DOCKER, "ps", "--filter", f"name=^/{_CONTAINER}$", "--format", "{{.Names}}"],
-        capture_output=True, text=True, timeout=30, check=False)
-    return out.stdout.strip() == _CONTAINER
+    argv = [_DOCKER, "ps", "--filter", f"name=^/{_CONTAINER}$",
+            "--format", "{{.Names}}"]
+    res = _watchdog.run_host_supervised(argv, stall_grace_s=_HOST_STALL_GRACE_S)
+    if res.outcome in ("stalled", "ceiling"):
+        return False
+    return res.out.strip() == _CONTAINER
 
 
 @pytest.mark.skipif(not _container_up(), reason=f"container '{_CONTAINER}' not running")
@@ -221,27 +275,36 @@ def test_on_real_docker_only_the_inner_timeout_leaves_nothing_behind():
     marker = f"exec -a {token} sleep 91"
 
     def alive() -> int:
-        r = subprocess.run(
-            [_DOCKER, "exec", _CONTAINER, "bash", "-c",
-             f"pgrep -cf '{bracketed}' || true"],
-            capture_output=True, text=True, timeout=30, check=False)
+        # HOST-SIDE bound on the counting probe. The count it returns is what
+        # both assertions below rest on, so a probe that was cut short must not
+        # be allowed to hand back a number — `_host_run` raises instead.
+        r = _host_run([_DOCKER, "exec", _CONTAINER, "bash", "-c",
+                       f"pgrep -cf '{bracketed}' || true"])
         return int((r.stdout.strip() or "0").splitlines()[0])
 
     def reap():
         # Resolve the token to PIDs, then signal those PIDs. Never a
         # pattern-matching killer, which cannot be told which run it is
         # serving. `unanchored_process_kill_check.py` pins this.
-        subprocess.run(
-            [_DOCKER, "exec", _CONTAINER, "bash", "-c",
-             f"pids=$(pgrep -f '{bracketed}' || true); "
-             f'[ -n "$pids" ] && kill -KILL $pids || true'],
-            capture_output=True, timeout=30, check=False)
+        # HOST-SIDE.
+        _host_run([_DOCKER, "exec", _CONTAINER, "bash", "-c",
+                   f"pids=$(pgrep -f '{bracketed}' || true); "
+                   f'[ -n "$pids" ] && kill -KILL $pids || true'])
 
     reap()
     assert alive() == 0, "a previous run leaked; refusing to measure against noise"
 
     try:
-        # old behaviour: kill the client
+        # old behaviour: kill the client.
+        #
+        # DELIBERATELY AN ELAPSED BOUND, AND IT MUST STAY ONE. This arm's whole
+        # job is to reproduce the 2026-08-19 measurement in the module docstring
+        # — kill the `docker exec` CLIENT after 4 s and show the tool it started
+        # is STILL RUNNING in the container. The kill is the stimulus, not a
+        # verdict: `TimeoutExpired` is caught and discarded, and what is scored
+        # is `orphaned = alive()` below. Replacing this with progress
+        # supervision would supervise the client, which is the one thing this
+        # test needs killed, and the premise assertion would then read zero.
         subprocess.run([_DOCKER, "exec", _CONTAINER, "bash", "-c", f"{marker} & wait"],
                        capture_output=True, timeout=4, check=False)
     except subprocess.TimeoutExpired:
@@ -249,11 +312,11 @@ def test_on_real_docker_only_the_inner_timeout_leaves_nothing_behind():
     orphaned = alive()
     reap()
 
-    # new behaviour: the timeout is inside
-    subprocess.run(
-        [_DOCKER, "exec", _CONTAINER, "timeout", "-k", "5", "3",
-         "bash", "-c", f"{marker} & wait"],
-        capture_output=True, timeout=60, check=False)
+    # new behaviour: the timeout is inside. The `timeout -k 5 3` is THE SUBJECT
+    # and stays exactly as it is; only the HOST-SIDE `timeout=60` that wrapped
+    # it — a backstop whose expiry reddened this test — becomes supervision.
+    _host_run([_DOCKER, "exec", _CONTAINER, "timeout", "-k", "5", "3",
+               "bash", "-c", f"{marker} & wait"], grace=60)
     survived = alive()
     reap()
 

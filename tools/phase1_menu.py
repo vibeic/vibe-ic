@@ -40,7 +40,62 @@ import argparse
 import subprocess
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Any
+from pathlib import Path
+from typing import List, Dict, Optional, Any, Tuple
+
+# The plugin's progress-stall supervision primitive. A generator is not a thing
+# whose runtime we can know: it depends on the document, the host's load and how
+# many other lanes are on the box. `subprocess.run(..., timeout=120)` answered
+# that unknowable with a guess, and when the guess was short it reported
+# "Datasheet re-generation: FAILED" about a generator that was working — the
+# defect this file's two call sites carried.
+_PROGRAMS = (Path(__file__).resolve().parents[1]
+             / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs")
+if str(_PROGRAMS) not in sys.path:
+    sys.path.insert(0, str(_PROGRAMS))
+try:
+    import _watchdog                                          # noqa: E402
+except Exception as _exc:                                     # pragma: no cover
+    _watchdog = None
+    _WATCHDOG_IMPORT_ERROR = repr(_exc)
+else:
+    _WATCHDOG_IMPORT_ERROR = ""
+
+#: How long a generator may be COMPLETELY IDLE -- no output, no CPU, no I/O
+#: anywhere in its process tree -- before it is called hung. NOT a runtime
+#: budget: a generator that keeps working runs to completion however long that
+#: legitimately takes. The number is the tolerance for silence, and 120 s of
+#: total silence from a document generator is already far past anything a
+#: working one produces.
+_GEN_STALL_GRACE_S = 120
+
+
+def _supervised_gen(argv: List[str]) -> Tuple[Optional[subprocess.CompletedProcess], str]:
+    """Run a generator under progress supervision.
+
+    Returns ``(proc, problem)``. ``problem`` is empty when the generator EXITED
+    on its own -- whatever its return code, which the caller judges as before.
+    A non-empty ``problem`` means no verdict was reached: either the tree went
+    completely flat for `_GEN_STALL_GRACE_S` (hung), or the supervisor itself
+    was unavailable. Neither is a statement that generation FAILED, and the
+    caller must not record one.
+    """
+    if _watchdog is None:                                     # pragma: no cover
+        return None, (f"the progress supervisor could not be imported "
+                      f"({_WATCHDOG_IMPORT_ERROR}), so this run was not "
+                      f"supervised and was not started")
+    res = _watchdog.run_host_supervised(
+        argv, stall_grace_s=_GEN_STALL_GRACE_S)
+    if res.outcome in ("stalled", "ceiling"):
+        return None, (
+            f"the generator made NO forward progress for {_GEN_STALL_GRACE_S}s "
+            f"-- nothing in its process tree (output, CPU or I/O) advanced, so "
+            f"it was stopped as hung. This is NOT a statement that generation "
+            f"failed, and nothing about the datasheet has been judged")
+    # A launch error is NOT a stall: "there is no such interpreter" is a real,
+    # decided failure and keeps reaching the caller's failure arm as rc 127,
+    # exactly as the FileNotFoundError it replaces did.
+    return _watchdog.completed_process(argv, res), ""
 
 
 # ============================================================================
@@ -351,30 +406,26 @@ class Phase1FailMenu:
             print(f"  Found: {gen_script}")
             confirm = input("  Proceed with re-generation? [Y/n] ").strip().lower()
             if confirm in ("", "y", "yes"):
-                try:
-                    result = subprocess.run(
-                        [sys.executable, gen_script,
-                         "--ic", ic, "--output-dir", proj],
-                        capture_output=True, text=True, timeout=120
-                    )
-                    if result.returncode == 0:
-                        print(f"  Datasheet re-generated successfully.")
-                        self._log("Datasheet re-generation: SUCCESS")
-                        print(f"  Re-run quality check to verify improvement.")
-                        return "success"
-                    else:
-                        print(f"  Generation failed:")
-                        for line in result.stderr.strip().split("\n")[:10]:
-                            print(f"    {line}")
-                        self._log(f"Datasheet re-generation: FAILED ({result.returncode})")
-                        return "failed"
-                except FileNotFoundError:
-                    print(f"  Error: Python interpreter not found")
-                    return "failed"
-                except subprocess.TimeoutExpired:
-                    print(f"  Error: Timed out after 120s")
-                    self._log("Datasheet re-generation: TIMEOUT")
-                    return "failed"
+                result, problem = _supervised_gen(
+                    [sys.executable, gen_script,
+                     "--ic", ic, "--output-dir", proj])
+                if problem:
+                    # NOT "failed". A generator that was stopped without
+                    # finishing produced no verdict about the datasheet, and
+                    # recording one would be inventing it.
+                    print(f"  Not re-generated: {problem}")
+                    self._log(f"Datasheet re-generation: NOT MEASURED — {problem}")
+                    return "stalled"
+                if result.returncode == 0:
+                    print(f"  Datasheet re-generated successfully.")
+                    self._log("Datasheet re-generation: SUCCESS")
+                    print(f"  Re-run quality check to verify improvement.")
+                    return "success"
+                print(f"  Generation failed:")
+                for line in result.stderr.strip().split("\n")[:10]:
+                    print(f"    {line}")
+                self._log(f"Datasheet re-generation: FAILED ({result.returncode})")
+                return "failed"
             else:
                 print("  Cancelled.")
                 return "cancelled"
@@ -404,25 +455,23 @@ class Phase1FailMenu:
             print(f"  Found: {gen_script}")
             confirm = input("  Proceed with re-generation? [Y/n] ").strip().lower()
             if confirm in ("", "y", "yes"):
-                try:
-                    result = subprocess.run(
-                        [sys.executable, gen_script,
-                         "--ic", ic, "--output-dir", proj],
-                        capture_output=True, text=True, timeout=120
-                    )
-                    if result.returncode == 0:
-                        print(f"  Application note re-generated successfully.")
-                        self._log("AppNote re-generation: SUCCESS")
-                        return "success"
-                    else:
-                        print(f"  Generation failed:")
-                        for line in result.stderr.strip().split("\n")[:10]:
-                            print(f"    {line}")
-                        self._log(f"AppNote re-generation: FAILED ({result.returncode})")
-                        return "failed"
-                except subprocess.TimeoutExpired:
-                    print(f"  Error: Timed out after 120s")
-                    return "failed"
+                result, problem = _supervised_gen(
+                    [sys.executable, gen_script,
+                     "--ic", ic, "--output-dir", proj])
+                if problem:
+                    # NOT "failed", for the same reason as the datasheet arm.
+                    print(f"  Not re-generated: {problem}")
+                    self._log(f"AppNote re-generation: NOT MEASURED — {problem}")
+                    return "stalled"
+                if result.returncode == 0:
+                    print(f"  Application note re-generated successfully.")
+                    self._log("AppNote re-generation: SUCCESS")
+                    return "success"
+                print(f"  Generation failed:")
+                for line in result.stderr.strip().split("\n")[:10]:
+                    print(f"    {line}")
+                self._log(f"AppNote re-generation: FAILED ({result.returncode})")
+                return "failed"
             else:
                 print("  Cancelled.")
                 return "cancelled"

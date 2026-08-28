@@ -50,7 +50,6 @@ import re
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
@@ -77,12 +76,56 @@ import pytest
 #: `_QUICK` roughly eightyfold over the quickest. Neither is so low that a
 #: healthy call cannot finish; both are low enough to still FIRE on a hang, which
 #: `test_an_inner_bound_is_a_real_bound` proves rather than assumes.
+#:
+#: WHAT THEY BOUND CHANGED, AND THE NUMBERS DELIBERATELY DID NOT.
+#: They were `subprocess.run(..., timeout=)` bounds -- ELAPSED seconds -- and an
+#: elapsed bound cannot tell a hung child from a working one on a loaded host.
+#: The margins above are the argument that this is unlikely here; they are not
+#: an argument that it is impossible, and when it happens `TimeoutExpired`
+#: reaches pytest as a RED test asserting something FALSE about the preflight
+#: gate. A verdict that depends on the host's load is the defect, whatever its
+#: margin. Both are now `stall_grace_s` handed to `_watchdog.run_host_supervised`
+#: via `_run` below: the tolerance for a process tree that is COMPLETELY FLAT --
+#: no output, no CPU, no I/O -- never for how long honest work may take. The
+#: numbers are unchanged so `test_an_inner_bound_is_a_real_bound`'s ceiling
+#: comparison keeps measuring the same thing and no bound in this file rose.
 _HEAVY = 60
 _QUICK = 30
 
 _ROOT = Path(__file__).resolve().parents[2]
 _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
 _PROGRAMS = _ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+
+sys.path.insert(0, str(_PROGRAMS))
+import _watchdog                                              # noqa: E402
+
+
+def _run(argv: list[str], *, grace: int, env: dict[str, str] | None = None,
+         cwd: str | None = None) -> subprocess.CompletedProcess:
+    """Launch under progress-stall supervision instead of an elapsed bound.
+
+    Every call this file makes goes through here. `grace` is how long the whole
+    process tree may be flat before it is called hung -- a still-working child
+    is never stopped. A stall is reported as `TimeoutExpired` so the shape the
+    callers (and `test_an_inner_bound_is_a_real_bound`) already understand is
+    preserved, but its `output` says NO FORWARD PROGRESS, so a reader can never
+    mistake the kill for "the machine was busy".
+    """
+    kw = {"stall_grace_s": float(grace), "merge_stderr": False}
+    if env is not None:
+        kw["env"] = env
+    if cwd is not None:
+        kw["cwd"] = cwd
+    res = _watchdog.run_host_supervised(argv, **kw)
+    if res.outcome in ("stalled", "ceiling"):
+        raise subprocess.TimeoutExpired(
+            argv, grace,
+            output=(res.out + "\nNO FORWARD PROGRESS: nothing in the process "
+                    "tree (output, CPU or I/O) advanced across the grace "
+                    "window -- killed as hung. This is NOT a statement that "
+                    "the call was too slow."),
+            stderr=res.err)
+    return _watchdog.completed_process(argv, res)
 _PREFLIGHT_CALL = 'python3 "$PROGRAMS/landing_pytest_runtime_preflight.py"'
 _HOST_LANE_ENV = "VIBEIC_TRUSTED_PYTEST_SITE"
 
@@ -204,19 +247,15 @@ def _runnerless_python(tmp_path: Path, env: dict[str, str]) -> Path:
     and is asserted here rather than assumed.
     """
     home = tmp_path / "runnerless"
-    made = subprocess.run(
-        [sys.executable, "-m", "venv", "--without-pip", str(home)], env=env,
-        stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        timeout=_HEAVY, check=False)
+    made = _run([sys.executable, "-m", "venv", "--without-pip", str(home)],
+                grace=_HEAVY, env=env)
     if made.returncode != 0:
         pytest.skip("this interpreter cannot create a venv, so the "
                     "runner-less interpreter this test needs is UNAVAILABLE "
                     f"here — not verified: {made.stderr.strip()[:200]}")
     shim = home / "bin" / "python3"
     assert shim.is_file(), made.stdout + made.stderr
-    probe = subprocess.run([str(shim), "-c", "import pytest"], env=env,
-                           stdin=subprocess.DEVNULL, capture_output=True,
-                           text=True, timeout=_QUICK, check=False)
+    probe = _run([str(shim), "-c", "import pytest"], grace=_QUICK, env=env)
     assert probe.returncode != 0, (
         "the runner-less interpreter can still import the runner under the "
         "environment the block will run in, so the refusal direction of this "
@@ -230,10 +269,9 @@ def _real_site_dir() -> Path:
     Resolved rather than assumed so the positive control is the same test on a
     host (user site directory) and in the pinned image (system site directory).
     """
-    proc = subprocess.run(
+    proc = _run(
         [sys.executable, "-c", "import pytest, sys; sys.stdout.write(pytest.__file__)"],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        timeout=_QUICK, check=False)
+        grace=_QUICK)
     assert proc.returncode == 0, "this session has no importable test runner"
     return Path(proc.stdout.strip()).resolve().parents[1]
 
@@ -340,9 +378,8 @@ def _run_block(block: str, tmp_path: Path, *, lane: str | None) -> subprocess.Co
     env = _shim_env(lane=lane)
     shim = _runnerless_python(tmp_path, env)
     env["PATH"] = f"{shim.parent}{os.pathsep}{env.get('PATH', '')}"
-    return subprocess.run(["bash", str(script)], env=env, cwd=str(tmp_path),
-                          stdin=subprocess.DEVNULL, capture_output=True,
-                          text=True, timeout=_HEAVY, check=False)
+    return _run(["bash", str(script)], grace=_HEAVY, env=env,
+                cwd=str(tmp_path))
 
 
 def test_the_full_tier_refuses_once_when_it_cannot_run_the_test_runtime(tmp_path):
@@ -454,22 +491,28 @@ def test_the_preflight_program_owns_the_cause_and_the_remedy():
 def test_an_inner_bound_is_a_real_bound():
     """A bound above the ceiling is a defect; one that never binds is another.
 
-    Three claims, because lowering a number can fail in three directions.
+    Three claims, and the middle one changed shape when the bounds did.
 
     TOO HIGH: both bounds must sit at or under the ceiling
     `ci_harness_timeout_ceiling_check` publishes for this tree, read from the
     program rather than restated here — a constant copied into a test rots the
     moment the harness bound moves.
 
-    TOO LOW: the slowest call this file makes is measured HERE, in this session,
-    and must finish inside a fraction of the smaller bound. A bound chosen from
-    the ceiling instead of from the work is how a green suite becomes an
-    intermittently red one on a loaded host.
+    TOO LOW: this used to time the quickest call and require it to finish
+    inside `_QUICK / 4`. That claim was itself an elapsed-time verdict — on a
+    host loaded enough to make `import pytest` take eight seconds it goes RED,
+    and it goes red saying the BOUND is wrong when nothing about the bound
+    moved. It was the very flake its own message warned about, written into the
+    guard against it. Under progress supervision the claim it was reaching for
+    is no longer about duration at all: a grace is too low only if a WORKING
+    call can trip it, and a working call trips a progress grace by going FLAT,
+    never by being slow. So it is now proved directly, in the direction that
+    matters, and no clock reading appears in an assertion.
 
-    INERT: the bound must actually stop a child that does not return. Proved on
-    the same `subprocess.run(..., timeout=...)` shape every call above uses, with
-    a deliberately tiny bound so the proof itself is cheap — the shape and the
-    raised `TimeoutExpired` are what is being pinned, not the number.
+    INERT: the supervision must still stop a child that does not return.
+
+    The last two together are the falsification pair — a supervisor that kills
+    everything and a supervisor that kills nothing both pass one of them alone.
     """
     sys.path.insert(0, str(_PROGRAMS))
     import ci_harness_timeout_ceiling_check as C
@@ -481,18 +524,40 @@ def test_an_inner_bound_is_a_real_bound():
         f"{ceiling}: the gate that made this repository unlandable is exactly "
         "this comparison")
 
-    start = time.monotonic()
-    probe = subprocess.run(
-        [sys.executable, "-c", "import pytest"], stdin=subprocess.DEVNULL,
-        capture_output=True, text=True, timeout=_QUICK, check=False)
-    elapsed = time.monotonic() - start
-    assert probe.returncode == 0, probe.stderr
-    assert elapsed < _QUICK / 4, (
-        f"the quickest call this file makes took {elapsed:.2f}s against a "
-        f"{_QUICK}s bound — the bound is no longer generous and will flake")
+    # A tiny grace so both proofs are cheap. What is pinned is the SHAPE — flat
+    # dies, moving lives — never the number.
+    grace = 2
 
+    # INERT: a child that returns nothing and does nothing is killed. It sleeps,
+    # so its whole tree is flat on every signal the meter reads: no output, no
+    # CPU, no I/O.
     with pytest.raises(subprocess.TimeoutExpired):
-        subprocess.run(
-            [sys.executable, "-c", f"import time; time.sleep({_QUICK * 2})"],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            timeout=1, check=False)
+        _run([sys.executable, "-c", "import time; time.sleep(3600)"],
+             grace=grace)
+
+    # TOO LOW, direction 1: a child that outlives the grace while still TALKING
+    # is not killed. It runs for several graces and exits 0 on its own.
+    chatty = _run(
+        [sys.executable, "-u", "-c",
+         "import time" + chr(10) +
+         "for i in range(40): print(i, flush=True); time.sleep(0.25)"],
+        grace=grace)
+    assert chatty.returncode == 0, (
+        "a child that was emitting output for five graces was still killed — "
+        f"the supervision is bounding RUNTIME, not progress: {chatty.stderr}")
+
+    # TOO LOW, direction 2, and the one the owner's ruling turns on: a child
+    # that outlives the grace SILENTLY, burning CPU, is not killed either. This
+    # is the shape an EDA tool has for hours at a time, and an output-only
+    # progress reading would murder it.
+    quiet = _run(
+        [sys.executable, "-c",
+         "import time" + chr(10) +
+         "end = time.monotonic() + 10.0" + chr(10) +
+         "n = 0" + chr(10) +
+         "while time.monotonic() < end: n += 1"],
+        grace=grace)
+    assert quiet.returncode == 0, (
+        "a child that burned CPU silently for five graces was killed — the "
+        "meter is reading output only, so any quiet phase of a real tool is a "
+        f"death sentence: {quiet.stderr}")

@@ -812,18 +812,65 @@ def _argv_for(cmd: str, project: Path) -> List[str]:
     return [sys.executable, str(prog)] + _expand_globs_like_the_flow(parts[1:], project)
 
 
-def _run(cmd: str, project: Path, timeout: int = 60) -> Tuple[int, str]:
-    argv = _argv_for(cmd, project)
+#: What `_run` and `_run_traced` return when a clause was STOPPED rather than
+#: answered. Kept at 124 -- every scoring site in this file already reads that
+#: number as "did not run", and re-spelling it would have meant editing each one
+#: to say the same thing. What CHANGED is what earns it: it used to mean "60 s
+#: of wall clock elapsed", which on a loaded host is a statement about the box,
+#: and this file then scored gates on it (see `probe_empty_tree`, which called
+#: that SUSPECT, and `corpus_pass`, which called it CLEAN). It now means the
+#: clause's whole process tree went FLAT -- no output, no CPU, no I/O -- for the
+#: grace, which is a statement about the CLAUSE.
+_STALLED_RC = 124
+_NOT_RUNNABLE_RC = 127
+
+#: The marker every stalled run carries in its captured output. Distinct from
+#: `<TIMEOUT>` on purpose: a reader who greps a report for the old word must not
+#: find it and conclude the old, load-dependent bound is still here.
+_STALL_MARKER = "<NO FORWARD PROGRESS>"
+
+
+def _supervised(argv: List[str], cwd: Path, env: Dict[str, str],
+                grace: int) -> Tuple[int, str]:
+    """Run a clause under PROGRESS-STALL supervision.
+
+    Returns the same `(rc, output)` pair the `subprocess.run` it replaces did.
+    A clause that keeps working -- emitting, burning CPU, or moving bytes --
+    runs to completion however long that legitimately takes; one whose entire
+    process tree is flat across `grace` is killed and reported `_STALLED_RC`.
+
+    Degrades LOUDLY: if the supervisor cannot be imported the census says so on
+    stderr and reports every clause `_NOT_RUNNABLE_RC`, which every scoring site
+    already treats as unmeasured. It does NOT fall back to an elapsed bound --
+    quietly restoring the defect is worse than declining to sweep.
+    """
     try:
-        proc = subprocess.run(
-            argv, cwd=str(project), capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        )
-    except subprocess.TimeoutExpired:
-        return 124, "<TIMEOUT>"
-    except OSError as exc:
-        return 127, f"<NOT RUNNABLE: {exc}>"
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        _plugin_on_path()
+        import _watchdog  # noqa: PLC0415
+    except Exception as exc:                                   # pragma: no cover
+        print(f"liar_census: CANNOT IMPORT the progress supervisor ({exc}) -- "
+              f"no clause can be run under supervision, so this sweep measures "
+              f"NOTHING rather than measuring it against a wall clock",
+              file=sys.stderr)
+        return _NOT_RUNNABLE_RC, f"<SUPERVISOR UNAVAILABLE: {exc}>"
+    res = _watchdog.run_host_supervised(
+        argv, cwd=str(cwd), env=env, stall_grace_s=float(grace))
+    if res.outcome in ("stalled", "ceiling"):
+        return _STALLED_RC, (
+            f"{_STALL_MARKER}: nothing in the clause's process tree (output, "
+            f"CPU or I/O) advanced for {grace}s, so it was stopped as hung. "
+            f"This is NOT a statement that the clause was slow.\n"
+            + (res.out or "") + (res.err or ""))
+    if res.outcome == "launch_error":
+        return _NOT_RUNNABLE_RC, f"<NOT RUNNABLE: {res.err.strip()}>"
+    return res.rc, (res.out or "") + (res.err or "")
+
+
+def _run(cmd: str, project: Path, timeout: int = 60) -> Tuple[int, str]:
+    """`timeout` is the STALL GRACE, not a runtime. See `_supervised`."""
+    argv = _argv_for(cmd, project)
+    return _supervised(argv, project,
+                       {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout)
 
 
 # --------------------------------------------------------------- probes
@@ -838,8 +885,17 @@ def probe_empty_tree(cl: Clause, empty: Path) -> ProbeResult:
     repro = f"cd <empty dir> && python3 programs/{cl.program}.py {' '.join(cl.cmd.split()[1:])}"
     if rc == 127:
         return ProbeResult("empty_tree", NA, out.strip()[:160], repro)
-    if rc == 124:
-        return ProbeResult("empty_tree", SUSPECT, "timed out on an EMPTY tree", repro)
+    if rc == _STALLED_RC:
+        # NOT a finding. This used to read SUSPECT — "timed out on an EMPTY
+        # tree" — off a 60 s wall clock, so a loaded host manufactured a
+        # suspicion about a gate nobody had touched. Its two sibling probes
+        # below already score the same rc `N/A`; this one is now consistent
+        # with them. A clause that was STOPPED said nothing about the empty
+        # tree, and "it said nothing" is not "it said something wrong".
+        return ProbeResult("empty_tree", NA,
+                           "made no forward progress on an EMPTY tree, so it "
+                           "was stopped before it answered — not measured",
+                           repro)
     if rc == 0:
         if cl.guarded_on_empty:
             return ProbeResult(
@@ -887,7 +943,7 @@ def probe_prose_vs_exit(cl: Clause, empty: Path) -> ProbeResult:
     """
     rc, out = _run(cl.cmd, empty)
     repro = f"cd <empty dir> && python3 programs/{cl.program}.py … ; echo rc=$?"
-    if rc in (124, 127):
+    if rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
         return ProbeResult("prose_vs_exit", NA, "", repro)
     hit = _REFUSAL_LEAD.search(out or "")
     if rc == 0 and hit:
@@ -918,7 +974,7 @@ def probe_zero_denominator(cl: Clause, empty: Path) -> ProbeResult:
     """
     rc, out = _run(cl.cmd, empty)
     repro = f"cd <empty dir> && python3 programs/{cl.program}.py …"
-    if rc in (124, 127):
+    if rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
         return ProbeResult("zero_denominator", NA, "", repro)
     hit = _ZERO_POP.search(out or "")
     if rc == 0 and hit:
@@ -940,13 +996,24 @@ def probe_writes_its_subject(cl: Clause, sandbox: Path,
     for i, tok in enumerate(parts):
         if tok == "--json" and i + 1 < len(parts):
             declared.add(parts[i + 1])
+    repro = f"seed a tree, run programs/{cl.program}.py in it, then `git status --porcelain`"
     before = {p: p.stat().st_mtime_ns for p in sandbox.rglob("*") if p.is_file()}
-    _run(cl.cmd, sandbox)
+    rc, _out = _run(cl.cmd, sandbox)
+    if rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
+        # The rc used to be DISCARDED here, and that was the quietest of this
+        # file's timeout defects: a clause killed part-way through leaves a
+        # half-written tree, and the before/after diff was then scored as if it
+        # were the clause's finished behaviour — a CLEAN "wrote nothing it was
+        # not asked to" from a run that had not reached its writes yet, or a
+        # contamination finding off a partial one. Neither is a measurement.
+        return ProbeResult(
+            "writes_its_subject", NA,
+            "the clause did not run to completion, so what it had written when "
+            "it was stopped is not what it writes", repro)
     after = {p: p.stat().st_mtime_ns for p in sandbox.rglob("*") if p.is_file()}
     touched = [p for p in after if p not in before or after[p] != before.get(p)]
     undeclared = [p for p in touched
                   if str(p.relative_to(sandbox)) not in declared]
-    repro = f"seed a tree, run programs/{cl.program}.py in it, then `git status --porcelain`"
     if not undeclared:
         return ProbeResult("writes_its_subject", CLEAN, "wrote nothing it was not asked to", repro)
 
@@ -2394,7 +2461,7 @@ def probe_producer_emitted_nothing(cl: Clause, sandbox: Path) -> ProbeResult:
             f"materialised (globs this probe will not guess at)", repro)
 
     rc, out = _run(cl.cmd, sandbox)
-    if rc in (124, 127):
+    if rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
         return ProbeResult("producer_emitted_nothing", NA,
                            "did not run in this fixture", repro)
     if rc != 0:
@@ -2444,7 +2511,7 @@ def probe_producer_emitted_nothing(cl: Clause, sandbox: Path) -> ProbeResult:
     finally:
         shutil.rmtree(bare, ignore_errors=True)
 
-    if rc_bare in (124, 127):
+    if rc_bare in (_STALLED_RC, _NOT_RUNNABLE_RC):
         # A run that TIMED OUT or could not be spawned told us it was unable to
         # look — never that the answer is "it behaves differently". Without the
         # control arm the differential is undetermined, and scoring a LIAR off
@@ -2565,10 +2632,11 @@ def probe_path_spelling(cl: Clause, sandbox: Path,
         return rc, tuple(sorted(f"{m[0]} {m[1].lower()}" for m in _POP_COUNT.findall(norm)))
 
     base_rc, base_out = _run(cl.cmd, sandbox)
-    if base_rc in (124, 127):
+    if base_rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
         return ProbeResult("path_spelling", NA,
                            "baseline invocation did not run", repro)
     base_sig = _signature(base_rc, base_out, ".")
+    unmeasured: List[str] = []
 
     link = sandbox.parent / f"{sandbox.name}__link"
     try:
@@ -2584,7 +2652,13 @@ def probe_path_spelling(cl: Clause, sandbox: Path,
             continue
         cmd = " ".join(spelling if tok == "." else tok for tok in parts)
         rc, out = _run(cmd, sandbox)
-        if rc in (124, 127):
+        if rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
+            # Dropped from the comparison, and now also from the DENOMINATOR
+            # the CLEAN verdict below states. It used to `continue` silently,
+            # so a run in which three of five spellings never completed still
+            # reported "5 spelling(s) of the same directory, same rc and same
+            # population" — a measurement of five claimed off two.
+            unmeasured.append(name)
             continue
         sig = _signature(rc, out, spelling)
         if sig != base_sig:
@@ -2597,9 +2671,19 @@ def probe_path_spelling(cl: Clause, sandbox: Path,
                 f"population {list(base_sig[1])[:3]}->{list(sig[1])[:3]} — the "
                 f"answer is a function of how the caller typed the path, not of "
                 f"what is in the tree ({name})", repro)
-    return ProbeResult("path_spelling", CLEAN,
-                       f"{min(variants, len(SPELLINGS))} spelling(s) of the same "
-                       f"directory, same rc and same population", repro)
+    tried = min(variants, len(SPELLINGS)) - len(unmeasured)
+    if tried <= 0:
+        return ProbeResult("path_spelling", NA,
+                           "no alternative spelling completed, so nothing was "
+                           f"compared against the baseline ({len(unmeasured)} "
+                           f"stopped: {', '.join(unmeasured)})", repro)
+    detail = (f"{tried} spelling(s) of the same directory, same rc and same "
+              f"population")
+    if unmeasured:
+        detail += (f" — {len(unmeasured)} further spelling(s) were STOPPED "
+                   f"before answering and are not in that count: "
+                   f"{', '.join(unmeasured)}")
+    return ProbeResult("path_spelling", CLEAN, detail, repro)
 #: SHAPE 12 — "every step is correct, it is simply answering a different
 #: question." The hardest of the twelve and the most common. Its instances in
 #: this repo are all the same silhouette:
@@ -2803,14 +2887,11 @@ def _run_traced(cmd: str, project: Path, tracer: Path, timeout: int
            "PYTHONPATH": os.pathsep.join(
                [str(tracer)] + ([os.environ["PYTHONPATH"]]
                                 if os.environ.get("PYTHONPATH") else []))}
-    try:
-        proc = subprocess.run(_argv_for(cmd, project), cwd=str(project),
-                              capture_output=True, text=True, timeout=timeout, env=env)
-        rc, out = proc.returncode, (proc.stdout or "") + (proc.stderr or "")
-    except subprocess.TimeoutExpired:
-        return 124, "<TIMEOUT>", None
-    except OSError as exc:
-        return 127, f"<NOT RUNNABLE: {exc}>", None
+    rc, out = _supervised(_argv_for(cmd, project), project, env, timeout)
+    if rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
+        # `events=None` is the caller's contract for "score this N/A, never
+        # CLEAN", and a run that was stopped produced no trace worth reading.
+        return rc, out, None
     raw = log.read_text(errors="replace").splitlines()
     if _TRACE_MARKER not in raw:
         return rc, out, None
@@ -3168,6 +3249,17 @@ def probe_ruler_blind(cl: Clause, tr: Traced, ctx: CorpusCtx) -> ProbeResult:
                            and (work / rel).read_text(errors="replace") != payload)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
+            if rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
+                # NOT `CLEAN — it measures it`. This branch used to be reached
+                # by `rc != 0`, and a stopped run returns non-zero, so a clause
+                # the clock ran out on was recorded as having NOTICED the
+                # mutation. That is an exoneration the census never measured,
+                # and it is the same defect as scoring a finding off a bound —
+                # only pointing the other way, where nobody looks for it.
+                notes.append(f"{cl.program}/{rel} [{label}]: the clause made no "
+                             f"forward progress and was stopped, so whether it "
+                             f"reacts to this mutation is UNMEASURED — not clean")
+                continue
             if rc != 0:
                 if worst is None:
                     worst = ProbeResult("ruler_blind", CLEAN,
@@ -3344,7 +3436,7 @@ def _sibling_objects(rel: str, payload: str, root: Path, tmp: Path, tracer: Path
             rc, _o, _e = _run_traced(sib.cmd, work, tracer, timeout)
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        if rc not in (0, 124, 127):
+        if rc not in (0, _STALLED_RC, _NOT_RUNNABLE_RC):
             return sib.program
     return None
 
@@ -3417,6 +3509,15 @@ def probe_self_upstream(cl: Clause, tr: Traced, ctx: CorpusCtx,
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+    if tr.rc in (_STALLED_RC, _NOT_RUNNABLE_RC):
+        # The BASELINE run, and the same rule as the mutated one below: a
+        # clause that was stopped has no rc on this root to reason from, so
+        # "nothing was laundered here" is a claim the census cannot make.
+        return ProbeResult(
+            "self_upstream", NA,
+            f"{shape} ({rel}), but the clause made no forward progress on this "
+            f"root and was stopped, so it has no baseline verdict — UNMEASURED",
+            repro)
     if tr.rc != 0:
         return ProbeResult("self_upstream", SUSPECT,
                            f"{shape} ({rel}) — but it is rc={tr.rc} on this root, so "
@@ -3427,6 +3528,20 @@ def probe_self_upstream(cl: Clause, tr: Traced, ctx: CorpusCtx,
                            f"{shape} ({rel}) and CRASHES when that artefact is emptied — "
                            f"a robustness defect, and not evidence that its own prior "
                            f"output was carrying the verdict", repro)
+    if rc2 in (_STALLED_RC, _NOT_RUNNABLE_RC):
+        # THE WORST SITE IN THIS FILE. `rc2` fell through to the LIAR branch
+        # below, whose sentence is "rc 0 -> {rc2} when that artefact is emptied
+        # — the gate is passing on evidence it produced itself". A clause that
+        # was merely stopped therefore ACCUSED a blocking gate of laundering its
+        # own output, and the accusation's whole evidence was that the clock ran
+        # out. The run has to have REACHED a verdict before its verdict can be
+        # compared with the baseline's.
+        return ProbeResult(
+            "self_upstream", NA,
+            f"{shape} ({rel}), but the run with that artefact emptied made no "
+            f"forward progress and was stopped, so there is no second verdict "
+            f"to compare against rc 0 — the cycle is real and its effect is "
+            f"UNMEASURED", repro)
     if rc2 == 0:
         return ProbeResult("self_upstream", SUSPECT,
                            f"{shape} ({rel}), but emptying that artefact does not move "
@@ -3520,7 +3635,7 @@ def corpus_pass(clauses: List[Clause], root: Path, tmp: Path, probes: List[str],
         finally:
             shutil.rmtree(work, ignore_errors=True)
         base[i] = Traced(rc=rc, out=out, events=ev)
-        if ev is None and rc not in (124, 127):
+        if ev is None and rc not in (_STALLED_RC, _NOT_RUNNABLE_RC):
             dead += 1
         print(f"  [corpus {i + 1}/{len(clauses)}] {cl.program[:48]:<48} rc={rc} "
               f"r={len(base[i].reads)} w={len(base[i].writes)}",
