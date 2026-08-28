@@ -528,17 +528,29 @@ def test_an_inner_bound_is_a_real_bound():
     # dies, moving lives — never the number.
     grace = 2
 
+    # `-S -E` ISOLATES THE SUBJECT FROM THIS SESSION'S STARTUP ENVIRONMENT, and
+    # it is load-bearing rather than tidy. Without it the child inherits
+    # `PYTHONPATH` and site processing, so anything slow on the interpreter's
+    # startup path — a `sitecustomize`, a heavy `.pth` — is dead time BEFORE the
+    # child can emit or compute anything. The tree is genuinely flat for that
+    # window, the supervisor correctly kills it, and the two must-live proofs
+    # below go red for a reason that has nothing to do with what they assert.
+    # MEASURED while writing this: a `sitecustomize` sleeping 9 s took the
+    # chatty child's first output from 0.01 s to 9.05 s and reddened the test.
+    # A falsification that is itself sensitive to the host is the defect this
+    # whole change removes, reappearing inside its own proof.
+    child = [sys.executable, "-S", "-E"]
+
     # INERT: a child that returns nothing and does nothing is killed. It sleeps,
     # so its whole tree is flat on every signal the meter reads: no output, no
     # CPU, no I/O.
     with pytest.raises(subprocess.TimeoutExpired):
-        _run([sys.executable, "-c", "import time; time.sleep(3600)"],
-             grace=grace)
+        _run(child + ["-c", "import time; time.sleep(3600)"], grace=grace)
 
     # TOO LOW, direction 1: a child that outlives the grace while still TALKING
     # is not killed. It runs for several graces and exits 0 on its own.
     chatty = _run(
-        [sys.executable, "-u", "-c",
+        child + ["-u", "-c",
          "import time" + chr(10) +
          "for i in range(24): print(i, flush=True); time.sleep(0.25)"],
         grace=grace)
@@ -551,7 +563,7 @@ def test_an_inner_bound_is_a_real_bound():
     # is the shape an EDA tool has for hours at a time, and an output-only
     # progress reading would murder it.
     quiet = _run(
-        [sys.executable, "-c",
+        child + ["-c",
          "import time" + chr(10) +
          "end = time.monotonic() + 6.0" + chr(10) +
          "n = 0" + chr(10) +
