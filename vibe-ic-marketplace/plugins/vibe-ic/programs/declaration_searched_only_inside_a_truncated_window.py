@@ -40,6 +40,15 @@ A slice that only feeds OUTPUT — a `print`, a report field, an f-string in a
 message — is a display bound and is correct. The rule turns on the slice
 reaching a SEARCH, which is the only place a window can change a verdict.
 
+Nor is a CONTENT-TYPE SNIFF. This rule is about a search for something an
+AUTHOR WROTE, where a miss is reported as "nothing was declared". A sniff asks
+what KIND of bytes these are — `b"\x00" in data[:8192]`, git's own text/binary
+heuristic — and its miss means "probably text", the fallback, never a claim
+about anybody. There is no declaration in the picture for a window to falsify,
+so the bound there IS the heuristic and not a truncation of one. The separator
+is structural and is stated in `_is_byte_class_probe`: a needle that is a
+`bytes` literal with no printable byte in it cannot be a declaration.
+
 The remedy the rule asks for is not "delete the window". Keep it for display,
 and on a miss re-run the same search over the full text, reporting a
 declaration found outside the window as its own outcome, naming the byte offset
@@ -170,26 +179,31 @@ def _window_bound(node: ast.Subscript,
     return None
 
 
-def _searched_here(parent_map: Dict[int, ast.AST], node: ast.AST) -> Optional[str]:
-    """How the sliced value is SEARCHED, walking up from the slice."""
+def _searched_here(parent_map: Dict[int, ast.AST], node: ast.AST
+                   ) -> Optional[Tuple[str, Optional[ast.AST]]]:
+    """(how the sliced value is SEARCHED, what is searched FOR), or None.
+
+    The second element is the NEEDLE — the thing whose presence the search is
+    deciding. It is what tells a declaration search apart from a content-type
+    sniff; see `_is_byte_class_probe`.
+    """
     cur = node
     for _ in range(4):
         par = parent_map.get(id(cur))
         if par is None:
             return None
         # `marker in <slice>`
-        if isinstance(par, ast.Compare) and cur is par.comparators[0] if \
-                (isinstance(par, ast.Compare) and par.comparators) else False:
-            if any(isinstance(o, (ast.In, ast.NotIn)) for o in par.ops):
-                return "`in` membership"
         if isinstance(par, ast.Compare) and any(
                 isinstance(o, (ast.In, ast.NotIn)) for o in par.ops):
             if cur in par.comparators:
-                return "`in` membership"
+                return "`in` membership", par.left
         # `<slice>.find(...)`
         if isinstance(par, ast.Attribute) and par.attr in _SEARCH_METHODS \
                 and par.value is cur:
-            return f".{par.attr}()"
+            call = parent_map.get(id(par))
+            needle = (call.args[0] if isinstance(call, ast.Call) and call.args
+                      else None)
+            return f".{par.attr}()", needle
         # `re.search(pat, <slice>)`
         if isinstance(par, ast.Call):
             f = par.func
@@ -202,14 +216,53 @@ def _searched_here(parent_map: Dict[int, ast.AST], node: ast.AST) -> Optional[st
                 # rule that reads only the module form would miss the very
                 # site it was written for.
                 if len(par.args) >= 2 and par.args[1] is cur:
-                    return f"re.{attr}()"
+                    return f"re.{attr}()", par.args[0]
                 if par.args and par.args[0] is cur and isinstance(
                         f, ast.Attribute) and not (
                         isinstance(f.value, ast.Name) and f.value.id == "re"):
-                    return f"<compiled pattern>.{attr}()"
+                    return f"<compiled pattern>.{attr}()", f.value
             return None
         cur = par
     return None
+
+
+def _is_byte_class_probe(needle: Optional[ast.AST]) -> bool:
+    """Is this search a CONTENT-TYPE SNIFF rather than a DECLARATION SEARCH?
+
+    WHAT DISTINGUISHES THEM (2026-08-28 — state it here so the next reader does
+    not re-derive it). A DECLARATION SEARCH looks for something an AUTHOR WROTE
+    — `ENFORCEMENT:`, `FATAL`, a required statement — and a miss is a claim
+    about that author: "nothing was declared". That claim is what this rule
+    protects, and it is what a window can falsify.
+
+    A CONTENT-TYPE SNIFF asks what KIND of bytes these are. Its needle is not a
+    word; it is a byte class, and a miss is not a claim about anybody. `b"\x00"
+    in data[:8192]` is exactly git's own text/binary heuristic: no NUL in the
+    first 8 KiB means "treat this as text", the FALLBACK — never "the author
+    declared nothing". Moving the window cannot turn an author's declaration
+    into an absence here, because there is no declaration in the picture. The
+    bound is the heuristic, not a truncation of one.
+
+    THE STRUCTURAL SEPARATOR. A declaration is text a human typed, so it always
+    carries at least one printable character. A needle that is a `bytes` literal
+    with NO printable ASCII byte in it cannot be a declaration in any encoding a
+    person writes — it can only be a byte-class probe. That is the whole rule,
+    and it cannot hide a real declaration search: make the needle a word and
+    this returns False.
+
+    Deliberately NARROW. A magic number that IS printable (`b"%PDF"`,
+    `b"\x89PNG"`) is not exempted here — it stays a finding until someone
+    measures one, which is the safe direction for a rule whose job is to refuse.
+    """
+    if isinstance(needle, (ast.Tuple, ast.List, ast.Set)):
+        return bool(needle.elts) and all(
+            _is_byte_class_probe(e) for e in needle.elts)
+    if not isinstance(needle, ast.Constant):
+        return False
+    v = needle.value
+    if not isinstance(v, (bytes, bytearray)) or not v:
+        return False
+    return not any(0x20 <= b <= 0x7E for b in v)
 
 
 def _parents(tree: ast.AST) -> Dict[int, ast.AST]:
@@ -234,6 +287,7 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     findings: List[dict] = []
     parsed = 0
     windows = 0
+    sniffs = 0
     bases = [root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
              root / "tools"]
     for base in bases:
@@ -262,14 +316,21 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
                 if w is None:
                     continue
                 windows += 1
-                how = _searched_here(pm, n)
-                if how is None:
+                hit = _searched_here(pm, n)
+                if hit is None:
+                    continue
+                how, needle = hit
+                # A content-type sniff is not a declaration search: its miss is
+                # "probably text", never "the author declared nothing".
+                if _is_byte_class_probe(needle):
+                    sniffs += 1
                     continue
                 findings.append({"file": rel, "line": n.lineno,
                                  "side": w[0], "size": w[1],
                                  "sliced": _sliced_name(n), "searched_by": how})
     return findings, {"modules_parsed": parsed,
                       "constant_size_windows": windows,
+                      "content_type_sniffs": sniffs,
                       "slice_then_search_sites": len(findings)}
 
 
@@ -318,6 +379,7 @@ def main(argv=None) -> int:
 
     print(f"  modules parsed:            {denom['modules_parsed']}")
     print(f"  constant-size windows:     {denom['constant_size_windows']}")
+    print(f"  content-type sniffs:       {denom['content_type_sniffs']}")
     print(f"  slice-then-search sites:   {denom['slice_then_search_sites']}")
     print(f"  inventory rows applied:    {len(known)}")
 
