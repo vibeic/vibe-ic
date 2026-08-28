@@ -15,7 +15,7 @@ Usage:
     python3 benchmark_dispatch.py --list                         # list all known benchmarks
 """
 from __future__ import annotations
-import argparse, hashlib, json, os, subprocess, sys
+import argparse, hashlib, json, os, shutil, subprocess, sys, tempfile
 import re
 from pathlib import Path
 
@@ -149,9 +149,10 @@ def cmd_show(bench: str):
         print(f"  3. Complete blind AI worklists per: {bi}")
         print("     needs_ai_backup.jsonl authors WAIVED candidates; "
               "needs_ai_review.jsonl independently reviews every candidate.")
-        print(f"  4. Converge both rails: python3 {Path(__file__).name} {bench} "
+        print(f"  4. Complete Program First + AI Review: "
+              f"python3 {Path(__file__).name} {bench} "
               "--resume --dataset <DATASET> --run <RUNDIR>")
-        print(f"  5. Score only after dual_track_acceptance.json is COMPLETE: "
+        print(f"  5. Score only after {_ACCEPTANCE_REPORT} is COMPLETE: "
               f"python3 {Path(__file__).name} {bench} --score "
               "--dataset <DATASET> --run <RUNDIR>")
     elif shape == "C":
@@ -493,16 +494,19 @@ def capture_goldens(run_p: Path, bench: str, ai_model: str,
             "sample_not_found": unreachable}
 
 
-# A candidate is not accepted merely because the program emitted it. The
-# program rail and a blind AI semantic-review rail must independently agree.
-_REVIEW_TASK_SCHEMA = "vibeic.benchmark.ai_review_task.v1"
-_AI_REVIEW_SCHEMA = "vibeic.benchmark.ai_review.v1"
-_ACCEPTANCE_SCHEMA = "vibeic.benchmark.dual_track_acceptance.v1"
+# A candidate is not accepted merely because Program emitted it. A blind AI
+# must review the frozen Program result; rejection requires executable proof.
+_REVIEW_TASK_SCHEMA = "vibeic.benchmark.ai_review_task.v2"
+_AI_REVIEW_SCHEMA = "vibeic.benchmark.ai_review.v2"
+_ACCEPTANCE_SCHEMA = "vibeic.benchmark.program_first_ai_review.v2"
+_CANDIDATE_SCHEMA = "vibeic.benchmark.candidate_snapshot.v1"
+_CHALLENGE_SCHEMA = "vibeic.benchmark.ai_verification_challenge.v1"
+_AI_REPAIR_RECORD_SCHEMA = "vibeic.benchmark.ai_repair_record.v1"
 _REVIEW_WORKLIST = "needs_ai_review.jsonl"
 _BACKUP_WORKLIST = "needs_ai_backup.jsonl"
 _REPAIR_WORKLIST = "needs_ai_repair.jsonl"
 _ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
-_ACCEPTANCE_REPORT = "dual_track_acceptance.json"
+_ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
 
 
 def _safe_problem_id(problem_id: str) -> str:
@@ -522,9 +526,118 @@ def _candidate_text(paths: list[Path]) -> str:
     return "\n".join(Path(p).read_text(errors="replace") for p in paths)
 
 
+def _write_immutable_text(path: Path, value: str) -> None:
+    """Write evidence once; a hash-addressed artefact may never be replaced."""
+    path = Path(path)
+    if path.is_file():
+        if path.read_text(errors="replace") != value:
+            raise ValueError(f"immutable evidence changed at {path}")
+        return
+    _atomic_write_text(path, value)
+
+
+def _write_immutable_json(path: Path, value: dict) -> None:
+    """JSON form of :func:`_write_immutable_text`."""
+    path = Path(path)
+    if path.is_file():
+        try:
+            current = json.loads(path.read_text(errors="replace"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"immutable evidence unreadable at {path}: {exc}") from exc
+        if current != value:
+            raise ValueError(f"immutable evidence changed at {path}")
+        return
+    _atomic_write_json(path, value)
+
+
+def _archive_candidate(problem_id: str, project: Path, got: dict,
+                       run_p: Path, candidate_origin: str) -> dict:
+    """Freeze the exact gated candidate before an AI can edit the work tree."""
+    project, run_p = Path(project).resolve(), Path(run_p).resolve()
+    source_paths = _rtl_files(project)
+    completion = str(got.get("completion") or "")
+    rtl_hash = _sha256_text(completion)
+    safe = _safe_problem_id(problem_id)
+    origin = _safe_problem_id(candidate_origin).lower()
+    root = run_p / "candidate_snapshots" / safe / f"{origin}-{rtl_hash}"
+    frozen_paths: list[str] = []
+    for index, source in enumerate(source_paths):
+        frozen = root / "rtl" / f"{index:02d}_{source.name}"
+        _write_immutable_text(frozen, source.read_text(errors="replace"))
+        frozen_paths.append(str(frozen.resolve()))
+    completion_path = root / "completion.txt"
+    payload_path = root / "response_payload.json"
+    _write_immutable_text(completion_path, completion)
+    _write_immutable_json(payload_path, got)
+    record = {
+        "schema": _CANDIDATE_SCHEMA,
+        "id": str(problem_id),
+        "candidate_origin": candidate_origin,
+        "rtl_sha256": rtl_hash,
+        "rtl_paths": frozen_paths,
+        "completion_path": str(completion_path.resolve()),
+        "response_payload_path": str(payload_path.resolve()),
+        "source_rtl_paths": [str(p.resolve()) for p in source_paths],
+    }
+    manifest = root / "manifest.json"
+    record["manifest_path"] = str(manifest.resolve())
+    _write_immutable_json(manifest, record)
+    return record
+
+
+def _validate_candidate_snapshot(candidate: dict, problem_id: str) -> list[str]:
+    """Return tamper/missing reasons for one immutable candidate record."""
+    reasons: list[str] = []
+    if not isinstance(candidate, dict):
+        return ["candidate snapshot is absent"]
+    if candidate.get("schema") != _CANDIDATE_SCHEMA:
+        reasons.append(f"candidate schema must be {_CANDIDATE_SCHEMA!r}")
+    if str(candidate.get("id")) != str(problem_id):
+        reasons.append("candidate id does not match the review task")
+    paths = [Path(str(p)) for p in candidate.get("rtl_paths") or []]
+    if not paths or not all(p.is_file() for p in paths):
+        reasons.append("candidate snapshot RTL is absent")
+    completion_path = Path(str(candidate.get("completion_path") or ""))
+    payload_path = Path(str(candidate.get("response_payload_path") or ""))
+    if not completion_path.is_file():
+        reasons.append("candidate snapshot completion is absent")
+        completion = ""
+    else:
+        completion = completion_path.read_text(errors="replace")
+    expected_hash = candidate.get("rtl_sha256")
+    if _sha256_text(completion) != expected_hash:
+        reasons.append("candidate snapshot completion hash is stale or wrong")
+    if paths:
+        try:
+            if _sha256_text(_candidate_text(paths)) != expected_hash:
+                reasons.append("candidate snapshot RTL bytes do not match completion")
+        except OSError as exc:
+            reasons.append(f"candidate snapshot RTL is unreadable: {exc}")
+    try:
+        payload = json.loads(payload_path.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        reasons.append(f"candidate snapshot response payload is unreadable: {exc}")
+    else:
+        if _sha256_text(str(payload.get("completion") or "")) != expected_hash:
+            reasons.append("candidate snapshot response payload does not match RTL")
+    manifest_path = Path(str(candidate.get("manifest_path") or ""))
+    try:
+        manifest = json.loads(manifest_path.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        reasons.append(f"candidate snapshot manifest is unreadable: {exc}")
+    else:
+        if manifest != candidate:
+            reasons.append("candidate snapshot manifest differs from its task record")
+    return reasons
+
+
 def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                          routing: dict, runner_rc: int, run_p: Path,
-                         candidate_origin: str) -> dict:
+                         candidate_origin: str, *,
+                         verification_challenges: list[dict] | None = None,
+                         program_candidate: dict | None = None,
+                         repair_provenance: dict | None = None) -> dict:
     """Build the hash-bound, oracle-free handoff for one AI review."""
     project, run_p = Path(project).resolve(), Path(run_p).resolve()
     prompt = project / "input" / "phase1_prompt.md"
@@ -533,15 +646,29 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
     if not prompt.is_file() or not paths or not got.get("ok") or not completion:
         raise ValueError("cannot request AI review without prompt + gated RTL")
     safe = _safe_problem_id(problem_id)
+    candidate = _archive_candidate(
+        problem_id, project, got, run_p, candidate_origin)
+    if candidate_origin == "PROGRAM":
+        program_candidate = candidate
+    challenges = verification_challenges or []
+    review_key = (f"{_safe_problem_id(candidate_origin).lower()}-"
+                  f"r{len(challenges)}-{candidate['rtl_sha256']}")
+    challenge_dir = (run_p / "ai_verification_challenges" / safe /
+                     review_key)
     return {
         "schema": _REVIEW_TASK_SCHEMA,
         "id": str(problem_id),
         "project": str(project),
         "candidate_origin": candidate_origin,
+        "candidate_snapshot": candidate,
+        "program_candidate_snapshot": program_candidate,
+        "verification_challenges": challenges,
+        "repair_provenance": repair_provenance,
         "prompt_path": str(prompt),
-        "rtl_paths": [str(p.resolve()) for p in paths],
+        "rtl_paths": candidate["rtl_paths"],
+        "working_rtl_paths": [str(p.resolve()) for p in paths],
         "prompt_sha256": _sha256_text(prompt.read_text(errors="replace")),
-        "rtl_sha256": _sha256_text(completion),
+        "rtl_sha256": candidate["rtl_sha256"],
         "program_routing": {
             "nature": routing.get("nature"),
             "route": routing.get("route"),
@@ -553,7 +680,9 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
             "rtl_gen": got.get("rtl_gen"),
             "runner_rc": int(runner_rc),
         },
-        "review_path": str((run_p / "ai_reviews" / f"{safe}.json").resolve()),
+        "review_path": str((run_p / "ai_reviews" / safe /
+                            f"{review_key}.json").resolve()),
+        "challenge_path": str((challenge_dir / "challenge_tb.sv").resolve()),
         "response_path": str((run_p / "responses" / f"{safe}.json").resolve()),
         "review_requirements": {
             "schema": _AI_REVIEW_SCHEMA,
@@ -565,8 +694,27 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                 "limitation; AI semantic judgment is authoritative"),
             "semantic_verdicts": ["PASS", "FAIL"],
             "semantic_fail_action": (
-                "author corrected RTL, return it through PROGRAM gates, then "
-                "perform a fresh hash-bound AI review"),
+                "write a self-contained prompt-derived executable test to "
+                "challenge_path and describe it in verification_test; the "
+                "reviewed PROGRAM candidate must fail that test before repair "
+                "is authorized. Corrected RTL must pass the SAME immutable "
+                "test, return through PROGRAM gates, then receive a fresh "
+                "hash-bound AI review"),
+            "semantic_fail_verification_test": {
+                "schema": _CHALLENGE_SCHEMA,
+                "path": str((challenge_dir / "challenge_tb.sv").resolve()),
+                "top_module": "vibeic_ai_challenge_tb",
+                "required_result_on_reviewed_candidate": "FAIL",
+                "required_result_on_repair": "PASS",
+                "pass_marker": "VIBEIC_AI_CHALLENGE=PASS",
+                "fail_marker": "VIBEIC_AI_CHALLENGE=FAIL",
+                "constraints": [
+                    "derive assertions only from prompt_path",
+                    "self-contained: no include/readmem/file/system/DPI access",
+                    "compile with the candidate RTL using iverilog -g2012",
+                    "exit zero and print the pass marker only when assertions pass",
+                ],
+            },
             "reviewer_kind": "AI",
             "reviewer_model_required": True,
             "oracle_accessed": False,
@@ -599,11 +747,12 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def _current_task_material(task: dict) -> tuple[str | None, str | None,
                                                  list[str], list[str]]:
-    """Current prompt/RTL hashes plus exact current/stated RTL path sets."""
+    """Current prompt/frozen-RTL hashes plus frozen/stated RTL path sets."""
     prompt = Path(str(task.get("prompt_path") or ""))
-    project = Path(str(task.get("project") or ""))
     stated = sorted(str(Path(p).resolve()) for p in task.get("rtl_paths") or [])
-    current_paths = [str(p.resolve()) for p in _rtl_files(project)]
+    candidate = task.get("candidate_snapshot") or {}
+    current_paths = sorted(
+        str(Path(p).resolve()) for p in candidate.get("rtl_paths") or [])
     prompt_hash = (_sha256_text(prompt.read_text(errors="replace"))
                    if prompt.is_file() else None)
     try:
@@ -612,6 +761,235 @@ def _current_task_material(task: dict) -> tuple[str | None, str | None,
     except OSError:
         rtl_hash = None
     return prompt_hash, rtl_hash, stated, current_paths
+
+
+def _repair_record_path(run_p: Path, task: dict) -> Path:
+    """Stable handoff path for the AI that authors a proven repair."""
+    safe = _safe_problem_id(str(task.get("id")))
+    parent_hash = str(task.get("rtl_sha256") or "missing")
+    return (Path(run_p).resolve() / "ai_repairs" / safe /
+            f"repair-of-{parent_hash}.json")
+
+
+def _validate_repair_record(path: Path, task: dict, repaired_hash: str,
+                            challenge: dict) -> tuple[dict | None, list[str]]:
+    """Bind an AI repair's author and rationale to parent/new/test hashes."""
+    path = Path(path).resolve()
+    reasons: list[str] = []
+    try:
+        raw = path.read_text(errors="replace")
+        record = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, [f"AI repair record is absent or unreadable: {exc}"]
+    if not isinstance(record, dict):
+        return None, ["AI repair record is not a JSON object"]
+    expected = {
+        "schema": _AI_REPAIR_RECORD_SCHEMA,
+        "id": str(task.get("id")),
+        "prompt_sha256": task.get("prompt_sha256"),
+        "parent_rtl_sha256": task.get("rtl_sha256"),
+        "repaired_rtl_sha256": repaired_hash,
+        "challenge_sha256": challenge.get("sha256"),
+    }
+    for key, value in expected.items():
+        if record.get(key) != value:
+            reasons.append(f"AI repair record {key} is stale or wrong")
+    author = record.get("author") or {}
+    if author.get("kind") != "AI":
+        reasons.append("AI repair record author.kind must be AI")
+    model = str(author.get("model") or "").strip()
+    if not model or model.lower() in {"unknown", "unspecified", "n/a"}:
+        reasons.append("AI repair record author.model must name the AI model")
+    if record.get("oracle_accessed") is not False:
+        reasons.append("AI repair record oracle_accessed must be false")
+    if len(str(record.get("rationale") or "").strip()) < 40:
+        reasons.append("AI repair record rationale must explain the repair")
+    if reasons:
+        return None, reasons
+    return {**record, "path": str(path), "sha256": _sha256_text(raw)}, []
+
+
+def _validate_embedded_repair_provenance(task: dict) -> list[str]:
+    """Ensure a final AI_REPAIR review still names its actual repair author."""
+    if task.get("candidate_origin") != "AI_REPAIR":
+        return []
+    provenance = task.get("repair_provenance")
+    if not isinstance(provenance, dict):
+        return ["AI_REPAIR candidate lacks repair_provenance"]
+    program = task.get("program_candidate_snapshot") or {}
+    challenges = task.get("verification_challenges") or []
+    expected_challenge_hashes = {str(c.get("sha256")) for c in challenges}
+    reasons = []
+    if provenance.get("schema") != _AI_REPAIR_RECORD_SCHEMA:
+        reasons.append("repair_provenance schema is invalid")
+    if str(provenance.get("id")) != str(task.get("id")):
+        reasons.append("repair_provenance id does not match task")
+    if provenance.get("prompt_sha256") != task.get("prompt_sha256"):
+        reasons.append("repair_provenance prompt hash is stale")
+    if provenance.get("parent_rtl_sha256") != program.get("rtl_sha256"):
+        reasons.append("repair_provenance parent hash is stale")
+    if provenance.get("repaired_rtl_sha256") != task.get("rtl_sha256"):
+        reasons.append("repair_provenance repaired hash is stale")
+    if str(provenance.get("challenge_sha256")) not in expected_challenge_hashes:
+        reasons.append("repair_provenance challenge hash is not inherited")
+    author = provenance.get("author") or {}
+    if author.get("kind") != "AI" or not str(author.get("model") or "").strip():
+        reasons.append("repair_provenance must name the AI author model")
+    if provenance.get("oracle_accessed") is not False:
+        reasons.append("repair_provenance oracle_accessed must be false")
+    path = Path(str(provenance.get("path") or ""))
+    try:
+        raw = path.read_text(errors="replace")
+        disk = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        reasons.append(f"repair_provenance file is absent or unreadable: {exc}")
+    else:
+        embedded = {k: v for k, v in provenance.items()
+                    if k not in {"path", "sha256"}}
+        if disk != embedded:
+            reasons.append("repair_provenance differs from its evidence file")
+        if _sha256_text(raw) != provenance.get("sha256"):
+            reasons.append("repair_provenance file hash is stale")
+    return reasons
+
+
+_CHALLENGE_FORBIDDEN = re.compile(
+    r"`\s*include|\$(?:readmem[hb]|fopen|fread|fscanf|sscanf|system)|"
+    r"\b(?:DPI|VPI|PLI)\b",
+    re.I,
+)
+
+
+def _verified_prompt_evidence(items, prompt_text: str) -> list[dict]:
+    """Keep only exact normalized excerpts tied to a non-trivial claim."""
+    verified = []
+    if not isinstance(items, list):
+        return verified
+    normalized_prompt = re.sub(r"\s+", " ", prompt_text).strip()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        excerpt = re.sub(r"\s+", " ", str(item.get("excerpt") or "")).strip()
+        supports = str(item.get("supports") or "").strip()
+        if (len(excerpt) >= 8 and excerpt in normalized_prompt
+                and len(supports) >= 12):
+            verified.append({"excerpt": excerpt, "supports": supports})
+    return verified
+
+
+def _challenge_from_review(task: dict, review: dict,
+                           prompt_text: str) -> tuple[dict | None, list[str]]:
+    """Validate and freeze an AI-authored prompt-only executable challenge."""
+    raw = review.get("verification_test")
+    reasons: list[str] = []
+    if not isinstance(raw, dict):
+        return None, ["semantic FAIL requires verification_test"]
+    if raw.get("schema") != _CHALLENGE_SCHEMA:
+        reasons.append(f"verification_test.schema must be {_CHALLENGE_SCHEMA!r}")
+    expected_path = Path(str(task.get("challenge_path") or "")).resolve()
+    actual_path = Path(str(raw.get("path") or "")).resolve()
+    if actual_path != expected_path:
+        reasons.append("verification_test.path must equal the task challenge_path")
+    if str(raw.get("top_module") or "") != "vibeic_ai_challenge_tb":
+        reasons.append("verification_test.top_module must be vibeic_ai_challenge_tb")
+    if not actual_path.is_file():
+        reasons.append("verification test file is absent")
+        source = ""
+    else:
+        if actual_path.is_symlink():
+            reasons.append("verification test must be a real file, not a symlink")
+        source = actual_path.read_text(errors="replace")
+    source_hash = _sha256_text(source)
+    if raw.get("sha256") != source_hash:
+        reasons.append("verification_test.sha256 is stale or wrong")
+    if _CHALLENGE_FORBIDDEN.search(source):
+        reasons.append("verification test is not self-contained")
+    if "module vibeic_ai_challenge_tb" not in source:
+        reasons.append("verification test must define vibeic_ai_challenge_tb")
+    if "VIBEIC_AI_CHALLENGE=PASS" not in source:
+        reasons.append("verification test must print VIBEIC_AI_CHALLENGE=PASS")
+    if "VIBEIC_AI_CHALLENGE=FAIL" not in source:
+        reasons.append("verification test must print VIBEIC_AI_CHALLENGE=FAIL "
+                       "before failing")
+    rationale = str(raw.get("rationale") or "").strip()
+    expected_behavior = str(raw.get("expected_behavior") or "").strip()
+    if len(rationale) < 80:
+        reasons.append("verification_test.rationale must explain the test in "
+                       "at least 80 characters")
+    if len(expected_behavior) < 24:
+        reasons.append("verification_test.expected_behavior must state the "
+                       "checked behavior")
+    verified_evidence = _verified_prompt_evidence(
+        raw.get("prompt_evidence") or [], prompt_text)
+    if not verified_evidence:
+        reasons.append("verification_test needs prompt-bound evidence")
+    if reasons:
+        return None, reasons
+    challenge = {
+        "schema": _CHALLENGE_SCHEMA,
+        "id": str(task.get("id")),
+        "path": str(actual_path),
+        "sha256": source_hash,
+        "top_module": "vibeic_ai_challenge_tb",
+        "prompt_sha256": task.get("prompt_sha256"),
+        "reviewed_rtl_sha256": task.get("rtl_sha256"),
+        "prompt_evidence": verified_evidence,
+        "expected_behavior": expected_behavior,
+        "rationale": rationale,
+    }
+    return challenge, []
+
+
+def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
+    """Compile/run one immutable test against one immutable candidate."""
+    reasons = _validate_candidate_snapshot(candidate, str(candidate.get("id")))
+    if reasons:
+        return {"status": "INVALID", "reasons": reasons}
+    test_path = Path(str(challenge.get("path") or ""))
+    try:
+        source = test_path.read_text(errors="replace")
+    except OSError as exc:
+        return {"status": "INVALID", "reasons": [f"challenge unreadable: {exc}"]}
+    if _sha256_text(source) != challenge.get("sha256"):
+        return {"status": "INVALID", "reasons": ["challenge hash changed"]}
+    if _CHALLENGE_FORBIDDEN.search(source):
+        return {"status": "INVALID",
+                "reasons": ["challenge is not self-contained"]}
+    iverilog, vvp = shutil.which("iverilog"), shutil.which("vvp")
+    if not iverilog or not vvp:
+        return {"status": "UNAVAILABLE", "reasons": ["iverilog/vvp unavailable"]}
+    rtl_paths = [str(Path(p)) for p in candidate.get("rtl_paths") or []]
+    with tempfile.TemporaryDirectory(prefix="vibeic-ai-challenge-") as td:
+        out = Path(td) / "simv"
+        try:
+            comp = subprocess.run(
+                [iverilog, "-g2012", "-s", "vibeic_ai_challenge_tb",
+                 "-o", str(out), *rtl_paths, str(test_path)],
+                cwd=td, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return {"status": "INVALID", "reasons": ["challenge compile timed out"]}
+        if comp.returncode != 0:
+            return {"status": "INVALID", "reasons": [
+                "challenge does not compile with the candidate",
+                (comp.stderr or comp.stdout)[-1200:],
+            ]}
+        try:
+            sim = subprocess.run(
+                [vvp, str(out)], cwd=td, capture_output=True, text=True,
+                timeout=30)
+        except subprocess.TimeoutExpired:
+            return {"status": "INVALID", "returncode": None,
+                    "reasons": ["challenge simulation timed out"]}
+    output = (sim.stdout or "") + (sim.stderr or "")
+    passed = sim.returncode == 0 and "VIBEIC_AI_CHALLENGE=PASS" in output
+    failed = sim.returncode != 0 and "VIBEIC_AI_CHALLENGE=FAIL" in output
+    return {
+        "status": ("PASS" if passed else ("FAIL" if failed else "INVALID")),
+        "returncode": sim.returncode,
+        "output": output[-2000:],
+        "candidate_rtl_sha256": candidate.get("rtl_sha256"),
+        "challenge_sha256": challenge.get("sha256"),
+    }
 
 
 def _validate_ai_review(task: dict) -> dict:
@@ -623,16 +1001,19 @@ def _validate_ai_review(task: dict) -> dict:
     valid semantic FAIL is a real ``REPAIR_REQUIRED`` decision, not a malformed
     review and not a permanent convergence failure.
     """
+    task_reasons: list[str] = []
+    if task.get("schema") != _REVIEW_TASK_SCHEMA:
+        task_reasons.append(f"review task schema must be {_REVIEW_TASK_SCHEMA!r}")
     review_path = Path(str(task.get("review_path") or ""))
     if not review_path.is_file():
         return {"status": "PENDING", "review_path": str(review_path),
-                "reasons": ["AI review file is absent"]}
+                "reasons": task_reasons + ["AI review file is absent"]}
     try:
         review = json.loads(review_path.read_text(errors="replace"))
     except (OSError, json.JSONDecodeError) as exc:
         return {"status": "REJECTED", "review_path": str(review_path),
                 "reasons": [f"AI review is unreadable: {type(exc).__name__}: {exc}"]}
-    reasons: list[str] = []
+    reasons: list[str] = task_reasons
     if not isinstance(review, dict):
         reasons.append("AI review is not a JSON object")
         review = {}
@@ -667,22 +1048,9 @@ def _validate_ai_review(task: dict) -> dict:
     prompt_path = Path(str(task.get("prompt_path") or ""))
     prompt_text = (prompt_path.read_text(errors="replace")
                    if prompt_path.is_file() else "")
-    normalized_prompt = re.sub(r"\s+", " ", prompt_text).strip()
-
-    def _verified_prompt_evidence(items) -> list[dict]:
-        verified = []
-        if not isinstance(items, list):
-            return verified
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            excerpt = re.sub(
-                r"\s+", " ", str(item.get("excerpt") or "")).strip()
-            supports = str(item.get("supports") or "").strip()
-            if (len(excerpt) >= 8 and excerpt in normalized_prompt
-                    and len(supports) >= 12):
-                verified.append({"excerpt": excerpt, "supports": supports})
-        return verified
+    reasons.extend(_validate_candidate_snapshot(
+        task.get("candidate_snapshot") or {}, str(task.get("id"))))
+    reasons.extend(_validate_embedded_repair_provenance(task))
 
     routing = review.get("routing") or {}
     expected_nature = (task.get("program_routing") or {}).get("nature")
@@ -697,7 +1065,7 @@ def _validate_ai_review(task: dict) -> dict:
         if not isinstance(evidence, list):
             reasons.append("override.prompt_evidence must be a list")
             evidence = []
-        verified_evidence = _verified_prompt_evidence(evidence)
+        verified_evidence = _verified_prompt_evidence(evidence, prompt_text)
         explanation = str(override.get("explanation") or "").strip()
         if not verified_evidence and len(explanation) < 160:
             reasons.append("OVERRIDE_PROGRAM needs prompt-bound evidence or a "
@@ -720,7 +1088,8 @@ def _validate_ai_review(task: dict) -> dict:
     semantic_verdict = semantic.get("verdict")
     findings = semantic.get("findings")
     semantic_evidence = semantic.get("prompt_evidence") or []
-    verified_semantic_evidence = _verified_prompt_evidence(semantic_evidence)
+    verified_semantic_evidence = _verified_prompt_evidence(
+        semantic_evidence, prompt_text)
     if semantic_verdict not in {"PASS", "FAIL"}:
         reasons.append("AI semantic_review verdict must be PASS or FAIL")
     if not isinstance(findings, list):
@@ -731,10 +1100,38 @@ def _validate_ai_review(task: dict) -> dict:
     rationale = str(semantic.get("rationale") or "").strip()
     if len(rationale) < 16:
         reasons.append("semantic_review.rationale must state the review basis")
-    if (semantic_verdict == "FAIL" and not verified_semantic_evidence
-            and not verified_evidence and len(rationale) < 160):
-        reasons.append("semantic FAIL needs prompt-bound evidence or a detailed "
-                       "rationale of at least 160 characters")
+    challenge = None
+    challenge_result = None
+    if semantic_verdict == "FAIL":
+        challenge, challenge_reasons = _challenge_from_review(
+            task, review, prompt_text)
+        reasons.extend(challenge_reasons)
+        if challenge is not None:
+            challenge_result = _run_verification_challenge(
+                task.get("candidate_snapshot") or {}, challenge)
+            if challenge_result.get("status") != "FAIL":
+                reasons.append("AI finding is not proven: the reviewed candidate "
+                               "must fail the prompt-derived verification test")
+    inherited_challenge_results = []
+    for inherited in task.get("verification_challenges") or []:
+        inherited_reasons = []
+        if inherited.get("schema") != _CHALLENGE_SCHEMA:
+            inherited_reasons.append("inherited challenge schema is invalid")
+        if str(inherited.get("id")) != str(task.get("id")):
+            inherited_reasons.append("inherited challenge id does not match task")
+        if inherited.get("prompt_sha256") != task.get("prompt_sha256"):
+            inherited_reasons.append("inherited challenge prompt hash is stale")
+        if inherited_reasons:
+            reasons.extend(inherited_reasons)
+            inherited_challenge_results.append({
+                "status": "INVALID", "reasons": inherited_reasons})
+            continue
+        result = _run_verification_challenge(
+            task.get("candidate_snapshot") or {}, inherited)
+        inherited_challenge_results.append(result)
+        if result.get("status") != "PASS":
+            reasons.append("repair does not pass every immutable verification "
+                           "test that proved its parent candidate wrong")
     if reasons:
         status = "REJECTED"
         decision_reasons = reasons
@@ -756,12 +1153,16 @@ def _validate_ai_review(task: dict) -> dict:
             "semantic_findings_detail": findings,
             "semantic_rationale": rationale,
             "verified_semantic_prompt_evidence": verified_semantic_evidence,
+            "verified_challenge": challenge,
+            "challenge_result": challenge_result,
+            "inherited_challenge_results": inherited_challenge_results,
             "override": ({**override, "verified_prompt_evidence": verified_evidence}
                          if routing_verdict == "OVERRIDE_PROGRAM" else None)}
 
 
-def _attach_ai_review_attribution(result: dict, verdict: dict) -> None:
-    """Put the second rail's WHO/HOW into this problem's four-phase record."""
+def _attach_ai_review_attribution(result: dict, verdict: dict,
+                                  task: dict) -> None:
+    """Put Program First's AI review WHO/HOW into the four-phase record."""
     phases = result.get("phases") or {}
     result["phases"] = phases
     status = verdict.get("status")
@@ -788,6 +1189,21 @@ def _attach_ai_review_attribution(result: dict, verdict: dict) -> None:
             "how": "blind prompt-versus-RTL review, hash-bound to rtl_sha256",
         },
     })
+    program_candidate = task.get("program_candidate_snapshot") or {}
+    initial_origin = (program_candidate.get("candidate_origin")
+                      or task.get("candidate_origin") or "NONE")
+    result["initial_candidate_origin"] = initial_origin
+    phases.setdefault("phase2_solving", {}).update({
+        "program_first_candidate": {
+            "origin": initial_origin,
+            "rtl_sha256": program_candidate.get("rtl_sha256"),
+            "how": "Program emitted and gated the immutable first candidate",
+        },
+        "accepted_candidate": {
+            "origin": task.get("candidate_origin"),
+            "rtl_sha256": task.get("rtl_sha256"),
+        },
+    })
     if status == "REPAIR_REQUIRED":
         phases.setdefault("phase4_debugging", {})[
             "ai_semantic_repair_handoff"] = {
@@ -798,17 +1214,43 @@ def _attach_ai_review_attribution(result: dict, verdict: dict) -> None:
                         "return through PROGRAM gates and a fresh AI review"),
                 "physical_eco": False,
             }
-    result["dual_track_review"] = {
+    repair = task.get("repair_provenance") or {}
+    if task.get("candidate_origin") == "AI_REPAIR" and repair:
+        phases.setdefault("phase4_debugging", {})[
+            "ai_semantic_repair"] = {
+                "actor": (repair.get("author") or {}).get("model"),
+                "mechanism": "AI",
+                "status": "VERIFIED_AND_ACCEPTED" if status == "ACCEPTED"
+                          else status,
+                "rationale": repair.get("rationale"),
+                "parent_rtl_sha256": repair.get("parent_rtl_sha256"),
+                "repaired_rtl_sha256": repair.get("repaired_rtl_sha256"),
+                "challenge_sha256": repair.get("challenge_sha256"),
+                "program_reentry": "step 2 gates",
+                "fresh_ai_review_actor": model,
+                "physical_eco": False,
+            }
+    result["program_first_ai_review"] = {
         k: verdict.get(k) for k in (
             "status", "reviewer_model", "routing_verdict", "ai_nature",
             "semantic_verdict", "semantic_findings", "override")
     }
+    result["program_first_ai_review"]["repair_provenance"] = repair or None
 
 
 def _program_enhancement_candidate(task: dict, result: dict,
                                    verdict: dict) -> dict:
     """A durable, non-blocking follow-up when AI exposes program rigidity."""
     override = verdict.get("override") or {}
+    if verdict.get("verified_challenge"):
+        why_non_blocking = (
+            "AI supplied prompt-bound executable evidence; convert the same "
+            "test into a reusable Program regression without rewriting this "
+            "already-frozen benchmark attempt")
+    else:
+        why_non_blocking = (
+            "AI supplied an auditable route interpretation; improve the "
+            "reusable Program router without rewriting this frozen attempt")
     return {
         "schema": "vibeic.benchmark.program_enhancement_candidate.v1",
         "id": str(task.get("id")),
@@ -816,6 +1258,10 @@ def _program_enhancement_candidate(task: dict, result: dict,
         "prompt_sha256": task.get("prompt_sha256"),
         "rtl_sha256": task.get("rtl_sha256"),
         "review_path": task.get("review_path"),
+        "program_candidate_snapshot": task.get("program_candidate_snapshot"),
+        "reviewed_candidate_snapshot": task.get("candidate_snapshot"),
+        "verified_challenge": verdict.get("verified_challenge"),
+        "challenge_result": verdict.get("challenge_result"),
         "program_routing": task.get("program_routing"),
         "ai_routing": {
             "verdict": verdict.get("routing_verdict"),
@@ -834,14 +1280,47 @@ def _program_enhancement_candidate(task: dict, result: dict,
         "candidate_origin": result.get("candidate_origin"),
         "status": "OPEN_PROGRAM_ENHANCEMENT",
         "blocking_acceptance": False,
+        "why_non_blocking": why_non_blocking,
+    }
+
+
+def _verified_program_recovery(task: dict, result: dict,
+                               verdict: dict) -> dict:
+    """Capture a repair only after it passes the tests that proved Program wrong."""
+    return {
+        "schema": "vibeic.benchmark.program_enhancement_candidate.v2",
+        "id": str(task.get("id")),
+        "project": task.get("project"),
+        "prompt_sha256": task.get("prompt_sha256"),
+        "rtl_sha256": task.get("rtl_sha256"),
+        "semantic_verdict": "VERIFIED_RECOVERY",
+        "program_candidate_snapshot": task.get("program_candidate_snapshot"),
+        "repaired_candidate_snapshot": task.get("candidate_snapshot"),
+        "verification_challenges": task.get("verification_challenges") or [],
+        "repair_challenge_results":
+            verdict.get("inherited_challenge_results") or [],
+        "repair_provenance": task.get("repair_provenance"),
+        "fresh_ai_review_path": task.get("review_path"),
+        "fresh_ai_reviewer_model": verdict.get("reviewer_model"),
+        "candidate_origin": result.get("candidate_origin"),
+        "status": "VERIFIED_AI_RECOVERY_READY_FOR_PROGRAM_CAPTURE",
+        "required_capture": {
+            "action": (
+                "add the immutable prompt-derived challenge as a Program "
+                "regression and enhance the reusable Program implementation"),
+            "acceptance": (
+                "the enhanced Program candidate passes the captured challenge "
+                "on its first attempt without AI repair"),
+        },
+        "blocking_acceptance": False,
         "why_non_blocking": (
-            "AI supplied an auditable semantic decision; improve the reusable "
-            "program without trapping this benchmark item in permanent disagreement"),
+            "the current repair is independently proven and accepted; capture "
+            "improves the next Program First attempt without rewriting this run"),
     }
 
 
 def _four_phase_rollup(fpa, results: list[dict]) -> dict:
-    """General attribution plus benchmark dual-track counts and actors."""
+    """General attribution plus Program First / AI Review counts and actors."""
     out = fpa.summarize(results)
 
     def counts(values) -> dict:
@@ -851,22 +1330,27 @@ def _four_phase_rollup(fpa, results: list[dict]) -> dict:
             result[key] = result.get(key, 0) + 1
         return result
 
-    reviews = [r.get("dual_track_review") or {} for r in results]
+    reviews = [r.get("program_first_ai_review") or {} for r in results]
     out["phase1_ai_review_status"] = counts(
         v.get("status") or "PENDING" for v in reviews)
     out["phase1_ai_review_models"] = counts(
         v.get("reviewer_model") or "PENDING" for v in reviews)
     out["phase2_candidate_origin"] = counts(
         r.get("candidate_origin", "NONE") for r in results)
+    out["phase2_initial_candidate_origin"] = counts(
+        r.get("initial_candidate_origin", r.get("candidate_origin", "NONE"))
+        for r in results)
     out["phase3_ai_semantic_verdict"] = counts(
         v.get("semantic_verdict") or "PENDING" for v in reviews)
     out["phase4_ai_repair_required"] = counts(
         bool(r.get("ai_repair_required")) for r in results)
+    out["phase4_ai_repairs_completed"] = counts(
+        r.get("candidate_origin") == "AI_REPAIR" for r in results)
     return out
 
 
-def _require_dual_track_acceptance(run_p: Path) -> None:
-    """Hard-block scoring of a solve-run until both rails accepted every id."""
+def _require_program_first_ai_acceptance(run_p: Path) -> None:
+    """Block scoring until Program gates and blind AI review accept every id."""
     run_p = Path(run_p).resolve()
     solve_p = run_p / "solve_report.json"
     if not solve_p.is_file():
@@ -878,30 +1362,39 @@ def _require_dual_track_acceptance(run_p: Path) -> None:
     policy = solve.get("acceptance_policy") or {}
     if policy.get("required") is not True:
         return
+    if (policy.get("review_task_schema") != _REVIEW_TASK_SCHEMA
+            or policy.get("review_schema") != _AI_REVIEW_SCHEMA):
+        raise SystemExit("Program First + AI Review acceptance BLOCKED: solve "
+                         "uses an obsolete proof schema; start a fresh run")
     acc_p = run_p / _ACCEPTANCE_REPORT
     if not acc_p.is_file():
-        raise SystemExit("dual-track acceptance BLOCKED: no acceptance report; "
+        raise SystemExit("Program First + AI Review acceptance BLOCKED: "
+                         "no acceptance report; "
                          "run --resume after completing needs_ai_review.jsonl")
     try:
         acceptance = json.loads(acc_p.read_text(errors="replace"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"dual-track acceptance BLOCKED: unreadable {acc_p}: {exc}")
+        raise SystemExit("Program First + AI Review acceptance BLOCKED: "
+                         f"unreadable {acc_p}: {exc}")
     if (acceptance.get("schema") != _ACCEPTANCE_SCHEMA
             or acceptance.get("status") != "COMPLETE"):
-        raise SystemExit("dual-track acceptance BLOCKED: acceptance status is "
+        raise SystemExit("Program First + AI Review acceptance BLOCKED: "
+                         "acceptance status is "
                          f"{acceptance.get('status', 'INVALID')}, not COMPLETE")
 
     tasks = _read_jsonl(run_p / _REVIEW_WORKLIST)
     expected = [str(r.get("id")) for r in solve.get("results") or []]
     by_id = {str(t.get("id")): t for t in tasks}
     if len(by_id) != len(tasks) or sorted(by_id) != sorted(expected):
-        raise SystemExit("dual-track acceptance BLOCKED: review worklist ids do "
+        raise SystemExit("Program First + AI Review acceptance BLOCKED: "
+                         "review worklist ids do "
                          "not exactly match solve_report results")
     accepted_ids = [str(pid) for pid in acceptance.get("accepted_ids") or []]
     if (sorted(accepted_ids) != sorted(expected)
             or acceptance.get("accepted") != len(expected)
             or acceptance.get("total") != len(expected)):
-        raise SystemExit("dual-track acceptance BLOCKED: COMPLETE report does "
+        raise SystemExit("Program First + AI Review acceptance BLOCKED: "
+                         "COMPLETE report does "
                          "not account for every solve_report result")
     failures = []
     for pid in expected:
@@ -919,8 +1412,69 @@ def _require_dual_track_acceptance(run_p: Path) -> None:
         if _sha256_text(str(payload.get("completion") or "")) != task.get("rtl_sha256"):
             failures.append(f"{pid}: response bytes do not match reviewed RTL")
     if failures:
-        raise SystemExit("dual-track acceptance BLOCKED:\n  "
+        raise SystemExit("Program First + AI Review acceptance BLOCKED:\n  "
                          + "\n  ".join(failures))
+
+
+def _export_accepted_shape_b_samples(bench: str, dataset: Path,
+                                     run_p: Path) -> None:
+    """Export accepted frozen candidates through Shape B's sole emit path.
+
+    Program First deliberately publishes hash-bound response payloads only
+    after AI acceptance.  The scorer, however, consumes ``samples/`` carrying
+    emit attestations.  Bridge those two contracts here, after blindness and
+    acceptance gates but before the scorer: export the immutable reviewed RTL,
+    never a mutable working copy, through ``shape_b_sample_export``.
+    """
+    if _entry(bench).get("shape") != "B":
+        return
+    import benchmark_io_adapter as bio                    # noqa: PLC0415
+    import shape_b_sample_export as sample_export          # noqa: PLC0415
+
+    fmt = _BENCH_FORMAT.get(bench)
+    if fmt is None:
+        raise SystemExit(f"no IO adapter bound for {bench!r}")
+    dataset = Path(dataset).resolve()
+    try:
+        problems = {str(row["id"]): row
+                    for row in bio.problems(fmt, dataset)}
+        tasks = _read_jsonl(run_p / _REVIEW_WORKLIST)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"accepted sample export setup failed: {exc}") from exc
+
+    failures = []
+    samples = run_p / "samples"
+    for task in tasks:
+        pid = str(task.get("id"))
+        candidate = task.get("candidate_snapshot") or {}
+        paths = [Path(str(p)) for p in candidate.get("rtl_paths") or []]
+        if not paths or len({p.parent.resolve() for p in paths}) != 1:
+            failures.append(f"{pid}: frozen RTL is absent or spans directories")
+            continue
+        problem = problems.get(pid)
+        if problem is None:
+            failures.append(f"{pid}: no dataset input record")
+            continue
+        problem_root = Path(str(problem.get("root") or "")).resolve()
+        try:
+            design = str(problem_root.relative_to(dataset))
+        except ValueError:
+            failures.append(f"{pid}: dataset problem root escapes dataset")
+            continue
+        result = sample_export.export(
+            paths[0].parent, pid, samples,
+            dataset=dataset, design=design,
+            prompt=Path(str(task.get("prompt_path") or "")),
+            project=Path(str(task.get("project") or "")))
+        if result.get("verdict") != "PASS":
+            failures.append(
+                f"{pid}: {result.get('reason') or 'emit rejected'}: "
+                f"{result.get('note') or result.get('block_reason') or ''}")
+    if failures:
+        raise SystemExit("accepted Shape-B sample export BLOCKED:\n  "
+                         + "\n  ".join(failures))
+    print(f"Program First export: {len(tasks)}/{len(tasks)} accepted frozen "
+          f"candidate(s) passed Shape-B emit -> {samples}")
 
 
 def cmd_score(bench: str, run: str, dataset: str | None,
@@ -931,7 +1485,7 @@ def cmd_score(bench: str, run: str, dataset: str | None,
     if e["shape"] not in ("B", "C"):
         raise SystemExit(f"--score only handles Shape B + C here. Shape {e['shape']} → use score_cocotb_mcp.py / benchmark-verify skill.")
     run_p = Path(run).resolve()
-    _require_dual_track_acceptance(run_p)
+    _require_program_first_ai_acceptance(run_p)
     # Front-door Vibe-IC entry gate (owner directive 2026-06-28): refuse to
     # score a run that did not enter through the Vibe-IC plugin.  Direct-agent
     # authoring / patching followed by a host-scorer invocation measures
@@ -1006,6 +1560,7 @@ def cmd_score(bench: str, run: str, dataset: str | None,
               "scored on this branch MUST disclose 'blindness audit "
               "unavailable' in its RESULT.md (ORGANIC-20260605-transcripts-"
               "export-default).")
+    _export_accepted_shape_b_samples(bench, ds_p, run_p)
     # Front-door GATE-AS-SOLE-EMIT-PATH guard: every scoreable sample MUST carry a
     # valid emit-path attestation (gates_atomic / shape_b_sample_export wrote it on a
     # clean emit). A sample authored directly into samples/ — bypassing the emit gates
@@ -1220,7 +1775,7 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
                   "candidate_origin": ("PROGRAM" if got.get("ok") else
                                        ("AI_BACKUP_PENDING" if waive else
                                         "NONE")),
-                  "dual_track_review": {"status": "PENDING"},
+                  "program_first_ai_review": {"status": "PENDING"},
                   "ai_repair_required": False,
                   "awaiting_ai_review": bool(got.get("ok")),
                   "awaiting_ai_backup": bool(waive and not got.get("ok")),
@@ -1239,7 +1794,7 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
             # not exist. The review must independently classify the same prompt.
             p1 = (phases.get("phase1_routing") or {})
             p1["needs_ai_parse_consumed_by"] = (
-                f"blind AI dual-track review at {task['review_path']}")
+                f"blind Program First AI review at {task['review_path']}")
         elif waive:
             backlog.append({
                 "schema": "vibeic.benchmark.ai_backup_task.v1",
@@ -1292,8 +1847,9 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
                      "may AGREE or evidence-backed OVERRIDE_PROGRAM"),
             "semantic_authority": "AI",
             "program_disagreement": (
-                "repair and re-gate candidate; preserve a non-blocking reusable "
-                "program-enhancement candidate rather than deadlock"),
+                "AI must prove the issue with a prompt-derived executable test "
+                "that the frozen Program candidate fails; repair must pass the "
+                "same immutable test, all Program gates, and a fresh AI review"),
             "review_task_schema": _REVIEW_TASK_SCHEMA,
             "review_schema": _AI_REVIEW_SCHEMA,
             "score_gate": _ACCEPTANCE_REPORT,
@@ -1312,22 +1868,22 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
     ok = sum(1 for r in results if r["ok"])
     waiting = sum(1 for r in results if r.get("awaiting_ai"))
     print(f"\n{ok}/{len(results)} produced a gated candidate; 0 accepted"
-          + (f", {waiting} awaiting an AI rail" if waiting else "")
+          + (f", {waiting} awaiting AI review/backup" if waiting else "")
           + f" -> {run_p}/solve_report.json")
     # 2 = handed off, not failed. Even when every PROGRAM candidate exists, no
-    # response is accepted until the independent AI rail agrees.
+    # response is accepted until the blind AI review agrees.
     return 2 if results and waiting == len(results) else 1
 
 
 def cmd_resume(bench: str, dataset: str, run: str) -> int:
-    """Advance AI backup/review work and publish only dual-track acceptances.
+    """Advance Program First / AI Review work and publish only acceptances.
 
-    There are two distinct AI jobs.  A runner WAIVE asks AI backup to author a
-    candidate, which is then returned through the PROGRAM gates.  Every gated
-    candidate, including a program-authored one, separately requires a blind
-    AI route + semantic review.  Only a hash-bound PASS on both rails writes a
-    scorer response.  A changed candidate is re-gated and receives a fresh
-    review task; a changed prompt is never legitimised by refresh.
+    PROGRAM emits first. A runner WAIVE is the sole case in which AI backup
+    authors the initial candidate. Every gated candidate then receives a blind
+    AI route + semantic review. AI may reject only with a prompt-derived test
+    that the frozen candidate actually fails; a repair must pass that same
+    immutable test plus PROGRAM gates and a fresh review. A changed prompt is
+    never legitimised by refresh.
     """
     import subprocess                                    # noqa: PLC0415
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1346,9 +1902,12 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         print(f"ERROR: unreadable solve report {solve_p}: {exc}",
               file=sys.stderr)
         return 2
-    if (solve.get("acceptance_policy") or {}).get("required") is not True:
-        print("ERROR: this solve predates the dual-track acceptance policy; "
-              "start a fresh --solve run", file=sys.stderr)
+    policy = solve.get("acceptance_policy") or {}
+    if (policy.get("required") is not True
+            or policy.get("review_task_schema") != _REVIEW_TASK_SCHEMA
+            or policy.get("review_schema") != _AI_REVIEW_SCHEMA):
+        print("ERROR: this solve predates the current Program First + AI Review "
+              "proof schemas; start a fresh --solve run", file=sys.stderr)
         return 2
     fmt = _BENCH_FORMAT.get(bench)
     if fmt is None:
@@ -1377,7 +1936,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         argv = [sys.executable, str(runner), str(proj), "--skip-analog",
                 "--skip-hardware", "--skip-phase3"]
         if supplied_rtl:
-            # The AI rail has already authored the candidate. Re-enter at the
+            # AI backup/repair has already authored the candidate. Re-enter at the
             # first RTL-validation step so program-first does not author again
             # and overwrite the hash whose semantics the AI just repaired.
             argv += ["--entry-step", "2"]
@@ -1412,8 +1971,8 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         for row in prior_enhancements
     }
 
-    # Rail 2a: AI authored after a deterministic WAIVE.  It still has to pass
-    # the exact same runner and then enters the independent review rail.
+    # AI backup authors only after a deterministic WAIVE. It still has to pass
+    # the exact same runner and then enters the ordinary blind AI review.
     for item in backup:
         pid = str(item.get("id"))
         result = result_by_id.get(pid)
@@ -1448,7 +2007,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             # rejected files, the next --resume must know to re-run the gates.
             remaining_backup.append(item)
             repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
                 "id": pid, "project": str(proj),
                 "status": "PROGRAM_GATES_REJECTED_AI_BACKUP",
                 "reasons": [str(got.get("reason") or "runner rejected RTL")],
@@ -1462,9 +2021,10 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                            "ai_repair_required": True})
             print(f"  {pid:44s} AI backup rejected by PROGRAM gates (rc={rc})")
 
-    # Rail 2b: an AI repair changes candidate bytes.  Re-run program gates and
-    # replace the old hash-bound task.  The prompt itself is immutable input;
-    # refreshing its hash would turn prompt tampering into accepted evidence.
+    # AI repair is authorised only after the frozen candidate has demonstrably
+    # failed a self-contained prompt-derived test.  Preserve that exact test,
+    # re-run the normal PROGRAM gates, and require the repaired candidate to
+    # pass it before a fresh AI PASS can publish anything.
     for pid, task in list(task_by_id.items()):
         if pid in refreshed:
             continue
@@ -1473,10 +2033,10 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             repairs.append({"id": pid, "status": "INVALID_REVIEW_TASK",
                             "reasons": ["review id is absent from solve_report"]})
             continue
-        prompt_hash, rtl_hash, stated, current = _current_task_material(task)
+        prompt_hash, _, _, _ = _current_task_material(task)
         if prompt_hash != task.get("prompt_sha256"):
             repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
                 "id": pid, "project": task.get("project"),
                 "status": "PROMPT_CHANGED",
                 "reasons": ["restore the original prompt; it cannot be refreshed"],
@@ -1484,15 +2044,76 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": False})
             continue
-        if stated == current and rtl_hash == task.get("rtl_sha256"):
-            continue
         proj = Path(str(task.get("project") or ""))
+        working_paths = _rtl_files(proj)
+        try:
+            working_hash = (_sha256_text(_candidate_text(working_paths))
+                            if working_paths else None)
+        except OSError:
+            working_hash = None
+        if working_hash == task.get("rtl_sha256"):
+            continue
+        prior_verdict = _validate_ai_review(task)
+        challenge = prior_verdict.get("verified_challenge")
+        if prior_verdict.get("status") != "REPAIR_REQUIRED" or not challenge:
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": str(proj),
+                "status": "UNPROVEN_AI_EDIT_REJECTED",
+                "reasons": [
+                    "working RTL changed before an AI finding was proven by "
+                    "a prompt-derived executable verification test",
+                    *[str(v) for v in prior_verdict.get("reasons") or []],
+                ],
+                "restore_from": (task.get("candidate_snapshot") or {}).get(
+                    "manifest_path"),
+            })
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": True,
+                           "ai_repair_required": False})
+            print(f"  {pid:44s} changed RTL rejected: AI issue is unproven")
+            continue
+        repair_record_path = _repair_record_path(run_p, task)
+        repair_provenance, provenance_reasons = _validate_repair_record(
+            repair_record_path, task, str(working_hash), challenge)
+        if provenance_reasons:
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": str(proj),
+                "status": "AI_REPAIR_PROVENANCE_REQUIRED",
+                "reasons": provenance_reasons,
+                "repair_record_path": str(repair_record_path),
+                "reviewed_rtl_sha256": task.get("rtl_sha256"),
+                "repaired_rtl_sha256": working_hash,
+                "challenge_sha256": challenge.get("sha256"),
+            })
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": False,
+                           "ai_repair_required": True})
+            print(f"  {pid:44s} changed RTL needs AI repair provenance")
+            continue
+        program_first_phases = (result.get("program_first_phases")
+                                or result.get("phases") or {})
         rc, got = _run_and_collect(pid, proj, supplied_rtl=True)
         _refresh_result(result, proj, rc, got)
+        if program_first_phases:
+            result["program_first_phases"] = program_first_phases
+            # Solving is the original Program emission. The supplied AI edit
+            # belongs to debugging; step-2 re-entry only verifies it.
+            result.setdefault("phases", {})["phase2_solving"] = \
+                program_first_phases.get("phase2_solving", {})
+            result["phases"]["phase4_debugging"] = \
+                program_first_phases.get("phase4_debugging", {})
         if got.get("ok"):
+            inherited = list(task.get("verification_challenges") or [])
+            inherited.append(challenge)
             new_task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
-                run_p, "AI_REPAIR")
+                run_p, "AI_REPAIR",
+                verification_challenges=inherited,
+                program_candidate=(task.get("program_candidate_snapshot")
+                                   or task.get("candidate_snapshot")),
+                repair_provenance=repair_provenance)
             task_by_id[pid] = new_task
             result["review_task"] = new_task["review_path"]
             result["candidate_origin"] = "AI_REPAIR"
@@ -1500,7 +2121,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             print(f"  {pid:44s} changed RTL re-gated; fresh AI review required")
         else:
             repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
                 "id": pid, "project": str(proj),
                 "status": "PROGRAM_GATES_REJECTED_AI_REPAIR",
                 "reasons": [str(got.get("reason") or "runner rejected RTL")],
@@ -1517,7 +2138,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             result["accepted"] = False
             continue
         verdict = _validate_ai_review(task)
-        _attach_ai_review_attribution(result, verdict)
+        _attach_ai_review_attribution(result, verdict, task)
         review_outcomes.append({"id": pid, **verdict})
         if (verdict["status"] == "REPAIR_REQUIRED"
                 or (verdict["status"] == "ACCEPTED"
@@ -1536,7 +2157,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             if needs_repair:
                 result["ai_repair_required"] = True
                 repairs.append({
-                    "schema": "vibeic.benchmark.ai_repair_task.v1",
+                    "schema": "vibeic.benchmark.ai_repair_task.v2",
                     "id": pid, "project": task.get("project"),
                     "status": "AI_SEMANTIC_REPAIR_REQUIRED",
                     "reasons": (verdict.get("decision_reasons") or [])
@@ -1544,6 +2165,24 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                                   verdict.get("semantic_findings_detail") or []],
                     "review_path": task.get("review_path"),
                     "reviewed_rtl_sha256": task.get("rtl_sha256"),
+                    "verified_challenge": verdict.get("verified_challenge"),
+                    "challenge_result": verdict.get("challenge_result"),
+                    "repair_record_path": str(
+                        _repair_record_path(run_p, task)),
+                    "repair_record_requirements": {
+                        "schema": _AI_REPAIR_RECORD_SCHEMA,
+                        "id": pid,
+                        "prompt_sha256": task.get("prompt_sha256"),
+                        "parent_rtl_sha256": task.get("rtl_sha256"),
+                        "repaired_rtl_sha256":
+                            "sha256 of the corrected working RTL",
+                        "challenge_sha256":
+                            (verdict.get("verified_challenge") or {}).get(
+                                "sha256"),
+                        "author": {"kind": "AI", "model": "required"},
+                        "oracle_accessed": False,
+                        "rationale": "required",
+                    },
                     "verified_prompt_evidence":
                         (verdict.get("override") or {}).get(
                             "verified_prompt_evidence") or [],
@@ -1553,8 +2192,10 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                         Path(str(task.get("project"))) /
                         "phase2" / "stage1" / "rtl"),
                     "required_next": (
-                        "author corrected RTL, run --resume for PROGRAM gates, "
-                        "then submit a fresh AI review for the new hash"),
+                        "author corrected RTL that passes verified_challenge, "
+                        "write the hash-bound AI repair record, run --resume "
+                        "for PROGRAM gates and the SAME challenge, then submit "
+                        "a fresh AI review for the new hash"),
                 })
             continue
         supplied_rtl = result.get("candidate_origin") in {
@@ -1568,7 +2209,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
             reasons = ["current PROGRAM-gated completion does not match the "
                        "AI-reviewed RTL hash"]
             repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v1",
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
                 "id": pid, "project": task.get("project"),
                 "status": "ACCEPTED_REVIEW_MATERIAL_MISMATCH",
                 "reasons": reasons,
@@ -1577,7 +2218,28 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                            "awaiting_ai_review": True,
                            "ai_repair_required": True})
             continue
-        _atomic_write_json(Path(task["response_path"]), got)
+        if task.get("candidate_origin") == "AI_REPAIR":
+            recovery = _verified_program_recovery(task, result, verdict)
+            enhancement_by_key[(
+                pid, str(task.get("prompt_sha256")),
+                str(task.get("rtl_sha256")), "VERIFIED_RECOVERY",
+            )] = recovery
+        payload_path = Path(str((task.get("candidate_snapshot") or {}).get(
+            "response_payload_path") or ""))
+        try:
+            frozen_payload = json.loads(payload_path.read_text(errors="replace"))
+        except (OSError, json.JSONDecodeError) as exc:
+            repairs.append({
+                "schema": "vibeic.benchmark.ai_repair_task.v2",
+                "id": pid, "project": task.get("project"),
+                "status": "FROZEN_RESPONSE_PAYLOAD_INVALID",
+                "reasons": [str(exc)],
+            })
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": False,
+                           "ai_repair_required": False})
+            continue
+        _atomic_write_json(Path(task["response_path"]), frozen_payload)
         accepted_ids.append(pid)
         result.update({"accepted": True, "awaiting_ai": False,
                        "awaiting_ai_backup": False,
@@ -1623,7 +2285,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         "program_enhancement_candidates": len(enhancements),
     }
     _atomic_write_json(run_p / _ACCEPTANCE_REPORT, acceptance)
-    print(f"\n{len(accepted_ids)}/{total} dual-track accepted; status "
+    print(f"\n{len(accepted_ids)}/{total} Program First + AI Review accepted; status "
           f"{acceptance['status']} -> {run_p / _ACCEPTANCE_REPORT}")
     if complete:
         return 0
@@ -1664,10 +2326,10 @@ def main():
     ap.add_argument("--resume", action="store_true",
                     help="Advance needs_ai_backup.jsonl, needs_ai_review.jsonl, "
                          "and needs_ai_repair.jsonl. AI-authored/modified RTL is "
-                         "re-gated; only a current hash-bound blind AI route + "
-                         "semantic PASS writes a scoreable response. Semantic "
-                         "FAIL becomes a finite repair/re-gate/review loop; "
-                         "repeat until dual_track_acceptance.json is COMPLETE.")
+                         "allowed only after a prompt-derived executable test "
+                         "proves the frozen candidate wrong, then is re-gated "
+                         "and must pass the same test plus fresh AI review; "
+                         f"repeat until {_ACCEPTANCE_REPORT} is COMPLETE.")
     ap.add_argument("--limit", type=int, default=0,
                     help="with --solve: stop after N problems (0 = all)")
     ap.add_argument("--dataset", help="dataset path on disk")

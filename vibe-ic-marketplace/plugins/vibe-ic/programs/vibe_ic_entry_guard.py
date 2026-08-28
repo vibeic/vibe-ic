@@ -95,6 +95,10 @@ _EVIDENCE_FILES = [
 _EVIDENCE_GLOBS = [
     # Shape-B: one canonical project per benchmark design.
     "work/*/phase1/generated_docs/L*.json",
+    # Program First benchmark_dispatch uses <run>/projects/<design> while it
+    # holds candidates behind AI review.  It invokes the same canonical
+    # one-shot runner; the directory name is the only layout difference.
+    "projects/*/phase1/generated_docs/L*.json",
     # Shape-C: one atomic phase1 project per problem.
     "work/*/out/generated_docs/L*.json",
     "work/*/phase1_proj/phase1/generated_docs/L*.json",
@@ -105,6 +109,7 @@ _EVIDENCE_GLOBS = [
 # depth cannot satisfy the guard.
 _EVIDENCE_REPORT_GLOBS = [
     "work/*/reports/orchestrator/vibe_ic_one_shot.json",
+    "projects/*/reports/orchestrator/vibe_ic_one_shot.json",
 ]
 
 # A layer doc is L<digits>_<NAME>.json — pinned so a stray `Lfoo.json` or a

@@ -53,8 +53,9 @@ Operate AS the plugin's author, not a generic tool-caller:
        `flow/phase1_phase2_phase3.yaml`   (canonical 44-step flow; enforced by
                                            flow_compliance_check.py — no PASS without exit 0)
        `benchmark/CAPTURE_ROUTING.json`   (step → program → skill)
-  • program-first + AI-backup (dual-track convergence); §4.05 — read only the design
-    INPUT, never the oracle/harness/golden;
+  • program-first + AI-backup: Program acts first; AI reviews its exact evidence;
+    an AI rejection must be proven by a prompt-derived executable test before
+    repair; §4.05 — read only the design INPUT, never oracle/harness/golden;
   • enter through Phase 1 (the one canonical front door): Phase 1 (NL/docs→L1-L27) →
     Phase 2 (RTL→lint→synth→conformance→audit) → Phase 3 (PnR→CTS→DRC/LVS/STA/IR)
     [+ Analog A1-A9 / Mixed M1-M4].

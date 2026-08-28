@@ -174,13 +174,14 @@ at the score front door.
      or any oracle. It independently classifies the task route and checks RTL
      semantics against the prompt.
    - Write the review to the task's `review_path` using schema
-     `vibeic.benchmark.ai_review.v1`, the task's exact `id`,
+     `vibeic.benchmark.ai_review.v2`, the task's exact `id`,
      `prompt_sha256`, and `rtl_sha256`, a real
      `reviewer={"kind":"AI","model":"<model>"}`,
      `blind={"oracle_accessed":false}`,
      `routing={"verdict":"AGREE","ai_nature":"<program nature>"}`, and
      `semantic_review={"verdict":"PASS","findings":[],"rationale":"..."}`.
-   - **AI is the final semantic authority; disagreement is not deadlock.** To
+   - **AI is the final semantic authority, but a rejection needs executable
+     proof.** To
      overrule a deterministic route, use `routing.verdict=OVERRIDE_PROGRAM`
      and add `override.program_limitation` plus either prompt-bound
      `prompt_evidence=[{"excerpt":"...","supports":"..."}]` or a detailed
@@ -188,15 +189,25 @@ at the score front door.
      (`component`, `proposal`, `regression_fixture`) is encouraged and retained.
    - If the current RTL is wrong, return
      `semantic_review.verdict=FAIL` with at least one actionable finding and a
-     rationale. Because this overrules the Program candidate, also provide
-     prompt-bound `semantic_review.prompt_evidence`, or a detailed rationale of
-     at least 160 characters. `--resume` records `REPAIR_REQUIRED` in
-     `needs_ai_repair.jsonl`; the AI repairs the RTL, PROGRAM gates re-run, and
-     a fresh AI review judges the new hash. Valid disagreements also persist in
-     `program_enhancement_candidates.jsonl` so the reusable deterministic path
-     can be improved without making this item wait forever.
+     rationale. Write a self-contained SystemVerilog test to the task's exact
+     `challenge_path`, with top `vibeic_ai_challenge_tb`, no include/readmem/
+     file/system/DPI access, and print `VIBEIC_AI_CHALLENGE=PASS` only on PASS.
+     On a checked mismatch it must print `VIBEIC_AI_CHALLENGE=FAIL` before a
+     non-zero `$fatal`; compile errors and timeouts are invalid proof.
+     Add `verification_test` using the task's required schema/path, the test
+     SHA-256, exact prompt evidence, expected behavior, and rationale. The
+     frozen Program candidate must compile and FAIL this test; otherwise the AI
+     rejection is unproven and repair is blocked.
+   - `--resume` records a proven finding in `needs_ai_repair.jsonl`. The AI may
+     then repair the working RTL and must write the requested repair record,
+     naming its model/rationale and binding parent RTL, repaired RTL, and the
+     challenge hashes. PROGRAM gates re-run; the repair must pass the
+     **same immutable challenge** and a fresh AI review before it can replace
+     the Program candidate. The frozen candidate, proof, and repair hashes also
+     persist in `program_enhancement_candidates.jsonl` for capture enhancement.
    - Run `benchmark_dispatch.py <bench> --resume --dataset <DATASET> --run
-     <RUNDIR>`. Scoring is blocked until `dual_track_acceptance.json` says
+     <RUNDIR>`. Scoring is blocked until
+     `program_first_ai_review_acceptance.json` says
      `COMPLETE` for every problem.
 
 6. The benchmark NUMBER measures what the runner pipeline (incl. you in the
@@ -204,7 +215,7 @@ at the score front door.
    was direct-agent authoring with MCP only — phase1 / chip_top / hygiene fix /
    rtl_repair_retry / conformance ALL skipped. Shape B done correctly invokes the AI
    for authoring AS PART OF the runner pipeline, with all those gates firing,
-   then requires a second blind AI semantic-review rail.
+   then requires a blind AI semantic review of the Program result.
 
 ## Final report (compact table)
 Per `<leaf>`: module name | runner verdict | sample emitted (y/n) | any close-loop

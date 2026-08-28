@@ -466,7 +466,12 @@ _PROSE_HINTS = (
         r"(area|footprint|design|netlist|module|implementation|circuit|logic)\s+smaller"
         r"|lint\s+clean)\b", re.I)),
     ("completion", re.compile(
-        r"\b(complete\s+the|fill\s+in|finish\s+the|implement\s+the\s+missing)\b",
+        r"\b((?:complete|finish)\s+(?:the|this)\s+(?:following\s+)?"
+        r"(?:code|rtl|module|implementation|function|task|stub|todo)"
+        r"|fill\s+in(?:\s+the)?\s+(?:missing\s+)?"
+        r"(?:code|rtl|module|implementation|function|task|stub|todo)"
+        r"|implement\s+the\s+missing\s+"
+        r"(?:code|rtl|module|implementation|function|task|stub|todo))\b",
         re.I)),
     ("functional_modification", re.compile(
         r"\b(modif(y|ies|ied)|change\s+the\s+behaviou?r|add\s+support\s+for|"
@@ -610,6 +615,23 @@ def classify_task_nature(prompt: str,
                     "plugin_entry": t["plugin_entry"],
                     "source": "embedded_rtl_prose_hint",
                     "needs_ai_parse": False}
+        if hinted == "completion":
+            # Completion is a transform of an existing artefact.  A prose
+            # occurrence without a supplied path or embedded module cannot
+            # establish that precondition.  Treat it as from-scratch
+            # generation and leave the AI-confirmation flag raised instead of
+            # routing an absent file into the completion loop.  This also
+            # prevents runtime phrases such as "complete the concatenation"
+            # and requests for "the complete code" from becoming code-
+            # completion tasks.
+            generated = NATURE_ENTRY["spec_generation"]
+            return {
+                "nature": "spec_generation",
+                "route": "phase1_entry",
+                "plugin_entry": generated["plugin_entry"],
+                "source": "completion_hint_without_artifact",
+                "needs_ai_parse": True,
+            }
         return {"nature": hinted, "route": t["route"],
                 "plugin_entry": t["plugin_entry"],
                 "source": "prose_hint_without_context",

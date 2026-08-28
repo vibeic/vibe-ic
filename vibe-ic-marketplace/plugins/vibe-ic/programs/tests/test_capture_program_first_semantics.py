@@ -39,8 +39,9 @@ import memory_array_synth as memory  # noqa: E402
 def test_captured_templates_preserve_prompt_visible_architecture():
     odd = canonical.emit_rtl("odd_clock_divider")
     assert "clk_div1 <= 1'b1" in odd
-    assert "cnt1 + 32'd1" in odd
-    assert "cnt2 + 32'd1" in odd
+    assert "((cnt1 + 32'd1) < (NUM_DIV / 2))" in odd
+    assert "((cnt2 + 32'd1) < (NUM_DIV / 2))" in odd
+    assert "cnt1 < NUM_DIV / 2" not in odd
 
     pulse = canonical.emit_rtl("pulse_detect_0to1to0")
     assert "output reg data_out" in pulse
@@ -144,6 +145,69 @@ def test_arithmetic_capture_emits_stated_structure_not_operator_shortcuts():
     assert "assign overflow =" in alu
     assert "? 1'b1 : 1'bz" in alu
     assert "default: res = {33{1'bz}}" in alu
+
+
+_FIXED_POINT_ADD_PROMPT = r"""
+Implement a fixed-point adder.
+Module name:
+    fixed_point_adder
+Input ports:
+    a [N-1:0]: first sign-magnitude fixed-point operand.
+    b [N-1:0]: second sign-magnitude fixed-point operand.
+Output ports:
+    c [N-1:0]: sign-magnitude sum.
+Parameter:
+    Q = 4
+    N = 8
+If a and b have the same sign, their absolute values are added. If their signs
+are different, the smaller absolute value is subtracted from the larger one and
+the result takes the sign of the larger absolute value.
+"""
+
+
+def test_fixed_point_adder_operation_is_bound_to_the_declared_purpose():
+    """An adder's opposite-sign branch says 'subtracted'; that does not make
+    the top-level task a subtractor."""
+    spec = arithmetic.recognize(_FIXED_POINT_ADD_PROMPT)
+    assert spec is not None and spec["op"] == "fixed_add"
+    rtl = arithmetic.synth(_FIXED_POINT_ADD_PROMPT, "fixed_point_adder")
+    assert rtl is not None
+    assert "res[N-2:0] = a[N-2:0] + b[N-2:0]" in rtl
+    assert "res[N-2:0] = a[N-2:0] - b[N-2:0]" in rtl
+
+
+@pytest.mark.skipif(not _HAVE_TOOLS,
+                    reason="Icarus Verilog is required")
+def test_fixed_point_adder_capture_passes_prompt_derived_sign_cases(tmp_path):
+    rtl = arithmetic.synth(_FIXED_POINT_ADD_PROMPT, "fixed_point_adder")
+    dut = tmp_path / "fixed_point_adder.sv"
+    tb = tmp_path / "tb.sv"
+    simv = tmp_path / "simv"
+    dut.write_text(rtl)
+    tb.write_text(r"""
+module tb;
+  reg [7:0] a, b; wire [7:0] c;
+  fixed_point_adder #(.Q(4), .N(8)) d(.a(a), .b(b), .c(c));
+  initial begin
+    a=8'h03; b=8'h02; #1;
+    if (c !== 8'h05) $fatal(1, "same-sign addition failed: %h", c);
+    a=8'h03; b=8'h82; #1;
+    if (c !== 8'h01) $fatal(1, "opposite-sign subtraction failed: %h", c);
+    a=8'h02; b=8'h83; #1;
+    if (c !== 8'h81) $fatal(1, "larger-magnitude sign failed: %h", c);
+    $display("PASS fixed-point adder capture");
+    $finish;
+  end
+endmodule
+""")
+    comp = progress.run(
+        ["iverilog", "-g2012", "-o", str(simv), str(dut), str(tb)],
+        capture_output=True, text=True, cwd=str(tmp_path))
+    assert comp.returncode == 0, comp.stderr
+    run = progress.run(["vvp", str(simv)], capture_output=True, text=True,
+                       cwd=str(tmp_path))
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "PASS fixed-point adder capture" in run.stdout
 
 
 def test_contract_capture_preserves_parameters_and_reset_timing():
@@ -306,7 +370,7 @@ endmodule
 
 @pytest.mark.skipif(not _HAVE_TOOLS,
                     reason="Icarus Verilog is required")
-def test_fifo_full_accounts_for_sixteenth_accepted_write(tmp_path):
+def test_fifo_gray_pointer_tracks_each_accepted_binary_position(tmp_path):
     rtl = tmp_path / "asyn_fifo.v"
     rtl.write_text(canonical.emit_rtl("async_gray_fifo"))
     tb = tmp_path / "tb.v"
@@ -315,7 +379,6 @@ module tb;
   reg wclk=0, rclk=0, wrstn=0, rrstn=0, winc=0, rinc=0;
   reg [7:0] wdata=0;
   wire wfull, rempty; wire [7:0] rdata;
-  integer i;
   asyn_fifo #(.WIDTH(8),.DEPTH(16)) dut(
     .wclk(wclk),.rclk(rclk),.wrstn(wrstn),.rrstn(rrstn),
     .winc(winc),.rinc(rinc),.wdata(wdata),.wfull(wfull),
@@ -323,10 +386,19 @@ module tb;
   always #5 wclk=~wclk;
   always #17 rclk=~rclk;
   initial begin
-    #2; wrstn=0; rrstn=0; #40; wrstn=1; rrstn=1; winc=1;
-    for (i=0; i<16; i=i+1) begin @(negedge wclk); wdata=i; @(posedge wclk); #1; end
-    if (wfull !== 1'b1) begin $display("FAIL wfull=%b",wfull); $fatal; end
-    $display("PASS full-after-16"); $finish;
+    #2; wrstn=0; rrstn=0; #40;
+    @(negedge wclk); wrstn=1; rrstn=1; winc=1; wdata=8'h11;
+    @(posedge wclk); #1;
+    if (dut.waddr_bin !== 5'd1 || dut.wptr !== 5'd1) begin
+      $display("FAIL first-position bin=%0d gray=%0d",dut.waddr_bin,dut.wptr);
+      $fatal;
+    end
+    @(negedge wclk); wdata=8'h22; @(posedge wclk); #1;
+    if (dut.waddr_bin !== 5'd2 || dut.wptr !== 5'd3) begin
+      $display("FAIL second-position bin=%0d gray=%0d",dut.waddr_bin,dut.wptr);
+      $fatal;
+    end
+    $display("PASS accepted-position-gray"); $finish;
   end
 endmodule
 """)
@@ -338,7 +410,7 @@ endmodule
     sim = progress.run([shutil.which("vvp"), str(out)],
                        capture_output=True, text=True)
     assert sim.returncode == 0, sim.stdout + sim.stderr
-    assert "PASS full-after-16" in sim.stdout
+    assert "PASS accepted-position-gray" in sim.stdout
 
 
 @pytest.mark.skipif(not _HAVE_IVERILOG,

@@ -1366,9 +1366,12 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
     # GATE-AS-SOLE-EMIT-PATH: attest that this sample passed the Shape-B emit guard
     # (+ port-reorder) so the score-time check can prove it was not authored direct.
     try:
-        # Phase-1 provenance: rtl_dir is <project>/phase2/stage1/rtl, so the
-        # project root (which holds phase1/generated_docs) is its 3rd parent.
-        _proj = rtl_dir.parents[2] if len(rtl_dir.parents) >= 3 else None
+        # A frozen Program/AI candidate may be exported from an immutable
+        # snapshot outside the project tree.  In that case the explicit
+        # project is the provenance authority.  Keep the legacy layout
+        # derivation for ordinary <project>/phase2/stage1/rtl callers.
+        _proj = (Path(project).resolve() if project is not None else
+                 (rtl_dir.parents[2] if len(rtl_dir.parents) >= 3 else None))
         _ea.record(samples_dir, dst,
                    gates=["shape_b_guard_export",
                           "port_reorder" if (reordered != original and not reorder_reverted) else "verbatim"],

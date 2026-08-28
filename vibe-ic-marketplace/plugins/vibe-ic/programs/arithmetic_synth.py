@@ -681,8 +681,21 @@ def recognize(text: str) -> Optional[Dict]:
         # so we read the names straight from the prose port lines.
         if qn and re.search(r"\ba\s*\[\s*N-1\s*:\s*0\s*\]", text) and \
                 re.search(r"\bc\s*\[\s*N-1\s*:\s*0\s*\]", text):
-            is_sub = bool(_RE_SUBTRACT.search(text)) or "subtractor" in text.lower()
-            return {"op": "fixed_sub" if is_sub else "fixed_add",
+            # A sign-magnitude ADDER necessarily says that opposite-sign
+            # magnitudes are *subtracted*.  Treating any occurrence of that
+            # operation word as the task's top-level operation routed the
+            # fixed_point_adder benchmark into the subtractor emitter.  Bind
+            # the operation to the declared module/purpose noun instead; if
+            # neither noun is pinned, honestly SKIP instead of inferring it
+            # from a branch inside the arithmetic algorithm.
+            declared = (module_name_from_prompt(text) or "").lower()
+            says_add = ("adder" in declared or bool(re.search(
+                r"\bfixed[- ]point\s+add(?:er|ition)\b", text, re.I)))
+            says_sub = ("subtract" in declared or bool(re.search(
+                r"\bfixed[- ]point\s+subtract(?:or|ion)\b", text, re.I)))
+            if says_add == says_sub:
+                return None
+            return {"op": "fixed_sub" if says_sub else "fixed_add",
                     "a": "a", "b": "b", "c": "c"}
         return None  # fixed-point without a clear Q/N a,b->c shape -> SKIP
 

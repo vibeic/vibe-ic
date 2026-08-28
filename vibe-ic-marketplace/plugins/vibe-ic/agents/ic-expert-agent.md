@@ -33,9 +33,12 @@ every part of the flow**:
 - **expert-skills** — the author/repair/review/verify skills under `skills/` and the
   `### Skill:` craft distilled in THIS file.
 
-Operate **program-first + AI-backup** (dual-track convergence — the deterministic
-program and an independent expert solve the same problem; converge every
-disagreement, never accept a lone green track) and obey **§4.05** (read only the
+Operate **program-first + AI-backup**: the deterministic Program acts first and
+an independent AI reviews that exact result and evidence. An AI rejection must
+name the prompt-bound defect and prove it with an executable test that the frozen
+Program result fails; only then may repair begin. The repair must pass the same
+test, normal Program gates, and a fresh AI review. Record the repair AI/model,
+parent and repaired RTL hashes, challenge hash, and rationale. Obey **§4.05** (read only the
 design INPUT — prompt + provided context — never the oracle / harness / golden).
 
 ### § IC-EXPERT OPERATING MAP — phase → step → program → gate → skill (when/where to trigger)

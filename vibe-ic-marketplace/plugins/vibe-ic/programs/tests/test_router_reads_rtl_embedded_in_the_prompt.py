@@ -232,6 +232,28 @@ def test_the_warning_survives_where_the_rtl_really_is_absent():
     assert "warning" in v and "no existing RTL was supplied" in v["warning"], v
 
 
+def test_runtime_completion_words_do_not_become_code_completion():
+    """Captured RTLLM route override: completing a two-sample concatenation
+    and asking for complete code still describes generation from a spec."""
+    prompt = """
+Implement a data width conversion circuit that converts 8-bit input to 16-bit
+output. Temporarily store the first valid byte; when the second arrives,
+complete the concatenation and assert valid_out. Give me the complete code.
+"""
+    v = tnr.classify_task_nature(prompt, False, None)
+    assert v["nature"] == "spec_generation", v
+    assert v["route"] == "phase1_entry", v
+
+
+def test_completion_without_an_artifact_falls_back_to_generation():
+    """Completion transforms an artefact; a bare interface stub is not one."""
+    prompt = "Complete the following module.\n\n" + _STUB
+    v = tnr.classify_task_nature(prompt, False, None)
+    assert v["nature"] == "spec_generation", v
+    assert v["source"] == "completion_hint_without_artifact", v
+    assert v["needs_ai_parse"] is True
+
+
 # ── 5. the flag must be capable of both values ───────────────────────────────
 
 def _corpus():
