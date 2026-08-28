@@ -62,6 +62,14 @@ _STALL_LOOKS = 300
 #: Pathological backstop, counted in LOOKS, not seconds. A daemon that keeps
 #: making progress is never stopped by it.
 _MAX_LOOKS = 200_000
+#: The HTTP look interval is deliberately MUCH coarser than the file-poll one.
+#: A look interval that is shorter than the answer takes never returns an
+#: answer: every attempt would expire and be retried, and because a serving
+#: daemon keeps progressing nothing would ever stop the retrying. It is a look,
+#: not a bound, so it costs nothing to make it generous.
+_HTTP_LOOK_S = 5.0
+#: …and with a coarser look, fewer of them make the same wedge window.
+_HTTP_STALL_LOOKS = 24
 
 
 def _await(name, ready, progress_fn, alive=None):
@@ -93,11 +101,11 @@ def _fetch(url, progress_fn):
     to tell apart. Retrying while the server is still progressing removes the
     ambiguity: only a server making no progress at all ends the wait."""
     guard = _watchdog.loop_guard("dashboard-http", max_iter=_MAX_LOOKS,
-                                 stall_iters=_STALL_LOOKS,
+                                 stall_iters=_HTTP_STALL_LOOKS,
                                  progress_fn=progress_fn)
     for _ in guard:
         try:
-            return urllib.request.urlopen(url, timeout=_LOOK_S)
+            return urllib.request.urlopen(url, timeout=_HTTP_LOOK_S)
         except urllib.error.HTTPError:
             raise
         except (socket.timeout, TimeoutError, ConnectionRefusedError):
