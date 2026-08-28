@@ -1776,6 +1776,17 @@ run "every declared step reaches the evaluator" "$ROOT" python3 "$PG/every_decla
 run "a declared output has a live producer" "$ROOT" python3 "$PG/declared_output_has_a_live_producer_check.py" --root "$ROOT" --strict
 run "a disclosure token needs a runtime condition" "$ROOT" python3 "$PG/vacuous_disclosure_needs_a_runtime_condition_check.py" --root "$ROOT" --strict
 run "gate red is more than absence" "$ROOT" python3 "$PG/gate_red_is_more_than_absence_census.py" --root "$ROOT" --self-test
+
+# THE CLASS NONE OF THE NINE DIMENSIONS TRIED. The campaign closed by injecting
+# defects that leave every structure intact — file, flag, edge, declaration —
+# and change only what the gate DECIDES. A yield sign-off whose refusal arm was
+# switched off with `if False and measured + 1e-9 < target:` lets a 12.5% yield
+# pass a 90% target, and 0 of 612 matrix cells change colour. This line catches
+# the one shape of that class a source scan can decide: an arm whose condition
+# the source has already answered. It does NOT close the class — the campaign's
+# other injected defect, a sign-off gate that stopped reading its signed memo,
+# is caught by nothing in this repository.
+run "a verdict arm decided by a constant" "$ROOT" python3 "$PG/verdict_arm_disabled_by_a_constant_check.py" --root "$ROOT" --strict
 run "population guard asserts equality not a floo" "$ROOT" python3 "$PG/population_guard_asserts_equality_not_a_floor.py" --root "$ROOT"
 run "population pin without its member set" "$ROOT" python3 "$PG/population_pin_without_its_member_set.py" --root "$ROOT"
 run "prepared checkout states the revision it hol" "$ROOT" python3 "$PG/prepared_checkout_states_the_revision_it_holds.py" "$ROOT"
