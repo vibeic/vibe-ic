@@ -33,7 +33,19 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# `_progress_run` lives in the plugin's `programs/`, which is not a sibling of
+# this file. Walk UP until the directory that actually holds it is found, so
+# this works from `tools/`, from `tools/<sub>/`, and from inside the flattened
+# plugin cache where the marketplace path does not exist.
+for _anc in Path(__file__).resolve().parents:
+    for _cand in (_anc / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                  _anc / "programs"):
+        if (_cand / "_progress_run.py").is_file():
+            sys.path.insert(0, str(_cand))
+            break
+    else:
+        continue
+    break
 import _progress_run as _pr  # noqa: E402
 
 # ============================================================================
