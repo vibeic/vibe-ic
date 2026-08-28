@@ -192,7 +192,8 @@ def stage(fmt_name: str, problem: Dict[str, Any], project: Path) -> Dict[str, An
             "prompt_chars": len(prompt)}
 
 
-def collect(fmt_name: str, problem_id: str, project: Path) -> Dict[str, Any]:
+def collect(fmt_name: str, problem_id: str, project: Path, *,
+            supplied_rtl: bool = False) -> Dict[str, Any]:
     """The answer artefact, in the shape the scorer reads — or a refusal.
 
     Always step 1's RTL (`phase2/stage1/rtl/*`) — measured: every open RTL
@@ -206,8 +207,13 @@ def collect(fmt_name: str, problem_id: str, project: Path) -> Dict[str, Any]:
     `--solve` reported **6/6 produced an artefact**. It would have handed four
     empty modules to a scorer and called it success.
 
-    So the run's OWN VERDICT decides. If the step that owns this artefact did
-    not report PASS, there is nothing to hand back, whatever is on disk.
+    So the run's OWN VERDICT decides. Normally the step that owns this
+    artefact must report PASS.  The sole exception is an explicitly supplied
+    AI-backup/repair candidate: its re-entry run begins at step 2 so rtl_gen
+    must report SKIPPED-BY-ENTRY, while all downstream PROGRAM gates run over
+    the hash-bound supplied bytes.  Callers must opt into that exception with
+    ``supplied_rtl=True``; an ordinary solve can therefore never promote a
+    scaffold merely because its generation step was skipped.
     """
     project = Path(project)
     rtl_dir = project / "phase2" / "stage1" / "rtl"
@@ -221,7 +227,10 @@ def collect(fmt_name: str, problem_id: str, project: Path) -> Dict[str, Any]:
         return {"id": problem_id, "ok": False, "rtl_gen": None,
                 "reason": "the run wrote no phase2 report — cannot tell whether "
                           "this RTL was produced or merely scaffolded"}
-    if verdict["status"] != "PASS":
+    accepted_statuses = {"PASS"}
+    if supplied_rtl:
+        accepted_statuses.add("SKIPPED-BY-ENTRY")
+    if verdict["status"] not in accepted_statuses:
         return {"id": problem_id, "ok": False, "rtl_gen": verdict["status"],
                 "reason": f"rtl_gen reported {verdict['status']}, so what is on "
                           f"disk is scaffolding, not an answer: "
@@ -229,7 +238,8 @@ def collect(fmt_name: str, problem_id: str, project: Path) -> Dict[str, Any]:
 
     text = "\n".join(f.read_text(errors="replace") for f in rtl)
     return {"id": problem_id, "ok": True, "completion": text,
-            "rtl_gen": verdict["status"], "files": [f.name for f in rtl]}
+            "rtl_gen": verdict["status"], "supplied_rtl": supplied_rtl,
+            "files": [f.name for f in rtl]}
 
 
 def _rtl_gen_verdict(project: Path) -> Optional[Dict[str, str]]:
