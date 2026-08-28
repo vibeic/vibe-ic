@@ -1,9 +1,15 @@
 """Drive the PRE-FIX pad_ring_gen at a PDK whose IO LEFs carry only the
 SITE-REFERENCE form and whose tech view declares the site, and print what the
 refusal artefact actually disclosed."""
+import os
+import pathlib
 import json, sys, tempfile
 from pathlib import Path
-HERE = Path("/home/reyerchu/_jcapsha_wt/vibe-ic-marketplace/plugins/vibe-ic/programs")
+HERE = Path(os.environ.get("VIBEIC_PROGRAMS")
+    # was an absolute path under the capturing operator's home; a probe kept
+    # as evidence must still be readable on someone else's machine.
+    or str(pathlib.Path(__file__).resolve().parents[4]
+           / "vibe-ic-marketplace/plugins/vibe-ic/programs"))
 sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE / "tests"))
 import test_pad_ring as T
 import _pad_ring as PR

@@ -1,6 +1,42 @@
+> **SUPERSEDED 2026-08-29 — READ THIS FIRST.**
+>
+> Everything below is the record as it stood on 2026-08-22. Two of its load-
+> bearing claims have since been MEASURED FALSE, and it is kept, corrected here
+> rather than rewritten, because both errors are the kind this capture is about.
+>
+> **1. "A red test here cannot block a push." It always could.**
+> `landing_unselectable_pytest_corpus.py` takes its population from
+> `git ls-files` filtered by `^(test_.*\.py|.*_test\.py)$` and excludes NOTHING
+> (`_EXCLUDED = ()` — declared, not an oversight). `gatekeeper-land.sh:1770`
+> runs that corpus on EVERY landing, not on a cadence. Living outside
+> `programs/tests/` never kept these two files out of a gate; it only kept them
+> out of the directory a reader would look in. Both files are therefore renamed
+> out of `test_*.py` — that, not their location, is what stops collection.
+>
+> **2. The transcript below is stale, and this time the tests did not even run.**
+> `pad_ring_gen.py:427` now reads `side_orient = dict(PR.SIDE_ORIENT)`; the AST
+> walk in both files expects a dict LITERAL, so both died with
+> `AttributeError: 'Call' object has no attribute 'keys'` — 2 failed / 1 passed,
+> measured in `ghcr.io/vibeic/vibeic-eda:0.3.16`. The README warned that its own
+> previous transcript had gone stale without being re-run. It happened again.
+>
+> **Neither test was repaired, and the reason is in each file's header.** F3c's
+> subject no longer exists (no rotation variable drives any side; a non-default
+> declaration is refused at `pad_ring_gen.py:927-946`). F3d's defect is fixed —
+> no side is a half turn of its partner — and its remaining claim, `east =
+> west.flipY()`, is refuted by the placer itself: at OpenROAD 26Q3-1581 the tool
+> writes `pw MXR90` and `pe R90`, a mirror on west and a pure rotation on east.
+> Repairing F3d would have made it red against a value three builds agree on.
+>
+> The coverage that replaced both asks the tool instead of our source text:
+> `programs/tests/test_pad_ring.py::test_the_shipped_orientations_are_what_the_placer_produces`.
+> Its probe reproduces all eight constants exactly. See the CAVEAT in the
+> handback: that test cannot currently run under pytest's default `--basetemp`
+> in the shipped image.
+
 # Candidate test — the red F3d ships with
 
-`test_f3d_opposite_side_is_a_mirror.py` lives here and **not** in
+`superseded_f3d_opposite_side_is_a_mirror.py` lives here and **not** in
 `programs/tests/` on purpose: it fails on `main` today, and landing a red test
 would block every push on the repo. It is the artefact the fix ships with, and
 it should move into `programs/tests/` in the same commit that fixes the defect.
@@ -12,19 +48,19 @@ Both files, run together. The load belongs beside the numbers; these are
 them, and saying so is cheaper than leaving a reader to wonder.
 
 ```
-FAIL test_f3c_side_to_variable_mapping.py::
+FAIL superseded_f3c_side_to_variable_mapping.py::
        test_each_rotation_variable_drives_the_sides_upstream_says_it_does
      each rotation variable must drive the sides its upstream defines it for:
        PAD_ROTATION_HORIZONTAL: ours drives ['N','S'], upstream defines it for ['E','W']
        PAD_ROTATION_VERTICAL:   ours drives ['E','W'], upstream defines it for ['N','S']
 
-FAIL test_f3d_opposite_side_is_a_mirror.py::
+FAIL superseded_f3d_opposite_side_is_a_mirror.py::
        test_the_opposite_side_is_derived_by_MIRRORING_as_upstream_does
      the opposite side must be derived by upstream's MIRROR, not a half turn:
        side N: derived with ['rotate_cw'] (a ROTATION)
        side E: derived with ['rotate_cw'] (a ROTATION)
 
-PASS test_f3d_opposite_side_is_a_mirror.py::
+PASS superseded_f3d_opposite_side_is_a_mirror.py::
        test_the_footprint_assertion_cannot_see_the_defect
 
 2 failed, 1 passed
@@ -97,7 +133,7 @@ file so the correction is visible rather than silently absorbed.
 
 ---
 
-# The second red — `test_f3c_side_to_variable_mapping.py`
+# The second red — `superseded_f3c_side_to_variable_mapping.py`
 
 Pins which SIDES each rotation variable drives, against the tool's documented
 contract. It reads our mapping out of the source rather than restating it.

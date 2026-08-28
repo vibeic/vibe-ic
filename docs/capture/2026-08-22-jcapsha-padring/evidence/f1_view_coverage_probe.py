@@ -11,9 +11,15 @@ concluded 'not found' consulted one view of N, and the artefact it already
 emits records exactly which files it opened -- so the comparison is a set
 difference over directories that exist, with no judgement in it.
 """
+import os
+import pathlib
 import json, sys, tempfile
 from pathlib import Path
-HERE = Path("/home/reyerchu/_jcapsha_wt/vibe-ic-marketplace/plugins/vibe-ic/programs")
+HERE = Path(os.environ.get("VIBEIC_PROGRAMS")
+    # was an absolute path under the capturing operator's home; a probe kept
+    # as evidence must still be readable on someone else's machine.
+    or str(pathlib.Path(__file__).resolve().parents[4]
+           / "vibe-ic-marketplace/plugins/vibe-ic/programs"))
 sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE / "tests"))
 import test_pad_ring as T
 

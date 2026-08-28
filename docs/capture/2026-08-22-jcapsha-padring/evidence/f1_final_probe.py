@@ -11,12 +11,18 @@ That is a grep over directories that exist for a string the step itself chose,
 so it has no judgement in it, and it CANNOT fire on a step that read one view
 and was right -- the name simply is not there.
 """
+import os
+import pathlib
 import json, sys, tempfile
 from pathlib import Path
 import importlib
 
 PROGRAMS = Path(sys.argv[1] if len(sys.argv) > 1 else
-    "/home/reyerchu/_jcapsha_wt/vibe-ic-marketplace/plugins/vibe-ic/programs")
+    os.environ.get("VIBEIC_PROGRAMS")
+    # was an absolute path under the capturing operator's home; a probe kept
+    # as evidence must still be readable on someone else's machine.
+    or str(pathlib.Path(__file__).resolve().parents[4]
+           / "vibe-ic-marketplace/plugins/vibe-ic/programs"))
 sys.path.insert(0, str(PROGRAMS)); sys.path.insert(0, str(PROGRAMS / "tests"))
 T = importlib.import_module("test_pad_ring")
 

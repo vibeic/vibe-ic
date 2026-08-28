@@ -1,3 +1,32 @@
+# SUPERSEDED — NOT A TEST, AND NO LONGER NAMED LIKE ONE.
+#
+# Renamed out of `test_*.py` on 2026-08-29 because it was still being COLLECTED.
+# `landing_unselectable_pytest_corpus.py` takes its population from
+# `git ls-files` filtered by `^(test_.*\.py|.*_test\.py)$` and excludes NOTHING
+# (`_EXCLUDED = ()`), and `gatekeeper-land.sh:run_unselectable_pytest` runs that
+# corpus on EVERY landing, not on a cadence. So "kept out of `programs/tests/`
+# so a red cannot block a push", which is what the README beside this file says
+# and what this header replaces, WAS NEVER TRUE: the file blocked every landing
+# from the moment it was tracked. The directory it sat in was never the thing
+# that kept it out of the gate.
+#
+# It did not even reach its own assertion. `pad_ring_gen.py:427` now reads
+# `side_orient = dict(PR.SIDE_ORIENT)`, and the AST walk below expects a dict
+# LITERAL, so both files died with
+#     AttributeError: 'Call' object has no attribute 'keys'
+# — measured in ghcr.io/vibeic/vibeic-eda:0.3.16, 2 failed / 1 passed. A test
+# that dies before its assertion is not testing what it says.
+#
+# WHY IT WAS NOT REPAIRED INSTEAD: ITS SUBJECT NO LONGER EXISTS.
+# This pinned which SIDES each `PAD_ROTATION_*` variable drives. No rotation
+# variable drives any side any more. `pad_ring_gen.py:927-946` REFUSES a run
+# that declares a non-default value on any of the three (SKIP / NOT DETERMINED,
+# naming the variable), and at the default every side takes the placer's own
+# measured orientation from `_pad_ring.SIDE_ORIENT`. There is no side-to-
+# variable mapping left to read out of the source, so there is nothing here to
+# repair — only a different test to write, which `programs/tests/test_pad_ring.py`
+# has already written against the tool itself.
+
 """CANDIDATE test pinning F3c. RED on the current tree, by design.
 
 Same reason as its sibling for living here rather than in `programs/tests/`: it

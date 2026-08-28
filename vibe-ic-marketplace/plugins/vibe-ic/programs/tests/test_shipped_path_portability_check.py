@@ -295,3 +295,70 @@ def test_a_real_violation_is_still_reported(tmp_path):
     r = _pr.run([sys.executable, str(prog), str(tmp_path)],
                capture_output=True, text=True)
     assert r.returncode == 1, r.stdout + r.stderr
+
+
+# --------------------------------------------------------------------------
+# `.template` — a GENERATED artefact that ships (vibe-ic public-hygiene audit)
+#
+# `waivers.json.template` is emitted by `waiver_template_gen.py` and shipped to
+# every plugin installer. It carried the generating maintainer's home directory
+# in `_source_audit` for as long as it had existed, and this guard PASSED over
+# it the whole time: `_SCAN_EXTS` listed `.example` but not `.template`, so the
+# file was never read. The leak was not missed by the detector — the file was
+# never in the population the detector was shown.
+#
+# Both tests below go through `scan_tree`, i.e. through `iter_source_files` and
+# its extension filter. Asserting `".template" in _SCAN_EXTS` would restate the
+# constant and would still pass if the filter stopped being consulted.
+# --------------------------------------------------------------------------
+def test_a_dot_template_file_is_in_the_scanned_population(tmp_path):
+    """The defect: an extension nobody listed is an extension nobody reads."""
+    (tmp_path / "waivers.json.template").write_text(
+        '{"_source_audit": "%s"}\n' % _home(_FAKE_USER, "wt/reports/x.json"))
+    found = mod.scan_tree(tmp_path)
+    assert found, (
+        "a personal home path in a shipped `.template` was not flagged — the "
+        "extension is missing from `_SCAN_EXTS`, so the file is never read")
+    assert any(x.rule == "R1" for x in found)
+    assert _FAKE_USER in found[0].reason
+
+
+def test_the_scanned_population_is_not_empty_for_this_tree(tmp_path):
+    """NEGATIVE CONTROL for the test above.
+
+    A `scan_tree` that returned findings for every input, or that silently
+    scanned nothing, would make the sibling vacuous. A clean `.template` in the
+    same population must produce NO finding — so the sibling's red comes from
+    the path, not from the extension merely being present.
+    """
+    (tmp_path / "waivers.json.template").write_text(
+        '{"_source_audit": "reports/flow_compliance.json"}\n')
+    assert mod.scan_tree(tmp_path) == [], (
+        "a portable `.template` must not be flagged; the sibling test would "
+        "otherwise pass for the wrong reason")
+    assert mod.SCAN_CENSUS["files_read"] == 1, (
+        f"the guard read {mod.SCAN_CENSUS['files_read']} file(s), not the one "
+        f"`.template` in this tree — a PASS over an empty population is not a "
+        f"pass, and would make the sibling test vacuous")
+
+
+# --------------------------------------------------------------------------
+# The PRODUCER, not just the artefact. Scrubbing `waivers.json.template` alone
+# would be undone by the next `waiver_template_gen.py` run, which stamped
+# `str(audit_json)` — always absolute, because `main` resolves the project dir.
+# --------------------------------------------------------------------------
+def test_waiver_template_gen_emits_a_portable_source_audit(tmp_path):
+    gen = _PROGRAMS / "waiver_template_gen.py"
+    project = tmp_path / "home" / _FAKE_USER / "proj"
+    (project / "reports").mkdir(parents=True)
+    (project / "reports" / "flow_compliance.json").write_text(json.dumps(
+        {"results": [{"id": 7, "status": "MISSING", "message": "no tool"}]}))
+    r = _pr.run([sys.executable, str(gen), str(project), "--quiet"],
+                capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = json.loads((project / "waivers.json.template").read_text())
+    assert out["_source_audit"] == "reports/flow_compliance.json", (
+        "the generator must record the audit RELATIVE to the project; an "
+        "absolute path ships the generating operator's home directory")
+    assert str(project) not in json.dumps(out), (
+        "the generated template still carries an absolute host path")

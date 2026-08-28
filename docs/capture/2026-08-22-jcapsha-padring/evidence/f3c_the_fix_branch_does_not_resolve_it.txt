@@ -29,7 +29,7 @@ real and which this capture confirms. It is what happens when a fix is built on
 a premise that was never checked against the contract it re-implements: every
 line of it is careful, and the thing it is careful ABOUT is wrong.
 
-THE PIN: `candidate_tests/test_f3c_side_to_variable_mapping.py`. It reads OUR
+THE PIN: `candidate_tests/superseded_f3c_side_to_variable_mapping.py`. It reads OUR
 mapping out of the source rather than restating it, so it keeps testing the code
 after somebody edits it, and it carries the upstream half as four entries that
 can be checked by eye against the quoted documentation.

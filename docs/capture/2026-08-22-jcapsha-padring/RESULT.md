@@ -918,9 +918,9 @@ cores** — 3.3x oversubscribed, where the harness bound is mine and not a
 verdict about the code. So the question was answered the cheap way instead:
 
 ```
-files changed eede2f5d9..HEAD    _jcapsha_notes/PROGRESS.md
-                                 _jcapsha_notes/RESULT.md
-                                 _jcapsha_notes/evidence/f3cd_..._MEASURED.txt
+files changed eede2f5d9..HEAD    docs/capture/2026-08-22-jcapsha-padring/PROGRESS.md
+                                 docs/capture/2026-08-22-jcapsha-padring/RESULT.md
+                                 docs/capture/2026-08-22-jcapsha-padring/evidence/f3cd_..._MEASURED.txt
 referenced by the four suites    0 of 4, for each of the three
 ```
 
@@ -993,13 +993,13 @@ On a clean tree (`git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`):
 ```
 # the capture itself
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/enhancement_emit.py \
-    --records _jcapsha_notes/recoveries.json --out-dir _jcapsha_notes/candidates
+    --records docs/capture/2026-08-22-jcapsha-padring/recoveries.json --out-dir docs/capture/2026-08-22-jcapsha-padring/candidates
 # (no forked-tool backlog is emitted any more -- the record was withdrawn to
 #  Bucket D. `backlog_sanitize_check` is the gate that would read one.)
 
 # the pre-fix reproduction and the AST pin
-python3 _jcapsha_notes/evidence/repro_f1.py
-python3 _jcapsha_notes/evidence/f2_pin_probe.py origin/main origin/jpadsite/pad-site
+python3 docs/capture/2026-08-22-jcapsha-padring/evidence/repro_f1.py
+python3 docs/capture/2026-08-22-jcapsha-padring/evidence/f2_pin_probe.py origin/main origin/jpadsite/pad-site
 
 # the two-arm tool measurement (needs the pinned image; --skip FIRST)
 docker run --rm -v <evidence>:/w <image> --skip bash /w/run.sh

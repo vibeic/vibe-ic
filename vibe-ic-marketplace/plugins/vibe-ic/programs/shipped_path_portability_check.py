@@ -104,6 +104,7 @@ _SYNTHETIC_USERS = frozenset({
 _SCAN_EXTS = frozenset({
     ".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash",
     ".json", ".yaml", ".yml", ".md", ".txt", ".tcl", ".ys", ".example",
+    ".template",
 })
 
 # R2 applies to executable source only.

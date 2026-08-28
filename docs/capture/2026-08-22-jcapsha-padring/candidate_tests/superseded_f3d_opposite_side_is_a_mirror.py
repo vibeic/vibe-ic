@@ -1,3 +1,47 @@
+# SUPERSEDED — NOT A TEST, AND NO LONGER NAMED LIKE ONE.
+#
+# Renamed out of `test_*.py` on 2026-08-29 because it was still being COLLECTED.
+# `landing_unselectable_pytest_corpus.py` takes its population from
+# `git ls-files` filtered by `^(test_.*\.py|.*_test\.py)$` and excludes NOTHING
+# (`_EXCLUDED = ()`), and `gatekeeper-land.sh:run_unselectable_pytest` runs that
+# corpus on EVERY landing, not on a cadence. So "kept out of `programs/tests/`
+# so a red cannot block a push", which is what the README beside this file says
+# and what this header replaces, WAS NEVER TRUE: the file blocked every landing
+# from the moment it was tracked. The directory it sat in was never the thing
+# that kept it out of the gate.
+#
+# It did not even reach its own assertion. `pad_ring_gen.py:427` now reads
+# `side_orient = dict(PR.SIDE_ORIENT)`, and the AST walk below expects a dict
+# LITERAL, so both files died with
+#     AttributeError: 'Call' object has no attribute 'keys'
+# — measured in ghcr.io/vibeic/vibeic-eda:0.3.16, 2 failed / 1 passed. A test
+# that dies before its assertion is not testing what it says.
+#
+# WHY IT WAS NOT REPAIRED INSTEAD: THE DEFECT IS FIXED AND THE ORACLE IS WRONG.
+#
+# (1) The half turn this file was written to catch is GONE on both axes.
+#     Computed from `_pad_ring`'s own algebra against the shipped constants:
+#         rotate_cw(S=N,2)  = S   shipped N = FS   -> not a half turn
+#         rotate_cw(W=FW,2) = FE  shipped E = W    -> not a half turn
+#
+# (2) Where the file still has an opinion, the opinion is REFUTED BY THE TOOL.
+#     `_FLIP_X` below is right — flipX(S) = FS = the shipped north — but the
+#     docstring's other half, "east = west.flipY()", is not what OpenROAD does.
+#     Asked directly, at the pinned commit (OpenROAD 26Q3-1581, the build the
+#     constants were measured on, gf180mcuD IO library):
+#         ORIENT ps R0      ORIENT pn MX      ORIENT pw MXR90     ORIENT pe R90
+#     West is a MIRROR and east is a PURE ROTATION — the placer alternates the
+#     two, exactly as `_pad_ring.CORNER_ORIENT` already documents for corners.
+#     `flipY(FW)` is E; the tool writes W. Repairing this file to read
+#     `PR.SIDE_ORIENT` would therefore make it RED against a value three
+#     OpenROAD builds agree on, and the only way to "fix" that red would be to
+#     change a measured constant to satisfy a hand-transcribed table. That is
+#     the failure this whole capture exists to record — see `../PROGRESS.md`,
+#     which retracts an earlier conclusion drawn the same way.
+#
+# The coverage that replaced it asks the tool instead of the source text:
+# `programs/tests/test_pad_ring.py::test_the_shipped_orientations_are_what_the_placer_produces`.
+
 """CANDIDATE test pinning F3d. RED on the current tree, GREEN under the fix.
 
 Lives here and not in `programs/tests/` because it fails on `main` today, and a

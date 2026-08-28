@@ -208,6 +208,28 @@ def _build_entries(audit: Dict[str, Any],
     return entries
 
 
+def _portable_audit_ref(audit_json: Path, project: Path) -> str:
+    """The audit path AS IT SHOULD SHIP: relative to the project it describes.
+
+    `main` resolves `project_dir`, so `audit_json` is always ABSOLUTE by the
+    time it reaches here. Writing `str(audit_json)` therefore stamped the
+    generating operator's own home directory into `waivers.json.template` — a
+    file that ships to every plugin installer — which is exactly what
+    `shipped_path_portability_check` R1 exists to refuse. The relative form
+    names the same file for whoever reads the template, on any machine.
+
+    An audit outside the project (an absolute `--audit-json` elsewhere) has no
+    relative form, so it degrades to the BARE NAME rather than to the absolute
+    path: the field is a provenance hint for a human, never something reopened
+    by this program, so losing the directory costs nothing and leaking it
+    costs portability.
+    """
+    try:
+        return audit_json.relative_to(project).as_posix()
+    except ValueError:
+        return audit_json.name
+
+
 def generate(project: Path, audit_json: Path, out_path: Path,
              include_fail: bool, quiet: bool) -> int:
     # Anti-fabrication safety: never overwrite an existing waivers.json.
@@ -252,7 +274,7 @@ def generate(project: Path, audit_json: Path, out_path: Path,
             "agent-emitted."
         ),
         "_generator": "waiver_template_gen.py",
-        "_source_audit": str(audit_json),
+        "_source_audit": _portable_audit_ref(audit_json, project),
         "waived_steps": entries,
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
