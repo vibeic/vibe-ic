@@ -590,6 +590,20 @@ def _invoked(src: str, gate: str) -> bool:
 # cell name. It reads Python control flow.
 # ---------------------------------------------------------------------------
 
+#: THE SECOND MODULE THAT STARTS A PROCESS. `_progress_run` is the
+#: progress-supervised drop-in for `subprocess.run`; a runner that spawns a
+#: gate through `_pr.run(...)` is spawning it just as surely as one that spawns
+#: it through `subprocess.run(...)`.
+#:
+#: MEASURED, and this is the failure it fixes. When the direct-timeout lane
+#: converted the runners, three gates — slot_pad_budget_check, pad_ring_check
+#: and pad_assignment_gen — went from wired to "declares an intent it is not
+#: wired for" WITHOUT ANY WIRING CHANGING. The launches were still there; this
+#: audit could no longer see them, so it answered from the launcher's spelling.
+#: That is the same species of defect the `sp_aliases` note below already
+#: names: answering from a nickname instead of from the control flow.
+_PROGRESS_RUN_MODULE = "_progress_run"
+
 #: `subprocess.<attr>(...)` entry points that start a process, and WHAT each
 #: hands back. The carrier matters: `run` returns an object you must ask for
 #: the status, `call` returns the status itself, `check_call` raises instead.
@@ -601,6 +615,10 @@ _SPAWN_CARRIER = {
     "call": "status",
     "check_call": "raise",
     "check_output": "raise",
+    # `_progress_run.run_best_effort` — the progress-supervised drop-in's
+    # tolerant face. Same carrier as `run`: it hands back a CompletedProcess
+    # and the caller must ask it for the status.
+    "run_best_effort": "process",
 }
 _SPAWN_ATTRS = frozenset(_SPAWN_CARRIER)
 #: THE SECOND SANCTIONED WAY TO START A PROCESS.
@@ -761,7 +779,13 @@ class _RunnerModule:
         #: that launch site invisible — the analysis would be answering from
         #: the module's nickname, which is the same species of defect as
         #: answering from the gate's filename.
-        self.sp_aliases: Set[str] = {"subprocess"}
+        # UNION OF TWO LANES, and the audit must see BOTH vocabularies or it
+        # goes blind on whichever one it was not taught. `_watchdog` arrived at
+        # v1.12.22; `_progress_run` arrives with this lane. They are different
+        # modules, so neither replaces the other: a spawn reached through either
+        # is still a spawn, and an audit that follows only one reports
+        # INLINE_UNPROVEN about code that is provably enforced.
+        self.sp_aliases: Set[str] = {"subprocess", _PROGRESS_RUN_MODULE}
         #: the same, for the watchdog module — `import _watchdog as _wd`.
         self.wd_aliases: Set[str] = {"_watchdog"}
         #: bare names bound by `from _watchdog import completed_process`.
@@ -794,11 +818,12 @@ class _RunnerModule:
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Import):
                 for a in node.names:
-                    if a.name == "subprocess":
-                        self.sp_aliases.add(a.asname or "subprocess")
+                    if a.name in ("subprocess", _PROGRESS_RUN_MODULE):
+                        self.sp_aliases.add(a.asname or a.name)
                     elif a.name == "_watchdog":
                         self.wd_aliases.add(a.asname or "_watchdog")
-            elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            elif isinstance(node, ast.ImportFrom) and node.module in (
+                    "subprocess", _PROGRESS_RUN_MODULE):
                 for a in node.names:
                     if a.name in _SPAWN_ATTRS:
                         self.sp_funcs[a.asname or a.name] = a.name

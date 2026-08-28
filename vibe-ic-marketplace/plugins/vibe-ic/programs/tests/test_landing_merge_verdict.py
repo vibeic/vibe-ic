@@ -2003,6 +2003,12 @@ def sandbox(tmp_path_factory):
                  plugin / "programs/pytest_per_file_junit.py")
     shutil.copy2(_PROGRAMS / "_watchdog.py",
                  plugin / "programs/_watchdog.py")
+    # `_progress_run` is imported by trusted-closure members staged below, so
+    # the miniature repository has to carry it for the same reason it carries
+    # `_watchdog`: a base commit that cannot import its own judge refuses
+    # before either arm starts, and the refusal says nothing about the subject.
+    shutil.copy2(_PROGRAMS / "_progress_run.py",
+                 plugin / "programs/_progress_run.py")
     shutil.copy2(_PROGRAMS / "_pytest_progress_plugin.py",
                  plugin / "programs/_pytest_progress_plugin.py")
     shutil.copy2(_PROGRAMS / "ci_harness_timeout_ceiling_check.py",
