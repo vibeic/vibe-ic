@@ -171,9 +171,104 @@ def test_the_shipped_defaults_are_a_count_of_looks_not_a_duration():
 
 # ── 5. DEGRADE LOUDLY on the shapes this primitive does not serve ────────────
 def test_unsupported_shapes_refuse_out_loud_rather_than_hanging():
-    """`input=` would need a writer thread the supervisor does not have, and
-    bytes mode would hand back str. Both refuse; neither hangs or lies."""
-    with pytest.raises(NotImplementedError):
-        R.run(_py("pass"), input="x", **FAST)
+    """Bytes mode would hand back str; a stdout REDIRECT would take the output
+    away from the progress meter without saying so; a decode policy other than
+    the one `_watchdog` applies would be accepted and then not honoured.
+
+    All three refuse. None hangs, and none accepts-then-ignores — which is the
+    failure mode that matters here, because a converted call site that silently
+    changed meaning is worse than the timeout it replaced.
+    """
     with pytest.raises(NotImplementedError):
         R.run(_py("pass"), text=False, **FAST)
+    with pytest.raises(NotImplementedError):
+        R.run(_py("pass"), stdout=subprocess.DEVNULL, **FAST)
+    with pytest.raises(NotImplementedError):
+        R.run(_py("pass"), errors="strict", **FAST)
+
+
+# ── 6. THE WIDENED SURFACE — each shape is one a call site in this repo uses ──
+# Every case below asserts the argument was HONOURED, not merely accepted. An
+# `input=` that reached no child, or a `stderr=STDOUT` that quietly dropped the
+# second stream, would leave the converted gate reading an empty answer and
+# calling it a clean one.
+def test_input_is_actually_delivered_to_the_child():
+    """`_published_tree` feeds `git cat-file --batch` its sha list this way."""
+    src_ = "import sys; sys.stdout.write(sys.stdin.read().upper())"
+    cp = R.run(_py(src_), input="hello\n", **FAST)
+    assert cp.returncode == 0
+    assert cp.stdout.strip() == "HELLO", cp.stdout
+
+
+def test_a_devnull_stdin_child_reads_eof_rather_than_inheriting_the_terminal():
+    """The landing gates pass `stdin=DEVNULL` so a child cannot block on a
+    terminal that is not there. Inheriting instead would hang a landing."""
+    src_ = "import sys; sys.stdout.write(repr(sys.stdin.read()))"
+    cp = R.run(_py(src_), stdin=subprocess.DEVNULL, **FAST)
+    assert cp.returncode == 0
+    assert cp.stdout.strip() == "''", cp.stdout
+
+
+def test_input_and_stdin_together_are_a_caller_error_not_a_silent_winner():
+    with pytest.raises(ValueError):
+        R.run(_py("pass"), input="x", stdin=subprocess.DEVNULL, **FAST)
+
+
+def test_the_combined_stream_preserves_the_order_a_human_observes():
+    """`gate_host_independence_check` compares two arms' OUTPUT, and separately
+    captured stdout-then-stderr is not the order `2>&1 | tee` shows. The
+    interleaving is the thing under test, so assert the order, not the bytes."""
+    src_ = ("import sys\n"
+            "sys.stderr.write('E1\\n'); sys.stderr.flush()\n"
+            "sys.stdout.write('O1\\n'); sys.stdout.flush()\n"
+            "sys.stderr.write('E2\\n'); sys.stderr.flush()\n")
+    cp = R.run(_py(src_), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+               **FAST)
+    assert cp.returncode == 0
+    assert cp.stdout.split() == ["E1", "O1", "E2"], cp.stdout
+    # There was no second stream, so there is nothing to report on one.
+    assert cp.stderr == "", cp.stderr
+
+
+def test_errors_replace_is_accepted_because_it_is_what_already_happens():
+    """A call site that spelled the decode policy out gets what it asked for —
+    including on a child that emits bytes no UTF-8 decoder accepts."""
+    src_ = ("import sys; sys.stdout.buffer.write(b'ok\\xff\\n')")
+    cp = R.run(_py(src_), errors="replace", **FAST)
+    assert cp.returncode == 0
+    assert cp.stdout.startswith("ok"), cp.stdout
+
+
+def test_shell_true_still_runs_through_the_supervisor():
+    cp = R.run("printf 'a\\n'", shell=True, **FAST)
+    assert cp.returncode == 0
+    assert cp.stdout.strip() == "a", cp.stdout
+
+
+# ── 7. THE WIDENED SURFACE IS STILL SUPERVISED, IN BOTH DIRECTIONS ───────────
+# A new argument that quietly bypassed the watchdog would be the same defect
+# wearing the fix's name, so each direction is asserted THROUGH the new shape.
+def test_a_stalled_child_is_still_caught_through_the_combined_stream():
+    """A guard that stopped refusing is a deletion, not a fix."""
+    with pytest.raises(R.Stalled):
+        R.run(_py(SLEEP_FOREVER), stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT, **FAST)
+
+
+def test_a_progressing_child_survives_the_combined_stream_far_past_a_bound():
+    """The same shape, the other direction: output on the COMBINED stream is
+    still read as progress, so a chatty child outliving the window lives."""
+    argv = _py(CHATTY_SLOW)                      # ~2s of output, 0.6s window
+    with pytest.raises(subprocess.TimeoutExpired):
+        subprocess.run(argv, capture_output=True, text=True, timeout=0.6)
+    cp = R.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **FAST)
+    assert cp.returncode == 0
+    assert cp.stdout.count("tick") == 10, cp.stdout
+
+
+def test_a_child_fed_by_input_is_still_killed_when_it_stops_moving():
+    """`input=` hands over a file and returns; it must not hand the child a
+    licence to hang. Same child, same payload, and it is still caught."""
+    src_ = "import sys,time; sys.stdin.read(); time.sleep(600)"
+    with pytest.raises(R.Stalled):
+        R.run(_py(src_), input="x\n", **FAST)

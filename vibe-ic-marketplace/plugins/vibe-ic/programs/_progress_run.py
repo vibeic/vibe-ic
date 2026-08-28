@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import os
 import subprocess  # nosec B404 — this module IS the process-launch primitive
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -282,7 +283,36 @@ def _fmt(cmd) -> str:
     return str(cmd)[:200]
 
 
+#: The ONLY decode policy `_watchdog` applies to a child's streams. A call site
+#: that asked for this explicitly (``errors="replace"``) is asking for what it
+#: already gets; any OTHER policy would silently not be applied, so it refuses.
+_DECODE_ERRORS = "replace"
+
+
+def _stdin_from(input_payload, stdin):
+    """The child's stdin, as a real file object, plus a closer.
+
+    ``subprocess.run(input=...)`` writes the whole payload and closes; for a
+    non-interactive child that is indistinguishable from handing it a seekable
+    file already containing those bytes. Doing it with a file rather than a
+    writer thread keeps this module free of the one thing it must never have —
+    a place the parent can block forever on a pipe nobody is draining.
+    """
+    if input_payload is None:
+        return stdin, None
+    if stdin is not None:
+        raise ValueError("pass input= or stdin=, not both")
+    fh = tempfile.TemporaryFile()
+    payload = (input_payload.encode("utf-8")
+               if isinstance(input_payload, str) else input_payload)
+    fh.write(payload)
+    fh.flush()
+    fh.seek(0)
+    return fh, fh
+
+
 def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
+        stdin=None, stdout=None, stderr=None, errors=None, shell=False,
         capture_output: bool = True, text: bool = True, check: bool = False,
         stall_looks: int = DEFAULT_STALL_LOOKS,
         poll_s: Optional[float] = None,
@@ -295,39 +325,76 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
 
     Raises `Stalled` iff every readable progress signal sat still across
     `stall_looks` consecutive looks. Never raises on account of elapsed time.
+
+    THE COMPATIBILITY SURFACE IS DELIBERATELY NARROW, and every shape it does
+    accept is one a call site in this repo actually uses. Anything else raises
+    `NotImplementedError` rather than accepting the argument and quietly not
+    honouring it — a converted call that silently changed meaning would be a
+    worse defect than the timeout it replaced:
+
+      * ``errors=`` — only ``"replace"``, which is the decode policy
+        `_watchdog` already applies; any other value would not be applied.
+      * ``input=`` / ``stdin=`` — the payload is handed over as a seekable
+        file (see `_stdin_from`); ``stdin=subprocess.DEVNULL`` passes through.
+      * ``stdout=subprocess.PIPE, stderr=subprocess.STDOUT`` — ONE combined
+        stream, in the order a human or ``2>&1`` observes it. `.stderr` is then
+        empty by construction, because there was no second stream.
+      * ``shell=True`` — passed to `Popen` unchanged.
+
+    A ``stdout=<file>`` redirect is NOT supported: it would take the output
+    away from the progress meter without saying so, leaving the supervision
+    resting on CPU and I/O while still claiming an output signal.
     """
     if not text:
         # Degrade loudly rather than hand back str where bytes were asked for.
         raise NotImplementedError(
             "_progress_run.run supervises decoded text; call with text=True "
             "or use subprocess directly for a bytes-mode child")
-    if input is not None:
-        # Degrade loudly: `_watchdog` owns the child's pipes, so feeding stdin
-        # would need a writer thread it does not have. A silent hang here would
-        # be exactly the failure this module exists to remove.
+    if errors is not None and errors != _DECODE_ERRORS:
         raise NotImplementedError(
-            "_progress_run.run does not feed stdin; pass the payload as a file "
-            "or argument, or use subprocess directly for an input= child")
+            f"_progress_run.run decodes with errors={_DECODE_ERRORS!r} "
+            f"(the policy `_watchdog` applies); errors={errors!r} would be "
+            f"accepted and then not honoured")
+    combined = (stdout is subprocess.PIPE and stderr is subprocess.STDOUT)
+    if not combined and (stdout is not None or stderr is not None):
+        raise NotImplementedError(
+            "_progress_run.run captures both streams itself; the only stdout/"
+            "stderr shape it honours is (stdout=PIPE, stderr=STDOUT) for one "
+            "combined stream. A file redirect would silently remove the output "
+            "progress signal — use _watchdog.run_supervised(log_path=...) so "
+            "the file it writes is what gets watched")
     if poll_s is None:
         poll_s = _poll_interval()
     signals: Dict[str, bool] = {"output": capture_output, "cpu": False,
                                 "io": False}
+    child_stdin, to_close = _stdin_from(input, stdin)
 
     def popen_factory(c, **kw):
-        return subprocess.Popen(c, cwd=cwd, **kw)  # nosec B603
+        if combined:
+            # ONE pipe for both streams, so interleaving is preserved. The
+            # supervisor's err file stays empty and unwatched; `_size` still
+            # sees every byte the child writes, because they all land in out.
+            kw = dict(kw, stderr=subprocess.STDOUT)
+        if child_stdin is not None:
+            kw["stdin"] = child_stdin
+        return subprocess.Popen(c, cwd=cwd, shell=shell, **kw)  # nosec B603,B602
 
     supervisor = _supervisor or _wd.run_supervised
     t0 = time.monotonic()
-    res = supervisor(
-        cmd,
-        output_progress=True,
-        stall_grace_s=stall_looks * poll_s,
-        poll_s=poll_s,
-        hard_ceiling_s=hard_ceiling_s,
-        cpu_probe=_host_probe(signals),
-        popen_factory=popen_factory,
-        env=env,
-    )
+    try:
+        res = supervisor(
+            cmd,
+            output_progress=True,
+            stall_grace_s=stall_looks * poll_s,
+            poll_s=poll_s,
+            hard_ceiling_s=hard_ceiling_s,
+            cpu_probe=_host_probe(signals),
+            popen_factory=popen_factory,
+            env=env,
+        )
+    finally:
+        if to_close is not None:
+            to_close.close()
     elapsed = time.monotonic() - t0
     outcome = getattr(res, "outcome", "natural")
     if outcome in ("stalled", "ceiling"):
