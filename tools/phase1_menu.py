@@ -410,11 +410,16 @@ class Phase1FailMenu:
                     [sys.executable, gen_script,
                      "--ic", ic, "--output-dir", proj])
                 if problem:
-                    # NOT "failed". A generator that was stopped without
-                    # finishing produced no verdict about the datasheet, and
-                    # recording one would be inventing it.
+                    # NOT "failed", and NOT "not measured" either. A STALL is a
+                    # POSITIVE observation: the generator's whole process tree
+                    # was watched and nothing in it moved. "Not measured" says
+                    # nobody looked — a strictly weaker finding — and handing
+                    # the operator the weaker one is the very substitution this
+                    # branch's RETRACTION exists to remove. The transcript gets
+                    # the finding that was actually made.
                     print(f"  Not re-generated: {problem}")
-                    self._log(f"Datasheet re-generation: NOT MEASURED — {problem}")
+                    self._log(f"Datasheet re-generation: STALLED (no forward "
+                              f"progress) — {problem}")
                     return "stalled"
                 if result.returncode == 0:
                     print(f"  Datasheet re-generated successfully.")
@@ -459,9 +464,11 @@ class Phase1FailMenu:
                     [sys.executable, gen_script,
                      "--ic", ic, "--output-dir", proj])
                 if problem:
-                    # NOT "failed", for the same reason as the datasheet arm.
+                    # NOT "failed", and NOT "not measured", for the same reason
+                    # as the datasheet arm above.
                     print(f"  Not re-generated: {problem}")
-                    self._log(f"AppNote re-generation: NOT MEASURED — {problem}")
+                    self._log(f"AppNote re-generation: STALLED (no forward "
+                              f"progress) — {problem}")
                     return "stalled"
                 if result.returncode == 0:
                     print(f"  Application note re-generated successfully.")
