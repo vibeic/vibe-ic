@@ -1,0 +1,23 @@
+[
+  {
+    "step": "flow.artefact_write_ownership",
+    "design": "ppa-page-reverification",
+    "bucket": "A",
+    "rule_name": "published_figure_has_a_live_deriver_check",
+    "docstring": "A published figure and the receipt underneath it can disagree, and nothing reads both.\n\nMEASURED 2026-08-28 while re-deriving `ppa.html` against the tree. The page's headline metric cards and its VERIFICATION RECEIPT state the SAME closed-loop census, and they disagreed:\n\n    headline cards  `DECLARED_ONLY` 18 | EXECUTABLE 0 | REMEASURED 1 | `ROLLBACK_PROVEN` 2\n    receipt         `DECLARED_ONLY` 18 | EXECUTABLE 0 | REMEASURED 3 | `ROLLBACK_PROVEN` 0\n\nThe cards had been updated when the tiers moved; the receipt had not. The receipt is the part a reader trusts MOST -- it is the section headed 'what this review actually ran' and it names a pinned commit -- so the stale half was the authoritative-looking half. The same page also carried 1,290 in one sentence and 1300 in a metric card for the same population, and a pinned commit two versions behind the tree it claimed to describe.\n\nWhat this rule adds: for every figure a published page states more than once, assert the statements AGREE, and for every figure that claims to be derived, assert a named command still produces it. Deterministic: both are string comparisons over an extraction the repo already performs for its `<!--figure:...-->` anchors. This is the anchor mechanism `gen_matrix_63x8_census` applies to markdown, applied to the published HTML that quotes the same numbers.\n\nWhy a page and not a doc: the anchors exist for in-repo markdown. A figure leaves the repo when it is published, and the published copy is the one a reader acts on.",
+    "expected_signal": "ERROR",
+    "fix_action": "Extract every stated figure from the published page with its surrounding claim, group by the quantity named, and report any quantity stated with two different values. For a figure carrying a deriving command, re-run it and compare."
+  },
+  {
+    "step": "flow.artefact_write_ownership",
+    "design": "ppa-page-reverification",
+    "bucket": "B",
+    "why_not_bucket_a": "The rule is 'search every venue the audit itself searches before contradicting it', but which venues an audit searches is written in that audit's own source in a different shape each time -- a lambda here, a glob list there, a constant elsewhere -- and deciding whether a hand-run search covered them requires reading the audit's intent, not matching a pattern.",
+    "skill_title": "Reproduce an audit's venue list before contradicting its verdict",
+    "pattern": "A hand-run grep contradicts a shipped audit; the grep's venue list is narrower than the audit's, so the 'finding' is the searcher's blind spot reported as the subject's defect.",
+    "when": "Whenever a hand-run search is about to be published as evidence that a shipped audit's verdict is unearned.",
+    "what": "Read the audit's own venue construction and reproduce it exactly -- including the directories its comments say were ADDED after a previous miss -- before writing the contradiction down.",
+    "example": "MEASURED 2026-08-28. `checker_execution_wiring_audit` credits `ppa_area_threshold_check` with a PROG runner. A grep over `programs/*.py` found only a docstring sentence, and a paragraph was drafted saying the credit was 'earned on prose'. Running the audit's OWN `_py_evidence` over the audit's OWN PROG population found the real invocation one directory over: `benchmark/cvdp_gate.py:97` imports `run_ppa_area_threshold` and blocks on its verdict. The audit's source says why that directory is in scope -- a comment records the identical miss being fixed once before, for `harness_verdict_forgery_gate`. The draft was withdrawn before publication.",
+    "generality": "Applies to any audit whose verdict a reader is tempted to overturn by hand: the audit's venue list is part of its claim, and a narrower search is not a refutation."
+  }
+]

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1220
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1220)
+- **Total programs (excluding helpers / shims):** 1221
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1221)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1211 |
+| `any` | 1212 |
 
 ## Alphabetical listing
 
@@ -767,6 +767,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pad_ring_check` | any | — | step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe... |
 | `pad_ring_gen` | any | — | step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without. |
 | `pad_side_constraint_check` | any | — | Gate: verify IO pin placements match the L-doc pad-side table (North/South/East/West per signal). |
+| `page_states_one_figure_twice_check` | any | — | One quantity, two numbers, one page — and nothing reads both. |
 | `parametric_spec_extractor` | any | — | deterministic baseline extractors for the PROSE PARAMETRIC element types (the design parameters a spec states in words but in a regular w... |
 | `path_delay_coverage_check` | any | — | REAL at-speed PATH-DELAY-FAULT (PDF) coverage gate for the timing-graded ATPG step (DT2). |
 | `path_delay_fault_atpg_run` | any | — | REAL at-speed TIMING-graded PATH-DELAY-FAULT (PDF) ATPG. Composes OpenSTA K-longest-path enumeration (real Liberty + SPEF timing) with th... |
@@ -1292,7 +1293,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1211 programs)
+### `any` (1212 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2030,6 +2031,7 @@ _(no programs in this group)_
 - `pad_ring_check` — step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe...
 - `pad_ring_gen` — step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without.
 - `pad_side_constraint_check` — Gate: verify IO pin placements match the L-doc pad-side table (North/South/East/West per signal).
+- `page_states_one_figure_twice_check` — One quantity, two numbers, one page — and nothing reads both.
 - `parametric_spec_extractor` — deterministic baseline extractors for the PROSE PARAMETRIC element types (the design parameters a spec states in words but in a regular w...
 - `path_delay_coverage_check` — REAL at-speed PATH-DELAY-FAULT (PDF) coverage gate for the timing-graded ATPG step (DT2).
 - `path_delay_fault_atpg_run` — REAL at-speed TIMING-graded PATH-DELAY-FAULT (PDF) ATPG. Composes OpenSTA K-longest-path enumeration (real Liberty + SPEF timing) with th...

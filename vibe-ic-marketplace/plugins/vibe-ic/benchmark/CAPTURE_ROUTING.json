@@ -222,7 +222,7 @@
     },
     "mcp_eda.synth": {
       "bucket_A_program": "mcp-eda/src/index.js",
-   "bucket_A_note": "The MCP server is a SINGLE module: every eda_* tool is registered in mcp-eda/src/index.js. These three routes named mcp-eda/src/tools/{synth,lint,cocotb}.js, which have NEVER existed in this repository at any commit, so every MCP-EDA capture was routed to a file nobody could open and enhancement_emit.py wrote a rule sketch telling the reader to merge into it. The path check that should have caught this exempted every mcp-eda/ route on the false premise that mcp-eda is a sibling package; it ships inside the plugin. Shared helpers live in mcp-eda/src/lib/*.mjs.",
+      "bucket_A_note": "The MCP server is a SINGLE module: every eda_* tool is registered in mcp-eda/src/index.js. These three routes named mcp-eda/src/tools/{synth,lint,cocotb}.js, which have NEVER existed in this repository at any commit, so every MCP-EDA capture was routed to a file nobody could open and enhancement_emit.py wrote a rule sketch telling the reader to merge into it. The path check that should have caught this exempted every mcp-eda/ route on the false premise that mcp-eda is a sibling package; it ships inside the plugin. Shared helpers live in mcp-eda/src/lib/*.mjs.",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "mixed_signal.M_top_merge": {
@@ -360,6 +360,15 @@
       "description": "Landing a document one lane owns, when another lane owns a document of the same kind",
       "bucket_A_program": "programs/enhancement_emit.py",
       "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    },
+    "publish.figure_agreement": {
+      "description": "A published page stating one named figure twice, with two different values",
+      "bucket_A_program": "programs/page_states_one_figure_twice_check.py",
+      "bucket_A_related": [
+        "programs/ppa_page_claim_check.py",
+        "programs/derived_corpus_figure_check.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
