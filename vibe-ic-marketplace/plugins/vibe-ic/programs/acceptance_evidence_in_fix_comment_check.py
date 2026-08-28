@@ -128,7 +128,9 @@ import argparse
 import json
 import os
 import re
+import socket
 import sys
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -158,7 +160,22 @@ def _read_token(token_file: Optional[str]) -> str:
 
 
 def _fetch_issue_body(repo: str, issue_number: int, token: str) -> str:
-    """Return the body string for a GitHub issue."""
+    """Return the body string for a GitHub issue.
+
+    A NETWORK STALL IS NOT A FINDING. `timeout=30` on `urlopen` is a
+    RESOURCE-CONTENTION guard, not a runtime estimate — the class this module
+    is here to fix is a fixed timer that PRODUCES A VERDICT, and the risk here
+    was structural rather than in the number itself: `main`'s
+    `except (ValueError, FileNotFoundError, RuntimeError)` did not catch
+    `socket.timeout`/`urllib.error.URLError`, so an uncaught network hiccup
+    propagated past every handler and crashed the process — and Python's
+    default exit code for an uncaught exception is 1, which THIS module's own
+    convention reads as FAIL (`return 1` == "an acceptance-evidence violation
+    was found"). A reader could not tell a real finding from a dropped
+    connection; both were rc 1. Caught here and re-raised as `RuntimeError` so
+    it reaches `main`'s EXISTING rc-2 ERROR path — the one already reserved
+    for `could not determine`, never for `found a violation`.
+    """
     url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
     req = urllib.request.Request(
         url,
@@ -167,8 +184,12 @@ def _fetch_issue_body(repo: str, issue_number: int, token: str) -> str:
             "Accept": "application/vnd.github+json",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
-        d = json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
+            d = json.loads(r.read())
+    except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
+        raise RuntimeError(
+            f"could not fetch issue #{issue_number}: {exc}") from exc
     return d.get("body") or ""
 
 
@@ -191,8 +212,16 @@ def _fetch_issue_comments(repo: str, issue_number: int,
                 "Accept": "application/vnd.github+json",
             },
         )
-        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
-            chunk = json.loads(r.read())
+        # See `_fetch_issue_body`: a network stall must reach `main`'s rc-2
+        # ERROR path, never fall through to the uncaught-exception rc 1 this
+        # module's own convention reads as a real FAIL finding.
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
+                chunk = json.loads(r.read())
+        except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
+            raise RuntimeError(
+                f"could not fetch comments for issue #{issue_number} "
+                f"(page {page}): {exc}") from exc
         if not chunk:
             break
         for c in chunk:
