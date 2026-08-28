@@ -364,6 +364,13 @@ def _image_pullable(image: str, runner=None) -> Optional[bool]:
         if runner(["docker", "image", "inspect", image]).returncode == 0:
             return True
         r = runner(["docker", "manifest", "inspect", image])
+        if r.returncode == _pr.RC_STALLED:
+            # docker itself stopped moving. That is UNDETERMINABLE, and this
+            # function's whole contract is that undeterminable returns None:
+            # False here would be a clear not-found, i.e. a host condition
+            # spent as a claim about the image — the defect this module's
+            # launch primitive exists to remove, re-entering as an rc.
+            return None
         return True if r.returncode == 0 else False
     except Exception:
         return None

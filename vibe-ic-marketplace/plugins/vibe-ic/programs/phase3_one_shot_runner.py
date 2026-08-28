@@ -24171,7 +24171,10 @@ def _die_finishing(project: Path, top: str, pdk: PdkConfig,
     try:
         cp = _pr.run_best_effort(argv, capture_output=True, text=True,
                             env=run_env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except OSError as exc:
+        # `subprocess.TimeoutExpired` was in this tuple and can no longer be
+        # raised here: the call is progress-supervised and reports a stall as
+        # an rc. Leaving it would be dead code that still reads as coverage.
         return False, f"die finishing NONFATAL: {exc}"
     if cp.returncode != 0:
         # rc 2 is the program's NAMED disclosed skip (this PDK ships no
@@ -24292,7 +24295,7 @@ def _die_density_fill(project: Path, top: str, pdk: PdkConfig,
     try:
         cp = _pr.run_best_effort(argv, capture_output=True, text=True,
                             env=run_env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except OSError as exc:                    # see `_die_finishing` above
         return False, f"die density fill NONFATAL: {exc}"
     if cp.returncode != 0:
         # rc 2 is the program's NAMED disclosed skip (this PDK ships no
@@ -24367,7 +24370,7 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
              "--gds", str(gds_path), "--config", str(cfg),
              "--cell", top, "--in-place"],
             capture_output=True, text=True, env=run_env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except OSError as exc:                    # see `_die_finishing` above
         return False, f"density fill NONFATAL: {exc}"
     if cp.returncode != 0:
         # rc 2 is the program's NAMED disclosed-skip; rc 1 is PARTIAL/FAIL with
