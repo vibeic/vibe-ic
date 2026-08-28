@@ -46,7 +46,22 @@ def _stage(tmp_path: Path, version: str = "9.9.9") -> Path:
     mj = tmp_path / "vibe-ic-marketplace" / ".claude-plugin" / "marketplace.json"
     mj.parent.mkdir(parents=True, exist_ok=True)
     mj.write_text(json.dumps({"plugins": [{"name": "vibe-ic", "version": version}]}))
+    # THE THIRD MANIFEST, at the REPO ROOT. `/plugin update` reads this one as
+    # the version truth, and the script gained a check for it at 7e1aab3e1f —
+    # a landing that did not update this fixture, so every case here began
+    # failing on a manifest the fixture never staged. Staging it is not the
+    # whole fix: see `test_a_desynced_root_manifest_is_refused` below, without
+    # which this line would merely make the red go away.
+    rmj = tmp_path / ".claude-plugin" / "marketplace.json"
+    rmj.parent.mkdir(parents=True, exist_ok=True)
+    rmj.write_text(json.dumps({"plugins": [{"name": "vibe-ic", "version": version}]}))
     return script
+
+
+def _desync_root(tmp_path: Path, version: str) -> None:
+    """Leave the two maintainer manifests alone and move ONLY the root one."""
+    rmj = tmp_path / ".claude-plugin" / "marketplace.json"
+    rmj.write_text(json.dumps({"plugins": [{"name": "vibe-ic", "version": version}]}))
 
 
 def _run(script: Path, tmp_path: Path, msg: str):
@@ -136,3 +151,37 @@ def test_flow_word_not_immediate_still_blocks(tmp_path):
     script = _stage(tmp_path, "9.9.9")
     cp = _run(script, tmp_path, "feat: the flow. v9.9.10 ships X\n")
     assert cp.returncode == 1, cp.stdout + cp.stderr
+
+
+def test_a_desynced_root_manifest_is_refused(tmp_path):
+    """The root manifest is the one a USER resolves, so it must be checked.
+
+    Before 7e1aab3e1f this script compared the commit message against the two
+    manifests a MAINTAINER edits and nothing else. MEASURED at the time: set the
+    root manifest to 9.9.9, leave the other two correct, and it printed
+    `PASS: ... ↔ ... ↔ ...` and exited 0 — a user's `/plugin update` would then
+    silently resolve the wrong version with no gate anywhere saying so.
+
+    This case exists so that staging the third manifest in `_stage` cannot be
+    mistaken for the fix. Staging alone makes the red go away; only this makes
+    the check mean something.
+    """
+    script = _stage(tmp_path, "1.2.3")
+    _desync_root(tmp_path, "9.9.9")
+    cp = _run(script, tmp_path, "feat: something [v1.2.3]")
+    assert cp.returncode == 1, (
+        "a root-only desync was accepted; the manifest `/plugin update` reads "
+        "is unchecked again\n" + cp.stdout + cp.stderr)
+    assert "ROOT" in (cp.stdout + cp.stderr), (
+        "it failed, but not for the root manifest — the message must say which "
+        "of the three is wrong or the next reader edits the wrong file")
+
+
+def test_an_absent_root_manifest_is_not_a_pass(tmp_path):
+    """"I could not find the version" is not "the version is right"."""
+    script = _stage(tmp_path, "1.2.3")
+    (tmp_path / ".claude-plugin" / "marketplace.json").unlink()
+    cp = _run(script, tmp_path, "feat: something [v1.2.3]")
+    assert cp.returncode == 1, (
+        "an absent root manifest passed; an unreadable version is not a "
+        "matching one\n" + cp.stdout + cp.stderr)
