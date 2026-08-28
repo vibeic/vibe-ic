@@ -6,6 +6,7 @@ import copy
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -129,6 +130,57 @@ def test_valid_blind_ai_review_is_hash_bound_and_accepted(tmp_path):
     Path(task["rtl_paths"][0]).write_text("module dut(); endmodule\n")
     with pytest.raises(SystemExit, match="dual-track acceptance BLOCKED"):
         bd._require_dual_track_acceptance(run)
+
+
+def test_supplied_rtl_accepts_only_explicit_step2_reentry(tmp_path):
+    project = _project(tmp_path)
+    report = project / "reports" / "orchestrator" / "phase2_one_shot.json"
+    report.write_text(json.dumps({
+        "verdict": "PASS",
+        "steps": [{
+            "name": "rtl_gen", "status": "SKIPPED-BY-ENTRY",
+            "detail": "run declared --entry-step 2",
+        }],
+    }))
+
+    ordinary = bio.collect("rtllm", "p1", project)
+    supplied = bio.collect("rtllm", "p1", project, supplied_rtl=True)
+
+    assert ordinary["ok"] is False
+    assert supplied["ok"] is True
+    assert supplied["rtl_gen"] == "SKIPPED-BY-ENTRY"
+    assert supplied["supplied_rtl"] is True
+
+
+def test_ai_repair_reenters_at_validation_without_regeneration(
+        tmp_path, monkeypatch):
+    run, task, _ = _task(tmp_path)
+    _solve_report(run, task)
+    Path(task["rtl_paths"][0]).write_text(
+        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    seen = []
+
+    def fake_run(argv, capture_output, text):
+        seen.append(argv)
+        report = (Path(task["project"]) / "reports" / "orchestrator" /
+                  "phase2_one_shot.json")
+        report.write_text(json.dumps({
+            "verdict": "PASS",
+            "steps": [{
+                "name": "rtl_gen", "status": "SKIPPED-BY-ENTRY",
+                "detail": "run declared --entry-step 2",
+            }],
+        }))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    assert seen and seen[0][-2:] == ["--entry-step", "2"]
+    solve = json.loads((run / "solve_report.json").read_text())
+    assert solve["results"][0]["candidate_origin"] == "AI_REPAIR"
+    assert solve["results"][0]["candidate_ready"] is True
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert refreshed["rtl_sha256"] != task["rtl_sha256"]
 
 
 def test_missing_review_stays_pending_and_writes_no_response(tmp_path):

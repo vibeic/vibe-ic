@@ -1372,12 +1372,17 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
               file=sys.stderr)
         return 2
 
-    def _run_and_collect(pid: str, proj: Path) -> tuple[int, dict]:
-        rc = subprocess.run(
-            [sys.executable, str(runner), str(proj), "--skip-analog",
-             "--skip-hardware", "--skip-phase3"],
-            capture_output=True, text=True).returncode
-        return rc, bio.collect(fmt, pid, proj)
+    def _run_and_collect(pid: str, proj: Path, *,
+                         supplied_rtl: bool = False) -> tuple[int, dict]:
+        argv = [sys.executable, str(runner), str(proj), "--skip-analog",
+                "--skip-hardware", "--skip-phase3"]
+        if supplied_rtl:
+            # The AI rail has already authored the candidate. Re-enter at the
+            # first RTL-validation step so program-first does not author again
+            # and overwrite the hash whose semantics the AI just repaired.
+            argv += ["--entry-step", "2"]
+        rc = subprocess.run(argv, capture_output=True, text=True).returncode
+        return rc, bio.collect(fmt, pid, proj, supplied_rtl=supplied_rtl)
 
     def _refresh_result(result: dict, proj: Path, rc: int, got: dict) -> None:
         routing = result.get("routing_verdict") or {}
@@ -1426,7 +1431,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                            "awaiting_ai_review": False, "awaiting_ai": True})
             print(f"  {pid:44s} AI backup still has no authored RTL")
             continue
-        rc, got = _run_and_collect(pid, proj)
+        rc, got = _run_and_collect(pid, proj, supplied_rtl=True)
         _refresh_result(result, proj, rc, got)
         if got.get("ok"):
             task = _make_ai_review_task(
@@ -1482,7 +1487,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         if stated == current and rtl_hash == task.get("rtl_sha256"):
             continue
         proj = Path(str(task.get("project") or ""))
-        rc, got = _run_and_collect(pid, proj)
+        rc, got = _run_and_collect(pid, proj, supplied_rtl=True)
         _refresh_result(result, proj, rc, got)
         if got.get("ok"):
             new_task = _make_ai_review_task(
