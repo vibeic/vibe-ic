@@ -2290,6 +2290,123 @@ def test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved():
             f"{key}: pytest reported the item but it never ran ({obs})")
 
 
+#: THE TWO VERDICTS A DISAGREEING CENSUS CAN REACH, and they are not the same
+#: finding. Extracted out of the test body on purpose: a three-valued verdict
+#: whose middle value is only reachable through a 400 s live nested run is a
+#: verdict nobody can falsify, and an unfalsifiable verdict is what this file
+#: exists to refuse.
+_VERDICT_FAIL = "fail"
+_VERDICT_REFUSE = "refuse"
+
+#: Outcomes that mean THE PREDICATE NEVER GAVE AN ANSWER, as opposed to
+#: giving a red one. `agrees` folds both into "contradicted" — correctly,
+#: since neither is evidence of enforcement — but the two have different
+#: causes and different owners, and the verdict must not conflate them.
+#:
+#: MEASURED (vibe-ic#1348): the same tree, same commit, reported 16
+#: contradictions on a host with every repo dependency installed and 54 in a
+#: container missing `pyyaml`. The extra 38 were predicates that could not
+#: RUN. A reader given one number cannot tell a repo defect from a missing
+#: dependency, and "16" is not reproducible without knowing which host
+#: produced it.
+_UNMEASURED_OUTCOMES = ("error", "unrun", "skipped")
+
+
+def _disagreement_verdict(
+        joined: Dict[Tuple[str, int], CellVerdict],
+        counts: Dict[str, int],
+) -> Tuple[Optional[str], str]:
+    """``(verdict, message)`` for a joined census; ``(None, "")`` when clean.
+
+    Splits the disagreeing cells into the two classes the message has printed
+    since #1348 and returns which of them decides the outcome:
+
+      * ``_VERDICT_FAIL`` — at least one cell was MEASURED RED. The message is
+        the one this check has always emitted, unchanged, and it is reached
+        whether or not not-measured cells sit beside it.
+      * ``_VERDICT_REFUSE`` — nothing was measured red and the whole
+        disagreement is cells that never returned a verdict.
+      * ``None`` — no cell disagrees.
+
+    Every disagreeing cell is enumerated in BOTH messages. The verdict decides
+    what the enumeration MEANS, never which cells appear in it.
+    """
+    broken = sorted((k for k, v in joined.items() if not v.agrees),
+                    key=lambda k: (k[1], k[0]))
+    if not broken:
+        return None, ""
+
+    measured, unmeasured = [], []
+    for sid, dim in broken:
+        verdict = joined[(sid, dim)]
+        line = (
+            f"  {sid}/d{dim} ({DIMENSION_NAMES[dim]}): reported "
+            f"{verdict.state} — which claims its predicate "
+            f"{STATE_EXPECTS_OUTCOME[verdict.state]} — but the live run "
+            f"says {', '.join(verdict.outcomes) or '<never observed>'}")
+        (unmeasured if (not verdict.outcomes
+                        or all(o in _UNMEASURED_OUTCOMES
+                               for o in verdict.outcomes))
+         else measured).append(line)
+    lines = []
+    if measured:
+        lines.append(
+            f"MEASURED RED — the predicate ran and contradicted the state "
+            f"({len(measured)}). These are repo defects:")
+        lines.extend(measured)
+    if unmeasured:
+        lines.append(
+            f"NOT MEASURED — the predicate never returned a verdict "
+            f"({len(unmeasured)}). NOT evidence of enforcement either, but "
+            f"a missing dependency or a collection error is a HOST problem, "
+            f"not a repo defect. Fix the environment and re-run before "
+            f"reading these as findings:")
+        lines.extend(unmeasured)
+    state_only = {s: sum(1 for v in joined.values() if v.state == s)
+                  for s in VALID_STATES}
+    enumeration = (
+        f"{len(broken)} of {len(joined)} cells are reported in a state "
+        f"their own live predicate contradicts "
+        f"({len(measured)} measured red, {len(unmeasured)} not measured):\n"
+        + "\n".join(lines)
+        + f"\n\nSTATE-ONLY census (what used to be published): "
+          f"{state_only}"
+        + f"\nTWO-AXIS census (what is true): {counts}")
+
+    if measured:
+        # UNCHANGED, byte for byte, from before the refusal existed. One
+        # measured red is a finding about this tree however many not-measured
+        # cells stand beside it, and it is reported the same way it always was.
+        return _VERDICT_FAIL, (
+            enumeration
+            + "\n\nA cell in this list is counted as coverage and is not "
+              "covering anything. Fix the predicate or waive it on the "
+              "record; see matrix_63x8/README.md, 'The three-state rule'.")
+
+    return _VERDICT_REFUSE, (
+        f"REFUSED — 0 measured red, {len(unmeasured)} NOT MEASURED. This "
+        f"check has no finding about this tree to report, and it has not "
+        f"passed either. Every one of the {len(unmeasured)} cells is "
+        f"enumerated below and NOT ONE of them is counted as enforcing "
+        f"anything.\n\n"
+        + enumeration
+        + "\n\nWHY THIS IS A REFUSAL AND NOT A PASS: 'a gate that could not "
+          "run has not passed' (tools/ci/J63B_63X8_RED_SET.md) — and it has "
+          "not failed either. Every cell above DECLINED TO LOOK; that is a "
+          "statement about what this checkout holds, not about what the flow "
+          "does. `benchmark-data` was moved OUT of this repository and large "
+          "raw geometry (*.def, *.gds, *.spef, *.oas over the ceiling) is not "
+          "committed, both by design, and a check that reddens because the "
+          "repository followed its own rules is measuring the policy and "
+          "reporting it as a defect."
+        + "\n\nIT SELF-INVALIDATES: point VIBE_IC_BENCHMARK_DATA at a clone "
+          "that carries the artefact, or publish the run, and the predicate "
+          "returns a verdict and every cell above re-enters the measured half "
+          "of this check. And ONE measured red still FAILS, beside any number "
+          "of these — `test_a_single_measured_red_still_fails_beside_any_"
+          "number_of_not_measured_cells` is the control that says so.")
+
+
 def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
     """A red predicate may not be counted as proof of enforcement.
 
@@ -2302,62 +2419,105 @@ def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
       * WAIVE it — registry entry + evidence-backed reason + ``strict=True`` —
         which the three cross-checks above then hold you to.
     Editing this test is not a third door.
+
+    THE THIRD ANSWER IS A REFUSAL, NOT A THIRD DOOR (owner ruling
+    2026-08-28). Since #1348 the message has separated MEASURED RED from NOT
+    MEASURED, said in its own words that the second class is a host problem
+    and "not a repo defect" — and then failed on it anyway. On this tree that
+    read 0 measured red, 47 not measured, FAIL: a checkout that followed this
+    repository's own published rules was reported as carrying a defect.
+    `benchmark-data` was moved out of this repository on purpose and large raw
+    geometry is not committed on purpose, so the evidence those 47 cells need
+    does not exist here to be pointed at. Reporting a deliberate design
+    decision as a defect is the thing being removed.
+
+    The verdict is therefore three-valued, and it is exactly the split the
+    message already printed:
+
+      * any MEASURED RED -> FAIL, message unchanged. THIS IS THE PROPERTY THAT
+        MUST SURVIVE: one measured red still turns this red, beside any number
+        of not-measured cells.
+      * 0 measured red and >= 1 NOT MEASURED -> REFUSE (skip), carrying the
+        same enumeration. "A gate that could not run has not passed"
+        (`tools/ci/J63B_63X8_RED_SET.md`) — and it has not failed either.
+      * nothing broken -> pass.
+
+    It is the idiom ``test_matrix_d3_outputs_produced.py`` already uses ONE
+    LEVEL DOWN, where the same absent corpus makes the cell ``pytest.skip``
+    with ``_published_corpus.SKIP_REASON`` — *"This is 'could not look', not
+    'nothing was wrong'."* This makes the reader of the census agree with the
+    census.
+
+    NOT A WEAKENING, AND IT SELF-INVALIDATES. No cell is excluded from the
+    enumeration, no cell is counted as ENFORCED — ``enforcement_counter``
+    still labels every one of them ``<STATE>-SKIPPED`` — and the moment the
+    evidence becomes obtainable the predicate returns a verdict and the cell
+    re-enters the measured half.
     """
     joined = enforcement_census()
     counts = enforcement_counter(joined)
-    broken = sorted((k for k, v in joined.items() if not v.agrees),
-                    key=lambda k: (k[1], k[0]))
-    if broken:
-        #: Outcomes that mean THE PREDICATE NEVER GAVE AN ANSWER, as opposed to
-        #: giving a red one. `agrees` folds both into "contradicted" — correctly,
-        #: since neither is evidence of enforcement — but the two have different
-        #: causes and different owners, and the message must not conflate them.
-        #:
-        #: MEASURED (vibe-ic#1348): the same tree, same commit, reported 16
-        #: contradictions on a host with every repo dependency installed and 54
-        #: in a container missing `pyyaml`. The extra 38 were predicates that
-        #: could not RUN. A reader given one number cannot tell a repo defect
-        #: from a missing dependency, and "16" is not reproducible without
-        #: knowing which host produced it.
-        _UNMEASURED = ("error", "unrun", "skipped")
-        measured, unmeasured = [], []
-        for sid, dim in broken:
-            verdict = joined[(sid, dim)]
-            line = (
-                f"  {sid}/d{dim} ({DIMENSION_NAMES[dim]}): reported "
-                f"{verdict.state} — which claims its predicate "
-                f"{STATE_EXPECTS_OUTCOME[verdict.state]} — but the live run "
-                f"says {', '.join(verdict.outcomes) or '<never observed>'}")
-            (unmeasured if (not verdict.outcomes
-                            or all(o in _UNMEASURED for o in verdict.outcomes))
-             else measured).append(line)
-        lines = []
-        if measured:
-            lines.append(
-                f"MEASURED RED — the predicate ran and contradicted the state "
-                f"({len(measured)}). These are repo defects:")
-            lines.extend(measured)
-        if unmeasured:
-            lines.append(
-                f"NOT MEASURED — the predicate never returned a verdict "
-                f"({len(unmeasured)}). NOT evidence of enforcement either, but "
-                f"a missing dependency or a collection error is a HOST problem, "
-                f"not a repo defect. Fix the environment and re-run before "
-                f"reading these as findings:")
-            lines.extend(unmeasured)
-        state_only = {s: sum(1 for v in joined.values() if v.state == s)
-                      for s in VALID_STATES}
-        pytest.fail(
-            f"{len(broken)} of {len(joined)} cells are reported in a state "
-            f"their own live predicate contradicts "
-            f"({len(measured)} measured red, {len(unmeasured)} not measured):\n"
-            + "\n".join(lines)
-            + f"\n\nSTATE-ONLY census (what used to be published): "
-              f"{state_only}"
-            + f"\nTWO-AXIS census (what is true): {counts}"
-            + "\n\nA cell in this list is counted as coverage and is not "
-              "covering anything. Fix the predicate or waive it on the "
-              "record; see matrix_63x8/README.md, 'The three-state rule'.")
+    verdict, message = _disagreement_verdict(joined, counts)
+    if verdict == _VERDICT_FAIL:
+        pytest.fail(message)
+    if verdict == _VERDICT_REFUSE:
+        pytest.skip(message)
+
+
+def test_a_single_measured_red_still_fails_beside_any_number_of_not_measured_cells():
+    """The control for the refusal, in BOTH directions.
+
+    A refusal that also absorbed a measured red would be strictly worse than
+    the failure it replaced: the one class this check exists to surface would
+    disappear behind the class it exists to excuse. These four constructed
+    censuses pin the polarity without paying for the live 612-cell run, and
+    the middle one — 1 measured red beside 47 not measured — is the exact
+    shape the refusal could have broken.
+    """
+    def _census(cells):
+        """``{cell: (state, outcomes)}`` -> a joined census, via the real join."""
+        return _join_axes({k: v[0] for k, v in cells.items()},
+                          {k: v[1] for k, v in cells.items()})
+
+    # (1) MEASURED RED ALONE -> FAIL.
+    red_only = _census({("R", 1): ("ENFORCED", ("failed",))})
+    verdict, message = _disagreement_verdict(
+        red_only, enforcement_counter(red_only))
+    assert verdict == _VERDICT_FAIL, (verdict, message)
+    assert "1 measured red, 0 not measured" in message, message
+    assert "R/d1" in message, message
+
+    # (2) NOT MEASURED ALONE -> REFUSE, still enumerating every cell.
+    skipped_only = _census({
+        (f"S{i}", 3): ("ENFORCED", ("skipped",)) for i in range(47)})
+    verdict, message = _disagreement_verdict(
+        skipped_only, enforcement_counter(skipped_only))
+    assert verdict == _VERDICT_REFUSE, (verdict, message)
+    assert "0 measured red, 47 not measured" in message, message
+    assert "MEASURED RED —" not in message, message
+    for i in range(47):
+        assert f"S{i}/d3" in message, f"cell S{i} vanished from the refusal"
+
+    # (3) THE MIXED CASE — the one this change could have broken. One measured
+    #     red hiding behind 47 not-measured cells must still FAIL, and the
+    #     message must report BOTH counts and enumerate BOTH classes.
+    mixed = dict(skipped_only)
+    mixed.update(_census({("R", 1): ("ENFORCED", ("failed",))}))
+    verdict, message = _disagreement_verdict(
+        mixed, enforcement_counter(mixed))
+    assert verdict == _VERDICT_FAIL, (verdict, message)
+    assert "48 of 48 cells" in message, message
+    assert "1 measured red, 47 not measured" in message, message
+    assert "MEASURED RED — the predicate ran" in message, message
+    assert "NOT MEASURED — the predicate never" in message, message
+    assert "R/d1" in message and "S0/d3" in message, message
+    # and the closing paragraph is the pre-refusal one, unchanged
+    assert "counted as coverage and is not covering anything" in message
+    assert "Fix the predicate or waive it on the record" in message
+
+    # (4) A CLEAN CENSUS IS STILL A PASS, so the refusal is not a check that
+    #     refuses everything.
+    clean = _census({("G", 1): ("ENFORCED", ("passed",))})
+    assert _disagreement_verdict(clean, enforcement_counter(clean)) == (None, "")
 
 
 def test_the_enforcement_census_is_reported_for_humans(record_property):

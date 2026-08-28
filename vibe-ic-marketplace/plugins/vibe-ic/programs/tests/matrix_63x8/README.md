@@ -299,7 +299,18 @@ own predicate is red was being counted as proof of enforcement
 (ORGANIC-20260808). `ENFORCED-CONTRADICTED` is that gap, made visible; it is
 not a fourth state but a *disagreement* between the two axes, and
 `test_no_cell_is_counted_enforced_while_its_predicate_is_red` fails while any
-cell is in it.
+cell is in it because its predicate RAN and said so.
+
+**AND IT REFUSES, RATHER THAN FAILS, WHEN NOTHING WAS MEASURED** (owner
+ruling 2026-08-28). A cell that disagrees because its predicate never returned
+a verdict — the `-SKIPPED` labels, which the NOT MEASURED column of the
+generated block below already counts as exactly that — has produced no finding
+about this tree. `benchmark-data` was moved out of this repository and large
+raw geometry is not committed, both by design, so reddening on their absence
+measures the policy and reports it as a defect. When the MEASURED RED class is
+empty and the NOT MEASURED class is not, that test now SKIPS carrying the same
+enumeration: a gate that could not run has not passed, and it has not failed
+either. ONE measured red still fails it.
 
 The per-dimension numbers for BOTH axes live in the generated block below;
 this section deliberately quotes none of them, because a hand-copied total is

@@ -1,22 +1,99 @@
 ### the 57 non-1.6x IDs — red ratio per lane, pass 1 + interleaved repeats
 
-### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing.**
+### VERDICT: IMAGE-ONLY = 0 and HOST-ONLY = 0, so **main is genuinely red here — these are NOT environment artefacts of one lane**. Of these 57 IDs, 55 reproduce in BOTH the pinned CI image and on this host, on every observation taken; the only exceptions are the 2 named FLAKY below, whose red ratios are stated. Nothing on this list can be closed by blaming the developer host. **These ratios were taken against `867de4289` (v1.11.18) and are historical; a row leaves the BOTH bucket only when it has been RE-MEASURED green in both lanes at a named later sha, and moves to CLEARED below rather than disappearing. A row may also leave BOTH for NOT_MEASURED below, which is neither of those two and is not a closure: it records that the predicate declined to look and names what it could not look at.**
 
 ### bucket needs BOTH lanes to have >=1 observation; NOT_MEASURED is never a default
-  BOTH          7
+  BOTH          0
   CLEARED       48
   FLAKY         2
+  NOT_MEASURED  7
 
 bucket        image    host     id
 FLAKY         4/13     13/13    test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged
 FLAKY         1/10     0/10     test_matrix_63x8_coverage.py::test_live_collection_relays_finite_semantic_progress_past_old_bound
-BOTH          2/2      2/2      test_matrix_63x8_coverage.py::test_no_cell_is_counted_enforced_while_its_predicate_is_red
-BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step15]
-BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step17]
-BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step19]
-BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]
-BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]
-BOTH          5/5      5/5      test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]
+
+### NOT_MEASURED — the predicate declined to look, re-measured at a named sha
+
+**These seven left BOTH by an OWNER RULING ON 2026-08-28**, and the ruling is
+that a deliberate design decision must not be reported as a defect.
+`benchmark-data` was MOVED OUT of this repository on purpose, and large raw
+geometry — `*.def`, `*.gds`, `*.spef`, `*.oas` above the ceiling — is NOT
+COMMITTED on purpose. A check that goes red because this repository followed
+its own published rules is measuring the policy and calling it a defect.
+
+NEITHER OF THE OTHER TWO BUCKETS IS TRUE OF THESE ROWS. BOTH means (red) in
+both lanes and CLEARED means re-measured GREEN at a named sha; a cell that was
+honestly not looked at is neither, and this table's own header has always said
+so — *"NOT_MEASURED is never a default"*. It is now a bucket rather than only
+a warning, and the repository's first principle applies unchanged in both
+directions: a gate that could not run has not passed, and it has not failed
+either.
+
+**NOT A WAIVER, AND IT CLOSES NOTHING — the state SELF-INVALIDATES.** The
+moment the evidence becomes obtainable — the artefact is published, or the
+manifest record is re-pointed at a run root the dimension actually searches —
+the predicate returns a verdict and the cell RE-ENTERS THE DENOMINATOR, in
+whichever colour it earns. Nothing here is excluded from any enumeration and
+nothing here is counted as coverage: `programs/tests/matrix_63x8/README.md`
+already prints all 47 of the coverage row's cells in its NOT MEASURED column
+and already says "NOT MEASURED is not a pass and not a defect".
+
+The `was` ratios are the original BOTH observations at `867de4289`, kept so the
+history is not erased. Re-measured whole-module, serial, no `-k`, corpus
+pointer UNSET, on the host lane at the sha named in the first column.
+
+MAIN MOVED WHILE THIS WAS MEASURED, and the measurement still carries. The
+re-measurements below were taken at `75c71a47a1` (v1.12.18); this landing sits
+on `bff27f202` (v1.12.22), one commit later. `git diff` between the two over the
+three files this landing touches — the census reader, its README and this table —
+is EMPTY, so nothing the measurement depended on changed underneath it. The sha
+in the first column is the sha each row was measured at, not the sha it landed
+on, because those are different facts.
+
+WHICH TREE EACH ROW WAS RE-MEASURED ON, because they are not the same and the
+difference matters. **The six `d3` rows were re-measured on CLEAN main** at that
+sha: `test_matrix_d3_outputs_produced.py` runs rc=0, **54 passed / 66 skipped in
+50.71 s**, and each of the six skips prints the citation quoted above. Their
+skip is already main's behaviour and owes nothing to any branch. **The seventh
+is measured at that sha with the refusal applied**; on clean main it still
+FAILS — 1 failed / 37 passed in 356.80 s across both 63x8 modules — and that
+failure, over 0 measured red and 47 not measured, is exactly what the ruling
+names.
+
+not_measured_at  was(image/host)  id / what it could not look at / why not obtainable
+75c71a47a1   5/5 5/5 RED   test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step15]
+             could not look at   `phase3/stage3/pnr/floorplan.def` from run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`
+             why not obtainable  the record cites a campaign run root this dimension searches on NO host, so the corpus pointer cannot settle it; and `programs/benchmark_evidence_publish.py` names `floorplan.def` VERBATIM as still `NOT_PUBLISHED` — "widening the SUBTREE remains an evidence-policy call left alone here" — so publishing the corpus would not settle it either
+
+75c71a47a1   5/5 5/5 RED   test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step17]
+             could not look at   `phase3/stage3/pnr/placed.def` from run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`
+             why not obtainable  the record cites a campaign run root this dimension searches on NO host, so the corpus pointer cannot settle it; and `programs/benchmark_evidence_publish.py` names `placed.def` VERBATIM as still `NOT_PUBLISHED` — "widening the SUBTREE remains an evidence-policy call left alone here" — so publishing the corpus would not settle it either
+
+75c71a47a1   5/5 5/5 RED   test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step19]
+             could not look at   `phase3/stage3/pnr/post_cts.def` from run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`
+             why not obtainable  the record cites a campaign run root this dimension searches on NO host, so the corpus pointer cannot settle it; and `programs/benchmark_evidence_publish.py` names `post_cts.def` VERBATIM as still `NOT_PUBLISHED` — "widening the SUBTREE remains an evidence-policy call left alone here" — so publishing the corpus would not settle it either
+
+75c71a47a1   5/5 5/5 RED   test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step20]
+             could not look at   `phase3/stage3/pnr/post_hold.def` from run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`
+             why not obtainable  the record cites a campaign run root this dimension searches on NO host, so the corpus pointer cannot settle it; and it is the same subtree and the same clause — raw PnR scratch under `phase3/stage3` is not staged, which is why the corpus at `88621a5ac` carries ZERO `*.def` of any name
+
+75c71a47a1   5/5 5/5 RED   test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step30]
+             could not look at   `phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp` from run root `AI_IC_design/4th_benchmark/cv32e40p_e2e`, and `phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json` from run root `AI_IC_design/4th_benchmark/ibex_e2e`
+             why not obtainable  both records cite benchmark run roots this dimension searches on NO host; and `phase3/stage3` scratch is not staged by the same evidence-policy clause, so the corpus carries 0 `*.sp` and its only three `*.spice` files are LVS netlists under `phase3/stage3/lvs/`, which is not the declared path
+
+75c71a47a1   5/5 5/5 RED   test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced[step32]
+             could not look at   `phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json` from run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`
+             why not obtainable  the record cites a campaign run root this dimension searches on NO host; and the corpus carries no `postroute_timing_repair` path at all, so the pointer has nothing behind it for this cell to read
+
+75c71a47a1   2/2 2/2 RED   test_matrix_63x8_coverage.py::test_no_cell_is_counted_enforced_while_its_predicate_is_red
+             could not look at   the 47 disagreeing cells its own live run reports — 45 `ENFORCED-SKIPPED` + 2 `WAIVED-SKIPPED`, every one of them a `d3 (outputs_produced)` coordinate, and **0 MEASURED RED**
+             why not obtainable  the six artefacts above plus the rest of dimension 3's corpus-bound declarations. The check now REFUSES rather than fails when MEASURED RED is empty and NOT MEASURED is not, carrying the same 47-cell enumeration; ONE measured red still FAILS it
+
+The absence was checked against the corpus itself, not assumed: the public
+`vibeic/benchmark-data` tree at `88621a5ac` lists **8897 paths, untruncated,
+with ZERO `*.def`, ZERO `*.sp` and ZERO `postroute_timing_repair` paths**. So
+these are not rows waiting on someone to set `VIBE_IC_BENCHMARK_DATA` — there
+is nothing behind that pointer for them to read.
 
 ### CLEARED — re-measured GREEN in both lanes at a named later sha
 
