@@ -180,7 +180,7 @@ def test_unsupported_shapes_refuse_out_loud_rather_than_hanging():
     changed meaning is worse than the timeout it replaced.
     """
     with pytest.raises(NotImplementedError):
-        R.run(_py("pass"), text=False, **FAST)
+        R.run(_py("pass"), text=False, errors="replace", **FAST)
     with pytest.raises(NotImplementedError):
         R.run(_py("pass"), stdout=subprocess.DEVNULL, **FAST)
     with pytest.raises(NotImplementedError):
@@ -272,3 +272,40 @@ def test_a_child_fed_by_input_is_still_killed_when_it_stops_moving():
     src_ = "import sys,time; sys.stdin.read(); time.sleep(600)"
     with pytest.raises(R.Stalled):
         R.run(_py(src_), input="x\n", **FAST)
+
+
+# ── 8. BYTES MODE — because decode-then-re-encode is not the same bytes ──────
+def test_bytes_mode_returns_exactly_what_the_child_wrote():
+    """`git ls-files -z` and `git cat-file --batch` are read as BYTES by the
+    gates that call them. A decoded-and-re-encoded stream would hand them
+    plausible bytes that are not the ones the child wrote — so assert the
+    payload survives EXACTLY, including a sequence no UTF-8 decoder accepts."""
+    payload = b"a\x00b\xff\xfe\x00c"
+    src_ = ("import sys; sys.stdout.buffer.write(%r)" % payload)
+    cp = R.run(_py(src_), text=False, **FAST)
+    assert cp.returncode == 0
+    assert cp.stdout == payload, cp.stdout
+    assert isinstance(cp.stderr, bytes)
+    # And the lossy alternative really would have destroyed it — this is the
+    # negative control for the sentence above, not a restatement of it.
+    assert payload.decode("utf-8", "replace").encode("utf-8") != payload
+
+
+def test_bytes_mode_is_still_supervised_in_both_directions():
+    """Skipping the decode must not skip the watchdog."""
+    with pytest.raises(R.Stalled):
+        R.run(_py(SLEEP_FOREVER), text=False, **FAST)
+    argv = _py(CHATTY_SLOW)
+    with pytest.raises(subprocess.TimeoutExpired):
+        subprocess.run(argv, capture_output=True, timeout=0.6)
+    assert R.run(argv, text=False, **FAST).stdout.count(b"tick") == 10
+
+
+def test_a_bytes_mode_stall_reports_its_reason_in_bytes_not_str():
+    """`run_best_effort` puts the reason on `.stderr`; a caller in bytes mode
+    would crash concatenating a str there, which is the silent-breakage shape
+    this module exists to avoid."""
+    cp = R.run_best_effort(_py(SLEEP_FOREVER), text=False, **FAST)
+    assert cp.returncode == R.RC_STALLED
+    assert isinstance(cp.stderr, bytes)
+    assert b"STALLED" in cp.stderr

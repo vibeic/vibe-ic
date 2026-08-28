@@ -292,7 +292,8 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
                    cwd=None,
                    wait_fn=None,
                    clock: Callable[[], float] = time.monotonic,
-                   abort_probe: Optional[Callable[[], Optional[str]]] = None
+                   abort_probe: Optional[Callable[[], Optional[str]]] = None,
+                   as_text: bool = True
                    ) -> SupervisedResult:
     """Launch `cmd` and supervise it by FORWARD PROGRESS (see module docstring).
 
@@ -309,6 +310,13 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
     proc.kill(). `abort_probe` (optional) is the caller's convergence read — a
     non-empty reason stops the job → rc=RC_ABORTED, `outcome='aborted'`, and the
     reason is echoed on `.abort_reason` and appended to `.err`.
+
+    `as_text=False` hands back the child's streams as RAW BYTES. Supervision is
+    identical — only the decode is skipped. It exists because the alternative,
+    decoding with `errors="replace"` and re-encoding, is LOSSY: a caller reading
+    a git blob or a NUL-separated path list would get plausible-looking bytes
+    that are not the ones the child wrote. The WATCHDOG_* annotations are
+    encoded to match, so a stall is still readable on either side.
     Returns a SupervisedResult."""
     popen_factory = popen_factory or (
         lambda c, **kw: subprocess.Popen(c, **kw))
@@ -374,9 +382,19 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
         proc = popen_factory(cmd, **_kw)
     except FileNotFoundError as e:
         out_f.close()
+        # UNION OF BOTH SIDES, and both halves are load-bearing.
+        # main's None-guard: `err_f` IS None whenever merge_stderr is set
+        # (`err_f = None if merge_stderr else tempfile.TemporaryFile()`), so an
+        # unguarded close raises AttributeError on the merged-stderr path --
+        # inside the handler for a FAILED LAUNCH, where the real error would be
+        # lost. This lane's bytes mode: a launch error must be returned in the
+        # SAME type as every other result on this path, or a bytes-mode caller
+        # gets str back exactly when it is least able to check.
         if err_f is not None:
             err_f.close()
-        return SupervisedResult(127, "", f"COMMAND_NOT_FOUND: {e}",
+        _msg = f"COMMAND_NOT_FOUND: {e}"
+        return SupervisedResult(127, "" if as_text else b"",
+                                _msg if as_text else _msg.encode("utf-8"),
                                 "launch_error", 0.0, scope=scope_meta)
 
     def _domain_or_log():
@@ -420,9 +438,14 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
     def _read(f):
         try:
             f.seek(0)
-            return _as_text(f.read())
+            raw = f.read()
         except OSError:
-            return ""
+            return b"" if not as_text else ""
+        return raw if not as_text else _as_text(raw)
+
+    def _note(text: str):
+        """An annotation in whatever alphabet the caller asked for."""
+        return text if as_text else text.encode("utf-8")
 
     out = _read(out_f)
     err = _read(err_f) if err_f is not None else ""
@@ -450,20 +473,21 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
     if outcome == "stalled":
         return SupervisedResult(
             RC_STALLED, out,
-            err + (f"\nWATCHDOG_STALLED: configured forward-progress signals "
-                   f"did not advance for > {stall_grace_s:g}s — killed as "
-                   "hung, not slow."),
+            err + _note(f"\nWATCHDOG_STALLED: configured forward-progress "
+                        f"signals did not advance for > {stall_grace_s:g}s — "
+                        f"killed as hung, not slow."),
             "stalled", elapsed, scope=scope_meta)
     if outcome == "ceiling":
         return SupervisedResult(
             RC_CEILING, out,
-            err + (f"\nWATCHDOG_CEILING: hard backstop {hard_ceiling_s:g}s "
-                   f"exceeded (pathological non-idle loop) — killed."),
+            err + _note(f"\nWATCHDOG_CEILING: hard backstop "
+                        f"{hard_ceiling_s:g}s exceeded (pathological non-idle "
+                        f"loop) — killed."),
             "ceiling", elapsed, scope=scope_meta)
     if outcome == "aborted":
         return SupervisedResult(
             RC_ABORTED, out,
-            err + (f"\nWATCHDOG_ABORTED: {_abort_reason}"),
+            err + _note(f"\nWATCHDOG_ABORTED: {_abort_reason}"),
             "aborted", elapsed, _abort_reason, scope=scope_meta)
     return SupervisedResult(rc if rc is not None else 0, out, err,
                             "natural", elapsed, scope=scope_meta)

@@ -339,30 +339,42 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
       * ``stdout=subprocess.PIPE, stderr=subprocess.STDOUT`` — ONE combined
         stream, in the order a human or ``2>&1`` observes it. `.stderr` is then
         empty by construction, because there was no second stream.
+      * ``stdout=subprocess.PIPE, stderr=subprocess.PIPE`` — the long spelling
+        of ``capture_output=True``, honoured as written.
       * ``shell=True`` — passed to `Popen` unchanged.
+      * ``text=False`` — the streams come back as RAW BYTES, supervised
+        identically. Decoding and re-encoding would be lossy, and a caller
+        splitting `git ls-files -z` on NUL or reading a blob out of
+        `git cat-file --batch` must get the bytes the child actually wrote.
 
     A ``stdout=<file>`` redirect is NOT supported: it would take the output
     away from the progress meter without saying so, leaving the supervision
     resting on CPU and I/O while still claiming an output signal.
     """
-    if not text:
-        # Degrade loudly rather than hand back str where bytes were asked for.
+    if not text and errors is not None:
+        # `errors=` is a DECODE policy; in bytes mode nothing is decoded, so
+        # honouring it is not possible and accepting it would be a lie.
         raise NotImplementedError(
-            "_progress_run.run supervises decoded text; call with text=True "
-            "or use subprocess directly for a bytes-mode child")
-    if errors is not None and errors != _DECODE_ERRORS:
+            "_progress_run.run(text=False) returns raw bytes; errors= has "
+            "nothing to apply to")
+    if text and errors is not None and errors != _DECODE_ERRORS:
         raise NotImplementedError(
             f"_progress_run.run decodes with errors={_DECODE_ERRORS!r} "
             f"(the policy `_watchdog` applies); errors={errors!r} would be "
             f"accepted and then not honoured")
     combined = (stdout is subprocess.PIPE and stderr is subprocess.STDOUT)
-    if not combined and (stdout is not None or stderr is not None):
+    # (PIPE, PIPE) is the long spelling of `capture_output=True` — the two
+    # streams, separately, which is what this function does anyway. Accepting
+    # the spelling lets a call site keep saying what it means.
+    both_piped = (stdout is subprocess.PIPE and stderr is subprocess.PIPE)
+    if not (combined or both_piped) and (stdout is not None or stderr is not None):
         raise NotImplementedError(
-            "_progress_run.run captures both streams itself; the only stdout/"
-            "stderr shape it honours is (stdout=PIPE, stderr=STDOUT) for one "
-            "combined stream. A file redirect would silently remove the output "
-            "progress signal — use _watchdog.run_supervised(log_path=...) so "
-            "the file it writes is what gets watched")
+            "_progress_run.run captures both streams itself; the stdout/stderr "
+            "shapes it honours are (PIPE, STDOUT) for one combined stream and "
+            "(PIPE, PIPE) for the two separately. A FILE redirect would "
+            "silently remove the output progress signal — use "
+            "_watchdog.run_supervised(log_path=...) so the file it writes is "
+            "what gets watched")
     if poll_s is None:
         poll_s = _poll_interval()
     signals: Dict[str, bool] = {"output": capture_output, "cpu": False,
@@ -391,6 +403,7 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
             cpu_probe=_host_probe(signals),
             popen_factory=popen_factory,
             env=env,
+            as_text=text,
         )
     finally:
         if to_close is not None:
@@ -400,7 +413,7 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
     if outcome in ("stalled", "ceiling"):
         raise Stalled(cmd, stall_looks, poll_s,
                       getattr(res, "elapsed_s", elapsed) or elapsed,
-                      signals, res.out, res.err)
+                      signals, _wd._as_text(res.out), _wd._as_text(res.err))
     cp = subprocess.CompletedProcess(cmd, res.rc, res.out, res.err)
     if check and cp.returncode != 0:
         raise subprocess.CalledProcessError(cp.returncode, cmd,
@@ -437,7 +450,10 @@ def run_best_effort(cmd, **kw) -> subprocess.CompletedProcess:
     try:
         return run(cmd, **kw)
     except Stalled as exc:
-        return subprocess.CompletedProcess(cmd, RC_STALLED, "", str(exc))
+        blank, reason = "", str(exc)
+        if kw.get("text") is False:
+            blank, reason = b"", reason.encode("utf-8")
+        return subprocess.CompletedProcess(cmd, RC_STALLED, blank, reason)
 
 
 def exit_undetermined_on_stall(main_fn, *args, rc: int = RC_UNDETERMINED,
