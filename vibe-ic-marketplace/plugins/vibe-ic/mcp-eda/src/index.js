@@ -2494,11 +2494,16 @@ puts "STA_COMPLETE"`;
     let staReason = "";
     if (!staAnalysed) {
       staClass = "TOOL_DID_NOT_RUN";
-      staReason = failedAssertion
+      // NAMING WHAT WAS MISSING is half the requirement: a refusal that does
+      // not say why sends a reader back to the same 900 bytes this replaced.
+      // So the reason carries the assertion that refused the run, or the rc
+      // and error tally, AND the first few bracketed error lines verbatim.
+      staReason = (failedAssertion
         ? `${failedAssertion.code}: ${failedAssertion.message}`
         : `no timing was analysed: openroad exited ${staRun.rc}`
           + (typeof staRun.errorCount === "number" ? ` with ${staRun.errorCount} error(s)` : "")
-          + (staCompleted ? "" : "; the script did not reach STA_COMPLETE");
+          + (staCompleted ? "" : "; the script did not reach STA_COMPLETE"))
+        + (staErrors.length ? `: ${staErrors.slice(0, 3).join(" | ")}` : "");
     } else if (!staEvidence.pass) {
       // The run reached the end of its script, but the independent evidence
       // channel refused it. `linked === false` is the tool stating its own
