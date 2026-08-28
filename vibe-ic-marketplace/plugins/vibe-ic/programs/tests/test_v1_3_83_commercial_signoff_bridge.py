@@ -82,23 +82,23 @@ def _fetch(url):
 
     RUNG 2 (structural assertion). Rung 1 for an HTTP wait would mean demoting
     the socket timeout to a LOOK INTERVAL and retrying while the server still
-    makes progress. That cannot work here, and the reason is MEASURED rather
-    than assumed: a retry ABANDONS the request in flight and starts a new one,
-    so when the honest answer legitimately takes longer than one look, every
-    attempt is abandoned and none ever completes. That is a LIVELOCK, and it
-    bites in exactly the case the old bound was manufacturing verdicts for — a
-    handler slower than the guess. The stall detector does not rescue it either:
-    the abandoned handlers keep burning CPU, so the progress signal reports the
-    server as working and the loop ends only at its iteration cap. Measured: a
-    6 s handler under a 0.5 s look returned NO response at all, while one
-    blocking GET against the same server answered 200 in 6.0 s.
+    makes progress. MEASURED, on a 6 s handler under a 0.5 s look: the retry
+    never obtains a response at all. Each attempt abandons the request in flight
+    and the next starts from scratch, so an answer slower than one look is never
+    collected, and the wait ends — via the stall detector, after 11 looks —
+    reporting that the server never answered a request it was in fact serving.
+    That is the SAME false verdict the 5 s bound produced, relocated rather than
+    removed, and it lands in exactly the case the bound was wrong about: a
+    handler slower than the guess.
 
-    (The signal itself is sound — it stops on a wedge wherever the waiter does
-    not touch the subject, which is why the file and bind polls in this campaign
-    KEPT rung 1. It is the retry that is unavailable, not the watchdog.)
+    The progress signal is not what fails. The identical rung-1 shape DOES stop
+    correctly on a wedge wherever the waiter never touches the subject, which is
+    why the file and bind polls in this campaign keep rung 1. It is the RETRY
+    that is unavailable for an HTTP wait, not the watchdog.
 
-    So the 5 s bound is gone and nothing replaces it with another clock. What is
-    asserted is the thing meant: the server ANSWERED, and with what. A genuinely
+    So the bound is gone and nothing replaces it with another clock. What is
+    asserted is the thing meant: the server ANSWERED, and with what. One
+    blocking GET against that same 6 s handler returns 200 in 6.0 s. A genuinely
     wedged server now blocks, and the outer progress-supervised session ends it
     — the only layer that can tell a wedge from a slow host."""
     return urllib.request.urlopen(url)
