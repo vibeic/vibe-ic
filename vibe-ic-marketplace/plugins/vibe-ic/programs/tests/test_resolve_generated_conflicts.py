@@ -30,7 +30,44 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 #: referenced so the sandbox stays a self-contained tree at the repo-relative
 #: path the script looks under.
 RESOLVER_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs"
-RESOLVER_FILES = ("generated_artifact_conflict_resolve.py", "_atomic_artefact.py")
+#: The resolver plus every sibling module it imports, DERIVED rather than typed.
+#:
+#: This was a hand-written tuple of two names. On 2026-08-28 the
+#: timeout-as-verdict lane added `import _progress_run as _pr` to the resolver;
+#: the tuple did not follow, and all three sandbox cases died with
+#: `ModuleNotFoundError: No module named '_progress_run'` — a REAL failure of a
+#: correct program, because the sandbox it was copied into was missing a file
+#: nobody remembered to list.
+#:
+#: A hand-maintained dependency list is a second copy of a fact the source
+#: already states, and the copy goes stale the first time someone edits the
+#: source without reading this file. Reading the imports means the sandbox is
+#: wrong only if the program is.
+def _resolver_files():
+    import ast as _ast
+    root = "generated_artifact_conflict_resolve.py"
+    seen, out, queue = set(), [], [root]
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name); out.append(name)
+        src = (PROGRAMS / name).read_text(encoding="utf-8")
+        for node in _ast.walk(_ast.parse(src)):
+            mods = []
+            if isinstance(node, _ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
+                mods = [node.module]
+            for m in mods:
+                cand = m.split(".")[0] + ".py"
+                # a SIBLING module only: stdlib and third-party live elsewhere
+                if (PROGRAMS / cand).is_file() and cand not in seen:
+                    queue.append(cand)
+    return tuple(out)
+
+
+RESOLVER_FILES = _resolver_files()
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="needs git")
@@ -279,3 +316,35 @@ def test_every_registered_derived_artefact_is_resolved_not_only_the_first(tmp_pa
     assert "total: 3" in idx and "- aaa" in idx and "- zzz" in idx, idx
     inv = json.loads((w / _INV_REL).read_text())
     assert inv["total"] == 3 and {"aaa", "zzz"} <= set(inv["programs"]), inv
+
+
+def test_the_sandbox_copies_every_module_the_resolver_imports(tmp_path):
+    """The derivation is the fix, so the derivation is what gets pinned.
+
+    Without this, `_resolver_files()` could silently start returning just the
+    root — every other case in this file would still pass on a tree where the
+    resolver happens to import nothing new, and the next added import would
+    break them all again exactly as `_progress_run` did.
+    """
+    import ast as _ast
+    files = set(RESOLVER_FILES)
+    assert "generated_artifact_conflict_resolve.py" in files
+    src = (PROGRAMS / "generated_artifact_conflict_resolve.py").read_text(encoding="utf-8")
+    siblings = set()
+    for node in _ast.walk(_ast.parse(src)):
+        names = ([a.name for a in node.names] if isinstance(node, _ast.Import)
+                 else [node.module] if isinstance(node, _ast.ImportFrom)
+                 and node.level == 0 and node.module else [])
+        for m in names:
+            c = m.split(".")[0] + ".py"
+            if (PROGRAMS / c).is_file():
+                siblings.add(c)
+    missing = sorted(siblings - files)
+    assert not missing, (
+        f"the resolver imports {missing} and the sandbox would not copy them; "
+        f"every case here would fail with ModuleNotFoundError on a program that "
+        f"is correct")
+    # and it must not have collapsed to the root alone
+    assert len(files) > 1, (
+        "RESOLVER_FILES derived only the root module — the walk found no "
+        "sibling imports at all, which is how this guard goes quietly vacuous")
