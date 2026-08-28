@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""convergence_doctrine_present_check.py — ORGANIC #716
+"""convergence_doctrine_present_check.py — ORGANIC #716, corrected 2026-08-28.
 
-Deterministic guard that the **program-first + AI-backup DUAL-TRACK CONVERGENCE**
-doctrine is documented in `skills/benchmark-enhancement-capture/SKILL.md`.
-
-"AI-backup" is binding-defined as a dual-track convergence (program verdict +
-independent AI solve + compare + converge), NOT an "AI only when the program
-fails" fallback. This guard pins that the doctrine is not silently dropped by a
-future skill edit — and, fittingly, it itself follows the doctrine: it emits the
-RAW EVIDENCE it judged on (which markers were found / missing) so an independent
-track can re-judge, rather than only a bare verdict.
+Guard the binding Program First + AI Backup sequence documented in
+`skills/benchmark-enhancement-capture/SKILL.md`: Program result first, blind AI
+review second, executable proof before repair, and capture enhancement after a
+verified recovery. The guard emits the raw marker evidence it judged on.
 
 Exit codes:
     0  doctrine present (all required markers found)
@@ -34,15 +29,15 @@ _DEFAULT_SKILL = (_PLUGIN_ROOT / "skills" / "benchmark-enhancement-capture"
 # The doctrine's load-bearing markers (newline- AND blockquote-insensitive
 # substring match against a flattened lower view of the skill markdown).
 _REQUIRED_MARKERS = (
-    "dual-track convergence",
+    "program first",
     "ai-backup",
-    "cross-check",
-    "converge",
+    "ai review",
     "raw evidence",
-    "comparator",
-    "lone-track",
-    # explicitly rejects the on-failure-only misreading
-    "only when the program fails",
+    "executable test",
+    "frozen program result",
+    "same immutable test",
+    "capture enhancement",
+    "blind",
     # the Benchmark Agent's #1 MANDATE — converge → capture → distill-to-program
     # (owner directive 2026-06-22). PROGRAM-FIRST lesson: prose alone regresses,
     # so the load-bearing doctrine MUST be pinned or a future skill edit can
@@ -77,7 +72,7 @@ def check(skill_path: Path) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Guard the #716 program-first + AI-backup convergence "
+        description="Guard the #716 Program First + AI Backup evidence "
                     "doctrine in benchmark-enhancement-capture.")
     ap.add_argument("--skill", default=str(_DEFAULT_SKILL),
                     help="path to the benchmark-enhancement-capture SKILL.md")

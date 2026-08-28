@@ -263,31 +263,33 @@ mcp-eda / per-skill compliance suites that legitimately live outside
 which is the real invariant and fires zero false-positives). A guard that
 flags the very state you just shipped is not a guard, it's a bug.
 
-## Program-first + AI-backup: the DUAL-TRACK CONVERGENCE doctrine (ORGANIC #716)
+## Program-first + AI-backup: review, prove, repair, capture (ORGANIC #716; corrected 2026-08-28)
 
-> **User directive (binding):** "AI-backup" does **NOT** mean "use AI only when the program
-> fails." It means a **dual-track convergence** — the program and an independent AI solve the
-> SAME problem, the two results are compared, and every disagreement is investigated and
-> converged. A green lone-track result is never accepted on its own.
+> **User directive (binding):** "dual-track" is not the right model. PROGRAM acts
+> first. AI then reviews PROGRAM's exact result and raw evidence. If AI says the
+> result is wrong, it must state the prompt-bound defect and supply an executable
+> test that proves the frozen PROGRAM result really fails. Only a proven failure
+> authorizes AI repair.
 
-"Program-first" makes a fix fire deterministically every time — but a program can still be
-*wrong*: a too-narrow regex, a missed template variable (#714's `__OSS_PNR_IMAGE__`), a stale
-baseline, a synth gate that silently never ran. A green program verdict can therefore **mask a
-real defect**. The cross-check is what catches that. The three steps, for EVERY deterministic
-gate:
+"Program-first" makes a fix fire deterministically every time — but a program can
+still be wrong: a too-narrow regex, stale baseline, or a gate that never ran. AI
+therefore reviews even a green Program result, but does not race it with a second
+unverified answer. The four states are:
 
-1. **PROGRAM (primary, program-first).** The gate produces a verdict AND emits the **raw evidence
-   it judged on** — the measured value, the log excerpt, the exit code, the cell/wire count — so
-   an independent track can re-judge the same inputs. A verdict with no attached evidence cannot
-   be cross-checked and is incomplete.
-2. **AI-BACKUP (independent solve, no peeking).** An independent AI **solves/evaluates the same
-   problem from scratch WITHOUT reading the program's answer**, then a **deterministic comparator
-   diffs the two verdicts**. This is *not* an on-failure fallback — it runs even when the program
-   says PASS.
-3. **CONVERGE (the load-bearing step).** Agreement → accept. **Disagreement → converge:** surface
-   BOTH verdicts with their evidence, root-cause *which track is correct and why*, fix the LOSER
-   (tighten the program OR correct the AI reading), and re-run until they agree. **Never accept a
-   lone-track "pass."**
+1. **PROGRAM FIRST.** Program emits a candidate, verdict, and the **raw evidence it
+   judged on**. Freeze the exact candidate and evidence by hash before AI review.
+2. **AI REVIEW (blind).** AI reads only design input plus the frozen Program
+   result/evidence. Agreement accepts it. A disagreement must name actionable
+   findings and cite the prompt; an unexplained opinion is not a repair permit.
+3. **PROVE THEN REPAIR.** AI supplies a self-contained prompt-derived executable
+   test. The frozen Program result must fail it. The repair must pass that SAME
+   immutable test, all normal Program gates, and a fresh hash-bound AI review.
+   A repair record names the AI/model and rationale and binds the parent RTL,
+   repaired RTL, and challenge hashes. Missing, non-compiling, oracle-reading,
+   unattributed, or non-discriminating repairs block replacement of Program output.
+4. **CAPTURE ENHANCEMENT.** Preserve Program/repair hashes, the verified test, and
+   the diagnosis. Convert the test into a reusable Program regression and enhance
+   the deterministic generator so the next run succeeds at Program First.
 
 **Why this is binding (evidence):** in the CVDP 100% campaign, FIVE separate "the program/agent
 said done" results that an independent check disagreed with were EACH a real defect — false
@@ -295,13 +297,10 @@ B-floor labels, an agent self-reporting PASS while the independent re-score said
 gate that silently never ran (#714). Convergence — not either track alone — is what reached
 302/302. A lone green track had a measurable false-positive rate.
 
-**How to apply when you author a NEW gate** (this pairs with the Bucket-A ladder above): every new
-deterministic gate ships with (a) evidence emission and (b) a named AI cross-check + converge step
-— not just the program. This applies to every gate captured this session — #714 OSS_PNR preflight,
-#715 multi-file completeness, and the latency / interface / coverage gates (#695/#697/#705): each
-carries its independent cross-check whose disagreements are converged, never an "AI only on
-failure" afterthought. The cross-check is itself subject to the honesty rules below (no peeking at
-the oracle; the blindness boundary still holds).
+**How to apply when you author a NEW gate:** ship (a) raw evidence emission,
+(b) a named AI review step, and (c) an executable proof contract for AI
+rejections. The proof is subject to the honesty rules below: no scorer, oracle,
+harness, golden, or prior-result access.
 
 ## ⭐ Bucket T — forked-EDA-tool enhancement (BINDING, owner directive 2026-07-11)
 
@@ -505,15 +504,10 @@ final sign correction"; "AXI-Stream: hold tdata/tlast stable while tvalid &&
 
 Route in `CAPTURE_ROUTING.json` → `phase2.rtl_gen.ic_expert_db`.
 
-**The dual-track SELECT is deterministic** — `programs/dual_track_select.py` makes
-the "keep whichever candidate PASSes" decision by a gate/verifier, NEVER by an
-author self-report. FUNCTIONAL tier (a scorer / cocotb TB supplied) picks the
-first candidate that truly PASSes (this is where the measured +13 union lift is
-real ground truth); STRUCTURAL tier (general Phase-1, no functional oracle) falls
-back to iverilog-elaborate + a PRIMARY-first tie-break — it avoids regressing
-below the primary single-track (38>31) but does NOT claim functional correctness.
-So dual-track is program-first: the two authors produce candidates, a PROGRAM
-keeps the passing one.
+`programs/dual_track_select.py` is a legacy post-score/capture diagnostic for
+historical multi-candidate records. It is **not** the Program First + AI Backup
+acceptance mechanism and must not invoke an official scorer during blind
+authoring. Canonical acceptance follows the review/prove/repair sequence above.
 
 ## Procedure
 

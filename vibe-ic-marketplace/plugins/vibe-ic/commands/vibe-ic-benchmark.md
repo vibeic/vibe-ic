@@ -24,15 +24,15 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench>
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
     --setup --dataset <path-to-dataset> --run <run-dir>
 
-# 4. Solve through the PROGRAM rail; this emits AI backup/review worklists
+# 4. Run Program First; this emits AI backup/review worklists
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
     --solve --dataset <path-to-dataset> --run <run-dir>
 
-# 5. After completing needs_ai_backup.jsonl / needs_ai_review.jsonl, converge
+# 5. Complete blind AI review; a FAIL also needs an executable challenge
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
     --resume --dataset <path-to-dataset> --run <run-dir>
 
-# 6. Score only after dual_track_acceptance.json says COMPLETE
+# 6. Score only after program_first_ai_review_acceptance.json says COMPLETE
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
     --score --dataset <path-to-dataset> --run <run-dir>
 ```
@@ -59,15 +59,17 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> \
 | **D** | `vibe_ic_one_shot_runner.py` (with `catalog-glue-author` if REUSED-IP) | `benchmark/score_cocotb_mcp.py` (MCP eda_cocotb / docker exec) | CVDP example, subservient-class |
 | **E** | n/a — blocked / out-of-scope, document only | n/a | PyHDL-Eval (golden gated), RTL-Repo (wrong metric), MetRex / ResBench (different task / toolchain), CVDP-full (gated) |
 
-For Shape B/C runs driven by `--solve`, the author column is only the first
-rail. Every candidate must also receive an independent, blind AI routing and
-semantic review. AI is the final semantic authority: it may accept the Program
-route or issue an evidence-backed `OVERRIDE_PROGRAM`. If it rejects the RTL,
-the result is `REPAIR_REQUIRED`, not permanent disagreement: AI repairs, the
-Program gates re-run, and AI reviews the new hash. Program gates PASS + AI
-semantic PASS is the sole scoreable acceptance state; `--score` hard-blocks
-every incomplete or stale review. Reusable Program limitations remain visible
-in `program_enhancement_candidates.jsonl` without blocking an evidenced item.
+For Shape B/C runs driven by `--solve`, Program emits the first candidate and
+an independent, blind AI reviews that exact hash. This is sequential Program
+First + AI Backup, not two authors racing. AI is the final semantic authority,
+but a semantic FAIL must include a self-contained prompt-derived executable
+test: the frozen Program candidate must actually fail it before repair is
+authorized. The repaired candidate must pass the same immutable test, all
+Program gates, and a fresh AI review. A hash-bound repair record names the AI
+author/model, rationale, parent/repaired RTL, and challenge. `--score`
+hard-blocks missing/stale proof or provenance.
+The challenge and both candidate hashes remain in
+`program_enhancement_candidates.jsonl` as a reusable regression fixture.
 
 ## Honesty (mandatory in any RESULT.md)
 - Disclose every tool substitution (VCS → iverilog, DC → yosys+OpenROAD, nvidia/cvdp-sim → vibeic-eda).

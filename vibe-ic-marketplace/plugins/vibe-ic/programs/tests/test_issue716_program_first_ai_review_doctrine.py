@@ -1,12 +1,8 @@
-"""ORGANIC #716 — codify the program-first + AI-backup CONVERGENCE doctrine.
+"""ORGANIC #716 — pin the corrected Program First + AI Backup doctrine.
 
-The binding meaning of "AI-backup" is NOT "use AI only when the program fails" —
-it is a DUAL-TRACK CONVERGENCE: (1) the program produces a verdict + raw evidence;
-(2) an independent AI solves/evaluates the SAME problem WITHOUT seeing the program
-verdict; (3) the two are compared and every disagreement is converged (root-cause
-which is right, fix the loser, re-run until they agree). Five lone-track "done"
-results that an independent check disagreed with were each a real defect; the
-convergence is what reached 302/302.
+Program emits and freezes its result first. AI reviews that result. An AI FAIL
+must prove the prompt-bound issue with an executable test before repair; the
+repair must pass the same immutable test, normal gates, and fresh AI review.
 
 The doctrine is captured as guidance in
 `skills/benchmark-enhancement-capture/SKILL.md` and pinned by a deterministic
@@ -64,18 +60,17 @@ def test_end_state_doctrine_stripped_exit1(tmp_path):
 def test_acceptance_doctrine_keywords_present():
     """驗收 (verbatim grep family): the doctrine markers are in the skill dir."""
     txt = _SKILL.read_text()
-    assert "AI-backup" in txt and "cross-check" in txt
-    assert "converge" in txt.lower()
+    assert "AI-backup" in txt and "AI REVIEW" in txt
+    assert "executable test" in C._flat(txt.replace("**", ""))
 
 
-def test_dual_track_section_rejects_on_failure_misreading():
-    """The doctrine SECTION states the dual-track definition AND explicitly
-    rejects the 'AI only when the program fails' misreading (via the guard's
-    own marker set — newline/blockquote-insensitive)."""
+def test_program_first_section_pins_proof_before_repair():
+    """The binding section pins sequential review and executable proof."""
     ev = C.check(_SKILL)
     assert ev["present"] is True
-    assert "dual-track convergence" in ev["found"]
-    assert "only when the program fails" in ev["found"]
+    assert "program first" in ev["found"]
+    assert "executable test" in ev["found"]
+    assert "same immutable test" in ev["found"]
 
 
 if __name__ == "__main__":

@@ -246,6 +246,35 @@ def test_pass_shape_b_phase1_layer_doc():
         assert rc == 0, err
 
 
+def test_pass_program_first_projects_orchestrator_report():
+    """benchmark_dispatch stores per-problem one-shot projects under
+    <run>/projects while candidates wait behind AI review."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        project = td / "projects" / "fixed_point_adder"
+        rep = project / "reports" / "orchestrator"
+        rep.mkdir(parents=True)
+        (rep / "vibe_ic_one_shot.json").write_text(
+            json.dumps(_valid_orchestrator_report(project)))
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 0, err
+
+
+def test_noleak_program_first_project_report_is_bound_to_its_project():
+    """A copied report naming another project is not runner evidence."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        project = td / "projects" / "fixed_point_adder"
+        rep = project / "reports" / "orchestrator"
+        rep.mkdir(parents=True)
+        other = td / "projects" / "different_design"
+        (rep / "vibe_ic_one_shot.json").write_text(
+            json.dumps(_valid_orchestrator_report(other)))
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+        assert "no Vibe-IC runner evidence" in err
+
+
 # ---- NEGATIVE no-leak (§ 4.05): boundary-outside, must STILL be caught ----
 
 def test_noleak_bare_work_dir_still_caught():

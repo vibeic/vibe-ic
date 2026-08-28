@@ -248,7 +248,7 @@ def phase1_routing(verdict: Optional[Dict[str, Any]], entry: Any, evidence: Any,
         "needs_ai_parse": verdict.get("needs_ai_parse"),
         "needs_ai_parse_consumed_by":
             "NOTHING in a standalone runner invocation — a benchmark "
-            "dispatcher may attach a blind AI dual-track review; recorded "
+            "dispatcher may attach a blind Program First AI review; recorded "
             "here as disclosure, not as a decision",
         "warning": verdict.get("warning"),
         "rtl_present_at_input": rtl_present,

@@ -225,7 +225,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `content_pinned_authority_verified_only_at_merge` | any | — | An authority pin whose only reader runs after the point of repair. |
 | `control_substance_check` | any | — | how many of a change's pre-fix control tests actually OBSERVED A VALUE, and how many only noticed that something was absent. |
 | `conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap... |
-| `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
+| `convergence_doctrine_present_check` | any | — | ORGANIC #716, corrected 2026-08-28. |
 | `conway_2d_synth` | any | — | DETERMINISTIC 2-D cellular-automaton (Conway's Game of Life-class) -> RTL synth. |
 | `coresight_protocol_synth` | any | — | ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64). |
 | `corner_coverage_audit` | any | — | Audit PVT corner coverage in IC design flows. |
@@ -1497,7 +1497,7 @@ _(no programs in this group)_
 - `content_pinned_authority_verified_only_at_merge` — An authority pin whose only reader runs after the point of repair.
 - `control_substance_check` — how many of a change's pre-fix control tests actually OBSERVED A VALUE, and how many only noticed that something was absent.
 - `conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap...
-- `convergence_doctrine_present_check` — ORGANIC #716
+- `convergence_doctrine_present_check` — ORGANIC #716, corrected 2026-08-28.
 - `conway_2d_synth` — DETERMINISTIC 2-D cellular-automaton (Conway's Game of Life-class) -> RTL synth.
 - `coresight_protocol_synth` — ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64).
 - `corner_coverage_audit` — Audit PVT corner coverage in IC design flows.

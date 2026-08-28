@@ -14,6 +14,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import emit_attestation as ea  # noqa: E402
+import shape_b_sample_export as shape_b_export  # noqa: E402
 
 
 def _mk_ldocs(gd: Path, names=("L1", "L9", "L13")):
@@ -99,4 +100,24 @@ def test_verify_passes_with_provenance(tmp_path):
     s.write_text("module m; endmodule")
     ea.record(samples, s, gates=["g"], shape="C", phase1=proj)
     ok, ungated, total = ea.verify(samples)  # default enforce
+    assert ok and total == 1 and ungated == []
+
+
+def test_shape_b_frozen_snapshot_uses_explicit_project_provenance(tmp_path):
+    """Accepted candidates are exported from immutable snapshot directories,
+    not from <project>/phase2/stage1/rtl.  The explicit project must therefore
+    remain the provenance source for the score-time attestation."""
+    proj = tmp_path / "projects" / "adder"
+    _mk_ldocs(proj / "phase1" / "generated_docs")
+    frozen_rtl = tmp_path / "candidate_snapshots" / "adder" / "rtl"
+    frozen_rtl.mkdir(parents=True)
+    (frozen_rtl / "00_adder.sv").write_text(
+        "module adder(input a, input b, output y); assign y = a ^ b; endmodule\n")
+    samples = tmp_path / "samples"
+
+    result = shape_b_export.export(
+        frozen_rtl, "adder", samples, spec_module="adder", project=proj)
+
+    assert result["verdict"] == "PASS", result
+    ok, ungated, total = ea.verify(samples)
     assert ok and total == 1 and ungated == []

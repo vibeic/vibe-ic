@@ -936,16 +936,19 @@ issue / backlog citation is an unsupported claim and FAILs the check.
 
 ### § 4.2 — program-first + AI-backup: the AI must TRY, and a general no-cheat recovery MUST be absorbed (user directive 2026-06-18, BINDING)
 
-> **Binding rule:** every benchmark fail case must be **DUAL-verified** — by a
-> **PROGRAM** (the plugin scorer / gate) AND by an **AI independent blind solve**.
-> The AI must genuinely **TRY ITS BEST** to solve each fail. **IF the AI CAN solve
-> it with a GENERAL + NO-CHEATING method, that recovery MUST be absorbed into the
-> plugin** — as a deterministic **PROGRAM rule**, OR as an **AI step GATED BY A
-> PROGRAM**. A `RECOVERABLE_AUTHORING` / `AUTHORING` label is **NOT a free pass to
-> skip** the absorption.
+> **Binding rule:** PROGRAM acts first and freezes its result/evidence. AI then
+> performs an independent blind **review of that exact Program result**. An AI
+> FAIL must state the prompt-bound defect and prove it with a self-contained
+> executable test that the frozen result fails; only then may AI repair. The
+> repair must pass the same immutable test, Program gates, and fresh AI review,
+> with a hash-bound record of the AI/model, rationale, parent/repaired RTL, and
+> challenge. Unattributed repair is not accepted as AI Backup evidence.
+> Every verified GENERAL + NO-CHEATING recovery MUST then be absorbed into the
+> plugin. A `RECOVERABLE_AUTHORING` / `AUTHORING` label is not a free pass to skip
+> absorption.
 
-This is the program-first/AI-backup doctrine of `benchmark-enhancement-capture`
-(#716 dual-track convergence) applied at the benchmark-campaign exit gate. The
+This is the corrected Program First / AI Backup doctrine of
+`benchmark-enhancement-capture` (#716) applied at the campaign exit gate. The
 A–H triage (§ 4) classifies; this subsection states the **convergence bar** that
 the classification must clear before you may claim a campaign converged.
 
@@ -1355,10 +1358,10 @@ stable across ≥2 independent authoring rounds so it is not a one-off; and (b) 
 internally consistent while only the hidden oracle disagrees. This makes the defect
 provable with NO external information — the given context is the evidence.
 
-This is the spec-faithful companion to the **#716 dual-track convergence**
-doctrine (program verdict + independent AI solve + converge): the "original-RTL-
-also-fails" run is the independent reference track that overturns a single-track
-FLOOR misread. *why_not_bucket_a*: deciding whether two assertions are truly
+This is the spec-faithful companion to the corrected **#716 Program First + AI
+Review** doctrine: the "original-RTL-also-fails" run is independent evidence
+that can overturn an unsupported FLOOR misread. *why_not_bucket_a*: deciding
+whether two assertions are truly
 mutually exclusive for identical stimulus is an open-ended meaning judgment no
 regex makes; the deterministic half (a FLOOR claim MUST carry the original-RTL-
 also-fails scorer evidence) is the gate condition recorded here.
