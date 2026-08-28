@@ -27,15 +27,34 @@ Running without the guards stays possible — but only as a DELIBERATE, disclose
 choice via --without-spec-guards, never as the accidental default.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+
+import pytest
 
 _BENCH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                       "..", "..", "benchmark")
 _GATE = os.path.join(_BENCH, "cvdp_gate.py")
 
 _REFUSAL_EXIT = 2
+
+#: `cvdp_gate.py` refuses with the SAME exit code (2) for two independent
+#: reasons that share nothing but the number: the spec-guards this module
+#: exists to test (#559/#715/#734, no --prompts/--dataset/--without-spec-guards)
+#: and, checked right after, iverilog/yosys absence (#528/#604 — the gate
+#: cannot enforce without them, so it refuses rather than emit responses
+#: gated on less than the full pipeline). On a host missing either tool, the
+#: three tests below that clear the SPEC-guard refusal still see exit 2 from
+#: the UNRELATED tool-guard, for the right reason on the gate's part and the
+#: wrong reason for what these three assert. Gated exactly like every other
+#: iverilog/yosys-dependent module in this directory (registered in
+#: WHICH_GATES, `test_tool_gate_opens_when_the_tool_is_present.py`), so the
+#: skip is disclosed and proved capable of opening rather than silent.
+_HAVE_TOOLS = (shutil.which("iverilog") is not None
+              and shutil.which("vvp") is not None
+              and shutil.which("yosys") is not None)
 
 
 def _run(extra_args):
@@ -69,6 +88,11 @@ def test_the_refusal_says_which_guards_would_be_off():
         assert token in err, f"refusal never mentions {token}:\n{err[-1500:]}"
 
 
+@pytest.mark.skipif(not _HAVE_TOOLS,
+                    reason="iverilog/vvp/yosys absent — cvdp_gate.py's #528/"
+                           "#604 tool-guard would refuse with the same exit "
+                           "code this test checks for, for a reason unrelated "
+                           "to the spec guard under test")
 def test_prompts_alone_is_accepted():
     """Either spec source clears the refusal — it is not an --dataset mandate."""
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
@@ -83,6 +107,11 @@ def test_prompts_alone_is_accepted():
         os.unlink(prompts)
 
 
+@pytest.mark.skipif(not _HAVE_TOOLS,
+                    reason="iverilog/vvp/yosys absent — cvdp_gate.py's #528/"
+                           "#604 tool-guard would refuse with the same exit "
+                           "code this test checks for, for a reason unrelated "
+                           "to the spec guard under test")
 def test_the_opt_out_is_honoured():
     """Running unguarded stays possible, as a deliberate disclosed choice."""
     r = _run(["--without-spec-guards"])
@@ -90,6 +119,11 @@ def test_the_opt_out_is_honoured():
         "--without-spec-guards did not clear the refusal:\n" + r.stderr[-1500:])
 
 
+@pytest.mark.skipif(not _HAVE_TOOLS,
+                    reason="iverilog/vvp/yosys absent — cvdp_gate.py's #528/"
+                           "#604 tool-guard would refuse with the same exit "
+                           "code this test checks for, for a reason unrelated "
+                           "to the spec guard under test")
 def test_the_opt_out_is_not_the_default():
     """The whole point: silence must not select the unguarded path."""
     assert _run([]).returncode == _REFUSAL_EXIT

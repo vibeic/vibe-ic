@@ -193,6 +193,11 @@ _TESTS = Path(__file__).resolve().parent
 if str(_TESTS) not in sys.path:
     sys.path.insert(0, str(_TESTS))
 
+_PROGRAMS = _TESTS.parent
+if str(_PROGRAMS) not in sys.path:
+    sys.path.insert(0, str(_PROGRAMS))
+import _progress_run as _pr  # noqa: E402
+
 #: A module-level `_HAVE_* =` binding. This is the population key: it catches
 #: the decorator and in-body gating shapes alike, and it names exactly the
 #: attribute the assertions below read back off the reloaded module.
@@ -261,7 +266,7 @@ _PRESENT = lambda name, *_a, **_k: f"/usr/bin/{name}"  # noqa: E731
 
 
 def _stage2_always_fails(args, *_a, **kw):
-    """`subprocess.run` pinned to one host-independent answer: it FAILED.
+    """`subprocess.run`-shaped, pinned to one host-independent answer: it FAILED.
 
     A two-stage probe (`which` the binary, then RUN it) reads differently on a
     host where stage 2 succeeds and on one where it does not — so a check that
@@ -272,7 +277,10 @@ def _stage2_always_fails(args, *_a, **kw):
     Faithful to the real signature where it matters: `text=`/`encoding=` decide
     whether the empty streams are `str` or `bytes`, and `check=True` still
     raises, so a caller that relies on either is not handed a shape the real
-    `subprocess.run` would never return.
+    `subprocess.run` would never return. Also stands in for `_progress_run.run`
+    (see the `_pr.run` patch in `_probe`) — that wrapper returns a genuine
+    `subprocess.CompletedProcess` too, so the same stand-in serves both call
+    shapes without a second implementation to keep in sync.
     """
     textmode = bool(kw.get("text") or kw.get("universal_newlines")
                     or kw.get("encoding") or kw.get("errors"))
@@ -290,13 +298,22 @@ def _probe(modname: str, const: str, fake, *, pin_stage2: bool = False):
     module, so a gate derived from `_sim_tools.MISSING` moves with the fake
     exactly as a gate that calls `which` itself does.
 
-    With `pin_stage2`, `subprocess.run` is also held at a fixed failure for the
-    duration, so a gate that shells out after `which` cannot make the answer
-    depend on this host. Off by default: `WHICH_GATES` entries are declared
+    With `pin_stage2`, `subprocess.run` AND `_progress_run.run` (`_pr.run`) are
+    both held at a fixed failure for the duration, so a gate that shells out
+    after `which` cannot make the answer depend on this host — through either
+    primitive. The five `_HAVE_CONTAINER` gates shelled out via
+    `subprocess.run` directly until `e3f1547b1` (2026-08-28, "925 sites where
+    a slow host was recorded as a defect in the subject") moved them onto
+    `_pr.run`, which shells out via `subprocess.Popen` and never calls
+    `subprocess.run` at all. Pinning only the latter left stage 2 live for
+    exactly the gates this pin exists to blind, reddening on any host with
+    `docker` present and `vibeic-eda` running — the host-dependence the pin
+    was written to remove, back because the subject moved and the pin did
+    not follow. Off by default: `WHICH_GATES` entries are declared
     single-stage, and pinning there would hide a gate that had grown a second
     stage instead of exposing it.
 
-    Then puts everything back — the patched function AND every module it
+    Then puts everything back — the patched functions AND every module they
     reloaded. A probe that walked out leaving `_sim_tools.MISSING = ()` would
     hand the rest of the session a module that believes yosys is installed,
     and the 38 cvdp tests it guards would run and fail against a refusal. That
@@ -305,10 +322,11 @@ def _probe(modname: str, const: str, fake, *, pin_stage2: bool = False):
     FIRST, because the first `import_module` under a fake also imported the
     helper under that fake and froze it there.
     """
-    real_which, real_run = shutil.which, subprocess.run
+    real_which, real_run, real_pr_run = shutil.which, subprocess.run, _pr.run
     shutil.which = fake
     if pin_stage2:
         subprocess.run = _stage2_always_fails
+        _pr.run = _stage2_always_fails
     try:
         for helper in _WHICH_HELPERS:
             _reload(helper)
@@ -316,6 +334,7 @@ def _probe(modname: str, const: str, fake, *, pin_stage2: bool = False):
     finally:
         shutil.which = real_which
         subprocess.run = real_run
+        _pr.run = real_pr_run
         for helper in _WHICH_HELPERS:
             _reload(helper)
         _reload(modname)
@@ -399,6 +418,7 @@ WHICH_GATES = (
     ("test_v1_0_87_issue770r2_latency_arbiter_onehot", "_HAVE_IVERILOG"),
     ("test_v1_0_93_issue784_emit_assert_discriminators", "_HAVE_TOOLS"),
     ("test_v1_1_1_issue787_latency_conformance_multibit_datapath", "_HAVE_IVERILOG"),
+    ("test_v1_11_79_gate_refuses_without_spec_guards", "_HAVE_TOOLS"),
     ("test_v1_1_26_sync_reset_next_state_redundant_gate", "_HAS_IVERILOG"),
     ("test_v1_1_46_pr42_emit_normalizer_hardening", "_HAS_TOOLCHAIN"),
     ("test_v1_1_60_combdly_blkseq_style_suppress", "_HAS_VERILATOR"),
@@ -489,14 +509,17 @@ def test_a_declared_non_which_gate_is_really_not_which_keyed(modname, const, why
     genuine non-which gate reads the SAME under both fakes. A tool gate parked
     here to make a failure go away does not, and fails here.
 
-    STAGE 2 IS PINNED (#1385). A live-container probe is one of the three
+    STAGE 2 IS PINNED (#1385), through BOTH `subprocess.run` AND `_pr.run`
+    (`e3f1547b1`, 2026-08-28, moved the five `_HAVE_CONTAINER` gates onto the
+    latter — see `_probe`). A live-container probe is one of the three
     reasons named above, and it runs the binary AFTER finding it — so on a host
     where that run succeeds the gate moves with `which` while still not being
     `which`-keyed, and this guard reddened for the host rather than for the
     tree (5 failed here, 0 on a host without the container, same tree). Holding
-    `subprocess.run` at a fixed failure leaves `which` as the only varying
-    input. What the guard discriminates is unchanged: a real `which` gate has
-    no second stage to pin, so it still reads False -> True and still fails.
+    both stage-2 primitives at a fixed failure leaves `which` as the only
+    varying input. What the guard discriminates is unchanged: a real `which`
+    gate has no second stage to pin, so it still reads False -> True and still
+    fails.
     """
     absent = _probe(modname, const, _ABSENT, pin_stage2=True)
     present = _probe(modname, const, _PRESENT, pin_stage2=True)
