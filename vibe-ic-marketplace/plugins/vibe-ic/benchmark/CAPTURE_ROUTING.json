@@ -222,7 +222,7 @@
     },
     "mcp_eda.synth": {
       "bucket_A_program": "mcp-eda/src/index.js",
-   "bucket_A_note": "The MCP server is a SINGLE module: every eda_* tool is registered in mcp-eda/src/index.js. These three routes named mcp-eda/src/tools/{synth,lint,cocotb}.js, which have NEVER existed in this repository at any commit, so every MCP-EDA capture was routed to a file nobody could open and enhancement_emit.py wrote a rule sketch telling the reader to merge into it. The path check that should have caught this exempted every mcp-eda/ route on the false premise that mcp-eda is a sibling package; it ships inside the plugin. Shared helpers live in mcp-eda/src/lib/*.mjs.",
+      "bucket_A_note": "The MCP server is a SINGLE module: every eda_* tool is registered in mcp-eda/src/index.js. These three routes named mcp-eda/src/tools/{synth,lint,cocotb}.js, which have NEVER existed in this repository at any commit, so every MCP-EDA capture was routed to a file nobody could open and enhancement_emit.py wrote a rule sketch telling the reader to merge into it. The path check that should have caught this exempted every mcp-eda/ route on the false premise that mcp-eda is a sibling package; it ships inside the plugin. Shared helpers live in mcp-eda/src/lib/*.mjs.",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "mixed_signal.M_top_merge": {
@@ -360,6 +360,44 @@
       "description": "Landing a document one lane owns, when another lane owns a document of the same kind",
       "bucket_A_program": "programs/enhancement_emit.py",
       "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    },
+    "flow.matrix_d1_wiring": {
+      "description": "The 68x9 matrix's wiring dimension: does something real parse and execute each declared gate",
+      "bucket_A_program": "programs/every_declared_step_reaches_the_evaluator_check.py",
+      "bucket_A_related": [
+        "programs/flow_gate_grid.py",
+        "programs/tests/test_matrix_d1_wiring.py",
+        "programs/tests/matrix_63x8/cells.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "flow.matrix_d2_falsifiable": {
+      "description": "The 68x9 matrix's falsifiability dimension: can each gate reach a genuine non-zero exit",
+      "bucket_A_program": "programs/gate_red_is_more_than_absence_census.py",
+      "bucket_A_related": [
+        "programs/flow_gate_grid.py",
+        "programs/tests/test_matrix_d2_falsifiable.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "flow.matrix_d3_outputs_produced": {
+      "description": "The 68x9 matrix's outputs dimension: are declared required_outputs genuinely written by a run",
+      "bucket_A_program": "programs/declared_output_has_a_live_producer_check.py",
+      "bucket_A_related": [
+        "programs/flow_gate_grid.py",
+        "programs/tests/test_matrix_d3_outputs_produced.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "flow.matrix_d6_skip_discipline": {
+      "description": "The 68x9 matrix's skip dimension: is a skip conditioned on a runtime fact and reported at a non-PASS tier",
+      "bucket_A_program": "programs/vacuous_disclosure_needs_a_runtime_condition_check.py",
+      "bucket_A_related": [
+        "programs/flow_gate_grid.py",
+        "programs/tests/test_matrix_d6_skip_discipline.py",
+        "programs/gate_skip_routing_check.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
