@@ -3176,6 +3176,11 @@ def probe_ruler_blind(cl: Clause, tr: Traced, ctx: CorpusCtx) -> ProbeResult:
     """
     root, tmp, tracer = ctx.root, ctx.tmp, ctx.tracer
     timeout, budget, notes = ctx.timeout, ctx.budget, ctx.notes
+    #: Mutations that were STOPPED rather than answered, and mutations that
+    #: actually reached a verdict. The CLEAN below states the second and must
+    #: never quietly include the first.
+    unmeasured = 0
+    measured = 0
     siblings = [c for c in ctx.by_step.get(cl.step, []) if c.program != cl.program]
     sib_cache = ctx.sib_cache
     if tr.events is None:
@@ -3259,7 +3264,11 @@ def probe_ruler_blind(cl: Clause, tr: Traced, ctx: CorpusCtx) -> ProbeResult:
                 notes.append(f"{cl.program}/{rel} [{label}]: the clause made no "
                              f"forward progress and was stopped, so whether it "
                              f"reacts to this mutation is UNMEASURED — not clean")
+                unmeasured += 1
                 continue
+            # Past the stall check every path below has a real rc from a run
+            # that finished, so this mutation IS a measurement whatever it says.
+            measured += 1
             if rc != 0:
                 if worst is None:
                     worst = ProbeResult("ruler_blind", CLEAN,
@@ -3350,8 +3359,23 @@ def probe_ruler_blind(cl: Clause, tr: Traced, ctx: CorpusCtx) -> ProbeResult:
                 continue
             return ProbeResult("ruler_blind", LIAR if cl.blocking else SUSPECT,
                                blind, repro)
-    return worst or ProbeResult("ruler_blind", CLEAN,
-                                "every declared subject it reads changes its verdict", "")
+    if worst is not None:
+        return worst
+    if unmeasured and not measured:
+        # DROPPING OUT OF THE DENOMINATOR IS THE SAME DEFECT ONE STEP LATER.
+        # With every mutation stopped rather than answered, "every declared
+        # subject it reads changes its verdict" is a claim about mutations that
+        # were never run — the CLEAN a stall used to buy directly, arrived at by
+        # subtraction instead.
+        return ProbeResult(
+            "ruler_blind", NA,
+            f"all {unmeasured} mutation(s) were STOPPED before the clause "
+            f"answered, so nothing was compared — not clean", "")
+    detail = "every declared subject it reads changes its verdict"
+    if unmeasured:
+        detail += (f" ({measured} mutation(s) measured; {unmeasured} were "
+                   f"STOPPED before answering and are not in that claim)")
+    return ProbeResult("ruler_blind", CLEAN, detail, "")
 
 
 def _fresh(root: Path, tmp: Path) -> Path:
