@@ -47,6 +47,12 @@ PROGRAMS = PLUGIN / "programs"
 
 sys.path.insert(0, str(PROGRAMS))
 import policy_direction_pin_check as pdpc  # noqa: E402
+import _watchdog  # noqa: E402
+
+#: Look interval / stall & backstop LOOK counts — never a runtime bound.
+_LOOK_S = 0.05
+_STALL_LOOKS = 600
+_MAX_LOOKS = 200_000
 
 
 ORIGINAL = 'x = "richer"\n'
@@ -80,14 +86,28 @@ def test_sigterm_inside_the_mutation_window_restores_the_file(tmp_path):
     """))
     proc = subprocess.Popen([sys.executable, str(driver)])
     try:
-        for _ in range(600):
-            if ready.exists():
+        # NOT `for _ in range(600)`: a fixed poll budget is a wall clock wearing
+        # a loop, and when it runs out the test says "driver never reached the
+        # mutation window" — a statement about the driver — on the evidence that
+        # this host was slow. The driver is watched by its OWN forward progress
+        # (CPU + I/O over its /proc tree) instead, so a slow interpreter start is
+        # waited out and a driver that wedges before arming still ends the wait.
+        guard = _watchdog.loop_guard(
+            "pin-check-arm", max_iter=_MAX_LOOKS, stall_iters=_STALL_LOOKS,
+            progress_fn=lambda: _watchdog.host_tree_progress(proc.pid))
+        for _ in guard:
+            if ready.exists() or proc.poll() is not None:
                 break
-            time.sleep(0.05)
-        assert ready.exists(), "driver never reached the mutation window"
+            time.sleep(_LOOK_S)
+        assert ready.exists(), (
+            "driver never reached the mutation window "
+            f"({guard.reason} after {guard.iterations} looks)")
         assert target.read_text() == MUTATED, "the window was not actually open"
         proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=60)
+        # Unbounded: what is meant is "the driver exited", and the `finally`
+        # below still SIGKILLs anything that did not. A 60 s bound here could
+        # only ever report a busy host as the handler having failed to return.
+        proc.wait()
     finally:
         if proc.poll() is None:
             proc.kill()

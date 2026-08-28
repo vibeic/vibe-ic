@@ -41,6 +41,29 @@ _PROGRAMS = _HERE.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import gatekeeper_prepare_landing as G  # noqa: E402
+import _watchdog  # noqa: E402
+
+
+def _supervised(cmd, **kw):
+    """`subprocess.run(cmd, capture_output=True, text=True, check=False)` with
+    the wall-clock budget REPLACED by forward-progress supervision.
+
+    These call sites used to carry a fixed `timeout=`. That number is not a
+    property of the subject — it is a guess about a HOST — and when the guess is
+    wrong on a loaded machine `TimeoutExpired` propagates out of the test and is
+    recorded as the SUBJECT being broken. The verdict is then manufactured by
+    the machine rather than measured on the program; the owner hit exactly that
+    on a module nobody had changed.
+
+    `_watchdog.run_host_supervised` bounds NO FORWARD PROGRESS instead — CPU and
+    I/O summed over the child's whole /proc tree, plus the growth of its
+    captured output — so a child that is merely slow runs to completion however
+    long that legitimately takes, while one that is genuinely hung is still
+    killed. A kill arrives as rc `_watchdog.RC_STALLED` with WATCHDOG_STALLED on
+    stderr: a distinct code none of these subjects produces itself, so a hang
+    can never be misread as an ordinary non-zero exit."""
+    res = _watchdog.run_host_supervised(cmd, **kw)
+    return _watchdog.completed_process(cmd, res)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -81,8 +104,7 @@ def repo(tmp_path):
     r = tmp_path / "r"
     (r / "sub").mkdir(parents=True)
     def git(*a):
-        return subprocess.run(["git", "-C", str(r), *a],
-                              capture_output=True, text=True, timeout=60)
+        return _supervised(["git", "-C", str(r), *a])
     git("init", "-q")
     git("config", "user.email", "t@t")
     git("config", "user.name", "t")

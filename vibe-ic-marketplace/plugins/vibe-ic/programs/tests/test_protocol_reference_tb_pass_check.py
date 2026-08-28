@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+import _watchdog
+
 PROG = (Path(__file__).resolve().parent.parent / "protocol_reference_tb_pass_check.py")
 
 PLUGIN_TB = (Path(__file__).resolve().parent.parent.parent
@@ -20,9 +22,24 @@ IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not N
 
 
 def _run(args, **kw):
-    return subprocess.run(
-        [sys.executable, str(PROG)] + args,
-        capture_output=True, text=True, **kw)
+    """Drive the checker as a subprocess, bounded by NO PROGRESS, not by a clock.
+
+    Six of these calls carried a fixed 60 s budget and the other four carried
+    nothing, which is already the tell: 60 is not a property of
+    `protocol_reference_tb_pass_check.py`, it is a guess about the host that ran
+    it. The calls that carried it are the ones that compile and simulate through
+    iverilog/vvp — exactly the ones a busy or slower machine takes longest on —
+    so the guess was wrong in the direction that turns "this box is loaded" into
+    "the reference TB failed".
+
+    `run_host_supervised` watches CPU and I/O across the child's whole /proc
+    tree (an iverilog that shells out has its progress in a grandchild) plus the
+    growth of its captured output, and kills only a job where all of that has
+    stopped. A slow compile now always finishes; a wedged one still dies, as rc
+    `_watchdog.RC_STALLED`, which no verdict of this checker collides with."""
+    cmd = [sys.executable, str(PROG)] + args
+    return _watchdog.completed_process(
+        cmd, _watchdog.run_host_supervised(cmd, **kw))
 
 
 def _make_proj(tmp_path: Path,
@@ -262,8 +279,7 @@ def test_passing_rtl_pass(tmp_path):
     proj = _make_proj(tmp_path,
                       rtl_files={"chip_top.v": PASSING_STUB_RTL},
                       l3=L3_DEFAULT)
-    r = _run([str(proj), "--json", str(tmp_path / "out.json")],
-             timeout=60)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "PASS — PROTOCOL_REFERENCE_TB_PASS" in r.stdout
     out = json.loads((tmp_path / "out.json").read_text())
@@ -277,8 +293,7 @@ def test_silent_rtl_fail(tmp_path):
     proj = _make_proj(tmp_path,
                       rtl_files={"chip_top.v": SILENT_STUB_RTL},
                       l3=L3_DEFAULT)
-    r = _run([str(proj), "--json", str(tmp_path / "out.json")],
-             timeout=60)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "FAIL_GET_ID" in r.stdout
     out = json.loads((tmp_path / "out.json").read_text())
@@ -293,8 +308,7 @@ def test_wrong_opcode_fail(tmp_path):
     proj = _make_proj(tmp_path,
                       rtl_files={"chip_top.v": WRONG_OPCODE_STUB_RTL},
                       l3=L3_DEFAULT)
-    r = _run([str(proj), "--json", str(tmp_path / "out.json")],
-             timeout=60)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")])
     assert r.returncode == 1, r.stdout + r.stderr
     out = json.loads((tmp_path / "out.json").read_text())
     findings = out.get("findings", [])
@@ -352,7 +366,7 @@ def test_with_legacy_waiver_still_fails(tmp_path):
         waiver=("Intentional: project gate-waivered while we wait for "
                 "the alternative bench harness to land — see TICKET-X."),
     )
-    r = _run([str(proj)], timeout=60)
+    r = _run([str(proj)])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "Wave 29" in r.stdout
     assert "non-waivable" in r.stdout
@@ -367,8 +381,7 @@ def test_device_br_stub_violation(tmp_path):
     proj = _make_proj(tmp_path,
                       rtl_files={"chip_top.v": DEVICE_BR_STUB_RTL},
                       l3=L3_DEFAULT)
-    r = _run([str(proj), "--json", str(tmp_path / "out.json")],
-             timeout=60)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")])
     assert r.returncode == 1, r.stdout + r.stderr
     out = json.loads((tmp_path / "out.json").read_text())
     assert out["pass"] is False
@@ -434,8 +447,7 @@ def test_wave35_scenarios_run_on_silent_stub(tmp_path):
     proj = _make_proj(tmp_path,
                       rtl_files={"chip_top.v": SILENT_STUB_RTL},
                       l3=L3_DEFAULT)
-    r = _run([str(proj), "--json", str(tmp_path / "out.json")],
-             timeout=60)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")])
     # Don't assert returncode; we just want to see scenario markers.
     out_text = r.stdout
     json_path = tmp_path / "out.json"

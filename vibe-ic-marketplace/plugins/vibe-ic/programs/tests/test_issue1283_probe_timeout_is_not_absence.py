@@ -66,6 +66,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 PROGRAMS = TESTS_DIR.parent
 sys.path.insert(0, str(PROGRAMS))
 import not_verified_tier as NV  # noqa: E402
+import _watchdog  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -233,10 +234,15 @@ def _child_session(tmp_path, docker_script: str, env_extra=None):
         [str(PROGRAMS)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     env.pop(NV.REQUIRE_ENV, None)
     env.update(env_extra or {})
-    return subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:randomly",
-         "-p", "not_verified_tier", str(test)],
-        capture_output=True, text=True, cwd=str(tmp_path), timeout=60, env=env)
+    cmd = [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:randomly",
+           "-p", "not_verified_tier", str(test)]
+    # No wall-clock bound on the child. The child's OWN 1 s probe budget is the
+    # subject here (the fixtures are named `_SLOW`/`_ABSENT` for it), and a 60 s
+    # bound on the pytest session that carries it decides nothing about that —
+    # it only decides whether THIS host got the session finished, and reports a
+    # slow host as the probe tier being broken.
+    return _watchdog.completed_process(
+        cmd, _watchdog.run_host_supervised(cmd, cwd=str(tmp_path), env=env))
 
 
 #: never answers within the child's 1s budget -> the probe is UNANSWERED

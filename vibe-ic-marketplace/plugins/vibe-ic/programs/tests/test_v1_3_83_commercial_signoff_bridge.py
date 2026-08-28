@@ -13,7 +13,11 @@ close-loop):
    (a stale daemon on 8787 used to silently serve the PREVIOUS run).
 """
 import json
+import os
+import socket
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -22,6 +26,41 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import phase3_one_shot_runner as p3
+import _watchdog
+
+#: A LOOK INTERVAL and two LOOK COUNTS — never a runtime bound. Nothing here
+#: decides "too slow"; the only thing that ends a wait is the subject making no
+#: forward progress at all.
+_LOOK_S = 0.1
+_STALL_LOOKS = 300
+_MAX_LOOKS = 200_000
+
+
+def _fetch(url):
+    """GET `url` from the in-process dashboard with no wall-clock verdict.
+
+    The 5 s socket timeout that used to sit here raised out of the test and was
+    recorded as the dashboard not serving. Retrying while this process's CPU
+    still advances separates "slow" from "wedged", which is the distinction the
+    assertion actually depends on."""
+    guard = _watchdog.loop_guard("signoff-dashboard-http", max_iter=_MAX_LOOKS,
+                                 stall_iters=_STALL_LOOKS,
+                                 progress_fn=lambda: sum(os.times()[:2]))
+    for _ in guard:
+        try:
+            return urllib.request.urlopen(url, timeout=_LOOK_S * 50)
+        except urllib.error.HTTPError:
+            raise
+        except (socket.timeout, TimeoutError, ConnectionRefusedError):
+            continue
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, (socket.timeout, TimeoutError,
+                                       ConnectionRefusedError)):
+                continue
+            raise
+    raise AssertionError(
+        f"no forward progress from the server behind {url!r} "
+        f"({guard.reason} after {guard.iterations} looks)")
 
 
 def test_pdkconfig_has_signoff_bridge_fields():
@@ -310,9 +349,7 @@ def test_step_lvs_env_unavailable_without_bridge(tmp_path, monkeypatch):
 
 
 def test_dashboard_serve_retries_ports_and_records_url(tmp_path):
-    import socket
     import threading
-    import urllib.request
     import flow_dashboard_web as fdw
     (tmp_path / "reports").mkdir()
     blocker = socket.socket()
@@ -323,15 +360,26 @@ def test_dashboard_serve_retries_ports_and_records_url(tmp_path):
         target=lambda: fdw.serve(str(tmp_path), port=port, host="127.0.0.1"),
         daemon=True)
     t.start()
+    import time
     url_f = tmp_path / "reports" / "dashboard_web.url"
-    for _ in range(50):
-        if url_f.is_file():
+    # `for _ in range(50)` was a 5 s wall clock wearing a loop: when it ran out
+    # the test said "daemon must record its actually-bound URL", which is a
+    # statement about `fdw.serve`, on the evidence that this host was busy. The
+    # server runs in a thread of THIS process, so this process's CPU advancing
+    # is a true "it is still working" reading; only a completely flat one ends
+    # the wait, and the socket timeout below is a LOOK INTERVAL, not a bound.
+    guard = _watchdog.loop_guard(
+        "signoff-dashboard-bind", max_iter=_MAX_LOOKS,
+        stall_iters=_STALL_LOOKS, progress_fn=lambda: sum(os.times()[:2]))
+    for _ in guard:
+        if url_f.is_file() or not t.is_alive():
             break
-        import time
-        time.sleep(0.1)
-    assert url_f.is_file(), "daemon must record its actually-bound URL"
+        time.sleep(_LOOK_S)
+    assert url_f.is_file(), (
+        "daemon must record its actually-bound URL "
+        f"({guard.reason} after {guard.iterations} looks)")
     rec = url_f.read_text().strip()
     bound = int(rec.rsplit(":", 1)[-1])
     assert bound != port, "daemon must have hopped off the busy port"
-    assert urllib.request.urlopen(rec, timeout=5).status == 200
+    assert _fetch(rec).status == 200
     blocker.close()
