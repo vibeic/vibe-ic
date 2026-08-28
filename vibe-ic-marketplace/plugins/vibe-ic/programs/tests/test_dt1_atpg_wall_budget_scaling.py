@@ -151,34 +151,43 @@ def test_as_text_coerces_bytes_str_none():
     assert tdf._as_text(b"ab\xffc") == "ab�c"  # replace undecodable byte
 
 
-def test_run_in_docker_salvages_partial_stdout_on_timeout(monkeypatch, tmp_path):
-    # The OLD code returned (124, "", "docker command timed out") on the wall,
-    # DISCARDING the completed-fault prefix yosys had already printed → the
-    # false "ATPG produced no gradeable verdicts (yosys exit 124,
-    # setup_done=False)" ERROR that blocked large designs. The fix must return
-    # the partial stdout so the completed prefix can still be graded.
+def test_run_in_docker_salvages_partial_stdout_on_a_stall(monkeypatch, tmp_path):
+    # The OLD code returned (124, "", "docker command timed out") on a fixed
+    # wall, DISCARDING the completed-fault prefix yosys had already printed →
+    # the false "ATPG produced no gradeable verdicts (yosys exit 124,
+    # setup_done=False)" ERROR that blocked large designs. #1444-class fix:
+    # the wall became a progress-STALL grace (v1.3.47 watchdog), so this now
+    # drives the ACTUAL seam — `_wd.run_host_supervised` — with a synthetic
+    # 'stalled' outcome, exactly as `_run_in_docker` will see one for real: no
+    # forward-progress signal for the whole grace window. The partial stdout
+    # must still be returned so the completed-fault PREFIX can be graded, and
+    # the rc must be the watchdog's own RC_STALLED, never the old fixed 124 —
+    # a reader must be able to tell "no progress for the grace" from "the
+    # runtime guess was too small", which 124 alone could never say.
     partial = ("VIBEICTDF_SETUP_DONE\n"
                "VIBEICTDF _001_ STR\nsat: model found: FAIL!\n"
                "VIBEICTDF _002_ STF\n")  # 2nd fault cut mid-solve
-    calls = {"n": 0}
 
-    def fake_run(cmd, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            # the `docker run` invocation → wall fires with partial output
-            raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 1),
-                                            output=partial, stderr="")
-        # the `docker rm -f` reap invocation → succeeds
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+    def fake_supervised(cmd, **kw):
+        # THE SEAM THE CODE ACTUALLY LAUNCHES THROUGH. `_run_in_docker` no
+        # longer calls `subprocess.run` for the launch at all — faking that
+        # would intercept nothing (see `test_a_pinless_abstract_is_never_
+        # staged` in test_digital_hardmacro_gen.py for the same lesson).
+        assert kw.get("kill") is not None, (
+            "the reap handler (identity-based `docker rm -f` on the named "
+            "container) must still be wired on the stall path")
+        return tdf._wd.SupervisedResult(
+            rc=tdf._wd.RC_STALLED, out=partial,
+            err="WATCHDOG_STALLED: configured forward-progress signals did "
+                "not advance for > 1s — killed as hung, not slow.",
+            outcome="stalled", elapsed_s=1.0)
 
-    monkeypatch.setattr(tdf.subprocess, "run", fake_run)
+    monkeypatch.setattr(tdf._wd, "run_host_supervised", fake_supervised)
     ec, out, err = tdf._run_in_docker(tmp_path, "yosys /work/x.ys", timeout=1)
-    assert ec == 124
+    assert ec == tdf._wd.RC_STALLED
     assert "VIBEICTDF_SETUP_DONE" in out          # setup marker survives
     assert "VIBEICTDF _001_ STR" in out           # completed fault survives
-    assert "docker command timed out" in err
-    # the container was reaped (a second subprocess.run call for `docker rm -f`)
-    assert calls["n"] == 2
+    assert "WATCHDOG_STALLED" in err
 
 
 def test_salvaged_partial_log_grades_completed_prefix():
