@@ -309,3 +309,23 @@ def test_a_bytes_mode_stall_reports_its_reason_in_bytes_not_str():
     assert cp.returncode == R.RC_STALLED
     assert isinstance(cp.stderr, bytes)
     assert b"STALLED" in cp.stderr
+
+
+# ── 9. THE EXCEPTION CONTRACT — a drop-in may not quietly change it ──────────
+def test_a_missing_executable_raises_exactly_as_subprocess_does():
+    """`subprocess.run` raises `FileNotFoundError` for an executable that is not
+    there, and call sites across this repo catch it to say "the tool is not
+    installed". The supervisor reports that as rc 127, which is right for a
+    supervisor and wrong for a drop-in: every one of those handlers would go
+    silent and 127 would be read as the tool's own verdict.
+
+    Asserted as an A/B against the call being replaced, so it cannot pass by
+    both sides merely doing something."""
+    argv = ["/nonexistent/definitely-not-a-tool-here", "--version"]
+    with pytest.raises(FileNotFoundError):
+        subprocess.run(argv, capture_output=True, text=True, timeout=5)
+    with pytest.raises(FileNotFoundError):
+        R.run(argv, **FAST)
+    # and the best-effort face must not swallow it into a plain rc either
+    with pytest.raises(FileNotFoundError):
+        R.run_best_effort(argv, **FAST)

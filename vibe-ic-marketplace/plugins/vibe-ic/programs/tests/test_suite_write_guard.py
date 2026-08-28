@@ -518,10 +518,20 @@ def test_paths_needing_quoting_are_parsed_not_mangled(tmp_path):
 # --------------------------------------------------------------------------
 
 def _detached_copy_of_the_guard(dest: Path) -> Path:
-    """A copy of the REAL guard module at `dest/programs/`, importable there."""
+    """A copy of the REAL guard module at `dest/programs/`, importable there.
+
+    The guard reaches `git status` through `_progress_run`, so the copy is not
+    one file any more. Its siblings come with it, into the same `programs/`
+    directory they live in here — which is the shape the guard is deployed in,
+    not a convenience for the test. Copying only the entry module would leave
+    the mirror importing a module that is not there, and the nested pytest
+    would die on the import rather than on the property under test.
+    """
     (dest / "programs").mkdir(parents=True, exist_ok=True)
     target = dest / "programs" / "suite_write_guard.py"
     target.write_text(_GUARD.read_text())
+    for dep in ("_progress_run.py", "_watchdog.py"):
+        (dest / "programs" / dep).write_text((_GUARD.parent / dep).read_text())
     return target
 
 

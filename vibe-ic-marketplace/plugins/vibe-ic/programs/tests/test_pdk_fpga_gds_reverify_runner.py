@@ -95,7 +95,7 @@ def _run_post_compile(tmp_path, monkeypatch, att_rc):
         # only the attestation helper is invoked in post-compile-only.
         return _CP(rc=att_rc, stdout="attest stdout", stderr="")
 
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod._pr, "run", fake_run)
     argv = _base_argv(project) + [
         "--post-compile-only", str(map_rpt),
         "--json", str(out_json),
@@ -139,7 +139,7 @@ def test_pre_compile_step1_fail_short_circuits(tmp_path, monkeypatch):
         # The first step (udp-shim) fails; chain must stop immediately.
         return _CP(rc=1, stdout="", stderr="shim failed")
 
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod._pr, "run", fake_run)
     argv = _base_argv(project) + ["--no-quartus", "--json", str(out_json)]
     rc = mod.main(argv)
     report = json.loads(out_json.read_text())

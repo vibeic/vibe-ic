@@ -20,6 +20,8 @@ import json
 import os
 import re
 import subprocess
+
+import _progress_run as _pr   # the seam the gate launches through
 import sys
 from pathlib import Path
 
@@ -391,7 +393,7 @@ def _unreachable_container_backends(monkeypatch, rc=125,
         assert cmd[:2] == ["docker", "exec"], cmd
         return subprocess.CompletedProcess(cmd, rc, "", stderr)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_pr, "run", fake_run)
 
 
 def test_a_container_that_never_answered_is_not_an_empty_pdk_root(tmp_path,
@@ -743,13 +745,13 @@ def _shell_backends(monkeypatch):
     Patching the module both of them import keeps the substitution in exactly
     one place and keeps these tests driving the gate's REAL command strings.
     """
-    real_run = subprocess.run
+    real_run = _pr.run
 
     def fake_run(cmd, **kw):
         assert cmd[:2] == ["docker", "exec"], cmd
         return real_run(["bash", "-lc", cmd[-1]], **kw)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_pr, "run", fake_run)
     return gate.docker_backends("container-name-is-never-used")
 
 

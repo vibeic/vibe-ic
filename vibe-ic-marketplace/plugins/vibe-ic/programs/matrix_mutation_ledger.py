@@ -2592,7 +2592,9 @@ def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]
 
 
 def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
-              timeout: int) -> Tuple[Optional[int], str, str]:
+              stall_looks: int = _pr.DEFAULT_STALL_LOOKS,
+              poll_s: Optional[float] = None
+              ) -> Tuple[Optional[int], str, str]:
     """Run the one cell and return ``(cell rc, output, why-unreadable)``.
 
     THE COLOUR COMES FROM THE REPORT, NOT FROM THE EXIT STATUS (vibe-ic#1412).
@@ -2634,7 +2636,8 @@ def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
                 [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
                  "-q", "-p", "no:randomly", "--no-header", "-rN",
                  "--junit-xml", str(junit)],
-                cwd=str(cwd), capture_output=True, text=True, env=env)
+                cwd=str(cwd), capture_output=True, text=True, env=env,
+                stall_looks=stall_looks, poll_s=poll_s)
         except _pr.Stalled as exc:
             # THE BOUND FIRING IS A MEASUREMENT FAILURE, NOT A COLOUR
             # (vibe-ic#1403).
@@ -2675,7 +2678,9 @@ def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
 
 
 def replay(mut: Mutation, sid: Optional[str] = None,
-           timeout: int = 900) -> ReplayResult:
+           timeout: int = 900, *,
+           stall_looks: int = _pr.DEFAULT_STALL_LOOKS,
+           poll_s: Optional[float] = None) -> ReplayResult:
     """Perform the mutation FOR REAL on an isolated copy and measure the cell.
 
     Never writes to the shared worktree. FLOW_YAML entries write one mutated
@@ -2686,6 +2691,18 @@ def replay(mut: Mutation, sid: Optional[str] = None,
     ARTEFACT_MUTATION entries are dispatched to :func:`replay_artefact`, which
     copies a published run FOR REAL — see its docstring for why a hardlink
     mirror is unsafe there and safe here.
+
+    ``timeout`` NO LONGER BOUNDS A CELL. A cell is supervised by forward
+    progress (`_run_cell`), so one that is merely slow on a busy host runs to
+    completion instead of being killed and recorded as unreadable. The
+    parameter is kept because :func:`replay_artefact` still takes it for
+    symmetry and callers pass it; it reaches no stopwatch on this path.
+
+    ``stall_looks`` / ``poll_s`` are the supervision cadence, forwarded to
+    `_run_cell`. They exist so a test can compress the wait it is measuring
+    instead of sitting out the shipped default — the cadence is a COUNT OF
+    LOOKS, so compressing it changes how long the test takes and not what the
+    supervisor decides.
     """
     import time
     if isinstance(mut, ArtefactMutation):
@@ -2715,9 +2732,11 @@ def replay(mut: Mutation, sid: Optional[str] = None,
                 yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
                 encoding="utf-8")
             base_rc, _, base_why = _run_cell(
-                mut.dim, sid, PLUGIN_ROOT, None, timeout)
+                mut.dim, sid, PLUGIN_ROOT, None,
+                stall_looks=stall_looks, poll_s=poll_s)
             mut_rc, out, mut_why = _run_cell(
-                mut.dim, sid, PLUGIN_ROOT, mutant, timeout)
+                mut.dim, sid, PLUGIN_ROOT, mutant,
+                stall_looks=stall_looks, poll_s=poll_s)
             patched = "flow/phase1_phase2_phase3.yaml (substituted)"
         else:
             mirror = scratch / "mirror"
@@ -2725,7 +2744,9 @@ def replay(mut: Mutation, sid: Optional[str] = None,
                            check=True, capture_output=True)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            base_rc, _, base_why = _run_cell(mut.dim, sid, mirror, None, timeout)
+            base_rc, _, base_why = _run_cell(
+                mut.dim, sid, mirror, None,
+                stall_looks=stall_looks, poll_s=poll_s)
             patched = apply_to_tree(mut, mirror)
             if patched is None:
                 return ReplayResult(
@@ -2737,7 +2758,9 @@ def replay(mut: Mutation, sid: Optional[str] = None,
                     mut.channel)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            mut_rc, out, mut_why = _run_cell(mut.dim, sid, mirror, None, timeout)
+            mut_rc, out, mut_why = _run_cell(
+                mut.dim, sid, mirror, None,
+                stall_looks=stall_looks, poll_s=poll_s)
         seen = mut.red_signal in out
         tail = "\n".join(l for l in out.strip().splitlines() if l.strip())[-1200:]
         # An arm whose cell could not be READ has no colour, and a colourless
@@ -2971,12 +2994,14 @@ def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
                 ) -> Tuple[ReplayResult, ...]:
     """Re-execute every pair in ``plan``, optionally under a TOTAL wall budget.
 
-    ``timeout`` bounds ONE cell and ``budget`` bounds the WHOLE plan, and the
-    second is not a refinement of the first — it is the only bound that exists
-    at the level where this function can outlive its caller. ``timeout`` is
-    per-cell, so the aggregate cost of a plan was ``len(frozen)`` cells deep and
-    UNDECLARED: nothing anywhere stated how long ``replay_many`` may take, and
-    no amount of lowering ``timeout`` states it.
+    ``budget`` bounds the WHOLE plan, and it is now the ONLY bound here.
+    ``timeout`` used to bound one cell; a cell is supervised by forward progress
+    instead, so a slow cell finishes and a wedged one is caught by having
+    stopped moving. The paragraph below is why ``budget`` was never a
+    refinement of that per-cell number and still is not: it is the only bound
+    that exists at the level where this function can outlive its caller. The
+    aggregate cost of a plan was ``len(frozen)`` cells deep and UNDECLARED,
+    and no amount of lowering ``timeout`` ever stated it.
 
     WHY AN UNDECLARED AGGREGATE IS NOT MERELY SLOW (vibe-ic#1410). The landing
     harness pins ``--timeout=180 --timeout-method=thread``

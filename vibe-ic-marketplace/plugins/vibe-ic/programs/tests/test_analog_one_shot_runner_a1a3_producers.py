@@ -55,13 +55,21 @@ def test_the_runner_dispatches_the_producer_at_its_own_step(
         R.step_for_block(p, blk, earlier)
 
     seen = []
-    real = subprocess.run
+    # The runner launches producers through TWO seams: `_pr.run` (progress
+    # supervised) and, at the three sites the timeout census classified
+    # NOT_MEASURED rather than verdict-bearing, still `subprocess.run`. A spy on
+    # one of them answers "the producer was never dispatched" for a run that
+    # dispatched it through the other, so both are watched.
+    real_pr, real_sp = R._pr.run, R.subprocess.run
 
-    def spy(cmd, *a, **kw):
-        seen.append(list(cmd))
-        return real(cmd, *a, **kw)
+    def _spy(real):
+        def spy(cmd, *a, **kw):
+            seen.append(list(cmd))
+            return real(cmd, *a, **kw)
+        return spy
 
-    monkeypatch.setattr(R.subprocess, "run", spy)
+    monkeypatch.setattr(R._pr, "run", _spy(real_pr))
+    monkeypatch.setattr(R.subprocess, "run", _spy(real_sp))
     res = R.step_for_block(p, blk, step)
 
     dispatched = [c for c in seen if any(program in str(t) for t in c)]
@@ -107,16 +115,21 @@ def test_a_declining_producer_leaves_the_step_WAIVED_and_names_the_gap(
 def test_a_crashing_producer_does_not_turn_a_step_into_a_FAIL(
         tmp_path, monkeypatch):
     p = make_project(tmp_path, [block("keeper_x", "pull", specs=None)])
-    real = subprocess.run
+    # Both launch seams, for the reason given at the spy above: the producer
+    # this test crashes is dispatched through `subprocess.run`, not `_pr.run`.
+    real_pr, real_sp = R._pr.run, R.subprocess.run
     exploded = []
 
-    def boom(cmd, *a, **kw):
-        if any("analog_a1_spec_emit" in str(t) for t in cmd):
-            exploded.append(list(cmd))
-            raise OSError("simulated producer crash")
-        return real(cmd, *a, **kw)
+    def _boom(real):
+        def boom(cmd, *a, **kw):
+            if any("analog_a1_spec_emit" in str(t) for t in cmd):
+                exploded.append(list(cmd))
+                raise OSError("simulated producer crash")
+            return real(cmd, *a, **kw)
+        return boom
 
-    monkeypatch.setattr(R.subprocess, "run", boom)
+    monkeypatch.setattr(R._pr, "run", _boom(real_pr))
+    monkeypatch.setattr(R.subprocess, "run", _boom(real_sp))
     res = R.step_for_block(p, {"name": "keeper_x", "type": "pull"},
                            "A1_spec_extract")
     # PRECONDITION: WAIVED is also what a runner that never dispatches a
@@ -219,7 +232,7 @@ def test_the_run_record_names_the_circuit_a4_measured(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(cmd, rc, "", "")
         return real(cmd, *a, **kw)
 
-    monkeypatch.setattr(R.subprocess, "run", spy)
+    monkeypatch.setattr(R._pr, "run", spy)
     res = R.step_for_block(p, blk, "A4_corner_sweep")
 
     # The deterministic A3 producer resolves this block's netlist from a

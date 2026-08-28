@@ -107,7 +107,7 @@ def _patch_subprocess(monkeypatch, behaviors):
         calls.append(cmd)
         return behaviors(cmd, calls)
 
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod._pr, "run", fake_run)
     return calls
 
 

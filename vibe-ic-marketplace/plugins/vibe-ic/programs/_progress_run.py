@@ -410,6 +410,14 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
             to_close.close()
     elapsed = time.monotonic() - t0
     outcome = getattr(res, "outcome", "natural")
+    if outcome == "launch_error":
+        # `subprocess.run` RAISES for an executable that is not there, and call
+        # sites all over this repo catch `FileNotFoundError` to report "the tool
+        # is not installed". `_watchdog` reports it as rc 127 instead, which is
+        # right for a supervisor and wrong for a drop-in: every one of those
+        # handlers would go quiet and the rc would be read as the tool's own
+        # verdict. A drop-in may not change the exception contract.
+        raise FileNotFoundError(_wd._as_text(res.err) or _fmt(cmd))
     if outcome in ("stalled", "ceiling"):
         raise Stalled(cmd, stall_looks, poll_s,
                       getattr(res, "elapsed_s", elapsed) or elapsed,

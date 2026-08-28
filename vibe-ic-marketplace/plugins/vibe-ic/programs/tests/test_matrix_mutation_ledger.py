@@ -1740,11 +1740,19 @@ def test_the_unmeasurable_count_is_disclosed_not_skipped():
 # subject of #1403, and which cost the fleet a standing brief pointed at a
 # regression that was not there. The distinction has to live in the OUTPUT.
 #
-# The bound below is ONE SECOND: far under the 60 s ceiling (`180 // 3`) that
-# `ci_harness_timeout_ceiling_check` permits one blocking call. These tests cost
-# ~1 s each; they do not replay anything to completion and are not a second copy
-# of LOCK 2.
-_BOUND_THAT_ALWAYS_FIRES = 1
+# THE CELL IS NO LONGER BOUNDED BY A CLOCK. It is supervised by forward
+# progress, so what these tests must produce is not "a cell that is slow" — a
+# slow cell now runs to completion, which is the whole point — but a cell that
+# has STOPPED MOVING. The knob below is therefore a CADENCE, not a deadline:
+# how many times to LOOK, and how far apart.
+#
+# `poll_s` is 1.0 s and not something smaller on purpose. pytest's own start-up
+# costs about 0.65 s idle and over 2 s under load, and a stall window narrower
+# than that boot floor would trip on the boot rather than on the sleep — the
+# test would still go green and would be measuring the wrong thing. At three
+# looks a second apart the child's own start-up keeps the meter alive, and the
+# stall is caused by the probe going quiet. These tests cost ~4 s each.
+_LOOKS_THAT_ALWAYS_STALL = {"stall_looks": 3, "poll_s": 1.0}
 
 #: THE SUBJECT THESE THREE TESTS KILL, and it is no longer a real matrix cell.
 #:
@@ -1763,14 +1771,21 @@ _BOUND_THAT_ALWAYS_FIRES = 1
 #:
 #: 0.81 s < 1 s, so all three tests were RED on an idle host and green only on a
 #: host slow enough to push pytest's own start-up past the bound — a control
-#: whose verdict is a property of the machine. A probe that sleeps for thirty
-#: seconds cannot finish inside a one-second bound on any host, which makes the
-#: kill a property of THIS FILE. Nothing about the claim under test — that a
-#: killed child returns a reason instead of raising, and is never given a
-#: colour — was ever about which cell was killed.
+#: whose verdict is a property of the machine. Nothing about the claim under
+#: test — that an unreadable child returns a reason instead of raising, and is
+#: never given a colour — was ever about which cell was killed.
+#:
+#: The probe now sleeps FOREVER rather than for thirty seconds. Under a clock,
+#: thirty seconds was simply longer than the bound; under progress supervision
+#: the question is different, and a thirty-second sleep would eventually WAKE
+#: and answer. A probe that never wakes is motionless on CPU, on I/O and on
+#: output for as long as anyone looks, which is exactly the state the
+#: supervisor is defined to catch — and, unlike a duration, it is that state on
+#: every host.
 _A_CELL_THAT_CANNOT_FINISH = ("import time\n\n\n"
                               "def test_probe():\n"
-                              "    time.sleep(30)\n")
+                              "    while True:\n"
+                              "        time.sleep(3600)\n")
 
 
 @pytest.fixture()
@@ -1801,13 +1816,14 @@ def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour(unkillable_cell)
     with a traceback and no verdict.
     """
     rc, out, why = L._run_cell(3, "D1", unkillable_cell, None,
-                               _BOUND_THAT_ALWAYS_FIRES)
+                               **_LOOKS_THAT_ALWAYS_STALL)
     assert rc is None, (
-        f"a cell killed at {_BOUND_THAT_ALWAYS_FIRES}s reported rc={rc!r}. An "
-        f"arm nobody waited for has NO COLOUR; giving it one is how 'could not "
+        f"a cell killed for making no progress reported rc={rc!r}. An arm "
+        f"nobody could read has NO COLOUR; giving it one is how 'could not "
         f"look' becomes 'looked and it was red'")
-    assert str(_BOUND_THAT_ALWAYS_FIRES) in why and "bound" in why, (
-        f"the reason does not name the bound that fired: {why!r}")
+    assert "STOPPED MAKING PROGRESS" in why, (
+        f"the reason does not say WHY the child was killed, and the reason is "
+        f"the whole difference between a wedged cell and a slow host: {why!r}")
     assert "NOT MEASURED" in why, (
         f"the reason does not say the arm was not measured, so a reader still "
         f"cannot tell this from a gate that stopped catching: {why!r}")
@@ -1831,16 +1847,16 @@ def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS(
     `cp -al` mirror is built for a pair that is going to be killed anyway.
     """
     mut = L.mutation("D3-UNDECLARED-ARTEFACT")          # FLOW_YAML: no cp -al
-    r = L.replay(mut, mut.witness, _BOUND_THAT_ALWAYS_FIRES)
+    r = L.replay(mut, mut.witness, **_LOOKS_THAT_ALWAYS_STALL)
     assert r.verdict == "NOT_REPLAYABLE", (
         f"a pair whose cells were killed scored {r.verdict!r}")
     assert not r.proved, "a replay that never ran was banked as proof"
     assert not r.as_recorded, "a replay that never ran was banked as reproduced"
     assert not r.unmeasurable, (
-        "a timed-out replay was folded into UNMEASURABLE, which is the claim "
+        "a stalled replay was folded into UNMEASURABLE, which is the claim "
         "that the WITNESS was pre-reddened — this measurement supports no such "
         "claim, and the unmeasurable ceiling would then absorb it")
-    assert "bound" in r.not_replayable, (
+    assert "STOPPED MAKING PROGRESS" in r.not_replayable, (
         f"the pair does not carry the reason: {r.not_replayable!r}")
 
 
@@ -1854,7 +1870,7 @@ def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs(
     green by deleting the evidence rather than by measuring anything.
     """
     _, _, why = L._run_cell(3, "D1", unkillable_cell, None,
-                            _BOUND_THAT_ALWAYS_FIRES)
+                            **_LOOKS_THAT_ALWAYS_STALL)
     assert "re-record the ledger" in why, (
         f"the reason does not refuse re-recording the ledger: {why!r}")
     assert "re-pick the witness" in why, (
