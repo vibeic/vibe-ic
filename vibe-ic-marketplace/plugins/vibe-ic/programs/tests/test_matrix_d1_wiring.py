@@ -113,6 +113,7 @@ Each mutation was applied to the GUARDED THING, confirmed red, then reverted.
 from __future__ import annotations
 
 import ast
+import contextlib
 import importlib
 import json
 import re
@@ -564,39 +565,186 @@ class UmbrellaRun:
     harness_error: Optional[str] = None
 
 
-class _SubprocessRecorder:
-    """Stands in for the ``subprocess`` module inside the compliance module.
+# ──────────────────────────────────────────────────────────────────────
+# THE OBSERVATION POINT — ANCHORED AT THE SPAWN, NOT AT A DISPATCHER
+# (owner ruling, 2026-08-28)
+# ──────────────────────────────────────────────────────────────────────
+# This probe used to stand in for the ``subprocess`` MODULE ATTRIBUTE on the
+# compliance module (``flow_compliance_check.subprocess = recorder``). That
+# anchored the observation to WHOEVER HAPPENED TO CALL subprocess THAT DAY.
+#
+# When the timeout-as-verdict campaign moved the P0 umbrella's gate launch
+# from ``subprocess.run(argv, timeout=60)`` to
+# ``_watchdog.run_host_supervised(argv)``, the gates still ran — the seam
+# simply moved one module down — and this recorder saw NOTHING. Ten cells went
+# red on a FALSE NEGATIVE IN THE OBSERVATION, not on a regression in the
+# behaviour. An observation point bound to a dispatcher can be defeated by
+# refactoring the dispatcher, including accidentally, which is exactly what
+# happened.
+#
+# So the recorder now stands in for ``subprocess.Popen`` itself, on the stdlib
+# module object. Every dispatch route in this repo converges there:
+#
+#     flow_compliance_check.subprocess.run(argv, ...)   ─┐
+#     _watchdog.run_supervised -> popen_factory(cmd)     ├─> subprocess.Popen
+#     <whatever the campaign moves it to tomorrow>      ─┘
+#
+# ``subprocess.run`` resolves ``Popen`` as a module GLOBAL, and ``_watchdog``'s
+# default ``popen_factory`` is ``lambda c, **kw: subprocess.Popen(c, **kw)``
+# over the same module object; every ``import subprocess`` in the process binds
+# THE SAME module, so one rebinding observes all of them. That is not asserted
+# from the docs — ``test_probe_the_anchor_sees_both_seams`` drives a real
+# program through BOTH seams and requires both to be recorded.
+#
+# THIS IS STRICTLY MORE THAN THE OLD ANCHOR OBSERVED, NEVER LESS:
+#   * ANY path that ends in a spawned gate is seen, whatever dispatches it;
+#   * a path that does NOT spawn records nothing and therefore cannot fake a
+#     dispatch — ``test_probe_an_in_process_gate_call_is_not_a_dispatch``
+#     performs exactly that mutation (every gate answered PASS in-process, no
+#     process created) and requires the P0 cell's own assertion to go RED.
+#     Without that leg this repair would be indistinguishable from deleting
+#     the check.
+#   * ``test_probe_no_spawn_primitive_bypasses_the_anchor`` is the
+#     anti-relocation canary: the anchor is universal only while nothing in the
+#     dispatch chain reaches ``os.system`` / ``os.exec*`` / ``os.posix_spawn``
+#     / ``pty.spawn`` / ``multiprocessing``. If one appears, this file says so
+#     instead of going quiet.
+#
+# The recorder RECORDS EVERY construction and STUBS ONLY the gate launches it
+# was asked about; anything else is handed to the real ``Popen`` and really
+# runs. Recording and stubbing are deliberately separate: the anchor's job is
+# to see everything, and answering-without-running is only an economy (driving
+# 241 real gate programs would measure dimension 2, not dimension 1).
 
-    Records every ``run(argv, ...)`` and answers with a caller-supplied
-    returncode. Everything else (``TimeoutExpired`` and friends) is delegated
-    to the real module, so the umbrella's own except-clauses still bind to the
-    genuine exception types.
+
+def _is_program_launch(argv: List[str]) -> bool:
+    """`[python, <PROGRAMS_DIR>/<name>.py, ...]` — a gate program launch."""
+    if len(argv) < 2:
+        return False
+    cand = Path(argv[1])
+    if cand.suffix != ".py":
+        return False
+    try:
+        return cand.resolve().parent == PROGRAMS_DIR.resolve()
+    except OSError:  # pragma: no cover - unresolvable path is not a launch
+        return False
+
+
+class _StubbedPopen:
+    """A ``subprocess.Popen`` that creates NO process and answers from `rc_for`.
+
+    Satisfies both consumers of the anchor, which want different things of a
+    process object:
+
+      * ``subprocess.run(..., capture_output=True, text=True)`` passes
+        ``stdout=PIPE`` (an int) and reads the answer back from
+        ``communicate()`` / ``poll()``;
+      * ``_watchdog.run_supervised`` passes ``stdout=``/``stderr=`` FILE
+        OBJECTS, polls ``wait(timeout)``, and then re-reads those files.
+
+    So the stubbed stdout is written INTO the caller's sink when one was given
+    and kept in memory otherwise — the two seams then return byte-identical
+    answers. ``pid`` is ``None`` so ``_watchdog.host_cpu_probe`` declines
+    rather than reading some unrelated live process's ``/proc`` entry.
     """
 
-    def __init__(self, real, rc_for):
-        self._real = real
+    def __init__(self, argv, rc: int, out, **kw):
+        self.args = argv
+        self.returncode = rc
+        self.pid = None
+        self.stdin = None
+        self.stdout = None
+        self.stderr = None
+        text = bool(kw.get("text") or kw.get("universal_newlines")
+                    or kw.get("encoding") or kw.get("errors"))
+        self._out_text = out if isinstance(out, str) else out.decode()
+        self._out = self._out_text if text else self._out_text.encode()
+        self._err = "" if text else b""
+        sink = kw.get("stdout")
+        if hasattr(sink, "write"):
+            # `_watchdog` opens a binary `tempfile.TemporaryFile()`; a caller
+            # that opened a text one is honoured too rather than raising.
+            try:
+                sink.write(self._out_text.encode())
+            except TypeError:  # pragma: no cover - text-mode sink
+                sink.write(self._out_text)
+
+    def communicate(self, input=None, timeout=None):
+        return self._out, self._err
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        pass
+
+    terminate = kill
+
+    def send_signal(self, _sig):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class _SpawnRecorder:
+    """Stands in for ``subprocess.Popen`` — the ONE process-creation primitive.
+
+    Anchored on the stdlib module rather than on any caller's ``subprocess``
+    attribute or on a dispatch helper, so a refactor that moves the dispatch
+    between them cannot move it off this. See the block comment above.
+    """
+
+    def __init__(self, real_popen, rc_for, stub_if=_is_program_launch):
+        self._real = real_popen
         self._rc_for = rc_for
+        self._stub_if = stub_if
         self.calls: List[List[str]] = []
+        self.delegated: List[List[str]] = []
         import threading
 
         self._lock = threading.Lock()
 
-    def run(self, argv, **_kw):  # noqa: D401 - mimics subprocess.run
-        argv = [str(a) for a in argv]
+    def __call__(self, argv, **kw):
+        try:
+            listed = [str(a) for a in argv]
+        except TypeError:  # pragma: no cover - a shell=True string command
+            listed = [str(argv)]
+        stub = self._stub_if(listed)
         with self._lock:
-            self.calls.append(argv)
-        stem = Path(argv[1]).stem if len(argv) > 1 else ""
-        rc, out = self._rc_for(stem)
+            # RECORDED FIRST, and recorded whether or not it is stubbed: the
+            # anchor's claim is that it sees every spawn, not every spawn it
+            # chose to answer.
+            self.calls.append(listed)
+            if not stub:
+                self.delegated.append(listed)
+        if not stub:
+            return self._real(argv, **kw)
+        rc, out = self._rc_for(Path(listed[1]).stem)
+        return _StubbedPopen(listed, rc, out, **kw)
 
-        class _Completed:
-            returncode = rc
-            stdout = out
-            stderr = ""
+    @property
+    def program_stems(self) -> Set[str]:
+        """`programs/<stem>.py` basenames recorded, from ANY seam."""
+        return {Path(c[1]).stem for c in self.calls if _is_program_launch(c)}
 
-        return _Completed()
 
-    def __getattr__(self, name):
-        return getattr(self._real, name)
+@contextlib.contextmanager
+def _popen_recording(rc_for, stub_if=_is_program_launch):
+    """Install the spawn recorder on ``subprocess.Popen`` for the block."""
+    real = subprocess.Popen
+    rec = _SpawnRecorder(real, rc_for, stub_if)
+    subprocess.Popen = rec
+    try:
+        yield rec
+    finally:
+        subprocess.Popen = real
 
 
 def _drive_umbrella(rc_for) -> UmbrellaRun:
@@ -608,32 +756,29 @@ def _drive_umbrella(rc_for) -> UmbrellaRun:
     """
     mod = compliance_module()
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d1_umbrella_"))
-    real_sub = getattr(mod, "subprocess")
-    recorder = _SubprocessRecorder(real_sub, rc_for)
+    real_popen = subprocess.Popen
     try:
         project = tmp / "proj"
         rtl = project / _UMBRELLA_RTL_REL
         rtl.parent.mkdir(parents=True)
         rtl.write_text(_UMBRELLA_RTL_BODY, encoding="utf-8")
-        mod.subprocess = recorder
-        try:
-            passed, fails, skips, waiver_entries = mod._run_structural_rtl_gates(
-                project)
-        except Exception as exc:  # pragma: no cover - harness failure path
-            return UmbrellaRun(None, (), (), (), (), harness_error=repr(exc))
-        finally:
-            mod.subprocess = real_sub
-        assert getattr(mod, "subprocess") is real_sub
+        with _popen_recording(rc_for) as recorder:
+            try:
+                passed, fails, skips, waiver_entries = (
+                    mod._run_structural_rtl_gates(project))
+            except Exception as exc:  # pragma: no cover - harness failure path
+                return UmbrellaRun(None, (), (), (), (),
+                                   harness_error=repr(exc))
+        assert subprocess.Popen is real_popen
         return UmbrellaRun(
             passed=passed,
             fails=tuple(str(f) for f in fails),
             skips=tuple(str(s) for s in skips),
             waivers=tuple(str(w) for w in waiver_entries),
-            dispatched=tuple(
-                sorted({Path(c[1]).stem for c in recorder.calls if len(c) > 1})),
+            dispatched=tuple(sorted(recorder.program_stems)),
         )
     finally:
-        mod.subprocess = real_sub
+        subprocess.Popen = real_popen
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -1320,11 +1465,23 @@ def test_probe_umbrella_dispatch_is_recorded_from_the_real_runner():
     stems = all_program_stems()
     unknown = sorted(s for s in run.dispatched if s not in stems)
     assert not unknown, f"umbrella dispatched non-programs: {unknown[:10]}"
-    import subprocess as _real_subprocess
-
-    assert getattr(mod, "subprocess") is _real_subprocess, (
-        "the recording shim was left installed on flow_compliance_check — "
-        "every later test in this process would be measuring the shim"
+    assert not isinstance(subprocess.Popen, _SpawnRecorder), (
+        "the spawn recorder was left installed on subprocess.Popen — every "
+        "later test in this process would be measuring the shim"
+    )
+    # The anchor is on the ONE primitive, so it is the ONE thing to restore.
+    # Named positively as well: the genuine class, not merely "not our shim"
+    # (a DIFFERENT leftover shim would satisfy the negative form alone).
+    assert getattr(subprocess.Popen, "__module__", None) == "subprocess", (
+        f"subprocess.Popen is {subprocess.Popen!r}, not the stdlib class — "
+        f"the anchor this file rests on is not in its shipped state"
+    )
+    # The compliance module reaches the same object; that shared identity is
+    # WHY one rebinding observes every caller's `subprocess.run`.
+    assert mod.subprocess.Popen is subprocess.Popen, (
+        f"{mod.__name__} sees a different subprocess.Popen than this module — "
+        f"the single-anchor assumption does not hold and the recorder would "
+        f"be blind to that module's spawns"
     )
 
 
@@ -1352,27 +1509,199 @@ def test_probe_direct_dispatch_programs_really_dispatch():
         f"registered and never run"
     )
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d1_direct_"))
-    real_sub = getattr(mod, "subprocess")
-    recorder = _SubprocessRecorder(real_sub, lambda stem: (0, ""))
+    real_popen = subprocess.Popen
     try:
         project = tmp / "proj"
         ys = project / "scripts" / "synth.ys"
         ys.parent.mkdir(parents=True)
         ys.write_text("read_verilog top.v\nsynth -top top\n", encoding="utf-8")
-        mod.subprocess = recorder
-        try:
+        # `_run_yosys_gates` still launches through a DIRECT `subprocess.run`
+        # while the P0 umbrella above launches through `_watchdog`. Both are
+        # observed by the same anchor and neither probe knows which seam its
+        # subject uses — that is the property, exercised here for free.
+        with _popen_recording(lambda stem: (0, "")) as recorder:
             dispatcher(project)
-        finally:
-            mod.subprocess = real_sub
     finally:
-        mod.subprocess = real_sub
+        subprocess.Popen = real_popen
         shutil.rmtree(tmp, ignore_errors=True)
-    dispatched = {Path(c[1]).stem for c in recorder.calls if len(c) > 1}
+    dispatched = set(recorder.program_stems)
     missing = sorted(n for n in names if n not in dispatched)
     assert not missing, (
         f"{len(missing)} {DIRECT_DISPATCH_KEY} program(s) were NOT subprocessed "
         f"by the real {mod.__name__}._run_yosys_gates on a project carrying "
         f"{ys.name}: {missing}. Recorded: {sorted(dispatched)}"
+    )
+
+
+def test_probe_the_anchor_sees_both_seams():
+    """The SAME anchor must record a direct spawn AND a supervised one.
+
+    This is the falsification the ruling asks for in direction (c): move the
+    dispatch and the observation must still see it. Both seams are driven here
+    over the same real program, through the shipped code that each represents:
+
+      * DIRECT   — `subprocess.run(argv, ...)`, the shape the P0 umbrella used
+        before the timeout-as-verdict campaign and the shape `_run_yosys_gates`
+        still uses today;
+      * SUPERVISED — `_watchdog.run_host_supervised(argv)`, the shape the
+        umbrella uses now.
+
+    Neither is re-implemented: the supervised leg calls the shipped
+    `_watchdog`, so if its default `popen_factory` ever stops going through
+    `subprocess.Popen` this test says so on the day it happens rather than
+    letting ten cells fail with an unrelated-looking message.
+
+    It also PROVES the mechanism the whole repair rests on — that
+    `subprocess.run` resolves `Popen` as a module global — rather than citing
+    CPython's source for it.
+    """
+    victim = sorted(umbrella_gate_names())[0]
+    argv = [sys.executable, str(PROGRAMS_DIR / f"{victim}.py"), "--help"]
+
+    with _popen_recording(lambda stem: (0, f"{stem}: stubbed")) as rec:
+        direct = subprocess.run(argv, capture_output=True, text=True)
+    assert rec.program_stems == {victim}, (
+        f"the anchor did not record a DIRECT subprocess.run of {victim}: "
+        f"{sorted(rec.program_stems)}"
+    )
+    assert direct.returncode == 0 and "stubbed" in direct.stdout, (
+        f"the stub did not reach subprocess.run's own return value: "
+        f"rc={direct.returncode} stdout={direct.stdout!r}"
+    )
+
+    wd = importlib.import_module("_watchdog")
+    with _popen_recording(lambda stem: (0, f"{stem}: stubbed")) as rec2:
+        res = wd.run_host_supervised(argv, stall_grace_s=30.0)
+    assert rec2.program_stems == {victim}, (
+        f"the anchor did not record a WATCHDOG-SUPERVISED launch of {victim}: "
+        f"{sorted(rec2.program_stems)}. The supervised seam has moved off "
+        f"subprocess.Popen and this file is blind to it"
+    )
+    assert res.rc == 0 and "stubbed" in res.out, (
+        f"the stub did not reach the supervised result: rc={res.rc} "
+        f"out={res.out!r}"
+    )
+
+    # The two seams are DIFFERENT code paths and must agree, or the anchor is
+    # reporting one of them through a shape the other never takes.
+    assert direct.stdout.strip() == res.out.strip()
+
+
+def test_probe_an_in_process_gate_call_is_not_a_dispatch():
+    """Answer every gate IN-PROCESS, spawning nothing — D1 must go RED.
+
+    Direction (b) of the ruling, and the reason the repair is a repair rather
+    than a deletion. The mutation is the strongest form of the defect this
+    dimension exists to catch: the umbrella still reports that all of its
+    registered gates PASSED, but not one process was created. If the anchor
+    could be satisfied by the dispatch *being called*, this would stay green.
+
+    Both of today's seams are stopped, because stopping only one would leave
+    the other spawning and prove nothing.
+    """
+    mod = compliance_module()
+    wd = importlib.import_module("_watchdog")
+
+    class _InProcess:
+        """What a gate answered without a process. rc 0 = 'PASS'."""
+
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _no_spawn_run(argv, **_kw):
+        return _InProcess()
+
+    def _no_spawn_supervised(cmd, **_kw):
+        return wd.SupervisedResult(0, "", "", "natural", 0.0)
+
+    real_run = mod.subprocess.run
+    real_sup = wd.run_host_supervised
+    # A module-level `subprocess.run` rebinding is process-wide, so it is put
+    # back before any assertion can fail out from under it.
+    mod_sub = mod.subprocess
+    try:
+        mod_sub.run = _no_spawn_run
+        wd.run_host_supervised = _no_spawn_supervised
+        _drive_umbrella.cache_clear() if hasattr(_drive_umbrella, "cache_clear") else None
+        mutated = _drive_umbrella(lambda stem: (0, ""))
+    finally:
+        mod_sub.run = real_run
+        wd.run_host_supervised = real_sup
+
+    assert mutated.harness_error is None, mutated.harness_error
+    assert mutated.dispatched == (), (
+        f"the mutation spawned after all — {list(mutated.dispatched)[:5]} — so "
+        f"this leg is not driving the property it claims to"
+    )
+    # The umbrella happily certifies its verdict over checkers that never ran…
+    assert mutated.passed is not False, (
+        "the in-process mutation was rejected for an unrelated reason, so the "
+        "'PASS with no process' state this leg needs was never reached"
+    )
+    # …and THIS is the assertion the P0 cell makes. Driven with the mutation's
+    # numbers it must FAIL. Re-typing the cell's condition would only agree
+    # with itself, so the cell's own helper set is used.
+    owned = umbrella_registry_gate_names()
+    skipped_names = {s.split()[0] for s in mutated.skips if s.split()}
+    silent = sorted(g for g in owned
+                    if g not in mutated.dispatched and g not in skipped_names)
+    assert silent, (
+        "D1 stayed GREEN while the umbrella reported PASS having created no "
+        "process — the dimension would be indistinguishable from deleted"
+    )
+    assert len(mutated.dispatched) < MIN_UMBRELLA_DISPATCHES
+
+    # And the CLEAN denominator: the same assertion over the unmutated run must
+    # be satisfied, or the leg above is red for a reason of its own.
+    clean = umbrella_dispatch()
+    assert not sorted(
+        g for g in owned
+        if g not in clean.dispatched
+        and g not in {s.split()[0] for s in clean.skips if s.split()})
+
+
+def test_probe_no_spawn_primitive_bypasses_the_anchor():
+    """The anti-relocation canary.
+
+    `subprocess.Popen` is the anchor because it is the ONE process-creation
+    primitive the dispatch chain uses. That is a property of the code, not a
+    law, and it is the single assumption the repair rests on. If the compliance
+    module or `_watchdog` ever reaches a primitive that creates a process
+    WITHOUT constructing a `Popen`, every recorded set here silently loses
+    those launches — the exact failure mode this repair exists to end, one
+    layer down.
+
+    So it is checked structurally, by AST, on the shipped source.
+    """
+    bypass = {
+        "os": {"system", "popen", "fork", "forkpty", "execv", "execve",
+               "execvp", "execvpe", "execl", "execle", "execlp", "execlpe",
+               "spawnv", "spawnve", "spawnvp", "spawnvpe", "spawnl", "spawnle",
+               "spawnlp", "spawnlpe", "posix_spawn", "posix_spawnp"},
+        "pty": {"spawn", "fork"},
+        "multiprocessing": {"Process", "Pool"},
+    }
+    offenders: List[str] = []
+    for mod_name in (compliance_module().__name__, "_watchdog"):
+        src = (PROGRAMS_DIR / f"{mod_name}.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not isinstance(fn, ast.Attribute):
+                continue
+            owner = fn.value
+            if isinstance(owner, ast.Name) and fn.attr in bypass.get(
+                    owner.id, ()):
+                offenders.append(f"{mod_name}:{node.lineno} "
+                                 f"{owner.id}.{fn.attr}()")
+    assert not offenders, (
+        f"{len(offenders)} process-creation call(s) BYPASS subprocess.Popen, "
+        f"so the D1 spawn anchor no longer sees every dispatch: {offenders}. "
+        f"Either route them through subprocess, or move the anchor lower "
+        f"(and never widen an assertion to accommodate one)"
     )
 
 
