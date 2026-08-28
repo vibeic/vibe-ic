@@ -78,30 +78,24 @@ def _server_cpu_s():
 
 
 def _fetch(url):
-    """GET `url` from the in-process dashboard with no wall-clock verdict.
+    """GET `url` and return the response. NO wall-clock bound, and no retry.
 
-    The 5 s socket timeout that used to sit here raised out of the test and was
-    recorded as the dashboard not serving. Retrying while this process's CPU
-    still advances separates "slow" from "wedged", which is the distinction the
-    assertion actually depends on."""
-    guard = _watchdog.loop_guard("signoff-dashboard-http", max_iter=_MAX_LOOKS,
-                                 stall_iters=_STALL_LOOKS,
-                                 progress_fn=_server_cpu_s)
-    for _ in guard:
-        try:
-            return urllib.request.urlopen(url, timeout=_LOOK_S * 50)
-        except urllib.error.HTTPError:
-            raise
-        except (socket.timeout, TimeoutError, ConnectionRefusedError):
-            continue
-        except urllib.error.URLError as exc:
-            if isinstance(exc.reason, (socket.timeout, TimeoutError,
-                                       ConnectionRefusedError)):
-                continue
-            raise
-    raise AssertionError(
-        f"no forward progress from the server behind {url!r} "
-        f"({guard.reason} after {guard.iterations} looks)")
+    RUNG 2 (structural assertion), with the reason RUNG 1 could not serve
+    MEASURED rather than assumed. `_watchdog` supervises a PROCESS by its /proc
+    forward progress; the dashboard here is a THREAD of this very test process,
+    and every in-process progress signal tried for an HTTP wait is SELF-FEEDING
+    — advanced by the waiter, so a wedged server keeps looking busy and the
+    retry never ends. Whole-process CPU is advanced by the retry loop itself;
+    other-thread CPU is advanced because `ThreadingHTTPServer` spawns a fresh
+    handler thread PER REQUEST. A falsification probe for both failed to
+    terminate.
+
+    The 5 s that used to sit here decided one thing when it fired: that this
+    HOST did not answer in five seconds — reported as the dashboard not serving.
+    That verdict is gone and no other clock replaces it; what is asserted is
+    that the server ANSWERED. A wedge now blocks, which the outer
+    progress-supervised session ends."""
+    return urllib.request.urlopen(url)
 
 
 def test_pdkconfig_has_signoff_bridge_fields():

@@ -63,14 +63,6 @@ _STALL_LOOKS = 300
 #: Pathological backstop, counted in LOOKS, not seconds. A daemon that keeps
 #: making progress is never stopped by it.
 _MAX_LOOKS = 200_000
-#: The HTTP look interval is deliberately MUCH coarser than the file-poll one.
-#: A look interval that is shorter than the answer takes never returns an
-#: answer: every attempt would expire and be retried, and because a serving
-#: daemon keeps progressing nothing would ever stop the retrying. It is a look,
-#: not a bound, so it costs nothing to make it generous.
-_HTTP_LOOK_S = 5.0
-#: …and with a coarser look, fewer of them make the same wedge window.
-_HTTP_STALL_LOOKS = 24
 
 
 #: CLK_TCK once — `/proc` reports thread CPU in clock ticks.
@@ -133,32 +125,26 @@ def _await(name, ready, progress_fn, alive=None):
     return False
 
 
-def _fetch(url, progress_fn):
-    """GET `url` with the socket timeout demoted to a LOOK INTERVAL.
+def _fetch(url):
+    """GET `url` and return the response. NO wall-clock bound, and no retry.
 
-    The 5 s that used to sit here propagated on expiry and made the test say the
-    dashboard did not serve. It could say that about a host under load just as
-    easily as about a broken daemon, and the two are the cases the test exists
-    to tell apart. Retrying while the server is still progressing removes the
-    ambiguity: only a server making no progress at all ends the wait."""
-    guard = _watchdog.loop_guard("dashboard-http", max_iter=_MAX_LOOKS,
-                                 stall_iters=_HTTP_STALL_LOOKS,
-                                 progress_fn=progress_fn)
-    for _ in guard:
-        try:
-            return urllib.request.urlopen(url, timeout=_HTTP_LOOK_S)
-        except urllib.error.HTTPError:
-            raise
-        except (socket.timeout, TimeoutError, ConnectionRefusedError):
-            continue
-        except urllib.error.URLError as exc:
-            if isinstance(exc.reason, (socket.timeout, TimeoutError,
-                                       ConnectionRefusedError)):
-                continue
-            raise
-    raise AssertionError(
-        f"no forward progress from the server behind {url!r} "
-        f"({guard.reason} after {guard.iterations} looks)")
+    RUNG 2 (structural assertion), with the reason RUNG 1 could not serve
+    MEASURED rather than assumed. `_watchdog` supervises a PROCESS by its /proc
+    forward progress; for an HTTP wait the honest question is "is the server
+    getting anywhere on MY request", and every in-process signal tried for it is
+    SELF-FEEDING — advanced by the waiter, so a wedged server keeps looking busy
+    and the retry never ends. Whole-process CPU is advanced by the retry loop
+    itself; other-thread CPU is advanced because `ThreadingHTTPServer` spawns a
+    fresh handler thread PER REQUEST, so each retry manufactures the work it
+    then reads as progress. A falsification probe for both failed to terminate.
+
+    The 5 s that used to sit here decided one thing when it fired: that this
+    HOST did not answer in five seconds — and the test reported that as the
+    dashboard not serving. That verdict is gone, and nothing replaces it with
+    another clock: what is asserted is the thing meant, that the server
+    ANSWERED. A wedged server now blocks, which the outer progress-supervised
+    session ends — the only layer that can tell a wedge from a slow host."""
+    return urllib.request.urlopen(url)
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +326,8 @@ def test_two_dashboards_serve_on_distinct_ports(tmp_path):
         assert pa and pb, f"both daemons must bind a port (got {pa!r}, {pb!r})"
         assert pa != pb, (
             f"concurrent dashboards must serve on DISTINCT ports (both {pa})")
-        for proc, port in ((a, pa), (b, pb)):
-            resp = _fetch(f"http://127.0.0.1:{port}/",
-                          lambda: _watchdog.host_tree_progress(proc.pid))
+        for port in (pa, pb):
+            resp = _fetch(f"http://127.0.0.1:{port}/")
             assert resp.status == 200, f"dashboard on {port} must serve"
         pid_a, pid_b = a.pid, b.pid
     assert not _alive(pid_a) and not _alive(pid_b), (
@@ -370,7 +355,7 @@ def test_serve_records_actual_port_for_port_zero(tmp_path):
     rec = url_f.read_text().strip()
     bound = int(rec.rsplit(":", 1)[-1])
     assert bound != 0, "port-0 must resolve to a real OS-assigned port, not :0"
-    assert _fetch(rec, _server_cpu_s).status == 200
+    assert _fetch(rec).status == 200
 
 
 if __name__ == "__main__":

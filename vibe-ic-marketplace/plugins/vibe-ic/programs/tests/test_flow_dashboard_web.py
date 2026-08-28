@@ -17,118 +17,44 @@ is unavailable, so the suite stays hermetic and quick.
 from __future__ import annotations
 
 import json
-import os
 import re
-import socket
 import sys
 import threading
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-import _watchdog
 import flow_dashboard_web as fdw
-
-#: How often the fetch below LOOKS, not how long it is allowed to take. The
-#: distinction is the whole point: a socket timeout that PROPAGATES decides one
-#: thing when it fires — that this host did not answer inside the guess — and
-#: the test then records `flow_dashboard_web` as broken. Five seconds is not a
-#: property of the dashboard.
-_LOOK_S = 5.0
-#: Consecutive looks across which this process's CPU may fail to advance at all
-#: before the server is called hung. The server runs in a thread of THIS
-#: process, so process CPU advancing is a true "it is working" signal and a flat
-#: reading across two minutes is a wedge, not a slow machine.
-_STALL_LOOKS = 24
-#: Pathological backstop only, counted in LOOKS. A server that keeps answering
-#: slowly is never stopped by it.
-_MAX_LOOKS = 4320
-
-
-#: CLK_TCK once — `/proc` reports thread CPU in clock ticks.
-_TICK = float(os.sysconf("SC_CLK_TCK") or 100)
-
-
-def _server_cpu_s():
-    """CPU seconds burned by every thread of this process EXCEPT this one.
-
-    THE WAITER CANNOT BE ITS OWN PROGRESS SIGNAL. The first version of this used
-    `sum(os.times()[:2])` — whole-process CPU — and that is wrong in the one
-    direction that matters: the retry loop asking "is the server done yet?" also
-    burns CPU, so the counter advances on the WAITER's account and a completely
-    wedged server keeps looking busy. The stall could then never fire and the
-    wait would run to its iteration cap — a hang introduced while removing a
-    false verdict. MEASURED: the falsification probe for this shape did not
-    terminate until the signal was narrowed to the lines below.
-
-    Excluding the calling thread leaves exactly the server's own work —
-    `serve_forever` plus the per-request thread `ThreadingHTTPServer` spawns.
-    Returns None when nothing is readable, which `ProgressMeter` carries forward
-    rather than mistaking for a reset."""
-    me = str(threading.get_native_id())
-    total = 0.0
-    seen = False
-    try:
-        tids = os.listdir("/proc/self/task")
-    except OSError:
-        return None
-    for tid in tids:
-        if tid == me:
-            continue
-        try:
-            with open(f"/proc/self/task/{tid}/stat", "rb") as fh:
-                fields = fh.read().rsplit(b")", 1)[1].split()
-            total += (int(fields[11]) + int(fields[12])) / _TICK
-            seen = True
-        except (OSError, IndexError, ValueError):
-            continue
-    return total if seen else None
 
 
 def _fetch(url):
-    """GET `url` from the in-process test server with NO wall-clock verdict.
+    """GET `url` and return the response. NO wall-clock bound, and no retry.
 
-    Every call site here used to pass `timeout=5` straight to `urlopen`, where
-    expiry raises out of the test and is recorded as the dashboard failing. That
-    is the manufactured verdict this campaign removes: five seconds measures the
-    host, and a busy host is not a broken handler.
+    RUNG 2 (structural assertion), and the reason RUNG 1 could not serve is
+    measured rather than assumed. `_watchdog.run_supervised` supervises a
+    PROCESS; the server here is a thread inside this very test process, so there
+    is nothing to hand it. Two in-process progress signals were tried and both
+    are SELF-FEEDING — they are advanced by the waiter, so a wedged server keeps
+    looking busy and the retry loop never ends:
 
-    So the socket timeout is demoted to a LOOK INTERVAL — when it expires the
-    request is simply retried — and the only thing that stops the retrying is
-    the absence of forward progress, read the way `_watchdog` reads it for a
-    sub-process: `loop_guard` holds the bounded, no-progress-aware loop and the
-    progress signal is this process's own CPU (`os.times()`), which the serving
-    thread advances while it works. A handler that is merely slow now always
-    completes; one that is wedged still stops the test, and stops it saying
-    'no forward progress', not 'the dashboard answered wrongly'.
+      * whole-process CPU (`os.times()`): the retry loop's own work advances it;
+      * CPU of every OTHER thread: `ThreadingHTTPServer` spawns a fresh handler
+        thread PER REQUEST, so each retry creates the very work it then reads as
+        the server progressing.
 
-    HTTP errors are NOT retried: `HTTPError` is a real answer from the server
-    and several tests here assert on one, so it propagates on the first look."""
-    guard = _watchdog.loop_guard(
-        "flow-dashboard-fetch", max_iter=_MAX_LOOKS,
-        stall_iters=_STALL_LOOKS,
-        progress_fn=_server_cpu_s)
-    for _ in guard:
-        try:
-            return urllib.request.urlopen(url, timeout=_LOOK_S)
-        except urllib.error.HTTPError:
-            raise
-        except (socket.timeout, TimeoutError):
-            continue
-        except urllib.error.URLError as exc:
-            if isinstance(exc.reason, (socket.timeout, TimeoutError)):
-                continue
-            raise
-    raise AssertionError(
-        f"the in-process dashboard server made no forward progress on {url!r} "
-        f"({guard.reason} after {guard.iterations} looks) — this is a hang, "
-        "not a slow answer, and it is deliberately not reported as a content "
-        "verdict")
+    Both were caught by a falsification probe that failed to terminate — which
+    is the point of running one. A hang introduced while removing a false
+    verdict is not an improvement.
+
+    So the wall clock is simply gone and what is asserted is the thing actually
+    meant: the server ANSWERED, and with what. A wedged handler now blocks
+    instead of returning a wrong verdict about the dashboard, and the outer
+    progress-supervised session is what ends a genuinely wedged run — which is
+    where a hang belongs, since it is the only place that can tell one from a
+    slow host."""
+    return urllib.request.urlopen(url)
 
 
-# ---------------------------------------------------------------------------
-# build_page(): self-contained + required hooks
-# ---------------------------------------------------------------------------
 def test_build_page_has_required_hooks():
     html = fdw.build_page()
     assert isinstance(html, str)
