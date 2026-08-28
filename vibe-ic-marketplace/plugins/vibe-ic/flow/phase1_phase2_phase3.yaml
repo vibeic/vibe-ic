@@ -2221,7 +2221,7 @@ steps:
       all_of:
         - files_exist: ["phase2/stage2/synth/netlist.v"]
         - program_exit_zero: "synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json reports/phase2/synth_netlist.json"
-        - program_exit_zero: "provenance_check . --output phase2/stage2/synth/netlist.v --tool yosys,yosys-abc"
+        - program_exit_zero: "provenance_check . --output phase2/stage2/synth/netlist.v --tool yosys,yosys-abc --require-measured"
         # THE AREA FIGURE WAS NEVER COMPARED TO ANYTHING. The clauses above
         # establish that the netlist is a real synthesis product and that yosys
         # produced it; none of them reads the AREA the same invocation reported.
@@ -3967,7 +3967,7 @@ steps:
         - program_exit_zero: "def_stage_progression_check . --json reports/phase3/pnr/def_progression.json"
         # Provenance required: routed.def must appear as a logged
         # openroad output (wrap OpenROAD invocation with provenance_logger).
-        - program_exit_zero: "provenance_check . --output phase3/stage3/pnr/routed.def --tool openroad"
+        - program_exit_zero: "provenance_check . --output phase3/stage3/pnr/routed.def --tool openroad --require-measured"
         # vibe-ic#306/#297 — ADVISORY. This gate DISCLOSES a routability-for-
         # clock-quality trade (GRT-0273: clock NDR quietly dropped to let
         # routing close). It declares itself advisory, so before the advisory
@@ -4027,7 +4027,7 @@ steps:
         - files_exist: ["phase3/stage3/extracted/*.spef"]
           any_of: true
         - program_exit_zero: "spef_extraction_check . --json reports/phase2/gates/spef_extraction.json"
-        - program_exit_zero: "provenance_check . --output phase3/stage3/extracted/*.spef --tool magic,openroad"
+        - program_exit_zero: "provenance_check . --output phase3/stage3/extracted/*.spef --tool magic,openroad --require-measured"
     blocks_on: [21]
     notes: |
       Coupling tiers (increasing accuracy, all DISCLOSED, none foundry-calibrated):
@@ -5395,8 +5395,8 @@ steps:
         # runner's own HIGHEST authority tier (svrfdrc > klayout > openroad,
         # `_signoff_drc_tool`) and, once attribution is honest, it is the tier
         # that would otherwise go red.
-        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,svrfdrc"
-        - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic,klayout"
+        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,svrfdrc --require-measured"
+        - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic,klayout --require-measured"
         # Step-31 ERC + sign-off density substance (replaces the dangling
         # density_check that referenced a non-existent program). This is a
         # DIFFERENT check from metal_fill_density_check (Step 34): the flow's
@@ -6351,7 +6351,7 @@ steps:
         # do. The space-separated form would be pre-expanded with nullglob
         # semantics: zero matches drops the argument entirely and argparse
         # then exits 2, which this runner reads as VACUOUS_PASS.
-        - program_exit_zero: "provenance_check . --output=phase3/stage4/gds/*.gds --tool=klayout,magic,openroad"
+        - program_exit_zero: "provenance_check . --output=phase3/stage4/gds/*.gds --tool=klayout,magic,openroad --require-measured"
         # TWO ORPHANED FINAL-STAGE GATES, RE-HOMED (2026-08-25). Step 37 is
         # where a design claims it is done, which is the only place these two
         # questions can be asked: does the stage evidence actually exist, and

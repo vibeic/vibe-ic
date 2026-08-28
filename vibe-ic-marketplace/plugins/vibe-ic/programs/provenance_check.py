@@ -11,6 +11,37 @@ Pairs with provenance_logger.py. A flow gate asks:
 
 If yes → PASS. If no (no entry, wrong tool, hash mismatch, no file) → FAIL.
 
+``--require-measured`` adds the question this check could never ask
+-------------------------------------------------------------------
+Everything above binds an ARTEFACT to a RUN. It has never asked whether that
+run did any work, and MEASURED 2026-08-27 that is the gap a false sign-off
+walks through: ``openroad`` executing the STA script exactly as ``eda_sta``
+emitted it read no technology, linked no design, failed every report — and
+**exited 0**. Every condition (a)–(d) above is satisfied by that run. The tool
+named itself, the exit code was 0, the artefact hashed, and nothing measured
+anything.
+
+With ``--require-measured`` the bound entry must also carry the tool's own
+``measurement`` record (see ``_mcp_measurement``), and there are THREE
+outcomes, not two:
+
+* ``measured: true``  → PASS, as before.
+* ``measured: false`` with a hard class → **FAIL**, naming the class and the
+  tool's own reason. This is the vacuous run, refused.
+* **no record at all** → ``UNMEASURED``: the program prints an ``INCOMPLETE:``
+  line and exits **0**. It is not a pass — ``flow_compliance_check`` reads that
+  token and dispositions the step in the ``INCOMPLETE`` tier, which is counted
+  and rendered separately from PASS and never counted into ``pass_count`` — and
+  it is not a failure either, because treating "nobody stated this" as "the
+  tool failed" converts an unmeasured thing into a bad result, which is the
+  same lie pointing the other way. Every run predating this contract, and every
+  artefact produced by a hand-run tool, lands here honestly.
+
+``measured: false`` with the benign class ``NOTHING_TO_MEASURE`` PASSES: the
+tool ran and there was legitimately nothing to judge. A gate that refuses that
+refuses every design it applies to, and a gate that refuses everything gets
+bypassed — which is a deleted gate.
+
 Usage
 -----
     provenance_check.py <project_dir> \\
@@ -37,6 +68,9 @@ import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _mcp_measurement  # noqa: E402
 
 
 def _sha256_file(path: Path) -> str:
@@ -149,6 +183,12 @@ def main(argv: List[str] | None = None) -> int:
                         "--output at the same position.")
     p.add_argument("--require-entries", type=int, default=0,
                    help="Shortcut: pass if log has >= N exit-0 entries")
+    p.add_argument("--require-measured", action="store_true",
+                   help="Also require the bound run to carry positive evidence "
+                        "it performed its work (the tool's own `measurement` "
+                        "record). measured:false with a hard class FAILs; an "
+                        "absent record is UNMEASURED — reported as INCOMPLETE "
+                        "at rc 0, which is not a PASS and not a FAIL.")
     p.add_argument("--json", help="Write JSON report to this path")
     args = p.parse_args(argv)
 
@@ -189,6 +229,9 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     overall_ok = True
+    #: Artefacts whose bound run states nothing about whether it measured. They
+    #: do not fail the gate and they do not pass it either.
+    unmeasured: List[str] = []
 
     for out_rel_pattern, tools_csv in zip(args.output, args.tool):
         allowed = {t.strip() for t in tools_csv.split(",") if t.strip()}
@@ -266,6 +309,43 @@ def main(argv: List[str] | None = None) -> int:
                 overall_ok = False
                 continue
 
+            # ── THE MEASUREMENT QUESTION, asked where the binding is
+            # decided. By here the artefact IS bound to an exit-0 run by this
+            # tool; the only thing still unasked is whether that run did any
+            # work.
+            if args.require_measured:
+                meas = _mcp_measurement.from_provenance_entry(entry)
+                check["measurement"] = {
+                    "declared": meas.declared,
+                    "measured": meas.measured,
+                    "not_measured_class": meas.reason_class,
+                    "not_measured_reason": meas.reason,
+                }
+                if meas.hard_miss:
+                    check["status"] = "FAIL"
+                    check["reasons"].append(
+                        f"the run bound to this artefact states it measured "
+                        f"NOTHING [{meas.reason_class}]: {meas.reason} — the "
+                        f"artefact exists and the tool exited 0, and neither "
+                        f"is evidence the work was done")
+                    report["checks"].append(check)
+                    overall_ok = False
+                    continue
+                if meas.undeclared:
+                    # NOT a failure and NOT a pass. See the module docstring.
+                    check["status"] = "UNMEASURED"
+                    check["reasons"].append(
+                        f"the run bound to this artefact declares no "
+                        f"measurement record, so whether {entry.get('tool')} "
+                        f"performed its work is not stated anywhere — "
+                        f"unmeasured, which is neither measured nor failed")
+                    check["tool"] = entry.get("tool")
+                    check["timestamp"] = entry.get("timestamp")
+                    check["version"] = entry.get("version")
+                    report["checks"].append(check)
+                    unmeasured.append(out_rel)
+                    continue
+
             check["status"] = "PASS"
             check["tool"] = entry.get("tool")
             check["timestamp"] = entry.get("timestamp")
@@ -273,13 +353,17 @@ def main(argv: List[str] | None = None) -> int:
             report["checks"].append(check)
 
     report["ok"] = overall_ok
+    report["unmeasured"] = unmeasured
 
     # Print summary
     print(f"\n=== provenance_check ({project.name}) ===")
     print(f"  log entries: {len(entries)}")
     for c in report["checks"]:
-        icon = "✓" if c["status"] == "PASS" else "✗"
-        print(f"  {icon} [{c['status']:<4}] {c['output']}")
+        # Three icons for three states. UNMEASURED wearing the failure mark
+        # would put a thing nobody measured in the same column as a thing that
+        # was measured and was wrong.
+        icon = {"PASS": "✓", "UNMEASURED": "…"}.get(c["status"], "✗")
+        print(f"  {icon} [{c['status']:<10}] {c['output']}")
         if c["status"] == "PASS":
             print(f"         via {c.get('tool')} @ {c.get('timestamp')}")
         else:
@@ -287,6 +371,28 @@ def main(argv: List[str] | None = None) -> int:
                 print(f"         - {r}")
 
     print(f"\nOverall: {'PASS' if overall_ok else 'FAIL'}")
+
+    # THE DISCLOSURE THAT KEEPS AN UNMEASURED STEP OUT OF THE PASS COLUMN.
+    # `flow_compliance_check._stdout_signals_token` reads a line beginning
+    # `INCOMPLETE:` off a passing gate and dispositions the whole step into the
+    # INCOMPLETE tier — counted and rendered separately, never added to
+    # `pass_count`, and never a failure. That tier is exactly what "the tool
+    # never said whether it did the work" means, so this prints it rather than
+    # inventing a fourth vocabulary for the same fact.
+    if overall_ok and unmeasured:
+        # DETAIL FIRST, SENTINEL LAST, AND THE SENTINEL SHORT. The consumer
+        # (`flow_compliance_check.output_snippet`) keeps only the LAST 300
+        # characters of stdout and then requires the token to START A LINE, so
+        # a single long line carrying both would lose the token to the tail cut
+        # -- the disclosure would exist and be unreadable, which is the
+        # "disclosure a path length can delete" failure this repo has already
+        # measured once. The names go on their own line above; the sentinel
+        # line is kept short enough to survive on its own.
+        print(f"  unmeasured artefacts: {', '.join(unmeasured[:5])}"
+              + (f" (+{len(unmeasured) - 5} more)" if len(unmeasured) > 5 else ""))
+        print(f"INCOMPLETE: {len(unmeasured)} of {len(report['checks'])} "
+              f"artefact(s) are bound to a run that declares no measurement "
+              f"record; whether the tool performed its work was NOT examined.")
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)

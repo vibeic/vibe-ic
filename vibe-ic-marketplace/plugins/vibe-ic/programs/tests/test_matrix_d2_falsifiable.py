@@ -2094,8 +2094,13 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "reports/phase2/gates/yosys_hilomap.json"): "SYNTH_BAD",
     ("14", "yosys_script_template_check . --json "
            "reports/phase2/gates/yosys_script_template.json"): "SYNTH_BAD",
+    # The command string is the KEY, so it moves with the flow declaration.
+    # `--require-measured` (2026-08-27) makes this clause additionally ask
+    # whether the run bound to the SPEF carried positive evidence it measured
+    # anything; `PNR_BAD` still reddens it for the reason it always did — the
+    # artefact is not there to bind.
     ("22", "provenance_check . --output phase3/stage3/extracted/*.spef "
-           "--tool magic,openroad"): "PNR_BAD",
+           "--tool magic,openroad --require-measured"): "PNR_BAD",
     ("24", "dynamic_ir_drop_check reports/phase3/dynamic_ir.json "
            "--budget-pct 10"): "HOLLOW_REPORTS",
     ("37", "gds_size_check --gds-file phase3/stage4/gds/*.gds --json "

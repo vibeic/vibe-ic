@@ -68,6 +68,12 @@ class AuditResult:
     passed: bool
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
+    #: What this audit says about ITSELF, when "passed / did not pass" is not
+    #: the whole truth. Emitted as a top-level `verdict` key ONLY when set, so
+    #: no existing report gains a field. `flow_compliance_check.
+    #: _json_report_signals_vacuous` already reads exactly this key off a
+    #: gate's own --json report; this is the producer side of that reader.
+    verdict: str = ""
 
 
 # v0.119.21: tool-unavailable-for-PDK waiver. Custom open-source PDKs
@@ -886,12 +892,22 @@ def _check_tool_authenticity(files: List[Path], mode: str,
     tool_written_present = any(
         fp.suffix not in _RUNNER_WRITTEN_SUFFIXES and fp.is_file()
         for fp in files)
+    import _mcp_measurement as _meas
     for fp in files:
         try:
             size = fp.stat().st_size
             text = fp.read_text(errors="replace")
         except OSError:
             continue
+        # A `# MCP_MEASUREMENT:` stamp is metadata ABOUT this report, not part
+        # of it. Both screens below are measured on what the TOOL wrote, so a
+        # report cannot buy its way past a size floor or a signature match by
+        # carrying a stamp that names the tool. MEASURED: without this, a
+        # stamped 873 B link-failure report cleared the 1024 B floor and
+        # matched the signature list, and two checks that had correctly refused
+        # it began passing it.
+        text, _stamp_bytes = _meas.strip_stamp(text)
+        size -= _stamp_bytes
         # Waive the byte-size floor when the report carries a strong,
         # multi-marker tool signature (a real-but-compact small-design
         # report). The tool-signature requirement below still gates.
@@ -2264,6 +2280,21 @@ def _signoff_basis_corners_elsewhere(project_dir: Path, declared_basis: str) -> 
 
 def _check_sta(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:sta", passed=False)
+    # THE DECISION POINT FOR THE TOOL-MEASUREMENT CONTRACT (STA half).
+    #
+    # Everything below this line used to decide the timing verdict from the
+    # SHAPE OF THE BYTES alone, and MEASURED 2026-08-27 that is not enough:
+    # a netlist with no `clk` port produced `[WARNING STA-0366] port 'clk' not
+    # found`, a source-less clock, and `wns max 0.00` -- and this function set
+    # `any_verdict_determined=True, real_violation_found=False`, i.e. accepted
+    # a fabricated perfect score as a met timing verdict. Nothing in the bytes
+    # distinguishes it from a genuinely clean run, because nothing in the bytes
+    # CAN: the missing fact is one only the tool knows.
+    #
+    # The tool now states it, on the report's own first line, and this is where
+    # that statement is read -- at the point where the verdict is decided, not
+    # beside it.
+    import _mcp_measurement as _meas
     declared_basis = _scope_declared_basis(project_dir)
     # The `*sta*` glob substring-matches unrelated report classes whose names
     # merely CONTAIN "sta" — most notably "cro**sta**lk" (si_crosstalk.rpt).
@@ -2347,6 +2378,15 @@ def _check_sta(project_dir: Path) -> AuditResult:
     # an ERROR, and `readable_files` is published beside `files_found` so the
     # two can never again be read as the same number.
     unreadable: List[str] = []
+    #: Reports whose own producer states it measured no timing. Split by the
+    #: only distinction that matters here: a run that COULD NOT measure (its
+    #: numbers would be fabricated) versus one that ran and had NOTHING to
+    #: measure (a purely combinational block has no timing paths, and never
+    #: did). Collapsing these is wrong in both directions -- refuse the second
+    #: and the gate refuses every combinational design until somebody bypasses
+    #: it, which is a deleted gate; accept the first and this is unchanged.
+    not_measured_hard: List[tuple] = []      # (path, class, reason)
+    not_measured_benign: List[tuple] = []    # (path, reason)
 
     for fp in files:
         try:
@@ -2354,6 +2394,16 @@ def _check_sta(project_dir: Path) -> AuditResult:
         except OSError as exc:
             unreadable.append(f"{fp} ({exc.__class__.__name__})")
             continue
+        # UNDECLARED is its own state and changes nothing: a report with no
+        # stamp is judged exactly as it was before this contract existed. It
+        # is NOT read as measured:false -- that would convert every report the
+        # runner wrote (and every published one) into a fabrication claim,
+        # which is a different lie in the opposite direction.
+        _m = _meas.from_text(text, f"stamp:{fp}")
+        if _m.hard_miss:
+            not_measured_hard.append((str(fp), _m.reason_class, _m.reason))
+        elif _m.nothing_to_measure:
+            not_measured_benign.append((str(fp), _m.reason))
         if declared_basis is not None:
             stamped = _report_declared_basis(text)
             why = ""
@@ -2377,6 +2427,38 @@ def _check_sta(project_dir: Path) -> AuditResult:
         if not best_file:
             best_file = str(fp)
 
+        # A report whose producer says it measured nothing does not get a
+        # vote on whether a verdict was determined. The 0.00 is still IN the
+        # file (it is what the tool printed) and is still shown, it simply no
+        # longer counts as evidence that timing was analysed.
+        #
+        # BUT A SELF-REPORT MUST NOT BE ABLE TO ERASE EVIDENCE IN ITS OWN FILE.
+        # Skipping the loop body outright would mean a `NOTHING_TO_MEASURE`
+        # stamp sitting on top of a report full of `slack (VIOLATED)` lines
+        # deleted every one of them — the producer's word outvoting the
+        # producer's own output, which is the shape of every defect this
+        # contract exists to close, rebuilt one layer up. A stamp can decline
+        # to ADD a verdict; it can never subtract one that is written down.
+        if _m.declared and _m.measured is False:
+            _slacks = _sta_slack.extract_slacks(text)
+            _vals = [v for v in _slacks.values() if v is not None]
+            if violated_re.search(text) or any(v < 0 for v in _vals):
+                real_violation_found = True
+                any_verdict_determined = True
+                if not violation_evidence:
+                    violation_evidence = str(fp)
+                result.findings.append(Finding(
+                    rule="STA_STAMP_CONTRADICTED_BY_ITS_OWN_REPORT",
+                    severity="ERROR",
+                    message=(f"the producer stamped this report "
+                             f"[{_m.reason_class}] — it states no timing was "
+                             f"measured — while the report itself contains a "
+                             f"real violation (a VIOLATED path entry or a "
+                             f"negative slack). A tool's statement about a run "
+                             f"cannot delete the run's own output"),
+                    file=str(fp)))
+            continue
+
         if has_pathtable:
             any_verdict_determined = True
             if violated_re.search(text):
@@ -2395,17 +2477,55 @@ def _check_sta(project_dir: Path) -> AuditResult:
                 if not violation_evidence:
                     violation_evidence = str(fp)
 
-    if not has_wns_tns:
+    #: True when EVERY report examined honestly reported nothing to measure and
+    #: none reported a hard miss: the step ran and had nothing to judge.
+    #: Computed BEFORE the shape findings because those findings ask a question
+    #: that has no answer in this case -- a design with no timing paths has no
+    #: WNS line and no setup/hold section, and saying so three times over is
+    #: accusing a report of being a stub when its producer has stated in
+    #: writing why there is no number in it.
+    #: `any_verdict_determined` is in this conjunction for the contradiction
+    #: case above: a stamped-benign report that nevertheless carries a real
+    #: violation sets it, and must not then be dispositioned as vacuous.
+    nothing_to_judge = (bool(not_measured_benign) and not not_measured_hard
+                        and not any_verdict_determined)
+    if not has_wns_tns and not nothing_to_judge:
         result.findings.append(Finding(
             rule="STA_WNS_TNS", severity="ERROR",
             message="No WNS/TNS slack values found in STA report",
             file=best_file))
-    if not has_setup_hold:
+    if not has_setup_hold and not nothing_to_judge:
         result.findings.append(Finding(
             rule="STA_SETUP_HOLD", severity="ERROR",
             message="No setup/hold analysis found in STA report",
             file=best_file))
-    if not any_verdict_determined:
+    # THE REFUSAL, naming what was missing. This is the case the contract
+    # exists for: the tool ran, produced a report of exactly the right shape,
+    # and states in that report that it measured no timing.
+    for _f, _cls, _why in not_measured_hard:
+        result.findings.append(Finding(
+            rule="STA_TOOL_REPORTS_NOT_MEASURED", severity="ERROR",
+            message=(f"the tool that produced this report states it measured "
+                     f"NO timing [{_cls}]: {_why} — a sign-off verdict read "
+                     f"off this run would be fabricated, and the numbers it "
+                     f"contains are not evidence that timing was analysed"),
+            file=_f))
+    # THE HONEST THIRD STATE. Not a pass (nothing was measured), not a failure
+    # (there was nothing to measure). Disclosed, and the step is marked vacuous
+    # rather than wearing a timing sign-off it never performed.
+    for _f, _why in not_measured_benign:
+        result.findings.append(Finding(
+            rule="STA_NOTHING_TO_MEASURE", severity="INFO",
+            message=(f"the tool that produced this report states there was "
+                     f"nothing to measure: {_why} — this is not a defect, and "
+                     f"it is not a timing sign-off either"),
+            file=_f))
+    if nothing_to_judge:
+        # `STA_VALUE_UNDETERMINED` would be the WRONG finding here — it accuses
+        # the report of resting on shape alone, when its producer has stated in
+        # writing why there is no number. Say the true thing instead.
+        result.verdict = "VACUOUS_PASS"
+    elif not any_verdict_determined:
         result.findings.append(Finding(
             rule="STA_VALUE_UNDETERMINED", severity="ERROR",
             message=("no discovered STA report yielded a determinable real "
@@ -2577,10 +2697,25 @@ def _check_sta(project_dir: Path) -> AuditResult:
     # `not basis_offenders` is part of the verdict, not a note beside it: a
     # gate that emits an ERROR finding and still returns rc 0 is the "reported
     # another question" failure one layer up.
-    result.passed = (own_design and has_wns_tns and has_setup_hold and authentic and corners_ok
-                      and any_verdict_determined and not real_violation_found
+    result.passed = (own_design and (has_wns_tns or nothing_to_judge)
+                      and (has_setup_hold or nothing_to_judge)
+                      and authentic and corners_ok
+                      and (any_verdict_determined or nothing_to_judge)
+                      and not real_violation_found
+                      and not not_measured_hard
                       and not basis_offenders and not unreadable)
     result.summary = {"files_found": len(files),
+                      # The third value, published beside the verdict rather
+                      # than folded into it. `sta_not_measured_hard` is why a
+                      # refusal happened; `sta_nothing_to_measure` is why a
+                      # design with no clock is honestly green without a
+                      # fabricated 0.00 anywhere in the record.
+                      "sta_not_measured_hard": [
+                          {"file": f, "class": c, "reason": r}
+                          for f, c, r in not_measured_hard],
+                      "sta_nothing_to_measure": [
+                          {"file": f, "reason": r}
+                          for f, r in not_measured_benign],
                       "design_binding": design_binding,
                       # `files_found` counts DISCOVERED PATHS; this counts the
                       # ones that yielded bytes. They were the same number by
@@ -2876,6 +3011,10 @@ def main(argv: list = None) -> int:
                              f"missing report.")))
 
     report = asdict(result)
+    # Only when the audit actually declared one — an always-present empty key
+    # would be a field that says nothing on every report ever written.
+    if not report.get("verdict"):
+        report.pop("verdict", None)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:
