@@ -16,7 +16,7 @@ VACUOUS_PASS — a PASS tier. Returning "undetermined" as rc 2 from this program
 would have turned a killed burn into a passing gate. rc 2 carries two different
 meanings across this flow and only one of them is UNDETERMINED.
 
-So the bound is now a STALL GRACE under `_watchdog.run_supervised`: "how long
+So the bound is now a STALL GRACE under `_watchdog.run_host_supervised`: "how long
 may this be silent AND idle", not "how long may this take". Any output or CPU
 resets it.
 
@@ -109,9 +109,12 @@ def test_a_wedged_tool_is_still_an_error(tmp_path):
     """THE HALF THAT MUST NOT MOVE. Silent AND idle for the whole grace, with
     the process still alive: that is a wedged tool, and it still stops this
     gate. A guard that stopped refusing would be a deletion."""
-    # 600 s of nothing against a 1 s grace floored at the measured launch
-    # cost. The wait is the FLOOR, not the sleep: a wedged tool is detected in
-    # seconds, not in ten minutes.
+    # 600 s of nothing against a 1 s grace, honoured as given: the wait is the
+    # GRACE, not the sleep, so a wedged tool is detected in about a second and
+    # not in ten minutes. (An earlier draft floored the grace at a measured
+    # launch cost; that floor was the v1.12.22 defect re-derived and is gone —
+    # `run_host_supervised` polls at a quarter of the grace, so a small grace
+    # is still observed several times.)
     body = "import time\ntime.sleep(600)\n"
     with pytest.raises(T.Stalled) as caught:
         T.run_cmd(_script(tmp_path, body), 1)

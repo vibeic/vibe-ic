@@ -50,12 +50,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shlex
-import subprocess
 import sys
-import time
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Optional
@@ -141,46 +138,32 @@ def run_cmd(cmd_str: str, timeout: int) -> tuple[int, str, str]:
     process burning CPU resets it, so a job that is doing something is never
     killed; a job doing nothing at all for the grace raises `Stalled`.
 
-    The grace is floored at the measured cost of launching a process on THIS
-    host, scaled: a grace under the boot cost is how a supervisor kills its
-    child during startup, and a config written for the old meaning could carry
-    a very small number.
+    THE CALLER'S NUMBER IS HONOURED AS GIVEN — no floor is imposed on it. An
+    earlier draft of this function floored the grace at a measured process
+    launch cost, on the theory that a grace under the boot cost kills the child
+    during startup. That is the same defect v1.12.22 removed from
+    `design_one_shot_runner._run`: a floor silently overrides a caller that
+    declared a short bound and meant it, and the reason it is not needed is
+    that `run_host_supervised` DERIVES the poll cadence as a quarter of the
+    grace, so the job is looked at several times over whatever grace it was
+    given. Startup is also not silent to the probe — the interpreter burns CPU
+    before it prints anything, and the CPU reading is what keeps it alive.
+
+    `run_host_supervised` rather than a hand-rolled `run_supervised`: it is the
+    canonical host primitive and already injects the whole-process-TREE /proc
+    reading. The bespoke probe this replaced read only the direct child, so a
+    burn tool that forks its real work was invisible to it.
     """
     tokens = shlex.split(cmd_str)
     if not tokens:
         raise ValueError("empty command")
-    res = _watchdog.run_supervised(
-        tokens,
-        stall_grace_s=max(float(timeout), _stall_grace_floor_s()),
-        poll_s=1.0,
-        cpu_probe=_cpu_seconds,
-    )
+    res = _watchdog.run_host_supervised(tokens, stall_grace_s=float(timeout))
     if res.outcome in ("stalled", "ceiling"):
         raise Stalled(
             f"`{cmd_str}` produced no output and used no CPU for "
             f"{res.elapsed_s:.0f}s and was stopped. It was not slow — it was "
             f"doing nothing.")
     return res.rc, res.out or "", res.err or ""
-
-
-def _cpu_seconds(proc) -> Optional[float]:
-    """utime+stime of the job, from /proc. A burn tool that is computing but
-    silent is PROGRESSING, and without this probe its silence alone would be
-    read as a stall. Returns None where /proc is unavailable, which the meter
-    treats as "no reading" and never as "no progress"."""
-    try:
-        with open(f"/proc/{proc.pid}/stat", "rb") as fh:
-            fields = fh.read().rsplit(b")", 1)[1].split()
-        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
-    except Exception:      # nosec — a probe error is "no reading"
-        return None
-
-
-def _stall_grace_floor_s() -> float:
-    """Measured here, in this session, on this host. See `run_cmd`."""
-    t0 = time.monotonic()
-    subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
-    return max(10.0, (time.monotonic() - t0) * 100.0)
 
 
 def check_oracle(config: dict, dry_run: bool = False) -> tuple[List[Finding], dict]:
