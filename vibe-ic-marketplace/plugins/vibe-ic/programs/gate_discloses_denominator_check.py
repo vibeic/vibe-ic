@@ -663,11 +663,21 @@ def audit_ci(repo_root: Path, timeout: int = 120,
         with tempfile.TemporaryDirectory() as gd:
             scratch = _scratch_repo(Path(gd))
             argv = _expand(cmd, repo_root, scratch)
+            # The abort predicate is only READ once per poll, so the poll
+            # cadence has to be able to notice the budget. Left at the cadence
+            # derived from the (large) stall grace, a 3 s aggregate budget was
+            # acted on 30 s late — measured. This is an observation cadence,
+            # never a runtime bound: sampling more often can only make the
+            # supervisor NOTICE sooner, never kill a working job.
+            kw = {}
+            if deadline is not None:
+                kw["poll_s"] = max(0.25, min(float(timeout) / 4.0,
+                                             float(budget) / 4.0))
             try:
                 r = _wd.run_host_supervised(
                     argv, cwd=str(scratch), stall_grace_s=float(timeout),
                     abort_probe=(_budget_spent if deadline is not None
-                                 else None))
+                                 else None), **kw)
             except (OSError, subprocess.SubprocessError) as exc:
                 return ("unrunnable", label, str(exc))
             if r.outcome == "launch_error":

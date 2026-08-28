@@ -742,9 +742,49 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800
 
     Note this bounds the docker CLIENT, as the previous form did; the reap of
     an orphaned in-container tool is `_docker_watchdog`'s job and is not
-    changed here."""
+    changed here.
+
+    A CPU probe is not optional here the way it can be elsewhere: every caller
+    of this function redirects OpenSTA's own output to a report file INSIDE
+    the container (`> {rpt_c} 2>&1`) and reads the file after exit, so the
+    `docker exec` CLIENT's captured stdout carries ZERO bytes for the entire
+    run. Output-progress, the supervisor's other default signal, therefore has
+    NOTHING to see, and (MEASURED) the CLIENT's own /proc CPU sits flat too —
+    the actual `sta` process runs under containerd-shim, never a ppid-chain
+    descendant of the exec client. Without an in-container CPU reading this
+    call has NO forward-progress signal at all, and every run — however long
+    it legitimately takes on a real routed design — would be indistinguishable
+    from a hang."""
     full = ["docker", "exec", container, "bash", "-lc", cmd]
-    res = _wd.run_host_supervised(full, stall_grace_s=float(timeout))
+
+    def _cpu_probe(_proc):
+        try:
+            r = subprocess.run(
+                ["docker", "exec", container, "sh", "-c",
+                 "cat /proc/[0-9]*/stat 2>/dev/null"],
+                capture_output=True, text=True, timeout=15)
+        except Exception:  # nosec — a probe failure is just "no reading"
+            return None
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return None
+        tck = _wd._clk_tck()
+        total, seen = 0.0, False
+        for line in r.stdout.splitlines():
+            cut = line.rfind(")")
+            if cut < 0:
+                continue
+            rest = line[cut + 2:].split()
+            if len(rest) < 13:
+                continue
+            try:
+                total += (float(rest[11]) + float(rest[12])) / tck
+                seen = True
+            except ValueError:  # nosec
+                continue
+        return total if seen else None
+
+    res = _wd.run_host_supervised(full, stall_grace_s=float(timeout),
+                                  cpu_probe=_cpu_probe)
     if res.outcome == "launch_error":
         return 127, "", res.err
     return res.rc, res.out or "", res.err or ""

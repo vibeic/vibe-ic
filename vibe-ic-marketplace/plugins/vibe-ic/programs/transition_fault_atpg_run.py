@@ -509,15 +509,62 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
         except Exception:
             pass
 
+    def _cpu_probe(_proc):
+        # MEASURED: the launched process here is the `docker run` CLIENT, and
+        # its own /proc CPU sits FLAT for the whole run even while the
+        # container burns a full core — over a 12s silent-CPU container job
+        # the host-level probe read 0.00/0.00/0.01/0.01/0.01/0.01 (essentially
+        # no signal at all: containerd-shim reparents the actual process, so
+        # it is never a ppid-chain DESCENDANT of the CLI on the host's own
+        # /proc). `run_host_supervised`'s default `cpu_probe` reads the
+        # LAUNCHED PROCESS's own tree, which is exactly wrong for `docker
+        # run`. `_watchdog`'s own module docstring names the fix — "docker
+        # exec ps in-container" — read via `/proc` directly (no `ps` package
+        # dependency inside the tool image) using the SAME utime+stime field
+        # position `_watchdog._pid_cpu_s` reads on the host. The container is
+        # `--rm --name cname` and EXCLUSIVELY this call's own, so every pid
+        # inside it is this job's — no marker/identity filtering needed.
+        # Without this, captured OUTPUT is the only signal, and yosys's
+        # miter-flatten phase on a large design is exactly the quiet-but-
+        # working stretch that signal cannot see either (`_docker_watchdog`'s
+        # own `yosys-abc` finding: a healthy 1.8M-cell synth was killed by
+        # output-only accounting during ABC's silent phase — the same shape
+        # of defect).
+        try:
+            r = subprocess.run(
+                ["docker", "exec", cname, "sh", "-c",
+                 "cat /proc/[0-9]*/stat 2>/dev/null"],
+                capture_output=True, text=True, timeout=15)
+        except Exception:  # nosec — a probe failure is just "no reading"
+            return None
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return None
+        tck = _wd._clk_tck()
+        total = 0.0
+        seen = False
+        for line in r.stdout.splitlines():
+            cut = line.rfind(")")
+            if cut < 0:
+                continue
+            rest = line[cut + 2:].split()
+            if len(rest) < 13:
+                continue
+            try:
+                total += (float(rest[11]) + float(rest[12])) / tck
+                seen = True
+            except ValueError:  # nosec
+                continue
+        return total if seen else None
+
     # PROGRESS supervision, not a runtime guess (v1.3.47 / owner directive).
     # `timeout` becomes the STALL GRACE: how long every forward-progress
-    # signal of the yosys tree (CPU, I/O, captured output) may sit flat before
-    # the job is called hung. A long-but-WORKING SAT solve on a large design —
-    # the case a fixed wall destroyed, booking a false exit-124 ERROR — now
-    # runs to completion however long it legitimately takes, while a genuine
+    # signal of the yosys tree (CPU, captured output) may sit flat before the
+    # job is called hung. A long-but-WORKING SAT solve on a large design — the
+    # case a fixed wall destroyed, booking a false exit-124 ERROR — now runs
+    # to completion however long it legitimately takes, while a genuine
     # deadlock is still killed and reported as such under its OWN rc.
     res = _wd.run_host_supervised(docker_cmd, stall_grace_s=float(timeout),
-                                  kill=_reap)
+                                  kill=_reap, cpu_probe=_cpu_probe)
     if res.outcome == "launch_error":
         return 127, "", "docker binary not found in PATH"
     # On a stall the partial stdout yosys emitted before the kill is still

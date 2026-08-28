@@ -68,6 +68,7 @@ import argparse
 import json
 import os
 import shutil
+import time
 import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
@@ -129,9 +130,56 @@ def default_runner(cmd, timeout: int = 3600) -> Tuple[int, str, str]:
         # Preserve the shell semantics the string form asks for; the
         # supervisor launches an argv, so the shell is named explicitly.
         cmd = ["/bin/sh", "-c", cmd]
+    argv = [str(a) for a in cmd]
+
+    # MEASURED: for a `docker run` invocation the launched process is the
+    # CLIENT, and its own /proc CPU sits FLAT for the whole run even while
+    # the container burns a full core (containerd-shim reparents the real
+    # work, so it is never a ppid-chain descendant of the CLI). Output growth
+    # is a real signal but not always a sufficient one — see
+    # `transition_fault_atpg_run._run_in_docker`'s identical finding. When the
+    # argv NAMES its container (`--name X`, as `build_harden_command` now
+    # does for the long OpenLane harden), read its CPU by `docker exec`'ing
+    # `/proc` directly — no `cpu_probe` beats no signal, but a probe that
+    # cannot see the actual work is worse than none, because it manufactures
+    # false confidence. A short admin call (`docker images`, `docker pull`)
+    # carries no `--name` and falls back to output+I/O only, which is fine at
+    # that timescale.
+    cpu_probe = None
+    if "--name" in argv:
+        i = argv.index("--name")
+        if i + 1 < len(argv):
+            cname = argv[i + 1]
+
+            def cpu_probe(_proc, _cname=cname):  # noqa: E731
+                try:
+                    r = subprocess.run(
+                        ["docker", "exec", _cname, "sh", "-c",
+                         "cat /proc/[0-9]*/stat 2>/dev/null"],
+                        capture_output=True, text=True, timeout=15)
+                except Exception:  # nosec — a probe failure is just "no reading"
+                    return None
+                if r.returncode != 0 or not (r.stdout or "").strip():
+                    return None
+                tck = _wd._clk_tck()
+                total, seen = 0.0, False
+                for line in r.stdout.splitlines():
+                    cut = line.rfind(")")
+                    if cut < 0:
+                        continue
+                    rest = line[cut + 2:].split()
+                    if len(rest) < 13:
+                        continue
+                    try:
+                        total += (float(rest[11]) + float(rest[12])) / tck
+                        seen = True
+                    except ValueError:  # nosec
+                        continue
+                return total if seen else None
+
     try:
-        res = _wd.run_host_supervised([str(a) for a in cmd],
-                                      stall_grace_s=float(timeout))
+        res = _wd.run_host_supervised(argv, stall_grace_s=float(timeout),
+                                      cpu_probe=cpu_probe)
     except OSError as e:
         return 127, "", str(e)
     if res.outcome == "launch_error":
@@ -206,8 +254,12 @@ def build_harden_command(project_dir: Path, design: str, image: str,
     is never hand-set here (chip-AGNOSTIC)."""
     resolved = _resolve_pdk_root(pdk_root) or "$PDK_ROOT"
     proj = str(project_dir.resolve()) if project_dir.exists() else str(project_dir)
+    # Named uniquely so `default_runner` can supervise the container's OWN
+    # CPU (see there) instead of the `docker run` client's, which never sees
+    # this run's work at all.
+    cname = f"vibeic_caravel_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
     return [
-        "docker", "run", "--rm",
+        "docker", "run", "--rm", "--name", cname,
         *_dmem.docker_memory_flags(),
         "-v", f"{proj}:/work",
         "-v", f"{resolved}:/pdk",

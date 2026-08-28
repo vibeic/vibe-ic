@@ -246,10 +246,53 @@ def default_docker_runner(cmd: List[str],
     ALL sat flat for the grace, and the partial output is still returned, so a
     precheck that produced logs before it stopped is still parsed. `None` keeps
     its meaning of "no bound at all" and gets the module default grace, which
-    still cannot end a job that is working."""
+    still cannot end a job that is working.
+
+    MEASURED: for a `docker run` invocation the launched process is the
+    CLIENT, whose own /proc CPU sits FLAT for the whole run even while the
+    container burns a full core (containerd-shim reparents the actual work,
+    so it is never a ppid-chain descendant of the CLI on host /proc). Output
+    growth is a real signal — `mpw_precheck.py` logs as it runs — but a
+    silent stretch inside it would otherwise be indistinguishable from a
+    hang. When the argv NAMES its container (`--name X`), its CPU is read
+    directly by `docker exec`'ing `/proc` — no extra tool dependency, no
+    reliance on `ps` being installed in the precheck image."""
     grace = (float(timeout) if timeout is not None
              else _wd.DEFAULT_STALL_GRACE_S)
-    res = _wd.run_host_supervised([str(c) for c in cmd], stall_grace_s=grace)
+    argv = [str(c) for c in cmd]
+    cpu_probe = None
+    if "--name" in argv:
+        i = argv.index("--name")
+        if i + 1 < len(argv):
+            cname = argv[i + 1]
+
+            def cpu_probe(_proc, _cname=cname):  # noqa: E731
+                try:
+                    r = subprocess.run(
+                        ["docker", "exec", _cname, "sh", "-c",
+                         "cat /proc/[0-9]*/stat 2>/dev/null"],
+                        capture_output=True, text=True, timeout=15)
+                except Exception:  # nosec
+                    return None
+                if r.returncode != 0 or not (r.stdout or "").strip():
+                    return None
+                tck = _wd._clk_tck()
+                total, seen = 0.0, False
+                for line in r.stdout.splitlines():
+                    cut = line.rfind(")")
+                    if cut < 0:
+                        continue
+                    rest = line[cut + 2:].split()
+                    if len(rest) < 13:
+                        continue
+                    try:
+                        total += (float(rest[11]) + float(rest[12])) / tck
+                        seen = True
+                    except ValueError:  # nosec
+                        continue
+                return total if seen else None
+    res = _wd.run_host_supervised(argv, stall_grace_s=grace,
+                                  cpu_probe=cpu_probe)
     if res.outcome == "launch_error":
         # This seam used to let a missing docker binary raise FileNotFoundError
         # out of the function; the supervisor resolves that to a result
@@ -297,7 +340,11 @@ def build_docker_command(
     precheck_src = precheck_src.resolve()
     rundir = rundir.resolve()
 
-    cmd: List[str] = [docker_bin, "run", "--rm", *_dmem.docker_memory_flags()]
+    # Named uniquely so `default_docker_runner` can read this container's OWN
+    # CPU instead of the `docker run` client's, which never sees it.
+    cname = f"vibeic_mpw_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
+    cmd: List[str] = [docker_bin, "run", "--rm", "--name", cname,
+                      *_dmem.docker_memory_flags()]
     uidgid = _uid_gid()
     if uidgid:
         cmd += ["-u", uidgid]
