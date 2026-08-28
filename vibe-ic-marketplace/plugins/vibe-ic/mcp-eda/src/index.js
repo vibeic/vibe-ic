@@ -239,7 +239,8 @@ let _LAST_FPGA_PROGRAM = null;   // {sof_path, sha256, timestamp, session_id}
 // gets the run logged automatically, so downstream provenance_check
 // gates can verify (file hash matches + tool in allow-list).
 function logProvenance({ projectDir, tool, version, argv, inputs, outputs,
-                          exitCode, durationMs, stdoutTail, stderrTail }) {
+                          exitCode, durationMs, stdoutTail, stderrTail,
+                          measurement }) {
   if (!projectDir) return; // nowhere to log; skip silently
   try {
     mkdirSync(projectDir, { recursive: true });
@@ -258,6 +259,18 @@ function logProvenance({ projectDir, tool, version, argv, inputs, outputs,
       stdout_tail: (stdoutTail || "").slice(-400),
       stderr_tail: (stderrTail || "").slice(-400),
       source: "mcp-eda",
+      // THE THIRD VALUE. `exit_code` above answers "was the outcome clean",
+      // which a reader has been mistaking for "did the tool do its work".
+      // They are orthogonal, and the corpus shows both directions: a DRC run
+      // that finds 12 violations MEASURED perfectly and logs exit_code 1; the
+      // STA run measured 2026-08-27 linked NOTHING and openroad still exited
+      // 0. `measurement` is the only field that answers the second question,
+      // and it is emitted by the tool that alone can answer it. Omitted (not
+      // null) when a call site has not yet been taught to assert its own
+      // precondition, so a reader can tell "declared not measured" from
+      // "never declared" -- those are different states and the flow renders
+      // them differently (FAIL vs INCOMPLETE).
+      ...(measurement ? { measurement } : {}),
     };
     const logPath = `${projectDir}/provenance.jsonl`;
     appendFileSync(logPath, JSON.stringify(record) + "\n");
@@ -1247,12 +1260,121 @@ function containerImageIdentity() {
 
 // `label` lets a caller name the wrapper it used (e.g. "opensta via openroad")
 // while still probing the binary that actually ran.
+//: `getToolVersion` probes a container and can throw; the measurement record
+//: must never be the thing that takes a tool down.
+function getToolVersionSafe(name) {
+  try { return getToolVersion(name); }
+  catch (e) { return `unavailable (${e.message})`; }
+}
+
 function toolIdentity(probeName, pdk, label) {
   const img = containerImageIdentity();
   let ver;
   try { ver = getToolVersion(probeName); } catch (e) { ver = `unavailable (${e.message})`; }
   return `${label || probeName} | version=${ver} | image=${img.image_ref} `
        + `| container=${CONTAINER} | pdk=${pdk} | via=mcp-eda@${SERVER_VERSION}`;
+}
+
+// ─── The measurement record: did the tool do its work? ───────────────────
+// MEASURED 2026-08-27, across the whole boundary between the MCP tools and the
+// flow steps that consume them: 23 of 68 steps declare `mcp_tools:`, and NOT
+// ONE of the artefacts those tools produce carried an answer to the only
+// question a sign-off gate actually needs. Every consumer was reading one of
+// two things, and neither is evidence:
+//
+//   * THE EXIT CODE. openroad exits 0 having read no technology, linked no
+//     design, and failed every report -- so `success:true` and a manifest
+//     `status:"PASS"` were written for a run in which nothing was analysed.
+//   * THE SHAPE OF THE BYTES. A report parser asks whether the text LOOKS like
+//     tool output. A vacuous run that is shape-correct sails through: a
+//     clockless netlist yields `wns max 0.00`, byte-indistinguishable from a
+//     genuinely clean design, and the gate accepted the 0.00 as a met verdict.
+//
+// So a tool must state a THIRD value beside PASS/FAIL: whether the substantive
+// operation completed at all. It has to come from the tool because the tool is
+// the only party that can assert its own precondition -- that the design
+// linked, that the cell count parsed, that a clock actually landed on a port.
+// Downstream, every reader is guessing from residue.
+//
+// THREE STATES, NOT TWO, and the third is not a failure:
+//   measured:true                     -- the operation ran and produced a
+//                                        reading. The verdict (clean or not)
+//                                        is a SEPARATE field; a DRC run that
+//                                        found violations measured perfectly.
+//   measured:false + NOTHING_TO_MEASURE -- the operation ran and there was
+//                                        legitimately nothing to judge (a
+//                                        purely combinational block has no
+//                                        timing paths to constrain). Honest,
+//                                        and NOT a defect.
+//   measured:false + a hard class     -- the operation could not run, or ran
+//                                        on a precondition that makes its
+//                                        numbers meaningless. A verdict read
+//                                        off this run would be fabricated.
+//
+// Collapsing the middle two is the failure mode in both directions at once:
+// treat "nothing to judge" as a failure and the gate refuses everything until
+// somebody bypasses it; treat "could not run" as nothing-to-judge and you are
+// back where this started.
+const MEASUREMENT_SCHEMA = "mcp-eda/measurement/1";
+
+//: Hard classes -- a reading taken from this run would be fabricated.
+const NOT_MEASURED_HARD = Object.freeze([
+  "TOOL_DID_NOT_RUN",   // the substantive operation never completed
+  "UNCONSTRAINED",      // it ran, but on inputs that make its numbers vacuous
+  "NO_PATHS",           // it ran and the analysis set came out empty
+  "UNPARSEABLE",        // it ran and its own output could not be read back
+]);
+//: The one honest non-failure: it ran, and there was nothing to judge.
+const NOT_MEASURED_BENIGN = "NOTHING_TO_MEASURE";
+
+function measurementRecord({ operation, measured, reasonClass, reason,
+                              read, wrote, toolLabel, version, image }) {
+  if (measured !== true && measured !== false) {
+    throw new Error("measurementRecord: `measured` must be a real boolean; "
+      + "a tool that cannot say has not been taught to assert its precondition");
+  }
+  if (measured === false && !reasonClass) {
+    throw new Error("measurementRecord: measured:false must name a class; "
+      + "an unexplained refusal is the same silence it replaces");
+  }
+  const rec = {
+    schema: MEASUREMENT_SCHEMA,
+    operation,
+    measured,
+    not_measured_class: measured ? null : reasonClass,
+    not_measured_reason: measured ? null : (reason || ""),
+    // WHAT IT READ and WHAT IT PRODUCED, named -- the two halves a consumer
+    // needs to bind a verdict to an artefact. Paths only; the digests already
+    // live in the provenance record's own inputs/outputs.
+    read: read || [],
+    wrote: wrote || [],
+    tool: toolLabel || operation,
+  };
+  if (version) rec.version = version;
+  if (image) rec.image = image;
+  return rec;
+}
+
+//: True when the record says a reading would be fabricated. The benign class
+//: is deliberately NOT in here: "nothing to judge" must not read as a defect.
+function measurementIsHardMiss(rec) {
+  return !!rec && rec.measured === false
+      && NOT_MEASURED_HARD.includes(rec.not_measured_class);
+}
+
+// The stamp a consumer finds ON THE ARTEFACT ITSELF.
+//
+// The provenance log is the right home for a run record, but it is not always
+// reachable from the thing being judged: a report gets copied, symlinked, or
+// published into a corpus far from the `provenance.jsonl` of the run that made
+// it (MEASURED: three published cells record a GDS under one path and ship it
+// under another). A one-line comment header travels WITH the bytes, so the
+// gate that opens the report can read the tool's own answer without having to
+// find the run. It is a comment (`#`), so every existing report reader still
+// reads the report.
+const MEASUREMENT_STAMP_PREFIX = "# MCP_MEASUREMENT: ";
+function measurementStamp(rec) {
+  return MEASUREMENT_STAMP_PREFIX + JSON.stringify(rec) + "\n";
 }
 
 // ─── Server Setup ───
@@ -1418,12 +1540,32 @@ server.tool(
     const inputs = {};
     verilog_files.forEach((f) => { inputs[f] = sha256File(f.replace("/work/", projectDir + "/")); });
     const outputs = { [output_netlist]: sha256File(output_netlist.replace("/work/", projectDir + "/")) };
+    // MEASURED IS NOT PASSED. `metrics.cells === null` is the tool saying it
+    // could not read a cell count back out of yosys' own stat block -- the
+    // netlist on disk may be anything. A legitimate ZERO (the constant-driven
+    // `assign zero = 1'b0`) is a MEASURED zero and says so.
+    const synthMeasurement = measurementRecord({
+      operation: "synthesis",
+      measured: metrics.success && metrics.cells !== null,
+      reasonClass: !metrics.success ? "TOOL_DID_NOT_RUN" : "UNPARSEABLE",
+      reason: !metrics.success
+        ? "yosys did not complete; no netlist was produced to count"
+        : "yosys completed but its stat block yielded no cell count, so the "
+          + "netlist's content was not measured -- null here means NOT KNOWN, "
+          + "which is a different fact from a design that has zero cells",
+      read: Object.keys(inputs || {}),
+      wrote: Object.keys(outputs || {}),
+      toolLabel: "yosys",
+      version: getToolVersionSafe("yosys"),
+      image: containerImageIdentity().image_ref,
+    });
     logProvenance({
       projectDir,
       tool: "yosys",
       version: toolIdentity("yosys", pdk),
       argv: ["yosys", "-p", `synth -top ${top_module} ...`],
       inputs, outputs,
+      measurement: synthMeasurement,
       exitCode: result.success ? 0 : (result.exitCode || 1),
       durationMs,
       stdoutTail: result.output || "",
@@ -1892,6 +2034,26 @@ exit`;
       argv: ["openroad", "-exit", `pnr ${top_module} util=${utilization}`],
       inputs: { [netlist]: sha256File(netlist.replace("/work/", projPnr + "/")) },
       outputs: { [output_def]: sha256File(output_def.replace("/work/", projPnr + "/")) },
+      // `complete` is the PNR_COMPLETE end-of-script sentinel, not the exit
+      // code -- this tool already refused to trust openroad's rc, and that
+      // same positive signal is what the measurement record states.
+      measurement: measurementRecord({
+        operation: "place_and_route",
+        measured: !!complete,
+        reasonClass: "TOOL_DID_NOT_RUN",
+        reason: "the PnR script did not reach PNR_COMPLETE, so no placed or "
+              + "routed database was produced and nothing about it was measured",
+        read: [netlist],
+        wrote: complete ? [output_def] : [],
+        toolLabel: "openroad",
+        version: getToolVersionSafe("openroad"),
+        image: containerImageIdentity().image_ref,
+      }),
+      // RE-DERIVED: main's `pnrRun.rc` (the real process status now the Tcl is
+      // a file argument) is KEPT. a444 wrote `complete ? 0 : 1` here, which was
+      // correct against the stdin form whose rc was pinned to 0; against main's
+      // file-argument form that would DISCARD a truthful non-zero rc. The
+      // sentinel it was standing in for is now stated in `measurement` above.
       exitCode: pnrRun.rc,
       durationMs: durationPnrMs,
       stdoutTail: pnrRun.output || "",
@@ -1998,6 +2160,18 @@ print('MERGE_OK: ' + str(cell_count_before) + ' lib cells + DEF -> ' + str(cell_
       argv: ["klayout", "-z", "-r", "gen_gds.py"],
       inputs: { [def_file]: sha256File(def_file.replace("/work/", projGds + "/")) },
       outputs: { [output_gds]: sha256File(output_gds.replace("/work/", projGds + "/")) },
+      measurement: measurementRecord({
+        operation: "gds_generation",
+        measured: cellsMatch != null && mergeOk,
+        reasonClass: "TOOL_DID_NOT_RUN",
+        reason: "klayout did not report MERGE_OK with a cell count, so no "
+              + "merged layout was produced and its cell count is not known",
+        read: [def_file],
+        wrote: (cellsMatch != null && mergeOk) ? [output_gds] : [],
+        toolLabel: "klayout",
+        version: getToolVersionSafe("klayout"),
+        image: containerImageIdentity().image_ref,
+      }),
       exitCode: (cellsMatch != null && mergeOk) ? 0 : 1,
       durationMs: durationGdsMs,
       stdoutTail: result.output || "",
@@ -2812,6 +2986,24 @@ equiv_status
         [schematic_netlist]: sha256File(schematic_netlist.replace("/work/", projLvs + "/")),
       },
       outputs: {},
+      // THE ORTHOGONAL PAIR, at its clearest. `exitCode` says whether the two
+      // netlists MATCHED. `measured` says whether netgen compared them at all:
+      // `matched === null` is the did-not-run sentinel this tool already
+      // computes, and a mismatch (matched === false) is a fully MEASURED
+      // result that happens to be bad news.
+      measurement: measurementRecord({
+        operation: "lvs",
+        measured: matched !== null,
+        reasonClass: "TOOL_DID_NOT_RUN",
+        reason: "netgen produced no comparison verdict (no report written, or "
+              + "a cell it needed could not be found), so layout and schematic "
+              + "were never compared -- neither a match nor a mismatch",
+        read: [layout_netlist, schematic_netlist],
+        wrote: [],
+        toolLabel: "netgen",
+        version: getToolVersionSafe("netgen"),
+        image: containerImageIdentity().image_ref,
+      }),
       exitCode: passed ? 0 : 1,
       durationMs: durationLvsMs,
       stdoutTail: result.output || "",
@@ -2894,6 +3086,21 @@ server.tool(
           argv: ["klayout", "-b", "-r", custom_drc_script, "input=" + gds_file],
           inputs: { [gds_file]: sha256File(gds_file.replace("/work/", projDrcC + "/")) },
           outputs: { [rdbPath]: sha256File(rdbPath.replace("/work/", projDrcC + "/")) },
+          // A deck that ran and found 12 violations MEASURED. A deck that
+          // failed to load measured nothing. Both used to log exit_code 1.
+          measurement: measurementRecord({
+            operation: "drc",
+            measured: !!resultC.success,
+            reasonClass: "TOOL_DID_NOT_RUN",
+            reason: "the custom DRC deck did not run to completion, so the "
+                  + "layout was never checked and a zero violation count "
+                  + "would mean only that nothing looked",
+            read: [gds_file, custom_drc_script],
+            wrote: resultC.success ? [rdbPath] : [],
+            toolLabel: "klayout DRC",
+            version: getToolVersionSafe("klayout"),
+            image: containerImageIdentity().image_ref,
+          }),
           exitCode: passC ? 0 : 1,
           durationMs: durationDrcMsC,
           stdoutTail: resultC.output || "",
@@ -3113,6 +3320,22 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
       argv: ["klayout", "-b", "-r", deckPath, "input=" + gds_file],
       inputs: { [gds_file]: sha256File(gds_file.replace("/work/", projDrc + "/")) },
       outputs: reportExists ? { [rdbPath]: sha256File(rdbPath.replace("/work/", projDrc + "/")) } : {},
+      // Same orthogonal pair: `viol` is the verdict, `reportExists` is the
+      // evidence the deck actually looked. A sign-off gate reading only the
+      // count cannot tell zero-violations from zero-looking.
+      measurement: measurementRecord({
+        operation: "drc",
+        measured: !!(result.success && reportExists),
+        reasonClass: "TOOL_DID_NOT_RUN",
+        reason: `the sign-off deck ${deckLeaf} produced no report database, so `
+              + "the layout was never checked -- a zero violation count here "
+              + "would mean only that nothing looked",
+        read: [gds_file, deckPath],
+        wrote: reportExists ? [rdbPath] : [],
+        toolLabel: "klayout sign-off DRC",
+        version: getToolVersionSafe("klayout"),
+        image: containerImageIdentity().image_ref,
+      }),
       exitCode: passReal ? 0 : 1,
       durationMs: durationDrcMs,
       stdoutTail: (result.output || "").slice(-1500),
