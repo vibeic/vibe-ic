@@ -38,12 +38,13 @@ OFFENSE CLASSES
     and is NEVER flagged (the spec: "a bounded for over a fixed list stays a
     plain loop"); any long sub-process inside it is judged by class (a).
 
-    A MONOTONIC-DEADLINE BOUND IS A BOUND (v1.12.25). ``loop_guard`` is not the
-    only way to stop a loop spinning forever: a loop whose exit is governed by a
-    monotonic clock compared against a deadline computed BEFORE it terminates by
-    the wall clock and is not class (b). Both idioms are read —
-    ``deadline = time.monotonic() + wait`` then ``while monotonic() < deadline``
-    or ``if monotonic() >= deadline: break/return`` — and so is
+    A MONOTONIC-DEADLINE BOUND IS A BOUND (2026-08-28). ``loop_guard`` is not
+    the only way to stop a loop spinning forever: a loop whose exit is
+    governed by a monotonic clock compared against a deadline computed
+    BEFORE it terminates by the wall clock and is not class (b). Both idioms
+    are read — ``deadline = time.monotonic() + wait`` then
+    ``while monotonic() < deadline`` or
+    ``if monotonic() >= deadline: break/return`` — and so is
     ``t0 = time.monotonic()`` with ``monotonic() - t0`` compared later. The
     recognition is STRUCTURAL: no identifier spelling is matched, only the role
     each expression plays, so it neither can be earned by naming a variable
@@ -130,8 +131,8 @@ BENIGN_ARGV0 = frozenset({
 INFINITE_ITERS = frozenset({"count", "cycle", "repeat"})
 EXEMPT_TAG = "# watchdog-exempt:"
 
-# v1.12.25 — the MONOTONIC-DEADLINE bound (see offense class (b)). These are the
-# stdlib clocks that cannot run backwards, so a comparison against a reading
+# 2026-08-28 — the MONOTONIC-DEADLINE bound (see offense class (b)). These are
+# the stdlib clocks that cannot run backwards, so a comparison against a reading
 # taken before the loop is a real wall-clock bound. This is the ONE lexicon the
 # structural probe needs: a deadline VARIABLE can be spelled any way at all and
 # is matched by shape, but the clock is an API, and a loop compared against a
@@ -528,7 +529,7 @@ def _for_iter_is_infinite(node: ast.For) -> bool:
     return False
 
 
-# ── the MONOTONIC-DEADLINE bound (v1.12.25) ────────────────────────────────
+# ── the MONOTONIC-DEADLINE bound (2026-08-28) ────────────────────────────────
 #
 # WHY THIS EXISTS. Class (b) asks one question: can this loop spin forever? It
 # answered it with a SHAPE — "a while that sleeps and is not a loop_guard
