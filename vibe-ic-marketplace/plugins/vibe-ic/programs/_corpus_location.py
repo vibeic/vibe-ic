@@ -270,7 +270,10 @@ def not_a_checkout_reason(root: Path, reads: str, *,
         probe = _pr.run(["git", "-C", str(root), "rev-parse",
                                 "--show-toplevel"],
                                capture_output=True, text=True)
-    except (OSError, subprocess.SubprocessError) as exc:   # noqa: BLE001
+    except (OSError, subprocess.SubprocessError, _pr.Stalled) as exc:  # noqa: BLE001,E501
+        # `_pr.Stalled` is a RuntimeError and `SubprocessError` does not catch
+        # it; a git that stopped moving is this branch's subject, not an
+        # exception for the caller to discover it has no handler for.
         if strict:
             raise CorpusIndexIndeterminate(
                 f"git checkout probe failed for {root}: {exc}") from exc

@@ -15,6 +15,7 @@ import _published_tree
 import _semantic_child_progress as S
 import l4_systemrdl_export as L4
 import repo_hygiene_parallel as P
+import _progress_run as _pr  # noqa: E402
 
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -281,11 +282,12 @@ def test_semantic_l4_git_failure_cannot_fallback_to_untracked_disk_population(
     kept, _found, published = L4._l4_documents(root)
     assert (kept, published) == ([tracked], True)
 
-    seen_timeouts = []
+    seen_kwargs = []
 
     def expire(argv, **kwargs):
-        seen_timeouts.append(kwargs.get("timeout"))
-        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        seen_kwargs.append(dict(kwargs))
+        # git is stopped for making no progress now, not for elapsed time.
+        raise _pr.Stalled(argv, 3, 1.0, 3.0, {"cpu": True, "io": True})
 
     monkeypatch.setattr(
         _corpus_location, "not_a_checkout_reason", lambda *_a, **_k: None)
@@ -303,7 +305,16 @@ def test_semantic_l4_git_failure_cannot_fallback_to_untracked_disk_population(
         "the control no longer reaches the historical timeout fallback")
     with pytest.raises(_published_tree.PublishedTreeIndeterminate):
         L4._l4_documents(root, semantic_strict=True)
-    assert seen_timeouts == [180, None]
+    # THE INVERSE OF WHAT THIS USED TO ASSERT, and for the reason the
+    # assertion had to change. It read `seen_timeouts == [180, None]`: the
+    # first probe spent a 180 s bound and the second did not. There is no bound
+    # to spend now — git runs to completion however long it legitimately takes
+    # and is stopped only if it stops moving — so asserting the ABSENCE is what
+    # keeps one from being quietly reintroduced at either call site.
+    assert len(seen_kwargs) == 2, seen_kwargs
+    assert all("timeout" not in kw for kw in seen_kwargs), (
+        f"a wall-clock bound is being spent on a git probe again: "
+        f"{seen_kwargs!r}")
 
 
 @pytest.mark.parametrize("planted,want_rc", [(False, 0), (True, 1)])

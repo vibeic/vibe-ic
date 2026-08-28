@@ -86,14 +86,16 @@ def test_an_unreadable_meminfo_emits_NO_limit_rather_than_a_guess(tmp_path):
     too low is an outage. None means no `ulimit` is emitted at all."""
     assert F.memory_limit_kb(meminfo="nothing here", env={}) is None
     rec = _Rec()
-    F.subprocess.run, orig = rec, F.subprocess.run
+    # The launcher moved from `subprocess` to `_pr`; see the note at the
+    # other substitution sites in this file.
+    F._pr.run, orig = rec, F._pr.run
     try:
         F.memory_limit_kb.__globals__["memory_limit_kb"]  # keep the name bound
         import unittest.mock as _m
         with _m.patch.object(F, "memory_limit_kb", lambda: None):
             F._run_sby(_sby(tmp_path), tmp_path, "c", 60)
     finally:
-        F.subprocess.run = orig
+        F._pr.run = orig
     assert "ulimit -v" not in rec.argv[-1]
 
 
@@ -128,11 +130,31 @@ def test_the_deadline_is_enforced_inside_the_container(monkeypatch, tmp_path):
     assert rec.argv[3:7] == ["timeout", "-k", str(CE.DEFAULT_KILL_GRACE_S), "45"]
 
 
-def test_the_client_wait_is_strictly_larger_so_the_container_fires_first(
+def test_the_client_cannot_preempt_the_container_deadline_at_all(
         monkeypatch, tmp_path):
+    """The same property, now held by construction rather than by arithmetic.
+
+    This asserted `rec.timeout == 45 + CLIENT_GRACE_S`: the client's wall-clock
+    wait had to be STRICTLY LARGER than the container-side deadline, so the
+    `timeout` inside the container fired first and killed the solver where it
+    lives. Killing the host `docker exec` CLIENT does not reach the tool inside
+    the container, so losing that race leaves an ORPHAN.
+
+    The client spends no wall-clock wait now — it is supervised by forward
+    progress — so it cannot pre-empt anything, whatever the grace happens to
+    be. That is strictly stronger than an inequality that had to be kept true
+    by hand, and the assertion says so: NO bound on the client side, and the
+    container-side deadline still emitted where the solver can be reached.
+    """
     rec = _Rec()
     _drive(monkeypatch, tmp_path, rec, timeout=45)
-    assert rec.timeout == 45 + CE.CLIENT_GRACE_S
+    assert rec.timeout is None, (
+        f"the client is spending a wall-clock wait again ({rec.timeout}); it "
+        f"can then pre-empt the container-side deadline and leave an orphan")
+    argv = [str(a) for a in rec.argv]
+    assert "timeout" in argv and "45" in argv, (
+        f"the CONTAINER-side deadline is gone — with no bound on either side "
+        f"nothing stops the solver where it lives: {argv}")
 
 
 def test_the_address_space_bound_precedes_everything_the_solver_runs(

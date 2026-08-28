@@ -312,6 +312,13 @@ def test_the_tracked_cells_are_still_reached():
                     / "programs")
         resolver.mkdir(parents=True)
         shutil.copy2(_CORPUS_LOCATION, resolver / "_corpus_location.py")
+        # The resolver asks git through `_progress_run`, so its siblings come
+        # with it. Without them the resolver cannot import, the population is
+        # EMPTY, and this test reports a coverage cut in a fan-out that is
+        # intact — which is precisely the false reading its docstring above
+        # describes and was rewritten to stop producing.
+        for _dep in ("_progress_run.py", "_watchdog.py"):
+            shutil.copy2(_CORPUS_LOCATION.parent / _dep, resolver / _dep)
         # ONE routed-DEF version per DESIGN. The producer refuses a design that
         # publishes more than one ("a two-phase identity migration is required
         # before this population can expand without duplicate gate owners"), so

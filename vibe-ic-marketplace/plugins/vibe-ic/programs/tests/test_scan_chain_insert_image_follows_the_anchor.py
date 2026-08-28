@@ -67,10 +67,16 @@ def test_a_total_blackout_answers_the_legacy_image_AND_SAYS_SO(monkeypatch, caps
     # Substituting on only one leaves the real launcher answering the
     # question this test is asking about a fake one, and the test then
     # passes or fails for a reason that has nothing to do with its subject.
+    import _progress_run as _pr                                # noqa: PLC0415
+    # `_eda_image` is a DIFFERENT module and resolves the daemon through the
+    # shared `_progress_run`, so substituting only on `far`'s own launcher
+    # leaves the real daemon answering the blackout this test is staging.
     for _launcher in (getattr(far, "subprocess", None),
-                      getattr(far, "_pr", None)):
+                      getattr(far, "_pr", None), _pr):
         if _launcher is not None:
             monkeypatch.setattr(_launcher, "run", _never_present)
+            monkeypatch.setattr(_launcher, "run_best_effort", _never_present,
+                                raising=False)
     got = far._resolve_docker_image()
     import _eda_image as M
     assert got == M.LEGACY_IMAGE, got

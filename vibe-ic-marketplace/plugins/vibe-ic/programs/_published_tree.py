@@ -115,7 +115,12 @@ def _index(root: Path, timeout: Optional[float], *,
     try:
         r = _pr.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
                            capture_output=True, text=True)
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, _pr.Stalled) as exc:
+        # `_pr.Stalled` is a RuntimeError, so `SubprocessError` does not catch
+        # it and it would escape this helper into a caller that has no handler
+        # for it. It belongs HERE: a git that stopped moving is exactly this
+        # branch's subject — "git could not be asked", which is not the same as
+        # clean and is what the strict path raises Indeterminate about.
         if strict:
             raise PublishedTreeIndeterminate(
                 f"git could not enumerate the published tree {root}: {exc}") \

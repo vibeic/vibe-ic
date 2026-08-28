@@ -577,13 +577,15 @@ def test_the_runner_treats_a_REJECTED_command_line_as_its_own_failure():
     The argv it rejected was built by this very step, so the fault is the
     caller's. FAIL, for the same reason the merge gate blocks on rc 3."""
     R = _runner()
-    orig = R.subprocess.run
+    # The launcher moved from `subprocess` to `_pr`; see the note at the
+    # other substitution sites in this file.
+    orig = R._pr.run
     try:
-        R.subprocess.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
+        R._pr.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
         sr = R.step_slot_pad_budget(_project(T._RTL_FITS, with_slots=True),
                                     "chip_top")
     finally:
-        R.subprocess.run = orig
+        R._pr.run = orig
     assert sr.extras["exit_code"] == 3
     assert sr.status == "FAIL", (
         f"a rejected command line reported {sr.status!r} — the usage tier "
@@ -601,12 +603,14 @@ def test_the_runner_reads_the_usage_rc_from_the_module_that_owns_it():
 
 def test_the_runners_four_tiers_are_four_distinct_readings():
     R = _runner()
-    orig = R.subprocess.run
+    # The launcher moved from `subprocess` to `_pr`; see the note at the other
+    # substitution sites in this file.
+    orig = R._pr.run
     try:
-        R.subprocess.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
+        R._pr.run = lambda cmd, **kw: orig([*cmd, "--not-a-flag"], **kw)
         usage = R.step_slot_pad_budget(_project(T._RTL_FITS, True), "chip_top").status
     finally:
-        R.subprocess.run = orig
+        R._pr.run = orig
     fits = R.step_slot_pad_budget(_project(T._RTL_FITS, True), "chip_top").status
     red = R.step_slot_pad_budget(_project(_HOPELESS, True), "chip_top").status
     skip = R.step_slot_pad_budget(_project(T._RTL_FITS, False), "chip_top").status
