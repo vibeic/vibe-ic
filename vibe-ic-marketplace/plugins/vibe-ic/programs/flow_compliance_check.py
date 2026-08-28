@@ -3047,6 +3047,21 @@ def gate_ledger_lines() -> List[str]:
     return out
 
 
+#: How long a gate's process tree may show NO forward progress before it is
+#: called wedged. NOT a bound on how long a gate may legitimately run: the
+#: structural gates read post-PnR netlists and multi-GB GDS, and a gate that is
+#: reading one is working.
+_GATE_STALL_GRACE_S = 60
+
+
+class _GateStalled(Exception):
+    """A gate whose whole process tree was idle across the grace."""
+
+    def __init__(self, res):
+        super().__init__("gate stalled")
+        self.res = res
+
+
 def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     """#682 attribution wrapper. Records the invocation whatever it returns, then
     delegates. WRAPPING rather than inserting a `_record_gate_execution` call at
@@ -3063,8 +3078,8 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         verdict, rc = "NOT_FOUND", None
     elif out.startswith(_CRASH_HINT_PREFIX):
         verdict, rc = "CRASHED", None
-    elif out.startswith("program TIMED OUT"):
-        verdict, rc = "TIMEOUT", None
+    elif out.startswith("program STALLED"):
+        verdict, rc = "STALLED", None
     elif out.startswith("program invocation error:"):
         verdict, rc = "INVOCATION_ERROR", None
     else:
@@ -3120,15 +3135,32 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     # slow gates on large SoCs (reset_dependency_check ~6 min on a 7.5MB
     # post-PnR netlist; provenance sha256 over multi-GB GDS) and reported
     # the kill as a plain gate FAIL.
+    # PROGRESS, NOT RUNTIME. `gate_budget` used to be "how long may this gate
+    # take" — the #525 comment below already recorded what that cost: the old
+    # fixed 300 s "killed honest slow gates on large SoCs
+    # (reset_dependency_check ~6 min on a 7.5MB post-PnR netlist; provenance
+    # sha256 over multi-GB GDS)". Raising it to 900 was the same defect
+    # restated, and so would be raising it again. A gate that is reading a
+    # multi-GB GDS is WORKING, and no wording of the kill gives its answer back.
+    #
+    # The number now bounds NO PROGRESS: how long the gate's whole process tree
+    # may show no CPU, no I/O and no output before it is called wedged. That can
+    # only ever kill LESS than the budget did — both stop a gate idle for N, and
+    # only the budget stopped a gate still working at N — so no gate that passes
+    # today can start failing.
+    #
+    # THE VERDICT TIER IS DELIBERATELY UNTOUCHED. A wedged gate still returns
+    # False and still FAILs the audit, exactly as a timed-out one did. This
+    # changes WHEN the kill happens, not what the flow concludes from it, which
+    # is why it does not disturb the VACUOUS_PASS / PASS_WITH_WAIVERS tiers that
+    # have a measured regression history in this file (v1.10.14 -> 1.10.16).
     gate_budget = _pl.gate_timeout_s()
     try:
-        r = subprocess.run(
-            argv,
-            cwd=project,
-            capture_output=True,
-            text=True,
-            timeout=gate_budget,
-        )
+        _res = _watchdog.run_host_supervised(argv, cwd=str(project),
+                                       stall_grace_s=gate_budget)
+        if _res.outcome in ("stalled", "ceiling"):
+            raise _GateStalled(_res)
+        r = _watchdog.completed_process(argv, _res)
         snippet = output_snippet(r.stdout, r.stderr)
         if r.returncode == 0:
             return True, snippet
@@ -3166,14 +3198,19 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
                            f"(INCONCLUSIVE: the gate died before reaching "
                            f"one): {cmd_str}")
         return False, snippet
-    except subprocess.TimeoutExpired:
-        # #525 — a timeout is NOT a verdict: the gate program was killed
-        # mid-run, so the step is INCONCLUSIVE (still FAILs the audit —
-        # an unevaluated gate cannot pass — but the message must never
-        # read as a substantive gate failure).
-        return False, (f"program TIMED OUT after {gate_budget}s — timeout "
-                       f"is NOT a verdict (INCONCLUSIVE; raise "
-                       f"{_pl.GATE_TIMEOUT_ENV} to extend): {cmd_str}")
+    except _GateStalled as stalled:
+        # #525's reading stands and is now MEASURED rather than inferred: the
+        # gate was killed mid-run, so the step is INCONCLUSIVE and still FAILs
+        # the audit (an unevaluated gate cannot pass) — but the reason is no
+        # longer "it has been N seconds", which a correct gate on a busy host
+        # reaches just as easily. It is "this gate's process tree did nothing
+        # at all for N seconds", which only a wedged gate reaches.
+        return False, (f"program STALLED — no CPU, no I/O and no output from "
+                       f"its process tree for {gate_budget}s, stopped after "
+                       f"{stalled.res.elapsed_s:.0f}s. It was not slow; it was "
+                       f"doing nothing. A stall is NOT a verdict about the "
+                       f"design (INCONCLUSIVE; raise {_pl.GATE_TIMEOUT_ENV} to "
+                       f"extend the grace): {cmd_str}")
     except Exception as exc:
         return False, f"program invocation error: {exc}"
 
@@ -3877,18 +3914,17 @@ def _run_yosys_gates(project: Path) -> tuple[bool, List[str]]:
     # --- yosys_hilomap_required_check: ordering constraint -----------------
     hilomap_prog = PROGRAMS_DIR / "yosys_hilomap_required_check.py"
     if hilomap_prog.exists():
-        try:
-            r1 = subprocess.run(
-                [sys.executable, str(hilomap_prog),
-                 "--ys-file", str(ys_path)],
-                capture_output=True, text=True, timeout=60,
-            )
-        except subprocess.TimeoutExpired:
+        _argv = [sys.executable, str(hilomap_prog), "--ys-file", str(ys_path)]
+        _res = _watchdog.run_host_supervised(_argv, stall_grace_s=_GATE_STALL_GRACE_S)
+        if _res.outcome in ("stalled", "ceiling"):
             return False, [
-                f"FAIL: yosys_hilomap_required_check timed out on "
-                f"{ys_rel} — cannot verify techmap→hilomap→write_verilog "
-                f"ordering, so PnR is unsafe. Re-run the check manually."
+                f"FAIL: yosys_hilomap_required_check STALLED on {ys_rel} — no "
+                f"CPU, no I/O and no output for {_GATE_STALL_GRACE_S}s. It was "
+                f"not slow; it was doing nothing. The techmap→hilomap→"
+                f"write_verilog ordering is unverified, so PnR is unsafe. "
+                f"Re-run the check manually."
             ]
+        r1 = _watchdog.completed_process(_argv, _res)
         if r1.returncode != 0:
             reasons.append(
                 f"FAIL: yosys_hilomap_required_check failed — PnR will "
@@ -3913,19 +3949,17 @@ def _run_yosys_gates(project: Path) -> tuple[bool, List[str]]:
     # --- yosys_script_template_check: token presence ----------------------
     tmpl_prog = PROGRAMS_DIR / "yosys_script_template_check.py"
     if tmpl_prog.exists():
-        try:
-            r2 = subprocess.run(
-                [sys.executable, str(tmpl_prog),
-                 "--ys-file", str(ys_path)],
-                capture_output=True, text=True, timeout=60,
-            )
-        except subprocess.TimeoutExpired:
+        _argv2 = [sys.executable, str(tmpl_prog), "--ys-file", str(ys_path)]
+        _res2 = _watchdog.run_host_supervised(_argv2, stall_grace_s=_GATE_STALL_GRACE_S)
+        if _res2.outcome in ("stalled", "ceiling"):
             reasons.append(
-                f"FAIL: yosys_script_template_check timed out on "
-                f"{ys_rel} — cannot verify -sv/-flatten/hilomap are "
-                f"present; treat as fail for strict gating."
+                f"FAIL: yosys_script_template_check STALLED on {ys_rel} — no "
+                f"CPU, no I/O and no output for {_GATE_STALL_GRACE_S}s. It was "
+                f"not slow; it was doing nothing. -sv/-flatten/hilomap are "
+                f"unverified; treat as fail for strict gating."
             )
         else:
+            r2 = _watchdog.completed_process(_argv2, _res2)
             if r2.returncode != 0:
                 reasons.append(
                     f"FAIL: yosys_script_template_check failed — one of "
@@ -7670,11 +7704,9 @@ def _program_accepts_flag(prog_name: str, flag: str) -> bool:
         prog_path = PROGRAMS_DIR / prog
         if not prog_path.is_file():
             return False
-        r = subprocess.run(
-            [sys.executable, str(prog_path), "--help"],
-            capture_output=True, text=True, timeout=30,
-        )
-        help_text = (r.stdout or "") + (r.stderr or "")
+        _hres = _watchdog.run_host_supervised(
+            [sys.executable, str(prog_path), "--help"], stall_grace_s=30)
+        help_text = (_hres.out or "") + (_hres.err or "")
         # Match the flag as a whole token (argparse renders it as `--skip-analog`
         # possibly followed by space / `=` / `,` / newline / metavar).
         return bool(re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])",
