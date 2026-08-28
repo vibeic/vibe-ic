@@ -382,15 +382,84 @@ def test_the_absent_exit_code_is_one_number_in_two_languages():
     assert _no_corpus_rc() not in (0, 1, 2)
 
 
+def _corpus_location_files() -> tuple[str, ...]:
+    """`_corpus_location.py` plus every sibling module it imports, DERIVED.
+
+    This used to be a single hard-coded `shutil.copy2("_corpus_location.py")`.
+    On 2026-08-28 `43dde885f` added `import _progress_run as _pr` to
+    `_corpus_location.py`; the hand-typed copy did not follow, and every test
+    below using `_subject_repo` died with `ModuleNotFoundError: No module
+    named '_progress_run'` on a `_corpus_location.py` that is correct.
+
+    A hand-maintained file list is a second copy of a fact the source already
+    states, and the copy goes stale the first time someone edits the source
+    without opening this file. Walking the AST means the sandbox is wrong only
+    if the program is — the same fix applied to the resolver sandbox in
+    `test_resolve_generated_conflicts.py` for the identical regression.
+    """
+    import ast as _ast
+    root = "_corpus_location.py"
+    seen, out, queue = set(), [], [root]
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name); out.append(name)
+        src = (PROGRAMS / name).read_text(encoding="utf-8")
+        for node in _ast.walk(_ast.parse(src)):
+            mods = []
+            if isinstance(node, _ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
+                mods = [node.module]
+            for m in mods:
+                cand = m.split(".")[0] + ".py"
+                if (PROGRAMS / cand).is_file() and cand not in seen:
+                    queue.append(cand)
+    return tuple(out)
+
+
 def _subject_repo(tmp_path: Path) -> Path:
     """The minimum tree `routed_def_corpus.main()` needs, carrying NO corpus."""
     root = tmp_path / "subject"
     programs = root / "vibe-ic-marketplace/plugins/vibe-ic/programs"
     programs.mkdir(parents=True)
-    shutil.copy2(PROGRAMS / "_corpus_location.py",
-                 programs / "_corpus_location.py")
+    for name in _corpus_location_files():
+        shutil.copy2(PROGRAMS / name, programs / name)
     assert not (root / "benchmark-data").exists()
     return root
+
+
+def test_the_subject_repo_copies_every_module_corpus_location_imports():
+    """The derivation is the fix, so the derivation is what gets pinned.
+
+    Without this, `_corpus_location_files()` could silently start returning
+    just the root — every `_subject_repo` case would still pass on a tree
+    where `_corpus_location.py` happens to import nothing new, and the next
+    added import would break them all again exactly as `_progress_run` did.
+    """
+    import ast as _ast
+    files = set(_corpus_location_files())
+    assert "_corpus_location.py" in files
+    src = (PROGRAMS / "_corpus_location.py").read_text(encoding="utf-8")
+    siblings = set()
+    for node in _ast.walk(_ast.parse(src)):
+        names = ([a.name for a in node.names] if isinstance(node, _ast.Import)
+                 else [node.module] if isinstance(node, _ast.ImportFrom)
+                 and node.level == 0 and node.module else [])
+        for m in names:
+            c = m.split(".")[0] + ".py"
+            if (PROGRAMS / c).is_file():
+                siblings.add(c)
+    missing = sorted(siblings - files)
+    assert not missing, (
+        f"_corpus_location.py imports {missing} and _subject_repo would not "
+        f"copy them; every case using it would fail with ModuleNotFoundError "
+        f"on a program that is correct")
+    assert len(files) > 1, (
+        "_corpus_location_files() derived only the root module — the walk "
+        "found no sibling imports at all, which is how this guard goes "
+        "quietly vacuous")
 
 
 def _read_but_empty_corpus(tmp_path: Path) -> Path:
