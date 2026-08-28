@@ -1,22 +1,26 @@
-"""The D9 generator's subject stopped existing, and it must say so.
+"""The D9 block is pinned to a flow that no longer exists, and it must say so.
 
-MEASURED 2026-08-28. `gen_flow_gate_d9_section.py` (#1009, 2026-08-11) refuses
-to publish D9 as a shipped dimension because "nothing in
-flow/phase1_phase2_phase3.yaml asks the ninth question". The flow it names now
-carries four `# D9` labelled clauses, one of them a BLOCKING
-`program_exit_zero: "step_internal_fail_bubble_up_check ."` in step 36.
+MEASURED 2026-08-28. `gen_flow_gate_d9_section.py` (#1009, 2026-08-11) renders a
+D9 block whose `--check` said only "D9 block absent from page" -- which reads as
+an invitation to `--install`. Two facts make installing it wrong, and neither is
+repairable by refreshing its data:
 
-The question also changed identity: #1009 measured "is the output CORRECT"; the
-D9 that shipped is `verdict_consumed`, and the published page says so -- "The
-ninth question is shipped -- and it is not 'is the output correct?'". So the
-block is not a stale version of that section, it is a denial of it.
+  * the report describes a 63-step flow and the flow has 68; and
+  * `63 步`, `上面那 504 格`, `47 / 63`, `25 / 63` are STRING LITERALS in the
+    rendering, so a regenerated 68-step report would still print 63.
 
-Its own `--check` used to say only "D9 block absent from page", which reads as
-an invitation to `--install`. These tests pin the refusal instead.
+A GUARD THAT WAS WRONG, PINNED HERE SO IT IS NOT RE-ADDED. The first version
+counted `# D9` comment lines in the flow yaml. Deleting four comments -- changing
+no criterion, leaving the blocking `step_internal_fail_bubble_up_check` in place
+-- flipped it back to "publish", and those comments were written by the D9
+campaign itself. `test_deleting_comments_does_not_re_arm_publication` is that
+refutation, kept executable.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -30,8 +34,26 @@ else:                                                    # pragma: no cover
 
 _GEN = _ROOT / "tools" / "gen_flow_gate_d9_section.py"
 _REALITY = _ROOT / "tools" / "d9_reality" / "d9_reality.json"
-_FLOW = (_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-         / "flow" / "phase1_phase2_phase3.yaml")
+
+
+def _module():
+    spec = importlib.util.spec_from_file_location("d9gen", _GEN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _flow_text() -> str:
+    return (_ROOT / _module()._FLOW_REL).read_text(encoding="utf-8", errors="ignore")
+
+
+def _tree(tmp_path: Path, flow_text: str) -> Path:
+    g = _module()
+    root = tmp_path / "repo"
+    flow = root / g._FLOW_REL
+    flow.parent.mkdir(parents=True, exist_ok=True)
+    flow.write_text(flow_text, encoding="utf-8")
+    return root
 
 
 def _run(*args: str):
@@ -39,16 +61,16 @@ def _run(*args: str):
                           capture_output=True, text=True)
 
 
-# ------------------------------------------------------- the premise is dead --
-def test_the_flow_asks_the_ninth_question_today():
-    """The sentence the generator justifies itself with, checked against its subject."""
-    text = _FLOW.read_text(encoding="utf-8", errors="ignore")
-    assert "# D9" in text, "the flow no longer labels D9 clauses; re-read this fix"
-    assert 'program_exit_zero: "step_internal_fail_bubble_up_check' in text
+# ---------------------------------------------------------------- can FAIL --
+def test_the_shipped_report_describes_a_smaller_flow():
+    """Not a synthetic number: the json in the tree, against the flow in the tree."""
+    g = _module()
+    rep = json.loads(_REALITY.read_text(encoding="utf-8"))
+    assert rep["steps"] == 63
+    assert g.flow_step_count(_ROOT) == 68
 
 
 def test_every_path_refuses_and_says_why(tmp_path):
-    """--check, --emit, --install and --write all exit 2 with the real reason."""
     page = tmp_path / "page.html"
     page.write_text("<html><body>x</body></html>", encoding="utf-8")
     for args in (["--reality", str(_REALITY), "--page", str(page), "--check"],
@@ -57,7 +79,6 @@ def test_every_path_refuses_and_says_why(tmp_path):
                  ["--reality", str(_REALITY), "--page", str(page), "--write"]):
         r = _run(*args)
         assert r.returncode == 2, (args, r.stdout + r.stderr)
-        assert "premise" in r.stderr, (args, r.stderr)
         assert "NOT an invitation to re-install" in r.stderr, args
 
 
@@ -74,7 +95,6 @@ def test_the_refusal_writes_nothing(tmp_path):
 
 
 def test_the_published_page_is_untouched_by_a_check():
-    """The real subject: today's flow-gate.html, if it is on this host."""
     live = Path("/home/reyerchu/vibeic.ai/flow-gate.html")
     if not live.is_file():                              # pragma: no cover
         import pytest
@@ -85,52 +105,49 @@ def test_the_published_page_is_untouched_by_a_check():
     assert live.read_bytes() == before
 
 
-# ------------------------------------------------------ the guard can pass --
-def test_a_flow_that_stops_asking_restores_the_program(tmp_path):
-    """The guard reads the tree, not this file's prose.
+# ------------------------------------------- the refuted guard, kept executable --
+def test_deleting_comments_does_not_re_arm_publication(tmp_path):
+    """The adversarial refutation of the FIRST guard, as a standing test.
 
-    Built by REMOVING the D9 labels from a copy of the real flow, so the
-    can-pass arm is the same subject minus exactly the thing under test -- and
-    the report's own step count is set to match, since that is the second gate.
+    Strip every `# D9` comment from the real flow. No criterion changes -- the
+    blocking clause is still there -- so the refusal must not lift.
     """
-    import re
-    sys.path.insert(0, str(_ROOT / "tools"))
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("g", _GEN)
-    g = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(g)
+    g = _module()
+    stripped = re.sub(r"^\s*#\s*D9\b.*$", "        # (comment removed)",
+                      _flow_text(), flags=re.M)
+    assert 'program_exit_zero: "step_internal_fail_bubble_up_check' in stripped, \
+        "the mutation removed a criterion; it must remove only comments"
+    root = _tree(tmp_path, stripped)
+    assert g.premise_refusal({"steps": 63}, root) is not None
 
-    root = tmp_path / "repo"
-    flow = root / g._FLOW_REL
-    flow.parent.mkdir(parents=True)
-    stripped = re.sub(r"^\s*#\s*D9\b.*$", "        # (label removed)",
-                      _FLOW.read_text(encoding="utf-8"), flags=re.M)
-    flow.write_text(stripped, encoding="utf-8")
 
-    assert g.flow_asks_the_ninth_question(root) == 0
+def test_the_typed_figures_are_read_from_string_literals_not_comments():
+    """The guard reads what the block PRINTS, never what the file discusses."""
+    g = _module()
+    typed = g.typed_populations()
+    assert 504 in typed and 63 in typed, typed
+    # the docstring above discusses 68 at length; that must not be collected
+    # as something the block prints.
+    assert all(isinstance(v, str) for v in typed.values())
+
+
+# ---------------------------------------------------------------- can PASS --
+def test_a_matching_report_on_a_derived_block_would_publish(tmp_path, monkeypatch):
+    """Both gates lift together: same-size report AND no typed populations.
+
+    Neither alone is enough, which is the point -- so the can-pass arm has to
+    clear both, and it does so without editing the flow's criteria.
+    """
+    g = _module()
+    root = _tree(tmp_path, _flow_text())
     steps = g.flow_step_count(root)
+    monkeypatch.setattr(g, "typed_populations", lambda: {})
     assert g.premise_refusal({"steps": steps}, root) is None
 
 
-def test_a_report_describing_another_flow_is_refused(tmp_path):
-    """Second gate: 63-step data against a 68-step flow."""
-    import re, importlib.util
-    spec = importlib.util.spec_from_file_location("g2", _GEN)
-    g = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(g)
-
-    root = tmp_path / "repo"
-    flow = root / g._FLOW_REL
-    flow.parent.mkdir(parents=True)
-    flow.write_text(re.sub(r"^\s*#\s*D9\b.*$", "        # (label removed)",
-                           _FLOW.read_text(encoding="utf-8"), flags=re.M),
-                    encoding="utf-8")
-    live = g.flow_step_count(root)
-    why = g.premise_refusal({"steps": live - 5}, root)
-    assert why and f"{live - 5}-step flow" in why and f"has {live} steps" in why
-
-
-def test_the_shipped_report_is_the_one_that_cannot_be_published():
-    """Not a synthetic number: the json in the tree describes a smaller flow."""
-    rep = json.loads(_REALITY.read_text(encoding="utf-8"))
-    assert rep["steps"] == 63, rep["steps"]
+def test_a_same_size_report_still_refuses_while_the_figures_are_typed(tmp_path):
+    """Gate 2 alone holds: refreshing the report does not correct a literal."""
+    g = _module()
+    root = _tree(tmp_path, _flow_text())
+    why = g.premise_refusal({"steps": g.flow_step_count(root)}, root)
+    assert why is not None and "TYPED" in why
