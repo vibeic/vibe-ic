@@ -408,16 +408,31 @@ def test_dashboard_serve_retries_ports_and_records_url(tmp_path):
     # server runs in a thread of THIS process, so this process's CPU advancing
     # is a true "it is still working" reading; only a completely flat one ends
     # the wait, and the socket timeout below is a LOOK INTERVAL, not a bound.
+    # THE PREDICATE IS THE RECORD, NOT THE FILE. `url_f.is_file()` is true the
+    # instant `serve` creates the file and BEFORE it has written the line, so a
+    # wait that stops there reads an empty string and dies on
+    # `int('')` — measured, this exact test, on the first full arm after the
+    # conversion. "The file appeared" is not the thing meant; "the record was
+    # written" is, and a readiness predicate that is weaker than the assertion
+    # it guards is a race whatever bounds the loop.
+    def _recorded():
+        try:
+            tail = url_f.read_text().strip().rsplit(":", 1)[-1]
+        except OSError:
+            return False
+        return tail.isdigit()
+
     guard = _watchdog.loop_guard(
         "signoff-dashboard-bind", max_iter=_MAX_LOOKS,
         stall_iters=_STALL_LOOKS, progress_fn=_server_cpu_s)
     for _ in guard:
-        if url_f.is_file() or not t.is_alive():
+        if _recorded() or not t.is_alive():
             break
         time.sleep(_LOOK_S)
-    assert url_f.is_file(), (
+    seen = url_f.read_text() if url_f.is_file() else None
+    assert _recorded(), (
         "daemon must record its actually-bound URL "
-        f"({guard.reason} after {guard.iterations} looks)")
+        f"({guard.reason} after {guard.iterations} looks; content={seen!r})")
     rec = url_f.read_text().strip()
     bound = int(rec.rsplit(":", 1)[-1])
     assert bound != port, "daemon must have hopped off the busy port"

@@ -353,10 +353,24 @@ def test_serve_records_actual_port_for_port_zero(tmp_path):
     # The server is a thread of THIS process, so this process's CPU advancing is
     # the "it is working" reading; a fixed 80-look budget was a reading of the
     # host instead.
-    _await("serve-bind", url_f.is_file,
-           progress_fn=_server_cpu_s,
-           alive=t.is_alive)
-    assert url_f.is_file(), "daemon must record its actually-bound URL"
+    # THE PREDICATE IS THE RECORD, NOT THE FILE. `url_f.is_file()` is true the
+    # instant `serve` creates the file and BEFORE it has written the line, so a
+    # wait that stops there reads an empty string and dies on
+    # `int('')` — measured, this exact test, on the first full arm after the
+    # conversion. "The file appeared" is not the thing meant; "the record was
+    # written" is, and a readiness predicate that is weaker than the assertion
+    # it guards is a race whatever bounds the loop.
+    def _recorded():
+        try:
+            tail = url_f.read_text().strip().rsplit(":", 1)[-1]
+        except OSError:
+            return False
+        return tail.isdigit()
+
+    _await("serve-bind", _recorded, progress_fn=_server_cpu_s, alive=t.is_alive)
+    assert _recorded(), (
+        "daemon must record its actually-bound URL "
+        f"(file={url_f.is_file()})")
     rec = url_f.read_text().strip()
     bound = int(rec.rsplit(":", 1)[-1])
     assert bound != 0, "port-0 must resolve to a real OS-assigned port, not :0"
