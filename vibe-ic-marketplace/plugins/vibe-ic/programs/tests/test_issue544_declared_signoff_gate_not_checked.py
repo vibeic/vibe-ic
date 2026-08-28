@@ -33,10 +33,15 @@ must produce a roll-up whose `not_checked` list is empty. A change that turned
 every incomplete checkout into a hard failure would get worked around, and a
 worked-around gate is worse than the hole.
 
-INNER TIMEOUTS (#542). Every gate driven here is a pure report reader — none of
-the five contains a `subprocess`, `docker` or `shutil.which` call — and returns
-in well under a second. `_INNER_TIMEOUT_S` is far below CI's `--timeout=180`
-harness bound, so a hang fails THIS test instead of killing the subset.
+INNER TIMEOUTS (#542, superseded). Every gate driven here is a pure report
+reader — none of the five contains a `subprocess`, `docker` or `shutil.which`
+call — and returns in well under a second ON THE HOST THAT WAS MEASURED. There
+is no inner wall-clock bound left: `_run_declared_signoff_gate` folds a
+`TimeoutExpired` into NOT_CHECKED, and the assertions here are precisely about
+telling BLOCKED, rc=2 and FAIL apart, so a bound firing because the machine was
+busy impersonates every one of them. The gates run under forward-progress
+supervision instead (`_supervise_signoff_launcher`), and
+`test_this_file_declares_no_inner_wall_clock_bound_at_all` keeps it that way.
 """
 from __future__ import annotations
 
@@ -53,6 +58,7 @@ _RUNNER_SRC = _PROGRAMS / "phase3_one_shot_runner.py"
 sys.path.insert(0, str(_PROGRAMS))
 
 import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
+import _watchdog                                           # noqa: E402
 
 _CEILING_REPO_ROOT = ceiling_check.find_repo_root()
 
@@ -66,10 +72,14 @@ _CI_HARNESS_TIMEOUT_S = (
     ceiling_check.ci_harness_timeout_seconds(_CEILING_REPO_ROOT)
     if _CEILING_REPO_ROOT else None)
 
-#: Inner subprocess bound. MUST stay below CI's harness bound (#542): a test
-#: whose own timeout is at or above it cannot fail as a test — pytest kills the
-#: whole targeted subset first and every other file's result is lost.
-_INNER_TIMEOUT_S = 60
+#: There is no inner subprocess bound any more, and that is the point. #542
+#: asked only that the number stay under CI's harness bound; the number itself
+#: was never a property of the five gates. `_run_declared_signoff_gate` maps a
+#: `TimeoutExpired` onto NOT_CHECKED, so a bound that fires because the host was
+#: busy is indistinguishable here from a gate that genuinely could not answer —
+#: and these tests assert on exactly that distinction (BLOCKED vs rc=2 vs FAIL).
+#: The gates are driven through a supervised launcher instead: see
+#: `_supervise_signoff_launcher`.
 
 #: What `phase3_one_shot_runner.main` exits 0 on. A sign-off that was not
 #: performed must not produce any of these.
@@ -119,9 +129,38 @@ _MULTICORNER_VIOLATED = (
 
 
 @pytest.fixture()
-def runner():
+def runner(monkeypatch):
     import phase3_one_shot_runner as R  # noqa: WPS433
+    _supervise_signoff_launcher(monkeypatch)
     return R
+
+
+def _supervise_signoff_launcher(monkeypatch):
+    """Drive every sign-off gate under forward-progress supervision.
+
+    `phase3_one_shot_runner._run_declared_signoff_gate` launches each gate with
+    `subprocess.run(cmd, timeout=N)` and folds ANY exception — including
+    `TimeoutExpired` — into `_signoff_not_checked`. That is right for the
+    runner: "I could not check this" is the honest record. It is wrong as a
+    TEST bound, because the assertions in this file are about which of BLOCKED,
+    rc=2 and FAIL a gate reaches, and a host-driven NOT_CHECKED impersonates all
+    of them.
+
+    So the launcher is replaced, not the runner's logic: the wall clock is
+    dropped and the child is watched by CPU + I/O over its /proc tree plus the
+    growth of its captured output. A gate that is merely slow now always
+    returns its real rc; one that wedges is still killed, as rc
+    `_watchdog.RC_STALLED` — a code none of these gates produces, so it can
+    never be read as one of their verdicts."""
+    def _supervised_run(cmd, **kw):
+        kw.pop("timeout", None)
+        kw.pop("capture_output", None)
+        kw.pop("text", None)
+        kw.pop("check", None)
+        return _watchdog.completed_process(
+            cmd, _watchdog.run_host_supervised(list(cmd), **kw))
+
+    monkeypatch.setattr(subprocess, "run", _supervised_run)
 
 
 def _project(tmp: Path, *, violated_corner: bool = False,
@@ -302,8 +341,7 @@ def test_rc2_from_a_declared_signoff_gate_does_not_release(tmp_path, runner):
     proj = _project(tmp_path)
     r = runner._run_declared_signoff_gate(
         proj, "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"),
-        timeout=_INNER_TIMEOUT_S)
+        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
     assert r.status == "BLOCKED", r
     assert "rc=2" in r.detail, r.detail
     assert runner._aggregate_verdict([r]) not in _RELEASING, r
@@ -316,8 +354,7 @@ def test_rc2_stays_distinct_from_a_design_failure(tmp_path, runner):
     proj = _project(tmp_path)
     r = runner._run_declared_signoff_gate(
         proj, "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"),
-        timeout=_INNER_TIMEOUT_S)
+        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
     assert r.status != "FAIL", (
         "a checker fault was recorded as a verdict about the design", r)
     assert r.status in runner._VERDICT_TIERS, (
@@ -346,8 +383,7 @@ def test_every_non_verdict_exit_code_is_non_releasing(tmp_path, runner,
     monkeypatch.setattr(runner, "PROGRAMS_DIR", dep)
     r = runner._run_declared_signoff_gate(
         proj, "sta_corner", "stub_signoff_gate.py",
-        "reports/phase3/sta/post_route_signoff_corner.json",
-        timeout=_INNER_TIMEOUT_S)
+        "reports/phase3/sta/post_route_signoff_corner.json")
     assert r.status == "BLOCKED", (rc, r)
     assert f"rc={rc}" in r.detail, r.detail
     assert runner._aggregate_verdict([r]) not in _RELEASING, (rc, r)
@@ -361,8 +397,7 @@ def test_an_rc2_argparse_rejection_says_it_was_never_validly_invoked(
     proj = _project(tmp_path)
     r = runner._run_declared_signoff_gate(
         proj, "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"),
-        timeout=_INNER_TIMEOUT_S)
+        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
     assert "never validly invoked" in r.detail, r.detail
     assert "invalid choice" in r.detail, r.detail
 
@@ -587,37 +622,60 @@ def test_the_blast_radius_is_recorded_where_the_change_is():
         "the concrete finding that justified the change is not recorded")
 
 
-def test_inner_subprocess_bounds_stay_under_the_ci_harness_bound():
-    """#542 — a test whose own subprocess timeout is at or above CI's harness
-    bound cannot fail as a test; it kills the whole subset.
+def test_this_file_declares_no_inner_wall_clock_bound_at_all():
+    """The SUCCESSOR of `_INNER_TIMEOUT_S <= ceiling`, and a stronger claim.
 
-    Parsed by the SHARED scanner rather than an inline walk: the bound and the
-    parse now have one implementation each, and this file inherits the two
-    shapes an inline copy did not have (a bound spelled as a module constant,
-    and a wrapper that splats `**kwargs` into a launcher)."""
+    #542 asked only that this file's own subprocess bound stay under CI's
+    harness bound, because a bound at or above it cannot fail as a test — it
+    kills the whole subset. That is true, and it is not the whole defect. A
+    bound UNDER the ceiling still decides something it cannot know: these tests
+    assert which of BLOCKED / rc=2 / FAIL a gate reached, and
+    `_run_declared_signoff_gate` folds a `TimeoutExpired` into NOT_CHECKED, so a
+    bound firing on a busy host impersonates a gate that could not answer.
+
+    So the assertion becomes the ABSENCE of any readable bound, checked with the
+    SAME shared scanner rather than an inline walk. `sites` counted the bounds
+    read; asserting it is EMPTY is the strict strengthening of asserting each
+    one was small enough, and it fails on a bound reintroduced under any name or
+    spelling the scanner understands — including the module constant and the
+    `**kwargs`-splatting wrapper an inline copy used to miss."""
     if _CI_HARNESS_TIMEOUT_S is None:
         pytest.skip("no .github/workflows in reach — the harness bound cannot "
                     "be resolved, and a remembered copy of it is the defect")
     ceiling = _CI_HARNESS_TIMEOUT_S // ceiling_check.CEILING_DIVISOR
-    assert _INNER_TIMEOUT_S <= ceiling
     findings, unresolved, sites = ceiling_check.scan_source(
         Path(__file__).read_text(errors="replace"), Path(__file__).name,
         ceiling)
-    assert sites, "no bound was READ at all — has the scan stopped working?"
+    assert not sites, (
+        "a wall-clock bound is back on a blocking call in this file; the gates "
+        f"here are supervised by forward progress instead: {sites}")
     assert not findings and not unresolved, "\n  ".join(
         str(x) for x in list(findings) + list(unresolved))
 
 
-def test_the_gates_this_file_drives_finish_well_inside_that_bound(tmp_path,
-                                                                 runner):
-    """The bound is only honest if it is generous. Measure the slowest thing
-    this file asks for — all five gates on a real fixture — rather than
-    assuming."""
-    import time
+def test_every_gate_this_file_drives_reaches_a_real_verdict(tmp_path, runner):
+    """The SUCCESSOR of "the gates finish well inside that bound".
+
+    That test asserted `elapsed < _INNER_TIMEOUT_S / 2` — an elapsed-time
+    verdict, and the same defect one level out: on a loaded host it reported
+    five healthy gates as too slow. With no bound left there is nothing for them
+    to be "inside" of, and how long they take was never the property that made
+    the other tests meaningful.
+
+    What IS load-bearing is that all five actually RAN and each reached a status
+    in the runner's declared vocabulary. That is the non-vacuity the timing
+    assertion was standing in for: a fixture where nothing launched would leave
+    every assertion in this file trivially satisfiable, and unlike a duration it
+    cannot be changed by how busy the machine is."""
     proj = _project(tmp_path)
-    t0 = time.time()
-    _all_signoff_steps(runner, proj)
-    elapsed = time.time() - t0
-    assert elapsed < _INNER_TIMEOUT_S / 2, (
-        f"five declared sign-off gates took {elapsed:.1f}s; the inner bound "
-        f"of {_INNER_TIMEOUT_S}s is no longer generous")
+    steps = _all_signoff_steps(runner, proj)
+    assert len(steps) >= 5, (
+        f"the runner planned {len(steps)} sign-off gates; this file's other "
+        "tests assert over the set it plans, so an empty or shrunken plan "
+        "would satisfy them without checking anything")
+    for r in steps:
+        assert r.status in runner._VERDICT_TIERS, (
+            f"{r.name} reached {r.status!r}, which is not in the runner's "
+            f"declared verdict vocabulary {runner._VERDICT_TIERS}")
+        assert r.status != "NOT_CHECKED" or r.detail, (
+            f"{r.name} could not be checked and did not say why")

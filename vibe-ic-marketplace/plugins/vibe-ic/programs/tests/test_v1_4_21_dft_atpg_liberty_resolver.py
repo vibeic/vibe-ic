@@ -19,6 +19,37 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import transition_fault_atpg_run as tdf  # noqa: E402
 import path_delay_fault_atpg_run as pdf  # noqa: E402
+import _watchdog  # noqa: E402
+
+
+def _supervise_docker(monkeypatch):
+    """Replace the launcher `transition_fault_atpg_run._run_in_docker` reaches
+    with a progress-supervised one, for the duration of one test.
+
+    `_run_in_docker` runs `docker run … fault cut` under
+    `subprocess.run(..., timeout=N)` and turns a `TimeoutExpired` into rc 124
+    plus "docker command timed out". That mapping is correct for the producer —
+    it salvages the partial log — but it means the wall clock DECIDES a verdict,
+    and the caller here asserts the cut succeeded. 60 s is a guess about this
+    host, and a container yosys on a loaded box is not a broken `fault cut`.
+
+    Supervision watches the `docker run` client's /proc tree AND the growth of
+    its captured output (the container relays through the client), so a long
+    quiet cut is waited out and a wedged one still dies — as rc
+    `_watchdog.RC_STALLED`, which is not 124, so a hang can never be mistaken
+    for the salvage path this producer books at 124.
+
+    `timeout` is accepted and ignored so the producer's own signature, and its
+    reap path, are untouched."""
+    def _supervised_run(cmd, **kw):
+        kw.pop("timeout", None)
+        kw.pop("capture_output", None)
+        kw.pop("text", None)
+        kw.pop("check", None)
+        return _watchdog.completed_process(
+            cmd, _watchdog.run_host_supervised(list(cmd), **kw))
+
+    monkeypatch.setattr(tdf.subprocess, "run", _supervised_run)
 import lec_run  # noqa: E402
 
 
@@ -132,8 +163,9 @@ _IMAGE_STATE, _IMAGE_DETAIL = probe(
     reason=probe_skip_reason(_IMAGE_STATE, _IMAGE_DETAIL,
                              "vibeic-eda container not available",
                              RUN_REMEDY))
-def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
+def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path, monkeypatch):
     import fault_atpg_run as far  # noqa: E402
+    _supervise_docker(monkeypatch)
     nl = tmp_path / "phase2" / "stage2" / "synth" / "spm_synth.v"
     nl.parent.mkdir(parents=True)
     body = ["module spm(input clk, input d0, input d1, output q0, output q1);"]
@@ -144,6 +176,11 @@ def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
     cells = far.detect_dff_cells(nl.read_text())
     assert cells == "sky130_fd_sc_hd__dfxtp_1"          # the fix detects it
     cut_rel = "phase2/stage2/dft/cut_netlist.v"
+    # No 60 s wall on a real container `fault cut`. `_run_in_docker` maps a
+    # `TimeoutExpired` onto rc 124, `_ensure_cut` reports that as the cut having
+    # failed, and `assert ok, msg` then blames the producer for what was really
+    # a busy machine. `_supervise_docker` above replaced the launcher, so the
+    # argument below is inert and the run is bounded by forward progress.
     ok, msg = tdf._ensure_cut(tmp_path, "phase2/stage2/synth/spm_synth.v",
                               cut_rel, "clk", None, None, timeout=60)
     assert ok, msg
