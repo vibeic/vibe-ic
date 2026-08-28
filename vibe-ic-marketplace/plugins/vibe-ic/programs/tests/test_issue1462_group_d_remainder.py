@@ -51,6 +51,8 @@ chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU or process.
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -121,6 +123,43 @@ def revert(name: str) -> str:
         out = out.replace("\nimport argparse\n", "\nimport argparse\nimport json\n", 1)
     assert "\nimport json\n" in out, f"{name}: json import missing"
     return out
+
+
+#: `import _foo` / `from _foo import bar`, this repo's convention for a
+#: sibling module in `programs/`. `_atomic_artefact` never matches through
+#: this helper: it is excluded by name below, deliberately, so the isolation
+#: `revert()` relies on cannot be reopened by a dependency that happens to sit
+#: behind it in the import graph.
+_SIBLING_IMPORT_RE = re.compile(r"^(?:import|from)\s+(_[A-Za-z0-9_]*)\b", re.MULTILINE)
+
+
+def _stage_sibling_deps(src: str, moddir: Path, _seen: set[str] | None = None) -> None:
+    """Copy every sibling `_*` module `src` (transitively) imports into moddir.
+
+    #1462's isolation is specifically about `_atomic_artefact` — the reverted
+    source must not be able to reach it. It says nothing about any OTHER
+    sibling helper the module happens to import, and `_progress_run` (reached
+    through `_watchdog`) is exactly that: a dependency `generated_artifact_
+    conflict_resolve.py` gained after this fixture was written, absent from
+    its one hand-typed exclusion, so the isolated child hit `ModuleNotFoundError`
+    at import time — which the poll loop below could only see as "never
+    observed a partial write", misattributing an import failure to the payload
+    finishing too fast. Recursing (rather than copying one level) is what makes
+    this survive the NEXT such addition too, instead of needing a second manual
+    patch.
+    """
+    seen = _seen if _seen is not None else set()
+    for m in _SIBLING_IMPORT_RE.finditer(src):
+        mod = m.group(1)
+        if mod == "_atomic_artefact" or mod in seen:
+            continue
+        seen.add(mod)
+        dep = PROGRAMS / f"{mod}.py"
+        if not dep.is_file():
+            continue
+        dep_src = dep.read_text(encoding="utf-8")
+        shutil.copy2(dep, moddir / dep.name)
+        _stage_sibling_deps(dep_src, moddir, seen)
 
 
 # --------------------------------------------------------------------------
@@ -206,7 +245,9 @@ def _kill_mid_write(tmp_path: Path, name: str, arm: str):
     # helper it is supposed to be running without.
     importdir = PROGRAMS if arm == "converted" else moddir
     if arm != "converted":
-        (moddir / name).write_text(revert(name), encoding="utf-8")
+        reverted_src = revert(name)
+        (moddir / name).write_text(reverted_src, encoding="utf-8")
+        _stage_sibling_deps(reverted_src, moddir)
 
     dest = tmp_path / arm / "out" / "verdict.json"
     dest.parent.mkdir(parents=True, exist_ok=True)

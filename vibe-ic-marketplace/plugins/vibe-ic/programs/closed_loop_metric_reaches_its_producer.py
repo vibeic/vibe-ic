@@ -89,6 +89,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402
+
 #: A metric identifier, as the flow's own triggers write them. Two shapes:
 #: the OpenROAD/ORFS double-underscore form (`design__instance__area`,
 #: `power__total`) and a dotted L-doc field (`L19.die_area_budget_um`).
@@ -260,7 +263,7 @@ def main(argv=None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
+        _aa.write_text(out, json.dumps(rep, indent=2) + "\n", encoding="utf-8")
 
     counts = {REACHABLE: 0, UNREACHABLE: 0, UNSTATED: 0}
     for row in rep["edges"]:
