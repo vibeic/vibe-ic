@@ -193,7 +193,7 @@ def _decision_findings(decision: Dict[str, Any], *,
 
 def _nontiming_block_domains(log: dict, decision: Optional[dict]) -> List[str]:
     """Names of the NON-TIMING sign-off domains that required this post-route repair, when
-    the run is in the v1.7.64 fail-close state and no timing post-route repair was applied.
+    the run is in the v1.7.64 fail-close state and no post-route timing repair was applied.
 
     Empty list => not that state => every pre-existing finding applies
     unchanged. Both inputs are consulted because the two records carry the same
@@ -204,7 +204,7 @@ def _nontiming_block_domains(log: dict, decision: Optional[dict]) -> List[str]:
     `repair_required_non_timing` action, or `timing_repair_needed` declared literally
     False beside a non-empty `nontiming_failures`. A missing, null or
     non-boolean `timing_repair_needed` does NOT qualify: a record that says
-    nothing must not be read as saying "no timing post-route repair was needed", which is
+    nothing must not be read as saying "no post-route timing repair was needed", which is
     what would let this branch swallow a genuine unapplied timing repair.
 
     chip-AGNOSTIC: canonical record keys only; no design, PDK or vendor token.
@@ -316,9 +316,9 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     if _blocking:
         findings.append(Finding(
             "ERROR", "REPAIR_BLOCKED_ON_NONTIMING_SIGNOFF",
-            "no timing post-route repair was applied, and none should have been: the post-route repair was "
+            "no post-route timing repair was applied, and none should have been: the post-route repair was "
             "required by a NON-TIMING sign-off failure ("
-            + ", ".join(_blocking) + "), which a timing-repair post-route repair cannot fix. "
+            + ", ".join(_blocking) + "), which a timing-repair pass cannot fix. "
             "Re-running sign-off STA will not clear this step — triage and "
             "re-run the named sign-off domain(s), then re-run the flow",
             f"decision action: {(decision or {}).get('action')!r}; "
@@ -433,7 +433,7 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
             "ERROR", "REPAIR_REGRESSED",
             "the post-route repair made timing measurably WORSE" + _d
             + " — a repair that regresses the design must not be recorded as "
-              "applied; the pre-post-route repair artefacts are the better ones"))
+              "applied; the pre-repair artefacts are the better ones"))
     stats["repair_setup_delta_ns"] = _delta
     stats["repair_delta_comparable"] = _comparable
 

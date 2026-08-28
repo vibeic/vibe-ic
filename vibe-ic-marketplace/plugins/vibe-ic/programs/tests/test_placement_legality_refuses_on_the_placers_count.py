@@ -57,6 +57,7 @@ chip-AGNOSTIC: an OpenROAD command's own output grammar and the runner's
 marker prefix; no chip, PDK, library or design literal.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -250,9 +251,17 @@ def test_the_runner_no_longer_demotes_the_verdict_to_a_warning():
 
 
 def test_both_call_sites_use_the_shared_builder():
-    """One builder, so the two sites cannot drift apart again."""
+    """One builder, so the two sites cannot drift apart again.
+
+    The repair site's arguments no longer fit on one line, so both sites are
+    matched with whitespace-tolerant patterns. Dropping the BUILDER'S NAME
+    from the repair assertion and keeping only its argument tuple would have
+    left the marker pinned and the shared-builder property — the one this
+    test is named for — unchecked.
+    """
     src = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
-    assert src.count('_build_check_placement_verdict_tcl("SPARE"') == 1
-    assert src.count(
-        '"POSTROUTE_TIMING_REPAIR", "_postroute_timing_repair_cp"'
-    ) == 1
+    call = r'_build_check_placement_verdict_tcl\(\s*"%s",\s*"%s"\)'
+    assert len(re.findall(call % ("SPARE", "_spare"), src)) == 1
+    assert len(re.findall(
+        call % ("POSTROUTE_TIMING_REPAIR", "_postroute_timing_repair_cp"),
+        src)) == 1

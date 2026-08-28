@@ -32256,7 +32256,7 @@ def _repair_residual_note(project: "Path", residual: bool,
     if isinstance(delta_ns, (int, float)) and delta_ns < -1e-9:
         return (
             f"post-route repair REGRESSED the design: setup WNS moved {delta_ns:+.3f} ns "
-            "(after minus before). Nothing was recovered — the pre-post-route repair "
+            "(after minus before). Nothing was recovered — the pre-repair "
             "artefacts are the better ones and are what this run retains. Do "
             "NOT read the residual violation as a process-corner floor; the "
             "post-route repair itself made the number worse, so the floor has not been "
@@ -33436,7 +33436,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 ("Multi-corner OCV sign-off: SETUP @ %s process (slow) + max-RC, "
                  "HOLD @ %s process (fast) + min-RC, flat-OCV ±5%% + recovery/"
                  "removal/MPW. Per-corner slack is REAL — a violation is SURFACED, "
-                 "not masked; close it with the DRV constraints + a timing post-route repair."
+                 "not masked; close it with the DRV constraints + a post-route timing repair."
                  % (setup_lbl, hold_lbl)) if multi_process else
                 "SINGLE process corner only — the active PDK exposes fewer than "
                 "two distinct ss/ff process liberties, so multi-corner OCV sign-off "
@@ -33513,7 +33513,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             notes.append(
                 "multi-corner OCV STA SURFACED a real violation at "
                 f"{'/'.join(_viol)} corner(s): setup_wns={setup_wns} "
-                f"hold_wns={hold_wns} — timing post-route repair required (not a plugin bug).")
+                f"hold_wns={hold_wns} — post-route timing repair required (not a plugin bug).")
 
     # --- Step 23: post-route STA report (canonical) ---------------------
     # #527 — SPEF-based is CANONICAL when available (closer to sign-off
@@ -33522,7 +33522,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # RESUME-upgrade (adversarial-review fix): a resumed project may carry a
     # STALE estimate-based alias written before the SPEF run existed; once
     # the SPEF-based report exists the alias MUST be upgraded (and a stale
-    # optimistic no-post-route repair flag cleared) or the old MET copy keeps shadowing a
+    # optimistic no-repair flag cleared) or the old MET copy keeps shadowing a
     # VIOLATED sign-off basis.
     if (spef_sta_ok and post_route_rpt.is_file()
             and "SPEF-BASED" not in post_route_rpt.read_text(
@@ -33551,7 +33551,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- #527: estimate-vs-SPEF discrepancy surface ----------------------
     # When both bases parse and they disagree (sign flip OR >1 ns delta),
     # NEVER silently keep the optimistic one: write a named discrepancy
-    # artifact so triage + the Step-32 timing-post-route repair loop see it.
+    # artifact so triage + the Step-32 post-route timing repair loop see it.
     if spef_sta_ok and primary_sta.is_file():
         _est = _worst_slack(primary_sta.read_text(errors="replace"))
         _spf = _worst_slack(spef_sta_rpt.read_text(errors="replace"))
@@ -33569,7 +33569,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "delta_ns": round(_delta, 4),
                     "sign_flip": _flip,
                     "canonical_basis": "spef",
-                    "action": ("timing post-route repair required when the SPEF basis "
+                    "action": ("post-route timing repair required when the SPEF basis "
                                "is VIOLATED — the estimate-based MET is "
                                "not a sign-off claim (#527)"),
                 }, indent=2) + "\n")
@@ -34455,7 +34455,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             notes.append(
                 "post-route repair REQUIRED (non-timing): " + _repair_decision["reason"]
                 + " — no_repair_needed.flag deliberately NOT written; the "
-                "the timing-repair pass does not apply; triage the named "
+                "timing-repair pass does not apply; triage the named "
                 "sign-off domain(s).")
         elif _repair_decision["mc_ocv_available"] and repair_tcl_path.is_file():
             # AUTO-TRIGGER FIRES: run the multi-corner-aware post-route repair.
@@ -34486,7 +34486,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             # adjacent in the record below, and were never SUBTRACTED. So an
             # post-route repair that made timing measurably WORSE was written down as
             # REPAIR_APPLIED / step status `pass`, and the artefacts it produced
-            # were adopted over the better pre-post-route repair ones. Measured on a real
+            # were adopted over the better pre-repair ones. Measured on a real
             # cell: setup went -0.68 -> -8.92 ns (a 12x regression) and the
             # record said `pass`.
             #
@@ -34560,7 +34560,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _repair_decision["action"] = "timing_repair_reverted_regression"
                 notes.append(
                     f"post-route repair REVERTED: setup {_repair_b:+.3f} -> {_repair_a:+.3f} ns "
-                    f"({_repair_delta:+.3f}) is a REGRESSION; the pre-post-route repair "
+                    f"({_repair_delta:+.3f}) is a REGRESSION; the pre-repair "
                     "artefacts are retained and this step does NOT pass.")
             _repair_log = postroute_timing_repair_out / "repair_log.json"
             try:
@@ -36912,7 +36912,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     REAL per-corner slack — a genuine ss violation appears as VIOLATED, NEVER
     hidden (§4.05: surface, do not mask). Rigor != closure: the rigor gate PASSes
     on a full-rigor report even when its ss slack is VIOLATED; closure is a
-    separate dimension driven by the DRV constraints + a timing post-route repair.
+    separate dimension driven by the DRV constraints + a post-route timing repair.
 
     §4.05 HONEST fallbacks: uses only the libs/SPEFs that actually exist. If the
     ss/ff process libs are absent it degrades to TT (the caller discloses single-
