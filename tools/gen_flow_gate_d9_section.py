@@ -16,10 +16,41 @@ generators do.
 
 WHAT IT REFUSES
 ---------------
-It refuses to publish D9 as a shipped dimension.  It is not one: nothing in
-``flow/phase1_phase2_phase3.yaml`` asks the ninth question, and the block says
-so in its first line.  MEASURED-TODAY and PLANNED are rendered in visibly
-different registers and never summed.
+It refuses to publish D9 as a shipped dimension.  MEASURED-TODAY and PLANNED are
+rendered in visibly different registers and never summed.
+
+THAT REFUSAL WAS RIGHT IN 2026-08 AND IS WRONG NOW, WHICH IS WHY THIS PROGRAM
+NO LONGER RENDERS
+-----------------------------------------------------------------------------
+The sentence this file used to carry here -- "it is not one: nothing in
+``flow/phase1_phase2_phase3.yaml`` asks the ninth question" -- was prose, never
+a measurement, and the file it names now contradicts it: four ``# D9`` labelled
+clauses, one of them the BLOCKING ``program_exit_zero:
+"step_internal_fail_bubble_up_check ."`` in step 36.
+
+The question also changed identity underneath this program.  #1009 measured "is
+the output CORRECT".  The D9 that shipped is ``verdict_consumed`` -- does a
+step's own FAIL survive to the process exit code -- and the published page says
+so in its own words: "The ninth question is shipped -- and it is not 'is the
+output correct?'".  So this block is not a stale version of that section; it is
+a denial of it.
+
+Two further facts make this unrepairable by refreshing the data, and both are
+measured:
+
+  * the report describes a 63-step flow (the flow has 68), and the block
+    additionally hardcodes ``504`` = 63 x 8 in its own prose, which no refresh
+    of the report would correct; and
+  * the report cannot BE refreshed here.  ``benchmark-data/`` was exported to
+    its own repository at v1.10.56 (e23d0be5e, 2026-08-17), so
+    ``d9_flow_gate_reality.py`` exits rc 2 "benchmark-data/ not found" and has
+    no corpus-path option.  The report landed on 2026-08-18, INTO a tree where
+    the corpus was already gone: it was un-regenerable the day it shipped.
+
+``premise_refusal()`` below decides this against the tree rather than against
+this paragraph, so a future flow that stops asking the ninth question restores
+the program without anyone editing prose.  Until then every path -- ``--emit``,
+``--install``, ``--write``, ``--check`` -- exits 2 and writes nothing.
 
 It also refuses to render the plan's target as though it were measured.  The
 only ceiling figure it prints is the one this repo can DERIVE — the count of
@@ -558,6 +589,86 @@ def splice(page: str, block: str) -> str:
     raise SystemExit("markers not found; use --install to place them first")
 
 
+#: The flow labels its own D9 clauses. When #1009 wrote this program the label
+#: did not exist; today the yaml carries them, so the question of whether the
+#: flow asks the ninth question is decided BY THE FLOW, not by a sentence in
+#: this file's docstring.
+_D9_LABEL_RE = re.compile(r"^\s*#\s*D9\b", re.M)
+
+_FLOW_REL = ("vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml")
+
+
+def _repo_root() -> Optional[Path]:
+    for anc in Path(__file__).resolve().parents:
+        if (anc / _FLOW_REL).is_file():
+            return anc
+    return None
+
+
+def flow_asks_the_ninth_question(root: Path) -> int:
+    """How many D9-labelled clauses the flow carries. 0 means the premise holds."""
+    return len(_D9_LABEL_RE.findall(
+        (root / _FLOW_REL).read_text(encoding="utf-8", errors="ignore")))
+
+
+def flow_step_count(root: Path) -> int:
+    """Steps the flow declares — the population any D9 figure is a fraction of."""
+    import yaml                                   # local: keep import cost off
+    data = yaml.safe_load((root / _FLOW_REL).read_text(encoding="utf-8"))
+    return len([s for s in (data or {}).get("steps") or [] if s.get("id") is not None])
+
+
+def premise_refusal(rep: Dict, root: Optional[Path]) -> Optional[str]:
+    """Why this program must not render today, or None if it may.
+
+    TWO CHECKS, and both are about whether this program's SUBJECT still exists.
+
+    (1) THE PREMISE. This file's docstring says it refuses to publish D9 as a
+        shipped dimension because "nothing in `flow/phase1_phase2_phase3.yaml`
+        asks the ninth question". MEASURED 2026-08-28: the flow carries four
+        `# D9` labelled clauses, one of them the BLOCKING
+        `program_exit_zero: "step_internal_fail_bubble_up_check ."` in step 36.
+        The premise is false, and it is false IN THE FILE IT NAMES.
+
+        It is also not the same question any more. #1009 measured "is the output
+        CORRECT". The shipped D9 is `verdict_consumed` -- does a step's FAIL
+        survive to the process exit code -- and the page says so in its own
+        words: "The ninth question is shipped -- and it is not 'is the output
+        correct?'". Rendering this block onto that page would publish a denial
+        of what the page next to it asserts.
+
+    (2) THE DATA'S FLOW. The report describes a 63-step flow; the flow has 68.
+        Every figure in the block is a fraction of a population that no longer
+        exists, and the block additionally hardcodes 504 = 63 x 8 in its prose,
+        which no refresh of the report would correct.
+
+    Neither is repairable by re-running the producer. MEASURED: `benchmark-data/`
+    was exported to its own repository at v1.10.56 (e23d0be5e, 2026-08-17), so
+    `d9_flow_gate_reality.py` exits rc 2 "benchmark-data/ not found" here and has
+    no corpus-path option. The report shipped on 2026-08-18, INTO a tree where
+    the corpus was already gone -- it was un-regenerable the day it landed.
+    """
+    if root is None:
+        return ("this program could not locate the flow it is about to publish "
+                "figures against, so it cannot tell whether its own premise "
+                "still holds")
+
+    d9_clauses = flow_asks_the_ninth_question(root)
+    if d9_clauses:
+        return (f"this program's stated premise is that nothing in the flow asks "
+                f"the ninth question. The flow carries {d9_clauses} `# D9` "
+                f"labelled clause(s) today, including a blocking one in step 36. "
+                f"The premise is false, and the shipped D9 is `verdict_consumed`, "
+                f"not the output-correctness question this report measured")
+
+    steps = flow_step_count(root)
+    if rep.get("steps") not in (None, steps):
+        return (f"the report describes a {rep['steps']}-step flow and the flow "
+                f"has {steps} steps. Every figure in the block is a fraction of "
+                f"a population that no longer exists")
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--reality", required=True)
@@ -570,6 +681,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     rep = json.loads(Path(args.reality).read_text())
+
+    # BEFORE ANY RENDERING. A refusal that still emitted the fragment would let
+    # the next caller install what this one declined to publish.
+    refusal = premise_refusal(rep, _repo_root())
+    if refusal:
+        print(f"CANNOT CHECK: {refusal}. Nothing was rendered, emitted or "
+              f"written. NOT a pass -- and NOT an invitation to re-install the "
+              f"markers: reconnecting this block would publish a denial of what "
+              f"the page beside it asserts. See the module docstring.",
+              file=sys.stderr)
+        return 2
+
     block = render(rep)
 
     if args.emit:
@@ -588,7 +711,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.check:
         if BEGIN not in page:
-            print("D9 block absent from page", file=sys.stderr)
+            # NOT "reconnect me". The markers are absent because the page
+            # replaced this block, CSS and all, with a section asserting the
+            # opposite; the guard above is what decides whether that was right.
+            print("D9 block absent from page — the page carries its own D9 "
+                  "section instead", file=sys.stderr)
             return 1
         current = BEGIN + page.split(BEGIN, 1)[1].split(END)[0] + END
         if current.strip() != block.strip():
