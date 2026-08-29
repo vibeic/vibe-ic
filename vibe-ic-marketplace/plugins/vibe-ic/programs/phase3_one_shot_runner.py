@@ -13904,19 +13904,16 @@ def _drt_violation_trajectory(log_text: str) -> List[int]:
     (older builds print `Completing 100% with N violations`); the SEQUENCE of
     those counts is the convergence trajectory. Returns [] when the log never
     reached detailed route. The LAST element equals `_drt_final_violations`
-    (the shipped geometry's state). chip-AGNOSTIC: OpenROAD log grammar only."""
-    if not log_text:
-        return []
-    counts = _RE_DRT_0199.findall(log_text)
-    if not counts:
-        counts = _RE_DRT_COMPLETING.findall(log_text)
-    out: List[int] = []
-    for c in counts:
-        try:
-            out.append(int(c))
-        except (TypeError, ValueError):
-            continue
-    return out
+    (the shipped geometry's state). chip-AGNOSTIC: OpenROAD log grammar only.
+
+    Delegates to the shared `_signoff_drc_format.router_iter_counts` — the SAME
+    helper `_drt_final_violations` reads through — so the docstring's last-element
+    invariant is held BY CONSTRUCTION rather than by two readers agreeing to use
+    the same regex. They did not: the regex aliases above are shared, but the
+    POST-ROUTE VERIFICATION (`[WARNING DRT-0701]`) count is appended inside
+    `router_iter_counts`, not by any pattern, so a reader that only borrowed the
+    patterns still returned the loop's SUPERSEDED trajectory."""
+    return _sdf.router_iter_counts(log_text)
 
 
 def _drt_is_non_converging(trajectory: List[int]) -> bool:
