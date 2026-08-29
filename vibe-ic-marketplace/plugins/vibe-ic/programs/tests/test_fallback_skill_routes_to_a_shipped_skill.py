@@ -44,11 +44,16 @@ import re
 from _skill_routes import (
     FALLBACK_KEY_RE,
     FALLBACK_LITERAL_RE,
+    FLOW,
     PLUGIN,
     SKILLS,
     deprecated_skills as _deprecated_skills,
+    flow_doc as _flow_doc,
+    flow_skill_routes as _flow_skill_routes,
+    iter_flow_steps as _iter_flow_steps,
     routing_sources,
     shipped_skills as _shipped_skills,
+    unbuilt_skills as _unbuilt,
 )
 
 RUNNER = PLUGIN / "programs" / "design_one_shot_runner.py"
@@ -206,3 +211,171 @@ def test_the_variable_valued_routes_are_covered_by_the_registry_channel():
         "literal the registry channel is no longer load-bearing here -- "
         "re-read the coverage argument in this module's docstring.")
     assert len(_registry_skill_routes()) >= 10, "registry channel is empty"
+
+
+# --------------------------------------------------------------------------
+# THE THIRD ROUTING TABLE, AND THE BIGGEST ONE.
+#
+# v1.12.76 guarded the runner. v1.12.89 widened that to every production
+# program, for the reason it names: the rename "missed the messages the agent
+# actually reads". The canonical FLOW was still outside both, and it is the
+# largest table of the three. MEASURED on main at v1.12.82:
+#
+#     flow/phase1_phase2_phase3.yaml names 56 skills. ONLY 25 SHIP. 31 DO NOT.
+#
+# and the flow's own `stage:` field says WHICH PART OF THE FLOW each hole is in
+# -- which matters, because "31 scattered names" and "stage2 is missing four of
+# its AI half" are different statements and only the second is actionable:
+#
+#     stage_phase1        17   the whole "Entry B" per-layer doc-gen chain (D1)
+#     stage1               4   assertion-gen cdc-check fpga-test-harness
+#                              rdc-check
+#     stage2               4   atpg constraint-gen dft-insert sdc-validator
+#     stage3               4   cts-plan em-check perc-check placement-optimize
+#     stage4               2   fpga-test-harness power-analysis
+#     stage_mixed_signal   1   flow-orchestrate
+#
+# so `test_every_flow_skill_ships` reports BY STAGE, not as a flat list.
+FLOW_STAGE_HINT = "grouped by the flow's own `stage:` field"
+
+
+def test_the_flow_actually_routes_to_skills():
+    """Guard the guard: no routes found would pass vacuously."""
+    routes = _flow_skill_routes()
+    assert len(routes) >= 25, (
+        f"expected the canonical flow to name many skills; got {len(routes)}. "
+        "If `skills:` was renamed, update _skill_routes -- do not delete this.")
+
+
+def test_the_flow_parser_sees_both_yaml_list_spellings():
+    """The blind spot that made this hole first measure 14 instead of 31.
+
+    `skills:` is written BOTH inline (`skills: [a, b]`) and block-style
+    (`skills:` then `- name`) in ONE file. A reader that sees only one spelling
+    under-reports silently and confidently -- and the spelling it missed held
+    the 17 largest. This pins that the parser reaches both, so nobody can
+    regress it back into a line matcher.
+    """
+    text = FLOW.read_text(encoding="utf-8")
+    assert re.search(r"^\s*skills:\s*\[", text, re.M), (
+        "expected at least one INLINE `skills: [...]` list in the flow")
+    assert re.search(r"^\s*skills:\s*$", text, re.M), (
+        "expected at least one BLOCK-STYLE `skills:` list in the flow; if the "
+        "last one was converted to inline, relax this DELIBERATELY -- do not "
+        "let the reader quietly become a line matcher again")
+    assert [sid for sid, _, _ in _flow_skill_routes() if sid == "D1"], (
+        "step D1 writes its `skills:` list in block style and the parser must "
+        "see it; a reader that misses it under-reports this guard by 17 names")
+
+
+def test_every_flow_skill_ships():
+    shipped = _shipped_skills()
+    bad = [(sid, stage, sk) for sid, stage, sk in _flow_skill_routes()
+           if sk not in shipped]
+    by_stage = {}
+    for _sid, stage, sk in bad:
+        by_stage.setdefault(stage or "(no stage)", set()).add(sk)
+    assert not bad, (
+        f"flow/phase1_phase2_phase3.yaml routes to skill(s) that do not exist "
+        f"under skills/, {FLOW_STAGE_HINT}: "
+        f"{ {k: sorted(v) for k, v in sorted(by_stage.items())} }. "
+        f"A step whose AI half names a skill the tree does not ship cannot be "
+        f"followed: the agent hand-authors instead, and the hand-authored "
+        f"artefact misses contracts the step hard-FAILs on. If the skill "
+        f"genuinely should exist, record it under `unbuilt_skills` in "
+        f"skills/_classification.json and remove it from the flow -- an "
+        f"explicit gap, NEVER an empty stub authored to make this test green.")
+
+
+def test_no_flow_skill_is_a_deprecated_one():
+    """Absent is one failure; removed-on-purpose-and-still-routed-to is worse."""
+    deprecated = _deprecated_skills()
+    bad = [(sid, stage, sk) for sid, stage, sk in _flow_skill_routes()
+           if sk in deprecated]
+    assert not bad, (
+        f"the canonical flow routes to DEPRECATED skill(s): {bad}. A skill "
+        f"archived on purpose must not stay the routing target of a live step.")
+
+
+# --------------------------------------------------------------------------
+# The gap record. A ghost deleted and written down NOWHERE is a flow that got
+# quietly narrower; these keep the record honest and stop it rotting.
+# --------------------------------------------------------------------------
+def test_the_unbuilt_record_is_populated():
+    """Guard the guard: an empty record makes the three below vacuous."""
+    assert len(_unbuilt()) >= 20, (
+        f"unbuilt_skills must record the names removed from the routing; got "
+        f"{sorted(_unbuilt())}")
+
+
+def test_no_unbuilt_skill_is_still_routed_to_anywhere():
+    """The record describes names that are GONE -- from ALL THREE tables."""
+    unbuilt = set(_unbuilt())
+    still = sorted(
+        {sk for _, _, sk in _flow_skill_routes() if sk in unbuilt}
+        | {v for _, _, v in _registry_skill_routes() if v in unbuilt}
+        | {n for n in _named_skills() if n in unbuilt})
+    assert not still, (
+        f"{still} are recorded as never-built yet are still routed to. The "
+        f"record documents a REMOVED route; it does not license keeping one.")
+
+
+def test_no_unbuilt_skill_secretly_ships():
+    """If one gets built, its record must go -- or the gap list lies."""
+    both = sorted(set(_unbuilt()) & _shipped_skills())
+    assert not both, (
+        f"{both} ship under skills/ but are still recorded as unbuilt. Delete "
+        f"the entry in the same change that builds the skill.")
+
+
+def test_unbuilt_and_deprecated_are_disjoint():
+    """Never-authored and built-then-archived are different facts."""
+    both = sorted(set(_unbuilt()) & _deprecated_skills())
+    assert not both, (
+        f"{both} are recorded as BOTH never-built and deprecated. A name is "
+        f"one or the other; deprecated means it was built, then archived.")
+
+
+def test_every_unbuilt_entry_declares_its_stage_and_status():
+    bad = [n for n, e in _unbuilt().items()
+           if not e.get("stages") or not e.get("note")
+           or e.get("status") not in ("gap", "covered")]
+    assert not bad, (
+        f"every unbuilt_skills entry needs `stages`, a `status` of "
+        f"gap|covered, and a `note` giving the evidence; malformed: {bad}")
+
+
+# --------------------------------------------------------------------------
+# CONTROLS for the flow half -- these hold on main too and MUST NOT MOVE.
+# --------------------------------------------------------------------------
+def test_control_the_flow_still_names_the_skills_that_always_shipped():
+    """Repointing must not have emptied the flow of its working routes."""
+    named = {sk for _, _, sk in _flow_skill_routes()}
+    for still in ("drc-fix", "lvs-triage", "formal-verify", "fpga-signaltap",
+                  "analog-flow-orchestrate", "sta-review", "phase1"):
+        assert still in named, (
+            f"{still} ships and was a correct flow route before this fix; it "
+            f"must remain one")
+        assert (SKILLS / still).is_dir()
+
+
+def test_control_every_stage_that_named_skills_still_names_some():
+    """A stage silently emptied of its AI half is the failure this guard
+    PREVENTS, not a way to pass it."""
+    per_stage = {}
+    for _sid, stage, sk in _flow_skill_routes():
+        per_stage.setdefault(stage, set()).add(sk)
+    for stage in ("stage_analog", "stage_mixed_signal", "stage_phase1",
+                  "stage3", "stage4"):
+        assert per_stage.get(stage), f"{stage} must still name at least one skill"
+    assert len(per_stage["stage_analog"]) >= 11, (
+        "stage_analog named 11 shipping skills and this fix does not touch it")
+
+
+def test_control_the_flow_file_is_the_canonical_one():
+    assert FLOW.is_file()
+    doc = _flow_doc()
+    assert isinstance(doc, dict) and doc, "flow yaml must parse to a mapping"
+    assert len(list(_iter_flow_steps(doc))) >= 70, (
+        "expected the full canonical step set; a truncated parse would make "
+        "every assertion above vacuous")

@@ -98,5 +98,302 @@
       "pdk-metal-stack-select",
       "phase1-coverage-report-gen"
     ]
+  },
+  "unbuilt_skills": {
+    "_comment": "Skill names the canonical flow ROUTED TO that were never authored -- distinct from deprecated_skills, which were built and archived on purpose. Recorded rather than silently deleted so a step advertising work the tree cannot do stays VISIBLE and cannot quietly return. status=gap means no shipped skill covers that step's AI half and the step now declares none; status=covered means a shipped skill (or the deterministic track that replaced the name) serves it and the step routes there now. Enforced by programs/tests/test_fallback_skill_routes_to_a_shipped_skill.py: no name listed here may appear in flow/phase1_phase2_phase3.yaml, ship under skills/, or also be listed under deprecated_skills. If one is ever BUILT, delete its entry here in the same change.",
+    "skills": {
+      "cdc-check": {
+        "stages": [
+          "stage1"
+        ],
+        "steps": [
+          "3"
+        ],
+        "status": "gap",
+        "note": "CDC triage. Step 3's deterministic half is complete and wired (cdc_crossing_check, cdc_async_input_check, clock_domain_reg_crossing_check, reset_dependency_check); no shipped skill covers CDC triage. rtl-repair is the nearest and is not it -- it covers lint/synth/sim-mismatch, not clock-domain crossing."
+      },
+      "rdc-check": {
+        "stages": [
+          "stage1"
+        ],
+        "steps": [
+          "3"
+        ],
+        "status": "gap",
+        "note": "RDC triage. Same step and same finding as cdc-check; reset_dependency_check is the deterministic half."
+      },
+      "fpga-test-harness": {
+        "stages": [
+          "stage1",
+          "stage4"
+        ],
+        "steps": [
+          "6",
+          "39"
+        ],
+        "status": "covered",
+        "note": "Named by two steps. Step 6 now routes to fpga-led-probe-allocation, which that step's own program entry cites by path ('fpga_led_probe_lint ... Enforces the four LED-probe anti-patterns of skills/fpga-led-probe-allocation'); step 39 already named fpga-signaltap. The wrapper-emitting bring-up SKILL the flow comment refers to ('an AGENT-INVOKED board bring-up helper (skill `fpga-test-harness` above)') was never authored; fpga_test_harness_gen is the program and is deliberately not auto-wired."
+      },
+      "constraint-gen": {
+        "stages": [
+          "stage2"
+        ],
+        "steps": [
+          "7"
+        ],
+        "status": "gap",
+        "note": "SDC + PVT authoring. sdc_gen.py and pvt_matrix_check.py exist as programs but step 7 declares NO programs and NO mcp_tools, so this ghost was its only declared executor. No shipped skill covers constraint authoring."
+      },
+      "sdc-validator": {
+        "stages": [
+          "stage2"
+        ],
+        "steps": [
+          "8"
+        ],
+        "status": "gap",
+        "note": "Ported to a program of the same name: sdc_validator_check.py, already declared and wired on step 8. The skill half was never authored."
+      },
+      "dft-insert": {
+        "stages": [
+          "stage2"
+        ],
+        "steps": [
+          "11"
+        ],
+        "status": "gap",
+        "note": "Scan insertion. Deterministic half wired (eda_dft, bsdl_emit, dft_signoff_check); no shipped skill covers DFT insertion."
+      },
+      "atpg": {
+        "stages": [
+          "stage2"
+        ],
+        "steps": [
+          "11"
+        ],
+        "status": "gap",
+        "note": "Deterministic half wired (fault_atpg_run, dft_atpg_coverage_check); no shipped skill covers ATPG coverage triage."
+      },
+      "cts-plan": {
+        "stages": [
+          "stage3"
+        ],
+        "steps": [
+          "16"
+        ],
+        "status": "gap",
+        "note": "Clock-tree planning. Deterministic half wired (clock_plan_check, and cts_quality_check exists); no shipped skill covers CTS planning. sta-review is the nearest and covers timing triage, not clock-tree construction."
+      },
+      "placement-optimize": {
+        "stages": [
+          "stage3"
+        ],
+        "steps": [
+          "17"
+        ],
+        "status": "covered",
+        "note": "ppa-optimize ships and its description is this step's job verbatim: 'bounded, reversible actuator moves ... placement density, clock period, synthesis effort, buffering, floorplan aspect'."
+      },
+      "em-check": {
+        "stages": [
+          "stage3"
+        ],
+        "steps": [
+          "25"
+        ],
+        "status": "covered",
+        "note": "ir-drop-triage ships and is the EM skill under its shipped name: 'Triage static and dynamic IR-drop and electromigration (EM) reports from power signoff tools'."
+      },
+      "perc-check": {
+        "stages": [
+          "stage3"
+        ],
+        "steps": [
+          "31"
+        ],
+        "status": "covered",
+        "note": "Recorded history, in the flow's own words on this step: 'the PERC skill was named with NO PERC program behind it'. The PROGRAM half has since landed (perc_corpus_sweep, perc_signoff_check); the SKILL half never existed. drc-fix and lvs-triage both ship and remain declared on step 31."
+      },
+      "power-analysis": {
+        "stages": [
+          "stage4"
+        ],
+        "steps": [
+          "33"
+        ],
+        "status": "covered",
+        "note": "ppa-measure ships and reads exactly this step's artefact: 'Read PPA artefacts that the tools already wrote -- STA reports, power reports, area reports'. power_total_vs_budget_check computes the verdict it reads."
+      },
+      "datasheet-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "frs-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "cmd-protocol-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "regmap-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "adi-spec-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "control-logic-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "test-debug-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "timing-waveform-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "rtl-constants-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "integration-spec-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "test-cases-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "calibration-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "behavioral-sequences-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "lab-calibration-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "otp-content-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "doc-consistency-check": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      },
+      "schematic-gen": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "steps": [
+          "D1"
+        ],
+        "status": "covered",
+        "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
+      }
+    }
   }
 }

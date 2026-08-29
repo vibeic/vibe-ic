@@ -25,7 +25,7 @@ load-bearing downstream consumer.
 | Entry | Skill chain | When to use |
 |-------|-------------|-------------|
 | **A. Prompt / Dialogue** | this `phase1` skill (`+ spec-review` for final confirm) | User has only an idea, wants AI to author the spec via dialogue |
-| **B. Existing Design Documents** | Phase 1's 17 doc-gen skills (`datasheet-gen`, `frs-gen`, `cmd-protocol-gen`, `regmap-gen`, `adi-spec-gen`, `control-logic-gen`, `test-debug-gen`, `timing-waveform-gen`, `rtl-constants-gen`, `integration-spec-gen`, `test-cases-gen`, `calibration-gen`, `behavioral-sequences-gen`, `lab-calibration-gen`, `doc-consistency-check`, `schematic-gen`, `otp-content-gen`) | User already has vendor PDFs / hand-authored markdown spec, wants per-layer extraction |
+| **B. Existing Design Documents** | the unified DOC→JSON track (`phase1_doc_one_shot_runner`), then `phase1-output-verify` + `phase1-completeness-deep-review` | User already has vendor PDFs / hand-authored markdown spec, wants per-layer extraction |
 
 Both entry points converge at L1-L27 JSON, then enter Phase 2 → Phase 3.
 
@@ -168,32 +168,49 @@ python3 -m tools.phase1_engine.cli ingest-docs path/to/generated_docs/ --out fac
 python3 -m tools.phase1_engine.cli render facts.yaml ./out/generated_docs/ --provenance-report ./out/PROVENANCE.md
 ```
 
-## Phase 1 sibling skills (used by Entry B, optionally invokable after Phase 1)
+## Phase 1 layers and where each one is authored
 
-Phase 1's 17 doc-gen skills are the alternative entry path for users
-who already have Design Documents. After Phase 1 renders, these skills
-can ALSO be invoked to refine a single layer (e.g. "regenerate just L4
-with this new register added") without re-running the whole pipeline.
+**These are LAYERS, not skills.** An earlier revision of this file listed
+seventeen per-layer skill names here (`datasheet-gen` … `otp-content-gen`)
+and marked them "restored to active in v0.60". NONE of the seventeen exists
+under `skills/` — `ls skills/` returns no such directory for any of them, and
+the canonical flow's step D1 named all seventeen too until that was corrected
+in the same change as this paragraph. An agent told to invoke one cannot, so it
+hand-authors instead; that is exactly the failure v1.12.76 measured for
+`testbench-author`, where the hand-authored artefact missed a contract the step
+hard-FAILs on. The names are recorded under `unbuilt_skills` in
+`skills/_classification.json` so they cannot quietly return.
 
-| Skill | Layer | Notes |
-|---|---|---|
-| `datasheet-gen` | L1 | restored to active in v0.60 |
-| `frs-gen` | L2 | restored v0.60 |
-| `cmd-protocol-gen` | L3 | restored v0.60 |
-| `regmap-gen` | L4 | restored v0.60 |
-| `adi-spec-gen` | L5 | restored v0.60 |
-| `control-logic-gen` | L6 | restored v0.60 |
-| `test-debug-gen` | L7 | restored v0.60 |
-| `timing-waveform-gen` | L8 | restored v0.60 |
-| `rtl-constants-gen` | L8R | restored v0.60 |
-| `integration-spec-gen` | L9 | restored v0.60 |
-| `test-cases-gen` | L10 | always active |
-| `calibration-gen` | L11 | always active |
-| `behavioral-sequences-gen` | L12 | always active |
-| `lab-calibration-gen` | L13 (contract) | always active |
-| `doc-consistency-check` | cross-layer | always active |
-| `schematic-gen` | L9-derived | always active; produces block diagram |
-| `otp-content-gen` | L4-derived | always active; produces `.ver` OTP image when L4 declares OTP |
+Every layer below is authored by the unified DOC→JSON track
+(`phase1_doc_one_shot_runner` / the `tools.phase1_engine` render pipeline
+shown above), which reads the whole document set at once. Per-layer
+re-rendering is a re-run of that track, not a separate skill invocation.
+
+| Layer | Document |
+|---|---|
+| L1 | `L1_DATASHEET.json` |
+| L2 | `L2_FRS.json` |
+| L3 | `L3_CMD_PROTOCOL.json` |
+| L4 | `L4_REGMAP.json` (OTP `.ver` image emitted when L4 declares OTP) |
+| L5 | `L5_ADI_SPEC.json` |
+| L6 | `L6_CONTROL_LOGIC.json` |
+| L7 | `L7_TEST_DEBUG.json` |
+| L8 | `L8_TIMING_WAVEFORM.json` |
+| L8R | `L8_RTL_CONSTANTS.json` |
+| L9 | `L9_INTEGRATION_SPEC.json` (+ the derived block diagram) |
+| L10 | `L10_TEST_CASES.json` |
+| L11 | `L11_CALIBRATION.json` |
+| L12 | `L12_BEHAVIORAL_SEQUENCES.json` |
+| L13 | `L13_LAB_CALIBRATION.json` |
+| cross-layer | consistency is checked by `doc_consistency_no_unresolved_conflicts_check` |
+
+The skills that DO ship for this stage are this `phase1` skill and the two
+verification-tier reviewers `phase1-output-verify` and
+`phase1-completeness-deep-review`. Step D1 of the canonical flow declares
+`phase1`; the two reviewers are on-pass reviewers and belong in a stage-level
+`on_pass_review:` block (the field v1.12.87 added for exactly that role), not
+in the step's `skills:` list, whose meaning at every site is "invoke this when
+the step could not, or when the step failed".
 
 The v0.51 `prompt-intake` and `phase1-orchestrate` skills are NOT
 restored — their function is fully subsumed by this `phase1` skill's
@@ -288,9 +305,10 @@ at `legacy/skills_phase1_v051/` and are no longer invoked — their
 function is subsumed by this `phase1` skill.
 
 The 10 v0.51 doc-gen skills (`datasheet-gen` through `integration-spec-gen`)
-were briefly archived in v0.58 but **restored to active in v0.60** as
-the Phase 1 Entry B path (existing-Design-Documents → L1-L27). They
-were never legacy in spirit — only in v0.58 placement.
+were archived in v0.58. This file used to claim they were "restored to active
+in v0.60"; they were not, and none of them ships. Entry B
+(existing-Design-Documents → L1-L27) is served by the unified DOC→JSON track.
+See "Phase 1 layers and where each one is authored" above.
 
 ## Compliance gate (mandatory)
 

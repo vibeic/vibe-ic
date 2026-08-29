@@ -244,24 +244,32 @@ steps:
           the user's natural-language prompt or dialogue fact-graph (Path B)
           or the supplied datasheets / specs (Path A), at any of the staged
           entry points this runner reads
+    # THE SEVENTEEN PER-LAYER DOC-GEN NAMES ARE GONE, AND THEY WERE THE
+    # LARGEST GHOST CLUSTER IN THIS FILE. This list used to name 18 skills --
+    # datasheet-gen, frs-gen, cmd-protocol-gen, regmap-gen, adi-spec-gen,
+    # control-logic-gen, test-debug-gen, timing-waveform-gen, rtl-constants-gen,
+    # integration-spec-gen, test-cases-gen, calibration-gen,
+    # behavioral-sequences-gen, lab-calibration-gen, otp-content-gen,
+    # doc-consistency-check, schematic-gen -- of which exactly ONE (`phase1`)
+    # ships. The other seventeen describe the OLD per-layer "Entry B" chain that
+    # was unified into the single DOC->JSON track this step's own runner
+    # (`phase1_doc_one_shot_runner`) now executes. They were invisible to the
+    # v1.12.76 guard because that guard matched `"fallback_skill": "..."` and
+    # this list is neither -- see unbuilt_skills in skills/_classification.json.
+    #
+    # ONLY `phase1` REMAINS, and the two obvious additions are DELIBERATELY NOT
+    # MADE HERE. `phase1-output-verify` and `phase1-completeness-deep-review`
+    # both ship, both say in their own descriptions that they run "After
+    # phase1_one_shot_runner emits L*.json", and neither is named by any stage
+    # -- so stage_phase1 has no declared on-pass review. But they are
+    # VERIFICATION-tier reviewers, and v1.12.87 ruled on exactly this key:
+    # "`skills:` is a STEP field, and its meaning at every one of its sites is
+    # 'invoke this when the step could not, or when the step failed' ...
+    # Re-using the key for the opposite trigger would give one key two
+    # contradictory meanings with nothing to tell them apart." Adding them here
+    # would be that re-use. They belong in an `on_pass_review:` block on
+    # stage_phase1, the field v1.12.87 added for them on stage1.
     skills:
-      - datasheet-gen
-      - frs-gen
-      - cmd-protocol-gen
-      - regmap-gen
-      - adi-spec-gen
-      - control-logic-gen
-      - test-debug-gen
-      - timing-waveform-gen
-      - rtl-constants-gen
-      - integration-spec-gen
-      - test-cases-gen
-      - calibration-gen
-      - behavioral-sequences-gen
-      - lab-calibration-gen
-      - otp-content-gen
-      - doc-consistency-check
-      - schematic-gen
       - phase1
     required_outputs:
       - "phase1/generated_docs/L1_DATASHEET.json"
@@ -1384,7 +1392,12 @@ steps:
     closed_loop:
       fallback_to: 1
       trigger: "CDC/RDC violation requires RTL change"
-    skills: [cdc-check, rdc-check]
+    # SKILLS: NONE. The AI half of this step was named and never built --
+    # see `unbuilt_skills` in skills/_classification.json for the record and
+    # the evidence. The names that used to sit here (cdc-check, rdc-check) ship
+    # nowhere under skills/, so an agent told to invoke one cannot, and
+    # hand-authors instead. The deterministic half below is what this step
+    # actually has; declaring the gap is honest, an empty stub is not.
     programs:
       - cdc_crossing_check
       - cdc_async_input_check
@@ -1723,7 +1736,11 @@ steps:
     closed_loop:
       fallback_to: 1
       trigger: "SVA assertion fail"
-    skills: [assertion-gen, formal-verify]
+    # assertion-gen REMOVED: skills/_classification.json records it under
+    # deprecated_skills (archived on purpose) and it shipped nowhere. Same
+    # route v1.12.76 already corrected in ic_class_registry.json, for the
+    # same reason. formal-verify ships and is this step's AI half.
+    skills: [formal-verify]
     mcp_tools: [eda_formal]
     programs:
       - assertion_property_check
@@ -1794,7 +1811,11 @@ steps:
     required_inputs:
       - from: 1
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-    skills: [fpga-test-harness]
+    # fpga-test-harness never shipped (see unbuilt_skills). The shipped skill
+    # this step's own programs cite is fpga-led-probe-allocation -- the
+    # `fpga_led_probe_lint` entry below says it "Enforces the four LED-probe
+    # anti-patterns of skills/fpga-led-probe-allocation".
+    skills: [fpga-led-probe-allocation]
     mcp_tools: [eda_synth]
     programs:
       # DECLARATION CORRECTION (2026-07-27). This entry used to read: "emit
@@ -1991,7 +2012,12 @@ steps:
         path: "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
       - from: 1
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-    skills: [constraint-gen]
+    # SKILLS: NONE. The AI half of this step was named and never built --
+    # see `unbuilt_skills` in skills/_classification.json for the record and
+    # the evidence. The names that used to sit here (constraint-gen) ship
+    # nowhere under skills/, so an agent told to invoke one cannot, and
+    # hand-authors instead. The deterministic half below is what this step
+    # actually has; declaring the gap is honest, an empty stub is not.
     required_outputs:
       - "phase2/stage2/constraints/*.sdc"
       - "phase2/stage2/constraints/pvt_matrix.json"
@@ -2090,7 +2116,12 @@ steps:
     closed_loop:
       fallback_to: 7
       trigger: "SDC syntax/semantic error"
-    skills: [sdc-validator]
+    # SKILLS: NONE. The AI half of this step was named and never built --
+    # see `unbuilt_skills` in skills/_classification.json for the record and
+    # the evidence. The names that used to sit here (sdc-validator) ship
+    # nowhere under skills/, so an agent told to invoke one cannot, and
+    # hand-authors instead. The deterministic half below is what this step
+    # actually has; declaring the gap is honest, an empty stub is not.
     programs:
       - sdc_syntax_check
       # Wave 82 — `sdc_validator_check` cross-checks the SDC against
@@ -2473,7 +2504,12 @@ steps:
     required_inputs:
       - from: 9
         path: "phase2/stage2/synth/netlist.v"
-    skills: [dft-insert, atpg]
+    # SKILLS: NONE. The AI half of this step was named and never built --
+    # see `unbuilt_skills` in skills/_classification.json for the record and
+    # the evidence. The names that used to sit here (dft-insert, atpg) ship
+    # nowhere under skills/, so an agent told to invoke one cannot, and
+    # hand-authors instead. The deterministic half below is what this step
+    # actually has; declaring the gap is honest, an empty stub is not.
     mcp_tools: [eda_dft]
     programs:
       # Fault (cloudv-io/fault) for open-source stuck-at ATPG.
@@ -3624,7 +3660,12 @@ steps:
         path: "phase3/stage3/pnr/floorplan.def"
       - from: 7
         path: "phase2/stage2/constraints/*.sdc"
-    skills: [cts-plan]
+    # SKILLS: NONE. The AI half of this step was named and never built --
+    # see `unbuilt_skills` in skills/_classification.json for the record and
+    # the evidence. The names that used to sit here (cts-plan) ship
+    # nowhere under skills/, so an agent told to invoke one cannot, and
+    # hand-authors instead. The deterministic half below is what this step
+    # actually has; declaring the gap is honest, an empty stub is not.
     programs:
       - clock_plan_check
     required_outputs:
@@ -3650,7 +3691,11 @@ steps:
         path: "phase3/stage3/pnr/floorplan.def"
       - from: 15
         path: "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
-    skills: [placement-optimize]
+    # placement-optimize never shipped. ppa-optimize does, and its own
+    # description is this step's job: "bounded, reversible actuator moves
+    # ... placement density, clock period, synthesis effort, buffering,
+    # floorplan aspect".
+    skills: [ppa-optimize]
     programs:
       - placement_legality_check
       - pnr_timing_repair_completeness_check
@@ -4562,7 +4607,10 @@ steps:
     closed_loop:
       fallback_to: 21
       trigger: "EM violation; widen wire or re-route"
-    skills: [em-check]
+    # em-check never shipped. ir-drop-triage does, and it is the EM skill
+    # under its shipped name: "Triage static and dynamic IR-drop and
+    # electromigration (EM) reports from power signoff tools".
+    skills: [ir-drop-triage]
     required_outputs:
       - "reports/phase3/em.rpt"
       # The MEASUREMENT (`verdict: MEASURED`, max_segment_current_A,
@@ -5114,7 +5162,12 @@ steps:
     closed_loop:
       fallback_to: 32
       trigger: "DRC/LVS/ERC fail; repair and recheck required"
-    skills: [drc-fix, lvs-triage, perc-check]
+    # perc-check REMOVED. The comment on Step 31's PERC clause records the
+    # history -- "the PERC skill was named with NO PERC program behind it".
+    # The program half has since landed (perc_corpus_sweep /
+    # perc_signoff_check); the SKILL half never did. drc-fix and lvs-triage
+    # both ship and are this step's physical-verification triage.
+    skills: [drc-fix, lvs-triage]
     mcp_tools: [eda_drc_klayout, eda_lvs]
     programs:
       - erc_density_check
@@ -5775,7 +5828,10 @@ steps:
     required_inputs:
       - from: 22
         path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
-    skills: [power-analysis]
+    # power-analysis never shipped. ppa-measure does, and it is the reader
+    # of exactly this step's artefact: "Read PPA artefacts that the tools
+    # already wrote -- STA reports, power reports, area reports".
+    skills: [ppa-measure]
     required_outputs:
       - "reports/phase3/power.rpt"
       - "reports/phase3/power.json"
@@ -6770,7 +6826,9 @@ steps:
       - from: external
         check: none
         what: "a physical FPGA board on the bench"
-    skills: [fpga-test-harness, fpga-signaltap]
+    # fpga-test-harness never shipped (see unbuilt_skills); fpga-signaltap
+    # ships and is this step's AI half.
+    skills: [fpga-signaltap]
     programs:
       # Wave 82 — `bringup_plan_gen` emits the bring-up plan from
       # L13_LAB_CALIBRATION before the on-board attestation runs;
@@ -6928,7 +6986,10 @@ steps:
         outputs: all
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
-    skills: [analog-flow-orchestrate, flow-orchestrate]
+    # flow-orchestrate REMOVED: skills/_classification.json records it under
+    # deprecated_skills. analog-flow-orchestrate ships and is the canonical
+    # A1-A9 / mixed-signal reference this step needs.
+    skills: [analog-flow-orchestrate]
     programs:
       # M1-d4 — the PRODUCER was missing here and from every runner.
       # mixed_signal_merge_check only PASSes when
