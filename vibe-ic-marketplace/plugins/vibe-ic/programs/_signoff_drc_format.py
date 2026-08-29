@@ -192,9 +192,32 @@ def router_iter_counts(text: str) -> List[int]:
     # readers want it. Appending makes the LAST element the published number, so
     # `router_iter_last_count` — which every caller uses for "what ships" —
     # returns the verified count without any caller having to know about 0701.
-    verified = router_post_route_verified_count(text)
-    if verified is not None and (not out or out[-1] != verified):
-        out.append(verified)
+    #
+    # `out` MUST ALREADY BE NON-EMPTY. Appending to an empty list does not
+    # supersede a trajectory, it MANUFACTURES one: DRT-0701 is not a
+    # per-iteration count, and this function's contract one docstring up is
+    # "every per-iteration router DRC count ([] when none)". v1.12.54 wrote the
+    # condition as `(not out or out[-1] != verified)`, and that `not out`
+    # disjunct made a log carrying ONLY a 0701 line read as a one-iteration
+    # route. MEASURED on such a log at v1.12.68, before this line was fixed:
+    #
+    #   router_iter_counts        []  ->  [1]      a trajectory never printed
+    #   _drt_violation_trajectory []  ->  [1]
+    #   _drt_is_non_converging  False  ->  True    the loosen ladder judging
+    #                                              convergence from one point
+    #   _ppa route.drc.violation.count
+    #        NOT_MEASURED(log)  ->  MEASURED 1 kind=log trajectory_len=1
+    #
+    # That last row is the damage that reached the PPA contract: the log then
+    # AGREED with `openroad.metrics.json`, so the artefact-authority
+    # declaration had no conflict left to settle and no silence left to record
+    # — the log's honest "I never printed this" was replaced by a number it
+    # never printed. A log the loop said nothing in is still UNDETERMINED here;
+    # `router_post_route_verified_count` remains the way to ask 0701 directly.
+    if out:
+        verified = router_post_route_verified_count(text)
+        if verified is not None and out[-1] != verified:
+            out.append(verified)
     return out
 
 
