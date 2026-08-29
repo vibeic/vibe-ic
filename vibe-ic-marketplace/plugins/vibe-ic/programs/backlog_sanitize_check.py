@@ -121,11 +121,9 @@ HARD_RULES: List[Tuple[str, str, str]] = [
     ("vendor_pdf",
      r"\b[A-Z][A-Za-z0-9_-]*\.(pdf|PDF)\b",
      "Vendor document filename — describe the information, not the source"),
-    # NDA PDK/process codename family — pattern reconstructed at runtime from
-    # the encoded token store so no SKU literal lives in this detector's source.
-    ("pdk_codename",
-     _cpdk.nda_source_regex_str(),
-     "PDK/process codename specific to one project"),
+    # The NDA PDK/process codename family is NOT built here — it is resolved
+    # below, guarded, because the resolver raises on a host without the private
+    # token store and a raise inside this literal kills the module at import.
     ("hid_cmd_byte",
      r"0x[0-9A-Fa-f]{2}\s*(?://|#)?\s*CMD_[A-Z_]+",
      "Hard-coded tester command byte — describe the test action instead"),
@@ -161,6 +159,47 @@ for _cn in _cpdk.project_codenames():
         rf"\b{re.escape(_cn)}\b",
         "Project codename — describe the IC class / benchmark instead",
     ))
+
+# ---------------------------------------------------------------------------
+# THE NDA CODENAME RULE, RESOLVED WITHOUT DYING AT IMPORT.
+#
+# `_cpdk.nda_source_regex_str()` RAISES `NoNdaLiterals` on any host whose
+# private config carries no `nda_tokens`. Since the token store moved out of
+# tracked source that is not an edge case — the raise's own docstring says it is
+# "the ORDINARY state of every public checkout and of every CI job that has not
+# been given the tokens", and it ends "A caller must report NOT_MEASURED."
+#
+# Calling it inside the rule-table literal made the raise escape at IMPORT, so
+# the process died before argparse ran and even `--help` exited 1. rc 1 is a
+# MEASURED verdict: `flow_compliance_check` maps it to a gate FAIL. A host that
+# merely lacks OPTIONAL config therefore produced a confident, specific failure
+# about the subject — the same defect class the resolver was rewritten to
+# prevent, arriving through the caller instead of the pattern.
+#
+# MEASURED 2026-08-30, gf180mcuD/spm through the one-shot runner at v1.12.80:
+# this gate and `backlog_sanitize_check` were the ONLY two of the P0 umbrella's
+# 246 structural checkers to FAIL. They took `Overall: PASS_WITH_WAIVERS` to
+# `Overall: FAIL`, Phase 2 to FAIL, and Phase 3 to SKIPPED — the design never
+# reached place-and-route. With `VIBEIC_NDA_TOKENS` set, both gates instead exit
+# 2 at argparse and the run proceeds, so the blocker is the absence of optional
+# config and nothing about the design.
+#
+# rc 2 / NOT_MEASURED is the channel `source_chip_agnostic_check`,
+# `nda_diff_scan_check` and `commit_msg_nda_check` already use for this exact
+# raise. This file is named in the resolver's own list of callers that must
+# recognise the tokens; it was not converted with them.
+# ---------------------------------------------------------------------------
+NDA_TOKENS_MISSING: str = ""
+try:
+    _NDA_CODENAME_RULES: List[Tuple[str, str, str]] = [
+        ("pdk_codename", _cpdk.nda_source_regex_str(),
+         "PDK/process codename specific to one project"),
+    ]
+except _cpdk.NoNdaLiterals as _nda_exc:            # noqa: F841 - reported below
+    _NDA_CODENAME_RULES = []
+    NDA_TOKENS_MISSING = str(_nda_exc)
+
+HARD_RULES.extend(_NDA_CODENAME_RULES)
 
 SOFT_RULES: List[Tuple[str, str, str]] = [
     ("provenance_chip",
@@ -527,6 +566,23 @@ def main(argv: List[str] = None) -> int:
                          "tracked = every backlog file on disk must be known "
                          "to git (vibe-ic#794); both = run the two together")
     args = ap.parse_args(argv)
+
+    # The NDA codename rule could not be built on this host (see
+    # NDA_TOKENS_MISSING above). Refuse on the NOT_MEASURED channel instead of
+    # scanning with a rule table that is silently one rule short: "I have
+    # nothing to match with" must never print what "I matched and found
+    # nothing" prints, and it must never print what a real finding prints.
+    # SCOPED TO THE AUDIT THAT USES THE RULES. `--audit tracked` asks whether
+    # every backlog file on disk is known to git; it never opens the content
+    # rule table, so an unresolvable NDA codename rule says nothing about it.
+    # Refusing there would refuse a question this program CAN answer — which is
+    # the same error as answering one it cannot, pointed the other way.
+    if NDA_TOKENS_MISSING and args.audit in ("content", "both"):
+        print(f"NO_NDA_TOKENS: {NDA_TOKENS_MISSING} Configure "
+              "VIBEIC_NDA_TOKENS (a JSON object {role: literal}) or the "
+              "private config's 'nda_tokens' key on the host that runs this "
+              "gate. This run is NOT a clean bill of health.", file=sys.stderr)
+        return 2
 
     paths: List[Path] = []
     if args.file_path:

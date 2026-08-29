@@ -41,6 +41,8 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
+from backlog_sanitize_check import (  # noqa: E402
+    _shipped_plugin_version)
 
 _BRAND = FICTIONAL_NDA_TOKENS["foundry_brand1"]
 _SKU = FICTIONAL_NDA_TOKENS["sku_full"]
@@ -65,16 +67,58 @@ def planted(tmp_path_factory):
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
     (prog / "thing.py").write_text(f'VALUE = 1\nVENDOR = "{_BRAND}"\nPDK = "{_SKU}"\n')
+    # The two PROSE guards do not take a repo — they take the document they
+    # audit. Plant the same SKU in one of each so the whole population below
+    # runs against ONE fixture and one plant.
+    notes = repo / "notes"
+    notes.mkdir()
+    (notes / "PRACTICAL_NOTES.md").write_text(
+        f"# Notes\n\nThe flow was closed on the {_SKU} process.\n")
+    (repo / "backlog.yaml").write_text(
+        "type: enhancement\n"
+        'component: "flow:pnr"\n'
+        "title: routing note\n"
+        f"pattern: the detailed router left a residual on the {_SKU} process.\n"
+        # The shipped version, read the way the gate reads it: any other
+        # value raises a SECOND finding, and an rc-1 control that would
+        # be rc 1 anyway is not a control.
+        f"plugin_version: {_shipped_plugin_version()}\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", f"wire up {_SKU} for the {_BRAND} flow")
     return repo
 
 
-def _run(gate, args, *, tokens):
+@pytest.fixture(scope="module")
+def _no_store(tmp_path_factory):
+    """A private config that resolves to NO tokens.
+
+    THE ENV VAR IS NOT THE ONLY TOKEN SOURCE. `_commercial_pdk` reads
+    `VIBEIC_NDA_TOKENS` **or** the private config, and the config's default
+    location is `~/.config/vibeic/commercial_pdk.json`. Dropping only the env
+    var therefore built a "no token store" arm that is a no-token arm ONLY on a
+    host that has no config — and the hosts that matter, the ones that actually
+    run these guards for real, are precisely the configured ones.
+
+    MEASURED 2026-08-30 on clean origin/main (v1.12.82), with a real private
+    config present: all FOUR of the then-parametrized gates failed this arm,
+    because every one of them could still answer. The arm was not asserting what
+    it said; it was asserting that the host was unconfigured.
+
+    `_load_private_config` returns the FIRST candidate that parses to a dict, and
+    `VIBEIC_PRIVATE_CONFIG` is ahead of the home path in that list, so pointing it
+    at `{}` short-circuits the home file without touching it."""
+    cfg = tmp_path_factory.mktemp("nostore") / "commercial_pdk.json"
+    cfg.write_text("{}\n")
+    return cfg
+
+
+def _run(gate, args, *, tokens, no_store=None):
     env = {k: v for k, v in os.environ.items() if k != "VIBEIC_NDA_TOKENS"}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     if tokens:
         env["VIBEIC_NDA_TOKENS"] = json.dumps(FICTIONAL_NDA_TOKENS)
+    elif no_store is not None:
+        env["VIBEIC_PRIVATE_CONFIG"] = str(no_store)
     proc = subprocess.run([sys.executable, "-B", str(_PROGRAMS / gate), *args],
                           capture_output=True, text=True, env=env)
     return proc.returncode, proc.stdout, proc.stderr
@@ -85,16 +129,50 @@ def _argv(gate, planted):
         return [str(planted / "vibe-ic-marketplace/plugins/vibe-ic")]
     if gate == "nda_tracked_tree_scan.py":
         return ["--repo", str(planted)]
+    if gate == "practical_notes_specificity_check.py":
+        return ["--paths", str(planted / "notes")]
+    if gate == "backlog_sanitize_check.py":
+        return ["--file", str(planted / "backlog.yaml")]
     return ["--repo", str(planted), "--rev-range", "HEAD~1..HEAD"]
 
 
+# THE POPULATION IS THE RESOLVER'S OWN CALLER LIST, NOT THE FOUR THAT WERE
+# MEASURED. `_commercial_pdk`'s module docstring names the guards that "must
+# RECOGNISE the NDA foundry tokens"; the 2026-08-29 pass measured two of them,
+# fixed two, and parametrized this test over four. The two PROSE guards below
+# were named in that same list and were never driven — and they call the
+# resolver inside a module-level rule table, so on a host with no token store
+# they did not mis-report, they died at IMPORT: `--help` itself exited 1, and
+# the Phase-2 P0 structural umbrella records rc 1 as a gate FAIL.
+#
+# MEASURED 2026-08-30 on gf180mcuD/spm through the one-shot runner: these two
+# were the ONLY two of the umbrella's 246 structural checkers to FAIL, and they
+# alone took `Overall: PASS_WITH_WAIVERS` to `Overall: FAIL`, Phase 2 to FAIL
+# and Phase 3 to SKIPPED. The design never reached place-and-route because the
+# host lacked OPTIONAL private config.
 _GATES = ("commit_msg_nda_check.py", "nda_diff_scan_check.py",
-          "source_chip_agnostic_check.py", "nda_tracked_tree_scan.py")
+          "source_chip_agnostic_check.py", "nda_tracked_tree_scan.py",
+          "practical_notes_specificity_check.py", "backlog_sanitize_check.py")
+
+# The echo test below runs over a STRICT SUBSET, and the exclusion is a
+# disclosure, not a skip. MEASURED 2026-08-30 with the fixture SKU planted:
+#   backlog_sanitize_check            emits `"matched": "<the literal>"`
+#   practical_notes_specificity_check prints the offending source line verbatim
+# Both therefore print the token while reporting that the token leaked — the
+# masked-reporting contract the four converted guards meet through
+# `_commercial_pdk.nda_mask_neighbourhood`. That is a SECOND defect in the same
+# two files and it is deliberately NOT fixed here: this change is the import
+# crash alone, and widening it would mean the crash fix could not be reverted
+# on its own. Adding these two to `_ECHO_GATES` is the follow-up's job.
+_ECHO_GATES = ("commit_msg_nda_check.py", "nda_diff_scan_check.py",
+               "source_chip_agnostic_check.py", "nda_tracked_tree_scan.py")
 
 
 @pytest.mark.parametrize("gate", _GATES)
-def test_without_tokens_the_guard_refuses_and_never_says_pass(gate, planted):
-    rc, out, err = _run(gate, _argv(gate, planted), tokens=False)
+def test_without_tokens_the_guard_refuses_and_never_says_pass(gate, planted,
+                                                              _no_store):
+    rc, out, err = _run(gate, _argv(gate, planted), tokens=False,
+                        no_store=_no_store)
     assert rc == 2, (
         f"{gate} exited {rc} with no token store. 0 is a clean bill of health "
         f"it cannot have earned; 1 is a MEASURED FINDING the push preflight "
@@ -123,7 +201,7 @@ def test_no_guard_echoes_the_literal_it_matched(planted):
     """Masked reporting survives the move: a finding names the ROLE, never the
     token. A guard that leaks the token while reporting the leak is the whole
     failure it exists to prevent."""
-    for gate in _GATES:
+    for gate in _ECHO_GATES:
         rc, out, err = _run(gate, _argv(gate, planted), tokens=True)
         blob = out + err
         assert _BRAND not in blob, f"{gate} echoed the brand literal:\n{blob}"
