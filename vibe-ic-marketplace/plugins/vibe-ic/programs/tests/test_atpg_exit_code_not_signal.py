@@ -23,6 +23,16 @@ Three cases, and the third is the one that matters most:
      unchanged.
 
 Pure: no docker, no PDK, no design, no I/O beyond importing the module.
+
+HOW THIS FILE IS EXECUTED. It is named `test_*.py` and pytest collects ZERO
+tests from it, because it is a CLI parameterised by the program path and not a
+pytest module — that is deliberate, and it is the only shape in which the
+negative half of the contract above can be driven. It is not dead:
+`test_bidirectional_controls_are_executed.py` runs it BOTH ways on every suite
+run (against the shipped program, and against a copy with the fixed construct
+removed), and lists it in that file's `DRIVEN` set, which
+`test_no_test_file_collects_zero_tests` re-checks. Delete the entry there and
+this file becomes an undeclared zero-collect module, which that test fails on.
 """
 import importlib.util
 import sys

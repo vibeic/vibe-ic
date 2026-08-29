@@ -16,14 +16,28 @@
 #   6. Coverage audit             - every skill has compliance.yaml + tests
 #
 # Exit 0 = all pass. Non-zero = failures (see stdout).
+#
+# `--list-tiers` prints the discovered tiers, one per line, and exits 0 without
+# running anything. It exists so a GUARD can ask this script what the full suite
+# is, instead of re-deriving the answer: a second copy of the discovery is a
+# second definition of "the suite", and the direction that drift goes is a tree
+# nothing checks. It is emitted from the SAME `TEST_DIRS` array the pytest
+# invocation below consumes, so the two cannot disagree.
 set -e
 cd "$(dirname "$0")"
 
 PYTEST_ARGS="${@:-}"
+LIST_TIERS_ONLY=0
+if [[ "${1:-}" == "--list-tiers" ]]; then
+    LIST_TIERS_ONLY=1
+    PYTEST_ARGS=""
+fi
+if [[ $LIST_TIERS_ONLY -eq 0 ]]; then
 echo "==========================================================="
 echo "vibe-ic-d: full test suite"
 echo "==========================================================="
 echo ""
+fi
 
 mapfile -t TEST_DIRS < <(
     # Plugin-level tests
@@ -56,6 +70,12 @@ mapfile -t TEST_DIRS < <(
 if [[ ${#TEST_DIRS[@]} -eq 0 ]]; then
     echo "No tests found."
     exit 1
+fi
+
+# The guard's hook. Printed from TEST_DIRS itself — see the header.
+if [[ $LIST_TIERS_ONLY -eq 1 ]]; then
+    printf '%s\n' "${TEST_DIRS[@]}"
+    exit 0
 fi
 
 echo "Test tiers discovered (${#TEST_DIRS[@]} dirs):"
