@@ -123,9 +123,26 @@ def test_parse_sat_verdict_redundant():
 
 
 def test_parse_sat_verdict_abort_on_ambiguous():
-    # a timeout / error block is NEVER a detection (fail-safe)
-    assert tdf.parse_sat_verdict("ERROR: minisat timed out") == "ABORT"
+    # The property this test exists to protect: an ambiguous block is NEVER a
+    # detection (fail-safe). That still holds for every input below.
+    for body in ("ERROR: minisat timed out", "", "Timeout reached while solving."):
+        assert tdf.parse_sat_verdict(body) != "DET"
+
+    # A block with NO verdict and NO fatal diagnostic is a genuine per-fault
+    # ABORT: the solver attempted the fault and left it undecided. It counts as
+    # undetected and sits in the coverage denominator — anti-gaming intact.
     assert tdf.parse_sat_verdict("") == "ABORT"
+    assert tdf.parse_sat_verdict("Timeout reached while solving.") == "ABORT"
+
+    # A block carrying a FATAL yosys `ERROR:` is a TOOL failure, not a
+    # per-fault outcome (yosys `log_error` aborts the whole batch; a per-fault
+    # `sat -timeout` prints no `ERROR:` line). Classifying it ABORT is what let
+    # ONE crash on the first fault be rendered as "0.0% test coverage" — a
+    # graded DESIGN failure for a tool that never ran. It is now strictly MORE
+    # conservative: it propagates ERROR instead of entering the denominator, so
+    # no coverage number is computed at all. See
+    # test_dt1_tool_crash_is_not_a_coverage_number.py.
+    assert tdf.parse_sat_verdict("ERROR: minisat timed out") == "TOOL_ERROR"
 
 
 # ── coverage math (the soundness core) ─────────────────────────────────────
