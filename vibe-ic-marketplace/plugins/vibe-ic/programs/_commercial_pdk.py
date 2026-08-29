@@ -73,11 +73,32 @@ def nda_tokens() -> List[str]:
     return [_dec(k) for k in _ENCODED_NDA]
 
 
+class NoNdaLiterals(RuntimeError):
+    """Raised instead of returning a pattern that matches EVERYTHING.
+
+    These builders join the tokens into an alternation. With an EMPTY token set
+    that is an alternation of nothing — `(?<![0-9a-zA-Z])()(?![0-9a-zA-Z])` —
+    which matches the empty string at every position. MEASURED by driving the two
+    real gates with an empty set:
+        commit_msg_nda_check   FAIL: 4 NDA token occurrence(s) in 3 message(s)
+        nda_diff_scan_check    FAIL: 1621 NDA token occurrence(s) in the diff
+    Both messages are false, confident, and specific. This is the same defect as
+    returning `("",)` from a prefix accessor: a detector that says YES to every
+    subject. It is latent today because `_ENCODED_NDA` always has eight entries —
+    and latent is exactly how it would ship into the first change that makes the
+    set resolvable-or-not, which is the change this guard was written alongside.
+    """
+
+
 def nda_regex_family() -> List[str]:
     """The process / foundry-product codename family used by the prose
     detectors' `pdk_codename` rule (word-bounded, case-insensitive at match
     time). Returns the decoded tokens; the historical hand-written pattern was
     the equivalent alternation of these same tokens."""
+    if not [k for k in _ENCODED_NDA if _dec(k)]:
+        raise NoNdaLiterals(
+            "no NDA literals; a pattern built from an empty token set "
+            "matches EVERYTHING. A caller must report NOT_MEASURED.")
     return [_dec("sku_full"), _dec("foundry_product"), _dec("sku_prefix")]
 
 
@@ -85,6 +106,10 @@ def nda_source_regex() -> "re.Pattern[str]":
     """Compiled, case-insensitive, word-bounded regex matching the PDK/process
     codename family — reconstructed at runtime so no literal token lives in the
     detector's source. Equivalent to the historical hand-written pattern."""
+    if not [k for k in _ENCODED_NDA if _dec(k)]:
+        raise NoNdaLiterals(
+            "no NDA literals; a pattern built from an empty token set "
+            "matches EVERYTHING. A caller must report NOT_MEASURED.")
     fam = sorted(set(nda_regex_family()), key=len, reverse=True)
     return re.compile(r"\b(" + "|".join(re.escape(t) for t in fam) + r")\b",
                       re.IGNORECASE)
@@ -93,6 +118,10 @@ def nda_source_regex() -> "re.Pattern[str]":
 def nda_source_regex_str() -> str:
     """Same as `nda_source_regex()` but returns the raw pattern STRING, for
     detectors that keep a table of `(name, pattern, message)` tuples."""
+    if not [k for k in _ENCODED_NDA if _dec(k)]:
+        raise NoNdaLiterals(
+            "no NDA literals; a pattern built from an empty token set "
+            "matches EVERYTHING. A caller must report NOT_MEASURED.")
     fam = sorted(set(nda_regex_family()), key=len, reverse=True)
     return r"\b(" + "|".join(re.escape(t) for t in fam) + r")\b"
 
@@ -101,7 +130,11 @@ def nda_cell_prefixes() -> Tuple[str, ...]:
     """Std-cell name prefix(es) that identify the commercial PDK in a gate-level
     netlist (used by the attestation scanner). Detector data — always present,
     reconstructed from the encoded token family, not from the private config."""
-    return (_dec("sku_prefix"),)
+    # () NOT ("",) — a prefix scanner doing `name.startswith(p)` matches EVERY
+    # name against an empty prefix. Empty means "cannot answer"; the caller
+    # must report NOT_MEASURED rather than scanning with nothing.
+    pfx = _dec("sku_prefix")
+    return (pfx,) if pfx else ()
 
 
 def nda_content_regex() -> "re.Pattern[str]":
@@ -123,6 +156,10 @@ def nda_content_regex() -> "re.Pattern[str]":
     Shared by `commit_msg_nda_check` and `nda_diff_scan_check` so the message
     guard and the diff guard can never drift. Reconstructed at runtime — no
     literal token lives in this or any calling source."""
+    if not [k for k in _ENCODED_NDA if _dec(k)]:
+        raise NoNdaLiterals(
+            "no NDA literals; a pattern built from an empty token set "
+            "matches EVERYTHING. A caller must report NOT_MEASURED.")
     toks = sorted({_dec(k) for k in _ENCODED_NDA}, key=len, reverse=True)
     alts = [r"[\s_\-]+".join(re.escape(p) for p in t.split()) for t in toks]
     return re.compile(r"(?<![0-9a-zA-Z])(" + "|".join(alts) + r")(?![0-9a-zA-Z])",

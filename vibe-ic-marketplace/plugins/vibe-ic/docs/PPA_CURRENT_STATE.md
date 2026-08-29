@@ -141,7 +141,7 @@ The predicate is one sentence: a closed-loop edge is a repair, so the step being
 re-entered has to be able to SEE the quantity its trigger names. If it cannot,
 re-entering reproduces what it produced before and the loop is inert by
 construction — which the repair loop already detects and calls
-`FAIL_RTL_REPAIR_INERT`.
+`FAIL_ECO_INERT`.
 
 ```
 $ python3 programs/closed_loop_metric_reaches_its_producer.py .

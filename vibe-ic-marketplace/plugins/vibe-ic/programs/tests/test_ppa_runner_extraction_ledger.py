@@ -205,42 +205,7 @@ _LEDGER = frozenset({
     "_write_sparse_die_skip_attestation", "density_counted_specs",
     "emit_clock_plan", "routed_sdc_clock",
     "step_drv_promotion_corroboration",
-    "step_signoff_drv_wire_length_repair", "step_signoff_spef_repair",
-    # RECORDED after 6c272d392 ("a bounded area retry"), which added these
-    # three without the ledger decision this blocking test requires. The
-    # decision, made now and from the source: all three are runner
-    # orchestration whose names only carry the `area` token.
-    #
-    # `_area_budget_um2` and `_synth_chip_area` DERIVE NO AREA. Each is an
-    # eight-line delegation to `area_total_vs_budget_check.read_ceiling` /
-    # `.read_areas` -- a project path in, that program's own number out --
-    # which is this file's own description of the runner's job: it calls
-    # modules, passes artefact paths and collects what comes back. They exist
-    # so the retry loop and the step-9 gate read the SAME number from the SAME
-    # reader; re-homing them somewhere that must parse the tree again would not
-    # remove a second parser, it would create one. `_synth_chip_area`'s one
-    # guard is a REFUSAL, not a derivation: a row whose artefact declined to
-    # name its unit is skipped rather than silently trusted.
-    #
-    # `area_retry_is_worth_adopting` decides WHICH StepResult the runner
-    # returns. That is flow control, which is the runner's job by construction;
-    # it measures nothing and only subtracts three numbers other code measured.
-    # Its sibling `repair_result_is_a_regression` is the identical shape for
-    # the post-route repair, sits in this same file, and is not flagged here
-    # only because "regression" is not in the vocabulary -- the whole
-    # difference between the two is a name, which is the thing this test is
-    # careful to say is all it can see.
-    #
-    # AND `_ppa/area.py` CANNOT HOST IT, which is the load-bearing half. The
-    # predicate's second clause compares a SYNTH_PROXY figure (yosys
-    # `chip_area`) against a declared DIE budget. `_ppa.area.compare` returns
-    # UNDETERMINED/`AREA_METRIC_MISMATCH` the moment two metrics differ, and
-    # `area_verdict` refuses proxies outright, so the module named in the
-    # failure message would have to answer UNDETERMINED to the only question
-    # this predicate exists to answer. That module also takes RECORDS and never
-    # a project tree -- the string "project" does not occur anywhere in it.
-    "_area_budget_um2", "_synth_chip_area",
-    "area_retry_is_worth_adopting",})
+    "step_signoff_drv_wire_length_repair", "step_signoff_spef_repair",})
 
 
 def test_the_ledger_derivation_is_not_vacuous():
