@@ -231,10 +231,31 @@ def audit(project_dir: str) -> AuditResult:
                         file=rel,
                     ))
                 if not sub.get("ports") and not sub.get("port_list") and not sub.get("port_map"):
+                    # READ THE PRODUCER'S OWN HEDGE. An emitter that scraped a
+                    # submodule out of a markdown heading marks the entry
+                    # `low_confidence: true` -- it is saying, in the artefact,
+                    # that it is not sure this is a module at all. Demanding a
+                    # port list of an entry its own producer flagged as
+                    # uncertain renders an extraction hedge as a design defect.
+                    # MEASURED 2026-08-29 on subservient/gf180mcuD: all six
+                    # entries in L9_INTEGRATION_SPEC.json carry
+                    # `"type": "markdown submodule-contract heading"`,
+                    # `"role": "documented submodule"` and
+                    # `"low_confidence": true`, and one of them is a prose
+                    # noun phrase, not an identifier. Six hard errors, none of
+                    # which names anything the design got wrong.
+                    #
+                    # The finding is NOT dropped -- it is still emitted and
+                    # still printed, at the severity the evidence supports.
+                    # Degrade loudly, never silently.
+                    hedged = bool(sub.get("low_confidence"))
                     file_findings.append(Finding(
                         rule="INVALID_SUBMODULE",
-                        severity="ERROR",
-                        message=f"submodules[{idx}]: missing 'ports'",
+                        severity="WARNING" if hedged else "ERROR",
+                        message=(f"submodules[{idx}]: missing 'ports'"
+                                 + (" (entry is flagged low_confidence by its "
+                                    "producer, so this is reported, not "
+                                    "refused)" if hedged else "")),
                         file=rel,
                     ))
 
