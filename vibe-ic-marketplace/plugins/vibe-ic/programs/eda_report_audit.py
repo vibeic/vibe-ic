@@ -337,6 +337,39 @@ def _identity(p: Path):
     return ("inode", st.st_dev, st.st_ino)
 
 
+def _name_token_match(name: str, prefixes: Sequence[str]) -> bool:
+    """True iff some TOKEN of `name`'s stem STARTS WITH one of `prefixes`.
+
+    The report-discovery globs are substring matches: `*ir*.rpt` matches any
+    name with the two letters "ir" ANYWHERE in it. MEASURED 2026-08-29,
+    spm x gf180mcuD: `sta_spef_repaired.rpt` -- an OpenSTA timing report --
+    was pulled into BOTH the EM and the IR-drop audit, because "repa(ir)ed"
+    contains "ir". Each audit then judged it against its own tool-signature and
+    byte-size floors, which a timing report cannot meet, and emitted two
+    severity=ERROR findings apiece:
+
+        EM_REPORT_TOO_SMALL      report 976 B is below minimum 1024 B --
+                                 suggests a hand-typed stub
+        EM_NO_TOOL_SIGNATURE     report lacks any known em tool signature
+        IR_DROP_REPORT_TOO_SMALL (same file)
+        IR_DROP_NO_TOOL_SIGNATURE(same file)
+
+    Four ERROR findings accusing a genuine STA report of being a hand-typed EM
+    stub, from one glob. Both steps still PASSed -- the verdict needs only one
+    authentic report and the real `em.rpt` (3314 B, OpenROAD PSM, 32101
+    segments) is authentic -- so the findings never changed a verdict; they
+    changed what the operator was TOLD. The phase-3 headline for the step read
+    `PASS em_signoff EM_REPORT_TOO_SMALL: ... suggests a hand-typed stub`.
+
+    Splitting the stem on non-alphanumerics and requiring a token to START with
+    the prefix keeps every intentional name (`em.rpt`, `ir_drop.rpt`,
+    `power_grid.rpt`, `static_ir.rpt`, `irdrop.rpt`, `pnr_em.rpt`) and drops
+    the accidental interior match. chip-AGNOSTIC: filename lexing only."""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    toks = [t for t in re.split(r"[^0-9a-zA-Z]+", stem.lower()) if t]
+    return any(t.startswith(pre) for t in toks for pre in prefixes)
+
+
 def _discover(project_dir: Path, patterns: List[str],
               exclude_name_tokens: Sequence[str] = ()) -> List[Path]:
     """Glob for files matching any of the given patterns recursively,
@@ -1912,8 +1945,12 @@ def _check_em(project_dir: Path) -> AuditResult:
         result.passed = True
         result.summary = {"waived": True, "reason": reason}
         return result
-    files = _discover(project_dir, ["*em*.rpt", "*electromigration*",
-                                     "*EM*.rpt", "*ir*.rpt"])
+    # `*em*.rpt` / `*ir*.rpt` are SUBSTRING globs; require a NAME TOKEN to
+    # start with the prefix so an STA report named ...repa(ir)ed.rpt is not
+    # judged as EM output. See _name_token_match.
+    files = [f for f in _discover(project_dir, ["*em*.rpt", "*electromigration*",
+                                                "*EM*.rpt", "*ir*.rpt"])
+             if _name_token_match(f.name, ("em", "electromigration", "ir"))]
     if not files:
         result.findings.append(Finding(
             rule="EM_REPORT_EXISTS", severity="ERROR",
@@ -2032,8 +2069,11 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
         result.passed = True
         result.summary = {"waived": True, "reason": reason}
         return result
-    files = _discover(project_dir, ["*ir*.rpt", "*power_grid*", "*IR*.rpt",
-                                     "*ir_drop*", "*voltage_drop*"])
+    # Same substring-glob hazard as the EM checker above.
+    files = [f for f in _discover(project_dir, ["*ir*.rpt", "*power_grid*",
+                                                "*IR*.rpt", "*ir_drop*",
+                                                "*voltage_drop*"])
+             if _name_token_match(f.name, ("ir", "power", "voltage", "psm"))]
     if not files:
         result.findings.append(Finding(
             rule="IR_REPORT_EXISTS", severity="ERROR",
