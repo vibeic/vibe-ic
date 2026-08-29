@@ -888,6 +888,56 @@ def _liberty_structure_text(project: Path, liberty: str,
                 f"{(err or '')[-160:]}")
 
 
+_SYNTH_STATS_REL = "phase2/stage2/synth/stats.json"
+
+
+def synth_recorded_liberty(stats_obj) -> str:
+    """The std-cell Liberty SYNTHESIS actually loaded, out of a parsed
+    synth stats record, or "" when it records none.
+
+    Why this source: the mapped netlist the ATPG grades is made OF this
+    library's cells, so it is the one library guaranteed to model every cell
+    the gate-levelise step must resolve. `synth_area_stats_emit` documents the
+    field it writes as "the library the synthesis actually loaded".
+
+    Read by KEY NAME anywhere in the record rather than by a pinned nested
+    path, so a schema move of the surrounding block cannot silently turn this
+    source off (which would drop resolution back to the hard-coded fallback —
+    the exact failure this source exists to close). Takes the first `.lib`
+    value found in document order. Pure — chip/PDK/vendor-agnostic, no library
+    name appears here."""
+    found: list = []
+
+    def _walk(o):
+        if found:
+            return
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if (k == "liberty" and isinstance(v, str)
+                        and v.strip().endswith(".lib")):
+                    found.append(v.strip())
+                    return
+                _walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                _walk(v)
+
+    _walk(stats_obj)
+    return found[0] if found else ""
+
+
+def _synth_recorded_liberty(project: Path) -> str:
+    """`synth_recorded_liberty` over the project's synth stats file, or "" when
+    the file is absent/unreadable/records no Liberty. Never raises."""
+    stats = project / _SYNTH_STATS_REL
+    if not stats.is_file():
+        return ""
+    try:
+        return synth_recorded_liberty(json.loads(stats.read_text(errors="ignore")))
+    except (ValueError, OSError):
+        return ""
+
+
 def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
     """Chip/PDK-AGNOSTIC std-cell Liberty resolution for the at-speed ATPG
     producers (TDF/PDF). The gate-levelise step needs ANY std-cell Liberty read
@@ -900,19 +950,37 @@ def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
       1. explicit --liberty (caller override, e.g. commercial PDK);
       2. the project's OWN PDK glob input/pdk/liberty/*typ*.lib (kept FIRST so a
          shipped Liberty always wins);
-      3. the Liberty the FLOW ITSELF used, recorded per-project in
+      3. the Liberty SYNTHESIS ITSELF LOADED, recorded per-project in
+         phase2/stage2/synth/stats.json — see `_synth_recorded_liberty`. This
+         is the library the netlist's cells LITERALLY CAME FROM, and synth
+         necessarily precedes DFT/ATPG in the flow, so unlike (4) it is always
+         already on disk when this producer runs;
+      4. the Liberty the FLOW ITSELF used, recorded per-project in
          phase2/stage2/constraints/pvt_matrix.json (its primary corner) — a
          gf180 project records its gf180 path there, sky130 records sky130, so
          this stays PDK-agnostic;
-      4. the shared OSS container default (lec_run.DEFAULT_LIBERTY) that
+      5. the shared OSS container default (lec_run.DEFAULT_LIBERTY) that
          synth/PnR/STA/LEC already use flow-wide — a single source of truth.
     Returns a path string (container-absolute /foss… used as-is, or a project-
-    relative path); `_resolve_liberty_mount` handles either. No chip literal."""
+    relative path); `_resolve_liberty_mount` handles either. No chip literal.
+
+    ORDERING (v1.12.55, measured on spm x gf180mcuD): source (4) is written by
+    a PHASE-3 step, but this producer runs in PHASE 2. On the measured run
+    pvt_matrix.json was written 4.2 s AFTER this producer had already resolved
+    its Liberty, so (4) could not be consulted and resolution fell through to
+    the sky130 literal in (5) — for a gf180mcu design. Source (3) is written by
+    synth 21.1 s BEFORE this producer runs, so it closes that window with the
+    one library that is correct BY CONSTRUCTION rather than by clock reading.
+    Every pre-existing source keeps its precedence; (3) only fills a gap where
+    resolution previously fell through to a hard-coded library."""
     if explicit:
         return explicit
     hits = sorted(project.glob("input/pdk/liberty/*typ*.lib"))
     if hits:
         return str(hits[0].relative_to(project))
+    synth_lib = _synth_recorded_liberty(project)
+    if synth_lib:
+        return synth_lib
     pvt = project / "phase2" / "stage2" / "constraints" / "pvt_matrix.json"
     if pvt.is_file():
         try:
