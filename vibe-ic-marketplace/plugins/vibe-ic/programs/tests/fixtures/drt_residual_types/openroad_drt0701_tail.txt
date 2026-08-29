@@ -1,0 +1,29 @@
+# REAL excerpt of phase3/stage3/pnr/openroad.log from spm x gf180mcuD on a
+# PRISTINE 1.12.92 plugin cache, 2026-08-30 (auto-loosen rung 0, 111x111um).
+# That rung ENDED here: the sign-off DRV loop that follows found 0 violations
+# and returned without re-routing, so this log's last `Viol/Layer` table is
+# exactly the one the route verdict would have quoted.
+#
+# Kept VERBATIM and in log order: the last in-loop table, the in-loop count
+# reaching ZERO, and OpenROAD's POST-ROUTE VERIFICATION disagreeing with it.
+# Nothing edited; unrelated wire-length / via-summary blocks elided.
+
+[INFO DRT-0199]   Number of violations = 50.
+Viol/Layer      Metal1 Metal2 Metal3
+Metal Spacing       12      7      1
+Short               16     13      1
+[INFO DRT-0267] cpu time = 00:00:48, elapsed time = 00:00:13, memory = 363.25 (MB), peak = 580.90 (MB)
+
+[INFO DRT-0199]   Number of violations = 0.
+[INFO DRT-0267] cpu time = 00:00:20, elapsed time = 00:00:04, memory = 392.45 (MB), peak = 583.47 (MB)
+
+[WARNING DRT-0290] Warning: no DRC report specified, skipped writing DRC report
+[INFO DRT-0198] Complete detail routing.
+
+
+[WARNING DRT-0701] Post-route verification found 1 violation(s) that the routing loop did not report (0 in-loop). The published result is the verified one.
+[WARNING DRT-0290] Warning: no DRC report specified, skipped writing DRC report
+[INFO DRT-0180] Post processing.
+
+SDR_DRV_PASS1_BEFORE: 0 (max_wire_length=7976)
+SDR_CONVERGED: pass 1

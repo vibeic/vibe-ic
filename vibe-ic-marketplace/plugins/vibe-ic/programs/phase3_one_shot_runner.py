@@ -13931,21 +13931,13 @@ def _drt_violation_trajectory(log_text: str) -> List[int]:
 _DRT_VIOL_HEADER_RE = re.compile(r"(?m)^\s*Viol/Layer\s+(.+?)\s*$")
 
 
-def _drt_violation_types(log_text: str) -> List[Tuple[str, str, int]]:
-    """The residual detailed-route violations BY TYPE AND LAYER, read from the
-    breakdown TritonRoute prints under its FINAL `DRT-0199` count. Returns a
-    list of ``(type, layer, count)`` with count > 0, or [] when the log has no
-    parseable table.
+def _drt_violation_table(log_text: str) -> List[Tuple[str, str, int]]:
+    """The LAST `Viol/Layer` breakdown in the log, VERBATIM and unreconciled.
 
-    WHY THIS EXISTS. `_drt_final_violations` reads the COUNT and nothing read
-    the next line, so a residual route violation reached the operator as a bare
-    integer and the verdict supplied a cause from a constant. MEASURED
-    2026-08-29, spm x gf180mcuD: the single residual was ``NS Metal`` on
-    ``Metal1`` -- TritonRoute's name for a MINIMUM-AREA violation, one metal
-    stub below the layer's MINIMUMAREA rule -- while the verdict said "the
-    design is congestion-limited" and prescribed more die area. This is the
-    same shape as the DRT-0701 defect fixed in v1.12.54: the tool published the
-    discriminating fact in its own log and nothing parsed it.
+    Returns a list of ``(type, layer, count)`` with count > 0, or [] when the
+    log has no parseable table. This is the raw read; callers that report a
+    cause to an operator want `_drt_violation_types`, which refuses a table the
+    router itself has superseded.
 
     chip-AGNOSTIC: OpenROAD log grammar only; no PDK, layer or design literal
     -- the layer and type names are whatever the tool printed."""
@@ -13971,6 +13963,87 @@ def _drt_violation_types(log_text: str) -> List[Tuple[str, str, int]]:
             if int(c) > 0:
                 out.append((name, lay, int(c)))
     return out
+
+
+def _drt_types_supersession(log_text: str) -> Optional[Tuple[int, int]]:
+    """``(published_count, in_loop_table_total)`` when the log's last
+    `Viol/Layer` table does NOT describe the geometry that ships — else None.
+
+    OpenROAD runs a POST-ROUTE VERIFICATION after the repair loop ends and,
+    when the two disagree, says which one ships:
+
+        [WARNING DRT-0701] Post-route verification found 4 violation(s) that
+        the routing loop did not report (0 in-loop). The published result is
+        the verified one.
+
+    `router_iter_counts` already honours that — it APPENDS the verified count
+    so `_drt_final_violations` returns the published number. The type/layer
+    breakdown does not, and cannot: the verification prints a COUNT and no
+    table at all (`[WARNING DRT-0290] no DRC report specified, skipped writing
+    DRC report`, twice per route). So the last table in such a log is whatever
+    in-loop iteration happened to print one — a route the verification then
+    superseded.
+
+    MEASURED 2026-08-30, spm x gf180mcuD on a pristine 1.12.92 cache (fixture
+    `drt_residual_types/openroad_drt0701_tail.txt` is that run's own log,
+    verbatim, auto-loosen rung 0): the loop reached `Number of violations = 0`,
+    DRT-0701 published 1, and the last in-loop table totalled 50 — `Metal
+    Spacing` and `Short` on Metal1..Metal3. That rung ENDED there (the DRV loop
+    that follows found 0 and did not re-route), so the verdict would have
+    stated one route's count beside another route's cause. A later rung of the
+    same run settled at `NS Metal` — a MINIMUM-AREA violation, in neither
+    family the earlier table names.
+
+    The test is RECONCILIATION, not a DRT-0701 grep: a breakdown whose counts
+    add up to the published number describes that number, whatever produced
+    it, and one that does not describes something else.
+
+    WHAT IT CANNOT DO. Reconciliation is a necessary condition, not a
+    sufficient one: an in-loop table that happens to total the published count
+    is accepted even if verification reached that count a different way. The
+    only reading that is sufficient is the router's own DRC report, which this
+    flow does not request — every route in this log carries
+    ``[WARNING DRT-0290] no DRC report specified``. Refusing a table that
+    provably belongs to another route is what is available here.
+
+    chip-AGNOSTIC: arithmetic over the tool's own two numbers.
+    """
+    table = _drt_violation_table(log_text)
+    if not table:
+        return None
+    published = _drt_final_violations(log_text)
+    if published is None:
+        return None
+    total = sum(c for _, _, c in table)
+    return None if total == published else (published, total)
+
+
+def _drt_violation_types(log_text: str) -> List[Tuple[str, str, int]]:
+    """The residual detailed-route violations BY TYPE AND LAYER — the router's
+    own breakdown OF THE GEOMETRY THAT SHIPS — or [] when this log has none.
+
+    WHY THIS EXISTS. `_drt_final_violations` reads the COUNT and nothing read
+    the next line, so a residual route violation reached the operator as a bare
+    integer and the verdict supplied a cause from a constant. MEASURED
+    2026-08-29, spm x gf180mcuD: the single residual was ``NS Metal`` on
+    ``Metal1`` -- TritonRoute's name for a MINIMUM-AREA violation, one metal
+    stub below the layer's MINIMUMAREA rule -- while the verdict said "the
+    design is congestion-limited" and prescribed more die area. This is the
+    same shape as the DRT-0701 defect fixed in v1.12.54: the tool published the
+    discriminating fact in its own log and nothing parsed it.
+
+    WHY IT RECONCILES. Reading the last table unconditionally re-introduced the
+    original defect one layer down — a cause read off a route the router had
+    already superseded (see `_drt_types_supersession`). A breakdown that does
+    not add up to the published count is not this route's breakdown, so it is
+    refused rather than stated; the caller reports the supersession instead of
+    silently saying nothing.
+
+    chip-AGNOSTIC: OpenROAD log grammar and arithmetic only; no PDK, layer or
+    design literal -- the layer and type names are whatever the tool printed."""
+    if _drt_types_supersession(log_text) is not None:
+        return []
+    return _drt_violation_table(log_text)
 
 
 def _drt_flat_tail(trajectory: Sequence[int]) -> int:
@@ -22446,9 +22519,28 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         except OSError:
             _log_text = ""
         _viol_types = _drt_violation_types(_log_text)
-        _types_note = ("" if not _viol_types else ", by type/layer: " +
-                       ", ".join(f"{t} x{c} on {lay}"
-                                 for t, lay, c in _viol_types))
+        # DEGRADE LOUDLY. When the router's post-route verification supersedes
+        # the loop (DRT-0701) it publishes a COUNT and no breakdown, so there
+        # is no table for the shipped geometry to name. Saying nothing would
+        # read exactly like a route that printed no table at all; say which
+        # route the log's table belongs to instead.
+        _types_sup = _drt_types_supersession(_log_text)
+        if _viol_types:
+            _types_note = (", by type/layer: " +
+                           ", ".join(f"{t} x{c} on {lay}"
+                                     for t, lay, c in _viol_types))
+        elif _types_sup is not None:
+            _types_note = (
+                f" — NO type/layer breakdown is available for this count: it "
+                f"was published by OpenROAD's post-route verification "
+                f"(DRT-0701), which prints a count and no table, and the last "
+                f"in-loop table in this log totals {_types_sup[1]} and "
+                f"describes a route that verification superseded. Re-run the "
+                f"router with `detailed_route -output_drc <file>` to get the "
+                f"published violations themselves (this run logged DRT-0290 "
+                f"'no DRC report specified')")
+        else:
+            _types_note = ""
         _traj = _drt_violation_trajectory(_log_text)
         _flat = _drt_flat_tail(_traj)
         # A remedy this run has already applied and MEASURED to buy nothing is
@@ -22490,6 +22582,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "drt_violation_types": [
                         {"type": t, "layer": lay, "count": c}
                         for t, lay, c in _viol_types],
+                    # None when the log's own table describes the shipped
+                    # route; otherwise the in-loop total that does NOT, so a
+                    # machine reader can tell "no table printed" from "the
+                    # table printed belongs to a superseded route".
+                    "drt_types_superseded_in_loop_total":
+                        (None if _types_sup is None else _types_sup[1]),
                     "drt_trajectory_flat_tail": _flat,
                     "drt_trajectory_len": len(_traj),
                     "remedies_open": _open_remedies,
