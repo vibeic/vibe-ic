@@ -507,7 +507,7 @@ def extract_arith_spec(project: Path,
             f"SERIAL/streaming datapath: {bad} is a literal 1-bit serial port "
             f"while another operand/result is a wide/parametric bus — bit-serial "
             f"delivery with Plugin-chosen latency/bit-order is NOT closed-form-"
-            f"derivable; defer to #654 (testbench-author)")
+            f"derivable; defer to #654 (testbench-gen)")
 
     # ORGANIC-20260703 — SEQUENTIAL / HANDSHAKE / STATUS-OUTPUT DEFER. The oracle
     # emitted here is COMBINATIONAL: it drives operands and compares
@@ -1151,7 +1151,7 @@ def generate(project: Path,
         return ({
             "program": "arith_oracle_tb_gen",
             "verdict": "DEFER",
-            "fallback_skill": "testbench-author",
+            "fallback_skill": "testbench-gen",
             "reason": reason,
             "serial_reason": serial_reason,
             "ic_class": ic_class,

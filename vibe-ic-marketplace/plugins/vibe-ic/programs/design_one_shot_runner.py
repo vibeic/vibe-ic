@@ -8273,7 +8273,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         "(#654)</source>"
         f"<waiver_reason>{track_reason}; no command/opcode oracle and no "
         "L10 golden vectors for this class — functional verification "
-        "DEFERRED to a per-IC oracle TB (skill testbench-author). "
+        "DEFERRED to a per-IC oracle TB (skill testbench-gen). "
         "Connectivity/structural binding to real rtl/ PASSED "
         "(FULL_STACK_TB_DONE).</waiver_reason>"
         "</results>\n")
@@ -9339,7 +9339,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             # here is how 3 of 4 campaign ICs shipped with zero
             # functional verification. WAIVED with the fallback-skill
             # direction — the per-IC oracle TB (deterministic
-            # oracle_tb_gen or AI testbench-author) is the only
+            # oracle_tb_gen or AI testbench-gen) is the only
             # functional PASS path.
             # ORGANIC #654 — for the no-oracle generic_full_stack CPU/SoC
             # class (no command/opcode oracle, no L10 golden vectors), the
@@ -9365,7 +9365,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                 (f"AID reference TB SKIPPED ({track_reason}); generic "
                  f"full-stack TB {tb_path.name} compiled + ran to "
                  f"completion — CONNECTIVITY only, 0 golden compares "
-                 f"(#439). AI invokes skill testbench-author: author a "
+                 f"(#439). AI invokes skill testbench-gen: author a "
                  f"per-IC oracle TB from L3/L5/L10 at "
                  f"sim_full_stack/tb_{top_name}_oracle.v, then re-run."),
                 [str(tb_path), str(transcript)],
@@ -9398,7 +9398,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
              f"unavailable — generic full-stack TB skeleton "
              f"({tb_path.name}) + results.json present but NO sim ran "
              f"(#439). Install a simulator + author the per-IC oracle "
-             f"TB (testbench-author) for functional verification."),
+             f"TB (testbench-gen) for functional verification."),
             [str(tb_path), str(results_path)],
             extras={"verification_track": "generic_full_stack",
                     "aid_tb_skipped_reason": track_reason,
@@ -13509,7 +13509,7 @@ def _v1_6_609_functional_tb_pass_payload(project: Path):
     """ORGANIC #609 — when a genuinely-passing AI-authored functional TB exists
     on disk, return a coverage_actual.json PASS payload citing it; else None.
     The producer's reference-TB / oracle tracks miss the case where the named
-    AI fallback (testbench-author) authors a self-checking functional TB at the
+    AI fallback (testbench-gen) authors a self-checking functional TB at the
     conventional sim/ path that PASSes — so a real verified PASS was hidden as
     SKIPPED-CONDITION.
 

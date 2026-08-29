@@ -1047,7 +1047,7 @@ def _write_not_applicable(formal_dir: Path, reason: str) -> None:
     (formal_dir / "formal_not_run.json").write_text(json.dumps({
         "verdict": "SKIPPED-CONDITION",
         "program": "formal_property_run",
-        "fallback_skill": "assertion-gen",
+        "fallback_skill": "formal-verify",
         "reason": reason,
     }, indent=2, ensure_ascii=False) + "\n")
 

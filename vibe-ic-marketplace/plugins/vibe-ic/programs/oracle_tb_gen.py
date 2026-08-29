@@ -10,7 +10,7 @@ FIRST-CLASS contract mirroring rtl_gen:
 
   * registry `tb_gen: oracle_tb_gen.py` → THIS deterministic generator;
   * when no concrete golden vectors are derivable, it exits 2 with the
-    `tb_fallback_skill: testbench-author` direction (the AI authors a
+    `tb_fallback_skill: testbench-gen` direction (the AI authors a
     per-IC oracle TB from L3/L5/L10, exactly as spec-to-rtl authors
     RTL), so a missing oracle is a NAMED open item, never a silent
     skeleton-PASS.
@@ -30,7 +30,7 @@ structural keys, no chip names):
 Exit codes: 0 = TB emitted; 2 = no concrete vectors → fallback-skill
 direction printed as JSON; 1 = error.
 
-testbench-author CONTRACT — $readmem mem-file staging (ORGANIC #476):
+testbench-gen CONTRACT — $readmem mem-file staging (ORGANIC #476):
   The runner compiles + runs the oracle TB with cwd =
   sim_full_stack/oracle_run/ (so oracle.vvp / oracle.log artifacts are
   collected there). If a hand-authored oracle TB loads firmware / ROM via
@@ -151,10 +151,10 @@ def generate(project: Path):
         return ({
             "program": "oracle_tb_gen",
             "verdict": "SKIPPED-CONDITION",
-            "fallback_skill": "testbench-author",
+            "fallback_skill": "testbench-gen",
             "reason": ("no concrete golden vectors derivable from L10 "
                        "against the L9 top ports — AI invokes skill "
-                       "testbench-author: author a per-IC oracle TB from "
+                       "testbench-gen: author a per-IC oracle TB from "
                        "L3/L5/L10 at sim_full_stack/tb_<top>_oracle.v "
                        "(#439); a skeleton TB is NOT functional "
                        "verification"),

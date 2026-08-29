@@ -8,11 +8,13 @@ functional_verified=false) that step_reference_tb reported as PASS —
 
 Pins:
   * registry: every digital class carries tb_gen/tb_fallback_skill
-    (oracle_tb_gen.py / testbench-author); pure-analog gets null;
+    (oracle_tb_gen.py / a shipped TB-authoring skill); pure-analog
+    gets null;
   * oracle_tb_gen emits a runnable oracle TB from concrete L10 golden
     vectors (verified end-to-end with iverilog when available: correct
     DUT → all vectors PASS; wrong DUT → mismatch detected);
-  * no concrete vectors → exit 2 + testbench-author fallback direction;
+  * no concrete vectors → exit 2 + a fallback direction that routes at a
+    skill the tree ships;
   * step_reference_tb: skeleton-completion is WAIVED (connectivity
     only), never PASS — source pin; oracle PASS path requires
     ORACLE_TB_DONE with all goldens matched.
@@ -20,6 +22,7 @@ Pins:
 chip-AGNOSTIC: synthetic generic fixtures.
 """
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +31,8 @@ from pathlib import Path
 from _source_pin import func_src
 
 import pytest
+
+from _skill_routes import assert_route_ships
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import oracle_tb_gen as OTG  # noqa: E402
@@ -66,13 +71,24 @@ def _proj(tmp_path, expected_out=1):
 # ── registry contract ───────────────────────────────────────────────────────
 
 def test_registry_tb_gen_contract():
+    _routed = set()
     for c in _REG["classes"]:
         assert "tb_gen" in c and "tb_fallback_skill" in c, c["name"]
         if c.get("rtl_gen") is None and c.get("fallback_skill") is None:
             assert c["tb_fallback_skill"] is None  # analog A-track
         elif not c.get("reference_tb"):
             assert c["tb_gen"] == "oracle_tb_gen.py", c["name"]
-            assert c["tb_fallback_skill"] == "testbench-author"
+            # PROPERTY, not literal. This line pinned "testbench-author" and
+            # was green through every release in which no such skill shipped:
+            # a string is always equal to itself, so pinning the NAME of a
+            # route can never tell you whether the route LEADS anywhere.
+            assert_route_ships(
+                c["tb_fallback_skill"],
+                f"registry class {c['name']}.tb_fallback_skill")
+            _routed.add(c["tb_fallback_skill"])
+    # The old literal also encoded "every such class routes at the SAME skill".
+    # Keep that invariant without naming the skill.
+    assert len(_routed) == 1, f"classes route TB authoring at {sorted(_routed)}"
 
 
 # ── generator ───────────────────────────────────────────────────────────────
@@ -98,7 +114,8 @@ def test_no_concrete_vectors_fallback_direction(tmp_path):
     rep, rc = OTG.generate(tmp_path)
     assert rc == 2
     assert rep["verdict"] == "SKIPPED-CONDITION"
-    assert rep["fallback_skill"] == "testbench-author"
+    assert_route_ships(rep["fallback_skill"],
+                       "oracle_tb_gen SKIPPED-CONDITION report")
 
 
 @pytest.mark.skipif(shutil.which("iverilog") is None,
@@ -145,7 +162,13 @@ def test_skeleton_completion_is_waived_not_pass():
     # skeleton-completion-is-WAIVED-not-PASS contract).
     window = _P2_SRC[i:i + 3800]
     assert '"reference_tb", "WAIVED"' in window
-    assert '"fallback_skill": "testbench-author"' in window
+    # The WAIVED return must still hand the agent a route, and that route must
+    # lead to a skill that ships -- pinning the literal here is what let the
+    # runner waive at a non-existent skill without this test noticing.
+    _m = re.search(r'"fallback_skill":\s*"([A-Za-z0-9\-_]+)"', window)
+    assert _m, "the WAIVED return no longer names a fallback skill"
+    assert_route_ships(_m.group(1),
+                       "design_one_shot_runner step_reference_tb WAIVED return")
     assert "#439" in window
 
 

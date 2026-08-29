@@ -984,7 +984,7 @@ def main():
                             "distinct address(es)), but the plugin's own "
                             f"Phase-2 TB generators already deferred it [{_why}]. "
                             "Functional verification is DEFERRED to a per-IC "
-                            "oracle TB (skill testbench-author); connectivity/"
+                            "oracle TB (skill testbench-gen); connectivity/"
                             "structural full-stack binding to real rtl/ stands. "
                             "WAIVED-DEFERRED (visible, review_required, non-"
                             "blocking) — consistent with the step-4 reference_tb "

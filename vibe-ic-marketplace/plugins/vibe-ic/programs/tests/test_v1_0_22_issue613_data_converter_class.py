@@ -36,6 +36,8 @@ pure-analog IC with NO digital readout still classifies as pure_analog) is
 the load-bearing guard against the new branch being too wide.
 """
 import json
+
+from _skill_routes import assert_route_ships
 import sys
 from pathlib import Path
 
@@ -130,7 +132,8 @@ def test_registry_data_converter_has_generation_path():
     # contract: a class with a generation path + no reference_tb needs the
     # oracle TB generator (test_registry_tb_gen_contract pins this too).
     assert c["tb_gen"] == "oracle_tb_gen.py"
-    assert c["tb_fallback_skill"] == "testbench-author"
+    assert_route_ships(c["tb_fallback_skill"],
+                       "registry class data_converter.tb_fallback_skill")
 
 
 def test_pure_analog_remains_the_double_null_dead_end():
