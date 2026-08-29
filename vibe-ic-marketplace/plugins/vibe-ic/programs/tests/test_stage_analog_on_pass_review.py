@@ -417,11 +417,14 @@ def test_every_rule_has_an_emitter_and_a_printer():
     writing somebody else's test; `review()` then leaves `test` absent and the
     unproven-rejection branch refuses the rejection. That is the right
     behaviour at runtime and the wrong thing to discover at runtime, so the
-    three registries are pinned to agree here — including for the two rules
-    this stage did not author.
+    active and declared-not-enabled registries are pinned to agree with the
+    emitter and printer registries here — including for rules this stage did
+    not author.
     """
     mod = _program()
     ids = {rid for rules in mod._RULES.values() for rid, _ in rules}
+    ids |= {rid for rules in getattr(mod, "_DECLARED_NOT_ENABLED", {}).values()
+            for rid, _ in rules}
     assert RULE in ids
     assert set(mod._EMITTERS) == ids, (
         f"emitters {sorted(set(mod._EMITTERS) ^ ids)} do not match the rules")

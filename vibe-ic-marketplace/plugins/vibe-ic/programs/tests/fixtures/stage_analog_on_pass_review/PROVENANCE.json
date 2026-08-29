@@ -2,7 +2,7 @@
   "_comment": "Verbatim copies of the two files stage_on_pass_review reads for stage_analog — the INTENT (L5_ADI_SPEC.json) and the ARTEFACT (phase3/analog/<block>/spec.json) — from real runs on this fleet. Nothing here is authored: each sha256 below is the source file's, and accept_adc_conv and reject_adc_stub share a byte-identical L5, so the control varies the ARTEFACT alone while the intent and the harness are held fixed.",
   "trees": {
     "accept_adc_conv": {
-      "run": "/home/reyerchu/AI_IC_design/_c_adc_run/proj_fix",
+      "run": "/home/<your-user>/AI_IC_design/_c_adc_run/proj_fix",
       "why": "a completed run of the incremental delta-sigma ADC front-end: both declared blocks in scope, every numeric requirement the intent declares carried by the spec the stage grades against",
       "files": {
         "phase1/generated_docs/L5_ADI_SPEC.json": {
@@ -20,7 +20,7 @@
       }
     },
     "reject_adc_stub": {
-      "run": "/home/reyerchu/AI_IC_design/_c_adc_run/proj_stub",
+      "run": "/home/<your-user>/AI_IC_design/_c_adc_run/proj_stub",
       "why": "the SAME design and the byte-identical L5 as accept_adc_conv, with the analog runner's deterministic-stub A1 tier: one row per block, `vout target 1.0 V`, against an intent declaring Vout 1.2 V (1.1-1.3) and twelve further numeric requirements",
       "files": {
         "phase1/generated_docs/L5_ADI_SPEC.json": {
@@ -38,7 +38,7 @@
       }
     },
     "accept_published_partial": {
-      "run": "/home/reyerchu/_d9_base/benchmark-data/ic/u_hawaii_adc",
+      "run": "/home/<your-user>/_d9_base/benchmark-data/ic/u_hawaii_adc",
       "why": "the published benchmark cell: one block the intent declares no numeric requirement for (DISARMED by the intent's own disclosure) and one measured and accepted",
       "files": {
         "phase1/generated_docs/L5_ADI_SPEC.json": {

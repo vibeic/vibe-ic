@@ -382,6 +382,78 @@ stages:
     name: "Manufacturing & Test (fab → wafer-sort → packaging → ATE final)"
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+    # DECLARED AND NOT ENABLED, on purpose. Read this before wiring it.
+    #
+    # WHAT IT WOULD ASK. Steps 40-44 record what the foundry, the assembly
+    # house and the test floor sent back. All five of their gates
+    # (manufacturing_fab_intake_check, wafer_sort_yield_check,
+    # packaging_intake_check, final_test_attestation_check,
+    # htol_attestation_check) check each artefact against ITSELF — measured at
+    # v1.12.100, they carry ZERO references to phase1/ or to any L document.
+    # So no gate anywhere asks whether the package that was assembled can bond
+    # out the design the intent describes. Stage 2 checks the netlist against
+    # the RTL and stage 3 checks layout against netlist and PDK; a package too
+    # small for its own die passes every one of them.
+    #
+    # WHY IT HAS NEVER FIRED. There is no artefact. MEASURED 2026-08-30: of the
+    # 89 published run roots, 0 carry a phase3/stage5_manufacturing/
+    # directory, 0 carry silicon_received.json, and no commit in the history of
+    # either repository ever added a file under that path. The published
+    # steps/manufacturing/stage5_manufacturing/** files are D3 AUDIT LEDGERS
+    # recording n_produced: 0 — the record that the step made nothing, not a
+    # stage-5 artefact.
+    #
+    # AND THE STAGE STILL REPORTS GREEN: on
+    # ic/sha256/clean_run_v1427_20260715/_logs/flow_compliance_strict.json all
+    # five stage-5 rows are SKIPPED-CONDITION, which stage_on_pass_review's
+    # stage_passed() holds in its green set. A review declared here fires on
+    # every real subject and finds nothing to read.
+    #
+    # SO IT CARRIES NO `gate:` KEY. Nothing invokes it, `enabled: false` says
+    # so, and stage5_manufacturing is registered in the program's
+    # _DECLARED_NOT_ENABLED rather than its _RULES, so `--stage
+    # stage5_manufacturing` reports the declaration and returns 2. Enabling it
+    # needs ONE real known-good and ONE real known-bad packaging_log.json that
+    # the rule's author did not create; a rule proven on its author's own
+    # fixture has never been tested. The half that IS provable — the intent
+    # reading itself — is exercised on the live corpus by
+    # `test_stage5_on_pass_review_declared_not_enabled.py`, and it finds the
+    # intent self-contradictory on 7 of the 7 roots that state a package.
+    on_pass_review:
+      enabled: false
+      not_enabled_reason: >-
+        No run has ever produced a stage-5 artefact (0 of 89 published run
+        roots, measured 2026-08-30), so both halves of the control would have
+        to be authored. Declared here so the gap is visible; not wired, so
+        nothing reports a review it did not perform.
+      skill: benchmark-verify
+      fires_on: stage_pass
+      verdict: advisory
+      rule: R5_PACKAGE_CANNOT_BOND_DESIGN
+      intent:
+        - "phase1/generated_docs/L1_DATASHEET.json"
+      intent_deny: ["oracle", "harness", "golden", "reference_output", "solution"]
+      artefact:
+        - "phase3/stage5_manufacturing/packaging_log.json"
+      rejection_requires: [intent, artefact, contradiction, test]
+      emit_test_dir: "reports/manufacturing/on_pass_review"
+      # WHAT WOULD ENABLE IT, as files rather than as an intention. R5 moves
+      # out of the program's _DECLARED_NOT_ENABLED when a run tree carries
+      # BOTH phase3/stage5_manufacturing/silicon_received.json (step 40's
+      # intake declaration — without it every stage-5 step is
+      # SKIPPED-CONDITION and the review has no subject) and
+      # phase3/stage5_manufacturing/packaging_log.json (step 42's declared
+      # output, stating package_type and pin_count), and that pair exists
+      # TWICE: once known-GOOD, whose pin count covers the design's external
+      # pin population, and once known-BAD, whose does not. ONE of each is the
+      # minimum, and neither may be authored by whoever enables the rule.
+      enable_requires:
+        - "phase3/stage5_manufacturing/silicon_received.json"
+        - "phase3/stage5_manufacturing/packaging_log.json"
+      enable_requires_note: >-
+        One known-GOOD and one known-BAD real artefact, neither authored by
+        whoever enables the rule. A reviewer proven on its author's own fixture
+        has never been tested.
 
 steps:
   # v2 — Phase 1 doc-extraction single-gate step. Wraps the 17
