@@ -18,6 +18,8 @@ This file now pins the INVERSE contract:
 """
 from __future__ import annotations
 
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -53,7 +55,22 @@ def test_formal_not_run_manifest_carries_fallback_direction():
     # assert the SKIP manifest STILL carries the same fallback direction.
     i = _SRC.rindex("formal_not_run.json")
     window = _SRC[i - 1800:i + 1400]
-    assert '"fallback_skill": "assertion-gen"' in window
+    # The DIRECTION is what this pins, not a particular name. It used to pin
+    # the literal "assertion-gen", which skills/_classification.json records
+    # under `deprecated_skills` -- so the assertion held while the manifest
+    # sent operators to a skill the tree does not ship. Pin the property
+    # instead, which is strictly stronger: a fallback direction is present AND
+    # it names a skill that actually exists and is not deprecated.
+    m = re.search(r'"fallback_skill": "([A-Za-z0-9\-_]+)"', window)
+    assert m, "the SKIP manifest must still carry a fallback direction"
+    _skill = m.group(1)
+    _skills_dir = PROGRAMS.parent / "skills"
+    assert (_skills_dir / _skill).is_dir(), (
+        f"formal_not_run.json routes to skill {_skill!r}, which does not ship")
+    _dep = json.loads((_skills_dir / "_classification.json").read_text()
+                      ).get("deprecated_skills", {}).get("skills", [])
+    assert _skill not in _dep, (
+        f"formal_not_run.json routes to {_skill!r}, a DEPRECATED skill")
     assert "SKIPPED-CONDITION" in window
     assert "all_proved" in window  # documented as proof-run-only
     assert "#440" in window
@@ -75,7 +92,23 @@ def test_step5_no_longer_a_capability_gap():
 
 
 def test_registry_has_assertion_fallback():
-    import json
+    """Every class carries an assertion fallback, and it must be a REAL skill.
+
+    This used to pin the literal "assertion-gen" for all 13 classes. That skill
+    is recorded under `deprecated_skills` in skills/_classification.json, so
+    the pin was holding the registry to a name the tree deliberately removed.
+    The requirement it was protecting -- every class states where assertion
+    work goes -- is kept and strengthened.
+    """
     reg = json.loads((PROGRAMS / "ic_class_registry.json").read_text())
+    skills_dir = PROGRAMS.parent / "skills"
+    deprecated = json.loads((skills_dir / "_classification.json").read_text()
+                            ).get("deprecated_skills", {}).get("skills", [])
+    assert reg["classes"], "registry must list classes"
     for c in reg["classes"]:
-        assert c.get("assertion_fallback_skill") == "assertion-gen", c["name"]
+        skill = c.get("assertion_fallback_skill")
+        assert skill, f"{c['name']}: no assertion_fallback_skill"
+        assert (skills_dir / skill).is_dir(), (
+            f"{c['name']}: assertion_fallback_skill {skill!r} does not ship")
+        assert skill not in deprecated, (
+            f"{c['name']}: assertion_fallback_skill {skill!r} is DEPRECATED")
