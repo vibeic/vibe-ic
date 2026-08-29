@@ -2087,13 +2087,119 @@ def _declared_rootdir(pytest_argv: Sequence[str],
     return [f"--rootdir={anchor}"]
 
 
+#: Files pytest accepts as a config source, in ITS order of precedence. A
+#: `pytest.ini` counts even when empty; the other three count only when they
+#: carry the section that declares them a pytest config.
+_INI_SECTION = {
+    "pytest.ini": None,
+    ".pytest.ini": None,
+    "pyproject.toml": "[tool.pytest.ini_options]",
+    "tox.ini": "[pytest]",
+    "setup.cfg": "[tool:pytest]",
+}
+
+
+def _is_pytest_config(path: Path) -> bool:
+    """True when pytest would accept `path` as this session's config file."""
+    section = _INI_SECTION.get(path.name, "")
+    if section is None:
+        return True
+    if not section:
+        return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return section in text
+
+
+def _declared_configfile(pytest_argv: Sequence[str], cwd: Optional[str],
+                         targets: Sequence[str]) -> List[str]:
+    """Carry the ini that `_declared_rootdir` strands.
+
+    DECLARING `--rootdir` ALSO DROPS THE CONFIG FILE. pytest finds the ini by
+    walking up from the arguments' common ancestor, and it performs that search
+    as part of inferring rootdir; with rootdir DECLARED the search does not
+    happen, no `configfile` is selected, and every `addopts` in that ini
+    silently stops applying to the session.
+
+    The docstring on `_declared_rootdir` recorded the opposite -- "the ini file
+    is still discovered and applied with rootdir moved ... so `addopts` and the
+    conftest-loaded plugins are unaffected". That claim is FALSE and this is the
+    measurement that falsifies it. Same tree (7074db3f5), the unselectable
+    corpus, 133 files, cwd at the repository root, one pytest process:
+
+        --rootdir=<repo root>                          rc=2   75 collection errors
+        --rootdir=<repo root> -c <plugin>/pytest.ini   rc=0   1221 passed
+        --rootdir=<repo root> --import-mode=importlib  rc=0   1221 passed
+
+    THE 75 ARE ONE DEFECT, NOT 75. `plugins/vibe-ic/pytest.ini` carries
+    `addopts = --import-mode=importlib`. Stranded, the session falls back to
+    pytest's default `prepend` mode, which inserts a test file's own directory
+    at the front of `sys.path` and imports the file under a module name derived
+    from its BASENAME alone whenever that directory has no `__init__.py` -- none
+    of these do. The corpus holds 70 files named `test_compliance.py` and 7
+    named `test_verdict_boundary.py`. The first of each binds that bare name in
+    `sys.modules`; for every later file `_pytest.pathlib.import_path` finds the
+    name already held by a different `__file__` and raises
+    `ImportPathMismatchError` ("import file mismatch"). 69 + 6 = 75. Collection
+    errors abort the session, so pytest exits 2 -- and rc=2 is correctly "the
+    question could not be put". The aggregate arm had simply stopped being able
+    to put it, while the same 133 files one-per-session stayed 133/133 green,
+    which is what makes this the aggregation and not the code.
+
+    RESTORING THE INI IS PREFERRED over pinning an import mode here. It returns
+    the session to the configuration it would have had rather than adding a
+    second, competing declaration of it, and it keeps this frame-moving helper
+    from quietly becoming a place where suite-wide pytest policy is set.
+    `testpaths` returns with it and stays inert: it applies only when no
+    argument is given, and every caller here names its files explicitly.
+
+    THE SEARCH IS PER-ARGUMENT, NOT PER-COMMON-ANCESTOR, because pytest's is.
+    `_pytest.config.locate_config` walks EACH argument's own ancestors in turn
+    and takes the first config file it meets; it never intersects the arguments.
+    That distinction is the whole reason the ini applies here at all: this
+    corpus spans `docs/capture/...` as well as the plugin, so the common
+    ancestor is the repository root, which carries no config -- and a search
+    written against the common ancestor finds NOTHING and silently restores
+    NOTHING. Walking each argument, the first plugin-resident file in the
+    selection reaches `plugins/vibe-ic/pytest.ini`, which is exactly the file
+    pytest would have used. Matching pytest's algorithm is the point: the goal
+    is to restore the config the session WOULD have had, not to pick a
+    defensible one.
+
+    Nothing is added when the caller already declared `-c`, or when no ini would
+    have been found -- the `tools/` corpus anchored at the repository root finds
+    none, so that lane's command is byte-for-byte the one it has always issued.
+    """
+    for arg in pytest_argv:
+        if arg in ("-c", "--config-file"):
+            return []
+        if arg.startswith(("-c=", "-c", "--config-file=")) and arg != "-c":
+            if arg.startswith("--config-file=") or len(arg) > 2:
+                return []
+    anchor = Path(cwd).resolve() if cwd else Path.cwd()
+    for target in targets:
+        argpath = Path(target)
+        if not argpath.is_absolute():
+            argpath = anchor / argpath
+        argpath = argpath.resolve()
+        for base in (argpath, *argpath.parents):
+            for name in _INI_SECTION:
+                found = base / name
+                if found.is_file() and _is_pytest_config(found):
+                    return ["-c", str(found)]
+    return []
+
+
 def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
             stall_after: float, cwd: Optional[str], *,
             progress_relay_path: Optional[Path] = None,
             outcome_sink: Optional[Dict[str, object]] = None,
             ) -> Tuple[Optional[int], str, bool]:
     """One pytest session for one file, supervised by forward progress."""
-    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) \
+        + _declared_configfile(pytest_argv, cwd, [test_file]) + [
         "-p", _PROGRESS_PLUGIN,
         # xunit1 CARRIES THE `file` ATTRIBUTE and xunit2 drops it. The merge
         # gate answers "did every file we selected actually run" off that
@@ -2118,7 +2224,8 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
                   outcome_sink: Optional[Dict[str, object]] = None,
                   ) -> Tuple[Optional[int], str, bool]:
     """Run the original whole-selection pytest shape as a semantics canary."""
-    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) \
+        + _declared_configfile(pytest_argv, cwd, test_files) + [
         "-p", _PROGRESS_PLUGIN,
         "-o", "junit_family=xunit1", f"--junitxml={junit_path}",
         *test_files,
@@ -2141,7 +2248,8 @@ def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
     FSM must also observe a count-preserving collect-only terminal followed by
     ``session_finish``.
     """
-    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) + [
+    cmd = list(pytest_argv) + _declared_rootdir(pytest_argv, cwd) \
+        + _declared_configfile(pytest_argv, cwd, test_files) + [
         "-p", _PROGRESS_PLUGIN, "--collect-only", *test_files,
     ]
     return _run_progress_supervised(

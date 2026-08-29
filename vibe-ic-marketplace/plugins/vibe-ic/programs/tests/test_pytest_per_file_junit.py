@@ -34,6 +34,7 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -2408,6 +2409,123 @@ def test_a_caller_that_declared_a_rootdir_keeps_it():
     assert D._declared_rootdir(["-q", "--rootdir=/elsewhere"], "/anchor") == []
     assert D._declared_rootdir(["-q", "--rootdir", "/elsewhere"], "/anchor") == []
     assert D._declared_rootdir(["-q"], "/anchor") == ["--rootdir=/anchor"]
+
+
+# ── declaring the frame must not STRAND the config file ──────────────────────
+#
+# `--rootdir` moves the frame, and it also stops pytest looking for an ini:
+# that search happens only while rootdir is being INFERRED. Every `addopts` in
+# the stranded ini then silently stops applying.
+#
+# MEASURED at 7074db3f5 on the landing gate's `full:unselectable-tests` lane,
+# 133 files, one pytest process, cwd at the repository root:
+#
+#     --rootdir=<repo root>                          rc=2   75 collection errors
+#     --rootdir=<repo root> -c <plugin>/pytest.ini   rc=0   1221 passed
+#
+# The 75 are ONE defect. `plugins/vibe-ic/pytest.ini` carries
+# `addopts = --import-mode=importlib`; stranded, the session falls back to
+# pytest's default `prepend` mode, which names a test module by its BASENAME
+# when its directory has no `__init__.py`. The corpus holds 70 files named
+# `test_compliance.py` and 7 named `test_verdict_boundary.py`; the first of each
+# binds the bare name and every later one raises `ImportPathMismatchError`.
+# 69 + 6 = 75. The same 133 files one-per-session were 133/133 GREEN, which is
+# what makes this the aggregation and not the code.
+
+
+def _config_probe_tree() -> Path:
+    """A tree whose COMMON ancestor carries no config but whose arguments do.
+
+    `mkdtemp` rather than `tmp_path`: the pinned image's `tmp_path` carries a
+    newline, and these paths are handed to a subprocess command line.
+    """
+    root = Path(tempfile.mkdtemp(prefix="cfgprobe"))
+    (root / "outside").mkdir()
+    (root / "outside" / "test_outside.py").write_text("def test_outside():\n    pass\n")
+    pkg = root / "pkg"
+    (pkg / "a" / "tests").mkdir(parents=True)
+    (pkg / "b" / "tests").mkdir(parents=True)
+    (pkg / "pytest.ini").write_text("[pytest]\naddopts = --import-mode=importlib\n")
+    # SAME BASENAME, and neither directory carries an `__init__.py` — the exact
+    # shape the unselectable corpus has 70 of.
+    (pkg / "a" / "tests" / "test_same.py").write_text("def test_a():\n    pass\n")
+    (pkg / "b" / "tests" / "test_same.py").write_text("def test_b():\n    pass\n")
+    return root
+
+
+def _probe_args(root: Path) -> list:
+    return ["outside/test_outside.py", "pkg/a/tests/test_same.py",
+            "pkg/b/tests/test_same.py"]
+
+
+def _run_pytest_in(root: Path, extra: list) -> subprocess.CompletedProcess:
+    env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+               PYTHONDONTWRITEBYTECODE="1")
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         f"--rootdir={root}", *extra, *_probe_args(root)],
+        cwd=str(root), env=env, capture_output=True, text=True)
+
+
+def test_the_stranded_config_is_what_aborts_collection():
+    """BOTH DIRECTIONS ON THE SAME BYTES. Identical files and identical
+    arguments: without the ini the session cannot even be collected, with it
+    restored every file collects and passes."""
+    root = _config_probe_tree()
+    without = _run_pytest_in(root, [])
+    assert without.returncode == 2, (
+        "a stranded ini must abort COLLECTION (rc 2 = the question could not "
+        "be put), not merely change a result\n" + without.stdout)
+    assert "import file mismatch" in without.stdout, without.stdout
+
+    with_ini = _run_pytest_in(root, ["-c", str(root / "pkg" / "pytest.ini")])
+    assert with_ini.returncode == 0, with_ini.stdout
+
+
+def test_the_config_is_found_by_walking_each_argument_not_their_ancestor():
+    """The regression this pins: a COMMON-ANCESTOR search restores nothing.
+
+    `outside/` and `pkg/` share only the root, which carries no config, so an
+    implementation that intersects the arguments finds nothing and silently
+    leaves the session in `prepend` mode. pytest walks each argument in turn
+    (`_pytest.config.locate_config`), and so must this."""
+    root = _config_probe_tree()
+    assert D._declared_configfile([], str(root), _probe_args(root)) == [
+        "-c", str(root / "pkg" / "pytest.ini")]
+
+
+def test_a_corpus_with_no_config_anywhere_is_left_exactly_as_it_was():
+    """THE CONTROL THAT MUST NOT MOVE. The repository-root `tools/` corpus
+    reaches no ini, so its command stays byte-for-byte the one it has always
+    issued; this fix must be inert there."""
+    root = Path(tempfile.mkdtemp(prefix="cfgnone"))
+    (root / "tools").mkdir()
+    (root / "tools" / "test_x.py").write_text("def test_x():\n    pass\n")
+    assert D._declared_configfile([], str(root), ["tools/test_x.py"]) == []
+
+
+def test_a_caller_that_declared_a_config_keeps_it():
+    """Added, never overridden — the same contract `--rootdir` already has."""
+    root = _config_probe_tree()
+    args = _probe_args(root)
+    assert D._declared_configfile(["-c", "/mine.ini"], str(root), args) == []
+    assert D._declared_configfile(["-c=/mine.ini"], str(root), args) == []
+    assert D._declared_configfile(["--config-file", "/mine.ini"], str(root), args) == []
+    assert D._declared_configfile(["--config-file=/mine.ini"], str(root), args) == []
+
+
+def test_the_restored_session_can_still_report_a_real_red_by_name():
+    """An aggregation that stopped aborting but also stopped DISCRIMINATING is
+    the same defect wearing a green hat. One genuinely failing file must come
+    back as ONE named red, not as every file in the corpus."""
+    root = _config_probe_tree()
+    (root / "pkg" / "b" / "tests" / "test_same.py").write_text(
+        "def test_b():\n    assert False, 'planted'\n")
+    proc = _run_pytest_in(root, ["-c", str(root / "pkg" / "pytest.ini")])
+    assert proc.returncode == 1, (
+        "rc 1 is 'tests failed'; rc 2 would mean the question could not be "
+        "put and rc 0 that it was never asked\n" + proc.stdout)
+    assert "1 failed" in proc.stdout and "2 passed" in proc.stdout, proc.stdout
 
 
 # ── a --maxfail prefix is a NAMED truncation, still refused (jnorec, B1) ──────
