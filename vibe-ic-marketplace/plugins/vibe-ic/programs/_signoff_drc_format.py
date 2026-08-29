@@ -145,6 +145,31 @@ RE_DRT_0199 = re.compile(
 RE_DRT_COMPLETING = re.compile(
     r"Completing\s+100%\s+with\s+(\d+)\s+violations?")
 
+# DRT-0701 SUPERSEDES THE TRAJECTORY, AND THE ROUTER SAYS SO ITSELF.
+# OpenROAD runs a POST-ROUTE VERIFICATION after the repair loop ends. When it
+# disagrees with the loop it emits, in its own words:
+#
+#   [WARNING DRT-0701] Post-route verification found 1 violation(s) that the
+#   routing loop did not report (0 in-loop). The published result is the verified one.
+#
+# "The published result is the verified one" — the tool is telling the reader
+# which of its two numbers describes the geometry that ships. The DRT-0199
+# trajectory is the loop's view and is SUPERSEDED whenever this line is present.
+#
+# MEASURED on a real gf180mcuD run of `spm` (2026-08-29): trajectory
+# [251, 50, 50, 0] with DRT-0701 reporting 1. Reading the trajectory gave 0
+# while `detailedroute__route__drc_errors` in the metrics JSON carried 1, and
+# the disagreement failed pnr with ROUTE_DRC_METRIC_DISAGREEMENT — so NO GDS was
+# ever streamed, which then failed steps 31/36/38 and left 37 MISSING. One
+# unparsed line, four reds.
+#
+# Worse than the false number: `_route_feedback_loosen_ex` decides whether to
+# grow the die from the trajectory, so a trailing 0 reads as "still converging"
+# and the automatic rescue DECLINES to fire on a design that had not converged.
+# chip-AGNOSTIC: OpenROAD/TritonRoute log grammar only.
+RE_DRT_0701 = re.compile(
+    r"\[WARNING DRT-0701\][^\n]*?found\s+(\d+)\s+violation")
+
 
 def router_iter_counts(text: str) -> List[int]:
     """Every per-iteration router DRC count, in log order ([] when none).
@@ -162,7 +187,34 @@ def router_iter_counts(text: str) -> List[int]:
             out.append(int(c))
         except (TypeError, ValueError):
             continue
+    # The post-route verification's count is APPENDED, not substituted: the
+    # trajectory is still the loop's real history and `_drt_violation_trajectory`
+    # readers want it. Appending makes the LAST element the published number, so
+    # `router_iter_last_count` — which every caller uses for "what ships" —
+    # returns the verified count without any caller having to know about 0701.
+    verified = router_post_route_verified_count(text)
+    if verified is not None and (not out or out[-1] != verified):
+        out.append(verified)
     return out
+
+
+def router_post_route_verified_count(text: str) -> Optional[int]:
+    """OpenROAD's POST-ROUTE VERIFICATION count, or None when it did not speak.
+
+    None, never 0, for the same reason `router_iter_last_count` returns None on
+    a report with no trajectory: "the verifier said nothing" and "the verifier
+    found nothing" are different facts, and collapsing them would turn a log this
+    reader cannot read into a clean design.
+    """
+    if not text:
+        return None
+    m = RE_DRT_0701.findall(text)
+    if not m:
+        return None
+    try:
+        return int(m[-1])
+    except (TypeError, ValueError):
+        return None
 
 
 def router_iter_last_count(text: str) -> Optional[int]:
