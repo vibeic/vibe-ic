@@ -151,6 +151,22 @@ def score_one(design_id: str, draft: Path, dataset: Path, bench: Path,
         score_prefix = wd / "score"
         env = dict(os.environ)
         env["OSS_SIM_IMAGE"] = sim_image
+        # THE OFFICIAL HARNESS TAKES **TWO** IMAGES, AND SETTING ONE IS NOT A
+        # PARTIAL RUN — IT IS A WRONG VERDICT. An area-opt / cid007 problem
+        # scores its `*_synth` subtest in a SECOND container named by
+        # `OSS_PNR_IMAGE`; unset, the harness falls back to the gated
+        # `nvidia/cvdp-sim:v1.0.0`, the pull is denied, and the subtest is
+        # recorded as a FAILURE OF THE DESIGN. Measured on 302 authored CVDP
+        # completions: 6 designs whose functional half was clean
+        # (`TESTS=n PASS=n FAIL=0`) were scored FAIL on a `*_synth.txt` whose
+        # entire body is `ERROR: pull access denied`. Control/variant on
+        # `cvdp_copilot_generic_nbit_counter_0039`, same draft: unset -> FAIL,
+        # set -> PASS. All six flip to PASS with this line.
+        #
+        # `eda_image_preflight.py` was written for exactly this (#714) and
+        # nothing called it. Default the synth image to the sim image the
+        # caller already proved they have; an explicit env still wins.
+        env.setdefault("OSS_PNR_IMAGE", sim_image)
         subprocess.run(
             [sys.executable, "run_benchmark.py", "-f", str(score_dataset),
              "--model", "local_import", "--prompts-responses-file", str(resp),

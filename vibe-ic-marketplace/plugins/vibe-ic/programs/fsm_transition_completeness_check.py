@@ -251,35 +251,61 @@ def _split_case_arms(case_body: str) -> List[Tuple[str, str]]:
     nested inside a begin/end or paren). Conservative: a nested `case` inside an
     arm is opaque (its inner labels are skipped via begin/end depth tracking)."""
     # find top-level label positions: IDENT(s) or default, followed by ':' that
-    # is NOT '::' and not part of '?:'. We track begin/end + paren depth so inner
-    # case labels are not mistaken for outer arms.
+    # is NOT '::' and does NOT belong to a ternary `? … : …`. begin/end depth
+    # keeps a nested case's labels from being mistaken for outer arms.
+    #
+    # THE TERNARY RULE IS LOAD-BEARING, AND IT USED TO BE ONLY A COMMENT. The
+    # line above promised a `?:` exclusion that the token loop never
+    # implemented, so
+    #
+    #     COMPUTE : next_state = (count < LIMIT) ? LOAD : COMPLETE;
+    #
+    # was read as the COMPUTE arm followed by a second arm labelled `LOAD`
+    # whose body is `COMPLETE;` — an arm that assigns nothing. The checker then
+    # reported `fsm-inferred-latch` against LOAD, a state whose real arm two
+    # lines up assigns `next_state` perfectly well. A ternary naming two states
+    # is the ordinary way to write a conditional transition, so the false
+    # positive fires on CORRECT FSMs, and it is BLOCKING: on the CVDP corpus it
+    # cost `cvdp_copilot_alphablending_0003` its emit.
+    #
+    # A `:` closes the nearest unmatched `?` at the same begin/end depth; only a
+    # `:` with no `?` outstanding can open a case arm. Tracked per depth so a
+    # ternary inside one arm cannot mask a label in the next.
     arms: List[Tuple[str, str]] = []
-    label_re = re.compile(
-        r"(\bdefault\b|[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*:(?!:)")
     depth = 0
-    i = 0
     pending_label = None
     pending_start = None
-    tokens = list(re.finditer(r"\bbegin\b|\bend\b|\bcase\b|\bendcase\b|"
+    open_ternaries: dict = {}
+    tokens = list(re.finditer(r"\bbegin\b|\bend\b|\bcase\b|\bendcase\b|\?|"
                               r"(\bdefault\b|[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)"
                               r"\s*:(?!:)", case_body))
     for tk in tokens:
         word = tk.group(0)
+        if word == "?":
+            open_ternaries[depth] = open_ternaries.get(depth, 0) + 1
+            continue
         if word.startswith("begin"):
             depth += 1
             continue
         if word.startswith("end") and not word.startswith("endcase"):
+            open_ternaries.pop(depth, None)
             depth -= 1
             continue
         if word.startswith("case") or word.startswith("endcase"):
             # nested case — treat as part of current arm (skip)
             continue
-        if depth == 0 and ":" in tk.group(0):
-            # a top-level label
-            if pending_label is not None:
-                arms.append((pending_label, case_body[pending_start:tk.start()]))
-            pending_label = tk.group(1).strip()
-            pending_start = tk.end()
+        if ":" in tk.group(0):
+            if open_ternaries.get(depth, 0) > 0:
+                # this ':' closes a ternary, it does not open an arm
+                open_ternaries[depth] -= 1
+                continue
+            if depth == 0:
+                # a top-level label
+                if pending_label is not None:
+                    arms.append((pending_label,
+                                 case_body[pending_start:tk.start()]))
+                pending_label = tk.group(1).strip()
+                pending_start = tk.end()
     if pending_label is not None:
         arms.append((pending_label, case_body[pending_start:]))
     return arms
