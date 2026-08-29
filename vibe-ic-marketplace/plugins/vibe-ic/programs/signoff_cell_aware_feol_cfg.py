@@ -345,9 +345,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     lib_c = a.lib_container or a.lib
     def_c = a.def_container or a.def_path
-    # CLI convenience: the container sees the deck at its own path. The vibeic-eda
-    # image mounts /home/reyerchu identically, so a host deck path resolves as-is;
-    # pass an explicit container path via a mounted location when they differ.
+    # CLI convenience: the container sees the deck at its own path. When the host
+    # tree is bind-mounted at that same path inside the container, a host deck
+    # path resolves as-is; pass an explicit container path via a mounted location
+    # when they differ.
     deck_c = a.deck
     runner = _docker_standalone_runner(a.container, a.svrfdrc_bin, deck_c,
                                        lib_c, a.workdir_container)
