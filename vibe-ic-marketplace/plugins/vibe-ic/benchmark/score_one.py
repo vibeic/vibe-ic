@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -148,7 +149,28 @@ def score_one(design_id: str, draft: Path, dataset: Path, bench: Path,
             score_dataset.write_text(one_line + "\n")
         else:
             score_dataset = dataset
+        # A REUSED PREFIX MAKES THE SCORER REPLAY THE PREVIOUS DRAFT'S VERDICT.
+        # `run_benchmark.py` will not re-run over an existing `--prefix` tree; it
+        # leaves the earlier `raw_result.json` and `reports/*.txt` exactly where
+        # they were, and `parse_result` below then reads THAT. The failure is
+        # silent and it is not merely a wasted iteration — it reports the wrong
+        # answer. Measured on `cvdp_copilot_binary_to_gray_0001`: score the
+        # correct draft into a fresh workdir (PASS), then score a deliberately
+        # WRONG one (`gray_out[i] = ~(b[i+1]^b[i])`) into the SAME workdir and it
+        # still says PASS; the identical wrong draft into a fresh workdir says
+        # FAIL. So a broken design can be certified correct.
+        #
+        # Four independent convergence agents hit this during a 302-design CVDP
+        # campaign, each losing an iteration to a verdict that described a draft
+        # they had already replaced, and several "cannot determine the root
+        # cause, no log" triage notes were this bug rather than missing evidence.
+        #
+        # Clearing the prefix — not the whole workdir — keeps `--workdir` usable
+        # as a stable place to look at the batch and the response the caller
+        # staged, while guaranteeing the verdict describes THIS draft.
         score_prefix = wd / "score"
+        if score_prefix.exists():
+            shutil.rmtree(score_prefix, ignore_errors=True)
         env = dict(os.environ)
         env["OSS_SIM_IMAGE"] = sim_image
         # THE OFFICIAL HARNESS TAKES **TWO** IMAGES, AND SETTING ONE IS NOT A
