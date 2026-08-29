@@ -1759,8 +1759,11 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         proj.mkdir(parents=True, exist_ok=True)
         staged = bio.stage(fmt, prob, proj)
 
-        rtl_present = any((proj / "input" / "rtl").glob("*")) \
-            if (proj / "input" / "rtl").is_dir() else False
+        # One detector, not a second inline copy: `input/rtl/` is only ONE of
+        # the canonical places a design's input RTL arrives in, and a private
+        # re-implementation here silently disagreed with the attribution report
+        # written from the same tree.
+        rtl_present = fpa.rtl_present_at_input(proj)
         prompt_text = (proj / "input" / "phase1_prompt.md").read_text(errors="replace")
 
         # SPEC COMPLETENESS, from the one general engine via this format's thin
@@ -1983,11 +1986,10 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
 
     def _refresh_result(result: dict, proj: Path, rc: int, got: dict) -> None:
         routing = result.get("routing_verdict") or {}
-        rtl_input = proj / "input" / "rtl"
         phases = fpa.attribute(
             proj, routing=routing, entry=result.get("entry"),
             evidence=result.get("evidence"), exit_step=result.get("exit"),
-            rtl_present=rtl_input.is_dir() and any(rtl_input.glob("*")),
+            rtl_present=fpa.rtl_present_at_input(proj),
             artefact_collected=bool(got.get("ok")))
         result.update({
             "rc": rc,

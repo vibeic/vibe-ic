@@ -171,15 +171,45 @@ def _prompt_text(project: Path) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+# The canonical directories a design's INPUT RTL arrives in. `input/rtl/` is the
+# declared one; `rtl/` is the one the rest of this plugin ALSO reads as input --
+# phase1_doc_one_shot_runner's top-module extractor iterates
+# `(project/"input"/"rtl", project/"rtl")`, and phase3_one_shot_runner's
+# clock-port scanner lists `rtl/` among its search roots. Reading only the first
+# of the two made this detector the odd one out, and a design staged at `rtl/`
+# was reported as arriving with no RTL at all.
+#
+# The emit directory `phase2/stage1/rtl/` is deliberately NOT a member: RTL this
+# run PRODUCED is not RTL the design ARRIVED with, and admitting it would make
+# the signal true for every project after Phase 2 has run.
+_INPUT_RTL_DIRS: Tuple[Tuple[str, ...], ...] = (("input", "rtl"), ("rtl",))
+_RTL_SUFFIXES = (".v", ".sv", ".vh", ".svh")
+
+
 def rtl_present_at_input(project: Path) -> bool:
     """Did the design ARRIVE with RTL? The router's `has_context` signal.
 
     This is the difference between "a spec asking for new RTL" and "a transform
     on RTL that already exists", and it is the one input the router cannot
-    infer from prose.
+    infer from prose. `classify_task_nature` states the consequence of getting
+    it wrong: "never promote a context-bearing task to spec_generation -- that
+    is the mistake that pushes a debug task through Phase 1." A blind detector
+    makes exactly that mistake, silently, on every design whose RTL was staged
+    anywhere but `input/rtl/`.
+
+    A file is RTL by SUFFIX, not by living in a directory called `rtl`: a
+    README or a manifest dropped beside the sources does not mean the design
+    arrived with a module to transform.
     """
-    d = Path(project) / "input" / "rtl"
-    return d.is_dir() and any(d.glob("*"))
+    project = Path(project)
+    for parts in _INPUT_RTL_DIRS:
+        d = project.joinpath(*parts)
+        if not d.is_dir():
+            continue
+        for f in d.rglob("*"):
+            if f.is_file() and f.suffix.lower() in _RTL_SUFFIXES:
+                return True
+    return False
 
 
 def derive_routing(project: Path) -> Dict[str, Any]:
