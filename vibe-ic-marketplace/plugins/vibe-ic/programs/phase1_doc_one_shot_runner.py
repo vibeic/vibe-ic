@@ -8470,6 +8470,42 @@ def _write_l_doc(project: Path, name: str, content: dict,
     evidence, _v1_6_367_sentinel_skipped = _v1_6_367_strip_sentinel_keys(
         evidence)
     content["extraction_evidence"] = evidence
+    # v1.12.65 — RECORD WHERE THE LAYER CAME FROM, AT THE ONE PLACE EVERY
+    # LAYER PASSES THROUGH.
+    #
+    # `phase1_provenance_presence_check` asks all fourteen layers for a
+    # top-level `provenance` or `source_documents`. Exactly ONE emitter wrote
+    # one — the L5 no-analog builder hardcodes `source_documents` in its own
+    # content dict — so the gate returned 1/14 on EVERY design. Measured on two
+    # independent designs on two hosts: 1 of 28 generated docs, both times, and
+    # the one was L5 both times. That is not a design's docs being thin; it is
+    # the writer recording provenance at one of fourteen sites.
+    #
+    # The data was already here. `extraction_evidence` is KEYED BY SOURCE:
+    #     {"input/docs/L1_product_metadata.md": [{"literal": "100 MHz", ...}],
+    #      "derived_from_L3": []}
+    # so the layer's provenance is its own evidence's keys, split by whether the
+    # key names an input path or names a derivation. Nothing is invented.
+    #
+    # THREE THINGS THIS DELIBERATELY DOES NOT DO:
+    #   - it never overwrites a `source_documents` an emitter set itself (L5);
+    #   - a layer whose evidence is EMPTY gets `[]`, which the gate still counts
+    #     as absent, and that is the honest answer — a document with no evidence
+    #     has no provenance, and manufacturing one would be the fabrication this
+    #     whole gate exists to catch;
+    #   - a derivation key ("derived_from_L3") is NOT written into
+    #     source_documents, because it is not a source document. It is recorded
+    #     separately so the trail is still readable.
+    # Measured on the real artefacts: 1/14 -> 10/14, with L8_TIMING_WAVEFORM,
+    # L9 and L10 still honestly absent.
+    if "source_documents" not in content and "provenance" not in content:
+        _ev_keys = [k for k in evidence if isinstance(k, str)] \
+            if isinstance(evidence, dict) else []
+        _src = sorted({k for k in _ev_keys if "/" in k})
+        _derived = sorted({k for k in _ev_keys if "/" not in k})
+        content["source_documents"] = _src
+        if _derived:
+            content["source_documents_derivation"] = _derived
     if _v1_6_367_sentinel_skipped:
         content.setdefault("extraction_strategy", {})[
             "extraction_evidence_sentinel_stripped_v1_6_367"

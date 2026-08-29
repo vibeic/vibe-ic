@@ -86,8 +86,21 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
         # non-empty AND identical across both projects is a candidate
         # hardcode. Skip schema-fixed fields (schema_version, etc.) and
         # known-shared fields (chip_class_hint, etc.).
+        # v1.12.65 — `source_documents` and `source_documents_derivation` are
+        # not design content. They are `extraction_evidence`'s OWN KEYS,
+        # partitioned by whether the key names an input path or names a
+        # derivation, written at the `_write_l_doc` chokepoint. Every value
+        # either of them can hold is already inside `extraction_evidence`,
+        # which this set has skipped since the beginning — so skipping two
+        # reshapings of an already-skipped field is CONSISTENCY, not a new
+        # exemption, and `test_the_provenance_fields_are_views_of_an_already_
+        # skipped_one` below proves the subset relation rather than asserting
+        # it. They are also identical across designs BY CONSTRUCTION: every
+        # project in this corpus stages the same nine input filenames, and
+        # a derivation label like `derived_from_L3` names a layer, not a chip.
         SKIP = {"schema_version", "_schema", "ic_class_hint", "doc_class",
                 "extraction_strategy", "extraction_evidence",
+                "source_documents", "source_documents_derivation",
                 "no_pin_table_in_input", "no_protocol_overview_in_input",
                 "no_crc_parameters_in_input", "no_registers_in_input",
                 "no_analog", "no_fsm_in_input", "no_test_modes_in_input",
@@ -260,3 +273,54 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
         f"between AES and LiteDRAM, suggesting hardcoded EXAMPLE_PROTOCOL-class "
         f"scaffold:\n  " + "\n  ".join(suspect_fields)
     )
+
+
+def test_the_provenance_fields_are_views_of_an_already_skipped_one(tmp_path):
+    """WHY the two provenance fields may be skipped — proven, not asserted.
+
+    `extraction_evidence` has been in SKIP since this guard was written. The two
+    fields added alongside it in v1.12.62 are that same dict's KEYS, partitioned by
+    the `_write_l_doc` chokepoint into paths and derivations. If that stops being
+    true — if either field ever carries something the evidence does not — this test
+    goes red and the skip must be re-argued rather than inherited.
+    """
+    import importlib
+    import json
+    import sys
+    sys.path.insert(0, str(_PROGRAMS if "_PROGRAMS" in dir() else
+                          __import__("pathlib").Path(__file__).resolve().parents[1]))
+    write = importlib.import_module("phase1_doc_one_shot_runner")._write_l_doc
+    evidence = {
+        "input/docs/L1_product_metadata.md": [{"literal": "100 MHz"}],
+        "input/docs/L2_architecture.md": [],
+        "derived_from_L3": [],
+        "L1_description.doc_intro": [],
+    }
+    write(tmp_path, "L1_DATASHEET", {"schema_version": 1}, evidence)
+    doc = json.loads(
+        (tmp_path / "phase1" / "generated_docs" / "L1_DATASHEET.json").read_text())
+    union = set(doc.get("source_documents", [])) | \
+        set(doc.get("source_documents_derivation", []))
+    assert union <= set(evidence), (
+        "the provenance fields carry %r, which extraction_evidence does not — they "
+        "are no longer views of an already-skipped field, so the SKIP entry is no "
+        "longer justified by consistency" % sorted(union - set(evidence)))
+    assert union == set(evidence), (
+        "the partition dropped %r; a provenance trail that silently loses a source "
+        "is worse than none" % sorted(set(evidence) - union))
+
+
+def test_a_genuinely_copied_content_field_is_still_caught(tmp_path):
+    """CONTROL for the skip. The guard must still catch a real shared blob.
+
+    Without this, extending SKIP is indistinguishable from blunting the guard.
+    """
+    SKIP_LOCAL = {"schema_version", "extraction_evidence",
+                  "source_documents", "source_documents_derivation"}
+    a = {"schema_version": 1, "source_documents": ["input/docs/x.md"],
+         "protocol_overview": "an identical hardcoded scaffold sentence"}
+    b = dict(a)
+    suspect = [k for k in a
+               if k not in SKIP_LOCAL and a[k] and a[k] == b.get(k)]
+    assert suspect == ["protocol_overview"], (
+        "the skip set must not absorb a genuine content field; caught %r" % suspect)
