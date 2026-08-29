@@ -62,12 +62,25 @@ EXPECTED_DOCS = [
     ("L8T", "L8_TIMING_WAVEFORM.json"),
     ("L9",  "L9_INTEGRATION_SPEC.json"),
     ("L10", "L10_TEST_CASES.json"),
-    ("L11", "L11_CALIBRATION.json"),
+    ("L11", "L11_OTP_CONTENT.json"),
     ("L12", "L12_BEHAVIORAL_SEQUENCES.json"),
     ("L13", "L13_LAB_CALIBRATION.json"),
 ]
 
 PROV_KEYS = ("provenance", "source_documents")
+
+# Filenames a layer was emitted under before a rename. The canonical name in
+# EXPECTED_DOCS is what a MISSING_FILE reports; an alias is only consulted when
+# the canonical file is absent, so a pre-rename tree keeps its old verdict.
+#
+# L11: tools/phase1_engine/schema.py records that "L11_CALIBRATION.json"
+# existed in ZERO runs across the fleet and that the emitted name is
+# L11_OTP_CONTENT.json. Resolving L11 through the retired name made this gate
+# report MISSING_FILE for a file that was present, and left the gate with no
+# reachable green: L11 could not pass for ANY design on ANY PDK.
+LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
+    "L11": ("L11_CALIBRATION.json",),
+}
 
 
 def _truthy(v: Any) -> bool:
@@ -87,6 +100,11 @@ def check_dir(gen: Path) -> dict[str, Any]:
     per_layer = {}
     for tag, fname in EXPECTED_DOCS:
         path = gen / fname
+        if not path.is_file():
+            for alias in LEGACY_ALIASES.get(tag, ()):
+                if (gen / alias).is_file():
+                    path = gen / alias
+                    break
         if not path.is_file():
             per_layer[tag] = {"status": "MISSING_FILE",
                               "reason": f"{fname} not found"}

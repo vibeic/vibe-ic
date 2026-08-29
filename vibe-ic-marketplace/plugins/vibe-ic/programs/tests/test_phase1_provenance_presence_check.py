@@ -111,3 +111,74 @@ def test_not_a_directory(tmp_path):
     f.write_text("x")
     rc, _ = _invoke(f, tmp_path)
     assert rc == 2
+
+
+# ----------------------------------------------------------------------
+# L11 resolved through a RETIRED filename (regression).
+#
+# EXPECTED_DOCS resolved L11 to "L11_CALIBRATION.json", a name
+# tools/phase1_engine/schema.py records as existing in ZERO Phase-1 runs;
+# the emitter writes "L11_OTP_CONTENT.json". The gate therefore reported
+# MISSING_FILE for a file that was present, and no tree could make L11 pass:
+# the gate had no reachable green.
+#
+# These cases deliberately do NOT build their input from EXPECTED_DOCS.
+# Deriving the tree from the map under test makes the case self-referential
+# -- it would write whatever name the map holds and pass either way.
+# ----------------------------------------------------------------------
+
+# The filename the Phase-1 emitter actually writes, stated independently of
+# the map under test (tools/phase1_engine/schema.py "L11").
+L11_EMITTED = "L11_OTP_CONTENT.json"
+L11_RETIRED = "L11_CALIBRATION.json"
+
+
+def _write_tree(gen: Path, l11_name: str | None):
+    """Every expected layer except L11, plus L11 under `l11_name` (or absent)."""
+    gen.mkdir(parents=True, exist_ok=True)
+    for tag, fname in mod.EXPECTED_DOCS:
+        if tag == "L11":
+            continue
+        (gen / fname).write_text(json.dumps(
+            {"layer": fname, "provenance": {"source": "input_doc/readme.md"}}))
+    if l11_name is not None:
+        (gen / l11_name).write_text(json.dumps(
+            {"layer": l11_name, "provenance": {"source": "input_doc/readme.md"}}))
+
+
+def test_l11_resolves_to_the_emitted_filename():
+    """L11 must resolve to the name Phase 1 actually writes."""
+    assert dict(mod.EXPECTED_DOCS)["L11"] == L11_EMITTED
+
+
+def test_l11_emitted_name_reaches_green(tmp_path):
+    """A tree carrying the EMITTED L11 filename must exit 0.
+
+    Pre-fix this returned 1 with L11 MISSING_FILE, so no input could satisfy
+    the gate -- the failure this case pins.
+    """
+    gen = tmp_path / "generated_docs"
+    _write_tree(gen, L11_EMITTED)
+    rc, rep = _invoke(gen, tmp_path)
+    assert rc == 0
+    assert rep["per_layer"]["L11"]["status"] == "PASS"
+    assert rep["passes"] == rep["total"] == 14
+
+
+def test_l11_retired_name_still_accepted(tmp_path):
+    """CONTROL: a pre-rename tree keeps its old verdict, not a new red."""
+    gen = tmp_path / "generated_docs"
+    _write_tree(gen, L11_RETIRED)
+    rc, rep = _invoke(gen, tmp_path)
+    assert rc == 0
+    assert rep["per_layer"]["L11"]["status"] == "PASS"
+
+
+def test_l11_absent_under_both_names_is_missing(tmp_path):
+    """CONTROL: the alias must not invent a file that is genuinely absent."""
+    gen = tmp_path / "generated_docs"
+    _write_tree(gen, None)
+    rc, rep = _invoke(gen, tmp_path)
+    assert rc == 1
+    assert rep["per_layer"]["L11"]["status"] == "MISSING_FILE"
+    assert L11_EMITTED in rep["per_layer"]["L11"]["reason"]
