@@ -1463,7 +1463,7 @@ _gate_dispatch_emit() {
              "${GATE_ITEM_CORPUS[$i]}" "${GATE_ITEM_IDX[$i]}"
              "${GATE_ITEM_TOTAL[$i]}" "${GATE_EX_UNTIL[$i]}"
              "${GATE_EX_WHY[$i]}" "${GATE_LABELS[$i]}"
-             "${GATE_SCOPES[$i]-}")
+             "${GATE_SCOPES[$i]-}" "${GATE_BLOCKING_REFUSAL[$i]-0}")
   done
   for (( i=0; i<nc; i++ )); do
     fields+=("${GATE_CORPUS_ITEMS[$i]}" "${GATE_CORPUS_GATES[$i]}"
@@ -1485,14 +1485,16 @@ SHARD = os.environ.get("GATE_DISPATCH_SHARD_ID") or None
 ng, nc, nw = int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])
 today = sys.argv[7]
 rest = sys.argv[8:]
-# 9 per gate: vibe-ic#584 appended exempt_until/exempt_reason (gf[i+5..6]) and
-# vibe-ic#1729 appended the declared scope (gf[i+8]). Positional, and appended at
-# the END each time, so every field an older consumer reads keeps its index.
-gf, rest = rest[:ng * 9], rest[ng * 9:]
+# 10 per gate: vibe-ic#584 appended exempt_until/exempt_reason (gf[i+5..6]),
+# vibe-ic#1729 appended the declared scope (gf[i+8]) and vibe-ic#1789 appended
+# the dispatcher-owned population refusal flag (gf[i+9]). Positional, and
+# appended at the END each time, so every field an older consumer reads keeps
+# its index.
+gf, rest = rest[:ng * 10], rest[ng * 10:]
 cf, rest = rest[:nc * 4], rest[nc * 4:]
 wiring, undisclosed = rest[:nw], rest[nw:]
 gates = []
-for i in range(0, len(gf), 9):
+for i in range(0, len(gf), 10):
     # The three loop keys are written ONLY for a gate a loop produced, so a
     # gate wired outside one records byte-for-byte what it recorded before
     # vibe-ic#957 — the record of the other ~70 must not move either.
@@ -1517,6 +1519,20 @@ for i in range(0, len(gf), 9):
     # declared no scope" from "this record was written by an older script".
     # A gate recorded OUT_OF_SCOPE without its scope is a skip nobody can check.
     g["scope"] = gf[i + 8] or None
+    # vibe-ic#1789. THE ONE BIT THAT SAYS WHETHER A PROCESS RAN, and until now
+    # the record did not carry it. `_dispatch` mode 2 — the dispatcher-owned
+    # population refusal — EXECUTES a gate and writes a process attestation;
+    # the phase-1 legacy synthetic row for the same empty corpus executes
+    # nothing and writes none. Both wear the SAME label by design (the trusted
+    # transition judge compares that row literally), the same `EXPANDED`
+    # expansion, the same `items: 0` and the same `gates: 1`, so a consumer
+    # asking "should this label have an attestation?" had nothing left to read.
+    # `repo_hygiene_parallel._legacy_empty_without_process` answered "no" for
+    # both and the run then reported its own attested row as an "unassigned
+    # gate label in attestation progress". ALWAYS present, like `exempt_until`
+    # and `scope` above and for the same reason: an absent key must not be
+    # ambiguous between "not a refusal" and "written by an older script".
+    g["blocking_refusal"] = gf[i + 9] == "1"
     gates.append(g)
 corpora = [{"name": cf[i + 3], "items": int(cf[i]), "gates": int(cf[i + 1]),
             "expansion": cf[i + 2]}
