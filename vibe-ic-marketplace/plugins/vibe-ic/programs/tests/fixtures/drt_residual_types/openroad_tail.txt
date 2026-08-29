@@ -1,0 +1,19 @@
+# REAL excerpt of phase3/stage3/pnr/openroad.log from the run of
+# spm x gf180mcuD on plugin 1.12.65, 2026-08-29. Two DRT-0199 blocks kept
+# VERBATIM: the last MULTI-layer one, and the FINAL single-layer one the
+# route verdict is derived from. Nothing edited.
+
+[INFO DRT-0199]   Number of violations = 55.
+Viol/Layer      Metal1 Metal2
+Metal Spacing        5      6
+NS Metal             1      0
+Short               32     11
+[INFO DRT-0267] cpu time = 00:00:38, elapsed time = 00:00:06, memory = 424.71 (MB), peak = 620.87 (MB)
+
+[INFO DRT-0199]   Number of violations = 1.
+Viol/Layer      Metal1
+NS Metal             1
+[INFO DRT-0267] cpu time = 00:00:00, elapsed time = 00:00:00, memory = 626.72 (MB), peak = 622.70 (MB)
+Total wire length = 25689 um.
+Total wire length on LAYER Metal1 = 1378 um.
+

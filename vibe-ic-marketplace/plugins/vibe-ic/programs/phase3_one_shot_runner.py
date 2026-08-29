@@ -13916,6 +13916,80 @@ def _drt_violation_trajectory(log_text: str) -> List[int]:
     return _sdf.router_iter_counts(log_text)
 
 
+#: TritonRoute prints a per-type/per-layer breakdown IMMEDIATELY under the
+#: `[INFO DRT-0199] Number of violations = N` line it is a breakdown of:
+#:
+#:     [INFO DRT-0199]   Number of violations = 55.
+#:     Viol/Layer      Metal1 Metal2
+#:     Metal Spacing        5      6
+#:     NS Metal             1      0
+#:     Short               32     11
+#:
+#: A violation TYPE name may contain spaces, so the counts are taken as the
+#: trailing integer columns and the remainder is the name.
+_DRT_VIOL_HEADER_RE = re.compile(r"(?m)^\s*Viol/Layer\s+(.+?)\s*$")
+
+
+def _drt_violation_types(log_text: str) -> List[Tuple[str, str, int]]:
+    """The residual detailed-route violations BY TYPE AND LAYER, read from the
+    breakdown TritonRoute prints under its FINAL `DRT-0199` count. Returns a
+    list of ``(type, layer, count)`` with count > 0, or [] when the log has no
+    parseable table.
+
+    WHY THIS EXISTS. `_drt_final_violations` reads the COUNT and nothing read
+    the next line, so a residual route violation reached the operator as a bare
+    integer and the verdict supplied a cause from a constant. MEASURED
+    2026-08-29, spm x gf180mcuD: the single residual was ``NS Metal`` on
+    ``Metal1`` -- TritonRoute's name for a MINIMUM-AREA violation, one metal
+    stub below the layer's MINIMUMAREA rule -- while the verdict said "the
+    design is congestion-limited" and prescribed more die area. This is the
+    same shape as the DRT-0701 defect fixed in v1.12.54: the tool published the
+    discriminating fact in its own log and nothing parsed it.
+
+    chip-AGNOSTIC: OpenROAD log grammar only; no PDK, layer or design literal
+    -- the layer and type names are whatever the tool printed."""
+    heads = list(_DRT_VIOL_HEADER_RE.finditer(log_text or ""))
+    if not heads:
+        return []
+    h = heads[-1]
+    layers = h.group(1).split()
+    if not layers:
+        return []
+    out: List[Tuple[str, str, int]] = []
+    for line in log_text[h.end():].splitlines()[1:]:
+        toks = line.split()
+        if len(toks) <= len(layers):
+            break
+        counts = toks[-len(layers):]
+        if not all(c.lstrip("-").isdigit() for c in counts):
+            break
+        name = " ".join(toks[:-len(layers)]).strip()
+        if not name:
+            break
+        for lay, c in zip(layers, counts):
+            if int(c) > 0:
+                out.append((name, lay, int(c)))
+    return out
+
+
+def _drt_flat_tail(trajectory: Sequence[int]) -> int:
+    """How many TRAILING iterations held the final violation count unchanged.
+
+    Arithmetic only. It answers the one question the "raise the router's end
+    iteration" remedy depends on: did the last iterations buy anything? MEASURED
+    on the spm x gf180mcuD route -- 49 iterations, the last 42 of them at
+    exactly 1 -- the answer was no, and the verdict recommended more of them."""
+    if not trajectory:
+        return 0
+    final = trajectory[-1]
+    n = 0
+    for v in reversed(trajectory):
+        if v != final:
+            break
+        n += 1
+    return n
+
+
 def _drt_is_non_converging(trajectory: List[int]) -> bool:
     """True iff a detailed-route violation TRAJECTORY shows genuine
     NON-convergence: the route finished with violations remaining AND is not
@@ -22353,18 +22427,71 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _util_note = ("" if _eff_util is None else
                       f" (auto-loosen rung {_loosen_idx} targeted util "
                       f"{_eff_util:.4g})")
+        # The verdict used to state, unconditionally, that "the design is
+        # congestion-limited" and to prescribe three congestion remedies. It
+        # named no violation TYPE because nothing read one -- and TritonRoute
+        # prints the type/layer breakdown on the line directly BELOW the count
+        # this branch already reads. MEASURED, spm x gf180mcuD: the single
+        # residual was `NS Metal` on Metal1 (a MINIMUM-AREA violation -- one
+        # metal stub under the layer's MINIMUMAREA rule, which no amount of die
+        # area can change), and all three prescribed remedies had ALREADY been
+        # measured useless by this same run. State what was measured; let the
+        # router's own words supply the diagnosis.
+        # Read the tee'd log from disk: `_pnr_log` is bound inside the retry
+        # loop, `_pnr_logp` at function scope, and this branch runs after the
+        # loop. Same artefact the StepResult cites below.
+        try:
+            _log_text = _pnr_logp.read_text(errors="ignore")
+        except OSError:
+            _log_text = ""
+        _viol_types = _drt_violation_types(_log_text)
+        _types_note = ("" if not _viol_types else ", by type/layer: " +
+                       ", ".join(f"{t} x{c} on {lay}"
+                                 for t, lay, c in _viol_types))
+        _traj = _drt_violation_trajectory(_log_text)
+        _flat = _drt_flat_tail(_traj)
+        # A remedy this run has already applied and MEASURED to buy nothing is
+        # not a remedy; offering it sends the operator to redo the experiment.
+        _area_ruled_out = _term_kind == "evidence"
+        _iters_ruled_out = _flat >= 2
+        _open_remedies = ([] if _area_ruled_out else
+                          ["increase --die-um", "lower --util"])
+        if not _iters_ruled_out:
+            _open_remedies.append("raise the router's end iteration")
+        _measured: List[str] = []
+        if _area_ruled_out:
+            _measured.append(
+                f"more die area was tried and did not help (auto-loosen "
+                f"residual series {_l_series})")
+        if _iters_ruled_out:
+            _measured.append(
+                f"more router iterations did not help (the final count was "
+                f"unchanged for the last {_flat} of {len(_traj)} iterations)")
+        _remedy_note = (
+            f" Remedies not ruled out by this run: "
+            f"{', '.join(_open_remedies)}." if _open_remedies else
+            " This run measured no remaining remedy of the kind this step can "
+            "apply.")
+        _measured_note = ("" if not _measured else
+                          " ALREADY MEASURED ON THIS RUN: " +
+                          "; ".join(_measured) + ".")
         return StepResult(
             "pnr", "FAIL", time.time() - t0,
             (f"ROUTE_NOT_CONVERGED: detailed route completed with "
-             f"{_drt_viol} violations remaining (final DRT-0199). The "
-             f"design is congestion-limited at die {die_w}x{die_h}µm / "
-             f"requested util {util:g}{_util_note}: increase --die-um, lower "
-             f"--util, or raise the router's end iteration. Emitted DEF/GDS "
-             f"are kept for debugging but are NOT sign-off "
+             f"{_drt_viol} violations remaining (final "
+             f"DRT-0199){_types_note}. Die {die_w}x{die_h}µm / requested "
+             f"util {util:g}{_util_note}.{_measured_note}{_remedy_note} "
+             f"Emitted DEF/GDS are kept for debugging but are NOT sign-off "
              f"artifacts.{_ladder_note}"),
             [str(out_dir / "openroad.log"), str(def_file)],
             extras={"finding": "ROUTE_NOT_CONVERGED",
                     "drt_violations": _drt_viol,
+                    "drt_violation_types": [
+                        {"type": t, "layer": lay, "count": c}
+                        for t, lay, c in _viol_types],
+                    "drt_trajectory_flat_tail": _flat,
+                    "drt_trajectory_len": len(_traj),
+                    "remedies_open": _open_remedies,
                     "die_um": f"{die_w}x{die_h}",
                     "util": util,
                     "loosen_terminator": _loosen_terminator,
