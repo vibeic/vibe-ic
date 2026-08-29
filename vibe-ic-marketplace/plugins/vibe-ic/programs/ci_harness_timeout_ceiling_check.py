@@ -595,7 +595,7 @@ _LANDING_SCRIPT_SHA256 = (
 # exactly the check that catches this, and it did — one landing later than it
 # should have.
 _SEMANTIC_DRIVER_SHA256 = (
-    "da77e90942aff5ff9f61aff7683a17eb477a5fbdf4dfcffac17f954e58c8125f"
+    "e412b0e3ec696c45bea5f45be14a984664b66db6bc11a11e62095d74c48d53ce"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
