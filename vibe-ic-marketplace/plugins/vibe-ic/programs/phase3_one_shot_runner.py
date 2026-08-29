@@ -60,7 +60,8 @@ import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import (Any, Dict, FrozenSet, List, Optional, Sequence, Set,
+                    Tuple)
 import _path_layout as _pl
 import _reference_flow_boundary as _rfb
 import _source_record_merge as _srm  # per-source merge: silence cannot erase
@@ -37540,7 +37541,10 @@ def _lec_post_layout_module():
         return None
 
 
-def _discover_blackbox_verilog(pdk: PdkConfig, container: str) -> List[str]:
+def _discover_blackbox_verilog(pdk: PdkConfig, container: str,
+                               netlists: Optional[Sequence[Path]] = None,
+                               notes: Optional[List[str]] = None,
+                               ) -> List[str]:
     """PDK-AGNOSTIC glob for the PDK's blackbox Verilog (empty module decls for
     physical-only cells: tap/fill/decap/diode/endcap have no Liberty model and
     would abort yosys `hierarchy` on a routed netlist). Returns container paths;
@@ -37563,7 +37567,76 @@ def _discover_blackbox_verilog(pdk: PdkConfig, container: str) -> List[str]:
             continue
         if h not in seen:
             seen.append(h)
-    return seen
+    if netlists is None:
+        return seen
+    return _blackbox_scope_to_netlists(seen, container, netlists, notes)
+
+
+#: A blackbox Verilog file declares its cells as plain `module <name>` lines
+#: (usually preceded by a `(* blackbox *)` attribute on its own line).
+_BLACKBOX_MODULE_RE = re.compile(r"(?m)^\s*module\s+(\\?[A-Za-z_]\w*)")
+
+
+def _blackbox_scope_to_netlists(hits: List[str], container: str,
+                                netlists: Sequence[Path],
+                                notes: Optional[List[str]] = None) -> List[str]:
+    r"""Keep only the blackbox files whose modules the netlists INSTANTIATE.
+
+    The glob above is `libs.ref/*/verilog/*blackbox*.v` — every family the PDK
+    ships, not the ones this design uses. The docstring's stated job is models
+    for "physical-only cells ... on a routed netlist", i.e. cells the netlist
+    actually contains; loading the rest cannot help the proof and can only add
+    ways to fail. MEASURED 2026-08-29, spm x gf180mcuD: the routed netlist
+    instantiates 39 distinct masters, ALL of them `gf180mcu_fd_sc_mcu7t5v0__*`,
+    and the glob still fed yosys six io/SRAM files. One of them,
+    `gf180mcu_fd_ip_sram__sram128x8m8wm1__blackbox.v`, declares `inout VDD;` /
+    `inout VSS;` in the module BODY while its header port list names neither —
+    illegal in Verilog-2005 (IEEE 1364-2005 s12.3), so yosys is right to reject
+    it: `:43: ERROR: Module port `\VDD' is not declared in module header`,
+    exit 1. The post-layout LEC therefore returned RUN_ERROR for EVERY design
+    on this PDK, SRAM-free ones included, and `canonicalize_artefacts` FAILed
+    behind it. Dropping the six unused files on the same real artefacts: yosys
+    rc 0, 429 of 429 $equiv cells proven, "Equivalence successfully proven!".
+
+    Chip- AND PDK-agnostic: the predicate is (file declares a module the
+    netlist instantiates), with no PDK, family or cell literal anywhere.
+
+    DEGRADES to the pre-fix behaviour, never to a smaller set, whenever the
+    evidence to narrow is missing: no readable netlist, no instantiated cells,
+    an unreadable blackbox file, or a file declaring no module at all. A file
+    that is wrongly dropped cannot pass silently — yosys `hierarchy` aborts on
+    the undefined cell and the gate REFUSES, which is the honest outcome."""
+    instantiated: Set[str] = set()
+    for nl in netlists:
+        try:
+            instantiated |= {m.group(1).lstrip("\\") for m in
+                             _NETLIST_INST_RE.finditer(Path(nl).read_text(
+                                 errors="ignore"))}
+        except OSError:
+            continue
+    instantiated -= _VERILOG_KEYWORDS
+    if not instantiated:
+        return hits
+    kept: List[str] = []
+    dropped: List[str] = []
+    for h in hits:
+        txt = _read_pdk_text(h, container)
+        if txt is None:
+            kept.append(h)          # unreadable -> cannot judge -> keep
+            continue
+        mods = {m.group(1).lstrip("\\")
+                for m in _BLACKBOX_MODULE_RE.finditer(txt)}
+        if not mods or (mods & instantiated):
+            kept.append(h)
+        else:
+            dropped.append(h)
+    if dropped and notes is not None:
+        notes.append(
+            "post-layout LEC: skipped %d PDK blackbox file(s) declaring no "
+            "cell this netlist instantiates (%s); %d kept."
+            % (len(dropped), ", ".join(Path(d).name for d in dropped),
+               len(kept)))
+    return kept
 
 
 _LEF_MACRO_PINS_RE = re.compile(
@@ -37763,7 +37836,11 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     lib_c = _to_container_path(str(pdk.liberty), container)
     gold_c = _to_container_path(str(gold), container)
     gate_c = _to_container_path(str(gate), container)
-    blackbox = _discover_blackbox_verilog(pdk, container)
+    # v?.?.? — scope the PDK blackbox set to the cells these two netlists
+    # actually instantiate (see _blackbox_scope_to_netlists).
+    blackbox = _discover_blackbox_verilog(pdk, container,
+                                          netlists=[gate, gold],
+                                          notes=notes)
     # v1.3.93 — a commercial PDK ships no OpenLane `/libs.ref/**/verilog/*blackbox*.v`
     # tree, so the glob above returns []; synthesize stubs for physical-only cells
     # (FILL/ENDCAP/TAP) the routed netlist instantiates but the Liberty doesn't
