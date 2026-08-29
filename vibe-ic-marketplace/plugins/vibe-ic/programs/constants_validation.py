@@ -83,26 +83,53 @@ def discover_constants_files(base: Path) -> List[Path]:
 # ---------------------------------------------------------------------------
 # Extract constants list from parsed JSON
 # ---------------------------------------------------------------------------
-def extract_constants(data) -> list:
-    """Extract the list of constant entries from a parsed JSON structure.
+#: The two entry SHAPES this file can hold, and the key each is spelled with.
+#: They are not the same object and must not be judged by the same schema: a
+#: CONSTANT is a fixed value the RTL bakes in, so it has a `value` and a width;
+#: a PARAMETER is an override point, so its value lives in `default` and it is
+#: routinely unsized -- a Verilog `parameter` needs no width and most carry
+#: none. Collapsing the two is what made this gate demand `value`/`width` of
+#: every parameter the L8 emitter writes, which is a shape no emitter produces.
+KIND_CONSTANTS = "constants"
+KIND_PARAMETERS = "parameters"
 
-    Handles both:
-      - Top-level list: [{name, value, width}, ...]
-      - Dict with a 'constants' key: {"constants": [...]}
-      - Dict with other keys wrapping lists
+_CONSTANT_KEYS = ("constants", "rtl_constants")
+_PARAMETER_KEYS = ("params", "parameters")
+
+
+def extract_constants(data) -> list:
+    """The entry list alone, for callers that do not care which shape it is.
+
+    Kept so the module's published surface does not change. New code should
+    call `extract_entries`, which also says WHICH of the two shapes it read.
+    """
+    return extract_entries(data)[0]
+
+
+def extract_entries(data) -> "tuple":
+    """(entries, kind) for a parsed constants JSON.
+
+    `kind` is what the entries were spelled as, so the caller can require the
+    fields that shape actually carries instead of one schema for both. An
+    unkeyed list -- a bare top-level list, or the first-list fallback -- is
+    reported as KIND_CONSTANTS, which is the behaviour this program already
+    had for it and the stricter of the two; widening it would lose findings.
     """
     if isinstance(data, list):
-        return data
+        return data, KIND_CONSTANTS
     if isinstance(data, dict):
-        # Prefer explicit 'constants' key
-        for key in ("constants", "rtl_constants", "params", "parameters"):
+        # Prefer an explicit constants key, then an explicit parameters key.
+        for key in _CONSTANT_KEYS:
             if key in data and isinstance(data[key], list):
-                return data[key]
+                return data[key], KIND_CONSTANTS
+        for key in _PARAMETER_KEYS:
+            if key in data and isinstance(data[key], list):
+                return data[key], KIND_PARAMETERS
         # Fall back: find the first list value
         for v in data.values():
             if isinstance(v, list) and len(v) > 0:
-                return v
-    return []
+                return v, KIND_CONSTANTS
+    return [], KIND_CONSTANTS
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +211,7 @@ def audit(project_dir: str) -> AuditResult:
                     file=rel,
                 ))
 
-        constants = extract_constants(data)
+        constants, kind = extract_entries(data)
 
         if len(constants) == 0:
             findings.append(Finding(
@@ -196,7 +223,9 @@ def audit(project_dir: str) -> AuditResult:
             continue
 
         for idx, entry in enumerate(constants):
-            prefix = f"constants[{idx}]"
+            # Name the shape that was actually read. A message that says
+            # `constants[0]` about a parameter misnames the object it refuses.
+            prefix = f"{kind}[{idx}]"
 
             if not isinstance(entry, dict):
                 findings.append(Finding(
@@ -230,12 +259,21 @@ def audit(project_dir: str) -> AuditResult:
                 else:
                     all_names[name_str] = rel
 
-            # Check 'value'
-            if "value" not in entry or entry["value"] is None:
+            # Check the entry's VALUE field, under the name its shape uses.
+            # A parameter's value is its `default`; `value` is still accepted
+            # for an emitter that spells it that way, so this only ever widens
+            # what satisfies the check -- an entry carrying neither is still
+            # a finding, and that is the defect this rule exists to catch.
+            if kind == KIND_PARAMETERS:
+                value_keys = ("default", "value")
+            else:
+                value_keys = ("value",)
+            if not any(k in entry and entry[k] is not None for k in value_keys):
+                spelled = "' or '".join(value_keys)
                 findings.append(Finding(
                     rule="MISSING_FIELD",
                     severity="ERROR",
-                    message=f"{prefix}: missing or null 'value'",
+                    message=f"{prefix}: missing or null '{spelled}'",
                     file=rel,
                 ))
 
@@ -248,15 +286,21 @@ def audit(project_dir: str) -> AuditResult:
                     file=rel,
                 ))
 
-            # Check 'width' or 'bits'
+            # Check 'width' or 'bits'. REQUIRED of a constant, which is a
+            # literal the RTL bakes in at a definite width; NOT required of a
+            # parameter, which is an override point and is routinely unsized
+            # (`parameter memsize = 1024;` is legal and carries no width). A
+            # width that IS stated is validated either way -- declaring one
+            # and declaring it wrong is a finding whatever the shape.
             width = entry.get("width", entry.get("bits"))
             if width is None:
-                findings.append(Finding(
-                    rule="MISSING_FIELD",
-                    severity="ERROR",
-                    message=f"{prefix}: missing 'width' or 'bits' field",
-                    file=rel,
-                ))
+                if kind != KIND_PARAMETERS:
+                    findings.append(Finding(
+                        rule="MISSING_FIELD",
+                        severity="ERROR",
+                        message=f"{prefix}: missing 'width' or 'bits' field",
+                        file=rel,
+                    ))
             else:
                 try:
                     w = int(width)
