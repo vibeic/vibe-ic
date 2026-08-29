@@ -102,6 +102,41 @@ def parse_semver(v: str) -> Optional[Tuple[int, int, int]]:
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
+#: The patch component rolls to the next MINOR at 99; it never reaches 100.
+#:
+#: This is not a style preference, it is THIS REPO'S OBSERVED CONVENTION, and the
+#: history states it three times without anyone having written it down:
+#:
+#:     1.7.99  -> 1.8.x
+#:     1.8.99  -> 1.9.x
+#:     1.9.99  -> 1.10.x
+#:
+#: Every previous minor line ended at .99 and rolled. v1.12.100 is the first and
+#: only version to break it, and it broke it because the rule lived nowhere a
+#: program could read -- the monotonic check compares numeric tuples, and
+#: (1,12,100) > (1,12,99) is perfectly true, so nothing objected.
+#:
+#: A convention that only exists in the history is one every future lander has to
+#: rediscover by being corrected. This makes it refusable.
+_PATCH_ROLLS_AT = 100
+
+
+def patch_component_is_in_range(version: str) -> Optional[str]:
+    """None when the patch component is < 100, else the reason to refuse."""
+    parsed = parse_semver(version)
+    if parsed is None:
+        return None
+    major, minor, patch = parsed
+    if patch < _PATCH_ROLLS_AT:
+        return None
+    return (
+        f"version {version}: the patch component is {patch}. This repo rolls to "
+        f"the next MINOR at 99 -- 1.7.99 -> 1.8.x, 1.8.99 -> 1.9.x, "
+        f"1.9.99 -> 1.10.x. The next version after {major}.{minor}.99 is "
+        f"{major}.{minor + 1}.0, not {major}.{minor}.100."
+    )
+
+
 def _read_json_version(path: Path) -> Optional[str]:
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
@@ -359,6 +394,13 @@ def main(argv: Optional[list] = None) -> int:
         if current is None:
             print(f"ERROR: cannot read 'version' from {pj}", file=sys.stderr)
             return 2
+        # THE PATCH COMPONENT ROLLS AT 99. Checked here, on the CURRENT version,
+        # because a monotonic comparison can never object: (1,12,100) is
+        # genuinely greater than (1,12,99). The rule needed its own reader.
+        roll = patch_component_is_in_range(current)
+        if roll is not None:
+            print(f"FAIL: {roll}", file=sys.stderr)
+            return 1
         # Resolve repo dir + path relative to repo root for `git show`.
         repo_dir = pj.resolve().parent
         try:
