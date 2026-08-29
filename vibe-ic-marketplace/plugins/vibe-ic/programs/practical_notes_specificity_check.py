@@ -85,66 +85,6 @@ ALLOW_MARKER = "<!-- specificity-allow"
 # ---------------------------------------------------------------------------
 # Each rule = (id, severity, regex, description)
 # regex matches a substring on a line; the file/line is reported.
-
-# ---------------------------------------------------------------------------
-# The NDA codename rule is only a RULE when there are literals to build it from
-# ---------------------------------------------------------------------------
-# `_commercial_pdk` RAISES `NoNdaLiterals` rather than return an alternation of
-# nothing, because that alternation matches every line. Its own docstring states
-# the consequence and the obligation:
-#
-#     "the empty set is the ORDINARY state of every public checkout and of every
-#      CI job that has not been given the tokens. Every caller must handle this
-#      raise, and `nda_literals_available()` is the cheap way to ask first."
-#
-# This caller did not handle it, and the call sits inside a module-level rule
-# table — so the raise escaped at IMPORT, before argparse, before `--help`, and
-# before any subject was opened. MEASURED 2026-08-30 on a public-PDK benchmark
-# run with no token store configured: rc 1 with a bare traceback on stdout, and
-# `flow_compliance_check` records an rc-1 gate by its FIRST OUTPUT LINE — so the
-# design's completion audit carried
-#     {"name": "practical_notes_specificity_check", "verdict": "FAIL",
-#      "message": "Traceback (most recent call last):"}
-# and Phase 2 failed. A crash in this gate was rendered as a defect in the
-# design under test, which is the one thing a gate must never do.
-#
-# rc 2 is this program's existing "cannot answer" channel (see the other
-# `return 2` paths below), and `flow_compliance_check` already routes rc 2 to
-# NOT_INVOCABLE / SKIP with the callee's own reason line rather than to a
-# verdict. The same disposition `nda_diff_scan_check.py` and
-# `source_chip_agnostic_check.py` already reached for this identical raise.
-try:
-    _NDA_CODENAME_PATTERN: str | None = _cpdk.nda_source_regex_str()
-    _NDA_UNAVAILABLE: str = ""
-except _cpdk.NoNdaLiterals as _exc:                       # pragma: no cover
-    _NDA_CODENAME_PATTERN = None
-    _NDA_UNAVAILABLE = str(_exc)
-
-
-def _nda_rule_unmeasured(findings_present: bool) -> bool:
-    """Should this run answer NOT_MEASURED because the codename rule was absent?
-
-    Only when the run is otherwise CLEAN. A rule that never ran cannot weaken a
-    POSITIVE finding — a violation the other rules caught is a real measurement
-    and keeps its rc-1 verdict. What it does weaken is the negative: "I found
-    nothing" over a catalogue missing one detector is not the same claim as "I
-    found nothing" over the whole catalogue, and the two must not print the same
-    thing. `source_chip_agnostic_check` states the rule this follows: "I have
-    nothing to match with" must never print what "I matched and found nothing"
-    prints.
-    """
-    return _NDA_CODENAME_PATTERN is None and not findings_present
-
-
-def _print_nda_unmeasured(gate: str, rule_id: str) -> None:
-    print(f"NOT_MEASURED: {gate}: rule {rule_id!r} could not be built: "
-          f"{_NDA_UNAVAILABLE} Every other rule in the catalogue ran and found "
-          f"nothing, but this run is NOT a complete clean bill of health. "
-          f"Configure VIBEIC_NDA_TOKENS (a JSON object {{role: literal}}) or "
-          f"the private config's 'nda_tokens' key on the host that runs this "
-          f"gate.", file=sys.stderr)
-
-
 HARD_RULES: list[tuple[str, str, str]] = [
     ("chip_name_as3616", r"\bAS3616\b",
      "Hard-coded benchmark chip name <chip-class>"),
@@ -160,6 +100,9 @@ HARD_RULES: list[tuple[str, str, str]] = [
      "Vendor name 'Apple'"),
     ("specific_otp_file", r"\bapple\.ver\b",
      "OTP filename apple.ver is benchmark-specific"),
+    # The NDA PDK/process codename family is NOT built here — it is resolved
+    # below, guarded, because the resolver raises on a host without the private
+    # token store and a raise inside this literal kills the module at import.
     ("vendor_pdf_filename",
      r"\b[A-Z][A-Za-z0-9_-]*訊號格式\.pdf\b"
      r"|\b[A-Z][A-Za-z0-9_-]*_TxRx[^\s]*\.pdf\b"
@@ -242,18 +185,48 @@ def _deny_list_codename_rules() -> list[tuple[str, str, str]]:
     return rules
 
 
-# NDA PDK/process codename family — pattern reconstructed at runtime from the
-# encoded token store so no SKU literal lives in this detector's source. Appended
-# rather than inlined in the table so an EMPTY token store leaves the other
-# twelve rules standing instead of killing the import.
-if _NDA_CODENAME_PATTERN is not None:
-    HARD_RULES.append((
-        "specific_pdk_codename",
-        _NDA_CODENAME_PATTERN,
-        "PDK / process codename specific to one project",
-    ))
-
 HARD_RULES.extend(_deny_list_codename_rules())
+
+# ---------------------------------------------------------------------------
+# THE NDA CODENAME RULE, RESOLVED WITHOUT DYING AT IMPORT.
+#
+# `_cpdk.nda_source_regex_str()` RAISES `NoNdaLiterals` on any host whose
+# private config carries no `nda_tokens`. Since the token store moved out of
+# tracked source that is not an edge case — the raise's own docstring says it is
+# "the ORDINARY state of every public checkout and of every CI job that has not
+# been given the tokens", and it ends "A caller must report NOT_MEASURED."
+#
+# Calling it inside the rule-table literal made the raise escape at IMPORT, so
+# the process died before argparse ran and even `--help` exited 1. rc 1 is a
+# MEASURED verdict: `flow_compliance_check` maps it to a gate FAIL. A host that
+# merely lacks OPTIONAL config therefore produced a confident, specific failure
+# about the subject — the same defect class the resolver was rewritten to
+# prevent, arriving through the caller instead of the pattern.
+#
+# MEASURED 2026-08-30, gf180mcuD/spm through the one-shot runner at v1.12.80:
+# this gate and `backlog_sanitize_check` were the ONLY two of the P0 umbrella's
+# 246 structural checkers to FAIL. They took `Overall: PASS_WITH_WAIVERS` to
+# `Overall: FAIL`, Phase 2 to FAIL, and Phase 3 to SKIPPED — the design never
+# reached place-and-route. With `VIBEIC_NDA_TOKENS` set, both gates instead exit
+# 2 at argparse and the run proceeds, so the blocker is the absence of optional
+# config and nothing about the design.
+#
+# rc 2 / NOT_MEASURED is the channel `source_chip_agnostic_check`,
+# `nda_diff_scan_check` and `commit_msg_nda_check` already use for this exact
+# raise. This file is named in the resolver's own list of callers that must
+# recognise the tokens; it was not converted with them.
+# ---------------------------------------------------------------------------
+NDA_TOKENS_MISSING: str = ""
+try:
+    _NDA_CODENAME_RULES: list[tuple[str, str, str]] = [
+        ("specific_pdk_codename", _cpdk.nda_source_regex_str(),
+         "PDK / process codename specific to one project"),
+    ]
+except _cpdk.NoNdaLiterals as _nda_exc:            # noqa: F841 - reported below
+    _NDA_CODENAME_RULES = []
+    NDA_TOKENS_MISSING = str(_nda_exc)
+
+HARD_RULES.extend(_NDA_CODENAME_RULES)
 
 SOFT_RULES: list[tuple[str, str, str]] = [
     ("provenance_chip_in_prose",
@@ -344,16 +317,11 @@ def main() -> int:
 
     errors = [f for f in all_findings if f.severity == "ERROR"]
     warnings = [f for f in all_findings if f.severity == "WARN"]
-    # The word this prints is the claim it makes. "PASS" over a catalogue that
-    # was missing a detector is the false clean bill this fix exists to stop, so
-    # the console line and the JSON say NOT_MEASURED in exactly the case rc 2
-    # does — one fact, one name, three places.
-    if errors:
-        verdict = "FAIL"
-    elif _NDA_CODENAME_PATTERN is None:
-        verdict = "NOT_MEASURED"
-    else:
-        verdict = "PASS"
+    # The absent rule weakens only a negative conclusion. Scan every available
+    # rule first so a genuine violation keeps rc 1; only an otherwise-clean
+    # result uses the existing rc-2 no-verdict channel.
+    verdict = ("FAIL" if errors else
+               "NOT_MEASURED" if NDA_TOKENS_MISSING else "PASS")
 
     if args.json:
         print(json.dumps({
@@ -361,11 +329,8 @@ def main() -> int:
             "total_errors": len(errors),
             "total_warnings": len(warnings),
             "findings": [asdict(f) for f in all_findings],
-            # A consumer must not have to infer "the whole catalogue ran" from
-            # the absence of a field.
             "nda_codename_rule": (
-                "applied" if _NDA_CODENAME_PATTERN is not None
-                else "NOT_MEASURED"),
+                "NOT_MEASURED" if NDA_TOKENS_MISSING else "applied"),
             "verdict": verdict,
         }, indent=2))
     else:
@@ -385,9 +350,13 @@ def main() -> int:
         print(f"Warnings      : {len(warnings)}")
         print(verdict)
 
-    if _nda_rule_unmeasured(bool(errors)):
-        _print_nda_unmeasured("practical_notes_specificity_check",
-                              "specific_pdk_codename")
+    if verdict == "NOT_MEASURED":
+        print(f"NOT_MEASURED: practical_notes_specificity_check: rule "
+              f"'specific_pdk_codename' could not be built: "
+              f"{NDA_TOKENS_MISSING} Every other rule ran without a hard "
+              "violation, but this is not a complete clean bill of health. "
+              "Configure VIBEIC_NDA_TOKENS or the private config's "
+              "'nda_tokens' key.", file=sys.stderr)
         return 2
     return 0 if not errors else 1
 
