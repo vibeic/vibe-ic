@@ -566,7 +566,7 @@ build_trusted_test_selection() {
 }
 
 new_progress_nonce() {
-  PYTHONDONTWRITEBYTECODE=1 python3 -I -c \
+  PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c \
     'import secrets; print(secrets.token_hex(32))'
 }
 

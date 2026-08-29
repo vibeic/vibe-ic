@@ -128,7 +128,7 @@ def isolated_import_lane(python: str) -> Tuple[bool, str]:
     just not where `-I` looks" is the whole diagnosis and a reader should not
     have to run a second command to get it.
     """
-    probe = _run([python, "-I", "-c",
+    probe = _run([python, "-I", "-B", "-c",
                   "import pytest, sys; sys.stdout.write(pytest.__file__)"])
     if probe.returncode == 0:
         return True, probe.stdout.strip()
@@ -164,7 +164,7 @@ def entry_probe(python: str, entry: Path) -> subprocess.CompletedProcess:
                if key not in {"PYTHONPATH", "PYTHONHOME"}
                and not key.startswith(PROGRESS_ENV_PREFIX)}
         env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-        return _run([python, "-I", str(entry), "-q", "-p",
+        return _run([python, "-I", "-B", str(entry), "-q", "-p",
                      "no:cacheprovider", _PROBE_NAME],
                     cwd=subject, env=env)
 

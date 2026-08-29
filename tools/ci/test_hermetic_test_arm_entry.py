@@ -31,7 +31,9 @@ def test_entry_is_one_fixed_runtime_only_aggregate_invocation():
     assert "--aggregate-stall-after 300" not in body
     assert "--timeout" not in body
     assert "pytest_timeout" not in body
-    assert 'python3 -I "$PROGRAMS/trusted_pytest_entry.py"' in body
+    # `-B` is not decoration: `-I` implies `-E`, so the isolated child does not
+    # see PYTHONDONTWRITEBYTECODE and writes bytecode into the subject bind.
+    assert 'python3 -I -B "$PROGRAMS/trusted_pytest_entry.py"' in body
     assert _retains_only_failed_tmp_paths(body)
 
 

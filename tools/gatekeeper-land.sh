@@ -1166,8 +1166,13 @@ run_pytest() {
   # lane is written straight into that set, and losing the race does not fail
   # louder — `run_tolerating_uncheckable` downgrades it to NOT CHECKED (rc 2,
   # non-fatal), which is a check made WEAKER by parallelism and is forbidden.
-  # `python3 -I` does not imply `-B`, so the token is required and is not
-  # implied by the isolated entry. It does not make the gate check less: it
+  # `python3 -I` does not imply `-B` -- AND IT DOES NOT SEE THE VARIABLE
+  # EITHER: `-I` implies `-E`, which discards every `PYTHON*` name from the
+  # environment. So the variable below freezes the DRIVER (`pytest_per_file_
+  # junit.py`, no `-I`) and the `-B` flag on the isolated entry freezes the
+  # child that actually imports the tests. Both halves are required; supplying
+  # only the variable is what shipped, and it wrote 500+ `.pyc` into $ROOT in
+  # 7 minutes of one landing. It does not make the gate check less: it
   # makes the stimulus the checkout's PRE-EXISTING dirt, which is exactly what
   # that gate's own docstring says its subject is, and it makes that stimulus
   # IDENTICAL between the serial and the concurrent shape.
@@ -1179,7 +1184,7 @@ run_pytest() {
         --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
-        -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q \
+        -- python3 -I -B "$PROGRAMS/trusted_pytest_entry.py" -q \
         -p no:cacheprovider \
         "${maxfail[@]+"${maxfail[@]}"}" 2>&1 )"; then
     rc=0
@@ -1331,7 +1336,9 @@ run_repo_tools_pytest() {
   printf '%s\n' "${files[@]}" > "$list"
   # `PYTHONDONTWRITEBYTECODE=1` — see the note in `run_pytest`. This stage is
   # the one that MEASURABLY writes bytecode into $ROOT on main today: it never
-  # set the token and `python3 -I` does not imply `-B`. That churn lands in
+  # set the token, and setting the token alone would not have been enough
+  # because `python3 -I` implies `-E` and discards it. The `-B` on the
+  # isolated entry is the half that reaches the writer. That churn lands in
   # `gate_host_independence_check`'s untracked+ignored stimulus set, which is
   # the one ordering hazard concurrency here would otherwise create.
   out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
@@ -1343,7 +1350,7 @@ run_repo_tools_pytest() {
         --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures 0 \
-        -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q \
+        -- python3 -I -B "$PROGRAMS/trusted_pytest_entry.py" -q \
         -p no:cacheprovider 2>&1 )"
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
@@ -1470,7 +1477,7 @@ run_unselectable_pytest() {
         --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures 0 \
-        -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q \
+        -- python3 -I -B "$PROGRAMS/trusted_pytest_entry.py" -q \
         -p no:cacheprovider 2>&1 )"
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \

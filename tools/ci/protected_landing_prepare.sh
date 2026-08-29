@@ -56,5 +56,5 @@ echo "  PREPARE  $(git rev-parse --short HEAD)"
 
 for p in "${MOVED[@]}"; do cp "$STAGE/$(printf '%s' "$p" | tr / _)" "$p"; done
 echo "  bytes restored — commit them as the ACTIVATE half, then:"
-echo "    python3 -I vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py \\"
+echo "    python3 -I -B vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py \\"
 echo "      -q tools/ci/test_phase_b_activated_parity.py"
