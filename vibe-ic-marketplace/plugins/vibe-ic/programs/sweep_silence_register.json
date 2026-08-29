@@ -1,0 +1,462 @@
+{
+  "known_silent_untriaged": {
+    "clock_domain_reg_crossing_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "SKIP (no RTL found) \u2014 {'files_scanned': 0, 'multi_clock_modules_examined': 0, 'errors': 0, 'warnings': 0, 'str"
+      },
+      "empty_none_corpus": {
+        "rc": 0,
+        "says": "PASS \u2014 {'files_scanned': 8, 'multi_clock_modules_examined': 0, 'errors': 0, 'warnings': 0, 'strict': False, 'n"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "PASS \u2014 {'files_scanned': 3, 'multi_clock_modules_examined': 0, 'errors': 0, 'warnings': 0, 'strict': False, 'n"
+      },
+      "why_not_permitted": "Handed an EMPTY corpus this sweep still returns rc 0 (rc 2 on three readable empty directories, rc 0 on no targets at all) -- the SAME clean pass it returns over the populated corpus. A reader and a consumer can tell those two runs apart by nothing. This is exactly the shape the survey exists to catch and NO ARGUMENT IS MADE HERE THAT IT IS LEGITIMATE."
+    },
+    "cross_design_identity_check.py": {
+      "deciding_invocation": "positional/dirs",
+      "empty_dirs_corpus": {
+        "rc": 0,
+        "says": "{"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: cross_design_identity_check.py [-h] [--allow ALLOW] [--allow-honest-na]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "{"
+      },
+      "why_not_permitted": "Handed an EMPTY corpus this sweep still returns rc 0 (rc 0 on three readable empty directories, rc 2 on no targets at all) -- the SAME clean pass it returns over the populated corpus. A reader and a consumer can tell those two runs apart by nothing. This is exactly the shape the survey exists to catch and NO ARGUMENT IS MADE HERE THAT IT IS LEGITIMATE."
+    },
+    "fsm_error_invariant.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 0,
+        "says": "fsm_error_invariant: 0 error-assertion sites found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: fsm_error_invariant.py [-h] [--json JSON] files [files ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "fsm_error_invariant: 0 error-assertion sites found"
+      },
+      "why_not_permitted": "Handed an EMPTY corpus this sweep still returns rc 0 (rc 0 on three readable empty directories, rc 2 on no targets at all) -- the SAME clean pass it returns over the populated corpus. A reader and a consumer can tell those two runs apart by nothing. This is exactly the shape the survey exists to catch and NO ARGUMENT IS MADE HERE THAT IT IS LEGITIMATE."
+    },
+    "manifest_leak_check.py": {
+      "deciding_invocation": "positional/dirs",
+      "empty_dirs_corpus": {
+        "rc": 0,
+        "says": "manifest_leak_check: no manifest files found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: manifest_leak_check.py [-h] [--json JSON] targets [targets ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "manifest_leak_check: no manifest files found"
+      },
+      "why_not_permitted": "Handed an EMPTY corpus this sweep still returns rc 0 (rc 0 on three readable empty directories, rc 2 on no targets at all) -- the SAME clean pass it returns over the populated corpus. A reader and a consumer can tell those two runs apart by nothing. This is exactly the shape the survey exists to catch and NO ARGUMENT IS MADE HERE THAT IT IS LEGITIMATE."
+    },
+    "practical_notes_specificity_check.py": {
+      "deciding_invocation": "--paths/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "error: no PRACTICAL_NOTES.md files matched"
+      },
+      "empty_none_corpus": {
+        "rc": 0,
+        "says": "Files scanned : 16"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "Files scanned : 1"
+      },
+      "why_not_permitted": "Handed an EMPTY corpus this sweep still returns rc 0 (rc 2 on three readable empty directories, rc 0 on no targets at all) -- the SAME clean pass it returns over the populated corpus. A reader and a consumer can tell those two runs apart by nothing. This is exactly the shape the survey exists to catch and NO ARGUMENT IS MADE HERE THAT IT IS LEGITIMATE."
+    },
+    "silent_decline_audit.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "=== silent remedy declines ==="
+      },
+      "empty_none_corpus": {
+        "rc": 0,
+        "says": "=== silent remedy declines ==="
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "=== silent remedy declines ==="
+      },
+      "why_not_permitted": "Handed an EMPTY corpus this sweep still returns rc 0 (rc 2 on three readable empty directories, rc 0 on no targets at all) -- the SAME clean pass it returns over the populated corpus. A reader and a consumer can tell those two runs apart by nothing. This is exactly the shape the survey exists to catch and NO ARGUMENT IS MADE HERE THAT IT IS LEGITIMATE."
+    },
+    "task_nature_route.py": {
+      "deciding_invocation": "--rtl/files",
+      "empty_dirs_corpus": {
+        "rc": 0,
+        "says": "{"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "ERROR: give --prompt/--prompt-file, --rtl, or --nature"
+      },
+      "how_it_entered": "It did not newly go silent. Until ebe08a870 its CLI died on UnboundLocalError for every invocation without --json -- a defect present since the file's first commit -- so the survey classified it NOT_DRIVABLE and it never entered the denominator. Repairing the crash moved it into `driven`, where a silence that had always been there became visible and took the old count bound from 27 to 28. MEASURED, one file, both directions: at ebe08a870^ NOT_DRIVABLE, at HEAD SILENT, with nothing about its reporting changed. That is a ratchet punishing a repair, and it is why this register is a SET and not a number.",
+      "populated_corpus": {
+        "rc": 0,
+        "says": "{"
+      },
+      "why_not_permitted": "Handed an EMPTY corpus this sweep still returns rc 0 (rc 0 on three readable empty directories, rc 2 on no targets at all) -- the SAME clean pass it returns over the populated corpus. A reader and a consumer can tell those two runs apart by nothing. This is exactly the shape the survey exists to catch and NO ARGUMENT IS MADE HERE THAT IT IS LEGITIMATE."
+    }
+  },
+  "measured_at": {
+    "classification_commit": "7b7b2f3cc2d00eea136440d885c1d1f8420881ac (v1.12.100)",
+    "how": "sweep_reach_survey drives each sweep against the POPULATED probe corpus and against BOTH empty corpora (three readable empty directories, and no targets at all). The rc from each of the three runs is recorded per entry below, so the argument for every name is re-derivable from this file rather than asserted in it.",
+    "reconfirmed_at": "8917d6652d52121384958a5ca9dfc0b0363fbd96 (v1.13.0), where the survey still discovers 65 sweep-shaped programs, drives 36 and finds the same 28 SILENT \u2014 28 of 28 registered"
+  },
+  "permitted": {
+    "arith_ss_corner_risk_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "arith_ss_corner_risk_check: no RTL files found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "arith_ss_corner_risk_check: no RTL files found"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "arith_ss_corner_risk_check: PASS (advisory) \u2014 findings: 0 (0 HIGH, 0 MED)"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "bitwidth_consistency_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "Files: 0  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: bitwidth_consistency_check.py [-h] [--json] paths [paths ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "Files: 3  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "crc_residual_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "Files: 0  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: crc_residual_check.py [-h] [--json] paths [paths ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "Files: 3  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "device_response_no_br_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "Files: 0  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: device_response_no_br_check.py [-h] [--json] paths [paths ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "Files: 3  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "formal_complexity_classify.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "[ERROR] NO_RTL: No .v/.sv RTL found under: /tmp/sw/tmp/tmpsvenmoy3/p0, /tmp/sw/tmp/tmpsvenmoy3/p1, /tmp/sw/tmp"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "[ERROR] NO_INPUT: No RTL directory or file supplied"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "[INFO] PROVE_FEASIBLE: [probe_and2] k-induction feasible (FFs=0, counter=0, mem=0b); use mode prove, min_k_bou"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "fpga_wrapper_input_polluter_check.py": {
+      "deciding_invocation": "--rtl/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "error: no .v/.sv files found under --rtl"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "error: --rtl is required (file or directory)"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "Files scanned : 3"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "gap_reset_granularity_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "Files: 0  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: gap_reset_granularity_check.py [-h] [--json] paths [paths ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "Files: 3  Errors: 0  Warnings: 0  Result: PASS"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "module_port_audit.py": {
+      "deciding_invocation": "--files/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "WARNING: cannot read /tmp/sw/tmp/tmpsvenmoy3/p2: [Errno 21] Is a directory: '/tmp/sw/tmp/tmpsvenmoy3/p2'"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: module_port_audit.py [-h] [--rtl-dir RTL_DIR]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "module_port_audit: 0 errors, 0 warnings, 0 info"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "output_latency_advisor.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "output_latency_advisor: no RTL files found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "output_latency_advisor: no RTL files found"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "output_latency_advisor: PASS (advisory) \u2014 findings: 0 (0 warn)"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "pdk_via_patch_meets_layer_min_width_check.py": {
+      "deciding_invocation": "--tech-lef/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "[REFUSE] pdk_via_patch_meets_layer_min_width_check: no readable tech LEF. An unchecked PDK is not a clean PDK,"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "[REFUSE] pdk_via_patch_meets_layer_min_width_check: no readable tech LEF. An unchecked PDK is not a clean PDK,"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "[PASS] 3 tech LEF(s): every via patch is at least as wide as its own layer's declared minimum width."
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "real_artefact_test_backing_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "[SKIP] real_artefact_test_backing_check: this change adds or modifies no test module \u2014 nothing to classify."
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "[SKIP] real_artefact_test_backing_check: give FILEs or --base."
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "real_artefact_test_backing_check (ADVISORY): 0 of 0 test(s) driven by a checked-in artefact, across 3 changed "
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "reset_discipline_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "reset_discipline_check: FAIL \u2014 no RTL files found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "reset_discipline_check: FAIL \u2014 no RTL files found"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "reset_discipline_check: PASS \u2014 findings: 0 (0 error, 0 warn)"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "rom_init_lint.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 1,
+        "says": "rom_init_lint: cannot read /tmp/sw/tmp/tmpsvenmoy3/p0: [Errno 21] Is a directory: '/tmp/sw/tmp/tmpsvenmoy3/p0'"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: rom_init_lint.py [-h] [--json JSON] files [files ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "rom_init_lint: OK \u2014 no Quartus-unsafe ROM initializers found"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 1 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "rtl_hygiene_lint.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "ERROR parsing /tmp/sw/tmp/tmpsvenmoy3/p0: [Errno 21] Is a directory: '/tmp/sw/tmp/tmpsvenmoy3/p0'"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: rtl_hygiene_lint.py [-h] [--json JSON] [--severity {ERROR,WARN,INFO}]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "rtl_hygiene_lint: 0 errors, 0 warnings, 0 info"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "spec_review_lint.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "spec_review_lint: MISSING \u2014 no spec file found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "spec_review_lint: MISSING \u2014 no spec file found"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "spec_review_lint: PASS \u2014 findings: 4 (0 error, 3 warn) [3 spec(s) linted of 3 candidate(s)]"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "spec_rtl_port_fidelity_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "spec_rtl_port_fidelity_check: FAIL \u2014 no RTL files found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "spec_rtl_port_fidelity_check: FAIL \u2014 no RTL files found"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "spec_rtl_port_fidelity_check: PASS \u2014 findings: 0 (0 error, 0 warn) [3 ports]"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "spec_self_consistency_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "spec_self_consistency_check: no spec file found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "spec_self_consistency_check: no spec file found"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "spec_self_consistency_check: PASS \u2014 findings: 0 (0 error, 0 warn) [3 spec(s)]"
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "spec_worked_example_extract.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "ERROR reading /tmp/sw/tmp/tmpsvenmoy3/p0: [Errno 21] Is a directory: '/tmp/sw/tmp/tmpsvenmoy3/p0'"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: spec_worked_example_extract.py [-h] [--text TEXT] [--json]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "=== probe_and2.v ==="
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "staged_rtl_closure_preflight.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "error: no .sv/.v files found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: staged_rtl_closure_preflight.py [-h] [--json JSON]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "=== staged_rtl_closure_preflight (3 file(s)) ==="
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "sv2v_mixed_driver_fixup.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 1,
+        "says": "ERROR: /tmp/sw/tmp/tmpsvenmoy3/p0: not found"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: sv2v_mixed_driver_fixup.py [-h] [--dry-run] FILE [FILE ...]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": ""
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 1 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    },
+    "sv_package_closure_check.py": {
+      "deciding_invocation": "positional/files",
+      "empty_dirs_corpus": {
+        "rc": 2,
+        "says": "error: no .sv/.v/.svh under ['/tmp/sw/tmp/tmpsvenmoy3/p0', '/tmp/sw/tmp/tmpsvenmoy3/p1', '/tmp/sw/tmp/tmpsvenm"
+      },
+      "empty_none_corpus": {
+        "rc": 2,
+        "says": "usage: sv_package_closure_check.py [-h] [--json JSON] [--define NAME]"
+      },
+      "populated_corpus": {
+        "rc": 0,
+        "says": "=== sv_package_closure_check (3 file(s)) ==="
+      },
+      "why_permitted": "Handed an EMPTY corpus this sweep REFUSES (rc 2 on three readable empty directories, rc 2 on no targets at all) instead of returning the rc 0 it returns over the populated corpus. Its clean exit is therefore not reachable without reading input, so it is not confusable with a no-input run -- which is the confusion this survey exists to catch. What it still lacks is the machine-readable half: it says so in prose rather than through the VACUOUS_PASS sentinel. That is a reporting-format gap, not an unreached check."
+    }
+  },
+  "register": "sweep_silence_register",
+  "the_bound": "sweep_reach_survey --silent-set refuses on any SILENT sweep named in NEITHER list below. The bound is the SET, not its size: swapping one member for another leaves the total at 28 and is refused, which no count can do. A member that STOPS being silent is reported as removable and is NEVER a failure -- the asymmetry is deliberate and is stated in the program."
+}

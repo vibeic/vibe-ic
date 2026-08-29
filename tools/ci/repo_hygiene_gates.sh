@@ -2292,14 +2292,30 @@ run "silent remedy decline"             "$PLUGIN" python3 programs/silent_declin
 # quieter shape — a sweep that read 756 pairs in full, decided about none, and
 # exited 0 clean.
 #
-# `--max-silent 27`, NOT a bare run and NOT `--strict`. MEASURED at this commit:
-# 64 sweep-shaped programs discovered, 35 driven to a zero-reach run, 8 of the
-# 35 DISCLOSE and 27 are SILENT (29 the generic probe corpus cannot drive are
-# published as NOT_DRIVABLE rather than dropped, which is the survey refusing
-# its own version of the defect). A bare run returns 0 unconditionally — a gate
-# that cannot fail; failing on the whole 27 would wire a permanently red one.
-# The ratchet holds today's 27 visible, blesses none of them, and makes a
-# TWENTY-EIGHTH red. It is a number that may only shrink.
+# `--silent-set`, NOT a bare run and NOT `--strict`. A bare run returns 0
+# unconditionally — a gate that cannot fail; failing on the whole silent set
+# would wire a permanently red one.
+#
+# IT WAS `--max-silent 27` AND A COUNT WAS THE WRONG BOUND. Measured at this
+# commit: 65 sweep-shaped programs discovered, 36 driven to a zero-reach run, 8
+# DISCLOSE and 28 are SILENT. The 28th is `task_nature_route`, and it did not go
+# silent — until `ebe08a870` its CLI died on UnboundLocalError for every
+# invocation without `--json`, a defect present since the file's first commit, so
+# the survey classified it NOT_DRIVABLE and it never entered the denominator.
+# REPAIRING THE CRASH is what took the count from 27 to 28. Isolated to that one
+# file, both directions: at `ebe08a870^` NOT_DRIVABLE, at HEAD SILENT, with
+# nothing about its reporting changed. A count cannot tell that from a new
+# silence, and it is blind to a member SWAPPING for another — 28 -> 28 with a
+# different member is invisible to a number and obvious to a set.
+#
+# So the bound is the NAMED SET in `programs/sweep_silence_register.json`: 21
+# entries argued as legitimate (handed an EMPTY corpus they REFUSE rather than
+# returning the same rc 0 they return over a populated one, so their clean exit
+# cannot be reached without reading input) and 7 recorded UNTRIAGED, which is
+# explicitly NOT a claim that they are legitimate. A SILENT sweep in neither list
+# fails. A registered sweep that STOPS being silent is reported as removable and
+# is NEVER a failure — the asymmetry is the point: this bound replaced one that
+# reddened for a repair.
 #
 # `--programs-dir "$PLUGIN/programs"`, spelled out rather than left to the
 # program's default (which is the directory the SURVEY lives in): the fixture
@@ -2307,7 +2323,7 @@ run "silent remedy decline"             "$PLUGIN" python3 programs/silent_declin
 # corpus from `__file__` would read the real tree no matter what subject it was
 # handed — an input no fixture can move is an input no fixture can prove
 # anything about.
-run "a sweep can say it judged nothing" "$ROOT" python3 "$PG/sweep_reach_survey.py" --programs-dir "$PLUGIN/programs" --max-silent 27
+run "a sweep can say it judged nothing" "$ROOT" python3 "$PG/sweep_reach_survey.py" --programs-dir "$PLUGIN/programs" --silent-set "$PLUGIN/programs/sweep_silence_register.json"
 
 # vibe-ic#428 — final_summary.md printed TWO verdict roll-ups over the same 63
 # steps and they disagreed on the BLOCKING-FAILURE count, with nothing marking
