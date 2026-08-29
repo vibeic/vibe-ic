@@ -77,3 +77,67 @@ def assert_route_ships(skill: str | None, where: str) -> None:
         f"{where}: routes at skill {skill!r}, which _classification.json "
         f"records under deprecated_skills. A skill removed on purpose must "
         f"not stay the target of a live route.")
+
+
+# ---------------------------------------------------------------------------
+# THE THIRD ROUTING TABLE, AND THE BIGGEST ONE: the canonical flow.
+#
+# v1.12.76 guarded the runner; v1.12.89 widened that to every production
+# program and factored this module so there would be ONE answer to "which
+# names must ship". `flow/phase1_phase2_phase3.yaml` was still outside it, and
+# it is the largest table of the three. MEASURED at v1.12.82:
+#
+#     the flow names 56 skills across its steps. ONLY 25 SHIP. 31 DO NOT.
+#
+# A flow `skills:` entry is a route in exactly the sense this module's
+# docstring defines: the step hands the name to an agent and tells it to invoke
+# that skill. Same defect, same damage, one more table -- so it belongs here
+# rather than in a fourth copy of "which names must ship".
+FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
+
+
+def flow_doc():
+    import yaml  # already a test dependency -- flow_compliance_check.py uses it
+    return yaml.safe_load(FLOW.read_text(encoding="utf-8"))
+
+
+def iter_flow_steps(node):
+    """Every step-shaped mapping in the canonical flow, at any nesting depth."""
+    if isinstance(node, dict):
+        if "id" in node and ("name" in node or "stage" in node):
+            yield node
+        for v in node.values():
+            yield from iter_flow_steps(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from iter_flow_steps(v)
+
+
+def flow_skill_routes():
+    """[(step_id, stage, skill), ...] for every skill the canonical flow names.
+
+    PARSES the YAML; never pattern-matches it. That is not a style preference,
+    it is the finding: `skills:` is written BOTH inline (`skills: [a, b]`) and
+    BLOCK-style (`skills:` then `- name`) in one file, and the first
+    measurement of this hole reported FOURTEEN ghosts because it matched only
+    the inline spelling. The seventeen it missed were the single largest
+    cluster, all on step D1. One file, two spellings, and a line pattern sees
+    one of them -- confidently, and with no way to know it is under-reporting.
+    """
+    out = []
+    for s in iter_flow_steps(flow_doc()):
+        for skill in (s.get("skills") or []):
+            if isinstance(skill, str) and skill:
+                out.append((str(s.get("id")), str(s.get("stage") or ""), skill))
+    return out
+
+
+def unbuilt_skills() -> dict:
+    """Names a routing table named that were NEVER AUTHORED.
+
+    Distinct from `deprecated_skills`, which were built and archived on
+    purpose. Recorded rather than silently deleted so that a step advertising
+    work the tree cannot do stays visible and cannot quietly return.
+    """
+    doc = json.loads(CLASSIFICATION.read_text(encoding="utf-8"))
+    return doc.get("unbuilt_skills", {}).get("skills", {})
