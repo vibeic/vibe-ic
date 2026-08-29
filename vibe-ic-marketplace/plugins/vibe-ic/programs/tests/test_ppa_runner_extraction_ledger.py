@@ -99,6 +99,70 @@ def ppa_functions_in(path: Path):
 # v1.11.18. It may SHRINK freely. Growing it is a decision, not a diff.
 # ======================================================================
 _LEDGER = frozenset({
+    # RECORDED after 6c272d392, which added a bounded area retry to
+    # `step_synth` and did not make this ledger decision. The three names below
+    # are that retry's whole runner surface, and they are recorded TOGETHER
+    # because they answer one question between them: "did re-synthesising at a
+    # relaxed ABC timing target land inside the die this design DECLARED".
+    #
+    # WHY THEY ARE NOT EXTRACTABLE TO `_ppa/area.py`, from that module's own
+    # rules rather than from convenience.
+    #
+    #   1. `_ppa/area.py` answers ONE question, and PPA_INTERFACES.md §4 names
+    #      it: "area taxonomy: proxy vs physical, kept separate". It is a
+    #      RECORDS module -- it takes metric records in and emits a verdict --
+    #      and it has no run-tree reader at all: `project`, `glob(`, `L19` and
+    #      `read_areas` return ZERO hits in the whole file, and it imports only
+    #      the standard library plus `_ppa.canonical_json`.
+    #
+    #   2. `area_retry_is_worth_adopting` CANNOT live there, and this is the
+    #      decisive half. The figure it compares is `stats.json:chip_area` --
+    #      the yosys `Chip area for module` number, which `_ppa/area.py`
+    #      registers as `area.synth.cell_area`, class SYNTH_PROXY, with
+    #      `eligible_for_physical_ppa` False. That module's stated rule is "a
+    #      proxy comparison can never produce a SMALLER verdict", and
+    #      `area_verdict` implements it: with no PHYSICAL EXTENT comparison the
+    #      answer is UNDETERMINED, never SMALLER. This predicate returns
+    #      exactly a smaller-verdict over two SYNTH_PROXY figures. Putting it
+    #      in `_ppa/area.py` would install, inside the module written to
+    #      prevent that substitution, a function that performs it.
+    #
+    #      It is legitimate WHERE IT IS because it makes no claim about
+    #      silicon: it chooses between two attempts of the same step, and its
+    #      not-adopted branch leaves the step FAILING. A proxy improvement can
+    #      never become a PASS through it.
+    #
+    #   3. The two readers are six and fifteen lines that CALL another program.
+    #      The area logic -- globbing the tree, parsing the declared
+    #      `L19.die_area_budget_um` as a 'WxH' rect, establishing the
+    #      figure's unit from the artefact that states it,
+    #      refusing when published copies disagree -- was already extracted, to
+    #      `area_total_vs_budget_check.py`, which is the blocking gate
+    #      `step_synth` spawns inline. Moving these two would not move that
+    #      logic; it would add a hop, and give the taxonomy module a run-tree
+    #      dependency on a gate program. "It calls a module, passes an artefact
+    #      path and collects the answer" is this test's own definition of
+    #      orchestration.
+    #
+    # PRECEDENT, not a one-off. The ledger already carries both shapes for this
+    # exact domain: `_l19_declared_die_area` reads the SAME
+    # `die_area_budget_um` field out of the SAME run tree, and
+    # `_compute_resized_die` /
+    # `_compute_loosened_die` / `_compute_downsized_die` are the same shape as
+    # the predicate -- bounded die-area retry arithmetic with the decision left
+    # to the caller.
+    #
+    # ON THE RECORD, because this ledger is a record and not an absolution:
+    # `_synth_chip_area` returns the FIRST unit-established row and its
+    # docstring claims that is "the order the comparator itself uses". It is
+    # not -- `area_total_vs_budget_check.evaluate` takes
+    # `max(usable, key=chip_area)`. With one `stats.json` the two agree, which
+    # is why every existing test passes; with two they are a second answer.
+    # That is a defect in what the function DOES, and this test says in its own
+    # docstring that it "says nothing about what the function does", so it is
+    # filed rather than fixed here. Location decision only.
+    "_area_budget_um2", "_synth_chip_area",
+    "area_retry_is_worth_adopting",
     "_auto_die_side_um", "_auto_pdn_straps_from_techlef",
     "_build_auto_silicon_sdc", "_build_clock_records_from_sdcs",
     "_build_hardmacro_supply_gc_tcl", "_build_macro_pdn_grid_tcl",
