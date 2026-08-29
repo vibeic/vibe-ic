@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 69,
+  "_comment": "AUTHORITATIVE AI-skill inventory — generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
+  "total": 70,
   "by_tier": {
     "debug": 13,
     "judgment": 7,
-    "nl_primary": 33,
+    "nl_primary": 34,
     "unclassified": 8,
     "verification": 8
   },
@@ -50,6 +50,7 @@
     "hw-debug-loop",
     "ir-drop-triage",
     "layer-contract-doctrine",
+    "loop2converge",
     "lvs-triage",
     "mixed-signal-cosim",
     "open-benchmark-methodology",
@@ -280,6 +281,11 @@
       "name": "layer-contract-doctrine",
       "frontmatter_name": "layer-contract-doctrine",
       "tier": "judgment"
+    },
+    {
+      "name": "loop2converge",
+      "frontmatter_name": "loop2converge",
+      "tier": "nl_primary"
     },
     {
       "name": "lvs-triage",

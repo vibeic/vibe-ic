@@ -1,0 +1,49 @@
+# Compliance spec for skill 'loop2converge'.
+# Refines vibe-ic/skills/loop2converge/SKILL.md output requirements.
+skill: loop2converge
+
+requirements:
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line OR clear next-action statement"
+    pattern: '(?:Next:\s*(?:run\s+)?/\w|## Next |proceed to)'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:|## Result|## Verdict)'
+    skill_section: 'Output/Handoff'
+  - id: R_classification
+    description: "Every FAIL is classified flow / gate / tool before any fix — the
+      three have different owners and different repos, and guessing costs a fix in the
+      wrong layer that the next run re-breaks."
+    pattern: '(?i)(flow\s*/\s*gate\s*/\s*tool|classif)'
+    skill_section: '2 — CLASSIFY'
+  - id: R_cache_proof
+    description: "The fix is proven in the installed plugin CACHE against the real
+      artefacts before the repo, and the cache base is confirmed identical to main."
+    pattern: '(?i)(plugin cache|in the cache)'
+    skill_section: '4 — PROVE'
+  - id: R_falsification
+    description: "Both directions: remove the fix and the failure returns with the SAME
+      message, plus a CONTROL input the fix must not change."
+    pattern: '(?i)falsif'
+    skill_section: '4 — PROVE'
+  - id: R_owning_repo
+    description: "The PR goes to the repo that owns the layer — a tool defect is a
+      vibeic-eda PR, never a plugin-side band-aid."
+    pattern: '(?i)vibeic-eda'
+    skill_section: '5 — CAPTURE'
+  - id: R_no_fabrication
+    description: "Convergence never fabricates: no authored artefact, no authored
+      coverage number, no relaxed deck, no waiver without evidence + ticket."
+    pattern: '(?i)(never fabricate|fabrication)'
+    skill_section: '3 — CONVERGE'
+
+  - id: R_upgrade_readback
+    description: "Step 1.0 — the tick names the plugin version and the MCP/EDA build it
+      actually ran, read back from the running server (eda_doctor), not from what was
+      installed. An install is not a binding: an MCP server keeps serving the version it
+      booted with."
+    pattern: '(?i)(eda_doctor|plugin_programs_dir)'
+    skill_section: '1.0 — Upgrade FIRST'
+
+cross_checks: []
