@@ -738,6 +738,42 @@ _VERILOG_NON_INSTANCE_LEAD = frozenset({
 })
 
 
+# YOSYS WRITES ITS OWN COMMENTS INTO THE NETLIST IT GENERATES, and one of the
+# two forms lands in the middle of a cell-instance line. `synth_netlist_check`
+# recorded that at v0.1.32 while fixing the same blind spot one gate over:
+# DFF-heavy designs emit `$_DFF_PN0_ /* _04_ */ s4_reg (`, which its
+# `CELL_INST_RE` never matched -> false TOO_FEW_CELLS / total_cells=0.
+#
+# `_INSTANCE_RE` below wants `<type> <name> (` and has exactly the same blind
+# spot: a comment between the type and the name breaks the match, so an
+# UNRESOLVED cell on such a line reads as ABSENT. MEASURED on this function
+# before this was written:
+#
+#     and3_1 _392_ (                -> {'and3_1': 1}   refused, correctly
+#     and3_1 /* _04_ */ _392_ (     -> {}              accepted as levelised
+#
+# The second is the DT1 defect coming back through its own post-condition: the
+# step reports levelisation succeeded, and the ATPG then dies inside `sat` with
+# "No SAT model available for cell", which is the crash this whole guard exists
+# to stop being rendered as a coverage number.
+#
+# BLANKED, NOT DELETED, AND NEWLINES ARE KEPT. `_INSTANCE_RE` is `re.M` and
+# anchors on `^`, so removing characters would move line starts, and deleting a
+# multi-line comment would splice two unrelated lines into one that can match.
+# Length-preserving for the same reason `_prose_polarity.blank_bracketed` is.
+_HDL_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
+
+def strip_comments(verilog_text: str) -> str:
+    """`verilog_text` with every Verilog comment blanked to spaces.
+
+    Line structure and every offset are preserved; only the comment BYTES go.
+    Pure — no I/O, no library name, no chip literal."""
+    return _HDL_COMMENT_RE.sub(
+        lambda m: "".join(c if c == "\n" else " " for c in m.group(0)),
+        verilog_text or "")
+
+
 def unresolved_cell_types(flat_verilog_text: str) -> dict:
     """Cell TYPES still instantiated as BLACKBOXES in a gate-levelised core.
 
@@ -749,9 +785,13 @@ def unresolved_cell_types(flat_verilog_text: str) -> dict:
     Returns {cell_type: instance_count} for every surviving non-generic type;
     an empty dict means levelisation actually levelised. Pure — no I/O, no
     library name, no chip literal.
+
+    COMMENTS ARE BLANKED FIRST. Yosys puts its own `/* <name> */` between the
+    cell type and the instance name, and a cell hidden behind one used to read
+    as absent — see `strip_comments` above for the measured pair.
     """
     out: dict = {}
-    for m in _INSTANCE_RE.finditer(flat_verilog_text or ""):
+    for m in _INSTANCE_RE.finditer(strip_comments(flat_verilog_text)):
         ctype = m.group(1)
         if ctype in _VERILOG_NON_INSTANCE_LEAD:
             continue
