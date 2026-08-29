@@ -2043,9 +2043,32 @@ elif [ "$FAILED" -eq 0 ]; then
   printf 'cadence=%s\n' "$LANDING_CADENCE" \
     >> "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) at cadence $LANDING_CADENCE ==="
+  # AND PUBLISH THE VERDICT WHERE THE SERVER CAN READ IT (2026-08-29).
+  #
+  # The stamp above is in `.git/`, which is untracked, local, and invisible to
+  # the remote. `--no-verify` skips the hook that reads it, and MEASURED on this
+  # repository the same day: `branches/main/protection` -> 404, `rulesets` ->
+  # [], `actions/permissions` -> {"enabled": false}. So the lane refused
+  # correctly 49 times over and stopped nothing, because nothing on the server
+  # was asking it.
+  #
+  # `required_status_checks` is the one rule that needs no GitHub Actions: the
+  # context is fed by the Commit Statuses API. This line is the lane's half of
+  # it. `main_ref_protection_check.py` is the other half's reader.
+  #
+  # NOT FATAL TO THE LANDING, and that is the safe direction rather than a
+  # tolerance: a status that could not be published leaves the ruleset
+  # unsatisfied, so the PUSH is refused by the server with a sentence naming the
+  # missing context. Failing to publish can only ever make a push harder.
+  python3 "$ROOT/tools/ci/landing_status_publish.py" --repo "$ROOT" \
+      --failed "$FAILED" || true
 else
   rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+  # AND SAY SO ON THE SERVER TOO, for the same reason the stamp is removed: the
+  # previous green must not still be standing against this commit's sha.
+  python3 "$ROOT/tools/ci/landing_status_publish.py" --repo "$ROOT" \
+      --failed "$FAILED" || true
   # AND SAY WHICH QUESTION WAS ASKED. This tier is ABSOLUTE: it refuses on any
   # red, including one the base tree already carries. On 2026-08-17 that made
   # main's own tip unpushable to main, so a reader of this line needs to know
