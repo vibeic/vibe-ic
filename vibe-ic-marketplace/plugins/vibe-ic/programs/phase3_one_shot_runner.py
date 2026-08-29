@@ -15641,6 +15641,222 @@ def _emit_spare_cell_coverage(project: Path, spare_json: Path) -> str:
     return note
 
 
+# ── STEP 18'S OWN MARKER VOCABULARY ───────────────────────────────────────
+# The strings the Step-18 fragment — and nothing else in this flow — puts in
+# the OpenROAD log. Every branch through `_build_spare_protection_tcl` +
+# `_build_spare_postfix_tcl` prints at least one of them once the block is
+# REACHED: the FIRM-lock `catch` prints SPARE_FIRM_LOCKED on success and
+# SPARE_FIXED_NONFATAL on failure, so that pair alone is unconditional.
+#
+# THE LIST IS NOT A HAND-WRITTEN GUESS AT "the ways insertion can happen".
+# `test_step18_evidence_not_hostage_to_route_verdict.py`'s
+# `TestStep18MarkerVocabularyIsDerivedFromTheTcl` derives the marker set from
+# the TCL the builders ACTUALLY generate and pins BOTH directions: it refuses
+# an entry this list names that the TCL cannot emit, and refuses a builder
+# marker missing from here — so the enumeration cannot drift away from the
+# tree it is supposed to describe.
+_STEP18_INSERTION_MARKERS = (
+    # insertion + protection (_build_spare_protection_tcl)
+    "SPARE_INSERT_NONFATAL",
+    "SPARE_DONTTOUCH_NONFATAL",
+    "SPARE_DONTTOUCH_RESTORE_NONFATAL",
+    # tie-off (_build_spare_postfix_tcl)
+    "SPARE_TIELO_PLACE_NONFATAL",
+    "SPARE_TIEOFF_CONNECTED",
+    "SPARE_TIEOFF_SKIPPED",
+    "SPARE_TIEOFF_NONFATAL",
+    "SPARE_TIEOFF_DONE",
+    "SPARE_TIEOFF_DRIVERS",
+    "SPARE_TIEOFF_ITERM_NONFATAL",
+    "SPARE_TIEOFF_LEGALIZED",
+    "SPARE_TIEOFF_LEGALIZE_NONFATAL",
+    "SPARE_TIE_NET_DONT_TOUCH",
+    "SPARE_TIE_NET_DONT_TOUCH_NONFATAL",
+    # FIRM lock — the unconditional pair
+    "SPARE_FIRM_LOCKED",
+    "SPARE_FIXED_NONFATAL",
+    # check_placement verdict (_build_check_placement_verdict_tcl)
+    "SPARE_CHECK_PLACEMENT_VIOLATIONS",
+    "SPARE_CHECK_PLACEMENT_RAISED",
+    "SPARE_CHECK_PLACEMENT_UNAVAILABLE",
+)
+
+
+def _spare_insertion_observed(log_path: Path) -> Dict[str, Any]:
+    """MEASURE whether OpenROAD reached Step 18's insertion block at all.
+
+    This is the guard that keeps `_emit_step18_spare_record` from becoming a
+    fabrication. That function is called BEFORE the route-outcome gates, so
+    it now runs on failure paths where the old tail-emit never ran — and on
+    a run that died in `read_lef`, the spare PLAN is still sitting in memory,
+    fully formed and completely untrue. `spare_plan` is PRE-RUN INTENT: it
+    says what the runner asked OpenROAD to insert, never what OpenROAD did.
+    Serialising it as though it were the outcome would manufacture a
+    well-formed record of work that never happened, which is the same family
+    of offence as inventing the coverage number.
+
+    So the record is gated on the tool's OWN log, exactly as `tied_off` is
+    (`_spare_tieoff_measured_from_log`): no marker, no record, and the step
+    SAYS `SPARE_INSERTION_NOT_OBSERVED` instead of going silent.
+
+    Fail-closed: an unreadable or empty log is NOT OBSERVED, never
+    observed-success. Chip-AGNOSTIC — parses our own markers only, no PDK,
+    design, vendor or geometry literal.
+    """
+    out: Dict[str, Any] = {"observed": False, "markers": [], "reason": ""}
+    try:
+        text = log_path.read_text(errors="replace") if log_path.is_file() else ""
+    except OSError as exc:
+        out["reason"] = (f"SPARE_INSERTION_NOT_OBSERVED: PnR log unreadable "
+                         f"({exc}) — the insertion cannot be measured, so the "
+                         f"plan is NOT written as a record")
+        return out
+    if not text:
+        out["reason"] = ("SPARE_INSERTION_NOT_OBSERVED: no PnR log to measure "
+                         "the insertion from — the plan is NOT written as a "
+                         "record")
+        return out
+    seen = [m for m in _STEP18_INSERTION_MARKERS if m in text]
+    out["markers"] = seen
+    out["observed"] = bool(seen)
+    if not seen:
+        out["reason"] = (
+            "SPARE_INSERTION_NOT_OBSERVED: the PnR log carries none of the "
+            "markers the Step-18 fragment prints, so OpenROAD never reached "
+            "the spare-insertion block. The plan is pre-run INTENT and is NOT "
+            "written as a record")
+    else:
+        out["reason"] = f"observed via {', '.join(seen)}"
+    return out
+
+
+def _emit_step18_spare_record(project: Path, out_dir: Path, log_path: Path,
+                              spare_plan: Dict[str, Any],
+                              placed_cells_est: int, spare_dens: float,
+                              spare_warn: str) -> Tuple[str, bool]:
+    """Commit Step 18's evidence at the point Step 18's WORK ends.
+
+    A STEP'S EVIDENCE MUST NOT BE HOSTAGE TO A LATER STEP'S VERDICT. This is
+    the body that used to sit at the TAIL of `step_pnr`, downstream of every
+    route-outcome gate. Steps 14-21 are one Python function issuing one
+    OpenROAD session, and the generated pnr.tcl orders the Step-18 block
+    (insert → detailed_placement → tie-off → FIRM lock → check_placement)
+    BEFORE `clock_tree_synthesis` and ~200 lines before `detailed_route`. So
+    on a run where the route did not converge, OpenROAD had already placed,
+    tied off and locked the spares — and the Python threw the only record of
+    it away on the way out. Step 18 then reported MISSING, which reads as
+    "the work was skipped" and is a different claim from "the work happened
+    and was not written down".
+
+    Step 18 was uniquely exposed to this. Every other step in the PnR band
+    keeps a TCL-WRITTEN DEF that OpenROAD lands on disk whatever the Python
+    decides afterwards (15 floorplan.def, 17 placed.def, 19 post_cts.def,
+    20 post_hold.def, 21 routed.def). Step 18's two required_outputs are
+    100% Python-tail-written, so it had no anchor at all.
+
+    This is #519's fix applied to the neighbouring step: #519 made the CTS
+    report durable the moment CTS completed, for the same reason and against
+    the same gate. The call site is deliberately beside it.
+
+    Returns `(detail_note, record_written)`. Never raises: an emit failure is
+    reported on the step detail and never masks the real PnR verdict.
+    """
+    spare_note = ""
+    written = False
+    # A plan with no instances asked OpenROAD to insert nothing (e.g.
+    # `--spare-density 0`), so there is no insertion to observe and the
+    # record — count 0 — is true by construction. The observation gate below
+    # applies only where something was actually asked for; applying it here
+    # would turn an honest zero into a refusal.
+    _planned = list(spare_plan.get("instances") or [])
+    _obs = (_spare_insertion_observed(log_path) if _planned else
+            {"observed": None, "markers": [],
+             "reason": "no spare instances planned — nothing to observe"})
+    if _planned and not _obs["observed"]:
+        # NOTHING is written at either of step 18's required_output paths,
+        # and the step SAYS why. A step that cannot honestly run must say so;
+        # this is the half that keeps the early commit above from becoming a
+        # fabrication of the plan.
+        spare_note = f" | {_obs['reason']}"
+        spare_note += _emit_spare_cell_coverage(project,
+                                                out_dir / "spare_cells.json")
+        if spare_warn:
+            spare_note += f" | {spare_warn}"
+        return spare_note, False
+    try:
+        actual_dens = _spare_actual_density(spare_plan, placed_cells_est)
+        spare_payload = dict(spare_plan)
+        # `tied_off` is MEASURED from OpenROAD's own log, replacing the
+        # pre-run claim `bool(tie_cell_discovered and instances)`. That claim
+        # said a tie cell EXISTS, not that anything was tied off, and
+        # `spare_cell_coverage_check` gates on it — so the gate was reading an
+        # intention. Measured on three PDKs: zero sinks connected on every run
+        # while `tied_off: true` shipped. The evidence goes in beside it so a
+        # reader sees the count, not just the verdict.
+        _tie_measured = _spare_tieoff_measured_from_log(log_path)
+        spare_payload["tie_off"] = _tie_measured
+        if spare_plan.get("instances"):
+            spare_payload["tied_off"] = bool(_tie_measured["tied_off"])
+        # The measurement that entitles this record to exist, carried IN it.
+        # A reader (or a resumed run) can now tell a record backed by the
+        # tool's own log from one that is only a plan — which is exactly the
+        # distinction the old tail-emit could not express, because reaching
+        # the tail was itself the only evidence it had.
+        spare_payload["insertion_observed"] = _obs
+        spare_payload["placed_cells_est"] = placed_cells_est
+        spare_payload["target_density"] = round(spare_dens, 6)
+        spare_payload["actual_density"] = actual_dens
+        spare_payload["protection"] = {
+            "yosys_keep": True,
+            "openroad_dont_touch": True,
+            "inserted_after_abc": True,
+            "metal_fill_repair_aware": True,
+            "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
+        }
+        _aa.write_text(out_dir / "spare_cells.json",
+            json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
+        written = True
+        # reports/spare_cell_coverage.json is deliberately NOT written
+        # here. Step 18 declares ONE producer for that path —
+        # `spare_cell_coverage_check` — and this block used to write it
+        # too. The two payloads graded the SAME run against DIFFERENT
+        # floors: this one against the run's own `--spare-density`, the
+        # gate's against its fixed readiness minimum. A run invoked with
+        # `--spare-density 0.005` (or 0) therefore published
+        # `status: PASS` from here and `status: FAIL` from the gate, at
+        # one path, and whichever ran last decided what
+        # `benchmark_verify_report` Pillar 6 read. `distribution_ok`
+        # disagreed the same way: this block asked only for >1 distinct
+        # site, the gate for half the spare count.
+        #
+        # Nothing is lost. Every MEASUREMENT this block published —
+        # count, placed_cells_est, target_density, actual_density,
+        # tie_off, tied_off, and the instance coordinates the spread is
+        # derived from — is in the spare_cells.json written above, which
+        # is the gate's input. Only the self-grade is gone, and a
+        # self-grade against a self-chosen floor is precisely what the
+        # gate exists to refuse.
+        #
+        # docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md
+        distinct_xy = {(i.get("llx"), i.get("lly"))
+                       for i in spare_plan.get("instances", [])}
+        # The step detail reports the MEASUREMENT (how many distinct
+        # sites the spares occupy), never a verdict on it — grading the
+        # spread is the gate's job and it applies a stricter rule.
+        spare_note = (f" | spares={spare_plan.get('count', 0)} "
+                      f"(target_d={spare_dens:g} actual_d={actual_dens:g} "
+                      f"distinct_sites={len(distinct_xy)})")
+    except Exception as _sp_exc:  # nosec — artefact emit is best-effort
+        spare_note = f" | spare_emit_failed: {_sp_exc}"
+    # Step 18's SECOND declared output, produced by invoking its declaring
+    # producer — never by writing a second payload at the same path. See
+    # `_emit_spare_cell_coverage` for what this closes and what it refuses.
+    spare_note += _emit_spare_cell_coverage(project, out_dir / "spare_cells.json")
+    if spare_warn:
+        spare_note += f" | {spare_warn}"
+    return spare_note, written
+
+
 def _dont_use_family_fallback_tcl() -> str:
     """v1.2.86 — GENERAL, PDK-family fallback that excludes the physically
     unroutable characterization / low-power cell FAMILIES from the resizer/CTS/
@@ -21835,6 +22051,57 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _write_sparse_die_skip_attestation(project, [_log_txt, out, err])
     except Exception:  # nosec — attestation is best-effort, never fatal
         pass
+    # ── STEP 18's EVIDENCE, COMMITTED WHERE STEP 18's WORK ENDS ──────────
+    # Same principle as #519 directly above, for the neighbouring step: the
+    # Design-for-ECO record is durable the moment the OpenROAD session that
+    # inserted the spares has finished, BEFORE every route-outcome gate
+    # below. It used to be written at the TAIL of this function, downstream
+    # of 16 early returns — so the route-convergence verdict (and 15 other
+    # verdicts about LATER steps) discarded the only evidence that Step 18
+    # had run, and Step 18 reported MISSING for work OpenROAD had
+    # demonstrably done. (The verdict's own token is deliberately not spelled
+    # here: `test_step_pnr_wires_route_convergence_gate` pins its FIRST
+    # occurrence in this function to sit below the rc gate.)
+    #
+    # `_emit_step18_spare_record` refuses to write anything unless the log
+    # shows the insertion block was reached — see `_spare_insertion_observed`
+    # for why committing early is only honest with that guard attached.
+    # Best-effort in exactly the same sense as the two blocks above: an emit
+    # failure lands on the step detail and never masks the PnR verdict.
+    spare_note = ""
+    _spare_record_written = False
+    try:
+        spare_note, _spare_record_written = _emit_step18_spare_record(
+            project, out_dir, _pnr_logp, spare_plan,
+            placed_cells_est, spare_dens, spare_warn)
+    except Exception as _s18_exc:  # nosec — never fatal to PnR
+        spare_note = f" | spare_record_emit_failed: {_s18_exc}"
+    if "SPARE_INSERTION_NOT_OBSERVED" in spare_note:
+        # DEGRADE LOUDLY. A withheld record is the correct outcome, but a
+        # SILENT one is the defect this whole change is about wearing the
+        # other hat: step 18 would again report MISSING with nothing said
+        # about why. The verdicts below carry it in their detail; this makes
+        # it visible even on the paths whose detail is the tool's log tail.
+        print(f"[pnr]{spare_note}", file=sys.stderr)
+
+    def _non_signoff(*paths: str) -> List[str]:
+        """Name the artefacts on canonical paths that this FAIL does NOT
+        vouch for. Step 18's record joins the list whenever it was written:
+        it is now committed before these gates, so a failed run leaves one on
+        disk that never existed before, and on a RESUMED run a leftover
+        record must never be able to vouch for spares the shipped netlist has
+        lost. DISCLOSURE only — the verdict itself is unchanged.
+
+        USED BY THE ROUTE / PG VERDICTS ONLY, and deliberately not by the
+        PNR_TOOL_FATAL_SIGNAL returns. Those enumerate
+        `_pnr_signoff_artifacts` — the canonical SIGN-OFF SET — and answer
+        "which sign-off artefacts must not be signed off". The spare record
+        is not a member of that set, so naming it there would answer a
+        different question with the same key."""
+        named = [p for p in paths]
+        if _spare_record_written:
+            named.append(str(out_dir / "spare_cells.json"))
+        return named
     # ── TOOL CRASH vs TOOL ERROR ──────────────────────────────────────────
     # A signal death is not an error return, and until this gate existed the
     # runner could not tell them apart: both arrived as "rc != 0" and were
@@ -22010,10 +22277,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                         "resize_history": resize_history,
                         "loosen_declines": loosen_declines})
     if rc != 0 or not def_file.is_file():
+        # `spare_note` rides along: this is the gate a run that died BEFORE
+        # the Step-18 block actually reaches (no insertion => no route), so
+        # it is where SPARE_INSERTION_NOT_OBSERVED has to be readable.
         return StepResult("pnr", "FAIL", time.time() - t0,
-                          f"rc={rc} log_tail={(out+err)[-2000:]}",
+                          f"rc={rc}{spare_note} "
+                          f"log_tail={(out+err)[-2000:]}",
                           [str(out_dir / "openroad.log")],
                           extras={"resize_history": resize_history,
+                                  "spare_record_written": _spare_record_written,
                                  "loosen_declines": loosen_declines})
     # ORGANIC #585 — route-convergence gate. TritonRoute can run out of
     # iterations and COMPLETE with violations remaining (rc=0,
@@ -22106,7 +22378,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                         _last_decline.get("still_improving")),
                     "loosen_residual_series": _l_series,
                     "loosen_target_util": _eff_util,
-                    "non_signoff_outputs": [str(def_file)],
+                    "non_signoff_outputs": _non_signoff(str(def_file)),
                     "resize_history": resize_history,
                     "loosen_declines": loosen_declines})
     # ── PG NET-OWNERSHIP gate — a supply network that half the design is not
@@ -22231,7 +22503,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "pg_terminals_on_no_net": _pg_bad,
                     "pg_measures": "net_ownership_only",
                     "pg_example_masters": _pg_masters,
-                    "non_signoff_outputs": [str(def_file)]})
+                    "non_signoff_outputs": _non_signoff(str(def_file))})
     # v1.3.92 — post-route decap-under-signal-route SHORT guard (config-gated;
     # no-op on OSS PDKs). Runs on the final {top}.def, BEFORE streamout, so the
     # DEF leaving PnR is already short-free and both streamout paths inherit the
@@ -22249,79 +22521,6 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     rpt_dir.mkdir(parents=True, exist_ok=True)
     if sta_file.is_file():
         (rpt_dir / "sta.rpt").write_text(sta_file.read_text())
-
-    # === Design-for-ECO Step 18 artefacts ===
-    # Emit phase3/stage3/pnr/spare_cells.json — the inserted spare set,
-    # consumed by spare_cell_preservation_check AND by
-    # spare_cell_coverage_check, which recomputes the readiness verdict
-    # from it. This step emits the MEASUREMENT; the verdict belongs to
-    # the gate (see the block below). Best-effort: a write failure logs
-    # to the step detail but never fails PnR.
-    spare_note = ""
-    try:
-        actual_dens = _spare_actual_density(spare_plan, placed_cells_est)
-        spare_payload = dict(spare_plan)
-        # `tied_off` is MEASURED from OpenROAD's own log, replacing the
-        # pre-run claim `bool(tie_cell_discovered and instances)`. That claim
-        # said a tie cell EXISTS, not that anything was tied off, and
-        # `spare_cell_coverage_check` gates on it — so the gate was reading an
-        # intention. Measured on three PDKs: zero sinks connected on every run
-        # while `tied_off: true` shipped. The evidence goes in beside it so a
-        # reader sees the count, not just the verdict.
-        _tie_measured = _spare_tieoff_measured_from_log(_pnr_logp)
-        spare_payload["tie_off"] = _tie_measured
-        if spare_plan.get("instances"):
-            spare_payload["tied_off"] = bool(_tie_measured["tied_off"])
-        spare_payload["placed_cells_est"] = placed_cells_est
-        spare_payload["target_density"] = round(spare_dens, 6)
-        spare_payload["actual_density"] = actual_dens
-        spare_payload["protection"] = {
-            "yosys_keep": True,
-            "openroad_dont_touch": True,
-            "inserted_after_abc": True,
-            "metal_fill_repair_aware": True,
-            "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
-        }
-        _aa.write_text(out_dir / "spare_cells.json",
-            json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
-        # reports/spare_cell_coverage.json is deliberately NOT written
-        # here. Step 18 declares ONE producer for that path —
-        # `spare_cell_coverage_check` — and this block used to write it
-        # too. The two payloads graded the SAME run against DIFFERENT
-        # floors: this one against the run's own `--spare-density`, the
-        # gate's against its fixed readiness minimum. A run invoked with
-        # `--spare-density 0.005` (or 0) therefore published
-        # `status: PASS` from here and `status: FAIL` from the gate, at
-        # one path, and whichever ran last decided what
-        # `benchmark_verify_report` Pillar 6 read. `distribution_ok`
-        # disagreed the same way: this block asked only for >1 distinct
-        # site, the gate for half the spare count.
-        #
-        # Nothing is lost. Every MEASUREMENT this block published —
-        # count, placed_cells_est, target_density, actual_density,
-        # tie_off, tied_off, and the instance coordinates the spread is
-        # derived from — is in the spare_cells.json written above, which
-        # is the gate's input. Only the self-grade is gone, and a
-        # self-grade against a self-chosen floor is precisely what the
-        # gate exists to refuse.
-        #
-        # docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md
-        distinct_xy = {(i.get("llx"), i.get("lly"))
-                       for i in spare_plan.get("instances", [])}
-        # The step detail reports the MEASUREMENT (how many distinct
-        # sites the spares occupy), never a verdict on it — grading the
-        # spread is the gate's job and it applies a stricter rule.
-        spare_note = (f" | spares={spare_plan.get('count', 0)} "
-                      f"(target_d={spare_dens:g} actual_d={actual_dens:g} "
-                      f"distinct_sites={len(distinct_xy)})")
-    except Exception as _sp_exc:  # nosec — artefact emit is best-effort
-        spare_note = f" | spare_emit_failed: {_sp_exc}"
-    # Step 18's SECOND declared output, produced by invoking its declaring
-    # producer — never by writing a second payload at the same path. See
-    # `_emit_spare_cell_coverage` for what this closes and what it refuses.
-    spare_note += _emit_spare_cell_coverage(project, out_dir / "spare_cells.json")
-    if spare_warn:
-        spare_note += f" | {spare_warn}"
 
     # ORGANIC #593/#596 — persist the REQUESTED geometry (the `die_um`
     # arg — NEVER mutated in this function; only die_w/die_h are
