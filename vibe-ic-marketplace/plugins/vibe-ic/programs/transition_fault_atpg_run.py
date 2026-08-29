@@ -978,6 +978,65 @@ def _synth_recorded_liberty(project: Path) -> str:
         return ""
 
 
+_SYNTH_LOG_LIBERTY_RE = re.compile(
+    r"-liberty\s+(?P<path>[^\s;'\"]+\.lib)")
+
+# The yosys commands that MAP a netlist onto a library. A `-liberty` carried by
+# one of these is the library the netlist's cells LITERALLY CAME FROM, which is
+# exactly what gate-levelise must read back.
+_MAPPING_CMDS = ("abc", "dfflibmap", "stat")
+
+
+def synth_log_recorded_liberty(text: str) -> str:
+    """The std-cell Liberty a SYNTHESIS LOG records itself having mapped with,
+    or "" when it records none.  PURE — no filesystem, no chip/PDK/vendor
+    literal appears here.
+
+    Why this source exists: `_synth_recorded_liberty` reads the per-project
+    `stats.json`, and in the Phase-2 flow that artefact accounts for the
+    technology-GENERIC `netlist.v` (`$_NAND_`/`$_DFF_`), which by construction
+    loaded NO library — so it can never carry a `liberty` key, and the source
+    is unconditionally empty.  The netlist the at-speed ATPG actually grades is
+    the MAPPED one, and its own synthesis log records the library verbatim on
+    the `dfflibmap -liberty` / `abc -liberty` / `stat -liberty` it ran.
+
+    Takes the LAST distinct mapping `-liberty` in the log: a log that re-maps
+    ends with the library its final `write_verilog` describes.  A `-liberty` on
+    any NON-mapping command is ignored, so a probe or a report pass cannot
+    outvote the mapping that produced the cells."""
+    best = ""
+    for line in (text or "").splitlines():
+        for cmd in _MAPPING_CMDS:
+            for m in re.finditer(
+                    re.escape(cmd) + r"\s+[^;]*?-liberty\s+([^\s;'\"]+\.lib)",
+                    line):
+                best = m.group(1)
+    return best
+
+
+def _synth_log_recorded_liberty(project: Path) -> str:
+    """`synth_log_recorded_liberty` over the project's synthesis logs, or "".
+    Never raises.  Logs are read newest-LAST so the most recent mapping wins,
+    matching the netlist that is on disk now."""
+    synth = project / "phase2" / "stage2" / "synth"
+    if not synth.is_dir():
+        return ""
+    try:
+        logs = sorted((p for p in synth.glob("*.log") if p.is_file()),
+                      key=lambda p: (p.stat().st_mtime, p.name))
+    except OSError:
+        return ""
+    found = ""
+    for p in logs:
+        try:
+            hit = synth_log_recorded_liberty(p.read_text(errors="ignore"))
+        except OSError:
+            continue
+        if hit:
+            found = hit
+    return found
+
+
 def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
     """Chip/PDK-AGNOSTIC std-cell Liberty resolution for the at-speed ATPG
     producers (TDF/PDF). The gate-levelise step needs ANY std-cell Liberty read
@@ -1021,6 +1080,13 @@ def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
     synth_lib = _synth_recorded_liberty(project)
     if synth_lib:
         return synth_lib
+    # (3b) the library the SYNTHESIS LOG of the graded netlist records having
+    # mapped with. Same authority as (3) — correct BY CONSTRUCTION — and it is
+    # reachable on the Phase-2 flow, where (3)'s stats.json accounts for the
+    # technology-generic netlist and therefore never carries a library at all.
+    synth_log_lib = _synth_log_recorded_liberty(project)
+    if synth_log_lib:
+        return synth_log_lib
     pvt = project / "phase2" / "stage2" / "constraints" / "pvt_matrix.json"
     if pvt.is_file():
         try:
