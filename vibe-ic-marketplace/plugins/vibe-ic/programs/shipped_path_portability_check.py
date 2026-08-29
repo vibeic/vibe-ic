@@ -79,12 +79,25 @@ import _published_tree as _pt
 # The username charclass deliberately excludes backslash and regex metachars so
 # that a DETECTOR PATTERN (e.g. a source line containing the literal regex
 # "/home/" followed by a backslash-w) is not itself flagged as a path.
-_USER_CHARS = r"[A-Za-z0-9._-]+"
+# A username token may CONTAIN a dot or a dash but may not END on one. With the
+# trailing separator optional, a greedy `[A-Za-z0-9._-]+` would swallow the
+# sentence-ending period of "... see /home/<name>." and report the username as
+# `<name>.` — a name that is not the account's. Anchoring the last character
+# keeps the reported name, and the reported path, exactly right.
+_USER_CHARS = r"[A-Za-z0-9._-]*[A-Za-z0-9_]"
 
+# The trailing separator is OPTIONAL. A bare home directory with nothing after
+# it (`/home/<name>` at end of line, or followed by a space or punctuation) is
+# exactly as personal, and as unportable, as `/home/<name>/some/file` — it names
+# one account on one machine either way. Requiring the separator let a leak in a
+# shipped comment ("the image mounts /home/<name> identically") sit green.
+# The greedy username class already supplies the right boundary: it stops at the
+# first character that cannot be part of a name, so a DETECTOR PATTERN such as
+# the literal `"/home/"` followed by a quote or a paren still does not match.
 _HOME_PAT = re.compile(
-    r"(?:/home/(?P<u1>" + _USER_CHARS + r")/"
-    r"|/Users/(?P<u2>" + _USER_CHARS + r")/"
-    r"|[Cc]:\\+Users\\+(?P<u3>" + _USER_CHARS + r")\\+)"
+    r"(?:/home/(?P<u1>" + _USER_CHARS + r")/?"
+    r"|/Users/(?P<u2>" + _USER_CHARS + r")/?"
+    r"|[Cc]:\\+Users\\+(?P<u3>" + _USER_CHARS + r")\\*)"
 )
 
 # Placeholder usernames: structurally impossible to mistake for a real value.
