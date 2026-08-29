@@ -92,6 +92,16 @@ def discover_constants_files(base: Path) -> List[Path]:
 #: every parameter the L8 emitter writes, which is a shape no emitter produces.
 KIND_CONSTANTS = "constants"
 KIND_PARAMETERS = "parameters"
+#: No recognized slot was found. NOT a shape — the absence of one. A document
+#: reported as KIND_UNKNOWN is NOT GRADED, and says so; guessing which
+#: design-descriptive section holds the constants is the defect this replaces.
+KIND_UNKNOWN = "unknown"
+
+#: Marks an entry normalised out of a `{NAME: value}` MAPPING. The mapping form
+#: has nowhere to write a width or a comment, so neither is asked of it — the
+#: same principle that exempts a parameter from a width: never require of a
+#: producer information its form cannot express.
+_MAPPING_MARK = "__from_mapping__"
 
 _CONSTANT_KEYS = ("constants", "rtl_constants")
 _PARAMETER_KEYS = ("params", "parameters")
@@ -118,18 +128,38 @@ def extract_entries(data) -> "tuple":
     if isinstance(data, list):
         return data, KIND_CONSTANTS
     if isinstance(data, dict):
-        # Prefer an explicit constants key, then an explicit parameters key.
-        for key in _CONSTANT_KEYS:
-            if key in data and isinstance(data[key], list):
-                return data[key], KIND_CONSTANTS
-        for key in _PARAMETER_KEYS:
-            if key in data and isinstance(data[key], list):
-                return data[key], KIND_PARAMETERS
-        # Fall back: find the first list value
-        for v in data.values():
-            if isinstance(v, list) and len(v) > 0:
-                return v, KIND_CONSTANTS
-    return [], KIND_CONSTANTS
+        # Prefer an explicit constants key, then an explicit parameters key —
+        # and accept EITHER SPELLING at each key before moving to the next.
+        #
+        # A MAPPING `{NAME: value}` is a legitimate way to write RTL constants:
+        # MEASURED 2026-08-29, 5 designs (52 of 1453 real generated_docs trees)
+        # spell `constants` that way. It used to fall through to the first-list
+        # fallback and be reported EMPTY.
+        #
+        # THE SPELLING IS RESOLVED PER KEY, NOT PER SHAPE, and that ordering is
+        # load-bearing: those same 52 trees carry BOTH a non-empty `constants`
+        # mapping and an EMPTY `parameters` list. A shape-major loop reaches the
+        # empty list first and abstains over a document that had constants in it
+        # all along — measured while writing this change.
+        for key in _CONSTANT_KEYS + _PARAMETER_KEYS:
+            if key not in data:
+                continue
+            kind = KIND_CONSTANTS if key in _CONSTANT_KEYS else KIND_PARAMETERS
+            if isinstance(data[key], list):
+                return data[key], kind
+            if isinstance(data[key], dict):
+                return ([{"name": k, "value": v, _MAPPING_MARK: True}
+                         for k, v in data[key].items()], kind)
+        # NO FIRST-LIST FALLBACK. It used to `return v, KIND_CONSTANTS` for the
+        # first list value in the dict, whatever key that was. MEASURED across
+        # 2614 real L8 documents, that picked `source_documents`, `evidence`,
+        # `clock_domains`, `max_throughput_table` and
+        # `tap_state_names_in_canonical_order` on 339 files — prose provenance
+        # and clock tables graded against a constants schema, under the
+        # STRICTEST of the two shapes. A wrong denominator is worse than none,
+        # so the answer is now "no recognized slot" and the caller discloses it.
+        return [], KIND_UNKNOWN
+    return [], KIND_UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +199,8 @@ def audit(project_dir: str) -> AuditResult:
 
     all_names: dict = {}  # name -> file (for duplicate detection across files)
     total_constants = 0
+    abstained = 0        # files whose recognized slot was present and EMPTY
+    ungraded = 0         # files with no recognized slot at all
 
     for jf in json_files:
         rel = str(jf.relative_to(base)) if jf.is_relative_to(base) else str(jf)
@@ -194,38 +226,78 @@ def audit(project_dir: str) -> AuditResult:
             ))
             continue
 
-        # ----- Section structure check (WARNING, not ERROR) -----
-        RECOGNIZED_SECTIONS = {
-            "tx_phy_constants", "rx_phy_constants", "crc8_constants",
-            "mac_key_signals", "port_naming_convention",
-        }
+        # A recognized slot that holds a SCALAR is a schema REGRESSION, and a
+        # different finding from "this document has no constants slot": the
+        # producer meant to write one and wrote something nothing can be read
+        # from. Distinguishing them matters — one is a bug upstream, the other
+        # is a document out of this gate's declared scope.
+        bad_slot = None
         if isinstance(data, dict):
-            has_section = any(k in data for k in RECOGNIZED_SECTIONS)
-            has_constants_key = "constants" in data
-            if not has_section and not has_constants_key:
-                findings.append(Finding(
-                    rule="SECTION_STRUCTURE",
-                    severity="WARNING",
-                    message="No recognized section structure "
-                            "(tx_phy, rx_phy, crc8, mac, port_naming)",
-                    file=rel,
-                ))
+            for key in _CONSTANT_KEYS + _PARAMETER_KEYS:
+                if key in data and not isinstance(data[key], (list, dict)):
+                    bad_slot = key
+                    break
+        if bad_slot is not None:
+            findings.append(Finding(
+                rule="SLOT_NOT_A_COLLECTION",
+                severity="ERROR",
+                message=f"'{bad_slot}' is "
+                        f"{type(data[bad_slot]).__name__}, not a list or an "
+                        "object — nothing can be read from it",
+                file=rel,
+            ))
+            continue
 
         constants, kind = extract_entries(data)
 
-        if len(constants) == 0:
+        if kind == KIND_UNKNOWN:
+            # NOT GRADED, and it says so by name. `RECOGNIZED_SECTIONS` used to
+            # decide this from five section names lifted from ONE design
+            # (tx_phy / rx_phy / crc8 / mac / port_naming) — matched by 0 of
+            # 2614 real L8 documents, and a flow-level program that carries one
+            # design's vocabulary has stopped being flow. The successor asks
+            # only whether a recognized constants SLOT is present, which is
+            # design-independent. WARNING, not ERROR: such a document is not
+            # malformed, it is out of the declared scope, and firing on a
+            # legitimately-complete design is a bug in the gate.
             findings.append(Finding(
-                rule="EMPTY_CONSTANTS",
-                severity="ERROR",
-                message="File contains zero constant entries",
+                rule="SLOT_UNRECOGNIZED",
+                severity="WARNING",
+                message="no recognized constants slot ("
+                        + ", ".join(_CONSTANT_KEYS + _PARAMETER_KEYS)
+                        + ") — NOT GRADED. This file was read and no verdict "
+                          "was reached about it.",
                 file=rel,
             ))
+            ungraded += 1
+            continue
+
+        if len(constants) == 0:
+            # THE SLOT IS PRESENT AND EMPTY: this design declared no constants.
+            # MEASURED 2026-08-29: 1321 of 1453 real generated_docs trees are in
+            # that state, and this rule failed every one of them as an ERROR.
+            # It is a legitimate state, so it is not a defect — and nothing was
+            # verified, so it is not a PASS either. A named abstention, counted,
+            # and `status_word()` refuses to print PASS over it.
+            findings.append(Finding(
+                rule="NO_CONSTANTS_DECLARED",
+                severity="INFO",
+                message=f"'{kind}' is present and empty — this design declared "
+                        "no constants, so nothing here was verified",
+                file=rel,
+            ))
+            abstained += 1
             continue
 
         for idx, entry in enumerate(constants):
             # Name the shape that was actually read. A message that says
             # `constants[0]` about a parameter misnames the object it refuses.
-            prefix = f"{kind}[{idx}]"
+            # A mapping entry is named by its KEY: an index into a dict's
+            # iteration order is not something a reader can look up.
+            if isinstance(entry, dict) and entry.get(_MAPPING_MARK) is True:
+                prefix = f"{kind}['{entry.get('name')}']"
+            else:
+                prefix = f"{kind}[{idx}]"
 
             if not isinstance(entry, dict):
                 findings.append(Finding(
@@ -277,12 +349,16 @@ def audit(project_dir: str) -> AuditResult:
                     file=rel,
                 ))
 
-            # Check 'comment' (WARNING only)
-            if "comment" not in entry:
+            # Prose (WARNING only). The emitter writes 'description'; older
+            # documents write 'desc'; the constant shape writes 'comment'. Not
+            # asked of a MAPPING entry, which has no field to put one in.
+            from_mapping = entry.get(_MAPPING_MARK) is True
+            if not from_mapping and not any(
+                    k in entry for k in ("comment", "description", "desc")):
                 findings.append(Finding(
                     rule="MISSING_COMMENT",
                     severity="WARNING",
-                    message=f"{prefix}: missing 'comment' field",
+                    message=f"{prefix}: no 'comment' / 'description' / 'desc' field",
                     file=rel,
                 ))
 
@@ -294,7 +370,11 @@ def audit(project_dir: str) -> AuditResult:
             # and declaring it wrong is a finding whatever the shape.
             width = entry.get("width", entry.get("bits"))
             if width is None:
-                if kind != KIND_PARAMETERS:
+                # ...and not of a MAPPING either: `{NAME: value}` has nowhere to
+                # write a width. MEASURED: an earlier draft of this very change
+                # required it there and falsely reddened 52 of 1453 real trees
+                # (5 designs). Same principle as the parameter exemption above.
+                if kind != KIND_PARAMETERS and not from_mapping:
                     findings.append(Finding(
                         rule="MISSING_FIELD",
                         severity="ERROR",
@@ -321,26 +401,44 @@ def audit(project_dir: str) -> AuditResult:
 
             total_constants += 1
 
-    # Final: at least 1 constant total
-    if total_constants == 0 and not any(f.rule == "EMPTY_CONSTANTS" for f in findings):
-        findings.append(Finding(
-            rule="EMPTY_CONSTANTS",
-            severity="ERROR",
-            message="No valid constant entries found across all files",
-        ))
+    # A run that GRADED NOTHING is not a run that found nothing wrong. The
+    # global EMPTY_CONSTANTS error that stood here made "this design declared no
+    # constants" — 1321 of 1453 real trees, measured — indistinguishable from a
+    # defect. The count is reported instead, and `status_word` refuses to print
+    # PASS over it.
+    graded = total_constants
+    errors = sum(1 for f in findings if f.severity == "ERROR")
 
-    passed = not any(f.severity == "ERROR" for f in findings)
     return AuditResult(
         program="constants_validation",
-        passed=passed,
+        passed=errors == 0,
         findings=findings,
         summary={
             "files_checked": len(json_files),
-            "constants_total": total_constants,
+            "constants_total": graded,
+            "graded": graded,
+            "abstained_files": abstained,
+            "ungraded_files": ungraded,
             "duplicates": sum(1 for f in findings if f.rule == "DUPLICATE_NAME"),
-            "errors": sum(1 for f in findings if f.severity == "ERROR"),
+            "errors": errors,
         },
     )
+
+
+def status_word(result: AuditResult) -> str:
+    """PASS / FAIL / NOT_GRADED — and NOT_GRADED is not a shade of PASS.
+
+    A run that reached no entry has verified nothing, and printing PASS over it
+    is how an audit reader comes to believe a document was checked. The exit
+    code cannot carry the distinction: this gate is wired
+    `advisory_program_exit_zero` and its rc is not read as a verdict at all, so
+    the status WORD is the only channel there is.
+    """
+    if not result.passed:
+        return "FAIL"
+    if result.summary.get("graded", 0) == 0:
+        return "NOT_GRADED"
+    return "PASS"
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +461,10 @@ def main():
         for f in result.findings:
             tag = f"[{f.file}] " if f.file else ""
             print(f"[{f.severity}] {f.rule}: {tag}{f.message}")
-        status = "PASS" if result.passed else "FAIL"
+        status = status_word(result)
+        if status == "NOT_GRADED":
+            print("\nNOT_GRADED — no constant entry was reached, so nothing was "
+                  "verified. This is not a PASS.")
         print(f"\n{status} — {result.summary}")
 
     sys.exit(0 if result.passed else 1)

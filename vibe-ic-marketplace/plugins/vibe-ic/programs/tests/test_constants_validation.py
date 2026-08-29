@@ -119,7 +119,19 @@ def test_section_structure_warning(tmp_path):
     result = cv.audit(str(tmp_path))
     assert result.passed is True
     warnings = [f for f in result.findings if f.severity == "WARNING"]
-    assert any(f.rule == "SECTION_STRUCTURE" for f in warnings)
+    # RENAMED RULE, SAME SUBJECT, STRICTER ASSERTION (2026-08-29). The rule was
+    # `SECTION_STRUCTURE`, and its predicate was five section names lifted from
+    # ONE design (tx_phy_constants, rx_phy_constants, crc8_constants,
+    # mac_key_signals, port_naming_convention) — matched by 0 of 2614 real L8
+    # documents. It is now `SLOT_UNRECOGNIZED`, keyed on the recognized
+    # constants SLOTS, which is design-independent. The case, its input and its
+    # `passed is True` outcome are unchanged; what is ADDED is the assertion the
+    # old rule never made and that carries the fix — this document is NOT
+    # GRADED. Pre-fix, the first-list fallback graded `my_custom_section` as if
+    # it were a constants list.
+    assert any(f.rule == "SLOT_UNRECOGNIZED" for f in warnings)
+    assert result.summary["graded"] == 0
+    assert cv.status_word(result) == "NOT_GRADED"
 
 
 # ---------------------------------------------------------------------------
