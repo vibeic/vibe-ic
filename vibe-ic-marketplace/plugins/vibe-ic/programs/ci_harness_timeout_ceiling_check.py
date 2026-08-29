@@ -262,11 +262,11 @@ _DRIVER_COMMAND_RE = {
 # permissive "looks command-like" fallback.
 _LANDING_LANE_SHA256 = {
     "run_pytest":
-        "e0b1e4f3337466370e4a8d992ab48aa59bd08db4183e5149ee5d921c284114ed",
+        "e73a1cf7e3f5071ee73e1847343d154b4032683eea9106b6a46b41bafb4ab816",
     "run_repo_tools_pytest":
-        "fafa41bc22777096f5a60601f755830b5744ef57e67f92fd1391fa730834c8fd",
+        "6988862ad90e1fe5aff44baf6f23b6704f75dae873f2dd497bf8b71efde4989a",
     "run_unselectable_pytest":
-        "70d7764ca0c83843f0b66a4e768c0ca5b874589894f1c688cb2d831b17863e78",
+        "0e0b8290e80cf1b83bd402d176c0ce55afcce14cbf57935c8c6d0a64f93f63ab",
 }
 # Entry-to-last-lane control flow is reviewed as one indivisible contract.
 # Hashing only the three function definitions is insufficient: their exact
@@ -295,7 +295,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "baf6a0c08fc2bc719b6a58eebbdeb8b080dbee75f43bd422b3f76e3ad9e3e1c5"
+    "2f498cdb16203af5e7fb6cca6fb202f226d2e90f334c535b01131c9519022e55"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -514,8 +514,65 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # tree being shipped, never hand-transcribed, and the check then exits 0.
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
+# RE-PINNED 2026-08-30, for TWO landings that each moved this script and
+# re-pinned nothing. FIVE of the six digests over `gatekeeper-land.sh` moved and
+# ALL FIVE are re-pinned here; the sixth, `_SEMANTIC_DRIVER_SHA256`, did not move
+# and is not touched. ENUMERATED FROM THE CODE, not from either diff, and every
+# value below was read back out of this check's own error text over the tree
+# being shipped, never hand-transcribed — three of four re-pinned is the same as
+# none, because this gate is a conjunction.
+#
+# WHAT MOVED (1), 23 lines added by 0878806b3 [v1.12.59] where the script writes
+# and removes the landing stamp:
+#
+#   * in the `FAILED -eq 0` branch, after the stamp is written, and again in the
+#     `else` branch, after the stamp is removed: a call to
+#     `tools/ci/landing_status_publish.py --repo "$ROOT" --failed "$FAILED"`,
+#     each suffixed `|| true`;
+#   * and 21 lines of comment stating why. The stamp lives in `.git/`, which is
+#     untracked, local and invisible to the remote, so the lane refused correctly
+#     49 times and stopped nothing. The publisher feeds a
+#     `required_status_checks` context through the Commit Statuses API, the one
+#     server-side rule that needs no GitHub Actions.
+#
+#   Both insertions sit AFTER `lane_emit_window`'s top-level call site, so this
+#   landing moved the whole-file digest ONLY — not the prefix, not a lane body.
+#
+# WHAT MOVED (2), three tokens added by 1e8d01d72 [v1.12.83] INSIDE all three
+# lane bodies: `python3 -I` became `python3 -I -B` at each isolated trusted
+# entry. `-I` implies `-E` and so discards `PYTHONDONTWRITEBYTECODE` from the
+# environment; only `-B` reaches the child that imports the tests, and without it
+# the tier wrote 500+ `.pyc` into the very tree `attestation_preflight_check` was
+# about to measure. Because those tokens are inside the lane bodies, this landing
+# moved the whole-file digest, the execution prefix AND all three lane digests.
+#   The `-I -B` shape is now REQUIRED by the trusted-entry rule above rather than
+#   merely accommodated, which is a tightening: deleting the flag again is a red
+#   test, not a silent regression.
+#
+# WERE THESE CHANGES REVIEWED UNDER THIS PIN? The pin exists so that the
+# executable which runs is the one that was reviewed, so re-pinning without
+# saying what changed would defeat it. BOTH WERE reviewed at their own landings,
+# and each commit message is the record: 0878806b3 falsified its hunk in both
+# directions (reverted -> 2 failed of 42; restored -> 42 passed, 0 failed), added
+# three tests anchoring each publisher call to the stamp operation it must follow
+# rather than counting occurrences, and stated the honest limit that
+# `status:write` travels with push access. 1e8d01d72 measured 46 passed / 7
+# failed / 46 passed across the four affected modules on a pristine clone. What
+# NEITHER did was turn THIS ratchet, and the cost is measured: ten tests red on
+# main for eighteen versions after the first (5fe1c1839..0a6083db1, every red
+# monotone), thirteen after the second. A permanently-red contract check is a
+# contract check nobody reads — the sentence this file already wrote at v1.11.5
+# and again at v1.11.74, now twice more.
+#
+# NOTHING ABOUT SUPERVISION MOVED in either: same three populations, same driver,
+# same `--stall-after`, same `--aggregate-check`, same no-ceiling contract, same
+# write guard, same junit. The publisher calls are `|| true`, so a status that
+# cannot be published leaves the server-side rule unsatisfied and the PUSH is
+# refused — failing to publish can only ever make a push harder, which is the
+# safe direction rather than a tolerance. `-B` suppresses a write and decides no
+# verdict. Neither can move a landing's answer.
 _LANDING_SCRIPT_SHA256 = (
-    "c8ddd93f6304b8e509a5da1eae3c62e4453db9e44bfa7cb5fb08a43037318dc3"
+    "9e030aae03aef20b3159924d7a7a1edcf8b6ee0db6f0e40d0f9256d910134239"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
@@ -932,16 +989,31 @@ def landing_semantic_progress_contract(repo_root: Path) -> Dict:
             errors.append(
                 f"gatekeeper-land.sh:{lineno} does not require the aggregate "
                 "semantic pytest record")
+        # `-B` IS REQUIRED OF THE ISOLATED ENTRY, NOT MERELY TOLERATED, and it
+        # is a TIGHTENING of this rule rather than room made for a new token.
+        # `python3 -I` implies `-E`, which discards every `PYTHON*` name from
+        # the environment -- so `PYTHONDONTWRITEBYTECODE=1` on the lane, which
+        # this file separately requires of all three populations, never reaches
+        # the interpreter that imports the tests. The variable freezes the
+        # DRIVER (`pytest_per_file_junit.py`, launched without `-I`); only this
+        # flag freezes the child. Supplying just the variable is what shipped,
+        # and it wrote 500+ `.pyc` into $ROOT in seven minutes of one landing --
+        # into the very tree `attestation_preflight_check` was about to measure,
+        # which then correctly refused a checkout that would attest itself
+        # (1e8d01d72, v1.12.83, verified there at 46 passed / 7 failed / 46
+        # passed). Requiring the token means deleting it again is a policy
+        # change with a red test, not a silent reintroduction of that hazard --
+        # the same sentence this file already writes about the variable itself.
         trusted_entry = re.search(
-            r"--\s+python3\s+-I\s+"
+            r"--\s+python3\s+-I\s+-B\s+"
             r"\"\$PROGRAMS/trusted_pytest_entry\.py\"(?=\s)",
             command,
         )
         if trusted_entry is None:
             errors.append(
                 f"gatekeeper-land.sh:{lineno} does not execute pytest through "
-                "the isolated trusted entry at the semantic driver's "
-                "subject-command boundary")
+                "the isolated trusted entry, with bytecode writing disabled "
+                "(`-I -B`), at the semantic driver's subject-command boundary")
         if re.search(r"(?:^|\s)-p\s+no:cacheprovider(?:\s|$)", command) is None:
             errors.append(
                 f"gatekeeper-land.sh:{lineno} does not disable pytest's cache "
@@ -2037,6 +2109,52 @@ def print_elapsed_verdict_advisory(adv: Dict[str, object]) -> None:
               "code; carry the load average beside the bound to clear a row.")
 
 
+#: THE KEYS A SEMANTIC-MODE RECORD ALWAYS CARRIES, so a refusal and a pass are
+#: the same shape and a reader never has to ask which one it is holding.
+_SEMANTIC_RECORD_KEYS = (
+    "inner_elapsed_verdict_advisory", "harness_seconds", "ceiling_seconds",
+    "ceiling_divisor", "harness_bounds", "semantic_lanes", "roots", "files",
+    "bounded_sites", "findings", "unresolved_above_ceiling", "marked_items",
+    "unparseable",
+)
+
+
+def _write_refusal_record(json_out: Optional[str], *, mode: str,
+                          exit_code: int, errors: Sequence[str]) -> None:
+    """Write the machine record for a run that REFUSED to judge.
+
+    THE DEFECT THIS CLOSES (vibe-ic#1215 follow-up, measured at v1.12.82). Every
+    terminal path in the legacy branch writes the record before it decides, and
+    every terminal path in THIS branch except the pass wrote nothing at all. So
+    when the landing contract broke at v1.12.59 — a stale
+    `_LANDING_SCRIPT_SHA256`, stated in one clear sentence on stdout — six of the
+    ten tests that went red never printed that sentence. They opened the record
+    the gate had not written and died on
+    ``FileNotFoundError: .../r.json``. A refusing checker that withholds its own
+    record hides its own reason, and eighteen versions of readers saw a missing
+    file instead of "the digest moved".
+
+    THE RESULT FIELDS ARE `null`, NOT `[]`/`0`, AND THAT IS LOAD-BEARING. This
+    repo already owns the rule as `gate_zero_denominator_refuses_check`: an empty
+    scan is NOT OBSERVED, never PASS. A refusal that published
+    ``"unresolved_above_ceiling": []`` would be read by a consumer as "nothing
+    unresolved" and pass VACUOUSLY — the FileNotFoundError, for all that it names
+    nothing, at least cannot be mistaken for an answer. `null` keeps that
+    property while restoring the sentence: the record exists, `verdict` says
+    REFUSED, `errors` names the cause, and a consumer that reaches for an
+    observation gets nothing it can misread as one.
+    """
+    if not json_out:
+        return
+    record = {"program": "ci_harness_timeout_ceiling_check", "mode": mode,
+              "verdict": "REFUSED", "exit_code": exit_code, "passed": False,
+              "errors": list(errors)}
+    for key in _SEMANTIC_RECORD_KEYS:
+        record[key] = None
+    Path(json_out).write_text(
+        json.dumps(record, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("root", nargs="?", default=None,
@@ -2076,12 +2194,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   "incomplete:")
             for error in semantic["errors"]:
                 print(f"   {error}")
+            _write_refusal_record(args.json_out, mode="semantic_progress",
+                                  exit_code=1, errors=semantic["errors"])
             return 1
         if not roots:
             print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: "
                   "semantic landing supervision is present, but no test tree "
                   f"to scan ({args.tests_root or TESTS_DIR_REL} not found) -- "
                   "0 files examined, which is NOT a pass.")
+            _write_refusal_record(
+                args.json_out, mode="semantic_progress", exit_code=2,
+                errors=[f"no test tree to scan "
+                        f"({args.tests_root or TESTS_DIR_REL} not found); "
+                        f"0 files examined, which is NOT a pass"])
             return 2
         # A deliberately enormous finite comparison value lets the existing
         # AST census count readable blocking sites without emitting non-standard
@@ -2094,6 +2219,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   "be parsed, so the population is incomplete:")
             for path in rep["unparseable"][:20]:
                 print(f"   {path}")
+            _write_refusal_record(
+                args.json_out, mode="semantic_progress", exit_code=2,
+                errors=[f"test source could not be parsed, so the population "
+                        f"is incomplete: {path}"
+                        for path in rep["unparseable"]])
             return 2
         print("ci_harness_timeout_ceiling_check: semantic-progress landing "
               f"harness ({len(semantic['lanes'])} pytest population(s)); "
@@ -2110,6 +2240,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             Path(args.json_out).write_text(json.dumps({
                 "program": "ci_harness_timeout_ceiling_check",
                 "mode": "semantic_progress",
+                "verdict": "JUDGED",
+                "exit_code": 0,
                 "inner_elapsed_verdict_advisory": adv,
                 "harness_seconds": None,
                 "ceiling_seconds": None,

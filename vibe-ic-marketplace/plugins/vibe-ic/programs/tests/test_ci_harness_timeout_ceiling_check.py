@@ -132,6 +132,36 @@ def _gate_over_the_real_tree(argv):
     return W.completed_process(argv, res)
 
 
+def _record(out: Path) -> dict:
+    """Load the gate's machine record, and REPORT A REFUSAL AS ITSELF.
+
+    The gate publishes `verdict: "REFUSED"` with the reason in `errors` when it
+    declines to judge. Every call site below then reaches straight for an
+    observation — `doc["roots"]`, `doc["unresolved_above_ceiling"]` — which on a
+    refusal is `null` on purpose, so what a reader used to get was
+    `TypeError: 'NoneType' object is not subscriptable` and, before the record
+    was written at all, `FileNotFoundError`.
+
+    MEASURED at v1.12.82: a stale `_LANDING_SCRIPT_SHA256` kept ten tests red for
+    eighteen versions, and six of them died on the absent record. The gate said
+    "gatekeeper-land.sh is not the complete reviewed executable (sha256=...,
+    expected=...)" on stdout every single time; nothing carried that sentence to
+    the person reading the failure. This is that carrier.
+
+    It WEAKENS NOTHING: a refusal was already a failure and is still a failure.
+    Only the sentence changes, from the shape of the crash to the cause of it.
+    """
+    assert out.is_file(), (
+        f"the gate wrote no machine record at {out} — every terminal path is "
+        "required to publish one, a refusal included")
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc.get("verdict") != "REFUSED", (
+        "the gate REFUSED to judge and published its reason; this is that "
+        "reason, not a missing file and not a NoneType:\n  "
+        + "\n  ".join(doc.get("errors") or ["(no reason recorded)"]))
+    return doc
+
+
 def _workflow(tmp_path: Path, *commands: str) -> Path:
     """A repo-shaped root with one workflow file carrying `commands`."""
     wf = tmp_path / ".github" / "workflows"
@@ -278,10 +308,22 @@ def _semantic_checkout(tmp_path: Path, *, lane_suffix: str = "",
     (root / "tools").mkdir()
     lanes = _LAND.read_text(encoding="utf-8")
     if lane_suffix:
-        lanes = lanes.replace(
-            '-- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q',
-            '-- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q '
-            + lane_suffix)
+        # THE LITERAL AND THE GUARD, and the guard is why this reads like the
+        # rest of the file. `_mutated` exists because a `str.replace(<literal>)`
+        # that stops matching is a SILENT no-op: the mutation never happens, the
+        # gate answers about an unmutated tree, and the negative control passes
+        # while proving nothing. This fixture was the one mutation path without
+        # that guard, and it drifted exactly as the note above `_call_index`
+        # predicted -- 1e8d01d72 [v1.12.83] changed the lanes to `-I -B`, the
+        # replace below silently matched nothing, and
+        # `test_half_migrated_semantic_lane_is_a_failure` went red because the
+        # gate correctly returned 0 over a tree nobody had half-migrated.
+        anchor = '-- python3 -I -B "$PROGRAMS/trusted_pytest_entry.py" -q'
+        assert anchor in lanes, (
+            "the shipped lane no longer contains the anchor this fixture "
+            f"mutates ({anchor!r}) — the mutation would be a silent no-op and "
+            "every test built on it would pass while proving nothing")
+        lanes = lanes.replace(anchor, anchor + " " + lane_suffix)
     (root / "tools" / "gatekeeper-land.sh").write_text(
         lanes, encoding="utf-8")
     shipped_driver = (_PROGRAMS / "pytest_per_file_junit.py").read_text(
@@ -351,7 +393,7 @@ def test_semantic_landing_harness_has_no_elapsed_ceiling(tmp_path):
         [sys.executable, str(_PROG), str(root), "--json", str(out)],
         capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    doc = json.loads(out.read_text(encoding="utf-8"))
+    doc = _record(out)
     assert doc["mode"] == "semantic_progress"
     assert doc["harness_seconds"] is None
     assert doc["ceiling_seconds"] is None
@@ -365,6 +407,62 @@ def test_half_migrated_semantic_lane_is_a_failure(tmp_path):
                           capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "fixed pytest elapsed-time verdict" in proc.stdout
+
+
+def test_a_refusal_publishes_its_reason_in_the_machine_record(tmp_path):
+    """A refusing gate that writes no record hides its own reason.
+
+    MEASURED at v1.12.82, and this is the defect the test exists for rather than
+    a hypothetical: a stale `_LANDING_SCRIPT_SHA256` put ten tests red on main
+    for eighteen versions, and SIX of them died on
+    `FileNotFoundError: .../r.json` — the record the refusing gate never wrote —
+    instead of on the one-sentence cause the gate had printed on stdout every
+    run. Every terminal path owes a record; the pass path was the only one
+    paying.
+
+    BOTH DIRECTIONS ARE ASSERTED HERE, because a record on a refusal is worth
+    nothing if a consumer can read it as an answer:
+      * the record EXISTS, says REFUSED, and `errors` names the digest;
+      * every observation field is `null`, NOT `[]`/`0`. An empty denominator is
+        NOT OBSERVED, never PASS (`gate_zero_denominator_refuses_check`), and a
+        refusal publishing `"unresolved_above_ceiling": []` would be read as
+        "nothing unresolved" and pass vacuously.
+    """
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    _mutated(land, land.read_text(encoding="utf-8"),
+             land.read_text(encoding="utf-8") + "\n# a byte the pin never saw\n")
+    out = tmp_path / "refused.json"
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(root), "--json", str(out)],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert out.is_file(), (
+        "the gate refused and wrote no record — this is exactly the shape that "
+        f"cost eighteen versions of readers the reason:\n{proc.stdout}")
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["verdict"] == "REFUSED" and doc["passed"] is False, doc
+    assert doc["exit_code"] == 1, doc
+    assert any("not the complete reviewed executable" in e
+               for e in doc["errors"]), doc["errors"]
+    for field in ("roots", "files", "unresolved_above_ceiling", "findings",
+                  "marked_items", "bounded_sites", "semantic_lanes"):
+        assert doc[field] is None, (
+            f"{field} is {doc[field]!r}; a refusal must publish null, never an "
+            "empty observation a consumer can read as an answer")
+
+    # THE CONTROL THAT MUST NOT MOVE: the same tree, unmutated, still judges and
+    # still publishes a JUDGED record. Without this the assertions above are
+    # satisfied by a gate that refuses everything.
+    clean = _semantic_checkout(tmp_path / "clean")
+    ok_out = tmp_path / "judged.json"
+    ok = subprocess.run(
+        [sys.executable, str(_PROG), str(clean), "--json", str(ok_out)],
+        capture_output=True, text=True, timeout=_T)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    ok_doc = json.loads(ok_out.read_text(encoding="utf-8"))
+    assert ok_doc["verdict"] == "JUDGED" and ok_doc["passed"] is True, ok_doc
+    assert ok_doc["roots"] is not None and ok_doc["files"] > 0, ok_doc
 
 
 def test_semantic_driver_must_disable_output_and_total_ceiling(tmp_path):
@@ -833,7 +931,7 @@ def test_each_root_prints_its_own_file_count(tmp_path):
     out = tmp_path / "r.json"
     _gate_over_the_real_tree(
         [sys.executable, str(_PROG), str(root), "--json", str(out)])
-    doc = json.loads(out.read_text())
+    doc = _record(out)
     assert len(doc["roots"]) == 2
     assert sum(r["files"] for r in doc["roots"]) == doc["files"]
     assert all(r["files"] > 0 for r in doc["roots"])
@@ -1212,7 +1310,7 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
     proc = _gate_over_the_real_tree(
         [sys.executable, str(_PROG), str(root), "--json", str(out)])
     assert proc.returncode == 0, proc.stdout[-4000:]
-    doc = json.loads(out.read_text())
+    doc = _record(out)
     assert doc["passed"] is True and doc["findings"] == []
     if doc.get("mode") == "semantic_progress":
         assert doc["harness_seconds"] is None
@@ -1330,7 +1428,7 @@ def test_the_advisory_residual_does_not_grow_unreviewed(tmp_path):
     out = tmp_path / "r.json"
     _gate_over_the_real_tree(
         [sys.executable, str(_PROG), str(root), "--json", str(out)])
-    doc = json.loads(out.read_text())
+    doc = _record(out)
     unresolved = doc["unresolved_above_ceiling"]
     if doc.get("mode") == "semantic_progress":
         assert unresolved == []
@@ -1362,7 +1460,7 @@ def test_a_recorded_advisory_that_stopped_existing_is_deleted(tmp_path):
     out = tmp_path / "r.json"
     _gate_over_the_real_tree(
         [sys.executable, str(_PROG), str(root), "--json", str(out)])
-    doc = json.loads(out.read_text())
+    doc = _record(out)
     if doc.get("mode") == "semantic_progress":
         assert doc["unresolved_above_ceiling"] == []
         return
@@ -1604,7 +1702,7 @@ def _advisory(tmp_path: Path, module_text: str | None):
     proc = subprocess.run(
         [sys.executable, str(_PROG), str(root), "--json", str(out)],
         capture_output=True, text=True, timeout=_T)
-    return proc, json.loads(out.read_text(encoding="utf-8"))
+    return proc, _record(out)
 
 
 def test_the_inner_sweep_runs_and_names_the_offender(tmp_path):
