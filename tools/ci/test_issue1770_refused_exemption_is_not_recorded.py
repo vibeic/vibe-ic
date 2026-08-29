@@ -151,3 +151,66 @@ def test_a_legitimately_bought_exemption_is_still_recorded(tmp_path):
     assert row["exempt_reason"] == "a declared missing prerequisite", row
     assert doc["not_checked_unexempted"] == [], doc
     assert doc["wiring_errors"] == [], doc
+
+
+# --------------------------------------------------------------------------
+# vibe-ic#1789 -- the same row, at the field that says whether a PROCESS ran
+# --------------------------------------------------------------------------
+# The empty-corpus population refusal above EXECUTES a gate: `_dispatch` mode 2
+# runs `_gate_dispatch_population_refusal` and the run writes one process
+# attestation for it. The phase-1 legacy synthetic row for the same empty corpus
+# executes nothing and writes none -- and until now the record could not tell
+# them apart, because they share the label, the `EXPANDED` expansion, `items: 0`
+# and `gates: 1`. `repo_hygiene_parallel._legacy_empty_without_process` read
+# that shape, answered "no process here" for the attested row too, and the
+# parallel run then reported its own gate as an "unassigned gate label in
+# attestation progress" and refused itself (5 of 80 wiring errors on clean main
+# fd8dec469, every run).
+#
+# Arm A pins the flag on the refusal. Arm B is the control and is the reason
+# Arm A cannot be satisfied by writing `true` everywhere.
+def test_the_population_refusal_records_that_it_is_one(tmp_path):
+    """ARM A. The row a process attestation is expected for says so."""
+    _, doc = _run(tmp_path, _EMPTY_POPULATION)
+    row = _population_row(doc)
+
+    assert row["blocking_refusal"] is True, (
+        "the dispatcher ran a process for this row and the record does not "
+        f"say so, leaving the consumer nothing to read: {row!r}")
+    assert row["state"] == "NOT_CHECKED", row
+
+
+def test_an_ordinary_gate_is_not_recorded_as_a_population_refusal(tmp_path):
+    """ARM B -- the control.
+
+    A dispatcher that wrote `blocking_refusal: true` for every gate would pass
+    Arm A and would make the field useless, so the ordinary gate is asserted
+    too. Both spellings of an ordinary gate are covered: a plain `run` and one
+    that legitimately bought an exemption.
+    """
+    _, doc = _run(tmp_path,
+                  'run "an ordinary gate" "$ROOT" true\n'
+                  'uncheckable_until 2999-01-01 "a declared missing prerequisite"\n'
+                  'run_tolerating_uncheckable "a tolerated gate" "$ROOT" '
+                  'bash -c "exit 2"\n')
+    by_label = {g["label"]: g for g in doc["gates"]}
+
+    assert by_label["an ordinary gate"]["blocking_refusal"] is False, by_label
+    assert by_label["a tolerated gate"]["blocking_refusal"] is False, by_label
+    assert doc["wiring_errors"] == [], doc
+
+
+def test_every_gate_row_carries_the_flag(tmp_path):
+    """It is ALWAYS present, so an absent key is never ambiguous.
+
+    A key written only for the refusal would leave a reader unable to tell "not
+    a refusal" from "written by an older script" -- the same reason
+    `exempt_until` and `scope` are unconditional.
+    """
+    _, doc = _run(tmp_path, 'run "an ordinary gate" "$ROOT" true\n'
+                  + _EMPTY_POPULATION)
+
+    assert doc["gates"], doc
+    assert all("blocking_refusal" in g for g in doc["gates"]), doc["gates"]
+    assert all(isinstance(g["blocking_refusal"], bool) for g in doc["gates"]), \
+        doc["gates"]

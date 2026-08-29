@@ -1486,7 +1486,32 @@ def repo_hygiene_gate(repo: Path,
     else:
         parallel = repo / _HYGIENE_PARALLEL_REL
         path = parallel if parallel.is_file() else (repo / _HYGIENE_SCRIPT_REL)
-        command = ([sys.executable, str(path)] if path == parallel
+        # `--stall-grace`, FORWARDED, because there are two watchdogs and only
+        # one of them was told the number (vibe-ic#1789).
+        #
+        # `_HYGIENE_STALL_GRACE_S` calls itself "the shared progress watchdog"
+        # and it was not shared. It reached `run_supervised` below, which
+        # supervises the COORDINATOR; the coordinator supervises each SHARD with
+        # `repo_hygiene_parallel.DEFAULT_STALL_GRACE_S` = 300 s, a number nobody
+        # here chose and nobody there reconciled — a 6x disagreement, already
+        # written down in `tools/gatekeeper-land.sh` on 2026-08-22 and never
+        # closed.
+        #
+        # It matters because of what the inner watchdog accepts as progress. The
+        # shard is launched with `--progress`, so `_owned_process_supervisor`
+        # sets `output_progress=False`: stdout cannot renew the lease and the
+        # ONLY signal is one attestation row per COMPLETED GATE. So the bound is
+        # not "the shard is idle for 300 s", it is "one gate takes longer than
+        # 300 s" — and this repo's own shipped cost profile records single gates
+        # at 646 s (`an argued direction is pinned`) and 2556 s (`gates are
+        # host-independent`). MEASURED on clean main fd8dec469 in the pinned
+        # image: 2 of 8 shards killed at rc 199, and 75 of the 80 "wiring
+        # errors" the run then reported were the fallout of those two kills.
+        #
+        # The shell script has no such flag and must not be given one here; only
+        # the parallel runner is passed the number.
+        command = ([sys.executable, str(path),
+                    "--stall-grace", str(stall_grace)] if path == parallel
                    else ["bash", str(path)])
     if not path.is_file():
         # An honest SKIP that states its denominator: this tree wires no

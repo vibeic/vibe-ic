@@ -995,3 +995,102 @@ def test_pipelined_host_comparison_refuses_a_semantic_mismatch(
     result = H.precomputed_audit(tmp_path, a, b)
     assert result.verdict == "FAIL"
     assert result.findings[0]["kind"] == "HOST_OR_NONDETERMINISTIC_VERDICT"
+
+
+# --------------------------------------------------------------------------
+# vibe-ic#1789 -- the attested population refusal is NOT the phase-1 legacy row
+# --------------------------------------------------------------------------
+# `repo_hygiene_gates.sh` wires the routed-DEF corpus with
+# `GATE_DISPATCH_ATTEST_POPULATION=1` at its ONE call site, so on an empty
+# corpus the dispatcher takes `_dispatch` mode 2: it RUNS a process and writes
+# one attestation. That row and the phase-1 legacy synthetic row share the
+# label, the `EXPANDED` expansion, `items: 0`, `gates: 1`, the corpus ordinals
+# and the absent exemption -- by design, because the trusted transition judge
+# compares the base arm's row literally. `blocking_refusal` is the only field
+# that separates them, and the shipped dispatcher now writes it.
+#
+# MEASURED on clean main fd8dec469 in the pinned image, both arms, every run:
+# `unassigned gate label in attestation progress: corpus "published cells
+# carrying a routed DEF" is EMPTY` -- the run reporting its own gate as one it
+# never planned, and refusing itself over it.
+def _attested_population_record(with_attestation=True):
+    """The record the real dispatcher writes for an EMPTY attested corpus."""
+    reference, a, b, attest = fixture()
+    label = P._LEGACY_ROUTED_EMPTY_LABEL
+    row = gate(label, "LISTED")
+    row.update({
+        "corpus": P._LEGACY_ROUTED_CORPUS,
+        "corpus_item": 0,
+        "corpus_items": 0,
+        "scope": None,
+        "blocking_refusal": True,
+    })
+    reference["gates"].insert(1, row)
+    reference["corpora"] = [{
+        "name": P._LEGACY_ROUTED_CORPUS,
+        "items": 0,
+        "gates": 1,
+        "expansion": "EXPANDED",
+    }]
+    owned = dict(row)
+    owned["state"] = "NOT_CHECKED"
+    other = dict(row)
+    other["state"] = "OTHER_SHARD"
+    a["gates"].insert(1, owned)
+    b["gates"].insert(1, other)
+    a["corpora"] = b["corpora"] = reference["corpora"]
+    if with_attestation:
+        attest.insert(1, process_attestation(label, "", 2, ["true"],
+                                             state="NOT_CHECKED"))
+    return reference, a, b, attest, label
+
+
+def test_an_attested_population_refusal_is_not_waived_as_processless():
+    """ARM A. It ran a process, so the aggregate must expect one."""
+    reference, a, b, attest, label = _attested_population_record()
+
+    assert not P._legacy_empty_without_process(reference, label), (
+        "the waiver named for the phase-1 bootstrap row also covered the "
+        "phase-2 attested refusal, so the run reports its own gate as an "
+        "unassigned label")
+
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+    assert problems == [], problems
+    assert doc["not_checked_unexempted"] == [label]
+    assert P._summary_rc(doc) == 2, (
+        "an empty denominator is still not a pass")
+
+
+def test_a_missing_attestation_for_that_row_is_still_refused():
+    """ARM A's other half: expecting the attestation has to mean something."""
+    reference, a, b, attest, label = _attested_population_record(
+        with_attestation=False)
+    problems = []
+
+    P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                    attest, 12, problems)
+
+    assert any(label in problem and "process attestation" in problem
+               for problem in problems), problems
+
+
+def test_the_phase1_legacy_row_is_still_waived():
+    """ARM B -- the control, and the backward-compatibility one.
+
+    A record written before the dispatcher published `blocking_refusal` has no
+    such key; it must keep answering exactly as it did, or every base arm read
+    out of an older `git archive` snapshot turns red at once.
+    """
+    reference, a, b, attest, label = _attested_population_record()
+    for row in (reference["gates"][1], a["gates"][1], b["gates"][1]):
+        del row["blocking_refusal"]
+
+    assert P._legacy_empty_without_process(reference, label)
+
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest[:1] + attest[2:], 12, problems)
+    assert problems == [], problems
+    assert doc["not_checked_unexempted"] == [label]

@@ -138,7 +138,22 @@ def _legacy_empty_without_process(reference: Dict[str, Any],
             and gate.get("corpus_items") == 0
             and gate.get("exempt_until") is None
             and gate.get("exempt_reason") is None
-            and gate.get("scope") is None)
+            and gate.get("scope") is None
+            # vibe-ic#1789 -- THE FIELD THAT ACTUALLY SEPARATES THE TWO ROWS.
+            # Everything above was the shape they SHARE. `blocking_refusal` is
+            # true only for `_dispatch` mode 2, the dispatcher-owned population
+            # refusal, which RUNS a process and writes an attestation; the
+            # phase-1 legacy synthetic row runs nothing and is false (or, on a
+            # record written before `_gate_dispatch.sh` published the key,
+            # absent -- which reads falsy and keeps every older base arm
+            # answering exactly as it did).
+            #
+            # Without it this function waived the attested row too, so a run
+            # over an EMPTY routed-DEF corpus reported its own gate as an
+            # "unassigned gate label in attestation progress" and refused
+            # itself. MEASURED on clean main fd8dec469: 5 of 80 wiring errors,
+            # every run, independently of load.
+            and not gate.get("blocking_refusal"))
 
 
 def _reap_completed_reaper_records() -> None:

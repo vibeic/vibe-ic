@@ -302,3 +302,105 @@ def test_a_missing_hygiene_script_is_still_reported_before_the_corpus(
     res = GR.repo_hygiene_gate(tmp_path / "no-such-tree")
     assert res.rc == -1, res.summary
     assert "not present under" in res.summary, res.summary
+
+
+# --------------------------------------------------------------------------
+# 4. vibe-ic#1789 -- the declared stall grace must reach the runner that shards
+# --------------------------------------------------------------------------
+# `_HYGIENE_STALL_GRACE_S` documents itself as "the shared progress watchdog"
+# and was shared with nobody: it governed the supervisor this module wraps
+# around the COORDINATOR, while the coordinator supervised each SHARD with
+# `repo_hygiene_parallel.DEFAULT_STALL_GRACE_S` = 300 s. Two watchdogs, 6x
+# apart, one of them chosen here and never sent.
+#
+# It is not a tuning question. The shard is launched with `--progress`, so
+# `_owned_process_supervisor` sets `output_progress=False` and the ONLY thing
+# that renews the lease is one attestation row per COMPLETED GATE -- so the
+# bound is "no single gate may take longer than the grace", and this repo's own
+# `hygiene_gate_profile.json` records single gates at 646 s and 2556 s.
+# MEASURED on clean main fd8dec469 in the pinned image: 2 of 8 shards killed at
+# rc 199, 75 of the 80 reported "wiring errors" were that kill's fallout, and
+# the tier's answer was "the set certifies NOTHING" about the HOST, not about
+# the tree.
+def _witness_parallel(root: Path, witness: Path) -> Path:
+    """A stand-in for the parallel runner, at the path the gate prefers."""
+    programs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    programs.mkdir(parents=True, exist_ok=True)
+    runner = programs / "repo_hygiene_parallel.py"
+    runner.write_text(textwrap.dedent(f"""\
+        import json, sys
+        argv = sys.argv[1:]
+        with open({str(witness)!r}, "w", encoding="utf-8") as fh:
+            json.dump(argv, fh)
+        out = argv[argv.index("--summary-json") + 1]
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump({{"declared": 1, "seconds": 0, "wiring_errors": [],
+                        "gates": [{{"label": "w", "state": "PASS"}}]}}, fh)
+        """), encoding="utf-8")
+    return runner
+
+
+def test_the_declared_stall_grace_reaches_the_sharding_runner(
+        tmp_path, monkeypatch):
+    """ARM A. The number this module declares is the number the shards get."""
+    corpus = _corpus_checkout(tmp_path / "corpus_sg")
+    root = tmp_path / "repo_sg"
+    _witness_script(root, tmp_path / "seen_sg.json")
+    argv_seen = tmp_path / "argv_sg.json"
+    _witness_parallel(root, argv_seen)
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv(GR._CORPUS_ENV, str(corpus))
+
+    res = GR.repo_hygiene_gate(root)
+
+    assert argv_seen.exists(), (
+        f"the parallel runner was not the one invoked: {res.summary}")
+    argv = json.loads(argv_seen.read_text())
+    assert "--stall-grace" in argv, (
+        "the coordinator was supervised with a declared grace and then "
+        f"supervised its own shards with a different, unstated one: {argv}")
+    assert argv[argv.index("--stall-grace") + 1] == str(
+        GR._HYGIENE_STALL_GRACE_S), argv
+
+
+def test_a_caller_supplied_stall_grace_is_the_one_forwarded(
+        tmp_path, monkeypatch):
+    """ARM B -- the control.
+
+    Arm A is satisfiable by hard-coding the literal 1800 at the call site,
+    which would leave a caller's own grace governing one watchdog and not the
+    other -- the same defect wearing a different number.
+    """
+    corpus = _corpus_checkout(tmp_path / "corpus_sg2")
+    root = tmp_path / "repo_sg2"
+    _witness_script(root, tmp_path / "seen_sg2.json")
+    argv_seen = tmp_path / "argv_sg2.json"
+    _witness_parallel(root, argv_seen)
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv(GR._CORPUS_ENV, str(corpus))
+
+    GR.repo_hygiene_gate(root, stall_grace=1234)
+
+    argv = json.loads(argv_seen.read_text())
+    assert argv[argv.index("--stall-grace") + 1] == "1234", argv
+
+
+def test_the_shell_fallback_is_not_given_a_flag_it_has_no_parser_for(
+        tmp_path, monkeypatch):
+    """ARM C -- the other control.
+
+    `tools/ci/repo_hygiene_gates.sh` accepts no `--stall-grace`. Forwarding it
+    there would make every tree without the parallel runner refuse on an
+    unknown argument, which is a new failure bought with the fix for an old one.
+    """
+    corpus = _corpus_checkout(tmp_path / "corpus_sg3")
+    root = tmp_path / "repo_sg3"
+    witness = tmp_path / "seen_sg3.json"
+    _witness_script(root, witness)
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv(GR._CORPUS_ENV, str(corpus))
+
+    res = GR.repo_hygiene_gate(root)
+
+    assert witness.exists(), res.summary
+    assert res.rc == 0, res.summary
