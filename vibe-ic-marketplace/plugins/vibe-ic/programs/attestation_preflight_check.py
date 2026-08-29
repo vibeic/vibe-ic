@@ -159,6 +159,59 @@ def untracked(repo: Path, roots: List[Path]) -> List[str]:
             if line.startswith("??")]
 
 
+def remedy_for(*, residues: List[str], drift: Optional[List[str]],
+               untracked_paths: List[str], env_value: Optional[str],
+               ) -> List[str]:
+    """The remedy for the causes that FIRED, and for no other cause.
+
+    THE DEFECT THIS REPLACES. The refusal used to end with one fixed sentence
+    naming all three remedies at once — "Clean the residue, commit or stash the
+    tracked edits, and export PYTHONDONTWRITEBYTECODE=1" — whatever had actually
+    gone wrong. An operator who had ALREADY done all three, on a `git clean
+    -xdfq` tree with `dirty=0` and the variable exported, was sent to do them
+    again. Two of the three were about a tree that was already clean, and the
+    third was about a variable that was already set, so the sentence carried no
+    information about this checkout at all and cost an hour.
+
+    THE RESIDUE-WITH-THE-FLAG-SET CASE IS ITS OWN DIAGNOSIS, not a repetition of
+    the generic one. Bytecode under a declared root while `PYTHONDONTWRITEBYTECODE`
+    IS set cannot be the operator's omission: a child ignored the environment.
+    The known way for that to happen in this repo is `python3 -I`, which implies
+    `-E` and therefore discards every `PYTHON*` variable. MEASURED in the pinned
+    image with the variable exported::
+
+        python3        -> sys.dont_write_bytecode True
+        python3 -I     -> sys.dont_write_bytecode False
+        python3 -I -B  -> sys.dont_write_bytecode True
+
+    So that case names `-B` on the isolated child, which is where the fix is,
+    instead of naming the export the operator has already done.
+    """
+    out: List[str] = []
+    if residues:
+        if env_value:
+            out.append(
+                f"residue exists even though {ENV_FLAG} IS set, so a CHILD "
+                f"ignored the environment rather than the operator omitting it: "
+                f"`python3 -I` implies `-E` and discards every PYTHON* variable, "
+                f"so pass the `-B` FLAG to any isolated child that imports this "
+                f"tree. Removing the listed paths without that fixes one run only")
+        else:
+            out.append("remove the residue paths listed above")
+    if drift is None:
+        out.append("make `git status` answerable for --repo; an unmeasurable "
+                   "checkout is not a clean one")
+    elif drift:
+        out.append("commit or stash the tracked edits listed above")
+    if untracked_paths:
+        out.append("remove or commit the untracked paths listed above "
+                   "(--refuse-untracked was requested)")
+    if not env_value:
+        out.append(f"export {ENV_FLAG}=1 so the children this run spawns "
+                   f"inherit it")
+    return out
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = _usage.GateArgumentParser(
         prog=TOOL,
@@ -275,9 +328,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  [PREFLIGHT] {p}")
         for d in detail:
             print(d)
+        for line in remedy_for(residues=residues, drift=drift,
+                               untracked_paths=extra_untracked,
+                               env_value=env_value):
+            print(f"  [REMEDY] {line}")
         print(f"[FAIL] {TOOL}: this checkout would make the attestation measure "
-              f"itself [{head}]. Nothing expensive has run. Clean the residue, "
-              f"commit or stash the tracked edits, and export {ENV_FLAG}=1.")
+              f"itself [{head}]. Nothing expensive has run. The REMEDY line(s) "
+              f"above name what actually fired; nothing else needs doing.")
         return _vac.RC_FAIL
 
     print(f"[PASS] {TOOL}: attestable — no residue, no tracked drift, "

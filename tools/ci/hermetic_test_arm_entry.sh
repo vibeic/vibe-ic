@@ -21,7 +21,7 @@ fi
 PROGRAMS="/runtime/vibe-ic-marketplace/plugins/vibe-ic/programs"
 cd /subject/vibe-ic-marketplace/plugins/vibe-ic \
   || { echo '[NORECORD] hermetic subject has no plugin root' >&2; exit 2; }
-exec python3 -I -c \
+exec python3 -I -B -c \
   'import pathlib,runpy,sys; p=pathlib.Path(sys.argv[1]); sys.argv=sys.argv[1:]; sys.path.insert(0,str(p.parent)); runpy.run_path(str(p),run_name="__main__")' \
   "$PROGRAMS/pytest_per_file_junit.py" \
   --selection /input/selection \
@@ -31,6 +31,6 @@ exec python3 -I -c \
   --aggregate-only \
   --aggregate-stall-after "$grace" \
   --hermetic-progress \
-  -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" \
+  -- python3 -I -B "$PROGRAMS/trusted_pytest_entry.py" \
   -o tmp_path_retention_policy=failed \
   -q -p no:cacheprovider

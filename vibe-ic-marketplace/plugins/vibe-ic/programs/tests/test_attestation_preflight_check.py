@@ -219,3 +219,74 @@ def test_reverting_the_residue_walk_lets_the_stray_bytecode_pass(tmp_path):
     assert r.returncode == RC_PASS, (
         "the mutant still refused, so the refusal does not come from the "
         "residue walk:\n" + r.stdout + r.stderr)
+
+
+# ── the remedy names what FIRED, and nothing else ────────────────────────────
+#
+# MEASURED on a pristine clone of main in the pinned image: the refusal ended
+# with one fixed sentence — "Clean the residue, commit or stash the tracked
+# edits, and export PYTHONDONTWRITEBYTECODE=1" — on a `git clean -xdfq` tree
+# with dirty=0 and the variable exported. All three remedies were already done.
+# The sentence carried no information about that checkout and cost an hour.
+
+def test_the_remedy_for_a_missing_flag_does_not_send_the_operator_to_clean(
+        tmp_path):
+    """A clean tree whose only fault is the unset variable must not be told to
+    clean residue or stash edits it does not have."""
+    repo = _repo(tmp_path)
+    r = _run("--repo", repo, repo / "src",
+             env_extra={"PYTHONDONTWRITEBYTECODE": ""})
+    assert r.returncode == RC_FAIL, r.stdout + r.stderr
+    remedies = [line for line in r.stdout.splitlines() if "[REMEDY]" in line]
+    assert len(remedies) == 1, "one cause fired; one remedy is owed:\n" + r.stdout
+    assert "export PYTHONDONTWRITEBYTECODE=1" in remedies[0], remedies[0]
+    assert "residue" not in remedies[0].lower(), remedies[0]
+    assert "stash" not in remedies[0].lower(), remedies[0]
+
+
+def test_residue_while_the_flag_is_set_names_the_isolated_child_not_the_export(
+        tmp_path):
+    """Bytecode under a declared root while the variable IS set cannot be the
+    operator's omission -- a CHILD ignored the environment. `python3 -I` implies
+    `-E`, which discards every `PYTHON*` name, so the remedy owed is `-B` on
+    that child and NOT an export that is already in place."""
+    repo = _repo(tmp_path)
+    cache = repo / "src" / "__pycache__"
+    cache.mkdir()
+    (cache / "a.cpython-312.pyc").write_bytes(b"\x00")
+    r = _run("--repo", repo, repo / "src")
+    assert r.returncode == RC_FAIL, r.stdout + r.stderr
+    remedies = "\n".join(line for line in r.stdout.splitlines()
+                         if "[REMEDY]" in line)
+    assert "-B" in remedies, remedies
+    assert "-I" in remedies, remedies
+    assert "export PYTHONDONTWRITEBYTECODE=1" not in remedies, (
+        "the operator has already exported it; naming it again is the "
+        "misdirection this test exists for:\n" + remedies)
+
+
+def test_a_genuinely_self_attesting_checkout_is_still_refused(tmp_path):
+    """THE CONTROL THAT MUST NOT MOVE. The remedy got more specific; the
+    REFUSAL did not get weaker. Residue and tracked drift together, with the
+    flag set, still refuse with the exact code."""
+    repo = _repo(tmp_path)
+    cache = repo / "src" / "__pycache__"
+    cache.mkdir()
+    (cache / "a.cpython-312.pyc").write_bytes(b"\x00")
+    (repo / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
+    r = _run("--repo", repo, repo / "src")
+    assert r.returncode == RC_FAIL, r.stdout + r.stderr
+    assert "would make the attestation measure itself" in r.stdout
+    remedies = "\n".join(line for line in r.stdout.splitlines()
+                         if "[REMEDY]" in line)
+    assert "-B" in remedies, remedies
+    assert "commit or stash" in remedies, remedies
+
+
+def test_a_clean_checkout_with_the_flag_set_is_still_a_pass(tmp_path):
+    """The other half of the control: the change must not turn a PASS into a
+    refusal. Exact code, never truthiness."""
+    repo = _repo(tmp_path)
+    r = _run("--repo", repo, repo / "src")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    assert "[REMEDY]" not in r.stdout

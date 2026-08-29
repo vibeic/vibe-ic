@@ -534,18 +534,40 @@ def test_every_lane_pytest_invocation_freezes_the_bytecode_stimulus(land_text):
     A neighbouring lane writing `__pycache__` into $ROOT changes that gate's
     stimulus WHILE IT RUNS, and losing that race does not fail louder --
     `run_tolerating_uncheckable` downgrades it to NOT CHECKED (rc 2,
-    non-fatal), which is a check made weaker by parallelism. `python3 -I` does
-    not imply `-B`, so the token has to be written.
+    non-fatal), which is a check made weaker by parallelism.
+
+    THE ENVIRONMENT VARIABLE IS NOT THE TOKEN THAT REACHES THE WRITER.
+    This assertion used to require only `PYTHONDONTWRITEBYTECODE=1` in the
+    stage body, and every stage carried it, and every stage still wrote
+    bytecode into $ROOT. `python3 -I` implies `-E`, and `-E` DISCARDS every
+    `PYTHON*` variable -- so the one form the env var cannot reach is exactly
+    the child that imports the tests. MEASURED in the pinned image with
+    `PYTHONDONTWRITEBYTECODE=1` exported::
+
+        python3        -> sys.dont_write_bytecode True
+        python3 -I     -> sys.dont_write_bytecode False   <- the writer
+        python3 -I -B  -> sys.dont_write_bytecode True
+
+    So both halves are required: the env var for the driver (no `-I`), and the
+    `-B` FLAG for the isolated entry the driver spawns.
     """
     missing = []
+    unisolated = []
     for name in ("run_pytest", "run_repo_tools_pytest",
                  "run_unselectable_pytest"):
         body = _extract(name, land_text)
         if "PYTHONDONTWRITEBYTECODE=1" not in body:
             missing.append(name)
+        if "python3 -I -B" not in body:
+            unisolated.append(name)
     assert missing == [], (
         "these lane stages can write bytecode into the checkout while "
         f"`gates are host-independent` is reading it: {missing}")
+    assert unisolated == [], (
+        "these lane stages spawn the trusted entry under `python3 -I`, which "
+        "implies `-E` and therefore DISCARDS PYTHONDONTWRITEBYTECODE; without "
+        "the `-B` flag on the command line the child writes bytecode into "
+        f"$ROOT no matter what the environment says: {unisolated}")
 
 
 #: Every form in which the lander emits a unit. `report` is in the list because
