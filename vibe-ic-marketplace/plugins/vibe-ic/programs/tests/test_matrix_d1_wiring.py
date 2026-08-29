@@ -5,10 +5,23 @@ say something that looks like a gate"; it is **would anything real parse and
 execute that gate at run time**.
 
 ====================================================================
-THE THREE CHANNELS, AND HOW EACH IS MEASURED *LIVE*
+THE PRECONDITION, AND THE THREE CHANNELS
 ====================================================================
-A step's gate is reachable if at least one of these holds. Nothing here reads
-`.audit_63x8.json`; `cells_for(1)` is used only to enumerate which cells exist.
+Wiring is two questions, not one, and (a)/(b)/(c) only answer the second.
+
+(d) **the step reaches the evaluator** — the precondition, asked FIRST and of
+    every step. Channels (a)/(b)/(c) all observe from inside the walk: (a)
+    hands `_evaluate_gate` the gate dict itself, so the caller is supplied by
+    this file and can never be wrong. Delete the seam that hands step 21 to
+    the executor and all three stay green while the step vanishes from every
+    real run. This channel imports
+    `every_declared_step_reaches_the_evaluator_check` — the program that owns
+    that predicate — and calls its `audit()`. Its logic is NOT reproduced
+    here; two copies drift.
+
+A step's gate is then reachable if at least one of (a)/(b)/(c) holds. Nothing
+here reads `.audit_63x8.json`; `cells_for(1)` is used only to enumerate which
+cells exist.
 
 (a) **flow yaml gate clause** — measured by RUNNING THE REAL EXECUTOR.
     `flow_compliance_check._evaluate_gate` is the function that actually walks
@@ -109,6 +122,16 @@ Each mutation was applied to the GUARDED THING, confirmed red, then reverted.
      `glob("*_protocol_synth.py")`)
      -> `test_probe_channel_c_resolves_dynamic_fstring_dispatch`, i.e. the
      scanner is not allowed to go quiet and be read as clean.
+
+CHANNEL (d) MUTATION PROOF (2026-08-29)
+  7. `flow_compliance_check.py`, in `main()` after `steps = flow.get("steps",
+     [])`, insert `steps = [s for s in steps if str(s.get("id")) != "21"]`
+     -> BEFORE channel (d): `86 passed`. The step disappears from the tally,
+     the per-step listing and the blocker list, and nothing in this module
+     notices, because every channel is handed its gate by the test.
+     -> AFTER: `test_d1_gate_is_wired_in[step21]` fails on the channel-(d)
+     assertion, naming step 21 as declared and never handed to the evaluator.
+     Blast radius of channel (d) on the clean tree: 0 of 68 cells.
 """
 from __future__ import annotations
 
@@ -1062,6 +1085,146 @@ def channels_for(step_id) -> Channels:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Channel (d) — did the step REACH the evaluator at all?
+#
+# Channels (a)/(b)/(c) all observe from INSIDE: (a) hands `_evaluate_gate`
+# the gate dict itself, so the caller is supplied by this file and can never
+# be wrong. Deleting the seam that hands step 21 to the executor on a real
+# project therefore leaves every one of them green (measured: `steps = [s for
+# s in steps if str(s.get("id")) != "21"]` after `steps = flow.get("steps",
+# [])` in flow_compliance_check.main -> 86 passed).
+#
+# `every_declared_step_reaches_the_evaluator_check` owns exactly that
+# predicate. It is IMPORTED and its `audit()` is called; nothing about how it
+# decides is re-implemented here, because two copies drift.
+# ──────────────────────────────────────────────────────────────────────
+REACH_CHECK = "every_declared_step_reaches_the_evaluator_check"
+
+
+@lru_cache(maxsize=1)
+def reach_module():
+    """The program that owns the "declared step reaches the tally" predicate."""
+    if str(PROGRAMS_DIR) not in sys.path:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+    mod = importlib.import_module(REACH_CHECK)
+    assert Path(mod.__file__).resolve().parent == PROGRAMS_DIR.resolve(), (
+        f"channel (d) imported {mod.__file__}, which is not the shipped "
+        f"{PROGRAMS_DIR}/{REACH_CHECK}.py"
+    )
+    return mod
+
+
+@lru_cache(maxsize=1)
+def _plugin_rel_prefix() -> Path:
+    """Where the reach program expects a plugin to sit under its `--root`.
+
+    Derived as the longest common leading path of its OWN two anchors, so a
+    plugin that moves inside the repo needs no edit here.
+    """
+    mod = reach_module()
+    flow_parts = Path(mod.FLOW_REL).parts
+    check_parts = Path(mod.CHECK_REL).parts
+    common: List[str] = []
+    for a, b in zip(flow_parts, check_parts):
+        if a != b:
+            break
+        common.append(a)
+    if not common:
+        raise RuntimeError(
+            f"{REACH_CHECK}.FLOW_REL ({mod.FLOW_REL}) and .CHECK_REL "
+            f"({mod.CHECK_REL}) share no leading path, so the plugin this "
+            f"module measures cannot be presented to it"
+        )
+    return Path(*common)
+
+
+@contextlib.contextmanager
+def subject_root():
+    """Present THIS plugin tree to the reach program as its `--root`.
+
+    The subject is not "whatever repository encloses the cwd": it is the
+    plugin the cells above are parametrized from. Everywhere the matrix runs
+    for real that plugin is nested under the repo-relative prefix the program
+    names, but the mutation ledger replays a cell inside a `cp -al` mirror of
+    the PLUGIN alone (`matrix_mutation_ledger._replay_plugin_tree`), where no
+    such ancestor exists. Walking up for the prefix therefore made every cell
+    in the mirror die on the harness — measured, and a defect in this wiring
+    rather than in the flow.
+
+    So the prefix is BUILT: a scratch directory holding one symlink at the
+    program's own expected location, pointing at `F.PLUGIN_ROOT`. Both anchors
+    are then proved to resolve to the very flow yaml and the very evaluator
+    this module measures everywhere else, which is the check the walk was
+    there for.
+    """
+    mod = reach_module()
+    with tempfile.TemporaryDirectory(prefix="d1-reach-root-") as tmp:
+        root = Path(tmp)
+        link = root / _plugin_rel_prefix()
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(F.PLUGIN_ROOT, target_is_directory=True)
+        flow = root / mod.FLOW_REL
+        checker = root / mod.CHECK_REL
+        if flow.resolve() != F.FLOW_YAML.resolve():
+            raise RuntimeError(
+                f"{REACH_CHECK}.FLOW_REL resolves to {flow.resolve()}, not the "
+                f"flow yaml this module measures ({F.FLOW_YAML})"
+            )
+        if checker.resolve() != Path(compliance_module().__file__).resolve():
+            raise RuntimeError(
+                f"{REACH_CHECK}.CHECK_REL resolves to {checker.resolve()}, not "
+                f"the evaluator this module runs "
+                f"({compliance_module().__file__})"
+            )
+        yield root
+
+
+@dataclass(frozen=True)
+class ReachAudit:
+    """What `every_declared_step_reaches_the_evaluator_check.audit` reported."""
+
+    declared: int = 0
+    evaluated: int = 0
+    unreached: Tuple[str, ...] = ()
+    uninvited: Tuple[str, ...] = ()
+    harness_error: Optional[str] = None
+
+
+@lru_cache(maxsize=1)
+def reach_audit() -> ReachAudit:
+    """Run the owning program's predicate ONCE for the whole module.
+
+    An audit that cannot run is an ERROR carried to every cell, never a quiet
+    empty result: `unreached=()` from an audit that never ran is
+    indistinguishable from a clean tree, and that equivalence is the disease
+    this campaign exists to remove.
+    """
+    try:
+        with subject_root() as root:
+            report = reach_module().audit(root)
+    except Exception as exc:                      # noqa: BLE001 - reported, not swallowed
+        return ReachAudit(harness_error=f"{type(exc).__name__}: {exc}")
+    declared = int(report.get("declared", 0))
+    evaluated = int(report.get("evaluated", 0))
+    if declared <= 0 or evaluated <= 0:
+        return ReachAudit(
+            declared=declared,
+            evaluated=evaluated,
+            harness_error=(
+                f"the reach audit measured declared={declared} "
+                f"evaluated={evaluated} under {F.PLUGIN_ROOT}; a census of "
+                f"nothing reports no unreached step and would read as clean"
+            ),
+        )
+    return ReachAudit(
+        declared=declared,
+        evaluated=evaluated,
+        unreached=tuple(str(s) for s in report.get("unreached") or ()),
+        uninvited=tuple(str(s) for s in report.get("uninvited") or ()),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Parametrization
 # ──────────────────────────────────────────────────────────────────────
 def _params():
@@ -1077,6 +1240,27 @@ def test_d1_gate_is_wired_in(cell):
     """The step's gate must be reachable through >= 1 live channel."""
     sid = cell.step_id
     ch = channels_for(sid)
+
+    # ── Channel (d): does THIS step reach the evaluator at all? ───────
+    # Asked before anything else, and asked of EVERY step including the
+    # umbrella: a gate whose step never arrives is not "weakly wired", it is
+    # unreachable, and the three channels below cannot see that because they
+    # are handed the gate directly. Verdict imported from the program that
+    # owns it, never re-derived here.
+    reach = reach_audit()
+    assert reach.harness_error is None, (
+        f"step {sid}: {REACH_CHECK}.audit could not measure "
+        f"{F.PLUGIN_ROOT}: {reach.harness_error}"
+    )
+    assert F.normalize_id(sid) not in reach.unreached, (
+        f"step {sid}: declared by the flow and NEVER handed to "
+        f"{compliance_module().__name__} — of {reach.declared} declared "
+        f"step(s) only {reach.evaluated} reached the tally "
+        f"(unreached: {list(reach.unreached)}). A step nobody evaluates "
+        f"contributes no failure: it drops out of the tally, out of the "
+        f"per-step listing and out of the blocker list, and the flow reads "
+        f"BETTER for having lost it. Its gate wiring below is moot"
+    )
 
     # ── The gate-less step: P0, the umbrella itself ───────────────────
     if not F.has_gate(sid):
@@ -1855,6 +2039,45 @@ def test_probe_umbrella_step_id_is_a_declared_flow_step():
     assert not F.has_gate(sid), (
         f"step {sid!r} now declares a gate of its own; the umbrella branch in "
         f"test_d1_gate_is_wired_in no longer applies and must be re-derived"
+    )
+
+
+def test_probe_channel_d_measured_this_worktree_and_the_whole_flow():
+    """The reach audit must be the shipped program, aimed at THIS tree.
+
+    Three ways channel (d) could go quiet and be read as clean: import a
+    stale copy, judge some other checkout, or judge a flow smaller than the
+    one every other cell is drawn from. All three end in `unreached=()`.
+    """
+    reach = reach_audit()
+    assert reach.harness_error is None, reach.harness_error
+    mod = reach_module()
+    assert Path(mod.__file__).resolve() == (PROGRAMS_DIR / f"{REACH_CHECK}.py").resolve()
+    assert callable(getattr(mod, "audit", None)), (
+        f"{REACH_CHECK} exposes no callable audit(); channel (d) has no "
+        f"predicate to import and would have to re-implement one"
+    )
+    assert reach.declared == len(F.step_ids()), (
+        f"the reach audit counted {reach.declared} declared step(s) but the "
+        f"flow this module parametrizes over declares {len(F.step_ids())}; "
+        f"channel (d) is judging a different flow and its silence means "
+        f"nothing"
+    )
+
+
+def test_probe_the_evaluator_tally_invents_no_steps():
+    """The mirrored half of the predicate, which owns no cell.
+
+    An id the evaluator reports that the flow does not declare cannot redden
+    a cell — there is no cell for it. It is the same defect seen from the
+    other side (a tally out of step with the flow) and is asserted here so it
+    is not silently unowned.
+    """
+    reach = reach_audit()
+    assert reach.harness_error is None, reach.harness_error
+    assert not reach.uninvited, (
+        f"{compliance_module().__name__} reported {len(reach.uninvited)} step "
+        f"id(s) the flow does not declare: {list(reach.uninvited)}"
     )
 
 
