@@ -395,5 +395,274 @@
         "note": "One of the seventeen per-layer 'Entry B' doc-gen names on step D1. None ever shipped. The per-layer chain was unified into the single DOC->JSON track that phase1_doc_one_shot_runner executes; D1 now declares the one phase-1 skill that DOES ship (phase1). The two shipping verification-tier reviewers for this stage, phase1-output-verify and phase1-completeness-deep-review, are on-pass reviewers and belong in a stage-level on_pass_review: block per v1.12.87, not in the step's skills: list."
       }
     }
+  },
+  "stage_axis": {
+    "_comment": "WHERE IN THE FLOW EACH SKILL APPLIES. The axis is the flow's own `stage:` field -- the eight values declared in flow/phase1_phase2_phase3.yaml -- plus two values that are NOT flow stages and must never be added to the flow's `stages[]`: `stage_all` and `off_flow`. NO FOURTH MAPPING: a skill NAMED BY A STEP (in that step's `skills:` or its stage's `on_pass_review:`) inherits that step's stage by DERIVATION and MUST NOT be listed here -- listing it would be the second declaration that flow_stage_membership_single_declaration_check exists to prevent. This block declares ONLY skills no step names. Enforced by programs/skill_stage_membership_check.py.",
+    "stage_all_is_a_claim_not_a_bucket": "`stage_all` asserts a skill is worth invoking at EVERY stage -- stage1 AND stage3 AND stage5_manufacturing AND stage_analog. Multi-stage is NOT all-stage: a skill that applies at four of eight is listed at those four. A skill that cannot be placed is UNDECIDED and must be reported as such, never parked in stage_all.",
+    "off_flow_is_also_a_claim": "`off_flow` asserts the skill's SUBJECT is the plugin, the repository, the CI or the benchmark programme -- not a design passing through the flow. It is falsifiable by reading what the skill reads and writes: if it operates on a design's artefacts it is not off_flow. This value exists because the 41 did NOT split cleanly into stage/stage_all, and forcing a repo-maintenance loop into stage_all would have made that value meaningless -- the same reasoning that produced `unbuilt_skills`.",
+    "stages": {
+      "spec-review": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "why": "Reviews the NL spec for ambiguity BEFORE it enters spec-to-rtl -- it reads a spec and no RTL exists yet."
+      },
+      "spec-validator": {
+        "stages": [
+          "stage_phase1",
+          "stage1"
+        ],
+        "why": "Cross-checks Datasheet / Application Note / Spec for consistency, which is phase-1 document work -- but its section 4 is 'spec_conformance_check.py -- Spec<->RTL contract gate (once RTL exists)' and runs `--rtl-dir phase2/stage1/rtl --top <module>`, and its procedure step 4 is 'Once RTL exists, run spec_conformance_check ... to prove the RTL conforms to the spec's ports + reset + latency contract'. That half reads stage1's artefact, so the skill is genuinely multi-stage. Found by spot-checking stage_phase1 against what each skill READS rather than what its name suggests."
+      },
+      "phase1-output-verify": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "why": "Its own description: runs 'After phase1_one_shot_runner emits 13 L*.json'. On-pass reviewer for this stage."
+      },
+      "phase1-completeness-deep-review": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "why": "Its own description: runs 'After phase1_one_shot_runner emits L*.json' and checks every input fact landed in an L-doc."
+      },
+      "phase1-coverage-loop": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "why": "Measures input->L1-L27 token completeness; its subject artefact is the L-doc set."
+      },
+      "checkpoint-gate": {
+        "stages": [
+          "stage_phase1",
+          "stage2"
+        ],
+        "why": "Triggers at the Phase 1->2 and Phase 2->3 transitions, i.e. it gates the EXIT of stage_phase1 and of stage2. Two named transitions -- multi-stage, deliberately NOT stage_all."
+      },
+      "architecture-explore": {
+        "stages": [
+          "stage1"
+        ],
+        "why": "Micro-architecture trade-offs 'before committing to RTL' -- it feeds the stage that authors RTL."
+      },
+      "ppa-predict": {
+        "stages": [
+          "stage1"
+        ],
+        "why": "Explicitly 'EARLY, PRE-SYNTHESIS ESTIMATE ... before any tool has run', so it sits before stage2 synthesis."
+      },
+      "catalog-glue-author": {
+        "stages": [
+          "stage1"
+        ],
+        "why": "Invoked when design_one_shot_runner.step_rtl_gen waives; it writes into phase2/stage1/rtl/."
+      },
+      "hls-c2rtl": {
+        "stages": [
+          "stage1"
+        ],
+        "why": "C/C++/SystemC -> synthesizable RTL: an alternative front end to the RTL-authoring stage."
+      },
+      "rtl-repair": {
+        "stages": [
+          "stage1",
+          "stage2"
+        ],
+        "why": "Fixes lint violations (stage1) and synthesis errors (stage2); its inputs are RTL and tool logs from both."
+      },
+      "compliance-gate-spot-check": {
+        "stages": [
+          "stage1",
+          "stage2",
+          "stage3",
+          "stage4"
+        ],
+        "why": "Spot-checks flow_compliance_check gate verdicts for gameable patterns. Its documented subject is the phase-2/phase-3 gates ('77+ structural-RTL gates'), so it spans four stages -- multi-stage, NOT stage_all: it makes no claim on stage_analog or stage5_manufacturing."
+      },
+      "design-for-eco": {
+        "stages": [
+          "stage3"
+        ],
+        "why": "Spare-cell insertion happens 'after placement, before CTS' -- inside the physical stage."
+      },
+      "ppa-recover": {
+        "stages": [
+          "stage3"
+        ],
+        "why": "Bounded way out when a PPA closure loop has stalled or oscillated; the closure loop it names is PnR."
+      },
+      "eco-plan": {
+        "stages": [
+          "stage3",
+          "stage4"
+        ],
+        "why": "A late-stage change to an ALREADY-placed-and-routed netlist; it cannot apply before that netlist exists."
+      },
+      "phase3-backend-verify": {
+        "stages": [
+          "stage3",
+          "stage4"
+        ],
+        "why": "Its own description: runs after 'synth netlist + DEF + GDS + STA + DRC reports' exist. On-pass reviewer for the backend stages."
+      },
+      "ppa-diagnose": {
+        "stages": [
+          "stage2",
+          "stage3",
+          "stage4"
+        ],
+        "why": "Explains why a PPA number is where it is, starting from the deterministic diagnosis; those numbers first exist at synthesis and are re-measured post-layout."
+      },
+      "fpga-hps-bridge": {
+        "stages": [
+          "stage1",
+          "stage4"
+        ],
+        "why": "FPGA verification plumbing; the flow's two FPGA steps are step 6 (stage1) and step 39 (stage4)."
+      },
+      "hw-debug-loop": {
+        "stages": [
+          "stage4"
+        ],
+        "why": "Invoked after the SOF is burned and real-silicon connect_test FAILs -- it needs a programmed board."
+      },
+      "scope-pattern-attestation": {
+        "stages": [
+          "stage4",
+          "stage5_manufacturing"
+        ],
+        "why": "Probes REAL SILICON IO over SCPI; applies once hardware exists, i.e. on-board sign-off and post-silicon."
+      },
+      "yield-diagnostic": {
+        "stages": [
+          "stage5_manufacturing"
+        ],
+        "why": "Reads ATE / wafer-sort data and wafer maps -- artefacts that exist only after fabrication and test."
+      },
+      "analog-sizing": {
+        "stages": [
+          "stage_analog"
+        ],
+        "why": "Transistor sizing against analog specs; step A4 of the analog track."
+      },
+      "analog-hw-testbench-gen": {
+        "stages": [
+          "stage_analog"
+        ],
+        "why": "FPGA RTL for hardware-in-the-loop ANALOG testing; part of the analog HIL track."
+      },
+      "analog-hw-measure": {
+        "stages": [
+          "stage_analog"
+        ],
+        "why": "Scope capture + FPGA ADC read for analog blocks; the analog HIL measurement step."
+      },
+      "analog-output-verify": {
+        "stages": [
+          "stage_analog"
+        ],
+        "why": "Its own description: runs 'After analog_one_shot_runner emits A1..A9 outputs'. On-pass reviewer for the analog track."
+      }
+    },
+    "stage_all": {
+      "benchmark-enhancement-capture": {
+        "stages": [
+          "stage_all"
+        ],
+        "why": "Its own description makes the all-stage claim explicitly: 'Applies to EVERY step in the Vibe-IC flow: Phase 1 NL ingestion, Phase 2 ..., Phase 3 ..., Analog A1-A9, Mixed-Signal M1-M4, MCP-EDA tools, and benchmark harness itself.' A recovery worth absorbing can happen at any stage."
+      },
+      "community-backlog-submit": {
+        "stages": [
+          "stage_all"
+        ],
+        "why": "'Invoke at any point during Phase 1/2/3 when you discover a gap.' The trigger is discovering a plugin gap WHILE RUNNING A DESIGN, which can occur at every stage -- unlike the maintenance loops below, which are not invoked from inside a design run at all."
+      }
+    },
+    "off_flow": {
+      "core-agent-loop": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Polls the repo for open issues and ships fixes; invoked as a cron on the REPO, never from inside a design run."
+      },
+      "gatekeeper-loop": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Gates and lands PRs on main. Its subject is the repository."
+      },
+      "field-agent-loop": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Drives plugin quality by running benchmarks and filing issues; its subject is the plugin."
+      },
+      "fork-gatekeeper-loop": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Maintains the forked EDA/PDK repos and the composed image. Its subject is other repositories."
+      },
+      "loop2converge": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Converges a benchmark subject by fixing the plugin layer that owns each FAIL; its output is a PR to the plugin."
+      },
+      "regression-issue-fix": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Fixes Phase-1 picker/extractor REGRESSIONS in the plugin's own code, not in a design."
+      },
+      "regression-manage": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "CI / nightly regression orchestration and flaky-test triage. Its subject is the test infrastructure."
+      },
+      "flow-change-acceptance": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "The acceptance standard for changing THE FLOW ITSELF -- a gate, a step, a verdict rule. It is read by someone editing the plugin."
+      },
+      "layer-contract-doctrine": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Read BEFORE authoring or revising an L-layer emitter, schema field, or gate. It governs plugin authoring, not a design's progress."
+      },
+      "full-test-audit": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "The plugin's own four-part health check (suite + D1/D2/D3). Its subject is the plugin tree."
+      },
+      "open-benchmark-methodology": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Doctrine for how a benchmark NUMBER must be produced. It constrains measurement methodology, not a point in a chip's flow."
+      },
+      "benchmark-verify": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Produces BENCHMARK_VERIFICATION_REPORT.md for a benchmark IC. Owner ruling 2026-08-30: this is a BENCHMARK artefact -- it belongs to the benchmark programme, not to a stage of the flow."
+      },
+      "ppa-benchmark": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Sets up a PPA comparison between ARMS (tool versions, flow configurations, PDKs). Its subject is a comparison between runs, not a stage within one."
+      },
+      "ppa-distill": {
+        "stages": [
+          "off_flow"
+        ],
+        "why": "Turns a PPA recovery into a reusable case and drafts the deterministic rule it should become -- a plugin-improvement capture."
+      }
+    }
   }
 }
