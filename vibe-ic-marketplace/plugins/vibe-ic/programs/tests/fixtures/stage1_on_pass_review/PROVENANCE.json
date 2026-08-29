@@ -1,0 +1,52 @@
+{
+  "_comment": "Verbatim copies of the files stage_on_pass_review reads, from two published benchmark-data cells. Nothing here is authored: each sha256 below is the source file's. The corpus-bound test re-reads the live cells when the corpus is resolvable; this fixture is what makes the control run on a checkout that has no corpus.",
+  "corpus_repo": "https://github.com/vibeic/benchmark-data",
+  "trees": {
+    "accept_spm": {
+      "cell": "ic/spm/v1.9.96_gf180mcuD",
+      "files": {
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 10008,
+          "sha256": "16ba0da5b2b4306bd49a12ea53a9f509ca4a2771870654809be5b46cac5ab6e9"
+        },
+        "phase2/stage1/rtl/chip_top.v": {
+          "bytes": 2162,
+          "sha256": "80e9750e1b80071edd8ffadc78d0ccaad0fa980e1321e875a73b1654b3b180bd"
+        },
+        "reports/phase2/cdc/crossing.json": {
+          "bytes": 433,
+          "sha256": "0ba5f11f1db65d9f60314be2d0966e01ab5877a37433e1de3f9f962101e86413"
+        }
+      }
+    },
+    "reject_caravel": {
+      "cell": "ic/caravel_user_project",
+      "files": {
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 25440,
+          "sha256": "93bf6c56e3986c289c2ab2d3d208cb78d684e979331f1aa4bc39aa8aca818682"
+        },
+        "phase2/stage1/rtl/defines.v": {
+          "bytes": 2235,
+          "sha256": "d4396effd5abd7fd2fa5cf6a9e9c2f0e737feed6d654046365cc8ca4ceb2d02d"
+        },
+        "phase2/stage1/rtl/user_defines.v": {
+          "bytes": 4211,
+          "sha256": "ab6e82ca9b069050b77ac0f74c5c9574f6a0eb4a09f96245490e89bd0f6ce6f7"
+        },
+        "phase2/stage1/rtl/user_proj_example.v": {
+          "bytes": 4287,
+          "sha256": "af1666e007dca72d851932f0a88370897302287088fa03d8687d10c607fa5e9d"
+        },
+        "phase2/stage1/rtl/user_project_wrapper.v": {
+          "bytes": 3427,
+          "sha256": "db2d0bd579f1a7db73f46d838ed2af1e88aa3d73585a7c23db6e4203762081ca"
+        },
+        "reports/phase2/cdc/crossing.json": {
+          "bytes": 505,
+          "sha256": "cef4393d20a6d458f1cae41bcc6129d812adc88c51cb91fec32c7bdd2e5dd85c"
+        }
+      }
+    }
+  }
+}

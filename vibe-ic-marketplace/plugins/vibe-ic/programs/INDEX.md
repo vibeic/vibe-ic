@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1226
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1226)
+- **Total programs (excluding helpers / shims):** 1227
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1227)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1217 |
+| `any` | 1218 |
 
 ## Alphabetical listing
 
@@ -1114,6 +1114,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `stage2_compliance` | any | — | Stage 2 (Synthesis + DFT) interim gate. |
 | `stage3_compliance` | any | — | Stage 3 (Physical Design + Sign-off) interim gate. |
 | `stage4_compliance` | any | — | Stage 4 (Output + Validation) interim gate. |
+| `stage_on_pass_review` | any | — | the ON-PASS review harness: after a stage PASSES, read the INTENT and the ARTEFACT and say whether they contradict each other. |
 | `staged_rtl_closure_preflight` | any | — | ORGANIC #586. |
 | `staged_rtl_reused_ip_manifest_emit` | any | — | ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path. |
 | `step_force` | any | — | re-run ONE step without re-running the phase. vibe-ic#1097 S6. |
@@ -1298,7 +1299,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1217 programs)
+### `any` (1218 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2381,6 +2382,7 @@ _(no programs in this group)_
 - `stage2_compliance` — Stage 2 (Synthesis + DFT) interim gate.
 - `stage3_compliance` — Stage 3 (Physical Design + Sign-off) interim gate.
 - `stage4_compliance` — Stage 4 (Output + Validation) interim gate.
+- `stage_on_pass_review` — the ON-PASS review harness: after a stage PASSES, read the INTENT and the ARTEFACT and say whether they contradict each other.
 - `staged_rtl_closure_preflight` — ORGANIC #586.
 - `staged_rtl_reused_ip_manifest_emit` — ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path.
 - `step_force` — re-run ONE step without re-running the phase. vibe-ic#1097 S6.

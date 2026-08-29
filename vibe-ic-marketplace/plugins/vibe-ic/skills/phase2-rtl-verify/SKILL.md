@@ -23,6 +23,55 @@ The aggregator runs `rtl_precheck_gate`, `spec_conformance_check`, and
 `rtl_hygiene_lint`, AND checks RTL/SOF/TB artifact presence. **Refuse
 to claim Phase 2 PASS without the aggregator's `verdict: PASS`.**
 
+## How you are invoked: the stage-1 ON-PASS review
+
+This skill is the AI half of `stage1.on_pass_review` in
+`flow/phase1_phase2_phase3.yaml` — the flow's ONE declaration of it. Until that
+block existed, this skill (and the other seven in the `verification` tier)
+appeared ZERO times in the flow: every `skills:` array there hangs on a FAILURE
+trigger, so the AI was wired as an author and as a repairer and never as a
+reviewer of a program that PASSED.
+
+Order, and it is not negotiable:
+
+1. **The program runs first.** `design_one_shot_runner` produces the stage-1
+   artefact; the stage's gates pass.
+2. **The deterministic on-pass rung runs next.**
+
+   ```bash
+   python3 programs/stage_on_pass_review.py <project> --stage stage1 \
+       --compliance reports/audit/flow_compliance.json \
+       --json reports/phase2/gates/stage1_on_pass_review.json
+   ```
+
+   It reads the INTENT (`phase1/generated_docs/L9_INTEGRATION_SPEC.json`) and
+   the ARTEFACT (`phase2/stage1/rtl/`, `reports/phase2/`). Exit 0 = ACCEPT,
+   1 = REJECT with evidence, 2 = NOT CHECKED. On a rejection it WRITES the
+   run's own regression under `reports/phase2/gates/on_pass_review/` — a test
+   that FAILS on this run and passes when it is repaired.
+3. **You take what is left.** Everything the program ACCEPTED or reported as
+   `NOT CHECKED` is your input, not your conclusion. Read its `--json` record
+   first: `rules[]` says which contract was decided deterministically, so you
+   do not re-derive it and do not contradict it without new evidence.
+
+Three rules bind you here:
+
+* **DO NOT RE-DERIVE THE ARTEFACT.** You review the RTL the runner produced.
+  Regenerating it, or re-running a tool to compare, replaces the program
+  instead of reviewing it — and your regenerated copy is not the artefact that
+  will be taped out.
+* **§4.05.** Read the design INPUT — the L-docs and the prompt. Never the
+  oracle, the harness or the golden. The program refuses a declared intent path
+  under any of those; you are held to the same line without a program to
+  enforce it.
+* **A REJECTION CARRIES EVIDENCE OR IT IS NOT A REJECTION.** Name the intent
+  you read (file + field + value), the artefact fact you read (file + what is
+  there), the contradiction in one sentence, and an executable test that FAILS
+  TODAY on this run and passes when repaired — written into the run tree beside
+  the program's, not into the plugin's suite. No test, no rejection. Whether
+  your finding BLOCKS is the flow's decision (`verdict:` in that same block),
+  never yours.
+
 <!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
 
 > **Case-study notation.** This skill cites the <chip-class> / <half-duplex-tester> /
