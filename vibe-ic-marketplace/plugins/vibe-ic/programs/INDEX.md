@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1227
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1227)
+- **Total programs (excluding helpers / shims):** 1228
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1228)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1218 |
+| `any` | 1219 |
 
 ## Alphabetical listing
 
@@ -1057,6 +1057,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sizing_adjust_policy` | any | — | the fixed failure-mode → parameter-delta lookup table from analog-sizing-loop (rule 5). |
 | `sizing_history_emit` | any | — | fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6). |
 | `skill_doc_section_present_check` | any | — | ORGANIC #724 / #725 |
+| `skill_stage_membership_check` | any | — | every shipped skill says WHERE IN THE FLOW it applies. |
 | `slave_tx_no_device_break_check` | any | Wave 25 | In a half-duplex single-wire request-response protocol (AID class — |
 | `slot_pad_budget_check` | any | — | does this design's interface FIT the purchased slot? |
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper. |
@@ -1299,7 +1300,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1218 programs)
+### `any` (1219 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2325,6 +2326,7 @@ _(no programs in this group)_
 - `sizing_adjust_policy` — the fixed failure-mode → parameter-delta lookup table from analog-sizing-loop (rule 5).
 - `sizing_history_emit` — fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6).
 - `skill_doc_section_present_check` — ORGANIC #724 / #725
+- `skill_stage_membership_check` — every shipped skill says WHERE IN THE FLOW it applies.
 - `slave_tx_no_device_break_check` — In a half-duplex single-wire request-response protocol (AID class —  _[Wave 25]_
 - `slot_pad_budget_check` — does this design's interface FIT the purchased slot?
 - `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper.  _[v0.1.91]_
