@@ -211,6 +211,73 @@ def _reference(schema):
     return cls(schema)
 
 
+def _differential_availability():
+    """(shipped schemas a reference can apply, NOT_MEASURED reason).
+
+    Exactly one of the two is non-empty, and that is the whole point. The
+    differential arm has three states, not two:
+
+      MEASURED      a reference engine exists here and applied N schemas.
+      NOT_MEASURED  no `jsonschema` at all -- nothing to differentiate
+                    against. This says NOTHING about the bundled engine.
+      NOT_MEASURED  `jsonschema` is here but too old to supply a validator
+                    class for any shipped schema's declared draft -- still
+                    nothing to compare against, but a different remedy, so a
+                    different sentence.
+
+    MEASURED: with the library removed from this host, the control below used
+    to be the single RED in this module (`1 failed, 76 passed, 150 skipped`)
+    and it read as a defect in the bundled engine. It was a host that had no
+    reference. A missing capability is NOT_MEASURED.
+    """
+    try:
+        import jsonschema                               # noqa: WPS433
+    except ImportError:
+        return [], ("NOT_MEASURED: `jsonschema` is not installed on this host, "
+                    "so there is no independent engine to differentiate the "
+                    "bundled one against. This says nothing about the bundled "
+                    "engine -- it is a capability this host does not have. "
+                    + SV.PREFERRED["install"])
+    paired = [n for n in SHIPPED if _reference(_schema(n)) is not None]
+    if paired:
+        return paired, ""
+    try:
+        import importlib.metadata as _md                 # noqa: WPS433
+        version = _md.version("jsonschema")
+    except Exception:                                    # pragma: no cover
+        version = "an unreadable version"
+    return [], (f"NOT_MEASURED: `jsonschema` {version} is installed but "
+                f"supplies no validator class for any shipped schema's "
+                f"declared draft, so there is still nothing to compare "
+                f"against. " + SV.PREFERRED["install"])
+
+
+def _disagreements(names, corpus, ref_for=_reference):
+    """Run both engines over every (schema, document) pair a reference can
+    apply, and return (pairs actually compared, the cases where they differ).
+
+    `ref_for` is injectable for one reason only: it lets the two branches of
+    this arm -- a real disagreement, and no reference at all -- be proven on
+    EVERY host rather than only on one that happens to have the right library.
+    """
+    compared, differ = 0, []
+    for name in names:
+        schema = _schema(name)
+        ref = ref_for(schema)
+        if ref is None:
+            continue
+        for label, doc in corpus:
+            compared += 1
+            theirs = bool(list(ref.iter_errors(doc)))
+            ours = bool(list(B.iter_errors(schema, doc)))
+            if ours != theirs:
+                differ.append(
+                    f"{name} / {label}: bundled says "
+                    f"{'INVALID' if ours else 'valid'}, reference says "
+                    f"{'INVALID' if theirs else 'valid'}")
+    return compared, differ
+
+
 CORPUS = [
     ("empty object", {}),
     ("null", None),
@@ -251,7 +318,9 @@ def test_the_two_engines_agree_case_by_case(schema_name, label, doc):
     schema = _schema(schema_name)
     ref = _reference(schema)
     if ref is None:
-        pytest.skip(f"no reference validator for {schema_name} on this host")
+        pytest.skip(f"NOT_MEASURED: no reference validator for {schema_name} "
+                    f"on this host -- this case was not compared, which is "
+                    f"not the same as the two engines agreeing")
     assert B.unsupported(schema) == []
     theirs = bool(list(ref.iter_errors(doc)))
     ours = bool(list(B.iter_errors(schema, doc)))
@@ -262,12 +331,109 @@ def test_the_two_engines_agree_case_by_case(schema_name, label, doc):
 
 
 def test_at_least_one_pair_was_compared():
-    """The denominator of the differential arm. If every case skipped, the arm
-    above is a row of green ticks over nothing."""
-    compared = [n for n in SHIPPED if _reference(_schema(n)) is not None]
+    """The denominator of the differential arm -- and the difference between
+    "the two engines agreed" and "nothing was compared".
+
+    This used to assert the denominator and nothing else, so on a host with no
+    reference library it went RED: 150 cases skipped and the control failed,
+    which reads in a sweep report as a defect in the bundled engine. It was a
+    host without `jsonschema`. It now states WHICH of the three states it is
+    in, and NOT_MEASURED is not a defect.
+
+    It is not an unconditional skip, which would be the other failure mode:
+      * the skip fires only on a live probe of the reference library, never
+        unconditionally, and `_differential_availability` names the remedy;
+      * where a reference DOES exist this control runs the entire differential
+        itself and goes RED on any disagreement -- it is a measurement, not a
+        counter;
+      * and both branches are proven on every host below, with an injected
+        reference, so neither can rot unobserved.
+    """
+    paired, not_measured = _differential_availability()
+    if not_measured:
+        pytest.skip(not_measured)
+    compared, differ = _disagreements(paired, CORPUS)
     assert compared, (
-        "no shipped schema could be cross-checked against a reference engine "
-        "on this host; the differential arm measured nothing")
+        "a reference engine is available for "
+        f"{paired} yet not one pair ran; the differential arm measured nothing")
+    assert not differ, (
+        f"{compared} pairs compared, {len(differ)} disagreed: " + "; ".join(differ))
+
+
+# ---------------------------------------------------------------------------
+# both branches of the arm, proven on EVERY host
+#
+# The differential arm can only run where a reference library exists. These
+# tests inject the reference instead, so the arm's two outcomes -- a real
+# disagreement, and nothing to compare -- are pinned even on a bare host. That
+# is what keeps the conditional skip above from being a silenced test.
+# ---------------------------------------------------------------------------
+class _AlwaysValid:
+    """A reference that accepts every document."""
+
+    def iter_errors(self, _doc):
+        return iter(())
+
+
+def test_a_real_disagreement_is_RED_not_a_skip():
+    """The RED branch. Against a reference that calls everything valid, every
+    document the bundled engine rejects is a disagreement, and the control's
+    machinery must NAME each one rather than fall silent."""
+    compared, differ = _disagreements(
+        SHIPPED, CORPUS, ref_for=lambda _schema: _AlwaysValid())
+    assert compared == len(SHIPPED) * len(CORPUS), compared
+    assert differ, ("a reference that accepts everything must disagree with "
+                    "the bundled engine somewhere in this corpus, or the "
+                    "corpus has stopped discriminating")
+    assert all("bundled says INVALID, reference says valid" in d
+               for d in differ), differ
+
+
+def test_no_reference_at_all_is_ZERO_COMPARED_not_a_silent_agreement():
+    """The NOT_MEASURED branch. With no reference for any schema the arm must
+    report nothing compared and nothing disagreeing -- never an empty
+    disagreement list that a reader could mistake for agreement."""
+    compared, differ = _disagreements(
+        SHIPPED, CORPUS, ref_for=lambda _schema: None)
+    assert compared == 0
+    assert differ == []
+
+
+def test_the_probe_says_NOT_MEASURED_when_the_library_is_absent():
+    """And the sentence a reader gets must say which state it is and how to
+    leave it."""
+    class _Blocked:
+        def find_spec(self, name, path=None, target=None):
+            if name.split(".")[0] == "jsonschema":
+                raise ImportError("blocked for this test")
+            return None
+
+    sys.meta_path.insert(0, _Blocked())
+    real = sys.modules.pop("jsonschema", None)
+    try:
+        paired, why = _differential_availability()
+    finally:
+        sys.meta_path.pop(0)
+        if real is not None:
+            sys.modules["jsonschema"] = real
+    assert paired == []
+    assert why.startswith("NOT_MEASURED:"), why
+    assert "says nothing about the bundled engine" in why
+    assert SV.PREFERRED["install"] in why
+
+
+def test_the_probe_says_MEASURED_where_a_reference_really_exists():
+    """The other direction, and the guard on the skip: the probe must not
+    report NOT_MEASURED on a host that does have a usable reference."""
+    try:
+        import jsonschema                               # noqa: F401,WPS433
+    except ImportError:
+        pytest.skip("NOT_MEASURED: no `jsonschema` on this host to probe with")
+    paired, why = _differential_availability()
+    if paired:
+        assert why == "", why
+    else:
+        assert "supplies no validator class" in why, why
 
 
 # ---------------------------------------------------------------------------

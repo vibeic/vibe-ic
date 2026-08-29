@@ -17,6 +17,52 @@ import benchmark_dispatch as bd                         # noqa: E402
 import benchmark_io_adapter as bio                      # noqa: E402
 
 
+def _simulator_absent() -> str:
+    """Why this host cannot EXECUTE a verification challenge, or "" if it can.
+
+    MEASURED, one host, one tree, one commit: with `iverilog` and `vvp` on PATH
+    this module is 19 passed from four different working directories; with the
+    same tree and the same directories but those two binaries off PATH it is
+    `4 failed, 15 passed`, the first of them an IndexError on an empty repair
+    worklist. The verdict is invariant in CWD and flips entirely on the
+    capability -- so four tests that drive a REAL simulation were reporting a
+    host capability gap as four behavioural defects.
+
+    They now declare the dependency. This is NOT an unconditional skip: the
+    condition is a live probe of the same two binaries the production code
+    looks for, `test_the_skip_condition_is_the_production_question` pins it to
+    that, and every branch those four tests cover is ALSO covered
+    host-independently by the stubbed NOT_MEASURED tests at the end of this
+    module -- so nothing here can go quiet on a bare host.
+    """
+    import shutil                                       # noqa: PLC0415
+    missing = [tool for tool in ("iverilog", "vvp") if shutil.which(tool) is None]
+    if not missing:
+        return ""
+    return ("NOT_MEASURED: this host has no " + " and no ".join(missing)
+            + "; a verification challenge cannot be executed here, so this "
+              "test would be measuring the host, not the code")
+
+
+_NEEDS_SIMULATOR = pytest.mark.skipif(
+    bool(_simulator_absent()),
+    reason=_simulator_absent() or "iverilog and vvp are both present")
+
+
+def _no_simulator(monkeypatch) -> None:
+    """Make this process look like a host with no simulator, precisely.
+
+    Only `iverilog` and `vvp` disappear; every other `which` answer is the real
+    one, so nothing else in the flow changes shape underneath the assertion.
+    """
+    import shutil                                       # noqa: PLC0415
+    real = shutil.which
+    monkeypatch.setattr(
+        bd.shutil, "which",
+        lambda name, *a, **k: (None if name in ("iverilog", "vvp")
+                               else real(name, *a, **k)))
+
+
 ROUTING = {
     "nature": "spec_generation",
     "route": "SPEC_TO_RTL",
@@ -232,6 +278,7 @@ def test_supplied_rtl_accepts_only_explicit_step2_reentry(tmp_path):
     assert supplied["supplied_rtl"] is True
 
 
+@_NEEDS_SIMULATOR
 def test_ai_repair_reenters_at_validation_without_regeneration(
         tmp_path, monkeypatch):
     run = tmp_path / "run"
@@ -310,6 +357,7 @@ def test_ai_repair_reenters_at_validation_without_regeneration(
         "test-repair-model"
 
 
+@_NEEDS_SIMULATOR
 def test_proven_ai_edit_cannot_reenter_without_repair_author_record(
         tmp_path, monkeypatch):
     run = tmp_path / "run"
@@ -374,6 +422,7 @@ def test_ai_cannot_edit_program_candidate_before_proving_a_finding(
     assert not Path(task["response_path"]).exists()
 
 
+@_NEEDS_SIMULATOR
 def test_repair_must_pass_the_same_immutable_challenge(tmp_path):
     run = tmp_path / "run"
     (run / "responses").mkdir(parents=True)
@@ -505,6 +554,7 @@ def test_detailed_ai_interpretation_can_substitute_for_a_literal_excerpt(tmp_pat
     assert bd._validate_ai_review(task)["status"] == "ACCEPTED"
 
 
+@_NEEDS_SIMULATOR
 def test_semantic_disagreement_requires_executable_proof_before_repair(tmp_path):
     run = tmp_path / "run"
     (run / "responses").mkdir(parents=True)
@@ -565,3 +615,209 @@ def test_verification_test_cannot_read_external_oracle_files(tmp_path):
     verdict = bd._validate_ai_review(task)
     assert verdict["status"] == "REJECTED"
     assert any("self-contained" in reason for reason in verdict["reasons"])
+
+
+# ---------------------------------------------------------------------------
+# a MISSING CAPABILITY is NOT_MEASURED, never a finding about the subject
+#
+# Everything below runs identically on every host: the simulator is removed by
+# a `which` stub, never by the host's luck. That is what stops the four
+# `_NEEDS_SIMULATOR` tests above from being a hole -- the branch they cannot
+# reach on a bare host is reached here instead.
+# ---------------------------------------------------------------------------
+def test_the_skip_condition_is_the_production_question(tmp_path, monkeypatch):
+    """The probe that gates the four tests must ask the production question.
+
+    If it ever drifted -- probing a different binary, or nothing at all -- the
+    four tests could skip on a host that can in fact run them, which is the
+    silenced-test failure mode. So it is pinned to the observable behaviour of
+    `_run_verification_challenge` in both directions.
+    """
+    _, task, _ = _task(tmp_path)
+    challenge = _write_direct_assignment_challenge(task)
+    candidate = task["candidate_snapshot"]
+
+    _no_simulator(monkeypatch)
+    assert _simulator_absent(), "the probe must see the stubbed-away simulator"
+    assert bd._run_verification_challenge(candidate, challenge)["status"] == \
+        bd._CHALLENGE_UNAVAILABLE
+
+    monkeypatch.undo()
+    if not _simulator_absent():
+        assert bd._run_verification_challenge(candidate, challenge)["status"] \
+            != bd._CHALLENGE_UNAVAILABLE, (
+            "the probe says this host has a simulator but the production code "
+            "still reports UNAVAILABLE -- the skip condition is asking the "
+            "wrong question")
+
+
+def test_an_unrunnable_challenge_is_NOT_MEASURED_not_a_rejected_review(
+        tmp_path, monkeypatch):
+    """THE BUG. A proven-FAIL review on a host with no simulator was coming
+    back REJECTED with "AI finding is not proven" -- an accusation assembled
+    out of a missing binary. Nothing about this candidate was established, and
+    the verdict must say so in those words."""
+    _, task, _ = _task(tmp_path)
+    _write_review(task, _proven_fail_review(task))
+    _no_simulator(monkeypatch)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == bd._NOT_MEASURED
+    assert verdict["reasons"] == [], (
+        "an unrunnable proof is not a finding against the review", verdict)
+    assert not any("not proven" in r for r in verdict["decision_reasons"]), \
+        verdict["decision_reasons"]
+    assert any("could not be RUN on this host" in r
+               for r in verdict["unmeasurable"]), verdict["unmeasurable"]
+    assert any("iverilog" in r for r in verdict["unmeasurable"]), \
+        "the reader must be told WHICH capability is missing"
+
+
+def test_an_unrunnable_INHERITED_challenge_is_also_NOT_MEASURED(
+        tmp_path, monkeypatch):
+    """The other UNAVAILABLE site. Folding it into `!= PASS` charged a repair
+    with failing a test nobody ran."""
+    _, task, _ = _task(tmp_path)
+    task["verification_challenges"] = [{
+        **_write_direct_assignment_challenge(task),
+        "id": task["id"], "prompt_sha256": task["prompt_sha256"],
+    }]
+    _write_review(task, _valid_review(task))
+    _no_simulator(monkeypatch)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == bd._NOT_MEASURED
+    assert not any("does not pass" in r for r in verdict["decision_reasons"])
+    assert any("inherited" in r for r in verdict["unmeasurable"]), \
+        verdict["unmeasurable"]
+
+
+def test_a_real_disagreement_is_still_RED_with_the_simulator_stubbed(
+        tmp_path, monkeypatch):
+    """The other branch, and the reason NOT_MEASURED is not a way out.
+
+    When the challenge DOES run and the candidate DOES fail it, the verdict is
+    REPAIR_REQUIRED and a repair row is written -- exactly as before. The fix
+    carved out UNAVAILABLE and nothing else.
+    """
+    _, task, _ = _task(tmp_path)
+    _write_review(task, _proven_fail_review(task))
+    monkeypatch.setattr(bd, "_run_verification_challenge",
+                        lambda *_a, **_k: {"status": "FAIL", "returncode": 1})
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED"
+    assert verdict["unmeasurable"] == []
+
+
+def test_a_challenge_the_candidate_PASSES_is_still_a_rejected_finding(
+        tmp_path, monkeypatch):
+    """And the accusation itself must survive. A review that claims FAIL over
+    a candidate that passes its own test is wrong, and that is a finding about
+    the review -- not a NOT_MEASURED."""
+    _, task, _ = _task(tmp_path)
+    _write_review(task, _proven_fail_review(task))
+    monkeypatch.setattr(bd, "_run_verification_challenge",
+                        lambda *_a, **_k: {"status": "PASS", "returncode": 0})
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert any("not proven" in r for r in verdict["reasons"])
+
+
+def test_a_malformed_review_outranks_an_unrunnable_proof(tmp_path, monkeypatch):
+    """Precedence, stated. A review that is wrong on every host stays REJECTED
+    on a host with no simulator; NOT_MEASURED must not become a place for real
+    defects to hide."""
+    _, task, _ = _task(tmp_path)
+    review = _proven_fail_review(task)
+    review["semantic_review"]["rationale"] = "no"          # too short: a defect
+    _write_review(task, review)
+    _no_simulator(monkeypatch)
+
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert any("rationale" in r for r in verdict["reasons"])
+
+
+def test_resume_reports_NOT_MEASURED_and_orders_no_repair(
+        tmp_path, monkeypatch):
+    """End to end, at the level a sweep report actually reads.
+
+    The run must not be COMPLETE, must not accept the candidate, and must not
+    put a row on the repair worklist -- telling an author to re-write RTL on
+    the strength of a test that did not run is the misdirection this whole fix
+    is about. It states the gap in its own field instead.
+    """
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    (project / "phase2" / "stage1" / "rtl" / "dut.v").write_text(
+        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    got = bio.collect("rtllm", "p1", project)
+    task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM")
+    _solve_report(run, task)
+    _write_review(task, _proven_fail_review(task))
+    _no_simulator(monkeypatch)
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    acceptance = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
+    assert acceptance["status"] == "PENDING"
+    assert acceptance["accepted"] == 0
+    assert acceptance["review_outcomes"][0]["status"] == bd._NOT_MEASURED
+    assert acceptance["not_measured"] == 1
+    assert acceptance["pending_repair"] == 0
+    assert bd._read_jsonl(run / bd._REPAIR_WORKLIST) == []
+    row = acceptance["not_measured_detail"][0]
+    assert row["id"] == "p1"
+    assert any("iverilog" in r for r in row["reasons"])
+    assert "install the missing capability" in row["required_next"]
+    assert not Path(task["response_path"]).exists(), \
+        "NOT_MEASURED must never publish a result"
+
+
+@_NEEDS_SIMULATOR
+def test_with_a_REAL_simulator_no_verdict_is_NOT_MEASURED(tmp_path):
+    """THE CONTROL ON THE FIX ITSELF.
+
+    Everything above proves NOT_MEASURED appears where it should. Nothing above
+    proves it stays away everywhere else -- and a "fix" that returned
+    NOT_MEASURED for every review would satisfy every one of those tests while
+    destroying the lane. So: with a real iverilog on this host, drive both
+    substantive outcomes through the REAL challenge runner and require that
+    neither is NOT_MEASURED and both carry an empty `unmeasurable`.
+
+      candidate y = ~a  vs a challenge demanding y == a  -> challenge FAIL,
+          the AI's finding is PROVEN            -> REPAIR_REQUIRED
+      candidate y =  a  vs the same challenge             -> challenge PASS,
+          the AI's FAIL claim is unfounded      -> REJECTED
+
+    Note which is which. REPAIR_REQUIRED is the verdict when the candidate
+    genuinely fails its proof: rejecting there would be discarding a proven
+    finding. REJECTED belongs to the review that could not prove its claim.
+    """
+    outcomes = {}
+    for rtl, label in (
+            ("module dut(input wire a, output wire y); assign y = ~a; endmodule\n",
+             "candidate fails the proof"),
+            ("module dut(input wire a, output wire y); assign y = a; endmodule\n",
+             "candidate passes the proof")):
+        run = tmp_path / label.replace(" ", "_")
+        (run / "responses").mkdir(parents=True)
+        project = _project(tmp_path / label.replace(" ", "_") / "p")
+        (project / "phase2" / "stage1" / "rtl" / "dut.v").write_text(rtl)
+        got = bio.collect("rtllm", "p1", project)
+        task = bd._make_ai_review_task(
+            "p1", project, got, ROUTING, 0, run, "PROGRAM")
+        _write_review(task, _proven_fail_review(task))
+        verdict = bd._validate_ai_review(task)
+        outcomes[label] = (verdict["status"],
+                           verdict["challenge_result"]["status"],
+                           verdict["unmeasurable"])
+
+    assert outcomes["candidate fails the proof"][:2] == ("REPAIR_REQUIRED", "FAIL")
+    assert outcomes["candidate passes the proof"][:2] == ("REJECTED", "PASS")
+    assert all(u == [] for _s, _c, u in outcomes.values()), outcomes
+    assert not any(s == bd._NOT_MEASURED for s, _c, _u in outcomes.values()), (
+        "with a working simulator NOTHING may come back NOT_MEASURED", outcomes)

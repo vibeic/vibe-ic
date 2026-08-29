@@ -508,6 +508,18 @@ _REPAIR_WORKLIST = "needs_ai_repair.jsonl"
 _ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
 _ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
 
+#: A verification challenge has three substantive outcomes -- the candidate
+#: PASSed it, the candidate FAILed it, or the challenge itself is INVALID --
+#: and one that is not an outcome at all. UNAVAILABLE means the host has no
+#: simulator, so nothing about this candidate was established either way.
+#: Folding it into "not FAIL" charges the AI reviewer with an unproven finding
+#: on the strength of a missing tool; folding it into "not PASS" charges the
+#: repair with failing a test nobody ran. Both are a MISSING CAPABILITY
+#: rendered as a DEFECT IN THE SUBJECT, so it gets its own status and its own
+#: name in the acceptance report.
+_CHALLENGE_UNAVAILABLE = "UNAVAILABLE"
+_NOT_MEASURED = "NOT_MEASURED"
+
 
 def _safe_problem_id(problem_id: str) -> str:
     return re.sub(r"[^-\w.]", "_", str(problem_id))
@@ -1102,6 +1114,10 @@ def _validate_ai_review(task: dict) -> dict:
         reasons.append("semantic_review.rationale must state the review basis")
     challenge = None
     challenge_result = None
+    #: Reasons this host could not ADJUDICATE, kept apart from `reasons`, which
+    #: are findings against the review or the candidate. The two must never be
+    #: mixed: one says "this is wrong", the other says "we did not look".
+    unmeasurable: list[str] = []
     if semantic_verdict == "FAIL":
         challenge, challenge_reasons = _challenge_from_review(
             task, review, prompt_text)
@@ -1109,7 +1125,14 @@ def _validate_ai_review(task: dict) -> dict:
         if challenge is not None:
             challenge_result = _run_verification_challenge(
                 task.get("candidate_snapshot") or {}, challenge)
-            if challenge_result.get("status") != "FAIL":
+            if challenge_result.get("status") == _CHALLENGE_UNAVAILABLE:
+                unmeasurable.append(
+                    "the prompt-derived verification test could not be RUN on "
+                    "this host, so the AI finding is neither proven nor "
+                    "disproven: "
+                    + "; ".join(str(r) for r in
+                                challenge_result.get("reasons") or []))
+            elif challenge_result.get("status") != "FAIL":
                 reasons.append("AI finding is not proven: the reviewed candidate "
                                "must fail the prompt-derived verification test")
     inherited_challenge_results = []
@@ -1129,12 +1152,26 @@ def _validate_ai_review(task: dict) -> dict:
         result = _run_verification_challenge(
             task.get("candidate_snapshot") or {}, inherited)
         inherited_challenge_results.append(result)
-        if result.get("status") != "PASS":
+        if result.get("status") == _CHALLENGE_UNAVAILABLE:
+            unmeasurable.append(
+                "an inherited immutable verification test could not be RUN on "
+                "this host, so the repair is neither proven nor disproven: "
+                + "; ".join(str(r) for r in result.get("reasons") or []))
+        elif result.get("status") != "PASS":
             reasons.append("repair does not pass every immutable verification "
                            "test that proved its parent candidate wrong")
     if reasons:
+        # A finding against the review outranks an unrunnable proof: a
+        # malformed review is wrong on every host, simulator or not.
         status = "REJECTED"
         decision_reasons = reasons
+    elif unmeasurable:
+        status = _NOT_MEASURED
+        decision_reasons = unmeasurable + [
+            "NOT_MEASURED is not a verdict about this candidate or this "
+            "review. This host lacks the capability the proof needs; install "
+            "it and re-run --resume. Nothing is accepted on the strength of a "
+            "test that did not run."]
     elif semantic_verdict == "FAIL":
         status = "REPAIR_REQUIRED"
         decision_reasons = ["AI semantic authority rejected the current RTL; "
@@ -1156,6 +1193,7 @@ def _validate_ai_review(task: dict) -> dict:
             "verified_challenge": challenge,
             "challenge_result": challenge_result,
             "inherited_challenge_results": inherited_challenge_results,
+            "unmeasurable": unmeasurable,
             "override": ({**override, "verified_prompt_evidence": verified_evidence}
                          if routing_verdict == "OVERRIDE_PROGRAM" else None)}
 
@@ -2132,6 +2170,7 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
 
     accepted_ids: list[str] = []
     review_outcomes: list[dict] = []
+    not_measured: list[dict] = []
     for pid, result in result_by_id.items():
         task = task_by_id.get(pid)
         if task is None:
@@ -2149,6 +2188,31 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
                 str(task.get("rtl_sha256")),
                 str(verdict.get("semantic_verdict")),
             )] = enhancement
+        if verdict["status"] == _NOT_MEASURED:
+            # Not accepted -- nothing was established, so nothing is scored --
+            # but this is NOT a repair task and NOT an AI failure. It waits on
+            # the HOST, and it says so in its own row rather than borrowing
+            # the vocabulary of a defect.
+            not_measured.append({
+                "schema": "vibeic.benchmark.ai_review_not_measured.v1",
+                "id": pid, "project": task.get("project"),
+                "status": _NOT_MEASURED,
+                "reasons": verdict.get("unmeasurable") or [],
+                "decision_reasons": verdict.get("decision_reasons") or [],
+                "review_path": task.get("review_path"),
+                "reviewed_rtl_sha256": task.get("rtl_sha256"),
+                "required_next": (
+                    "install the missing capability on this host and re-run "
+                    "--resume; do not re-author RTL on the strength of a test "
+                    "that did not run"),
+            })
+            result.update({"accepted": False, "awaiting_ai": False,
+                           "awaiting_ai_review": False,
+                           "ai_repair_required": False,
+                           "not_measured": True})
+            print(f"  {pid:44s} NOT_MEASURED -- this host cannot run the "
+                  f"verification challenge")
+            continue
         if verdict["status"] != "ACCEPTED":
             needs_repair = verdict["status"] == "REPAIR_REQUIRED"
             result.update({"accepted": False, "awaiting_ai": True,
@@ -2280,11 +2344,18 @@ def cmd_resume(bench: str, dataset: str, run: str) -> int:
         "review_outcomes": review_outcomes,
         "pending_backup": len(remaining_backup),
         "pending_repair": len(repairs),
+        "not_measured": len(not_measured),
+        "not_measured_detail": not_measured,
         "pending_review": sum(1 for o in review_outcomes
                               if o.get("status") in {"PENDING", "REJECTED"}),
         "program_enhancement_candidates": len(enhancements),
     }
     _atomic_write_json(run_p / _ACCEPTANCE_REPORT, acceptance)
+    if not_measured:
+        print(f"\n{len(not_measured)}/{total} NOT_MEASURED: this host could not "
+              f"run the verification challenge, so those reviews were neither "
+              f"proven nor disproven. This is a host capability gap, not a "
+              f"finding about the candidates.")
     print(f"\n{len(accepted_ids)}/{total} Program First + AI Review accepted; status "
           f"{acceptance['status']} -> {run_p / _ACCEPTANCE_REPORT}")
     if complete:
