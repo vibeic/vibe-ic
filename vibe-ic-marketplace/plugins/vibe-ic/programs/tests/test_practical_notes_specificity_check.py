@@ -39,7 +39,9 @@ import _commercial_pdk as _cpdk  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
-_PDK_SKU = next((t for t in _cpdk.nda_tokens() if t.lower().startswith("m18")), "")
+# BY ROLE, not by a hardcoded prefix of the real value (see
+# `_commercial_pdk.nda_token_for`).
+_PDK_SKU = _cpdk.nda_token_for("sku_full")
 
 _CODENAME_TOKEN_RE = re.compile(r"^[a-z]{2,5}\d{3,}[a-z]*$")  # e.g. "xx3616"
 

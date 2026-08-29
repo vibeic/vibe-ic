@@ -15,10 +15,14 @@ import pytest
 import _commercial_pdk as _cpdk
 from programs.source_chip_agnostic_check import audit
 
-# Real NDA tokens, decoded at runtime — never written as literals here.
+# NDA tokens, resolved at runtime BY ROLE — never written as literals here,
+# and no longer selected by a hardcoded prefix of the real value. The two
+# `startswith(...)` selectors this replaces spelled the opening characters of
+# two real tokens in tracked source, inside the very suite that proves those
+# tokens are not in tracked source.
 _NDA = _cpdk.nda_tokens()
-_SKU = next(t for t in _NDA if t.lower().startswith("m18"))     # process SKU
-_FOUNDRY = next(t for t in _NDA if t.lower().startswith("hp"))  # foundry product
+_SKU = _cpdk.nda_token_for("sku_full")               # process SKU
+_FOUNDRY = _cpdk.nda_token_for("foundry_product")    # foundry product
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]  # plugins/vibe-ic
 
 

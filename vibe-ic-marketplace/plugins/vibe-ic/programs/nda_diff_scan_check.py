@@ -80,13 +80,13 @@ class DiffFinding:
 
 
 def _mask(text: str, start: int, end: int, role: str) -> str:
-    """Neighbourhood of a hit with the literal token replaced by
-    `<NDA-TOKEN:role>`. Never returns the token itself."""
-    a = max(0, start - _CONTEXT_CHARS)
-    b = min(len(text), end + _CONTEXT_CHARS)
-    prefix = "…" if a > 0 else ""
-    suffix = "…" if b < len(text) else ""
-    return f"{prefix}{text[a:start]}<NDA-TOKEN:{role}>{text[end:b]}{suffix}".strip()
+    """Neighbourhood of a hit with EVERY literal token in it replaced by
+    `<NDA-TOKEN:role>`. Never returns a token itself.
+
+    Masked ONLY the reported hit until 2026-08-29, so an added line carrying two
+    different tokens echoed each one in the other's finding. See
+    `_commercial_pdk.nda_mask_neighbourhood` for the measurement."""
+    return _cpdk.nda_mask_neighbourhood(text, start, end, role, _CONTEXT_CHARS)
 
 
 def _scan_text(text: str) -> List[Tuple[str, int, int]]:
@@ -297,7 +297,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    findings = scan_unified_diff(diff)
+    try:
+        findings = scan_unified_diff(diff)
+    except _cpdk.NoNdaLiterals as exc:
+        # THE `except RuntimeError -> return 2` ABOVE DOES NOT COVER THIS. It
+        # guards the diff ACQUISITION; the token store is not consulted until
+        # `scan_unified_diff`, one statement outside that block. MEASURED
+        # 2026-08-29 with the store emptied: `NoNdaLiterals` escaped as an
+        # uncaught traceback and the process exited 1 — and rc 1 on this gate
+        # is a MEASURED REFUSE, so `build_push_preflight_receipt` recorded
+        # verdict=REFUSE with a Python traceback as the finding's summary line.
+        # A failed question wearing a finding's clothes: the same shape as
+        # vibe-ic#640 (rev-list blocking) and #645 (UnicodeDecodeError), by a
+        # third route. rc 2 is the honest channel — NORECORD, not REFUSE.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if args.json:
         out = Path(args.json)
