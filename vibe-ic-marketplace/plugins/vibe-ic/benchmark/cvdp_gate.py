@@ -1783,6 +1783,21 @@ _NON_INSTANCE_KEYWORDS = frozenset({
     "not", "nand", "nor", "xor", "xnor", "buf", "bufif0", "bufif1", "notif0",
     "notif1", "pmos", "nmos", "cmos", "tran", "tranif0", "tranif1", "pullup",
     "pulldown", "supply0", "supply1", "defparam", "specify", "endspecify",
+    # THE `end*` FAMILY, COMPLETED. The set already carried endgenerate /
+    # endpackage / endspecify and omitted `endcase`, and the omission is not
+    # inert: `_INSTANCE_RE`'s `\s+` between type and instance spans newlines, so
+    #
+    #     endcase
+    #     case ({push, pop})
+    #
+    # parses as type=`endcase`, instance=`case` and the gate reports the design
+    # "instantiates undefined module 'endcase'". Measured over 302 authored CVDP
+    # completions: 7 drafts carry the false positive, every one of them
+    # `endcase`. Listing the family rather than the one member that bit us is
+    # what stops the next keyword in it from doing the same.
+    "endcase", "endmodule", "endfunction", "endtask", "endclass",
+    "endinterface", "endclocking", "endsequence", "endproperty",
+    "endprimitive", "endprogram", "endchecker", "endconfig", "endtable",
 })
 _INSTANCE_RE = re.compile(
     r"^\s*([A-Za-z_]\w*)\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_]\w*\s*\(",
