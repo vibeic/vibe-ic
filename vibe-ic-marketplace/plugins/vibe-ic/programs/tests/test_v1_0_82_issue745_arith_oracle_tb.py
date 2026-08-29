@@ -13,6 +13,8 @@ Pins the two contract halves of arith_oracle_tb_gen:
 from __future__ import annotations
 
 import json
+
+from _skill_routes import assert_route_ships
 import re
 import sys
 from pathlib import Path
@@ -149,7 +151,8 @@ def test_b_no_oracle_class_processor_cpu_defers(tmp_path):
     rep, rc = aotg.generate(project, "processor_cpu")
     assert rc == 2
     assert rep["verdict"] == "DEFER"
-    assert rep["fallback_skill"] == "testbench-author"
+    assert_route_ships(rep["fallback_skill"],
+                       "arith_oracle_tb_gen DEFER report")
     assert _oracle_tbs(project) == []  # NO fabricated TB/golden
 
 

@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _skill_routes import assert_route_ships
+
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
@@ -145,7 +147,7 @@ def test_generic_class_reference_tb_runs_full_stack_tb(tmp_path):
     assert tb.is_file()
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
     # ORGANIC-20260606 #439: a skeleton TB running to completion is
-    # CONNECTIVITY evidence only — WAIVED with the testbench-author
+    # CONNECTIVITY evidence only — WAIVED with the TB-authoring
     # fallback direction, never a functional PASS (and never an AID-TB
     # false FAIL). PASS is reserved for a real per-IC oracle TB with
     # golden compares.
@@ -154,7 +156,10 @@ def test_generic_class_reference_tb_runs_full_stack_tb(tmp_path):
     assert "aid" in sr.detail.lower()
     if sr.status == "WAIVED":
         assert sr.extras.get("functional_verified") is False
-        assert sr.extras.get("fallback_skill") == "testbench-author"
+        # PROPERTY, not literal: the agent must be handed a route it can
+        # actually follow. See _skill_routes.py.
+        assert_route_ships(sr.extras.get("fallback_skill"),
+                           "step_reference_tb WAIVED extras")
 
 
 def test_generic_class_real_compile_failure_still_fails(tmp_path):

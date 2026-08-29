@@ -180,7 +180,7 @@ def _evaluate(project: Path) -> "tuple[int, str]":
         f"({CAP_CPU_FUNCTIONAL_ORACLE}). The connectivity full-stack TB "
         "compiled + ran to FULL_STACK_TB_DONE against the real rtl/ "
         f"(evidence: {evidence}); functional verification is DEFERRED to a "
-        "per-IC oracle TB (skill testbench-author). Step 4 WAIVED-DEFERRED, "
+        "per-IC oracle TB (skill testbench-gen). Step 4 WAIVED-DEFERRED, "
         "not a missing-file FAIL.")
 
 

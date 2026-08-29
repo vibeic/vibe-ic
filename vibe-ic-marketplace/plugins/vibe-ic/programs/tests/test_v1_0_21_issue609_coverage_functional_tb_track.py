@@ -1,7 +1,7 @@
 """ORGANIC #609 [MEDIUM] — the coverage_actual.json producer emitted a PASS
 verdict for only two TB tracks (a reference_tb ref_tb.log, or an oracle.log);
 its else-branch wrote verdict=SKIPPED-CONDITION. When the named AI fallback
-(testbench-author) authors a self-checking functional TB at the conventional
+(the TB-authoring skill) authors a self-checking functional TB at the
 sim/ path that GENUINELY PASSES (JUnit sim/results.xml tests=1 failures=0) AND
 l10_tb_conformance reports N/N, the producer never recognised that path, so
 coverage_actual.json stayed SKIPPED-CONDITION and flow_compliance Step 4 (which

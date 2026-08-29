@@ -35388,7 +35388,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # on direct PnR-derived artefacts.
 
     # ORGANIC #609 — idempotent coverage re-emit. The phase2 coverage producer
-    # ran BEFORE the named AI fallback (testbench-author) may have authored +
+    # ran BEFORE the named AI fallback (testbench-gen) may have authored +
     # run a self-checking functional TB, so coverage_actual.json can be a stale
     # SKIPPED-CONDITION stub even though a real functional PASS now exists on
     # disk (sim/results.xml failures=0 + l10_tb_conformance ok==total>0). This
