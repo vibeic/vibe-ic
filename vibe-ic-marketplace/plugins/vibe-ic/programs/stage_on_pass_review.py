@@ -114,6 +114,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _design_module_set as _dms  # noqa: E402
+from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082 (helper from PR #1094)  # noqa: E402
 
 try:
     import yaml  # type: ignore
@@ -567,10 +568,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     project = Path(a.project_dir).resolve()
 
     def emit(rec: Dict[str, Any]) -> None:
+        # vibe-ic#1082 — ATOMIC, because this record is a VERDICT.
+        #
+        # Every `emit()` call below carries the review's answer: NOT_CHECKED
+        # with its reason, or the rejections a landing acts on. A `write_text`
+        # that dies mid-write leaves a half-parsed verdict at the declared
+        # destination, and the next reader takes it as this step's evidence —
+        # the exact lie #1082 exists to remove.
+        #
+        # `ensure_ascii=True` and `sort_keys=True` reproduce `json.dumps`'s
+        # defaults for the call this replaces, so the BYTES do not move; the
+        # trailing newline comes from `write_json` itself.
         if a.json:
             a.json.parent.mkdir(parents=True, exist_ok=True)
-            a.json.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n",
-                              encoding="utf-8")
+            atomic_write_json(a.json, rec, indent=2, ensure_ascii=True,
+                              sort_keys=True)
 
     try:
         decl = load_declaration(a.flow_def, a.stage)
