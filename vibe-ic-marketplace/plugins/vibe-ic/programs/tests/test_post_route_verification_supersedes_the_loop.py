@@ -217,3 +217,97 @@ def test_control_a_genuinely_still_improving_route_is_still_not_loosened():
         285, 285, improving, 0, auto_die_requested=True,
         route_completed=True,
         residual_history=[]) == (None, "route_still_converging")
+
+
+# ---------------------------------------------------------------------------
+# APPENDING IS NOT THE SAME AS MANUFACTURING.
+#
+# Every case above feeds a log that carries `_LOOP` — a real DRT-0199
+# trajectory — or carries no DRT-0701 at all. The fourth quadrant, a log with a
+# 0701 line and NO router-iteration grammar, was asserted in neither direction,
+# and v1.12.54's append condition `(not out or out[-1] != verified)` fell
+# through its `not out` disjunct straight into it: with nothing to append TO,
+# the append SYNTHESISED a one-element trajectory out of a line that is not a
+# per-iteration count.
+#
+# That is not a hypothetical. `test_ppa_metric_artefact_authority` builds
+# exactly such a log — DRT-0701 present, no DRT-0199 — and two of its cases
+# went red at f5ec7524a [v1.12.54] and stayed red through v1.12.68. MEASURED on
+# that fixture before the fix: the PPA backend emitted
+# `route.drc.violation.count` as MEASURED 1 `kind=log` `trajectory_len=1`, so
+# the log AGREED with `openroad.metrics.json`, the artefact-authority
+# declaration had no conflict left to settle, and the log's overridden silence
+# — the evidence that there was ever a question — was never recorded.
+#
+# chip-AGNOSTIC: OpenROAD/TritonRoute log grammar only.
+# ---------------------------------------------------------------------------
+
+_VERIFIED_ONLY = (
+    "PNR_STAGE: detailed_route\n"
+    "[WARNING DRT-0701] Post-route verification found 1 violation(s) that the "
+    "routing loop did not report (0 in-loop). The published result is the "
+    "verified one.\n")
+
+
+def test_a_verification_with_no_loop_does_not_manufacture_a_trajectory():
+    """THE DEFECT. `router_iter_counts` promises "([] when none)"; a log the
+    loop never spoke in has none, whatever the verifier said afterwards."""
+    assert sdf.router_iter_counts(_VERIFIED_ONLY) == [], (
+        "a trajectory was manufactured from a DRT-0701 line, which is not a "
+        "per-iteration count")
+    assert sdf.router_iter_last_count(_VERIFIED_ONLY) is None, (
+        "the LAST per-iteration count was answered from a line that is not an "
+        "iteration")
+
+
+def test_the_verified_count_is_still_reachable_when_the_loop_was_silent():
+    """NOT VACUOUS, and the reason the case above is not just data loss: the
+    number is not gone, it is simply not pretending to be a trajectory. A
+    caller that wants OpenROAD's verified count asks for it by name."""
+    assert sdf.router_post_route_verified_count(_VERIFIED_ONLY) == 1
+
+
+def test_the_runner_does_not_judge_convergence_from_a_synthesised_point():
+    """THE CONSEQUENCE, at the reader the rescue ladder actually calls.
+    `_drt_is_non_converging([1])` is True and `([])` is False, so the
+    manufactured point did not merely mislabel a number — it put the die-loosen
+    ladder into a convergence judgement on a route with no history to judge."""
+    mod = _runner()
+    assert mod._drt_violation_trajectory(_VERIFIED_ONLY) == []
+    assert mod._drt_is_non_converging(
+        mod._drt_violation_trajectory(_VERIFIED_ONLY)) is False
+
+
+def test_the_ppa_log_reading_is_an_honest_silence_not_a_number():
+    """THE SEAM THAT WENT RED, asserted here so the grammar owns its own
+    consequence instead of a distant module discovering it again. The log
+    printed no route DRC count; the record must say so, and must not claim a
+    `trajectory_len` for a trajectory that was never printed."""
+    import tempfile
+    from pathlib import Path as _P
+    sys.path.insert(0, str(_PROGRAMS))
+    from _ppa.backends import openroad as _oro
+
+    d = _P(tempfile.mkdtemp()) / "pnr"
+    d.mkdir()
+    (d / "openroad.log").write_text(_VERIFIED_ONLY)
+    recs = [r for r in _oro.parse_run(d).records
+            if r["metric"] == "route.drc.violation.count"
+            and r["source"].get("kind") == "log"]
+    assert len(recs) == 1, recs
+    assert recs[0]["status"] == "NOT_MEASURED", recs[0]
+    assert "value" not in recs[0], recs[0]
+    assert "trajectory_len" not in recs[0]["source"], recs[0]["source"]
+
+
+def test_control_a_real_trajectory_still_takes_the_appended_verified_count():
+    """THE CONTROL THAT MUST NOT MOVE. v1.12.54's property is the whole point of
+    the append and this fix must not reach it: when there IS a loop to
+    supersede, the verified count is still appended and is still last. Without
+    this, "stop manufacturing" would be satisfied by deleting the feature."""
+    assert sdf.router_iter_counts(_VERIFIED_DISAGREES) == [251, 50, 50, 0, 1]
+    assert sdf.router_iter_last_count(_VERIFIED_DISAGREES) == 1
+    assert sdf.router_iter_counts(_VERIFIED_AGREES) == [251, 50, 50, 0]
+    assert sdf.router_iter_last_count(_VERIFIED_AGREES) == 0
+    assert sdf.router_iter_counts(_LOOP) == [251, 50, 50, 0]
+    assert sdf.router_iter_last_count(_LOOP) == 0
