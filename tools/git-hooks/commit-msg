@@ -23,7 +23,28 @@ if [ ! -f "$CHECKER" ]; then
   exit 0
 fi
 
-if ! python3 "$CHECKER" --message-file "$MSG_FILE"; then
+# EXIT CODES ARE NOT INTERCHANGEABLE. The checker distinguishes
+#   0 = scanned, clean          1 = scanned, A TOKEN IS PRESENT
+#   2 = COULD NOT SCAN (NOT_MEASURED — e.g. `NoNdaLiterals`: the token set is
+#       empty, so a pattern built from it would match everything)
+# Testing only `if ! python3 ...` collapses 2 into 1 and reports "your message
+# names the foundry" about a message the guard never actually read.
+#
+# MEASURED: since the tokens left tracked source, a checkout without the private
+# config resolves an EMPTY token set, so the checker returns 2 on EVERY message —
+# `echo "hello world"` included — and this hook blocked EVERY COMMIT in the repo
+# while asserting a leak that was not there.
+#
+# An unavailable guard is handled the way the missing-checker branch above
+# already handles one: say so loudly and let the commit through, because the
+# pre-push hook and CI still gate the push. A guard that cannot measure must not
+# masquerade as a guard that found something.
+set +e
+python3 "$CHECKER" --message-file "$MSG_FILE"
+rc=$?
+set -e
+
+if [ "$rc" -eq 1 ]; then
   cat >&2 <<'EOF'
 
 commit-msg: BLOCKED — the commit message names the commercial foundry / SKU /
@@ -33,4 +54,8 @@ wording ("commercial PDK", "commercial foundry", "the foundry deck") instead.
 Your message was preserved — re-run `git commit` to edit it.
 EOF
   exit 1
+elif [ "$rc" -ne 0 ]; then
+  echo "commit-msg: WARNING — NDA message guard could NOT scan this message" >&2
+  echo "  (checker exit $rc = NOT_MEASURED, not a finding). Commit allowed;" >&2
+  echo "  the pre-push hook and CI still gate the push." >&2
 fi
