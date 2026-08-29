@@ -220,13 +220,21 @@ def test_progress_plan_interleaves_only_parent_owned_matrix_module_units():
         f"pytest:{S.HERMETIC_MATRIX_FILE}",
         "pytest:record-published",
     ]
-    # 31 and 63, not 29 and 61, and they are the SEVENTH and EIGHTH faces of
+    # 31 and 64, not 29 and 61, and they are the SEVENTH and EIGHTH faces of
     # one pin. The coverage file's domain totals are 4 + 9 + 8 + 9 + 1; two of
     # them moved from 8 to 9 on 2026-08-25 when a ninth dimension module joined
     # `test_matrix_d[1-9]_*.py`, and `expected` is those 31 domain units plus
-    # one item unit per collected item (32), so it follows.
+    # one item unit per collected item, so it follows.
+    #
+    # 63 -> 64, v1.12.40, AND IT IS THE SECOND HALF OF ONE CHANGE. The domain
+    # sum is UNMOVED at 31 -- the dimension population is still nine modules --
+    # so the whole of this move is the item term: `items` 32 -> 33 when
+    # 95ad23e8c added one function to the coverage file. This literal is the
+    # face of that pin that does NOT read `spec` for its total, so it does not
+    # follow on its own; the two are asserted separately here precisely so a
+    # re-pin that moved one and forgot the other cannot pass.
     assert sum(row[3] for row in spec["domains"]) == 31
-    assert len(expected) == 63
+    assert len(expected) == 31 + spec["items"] == 64
     assert len(expected) == len(set(expected))
 
 

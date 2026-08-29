@@ -68,7 +68,18 @@ PY
 #: the roll-up — and a concurrent run is SUPPOSED to differ in exactly those.
 #: Nothing else is normalised: an assertion that erased more than the clock
 #: would stop being able to see a gate's output MOVE, which is what it is for.
-norm() { sed -E 's/\[[0-9]+s\]/[<T>s]/g; s/\(([0-9]+)s\)$/(<T>s)/' "$1"; }
+# THE THIRD RULE IS NOT DECORATION. Every closing sentence in `_gate_dispatch.sh`
+# spells its elapsed clock `(${total}s)` and the second rule catches all of them
+# -- except ONE. The FAILED summary at `_gate_dispatch.sh:1788` grew a `decided`
+# breakdown, so its clock now ends the line as `, ${total}s)` with a comma before
+# it and no `(` of its own, and `\(([0-9]+)s\)$` does not match that. The two
+# comparisons this helper feeds (`corpseq/corppar` and `twoseq/twopar`) both read
+# a FAILING run's stderr, so both were comparing a wall clock while announcing
+# "clock aside" -- green whenever the arms happened to round to the same second
+# and red on host load, blaming the ordering property they exist to check.
+# MEASURED: the aggregate arm of the repo-tools lane failed exactly here with a
+# one-line diff of `, 1s)` against `, 2s)` and 35 other cases green.
+norm() { sed -E 's/\[[0-9]+s\]/[<T>s]/g; s/\(([0-9]+)s\)$/(<T>s)/; s/, ([0-9]+)s\)$/, <T>s)/' "$1"; }
 
 # ── the toy gate set ─────────────────────────────────────────────────────────
 # Every state a gate can reach, plus a deliberate ordering trap: `slow-first`

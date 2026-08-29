@@ -2282,7 +2282,33 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # changed lines. The only file in that diff the census reads is the flow
     # YAML itself, +718/-1. The census did not start counting differently; the
     # flow got bigger.
-    assert pop["swept"] == pop["declared"] == 217, pop
+    # 217 -> 221, FIFTH TIME THIS LITERAL HAS LAGGED THE FLOW. RE-DERIVED the way
+    # every block above derives its own: `population_report` over the flow YAML blob
+    # at 57cf2814c (the commit that last moved this literal) and at HEAD, with the
+    # CLAUSE SETS diffed on the identity the census uses -- (step, kind, cmd) --
+    # rather than the counts compared. MEASURED:
+    #
+    #   57cf2814c   declared=217 swept=217 unswept=0 unrecognised=0
+    #   HEAD        declared=221 swept=221 unswept=0 unrecognised=0
+    #   ADDED 14    REMOVED 10        217 + 14 - 10 = 221
+    #
+    # `by_kind` moves advisory_program_exit_zero 72 -> 76 with program_exit_zero
+    # 116 and optional_program_exit_zero 29 BOTH UNCHANGED, which is the shape that
+    # says no blocking gate was added or lost in the move.
+    #
+    # TEN REMOVED AND NOT ONE RETIREMENT. Nine of the ten are the same clause with
+    # its command string EDITED, and `(step, kind, cmd)` cannot see that:
+    #   * six `provenance_check` clauses gained ` --require-measured` -- a
+    #     TIGHTENING, at steps 9, 21, 22, 31 (x2) and 37;
+    #   * two clauses at steps 4 and 6 follow `coverage_actual.json` ->
+    #     `coverage_verilator.json`;
+    #   * step 32's `eco_loop_audit` is `postroute_timing_repair_audit` since
+    #     c4fba40c4 renamed it.
+    # The tenth, step 31's `perc_corpus_sweep .`, gained ` --report ...` and its
+    # bare form is still declared elsewhere, so it never reached `unaccounted`.
+    # Each of the nine is named against its live successor, and ASSERTED to still
+    # be live, by `_REHOMED` below -- prose here, a control that runs there.
+    assert pop["swept"] == pop["declared"] == 221, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 
@@ -2476,8 +2502,20 @@ def test_two_clauses_that_are_IDENTICAL_are_two_and_not_one(tmp_path):
 #: that blob declares. BOTH move together or the assertion below is comparing a
 #: count to a different tree's population -- which is the exact failure the
 #: "base that moved" blocks above record, five times.
-_SHRINK_PIN = "e265f228be"
-_SHRINK_PIN_DECLARED = 182
+# PIN MOVED e265f228be -> d760471ed (v1.12.40), AND IT AUTHORISES A TEN-CLAUSE
+# CHURN. `d760471ed` is not chosen for being recent: it is the OLDEST commit
+# whose flow blob has `population_delta(pin, HEAD)["removed"] == []`, MEASURED by
+# walking all 17 commits that touched the flow YAML since the old pin and
+# reporting `removed_vs_HEAD` for each (14, 16, 17, 11, 13, 16, 16, 14, 13, 10,
+# 8, 8, 7, 7, 6, 0, 0). Taking the newest instead would blind the detector to
+# every commit in between for nothing; taking anything older leaves a removal in
+# the window that this change has not authorised.
+#
+# WHAT THE MOVE AUTHORISES is set out clause by clause beside the census literal
+# above, and NONE of it is a retirement -- every removed command has a live
+# successor. The half of that authorisation which RUNS is `_REHOMED`, below.
+_SHRINK_PIN = "d760471ed"
+_SHRINK_PIN_DECLARED = 220
 
 #: The pin this one replaced, kept because the control below is anchored to it
 #: permanently: it is the only tree in this repository's history that can
@@ -2485,6 +2523,76 @@ _SHRINK_PIN_DECLARED = 182
 #: control without stopping being green.
 _REHOME_PIN = "867de4289"
 _REHOME_CMD_PREFIX = "crosslayer_rewrite_equivalence_check ."
+
+#: Removed command -> the live command that succeeds it, for every clause that
+#: has left the flow since `_REHOME_PIN` by having its command string EDITED.
+#:
+#: WHY A TABLE AND NOT A WIDER MATCH. `population_delta` identifies a clause by
+#: `(step, kind, cmd)`, and the control below reads a removal whose cmd is not
+#: declared today as a RETIREMENT. That is the right default -- it is how a gate
+#: being switched off is caught -- but a command string legitimately changes
+#: when a flag is added, a path is renamed, or a program is renamed, and the
+#: exact-string test cannot tell that from a deletion. Relaxing the match to a
+#: prefix or a program name would make the deletion invisible too, which is
+#: making the check pass by deleting what it checks. So the distinction is made
+#: HERE, one named row at a time, and every row is ASSERTED -- a successor that
+#: stops being live reddens this control instead of quietly excusing a removal.
+#:
+#: THIS PIN IS PERMANENT, so this table only ever grows; that is the cost of the
+#: control keeping its stimulus, and it is paid one line per authored edit.
+_REHOMED = {
+    # NO ROW FOR THE 1.6x CLAUSE, and that is the point of the shape. vibe-ic#1779
+    # folded step `1.6x` into step `2` and the gate moved BYTE FOR BYTE, so its
+    # command is still in `live` under its own spelling and the exact-string test
+    # accounts for it with nothing written here. This table is only ever for the
+    # narrower case the exact-string test cannot see: the command itself changed.
+    # d760471ed: six provenance gates gained ` --require-measured`. A
+    # TIGHTENING -- the clause is strictly harder to satisfy than before, so
+    # reading it as a retirement had the sign backwards.
+    "provenance_check . --output phase2/stage2/synth/netlist.v "
+    "--tool yosys,yosys-abc":
+    "provenance_check . --output phase2/stage2/synth/netlist.v "
+    "--tool yosys,yosys-abc --require-measured",
+    "provenance_check . --output phase3/stage3/pnr/routed.def --tool openroad":
+    "provenance_check . --output phase3/stage3/pnr/routed.def "
+    "--tool openroad --require-measured",
+    "provenance_check . --output phase3/stage3/extracted/*.spef "
+    "--tool magic,openroad":
+    "provenance_check . --output phase3/stage3/extracted/*.spef "
+    "--tool magic,openroad --require-measured",
+    "provenance_check . --output reports/phase3/drc_signoff.rpt "
+    "--tool klayout,magic,svrfdrc":
+    "provenance_check . --output reports/phase3/drc_signoff.rpt "
+    "--tool klayout,magic,svrfdrc --require-measured",
+    "provenance_check . --output reports/phase3/lvs.rpt "
+    "--tool netgen,magic,klayout":
+    "provenance_check . --output reports/phase3/lvs.rpt "
+    "--tool netgen,magic,klayout --require-measured",
+    "provenance_check . --output=phase3/stage4/gds/*.gds "
+    "--tool=klayout,magic,openroad":
+    "provenance_check . --output=phase3/stage4/gds/*.gds "
+    "--tool=klayout,magic,openroad --require-measured",
+    # The coverage artefact was renamed to name its producer, so the two
+    # clauses that read it followed it.
+    "verilator_coverage_measure check --coverage-json "
+    "reports/phase2/coverage/coverage_actual.json":
+    "verilator_coverage_measure check --coverage-json "
+    "reports/phase2/coverage/coverage_verilator.json",
+    "fpga_verification_audit --report reports/fpga_verification_report.md "
+    "--summary phase2/stage1/sim/work/summary.txt --coverage "
+    "reports/phase2/coverage/coverage_actual.json --out "
+    "reports/phase2/gates/fpga_verification_audit.json":
+    "fpga_verification_audit --report reports/fpga_verification_report.md "
+    "--summary phase2/stage1/sim/work/summary.txt --coverage "
+    "reports/phase2/coverage/coverage_verilator.json --out "
+    "reports/phase2/gates/fpga_verification_audit.json",
+    # c4fba40c4 reserved "ECO" for physical changes; step 32 regenerates RTL,
+    # so its audit is `postroute_timing_repair_audit` now. Same clause, same
+    # step, same kind (`optional_program_exit_zero`), renamed program.
+    "eco_loop_audit . --json reports/phase2/gates/eco_audit.json":
+    "postroute_timing_repair_audit . --json "
+    "reports/phase2/gates/postroute_timing_repair_audit.json",
+}
 
 
 def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
@@ -2612,11 +2720,24 @@ def test_the_1_6x_clause_was_REHOMED_and_not_retired(tmp_path):
     )
 
     live = {c.cmd for c in lc.discover_clauses(lc.FLOW_YAML)}
-    unaccounted = [c for c in d["removed"] if c["cmd"] not in live]
+
+    # THE AUTHORISATION TABLE IS CHECKED BEFORE IT IS SPENT. A row whose
+    # successor has itself left the flow would otherwise go on excusing a
+    # removal forever, which is how an authorisation rots into prose.
+    dead = {was: now for was, now in _REHOMED.items() if now not in live}
+    assert not dead, (
+        "these `_REHOMED` rows name a successor that no step declares today, so "
+        "they are excusing a removal on the strength of a command that is itself "
+        f"gone — each needs re-deriving, not re-dating: {dead}"
+    )
+
+    unaccounted = [c for c in d["removed"]
+                   if c["cmd"] not in live and c["cmd"] not in _REHOMED]
     assert not unaccounted, (
         "these clauses left the flow between the pin and HEAD and their command "
-        "is declared by no step today — that is a RETIREMENT, not a re-homing, "
-        f"and it needs its own authorisation: {[c['cmd'] for c in unaccounted]}"
+        "is declared by no step today and no `_REHOMED` row names a successor "
+        "for them — that is a RETIREMENT, not a re-homing, and it needs its own "
+        f"authorisation: {[c['cmd'] for c in unaccounted]}"
     )
 
     # and the specific one the authorisation names, so a future re-homing of

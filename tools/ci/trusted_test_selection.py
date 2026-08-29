@@ -112,7 +112,28 @@ HERMETIC_TEST_PROGRESS = {
         ),
     },
     HERMETIC_MATRIX_FILE: {
-        "items": 32,
+        # items 32 -> 33 AND ordinal 31 -> 32, v1.12.40. RE-DERIVED, never
+        # adjusted to make the assertion pass: 95ad23e8c ("timeout-as-verdict:
+        # thirteen elapsed-asserts, moved off the stopwatch") added exactly one
+        # function to the protected file --
+        # `test_a_single_measured_red_still_fails_beside_any_number_of_not_measured_cells`
+        # -- and `git diff e91229941..HEAD` over that file shows one `+def test_`
+        # and no `-def test_`. MEASURED with the same command
+        # `test_nested_progress_schedule_matches_live_pytest_collection` runs --
+        # `pytest --collect-only -q` from the plugin root, autoload off:
+        #
+        #   collected                                                        33
+        #   ...::test_a_single_measured_red_still_fails_beside_...           #30
+        #   ...::test_the_second_axis_downgrades_a_red_cell_...              #32
+        #
+        # BOTH NUMBERS MOVE OR NEITHER DOES, for the reason the mutation-ledger
+        # block below already records: the ordinal is a position in the same
+        # list `items` counts. The new function lands at 30, so the four domain
+        # ordinals BEFORE it -- 21, 25, 26, 28 -- are unmoved and were each
+        # re-checked against the live collection rather than assumed; only 31
+        # is after it and shifts by exactly one. The domain TOTALS are unmoved
+        # too: they count `test_matrix_d[1-9]_*.py`, still 9 modules.
+        "items": 33,
         "producer_profiles": (
             ("_run_outcome_reports", "enforcement_census"),
             ("_collect_items_from_paths", "_run_outcome_reports",
@@ -131,7 +152,7 @@ HERMETIC_TEST_PROGRESS = {
             (28, HERMETIC_MATRIX_FILE
              + "::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved",
              "matrix-outcome-modules", 9),
-            (31, HERMETIC_MATRIX_FILE
+            (32, HERMETIC_MATRIX_FILE
              + "::test_the_second_axis_downgrades_a_red_cell_that_the_state_axis_counts",
              "matrix-outcome-modules", 1),
         ),
