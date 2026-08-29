@@ -2196,7 +2196,14 @@ def test_both_landing_arms_run_through_this_driver():
     assert "--aggregate-only" in entry_src, (
         "the hermetic arm must refuse an incomplete aggregate instead of "
         "launching a second unbound process population")
-    assert 'python3 -I "$PROGRAMS/trusted_pytest_entry.py"' in entry_src
+    # `-I -B`, NOT `-I`. THIS ASSERTION WAS THE STALE HALF: 1e8d01d72 [v1.12.83]
+    # deliberately inserted `-B` here and in all three landing lanes, because
+    # `-I` implies `-E` and so discards `PYTHONDONTWRITEBYTECODE` -- the tier was
+    # writing .pyc into the tree it then attested. The literal below still named
+    # the pre-fix shape, so it failed against a script that had been corrected.
+    # Re-pinned to the reviewed shape, and it now REQUIRES `-B` rather than
+    # tolerating it, so deleting the flag again is a red test.
+    assert 'python3 -I -B "$PROGRAMS/trusted_pytest_entry.py"' in entry_src
     assert "--timeout" not in entry_src and "pytest_timeout" not in entry_src
     assert "grep -q 'programs/pytest_per_file_junit.py'" not in verify_src, (
         "source text is not a runtime capability record; a comment containing "

@@ -58,6 +58,17 @@ ROOT = Path(__file__).resolve().parents[2]
 #: The environment a child inherits, and the one `-I` refuses to look at.
 ENV_FLAG = "PYTHONDONTWRITEBYTECODE"
 
+#: Inner bound for every launch below. This shipped as 120, which is ABOVE the
+#: 60 s per-call ceiling `ci_harness_timeout_ceiling_check` publishes for this
+#: corpus (the 180 s harness bound // 3), so a single such call could outlive the
+#: bound that ends the SESSION rather than the test -- and the gate was red about
+#: exactly these four sites. MEASURED here rather than rounded: the `-c` probe
+#: takes 0.009 s, `git ls-files '*.py'` 0.004 s over 4796 files, and
+#: `git ls-files '*.sh'` 0.003 s. 30 s is over 3000x headroom and half the
+#: ceiling the gate itself publishes, which is the same reasoning
+#: `test_ci_harness_timeout_ceiling_check._T` states for its own launches.
+_T = 30
+
 _PROBE = "import sys; sys.stdout.write(str(sys.dont_write_bytecode))"
 
 
@@ -66,7 +77,7 @@ def _dont_write_bytecode(*flags: str) -> str:
     proc = subprocess.run(
         [sys.executable, *flags, "-c", _PROBE],
         capture_output=True, text=True, stdin=subprocess.DEVNULL,
-        env={"PATH": "/usr/bin:/bin", ENV_FLAG: "1"}, timeout=120)
+        env={"PATH": "/usr/bin:/bin", ENV_FLAG: "1"}, timeout=_T)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
 
@@ -105,7 +116,7 @@ def _import_and_count_pycache(tmp_path: Path, *flags: str) -> int:
     proc = subprocess.run(
         [sys.executable, *flags, "go.py"], cwd=subject,
         capture_output=True, text=True, stdin=subprocess.DEVNULL,
-        env={"PATH": "/usr/bin:/bin", ENV_FLAG: "1"}, timeout=120)
+        env={"PATH": "/usr/bin:/bin", ENV_FLAG: "1"}, timeout=_T)
     assert proc.returncode == 0, proc.stderr
     return len(list(subject.rglob("*.pyc")))
 
@@ -159,14 +170,14 @@ def _isolated_call_lacks_B(line: str, start: int) -> bool:
 
 def _shell_callers() -> list[Path]:
     out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "*.sh"],
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, timeout=_T)
     assert out.returncode == 0, out.stderr
     return [ROOT / line for line in out.stdout.split() if line]
 
 
 def _python_callers() -> list[Path]:
     out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "*.py"],
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, timeout=_T)
     assert out.returncode == 0, out.stderr
     return [ROOT / line for line in out.stdout.split()
             if line and "/tests/" not in line
