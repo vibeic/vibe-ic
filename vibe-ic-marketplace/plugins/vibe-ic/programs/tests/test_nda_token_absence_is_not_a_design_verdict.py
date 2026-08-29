@@ -217,23 +217,36 @@ def test_control_the_codename_rule_still_fires_when_it_can_be_built(tmp_path):
 
 def test_control_the_rest_of_the_catalogue_is_intact(tmp_path):
     """A fix that dropped rules to stop the crash would also pass the rc checks.
-    Pin the rule SET, both with and without the token store."""
-    import importlib
-    sys.path.insert(0, str(PROGRAMS))
-    for mod, expected_extra in (("practical_notes_specificity_check",
-                                 "specific_pdk_codename"),
-                                ("backlog_sanitize_check", "pdk_codename")):
-        os.environ["VIBEIC_NDA_TOKENS"] = json.dumps(FICTIONAL_NDA_TOKENS)
-        m = importlib.reload(importlib.import_module(mod))
-        with_ids = {r[0] for r in m.HARD_RULES}
-        assert expected_extra in with_ids
+    Pin the rule SET, both with and without the token store.
 
-        os.environ.pop("VIBEIC_NDA_TOKENS", None)
-        os.environ["VIBEIC_PRIVATE_CONFIG"] = str(tmp_path / "empty.json")
-        (tmp_path / "empty.json").write_text("{}", encoding="utf-8")
-        m = importlib.reload(importlib.import_module(mod))
-        without_ids = {r[0] for r in m.HARD_RULES}
+    Read in a SUBPROCESS, like every other test here. An earlier draft imported
+    and `importlib.reload`-ed the two modules in-process after mutating
+    `os.environ` — which leaked the emptied store into every test that ran
+    afterwards in the same session and turned the `configured` arm of
+    `test_a_guard_that_loses_its_tokens_refuses` red, four nodes that have
+    nothing to do with this change. A child process cannot leak either the
+    environment or the module state.
+    """
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import importlib, json, sys\n"
+        f"sys.path.insert(0, {str(PROGRAMS)!r})\n"
+        "mod = sys.argv[1]\n"
+        "m = importlib.import_module(mod)\n"
+        "print(json.dumps(sorted({r[0] for r in m.HARD_RULES})))\n",
+        encoding="utf-8")
 
-        assert without_ids == with_ids - {expected_extra}, (
+    for mod, needs_tokens in (("practical_notes_specificity_check",
+                               "specific_pdk_codename"),
+                              ("backlog_sanitize_check", "pdk_codename")):
+        with_ids = set(json.loads(subprocess.run(
+            [sys.executable, str(probe), mod], capture_output=True, text=True,
+            env=_env(FICTIONAL_NDA_TOKENS, tmp_path)).stdout))
+        without_ids = set(json.loads(subprocess.run(
+            [sys.executable, str(probe), mod], capture_output=True, text=True,
+            env=_env(None, tmp_path)).stdout))
+
+        assert needs_tokens in with_ids, mod
+        assert without_ids == with_ids - {needs_tokens}, (
             f"{mod}: removing the token store must drop EXACTLY the one rule "
             f"that needs it, not any other")
