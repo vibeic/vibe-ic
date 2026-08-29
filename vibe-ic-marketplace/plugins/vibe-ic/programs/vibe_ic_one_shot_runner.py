@@ -576,6 +576,16 @@ def _line_buffer_own_stream() -> None:
             pass          # a stream that cannot be reconfigured keeps its own
 
 
+#: The runners THIS orchestrator can start a run inside. A step owned by any
+#: other runner is refused by `--entry-step` (see the guard in main()), so this
+#: tuple is the single source of truth for BOTH the refusal and the help text —
+#: they drifted apart once (the help advertised Phase-3 15/31/37 and analog
+#: A1..A9 as routable while the guard refused every one of them), and a reader
+#: has no way to tell which half is lying.
+ENTRY_STEP_ENTERABLE_RUNNERS = ("phase1_one_shot_runner",
+                                "design_one_shot_runner")
+
+
 def main() -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
@@ -595,12 +605,15 @@ def main() -> int:
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--entry-step", default=None,
                    help="START the flow at this canonical step id. The step "
-                        "decides WHICH runner owns the entry — D1 is Phase 1, "
-                        "2/4/1/9/11 are Phase 2, 15/31/37 Phase 3, A1..A9 "
-                        "analog — so the orchestrator routes to that runner "
-                        "and skips the phases before it. Only a step that "
-                        "HEADS a dispatch span is enterable; a mid-span step "
-                        "is refused rather than approximated.")
+                        "decides WHICH runner owns the entry, and THIS "
+                        "orchestrator can be entered at the Phase 1 and Phase "
+                        "2 spans only — D1 for Phase 1, 2/4/1/9/11 for Phase "
+                        "2. Phase-3 (15/31/37) and analog (A1..A9) steps are "
+                        "owned by phase3_one_shot_runner / "
+                        "analog_one_shot_runner and are REFUSED here: run "
+                        "that runner directly. Only a step that HEADS a "
+                        "dispatch span is enterable; a mid-span step is "
+                        "refused rather than approximated.")
     p.add_argument("--skip-phase1", action="store_true")
     p.add_argument("--skip-analog", action="store_true")
     p.add_argument("--skip-phase3", action="store_true")
@@ -825,8 +838,7 @@ def main() -> int:
                   f"{args.entry_step!r}. Enterable steps per runner: {_all}",
                   file=sys.stderr)
             return 2
-        if _entry_runner not in ("phase1_one_shot_runner",
-                                 "design_one_shot_runner"):
+        if _entry_runner not in ENTRY_STEP_ENTERABLE_RUNNERS:
             # Phase-3 and analog entries are NOT wired here yet. Say so rather
             # than routing to the nearest phase and reporting as if it were what
             # was asked.
