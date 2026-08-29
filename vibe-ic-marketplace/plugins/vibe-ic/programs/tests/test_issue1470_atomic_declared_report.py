@@ -58,13 +58,24 @@ import _atomic_artefact as A  # noqa: E402
 import atomic_artifact_write_check as G  # noqa: E402
 import generated_artifact_conflict_resolve as RESOLVER  # noqa: E402
 import hygiene_finding_delta as DELTA  # noqa: E402
+import stage_on_pass_review as REVIEW  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 BASELINE = PROGRAMS / "_atomic_artefact_residual.json"
 
-#: The two programs #1470 is about, pinned BY NAME. A count alone would also be
-#: satisfied by deleting them, and by any later pair regressing in their place.
-CONVERTED = ["generated_artifact_conflict_resolve", "hygiene_finding_delta"]
+#: The programs #1470 is about, pinned BY NAME. A count alone would also be
+#: satisfied by deleting them, and by any later program regressing in their
+#: place.
+#:
+#: `stage_on_pass_review` is the THIRD, and it arrived the same way as the
+#: first two: it landed after the residual was measured, so the register could
+#: not excuse it and the ratchet named it on sight —
+#: `stage_on_pass_review.py:572  .write_text(...)`, MEASURED on clean main
+#: 7d059e03b (v1.12.93) as the one and only new offender. Its `emit()` writes
+#: the review's VERDICT (NOT_CHECKED with its reason, or the rejections a
+#: landing acts on), which is exactly the class the other two are in.
+CONVERTED = ["generated_artifact_conflict_resolve", "hygiene_finding_delta",
+             "stage_on_pass_review"]
 
 #: The register's size at the tranche that last pulled it down (#1082's
 #: `open(..., 'w')` closure). It may SHRINK below this; growing past it is the
@@ -88,6 +99,14 @@ def _argv_resolver(dest: Path, repo: Path):
     return ["--repo", str(repo), "--dry-run", "--json", str(dest)]
 
 
+def _argv_review(dest: Path, repo: Path):
+    # A stage the flow does not declare: `load_declaration` refuses, `emit()`
+    # writes the NOT_CHECKED verdict and `main` returns 2. A refusal is still a
+    # verdict that must arrive whole, and this path needs no project tree, no
+    # compliance report and no flow run.
+    return [str(repo), "--stage", "no-such-stage", "--json", str(dest)]
+
+
 def _argv_delta(dest: Path, repo: Path):
     # Both records are deliberately absent: the program REFUSES, and a refusal
     # is still a verdict it must write whole. Nothing here needs a real hygiene
@@ -102,6 +121,7 @@ def _argv_delta(dest: Path, repo: Path):
 DRIVEN = [
     ("generated_artifact_conflict_resolve", RESOLVER, _argv_resolver),
     ("hygiene_finding_delta", DELTA, _argv_delta),
+    ("stage_on_pass_review", REVIEW, _argv_review),
 ]
 
 
@@ -141,7 +161,7 @@ def test_the_gate_is_green_and_the_ratchet_holds():
 
 
 def test_the_green_was_not_bought_by_widening_the_register():
-    """Adding these two names to the residual would ALSO have exited 0.
+    """Adding these names to the residual would ALSO have exited 0.
 
     That is the failure mode this repo keeps paying for: a gate turned green by
     shrinking the rule. The register must not name them, and must not have
