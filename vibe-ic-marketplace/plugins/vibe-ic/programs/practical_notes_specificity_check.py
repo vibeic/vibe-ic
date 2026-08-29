@@ -99,7 +99,7 @@ ALLOW_MARKER = "<!-- specificity-allow"
 #
 # This caller did not handle it, and the call sits inside a module-level rule
 # table — so the raise escaped at IMPORT, before argparse, before `--help`, and
-# before any subject was opened. MEASURED 2026-08-30 on a gf180mcuD benchmark
+# before any subject was opened. MEASURED 2026-08-30 on a public-PDK benchmark
 # run with no token store configured: rc 1 with a bare traceback on stdout, and
 # `flow_compliance_check` records an rc-1 gate by its FIRST OUTPUT LINE — so the
 # design's completion audit carried

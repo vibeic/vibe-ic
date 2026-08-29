@@ -109,7 +109,7 @@ class Finding:
 #
 # This caller did not handle it, and the call sits inside a module-level rule
 # table — so the raise escaped at IMPORT, before argparse, before `--help`, and
-# before any subject was opened. MEASURED 2026-08-30 on a gf180mcuD benchmark
+# before any subject was opened. MEASURED 2026-08-30 on a public-PDK benchmark
 # run with no token store configured: rc 1 with a bare traceback on stdout, and
 # `flow_compliance_check` records an rc-1 gate by its FIRST OUTPUT LINE — so the
 # design's completion audit carried
@@ -664,6 +664,28 @@ def main(argv: List[str] = None) -> int:
     else:
         is_pass = not any(f.severity == "ERROR" for f in findings)
 
+    # Keep the machine-readable surface on the same no-verdict channel as the
+    # exit code and stderr.  The ordinary report contains ``"pass": true``;
+    # emitting that beside rc 2 / NOT_MEASURED says both "clean" and "could not
+    # completely measure" about the same run.  We still scan first so a real
+    # finding from any available rule retains rc 1 below.
+    if _nda_rule_unmeasured(bool(findings)):
+        report = {
+            "program": "backlog_sanitize_check",
+            "version": "1.2.0",
+            "verdict": "NOT_MEASURED",
+            "nda_codename_rule": "NOT_MEASURED",
+            "summary": {"verdict": "NOT_MEASURED", **summary},
+            "findings": [],
+        }
+        out = json.dumps(report, indent=2, ensure_ascii=False)
+        if args.json_out:
+            Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(Path(args.json_out), out)
+        print(out)
+        _print_nda_unmeasured("backlog_sanitize_check", "pdk_codename")
+        return 2
+
     report = {
         "program": "backlog_sanitize_check",
         "version": "1.2.0",
@@ -679,9 +701,6 @@ def main(argv: List[str] = None) -> int:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(Path(args.json_out), out)
     print(out)
-    if _nda_rule_unmeasured(bool(findings)):
-        _print_nda_unmeasured("backlog_sanitize_check", "pdk_codename")
-        return 2
     return 0 if is_pass else 1
 
 

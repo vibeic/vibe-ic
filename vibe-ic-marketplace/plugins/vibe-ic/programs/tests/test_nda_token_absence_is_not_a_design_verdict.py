@@ -11,7 +11,7 @@ nothing, and says in its own docstring what that obliges of every caller:
 Two gates did not handle it, and the unhandled call sat inside a MODULE-LEVEL
 rule table — so the raise escaped at import, before argparse and before any
 subject was opened. `flow_compliance_check` records an rc-1 gate by its FIRST
-OUTPUT LINE, so a gf180mcuD benchmark run's completion audit carried
+OUTPUT LINE, so a public-PDK benchmark run's completion audit carried
 
     {"name": "backlog_sanitize_check", "verdict": "FAIL",
      "message": "Traceback (most recent call last):"}
@@ -48,6 +48,7 @@ PRACTICAL = PROGRAMS / "practical_notes_specificity_check.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 
 
 def _shipped_version() -> str:
@@ -141,6 +142,20 @@ def test_practical_answers_rc2_not_measured_on_a_clean_subject(tmp_path):
     assert r.returncode == 2, r.stdout + r.stderr
     assert "NOT_MEASURED" in r.stderr
     assert "specific_pdk_codename" in r.stderr
+
+
+def test_real_plugin_notes_refuse_instead_of_claiming_clean(tmp_path):
+    """The no-token verdict also bites on the checked-in documentation corpus.
+
+    Synthetic one-line subjects isolate the rule interaction above; this arm
+    makes the changed gate read the real tree that future plugin runs scan.
+    """
+    skills = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "skills")
+    r = _run(PRACTICAL, ["--paths", str(skills)], None, tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert r.stdout.strip().splitlines()[-1] == "NOT_MEASURED"
+    assert "Traceback" not in r.stderr
 
 
 def test_the_word_printed_matches_the_exit_code(tmp_path):
