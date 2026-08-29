@@ -104,9 +104,20 @@ def test_empty_inputs_are_noops():
     assert G.preserve_dropped_context_modules(_EMITTED, None) == (_EMITTED, [])
 
 
-def test_preserve_takes_only_completion_and_context():
-    # the preservation repair accepts ONLY the delivered completion + the
-    # provided input.context — both LEGAL inputs; it has no harness/dataset/path
-    # parameter, so it structurally cannot read the oracle.
-    assert list(inspect.signature(G.preserve_dropped_context_modules).parameters) \
-        == ["emitted", "ctx_texts"]
+def test_preserve_takes_only_completion_and_input_context():
+    # The invariant this pins is the §4.05 no-leak boundary: the repair may see
+    # ONLY the delivered completion and the record's `input.context` — both
+    # LEGAL inputs — so it structurally cannot read the oracle.
+    #
+    # It gained `ctx_by_path`, which carries THE SAME input.context with its
+    # `rtl/<name>.sv` keys kept. The path is what distinguishes a provided file
+    # the delivery rewrites from one the harness stages, and re-injecting a
+    # staged module is a duplicate declaration (3 designs measured on the 302-
+    # design CVDP set). So the boundary is asserted by SOURCE, not by parameter
+    # count: no harness, no dataset, and above all no `output.context`.
+    params = list(inspect.signature(
+        G.preserve_dropped_context_modules).parameters)
+    assert params[:2] == ["emitted", "ctx_texts"]
+    assert set(params) <= {"emitted", "ctx_texts", "ctx_by_path"}, params
+    for banned in ("harness", "dataset", "expected_files", "output"):
+        assert not any(banned in x for x in params), (banned, params)

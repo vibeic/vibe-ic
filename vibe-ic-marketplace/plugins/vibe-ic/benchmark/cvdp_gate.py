@@ -1998,7 +1998,8 @@ def _module_block(text: str, name: str) -> Optional[str]:
 
 
 def preserve_dropped_context_modules(
-        emitted: str, ctx_texts: Optional[List[str]]
+        emitted: str, ctx_texts: Optional[List[str]],
+        ctx_by_path: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, List[str]]:
     """#139(b) — packaging-layer file-clobber PRESERVATION (defense-in-depth over
     the v1.4.19 author-side lesson + file_extend_preserve_check detector).
@@ -2013,7 +2014,34 @@ def preserve_dropped_context_modules(
     instantiates is an intended REPLACEMENT and is NEVER re-included; (2) nothing
     outside `ctx_texts` is ever injected; (3) a module the author redefines is
     left as-authored. A JSON multi-file envelope is left untouched (the repair
-    targets a flat/bare emit; the detector + author-side lesson still apply)."""
+    targets a flat/bare emit; the detector + author-side lesson still apply).
+
+    (4) A MODULE THE OFFICIAL HARNESS STAGES ITSELF IS NEVER RE-INCLUDED. The
+    repair for a DROPPED module is a DUPLICATE DECLARATION for a SUPPLIED one:
+    `_load_context_rtl` states that an `input.context` value is "the file
+    CONTENTS the harness compiles alongside the author's completion", and the
+    compile path here tolerates unknown context modules for the same reason
+    ("the official harness supplies those context files at scoring time").
+    Appending one makes elaboration die on `already been declared in this scope`.
+
+    Which provided FILE the delivery replaces is decidable from `input.context`
+    alone — no `output.context`, which is the reference-solution field this gate
+    deliberately does not read: the author REPLACES a provided file iff the
+    delivery defines a module that file defines. Every OTHER provided file is
+    staged by the harness, so its modules are excluded. That keeps the #139(b)
+    repair for what it was written for (a module dropped from the very file the
+    author is rewriting, which lives in the SAME provided file as a module the
+    author did define) and drops it for what it broke.
+
+    Measured on 302 authored CVDP completions: 3 designs failed this way.
+    `cvdp_copilot_elevator_control_0033`/`0036` define `elevator_control_system`
+    (so `rtl/elevator_control_system.sv` is the replaced file) and instantiate
+    `floor_to_seven_segment`, which lives in a DIFFERENT provided file the
+    harness stages; the injected copy collided with the harness's own and
+    surfaced as a verilator lint failure that was never a lint issue.
+    `cvdp_copilot_scrambler_0018` is the same shape with `intra_block`.
+
+    Without `ctx_by_path` the behaviour is unchanged."""
     if not emitted or not ctx_texts or _fx is None:
         return emitted, []
     # never touch a JSON code-dict envelope (raw append would corrupt it).
@@ -2022,10 +2050,24 @@ def preserve_dropped_context_modules(
             return emitted, []
     except Exception:
         pass
+    # Modules the OFFICIAL HARNESS stages itself. A provided file is REPLACED by
+    # the delivery iff the delivery defines a module that file defines; every
+    # other provided file is staged at scoring time and its modules must not be
+    # appended. Derived from `input.context` only.
+    harness_supplied: set = set()
+    if ctx_by_path:
+        _authored = set(_fx.modules_defined(emitted))
+        for _path, _text in ctx_by_path.items():
+            _defs = set(_fx.modules_defined(_text))
+            if _defs & _authored:
+                continue                # the delivery rewrites this file
+            harness_supplied |= _defs
     # index provided context modules: name -> raw `module … endmodule` block
     provided: Dict[str, str] = {}
     for ctext in ctx_texts or []:
         for name in _fx.modules_defined(ctext):
+            if name in harness_supplied:
+                continue                # the harness compiles it — never duplicate
             if name not in provided:
                 blk = _module_block(ctext, name)
                 if blk:
@@ -2111,6 +2153,44 @@ def _load_context_modules(path):
         stems = context_module_names(ctx) if ctx else set()
         if stems:
             out[str(rid)] = stems
+    return out
+
+
+def _load_context_rtl_by_path(path):
+    """{id: {`rtl/<name>.sv`: text}} for the record's `input.context`.
+
+    The same content `_load_context_rtl` returns, with the PATH kept. Which
+    provided FILE a module came from is what says whether the official harness
+    stages it or the author's delivery replaces it, and that cannot be recovered
+    from the concatenated text. `input.context` only — `output.context` is the
+    reference-solution field and this gate does not read it. chip-AGNOSTIC."""
+    out = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    _RTL_EXTS = (".sv", ".svh", ".v", ".vh")
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        if rid is None:
+            continue
+        inp = d.get("input")
+        ctx = inp.get("context") if isinstance(inp, dict) else None
+        if ctx is None:
+            ctx = d.get("context")
+        if not isinstance(ctx, dict):
+            continue
+        byp = {k: v for k, v in ctx.items()
+               if isinstance(k, str) and isinstance(v, str)
+               and Path(k).name.endswith(_RTL_EXTS)}
+        if byp:
+            out.setdefault(rid, {}).update(byp)
     return out
 
 
@@ -3251,6 +3331,7 @@ def main(argv=None) -> int:
     # prompt-named port to its OWNING context/instantiated sub-module exactly the
     # way the STANDALONE gate does with `--context`.
     context_rtl = {}
+    context_rtl_by_path: Dict[str, Dict[str, str]] = {}
     # ORGANIC (GATE-AS-SOLE-EMIT) — per-id `.vlt` verilator lint waivers from
     # input.context (applied to the lint-zero block so an officially-waived
     # warning is never blocked).
@@ -3262,6 +3343,10 @@ def main(argv=None) -> int:
             context_modules.setdefault(_rid, set()).update(_stems)
         for _rid, _texts in _load_context_rtl(_ctx_src).items():
             context_rtl.setdefault(_rid, []).extend(_texts)
+        # same content, PATH kept — #139(b) needs the owning file to tell a
+        # harness-staged provided module from one the delivery replaces.
+        for _rid, _byp in _load_context_rtl_by_path(_ctx_src).items():
+            context_rtl_by_path.setdefault(_rid, {}).update(_byp)
         for _rid, _vlts in _load_context_waivers(_ctx_src).items():
             context_waivers.setdefault(_rid, []).extend(_vlts)
         context_available |= _load_context_available(_ctx_src)
@@ -3794,7 +3879,8 @@ def main(argv=None) -> int:
                 _ctx_texts = context_rtl.get(_rid_alias)
                 if _ctx_texts:
                     _repaired, _reinc = preserve_dropped_context_modules(
-                        out_rec.get("completion", ""), _ctx_texts)
+                        out_rec.get("completion", ""), _ctx_texts,
+                        ctx_by_path=context_rtl_by_path.get(_rid_alias))
                     if _reinc:
                         out_rec["completion"] = _repaired
                         entry["context_preserved"] = list(_reinc)
