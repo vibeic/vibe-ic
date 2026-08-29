@@ -339,19 +339,48 @@ def sample_faults(faults: list, max_faults: int):
     return [faults[i] for i in idx], True
 
 
+# A fatal yosys diagnostic. Yosys prints `ERROR: ...` and exits; nothing after
+# it in the batch runs. Anchored at line-start so the word "error" inside a
+# signal name, a path, or a cell name can never be mistaken for one.
+_YOSYS_FATAL_RE = re.compile(r"^ERROR:[^\n]*", re.M)
+
+
 def parse_sat_verdict(body: str) -> str:
     """Classify ONE Yosys `sat -prove` output block.
-      'DET'   — `model found: FAIL!`  (proof of trig==0 failed → detecting
-                2-pattern found)
-      'RED'   — `no model found: SUCCESS!` (proof holds → redundant/undetectable)
-      'ABORT' — anything else (timeout / error / no verdict) → NOT detected.
+      'DET'        — `model found: FAIL!`  (proof of trig==0 failed → detecting
+                     2-pattern found)
+      'RED'        — `no model found: SUCCESS!` (proof holds → redundant)
+      'TOOL_ERROR' — the block carries a fatal yosys `ERROR:`. The TOOL failed;
+                     this is NOT a statement about the fault or the design.
+      'ABORT'      — anything else (per-fault timeout / no verdict) → the fault
+                     was attempted and left undecided → NOT detected.
     Pure. FALSE-CLEAN-PROOF: only an explicit `model found: FAIL!` is a
-    detection; every ambiguous outcome is conservatively NOT a detection."""
+    detection; every ambiguous outcome is conservatively NOT a detection.
+
+    Why TOOL_ERROR is not ABORT (measured, spm x gf180mcuD, v1.12.51): the
+    per-fault marker is emitted BEFORE the `sat` command, so when yosys died on
+    the FIRST fault with "No SAT model available for cell ..." the log held a
+    marker with no verdict after it — scored ABORT, i.e. "attempted but left
+    undecided". ABORT sits in the coverage DENOMINATOR, so ONE phantom abort
+    made det+red+abort = 1, cleared the `no gradeable verdicts → ERROR` guard,
+    and rendered a hard tool crash as "TDF test-coverage 0.0 %" — a graded
+    DESIGN failure. A fault ATPG could not crack and a tool that could not run
+    are different facts; only the first is about the design."""
     if "model found: FAIL" in body:
         return "DET"
     if "no model found: SUCCESS" in body:
         return "RED"
+    if _YOSYS_FATAL_RE.search(body or ""):
+        return "TOOL_ERROR"
     return "ABORT"
+
+
+def _fatal_tool_message(log: str) -> str:
+    """The fatal yosys `ERROR:` line(s) from a batch log, verbatim, for the
+    operator. Empty string when the log carries none. Pure — quotes the tool,
+    never paraphrases it into a design claim."""
+    hits = _YOSYS_FATAL_RE.findall(log or "")
+    return " | ".join(dict.fromkeys(h.strip() for h in hits))[:600]
 
 
 def _extract_pattern(body: str, prim_in_names: list[str]) -> dict | None:
@@ -673,6 +702,93 @@ def _tdf_pre_flatten_script(liberty_ctr: str, cut_rel: str, top: str,
     )
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Gate-levelisation post-condition
+# ══════════════════════════════════════════════════════════════════════════
+# A `read_liberty` of a library that contains NONE of the netlist's cells is
+# NOT an error to yosys: read_liberty succeeds, flatten succeeds, exit code is
+# 0, and the file is written — and the "gate-levelised" core is still the
+# ORIGINAL blackbox instantiations, with no functional model behind any of
+# them. The step then reports success, and the ATPG dies much later inside
+# `sat` with "No SAT model available for cell <inst> (<type>)".
+#
+# Measured (spm x gf180mcuD, v1.12.51): the flow resolved a sky130 Liberty for
+# a gf180mcu design, `_gate_levelise` returned ok, and the written core held
+# 197 unresolved gf180 blackboxes and 0 resolved gates. With the design's OWN
+# Liberty the same cut netlist levelises to 1431 pure `assign`s and 0
+# instantiations. Both yosys runs exit 0. Exit code and file existence — the
+# only two things the step checked — cannot tell those two outcomes apart, so
+# the step must verify its OWN output.
+#
+# chip/PDK/vendor-AGNOSTIC: keyed on yosys's own generic-cell vocabulary (a
+# RESOLVED cell is inlined to `assign`s and/or `$_*_` primitives, both of which
+# are `$`-prefixed or gone entirely), never on a library or cell name — the
+# same vocabulary `_GENERIC_SEQ_PRIM_RE` below already keys on.
+_INSTANCE_RE = re.compile(
+    r"^[ \t]*(\\?[A-Za-z_$][\w$]*)[ \t]+(\\?[\w$\[\]:.]+)[ \t]*\(", re.M)
+
+# Verilog keywords that can lead a `<word> <word> (` line without being a cell
+# instantiation. Excluded by NAME so a library cell can never be mistaken for
+# one of them (no library literal is involved either way).
+_VERILOG_NON_INSTANCE_LEAD = frozenset({
+    "module", "endmodule", "input", "output", "inout", "wire", "reg",
+    "assign", "always", "initial", "parameter", "localparam", "defparam",
+    "function", "task", "generate", "endgenerate", "if", "else", "case",
+    "casex", "casez", "for", "while", "repeat", "integer", "genvar",
+})
+
+
+def unresolved_cell_types(flat_verilog_text: str) -> dict:
+    """Cell TYPES still instantiated as BLACKBOXES in a gate-levelised core.
+
+    After `read_liberty` + `flatten` + `opt_clean`, a cell the Liberty MODELLED
+    is gone: it has been inlined to `assign`s / `$_*_` generic primitives. A
+    cell the Liberty did NOT model survives verbatim as an instantiation of its
+    library type — it has no function behind it, and `sat` cannot import it.
+
+    Returns {cell_type: instance_count} for every surviving non-generic type;
+    an empty dict means levelisation actually levelised. Pure — no I/O, no
+    library name, no chip literal.
+    """
+    out: dict = {}
+    for m in _INSTANCE_RE.finditer(flat_verilog_text or ""):
+        ctype = m.group(1)
+        if ctype in _VERILOG_NON_INSTANCE_LEAD:
+            continue
+        # yosys generic/internal cells (`$_AND_`, `$paramod...`, `\$_DFF_P_`)
+        # ARE resolved logic the SAT solver models natively.
+        if ctype.lstrip("\\").startswith("$"):
+            continue
+        out[ctype] = out.get(ctype, 0) + 1
+    return out
+
+
+def levelisation_failure_reason(flat_verilog_text: str, liberty: str) -> str:
+    """"" if the core is fully levelised, else an operator-actionable message
+    naming the Liberty that was read and the cell types it did not model.
+
+    This is the message that must reach the operator INSTEAD of a coverage
+    number: "the library could not model these cells" is a statement about the
+    TOOL SETUP; "this design has 0 % at-speed coverage" is a statement about the
+    DESIGN. Only one of them was true. Pure."""
+    unresolved = unresolved_cell_types(flat_verilog_text)
+    if not unresolved:
+        return ""
+    types = sorted(unresolved, key=lambda k: (-unresolved[k], k))
+    shown = ", ".join(f"{t} x{unresolved[t]}" for t in types[:6])
+    more = f" (+{len(types) - 6} more types)" if len(types) > 6 else ""
+    return (
+        f"gate-levelisation did not levelise: the flattened core still "
+        f"instantiates {sum(unresolved.values())} cell(s) of {len(types)} "
+        f"type(s) that the Liberty did not model -- {shown}{more}. The Liberty "
+        f"read was {liberty}; it models none of this netlist's cells, so no "
+        f"functional model exists behind them and the SAT engine cannot import "
+        f"them. This is a LIBRARY/PDK SELECTION failure of the tool setup, NOT "
+        f"a measurement of the design: pass --liberty for the library these "
+        f"cells come from. NO at-speed coverage can be computed from this core "
+        f"and none is reported.")
+
+
 def _gate_levelise(project: Path, cut_rel: str, liberty_ctr: str,
                    top: str, flat_rel: str, pdk_dir: Path | None,
                    timeout: int,
@@ -696,6 +812,13 @@ def _gate_levelise(project: Path, cut_rel: str, liberty_ctr: str,
         extra_mounts=extra_mounts)
     if ec != 0 or not (project / flat_rel).exists():
         return False, f"gate-levelise failed (exit {ec}): {(out + err)[-400:]}"
+    # POST-CONDITION: exit 0 + file exists does NOT mean levelisation happened.
+    # A Liberty holding none of this netlist's cells produces exit 0 and a file
+    # of untouched blackboxes. Ask the only question that matters.
+    why = levelisation_failure_reason(
+        (project / flat_rel).read_text(errors="replace"), liberty_ctr)
+    if why:
+        return False, why
     return True, "gate-levelised via read_liberty -ignore_miss_func + flatten"
 
 
@@ -955,6 +1078,13 @@ def _parse_time_spent(log: str) -> "tuple[int, int, int]":
     return sat_calls, sat_sec, flatten_sec
 
 
+# Fraction of its wall share a batch must have spent before "not reached within
+# the wall budget" is an honest description of why faults are missing (and
+# "raise --timeout" is honest advice). Below it, the batch stopped early for
+# some other reason and saying otherwise sends the operator to burn the wall.
+_WALL_SPENT_FRACTION = 0.5
+
+
 def _scaled_wall_budget(floor_wall: int, scan_flops: int) -> int:
     """The at-speed ATPG wall budget for THIS design: the caller's floor plus a
     per-scan-flop term, capped at WALL_BUDGET_MAX. A design with no/few flops
@@ -1017,10 +1147,16 @@ def _parse_batch_log(log: str, faults: list, prim_in_names: list[str]):
     verdict is one of:
       * 'DET'       marker + `model found: FAIL!`      (detecting 2-pattern)
       * 'RED'       marker + `no model found: SUCCESS!` (redundant/undetectable)
-      * 'ABORT'     marker present but no sat verdict — the fault WAS attempted
-                    but left undecided (per-fault `sat -timeout` hit, solver
-                    interrupted, or the batch was killed WHILE solving it).
-                    Conservatively undetected — never a false detection.
+      * 'TOOL_ERROR' marker present and the block carries a fatal yosys
+                    `ERROR:` — the TOOL failed (bad/absent cell model, unusable
+                    script). NOT a per-fault outcome, NOT a design property; it
+                    must never enter the coverage denominator and must never be
+                    described as "attempted but left undecided".
+      * 'ABORT'     marker present, no sat verdict, and NO fatal error — the
+                    fault WAS attempted but left undecided (per-fault `sat
+                    -timeout` hit, solver interrupted, or the batch was killed
+                    WHILE solving it). Conservatively undetected — never a
+                    false detection.
       * 'UNREACHED' NO marker at all — the batch never got to this fault (e.g.
                     the wall budget killed yosys first, #154). The caller
                     EXCLUDES these from the graded sample (an honest, disclosed
@@ -1291,6 +1427,24 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
         per_fault_sec = float(sat_timeout)
         setup_sec = float(flatten_sec or 30)
 
+    # A fatal tool error during CALIBRATION is an ERROR, not a speed sample.
+    # (Measured: the calibration hit the same "No SAT model available" crash,
+    # timed it, and reported per_fault_sat_sec = 1.0 — declaring all 398 faults
+    # comfortably affordable. It was timing a crash. The pre-existing guard
+    # below could not fire because the setup marker IS emitted before the first
+    # `sat`, so cal_setup_done was True.)
+    cal_tool_err = [(n, k) for n, k, v in cal_results if v == "TOOL_ERROR"]
+    if cal_tool_err:
+        base.update({"verdict": "ERROR", "status": "ERROR",
+                     "tool_error": True,
+                     "reasons": [
+                         f"ATPG TOOL FAILURE during calibration (yosys exit "
+                         f"{cal_ec}): the at-speed engine did not run. This is "
+                         f"NOT a coverage measurement and no coverage is "
+                         f"reported.",
+                         _fatal_tool_message(cal_log)]})
+        return 1, base
+
     if not cal_setup_done and cal_graded == 0:
         base.update({"verdict": "ERROR", "status": "ERROR",
                      "reasons": [f"ATPG calibration produced no setup marker or "
@@ -1333,6 +1487,32 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     # undetected (counting un-reached faults undetected is exactly what scored a
     # too-large batch 0 %). Genuine per-fault aborts (marker present, undecided)
     # STILL count as undetected — anti-gaming intact.
+    # A TOOL FAILURE is not a fault verdict. A batch that died inside yosys
+    # produced NO measurement of this design, so it is reported as what it is
+    # and NOTHING is graded from it — the crash must reach the operator as a
+    # tool failure, never as a coverage number. This is checked BEFORE the
+    # grading arithmetic so a crash can never reach `coverage_math` at all.
+    tool_err = [(n, k) for n, k, v in results if v == "TOOL_ERROR"]
+    if tool_err:
+        nets = ", ".join(f"{n}/{k}" for n, k in tool_err[:4])
+        more = f" (+{len(tool_err) - 4} more)" if len(tool_err) > 4 else ""
+        base.update({
+            "verdict": "ERROR", "status": "ERROR",
+            "tool_error": True,
+            "tool_error_faults": len(tool_err),
+            "sat_log": "phase2/stage2/dft/tdf/sat_run.log",
+            "reasons": [
+                f"ATPG TOOL FAILURE (yosys exit {real_ec}): the at-speed "
+                f"engine aborted at {nets}{more} after "
+                f"{real_elapsed:.0f}s of its {int(remaining)}s budget. The "
+                f"engine did not run, so NO at-speed coverage was measured and "
+                f"none is reported. This is a statement about the TOOL, not "
+                f"about the design's testability -- do NOT read it as a "
+                f"coverage result and do NOT raise --timeout (the batch did not "
+                f"run out of time; it died).",
+                _fatal_tool_message(log)]})
+        return 1, base
+
     graded = [(n, k, v) for n, k, v in results if v != "UNREACHED"]
     unreached = len(results) - len(graded)
     det = sum(1 for _, _, v in graded if v == "DET")
@@ -1363,13 +1543,34 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
             f"{red}) = {cov['testable_faults']} testable; aborted {abort} "
             "counted as undetected)")
     if unreached:
-        reasons.append(
+        # "Raise --timeout" is only true advice if the batch actually SPENT its
+        # wall. A batch that stopped after a small fraction of its budget did
+        # not run out of time — it stopped early, and telling the operator to
+        # raise the timeout sends them to burn the wall for no change.
+        # (Measured: 397 of 398 faults were reported "not reached within the
+        # 1995s wall budget" by a process that had consumed ~2s of it.)
+        spent_frac = (real_elapsed / remaining) if remaining > 0 else 1.0
+        disclosure = (
             f"DISCLOSED budget-truncation: {unreached} of {len(faults)} sampled "
-            f"faults were not reached within the {wall}s size-scaled wall budget "
-            f"(floor {timeout}s + {WALL_PER_SCAN_FLOP:g}s/scan-flop, {scan_flops} "
-            f"flops) and are EXCLUDED from the graded sample (NOT counted "
-            f"undetected); coverage is over the {cov['sampled_faults']} graded "
-            f"faults. Raise --timeout or lower --max-faults for a fuller sample.")
+            f"faults were not reached and are EXCLUDED from the graded sample "
+            f"(NOT counted undetected); coverage is over the "
+            f"{cov['sampled_faults']} graded faults.")
+        if spent_frac >= _WALL_SPENT_FRACTION:
+            reasons.append(
+                disclosure +
+                f" The batch spent {real_elapsed:.0f}s of its {int(remaining)}s "
+                f"share of the {wall}s size-scaled wall budget (floor "
+                f"{timeout}s + {WALL_PER_SCAN_FLOP:g}s/scan-flop, {scan_flops} "
+                f"flops). Raise --timeout or lower --max-faults for a fuller "
+                f"sample.")
+        else:
+            reasons.append(
+                disclosure +
+                f" The batch did NOT run out of time: it stopped after "
+                f"{real_elapsed:.0f}s of its {int(remaining)}s share of the "
+                f"{wall}s wall budget (yosys exit {real_ec}). Raising --timeout "
+                f"will NOT reach more faults -- investigate why the batch "
+                f"stopped early instead.")
     base.update({
         "ge_floor": ge_floor,
         "launch_capture_pattern_count": det,   # each detection IS a 2-pattern
