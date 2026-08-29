@@ -94,6 +94,74 @@ stages:
 
   - id: stage1
     name: "RTL Generation + Verification"
+    # ON-PASS REVIEW (vibe-ic — the verification tier's first wiring)
+    # ------------------------------------------------------------------
+    # `skills/_classification.json` declares a `verification` tier — "run
+    # AFTER program PASS to spot-check the deterministic output" — with EIGHT
+    # members. Measured on v1.12.83: all eight appear ZERO times in this file,
+    # and `on_pass` / `after_pass` / `review_on` / `verify_artefact` /
+    # `artefact_review` appear zero times too. Every `skills:` array below
+    # hangs on a FAILURE trigger ("Lint error above threshold", "Setup
+    # violation", "DRC/LVS/ERC fail") or on a `condition:`. So the AI was
+    # wired as an AUTHOR (when no program can) and as a REPAIRER (when a
+    # program failed), and NOWHERE as a reviewer of a program that PASSED.
+    #
+    # WHY THE FIELD IS NEW AND `skills:` COULD NOT CARRY IT. `skills:` is a
+    # STEP field, and its meaning at every one of its sites is "invoke this
+    # when the step could not, or when the step failed" — step 2's
+    # `skills: [rtl-review]` sits directly beneath `closed_loop.trigger:
+    # "Lint error/warning above threshold"`. Re-using the key for the
+    # opposite trigger would give one key two contradictory meanings with
+    # nothing to tell them apart. It is declared on the STAGE, not the step,
+    # because 76 steps is the wrong granularity for eight skills and because
+    # `stage:` is ALREADY the flow's coarse axis (eight values, already
+    # separating analog and mixed-signal from digital, already enforced by
+    # flow_compliance_check). This adds no grouping field: membership is
+    # still declared exactly once, by the per-step `stage:` field
+    # (flow_stage_membership_single_declaration_check P1 is unaffected — the
+    # value here is a MAPPING and names no step id).
+    #
+    # WHY STAGE 1. Its artefact is the only one in the flow that is a
+    # TRANSLATION of the intent rather than a transformation of an upstream
+    # artefact: stage2 checks the netlist against the RTL (equivalence),
+    # stage3 checks the layout against the netlist (LVS) and against the PDK
+    # (DRC). Nothing checks the RTL against what the design was asked to be.
+    # A wrong-but-passing stage-1 artefact is therefore carried faithfully to
+    # GDS by every downstream gate doing its job correctly.
+    #
+    # WHAT THE REVIEW READS. The INTENT (`phase1/generated_docs/L*.json`, the
+    # §4.05 design input — never the oracle, the harness or the golden) and
+    # the ARTEFACT this stage produced. It NEVER re-derives the artefact: it
+    # does not regenerate RTL and runs no tool. `intent_deny` is enforced, not
+    # documentation — a declared intent path under any of those segments makes
+    # the review refuse (rc 2) instead of reading it.
+    #
+    # BLOCKING vs ADVISORY, declared here and not by the reviewer. ADVISORY:
+    # the review reports evidence and exits 1 on a rejection, and the runner
+    # surfaces it; it does not stop the flow. A rejection's evidence is
+    # required to include an executable test, and it is that test — an
+    # ordinary repo test, in the ordinary suite — that blocks. Flipping this
+    # to `blocking` is a one-word edit here and needs no reviewer change.
+    on_pass_review:
+      skill: phase2-rtl-verify
+      fires_on: stage_pass
+      verdict: advisory
+      intent:
+        - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+      intent_deny: ["oracle", "harness", "golden", "reference_output", "solution"]
+      artefact:
+        - "phase2/stage1/rtl/"
+        - "reports/phase2/"
+      rejection_requires: [intent, artefact, contradiction, test]
+      # WHERE THE REJECTION'S TEST IS WRITTEN. A rejection must be proven by an
+      # executable test that FAILS TODAY and passes when repaired — which
+      # cannot be a test in the plugin's own suite, since that would be a
+      # permanent red about somebody else's design. The review WRITES the test
+      # into the run it is reviewing: the run's own regression, red until the
+      # run is fixed.
+      emit_test_dir: "reports/phase2/gates/on_pass_review"
+      gate:
+        program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json"
 
   - id: stage2
     name: "Synthesis + DFT"
