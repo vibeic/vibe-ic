@@ -1,0 +1,23 @@
+{
+  "_comment": "Declared required_outputs this tree resolves to a real write site. SHRINK-ONLY is the wrong word: this set may GROW freely, and a path LEAVING it is the regression. Rewrite only with --record, and only when the loss is intended and explained in the commit.",
+  "write_site": [
+    "phase2/analog/*/*.sp",
+    "phase2/stage1/formal/*.sby",
+    "phase2/stage1/rtl/*.sv",
+    "phase2/stage1/rtl/*.v",
+    "phase2/stage1/sim/*.log",
+    "phase2/stage2/dft/scan_netlist.v",
+    "phase2/stage2/synth/netlist.v",
+    "phase2/stage2/synth/post_dft_netlist.v",
+    "phase3/analog/*/*.sp",
+    "phase3/analog/hardmacro/*/*.v",
+    "phase3/stage3/pnr/metal_fill.done",
+    "phase3/stage3/pnr/pdn.done",
+    "phase3/stage3/postroute_timing_repair/no_repair_needed.flag",
+    "phase3/stage3/spice/*.sp",
+    "phase3/stage3/spice/*.spice",
+    "phase3/stage4/foundry_handoff/corner_test_vectors.json",
+    "phase3/stage4/hardmacro/*.v",
+    "sim_spice/*.sp"
+  ]
+}

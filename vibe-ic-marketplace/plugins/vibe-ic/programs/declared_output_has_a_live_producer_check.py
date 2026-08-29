@@ -72,6 +72,9 @@ VENUE_RELS: Tuple[str, ...] = (
 )
 SOURCE_SUFFIXES = (".py", ".sh", ".yaml", ".yml", ".json", ".tcl")
 
+_DEFAULT_INVENTORY = (Path(__file__).resolve().parent
+                      / "declared_output_write_site_baseline.json")
+
 
 # --------------------------------------------------------------- rendering --
 def _rendered(node: ast.AST) -> Optional[str]:
@@ -214,8 +217,18 @@ def _venue_files(root: Path) -> List[Path]:
         if not venue.is_dir():
             continue
         for dirpath, dirnames, filenames in os.walk(venue, followlinks=False):
+            # `gate_fixtures` joins the excluded set for the same reason
+            # `tests` is in it, and it was measured, not guessed: on
+            # 2026-08-29 `tools/ci/gate_fixtures/report_basis_matches_its_
+            # session_inputs.py` was the SOLE credited producer of 23 declared
+            # flow outputs -- drc_signoff.rpt, lvs.rpt, erc.rpt, ir_drop.rpt
+            # among them. A mutation fixture writes those paths to BUILD a
+            # subject tree; nothing in the flow is thereby shown to write them.
+            # Crediting it made 23 outputs read as produced by a file whose
+            # whole purpose is to be synthetic.
             dirnames[:] = [d for d in dirnames
-                           if d not in ("__pycache__", "tests", ".git")]
+                           if d not in ("__pycache__", "tests", ".git",
+                                        "gate_fixtures")]
             for name in sorted(filenames):
                 if name.startswith("test_"):
                     continue
@@ -302,10 +315,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--root", default=".")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--strict", action="store_true",
-                    help="exit 1 when a declared output has NO trace of a producer")
+                    help="exit 1 on a NO-TRACE output or a lost write site")
+    ap.add_argument("--inventory",
+                    help="the shrink-only write-site baseline (default: beside this program)")
+    ap.add_argument("--record", action="store_true",
+                    help="rewrite the baseline from this tree; never automatic")
     args = ap.parse_args(argv)
 
     root = Path(args.root).resolve()
+    inv_path = Path(args.inventory) if args.inventory else _DEFAULT_INVENTORY
+    inventory = None
+    if inv_path.is_file():
+        try:
+            inventory = json.loads(inv_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            print(f"CANNOT CHECK: {inv_path} is not readable JSON ({exc}). An "
+                  f"unreadable baseline is refused, never treated as empty.",
+                  file=sys.stderr)
+            return 2
     try:
         report = audit(root)
     except FileNotFoundError as exc:
@@ -314,6 +341,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     no_trace = sorted(p for p, r in report["rows"].items()
                       if r["state"] == "NO-TRACE")
+
+    # BLOCKING ON `NO-TRACE` ALONE IS BLOCKING ON NOTHING.
+    #
+    # MEASURED 2026-08-29, by deleting the sole producer of a real declared
+    # output (`crc_vector_gen.py`'s `.sby` write) and then, using this
+    # program's own `exclude_modules` hook, simulating the deletion of the
+    # ENTIRE sole producer for all 34 single-producer paths: not one reached
+    # NO-TRACE. Every one landed in TOKEN-TRACE, because the path's name still
+    # appears in the source -- written there by its READERS. The strict verdict
+    # stayed PASS while a real producer was gone.
+    #
+    # So the blocking condition is the DEMOTION, recorded shrink-only: a path
+    # this repository has resolved to a write site must keep one. That is a
+    # fact about THIS tree, which is why it lives in an inventory beside the
+    # program rather than in a predicate that cannot fire.
+    regressed = []
+    if inventory is not None:
+        was = set(inventory.get("write_site") or ())
+        for path in sorted(was):
+            row = report["rows"].get(path)
+            if row is None:
+                regressed.append((path, "no longer declared by the flow"))
+            elif row["state"] != "WRITE-SITE":
+                regressed.append((path, f"demoted to {row['state']}"))
+    report["regressed"] = [{"path": p, "why": w} for p, w in regressed]
     if args.json:
         print(json.dumps(report, indent=2))
     else:
@@ -324,10 +376,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             steps = ",".join(report["rows"][path]["steps"])
             print(f"  [NO-TRACE] {path}  (declared by step {steps}) — nothing "
                   f"in the running source writes or names it")
-        print("PASS" if not no_trace
-              else f"{len(no_trace)} declared output(s) have no producer in the source")
+        for row in report["regressed"]:
+            print(f"  [LOST WRITE SITE] {row['path']} — {row['why']}; this "
+                  f"repository resolved it to a write site and no longer does")
+        bad = len(no_trace) + len(report["regressed"])
+        print("PASS" if not bad
+              else f"{bad} declared output(s) lost or never had a producer")
 
-    if no_trace and args.strict:
+    if args.record:
+        inv_path.write_text(json.dumps({
+            "_comment": ("Declared required_outputs this tree resolves to a real "
+                         "write site. SHRINK-ONLY is the wrong word: this set may "
+                         "GROW freely, and a path LEAVING it is the regression. "
+                         "Rewrite only with --record, and only when the loss is "
+                         "intended and explained in the commit."),
+            "write_site": sorted(p for p, r in report["rows"].items()
+                                 if r["state"] == "WRITE-SITE"),
+        }, indent=2) + "\n", encoding="utf-8")
+        print(f"recorded {inv_path}")
+        return 0
+
+    if (no_trace or report["regressed"]) and args.strict:
         return 1
     return 0
 
