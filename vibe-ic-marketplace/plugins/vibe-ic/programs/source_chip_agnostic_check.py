@@ -241,10 +241,25 @@ def _build_nda_re() -> re.Pattern:
     # enough to never false-positive, and substring matching makes this guard
     # exactly as strict as the `git grep <SKU>` gate it enforces (so e.g.
     # `<SKU>_typ.lib` and `Calibre_<SKU>_DRC.rule` are both caught).
-    toks = sorted(set(_NDA_TOKENS), key=len, reverse=True)
+    # Read FRESH, not from the import-time `_NDA_TOKENS` snapshot: the token
+    # store is the private config now, and a value captured at import is a
+    # different question than the one this scan is asking.
+    toks = sorted(set(_cpdk.nda_tokens()), key=len, reverse=True)
     if not toks:
-        # No tokens (should never happen) -> a never-matching pattern.
-        return re.compile(r"(?!x)x")
+        # THIS RETURNED A NEVER-MATCHING PATTERN, `(?!x)x`, UNDER THE COMMENT
+        # "should never happen". It never happened while the tokens were eight
+        # entries compiled into `_commercial_pdk.py`; the store is the private
+        # config now, so an empty set is the ORDINARY state of every public
+        # checkout. MEASURED 2026-08-29 with a token planted in the scanned
+        # tree and the store emptied, this gate printed
+        #     PASS (1 file(s) scanned): no forbidden chip / vendor / SKU tokens
+        # at rc 0 — confident, specific, and false, over a file that contained
+        # the token. A guard that loses its tokens must REFUSE, never report
+        # clean; `main` renders this on the same rc-2 "no verdict" channel as
+        # NOTHING_SCANNED and COULD_NOT_LOOK.
+        raise _cpdk.NoNdaLiterals(
+            "no NDA token store on this host; the NDA panel cannot answer. "
+            "A caller must report NOT_MEASURED, never PASS.")
     escaped = [re.escape(t) for t in toks]
     return re.compile("(" + "|".join(escaped) + ")", re.IGNORECASE)
 
@@ -608,7 +623,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         extra = [t.strip() for t in args.extra_tokens.split(",")
                  if t.strip()]
 
-    verdict, findings = audit(root, extra_tokens=extra)
+    try:
+        verdict, findings = audit(root, extra_tokens=extra)
+    except _cpdk.NoNdaLiterals as exc:
+        # Same "no verdict" channel as NOTHING_SCANNED / COULD_NOT_LOOK below,
+        # and deliberately not 0: "I have nothing to match with" must never
+        # print what "I matched and found nothing" prints.
+        print(f"NO_NDA_TOKENS: {exc} Configure VIBEIC_NDA_TOKENS (a JSON "
+              "object {role: literal}) or the private config's 'nda_tokens' "
+              "key on the host that runs this gate. This run is NOT a clean "
+              "bill of health.", file=sys.stderr)
+        return 2
     report = {
         "gate": "source_chip_agnostic_check",
         "verdict": verdict,

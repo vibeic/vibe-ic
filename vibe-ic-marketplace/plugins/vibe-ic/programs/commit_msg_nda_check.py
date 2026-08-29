@@ -62,15 +62,19 @@ _CONTEXT_CHARS = 32
 
 
 # ---------------------------------------------------------------------------
-# Token table: ROLE -> token, built at runtime from the encoded store.
+# Token table: ROLE -> token, resolved at runtime from the PRIVATE config.
 # ---------------------------------------------------------------------------
 def token_roles() -> Dict[str, str]:
-    """Map each NDA token role -> its decoded literal.
+    """Map each NDA token role -> its literal, or `{}` on an unconfigured host.
 
-    Roles come straight from `_commercial_pdk._ENCODED_NDA`'s keys, so adding a
+    Roles come straight from the resolved private token store, so adding a
     token there automatically extends this guard — no edit here, no drift
-    between the source guard and the message guard."""
-    return {role: _cpdk._dec(role) for role in _cpdk._ENCODED_NDA}
+    between the source guard and the message guard.
+
+    `{}` means CANNOT ANSWER, not "no tokens to look for". Every caller reaches
+    the literals through `message_regex()`, which raises `NoNdaLiterals` on the
+    empty set rather than returning an alternation of nothing."""
+    return dict(_cpdk._nda_token_map())
 
 
 def message_regex() -> "re.Pattern[str]":
@@ -107,15 +111,15 @@ class MsgFinding:
 
 
 def _mask_line(line: str, m: "re.Match[str]", role: str) -> str:
-    """Return the neighbourhood of the hit with the literal token replaced by
-    `<NDA-TOKEN:role>`. Never returns the token itself."""
-    start = max(0, m.start() - _CONTEXT_CHARS)
-    end = min(len(line), m.end() + _CONTEXT_CHARS)
-    before = line[start:m.start()]
-    after = line[m.end():end]
-    prefix = "…" if start > 0 else ""
-    suffix = "…" if end < len(line) else ""
-    return f"{prefix}{before}<NDA-TOKEN:{role}>{after}{suffix}".strip()
+    """Return the neighbourhood of the hit with EVERY literal token in it
+    replaced by `<NDA-TOKEN:role>`. Never returns a token itself.
+
+    Masked ONLY the reported hit until 2026-08-29, so a message naming both a
+    SKU and a brand printed each one in the other's finding — into this gate's
+    stdout and thence into the push-preflight receipt's permanent `summary`.
+    See `_commercial_pdk.nda_mask_neighbourhood` for the measurement."""
+    return _cpdk.nda_mask_neighbourhood(line, m.start(), m.end(), role,
+                                        _CONTEXT_CHARS)
 
 
 def scan_message(message: str, *, source: str, commit: str = "") -> List[MsgFinding]:

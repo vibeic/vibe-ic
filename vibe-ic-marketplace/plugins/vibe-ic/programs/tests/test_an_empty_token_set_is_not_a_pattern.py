@@ -41,8 +41,14 @@ _BUILDERS = ("nda_regex_family", "nda_source_regex",
 
 @pytest.fixture
 def no_literals(monkeypatch):
-    """Make every token resolve to "" — the state an unreachable store produces."""
-    monkeypatch.setattr(cpdk, "_dec", lambda key: "")
+    """Resolve NO tokens — the state of every unconfigured host.
+
+    Was `monkeypatch.setattr(cpdk, "_dec", lambda key: "")`, which simulated an
+    unreachable store while the store was eight base64 entries compiled into
+    the module. The store is the PRIVATE CONFIG now, so this state is no longer
+    a simulation: it is what a public checkout, and any CI job that has not been
+    handed the tokens, actually is."""
+    monkeypatch.setattr(cpdk, "_nda_token_map", dict)
     return cpdk
 
 
@@ -72,7 +78,9 @@ def test_the_prefix_accessor_returns_nothing_not_an_empty_prefix(no_literals):
 def test_the_guard_is_not_in_the_way_when_the_tokens_ARE_there():
     """The control. Without this, the four tests above are satisfied by builders
     that refuse unconditionally, which would disable the detectors entirely."""
-    assert cpdk.nda_tokens(), "this tree resolves its token store; fixture-free arm"
+    assert cpdk.nda_tokens(), (
+        "this suite resolves a token store (the fixture set, via conftest); "
+        "fixture-free arm")
     pat = cpdk.nda_content_regex()
     assert pat.pattern != "", pat.pattern
     assert pat.search("") is None, (

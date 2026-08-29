@@ -36,14 +36,19 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import _commercial_pdk as cpdk  # noqa: E402
+from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
 import nda_diff_scan_check as guard  # noqa: E402
 
 _CHECKER = _PROGRAMS / "nda_diff_scan_check.py"
 
 
 def _tok(role: str) -> str:
-    """A live NDA token, reconstructed at runtime — never a literal here."""
-    return cpdk._dec(role)
+    """The fixture's token for `role` — never a real literal here.
+
+    Was a decode of the real token out of the shipped plugin store. That store
+    is gone; the suite supplies its own fictional set through the private-config
+    channel, so this test no longer depends on a secret to run."""
+    return FICTIONAL_NDA_TOKENS[role]
 
 
 def _run(args, cwd=None, input_text=None):

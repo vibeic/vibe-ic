@@ -35,6 +35,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import _commercial_pdk as cpdk  # noqa: E402
+from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
 import commit_msg_nda_check as guard  # noqa: E402
 
 _CHECKER = _PROGRAMS / "commit_msg_nda_check.py"
@@ -44,7 +45,14 @@ _CHECKER = _PROGRAMS / "commit_msg_nda_check.py"
 # Leak strings, reconstructed at runtime — never literals.
 # ---------------------------------------------------------------------------
 def _tok(role: str) -> str:
-    return cpdk._dec(role)
+    """The fixture's token for `role`.
+
+    Was `cpdk._dec(role)` — a decode of the real token out of the shipped
+    plugin. That store is gone (the literals resolve from the private config
+    now), and this test never needed the real value: it needs A token of the
+    right SHAPE, which is what the fixture set provides through the same
+    channel a configured host uses."""
+    return FICTIONAL_NDA_TOKENS[role]
 
 
 def _run(args, cwd=None, input_text=None):
@@ -142,7 +150,7 @@ def _leak_messages():
     upper/mixed case, glued to punctuation, and in the body rather than the
     subject."""
     out = []
-    for role in cpdk._ENCODED_NDA:
+    for role in FICTIONAL_NDA_TOKENS:
         t = _tok(role)
         out.append((role, f"phase3 gds: substitute artwork for the {t} "
                           f"macro-box artefact, on the opposite library shape."))
@@ -233,7 +241,7 @@ def test_report_json_names_the_role_not_the_token(tmp_path):
 def test_token_table_covers_every_encoded_role():
     """The guard must derive its tokens from the encoded store, so a token added
     to `_commercial_pdk` is covered with no edit here (no drift)."""
-    assert set(guard.token_roles()) == set(cpdk._ENCODED_NDA)
+    assert set(guard.token_roles()) == set(FICTIONAL_NDA_TOKENS)
     for role, tok in guard.token_roles().items():
         assert tok, f"empty token for role {role}"
 

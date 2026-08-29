@@ -24,6 +24,25 @@ from pathlib import Path
 import pytest
 
 _TESTS_DIR = Path(__file__).resolve().parent       # .../programs/tests
+
+# ---------------------------------------------------------------------------
+# NDA token store for the suite. The real tokens no longer ship in tracked
+# source (they resolve from the private config at runtime), so the suite
+# supplies its own FICTIONAL set through the SAME channel a configured host
+# uses. This is set before any test module imports `_commercial_pdk`, and it is
+# inherited by every gate subprocess the tests spawn.
+#
+# `setdefault`, not an unconditional write: a host that genuinely has the real
+# tokens configured keeps them, so the suite measures that host as it is.
+# ---------------------------------------------------------------------------
+import json as _json                                 # noqa: E402
+import os as _os                                     # noqa: E402
+
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+from _nda_fixture_tokens import FICTIONAL_NDA_TOKENS  # noqa: E402
+
+_os.environ.setdefault("VIBEIC_NDA_TOKENS", _json.dumps(FICTIONAL_NDA_TOKENS))
 _PROGRAMS = _TESTS_DIR.parent                       # .../programs
 _PLUGIN_ROOT = _PROGRAMS.parent                     # .../vibe-ic
 
