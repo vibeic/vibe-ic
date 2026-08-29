@@ -298,18 +298,6 @@ def main() -> int:
                     help="Emit machine-readable JSON.")
     args = ap.parse_args()
 
-    # The NDA codename rule could not be built on this host (see
-    # NDA_TOKENS_MISSING above). Refuse on the NOT_MEASURED channel instead of
-    # scanning with a rule table that is silently one rule short: "I have
-    # nothing to match with" must never print what "I matched and found
-    # nothing" prints, and it must never print what a real finding prints.
-    if NDA_TOKENS_MISSING:
-        print(f"NO_NDA_TOKENS: {NDA_TOKENS_MISSING} Configure "
-              "VIBEIC_NDA_TOKENS (a JSON object {role: literal}) or the "
-              "private config's 'nda_tokens' key on the host that runs this "
-              "gate. This run is NOT a clean bill of health.", file=sys.stderr)
-        return 2
-
     if args.paths:
         paths = collect_paths(args.paths)
     else:
@@ -329,7 +317,11 @@ def main() -> int:
 
     errors = [f for f in all_findings if f.severity == "ERROR"]
     warnings = [f for f in all_findings if f.severity == "WARN"]
-    verdict = "FAIL" if errors else "PASS"
+    # The absent rule weakens only a negative conclusion. Scan every available
+    # rule first so a genuine violation keeps rc 1; only an otherwise-clean
+    # result uses the existing rc-2 no-verdict channel.
+    verdict = ("FAIL" if errors else
+               "NOT_MEASURED" if NDA_TOKENS_MISSING else "PASS")
 
     if args.json:
         print(json.dumps({
@@ -337,6 +329,8 @@ def main() -> int:
             "total_errors": len(errors),
             "total_warnings": len(warnings),
             "findings": [asdict(f) for f in all_findings],
+            "nda_codename_rule": (
+                "NOT_MEASURED" if NDA_TOKENS_MISSING else "applied"),
             "verdict": verdict,
         }, indent=2))
     else:
@@ -356,6 +350,14 @@ def main() -> int:
         print(f"Warnings      : {len(warnings)}")
         print(verdict)
 
+    if verdict == "NOT_MEASURED":
+        print(f"NOT_MEASURED: practical_notes_specificity_check: rule "
+              f"'specific_pdk_codename' could not be built: "
+              f"{NDA_TOKENS_MISSING} Every other rule ran without a hard "
+              "violation, but this is not a complete clean bill of health. "
+              "Configure VIBEIC_NDA_TOKENS or the private config's "
+              "'nda_tokens' key.", file=sys.stderr)
+        return 2
     return 0 if not errors else 1
 
 

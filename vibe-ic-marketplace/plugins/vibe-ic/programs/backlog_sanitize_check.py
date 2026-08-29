@@ -567,23 +567,6 @@ def main(argv: List[str] = None) -> int:
                          "to git (vibe-ic#794); both = run the two together")
     args = ap.parse_args(argv)
 
-    # The NDA codename rule could not be built on this host (see
-    # NDA_TOKENS_MISSING above). Refuse on the NOT_MEASURED channel instead of
-    # scanning with a rule table that is silently one rule short: "I have
-    # nothing to match with" must never print what "I matched and found
-    # nothing" prints, and it must never print what a real finding prints.
-    # SCOPED TO THE AUDIT THAT USES THE RULES. `--audit tracked` asks whether
-    # every backlog file on disk is known to git; it never opens the content
-    # rule table, so an unresolvable NDA codename rule says nothing about it.
-    # Refusing there would refuse a question this program CAN answer — which is
-    # the same error as answering one it cannot, pointed the other way.
-    if NDA_TOKENS_MISSING and args.audit in ("content", "both"):
-        print(f"NO_NDA_TOKENS: {NDA_TOKENS_MISSING} Configure "
-              "VIBEIC_NDA_TOKENS (a JSON object {role: literal}) or the "
-              "private config's 'nda_tokens' key on the host that runs this "
-              "gate. This run is NOT a clean bill of health.", file=sys.stderr)
-        return 2
-
     paths: List[Path] = []
     if args.file_path:
         p = Path(args.file_path)
@@ -651,6 +634,32 @@ def main(argv: List[str] = None) -> int:
         is_pass = len(findings) == 0
     else:
         is_pass = not any(f.severity == "ERROR" for f in findings)
+
+    # The absent rule weakens only a negative conclusion. Scan every available
+    # rule first so a genuine violation keeps rc 1; only an otherwise-clean
+    # content audit uses the existing rc-2 no-verdict channel.
+    if NDA_TOKENS_MISSING and args.audit in ("content", "both") and is_pass:
+        report = {
+            "program": "backlog_sanitize_check",
+            "version": "1.2.0",
+            "verdict": "NOT_MEASURED",
+            "nda_codename_rule": "NOT_MEASURED",
+            "summary": {"verdict": "NOT_MEASURED",
+                        "findings_count": len(findings), **summary},
+            "findings": [asdict(f) for f in findings],
+        }
+        out = json.dumps(report, indent=2, ensure_ascii=False)
+        if args.json_out:
+            Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(Path(args.json_out), out)
+        print(out)
+        print(f"NOT_MEASURED: backlog_sanitize_check: rule "
+              f"'pdk_codename' could not be built: {NDA_TOKENS_MISSING} "
+              "Every other rule ran without a hard violation, but this is "
+              "not a complete clean bill of health. Configure "
+              "VIBEIC_NDA_TOKENS or the private config's 'nda_tokens' key.",
+              file=sys.stderr)
+        return 2
 
     report = {
         "program": "backlog_sanitize_check",
