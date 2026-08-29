@@ -60,7 +60,9 @@ def declared_step_ids(flow_path: Path) -> Set[str]:
             if s.get("id") is not None}
 
 
-def evaluated_step_ids(root: Path, timeout: int = 600) -> Tuple[Set[str], str]:
+def evaluated_step_ids(root: Path, timeout: int = 600,
+                       checker: Optional[Path] = None,
+                       flow: Optional[Path] = None) -> Tuple[Set[str], str]:
     """The ids the SUBJECT tree's evaluator actually reports, plus its stderr.
 
     The evaluator run is the subject's own copy, never this file's neighbour:
@@ -68,9 +70,9 @@ def evaluated_step_ids(root: Path, timeout: int = 600) -> Tuple[Set[str], str]:
     whose evaluator is broken, which is the ordering defect this repo has
     already paid for once.
     """
-    checker = root / CHECK_REL
+    checker = Path(checker) if checker is not None else root / CHECK_REL
     if not checker.is_file():
-        raise FileNotFoundError(f"{CHECK_REL} is not present under {root}")
+        raise FileNotFoundError(f"{checker} is not a readable evaluator")
     with tempfile.TemporaryDirectory(prefix="step-reach-") as tmp:
         project = Path(tmp) / "stub"
         (project / "input" / "docs").mkdir(parents=True)
@@ -79,7 +81,8 @@ def evaluated_step_ids(root: Path, timeout: int = 600) -> Tuple[Set[str], str]:
         out = Path(tmp) / "compliance.json"
         proc = subprocess.run(
             [sys.executable, str(checker), str(project), "--lenient",
-             "--read-only", "--json", str(out)],
+             "--read-only", "--json", str(out)]
+            + (["--flow-def", str(flow)] if flow is not None else []),
             capture_output=True, text=True, timeout=timeout)
         if not out.is_file():
             raise RuntimeError(
@@ -89,12 +92,28 @@ def evaluated_step_ids(root: Path, timeout: int = 600) -> Tuple[Set[str], str]:
     return {str(s.get("id")) for s in data.get("steps") or []}, proc.stderr
 
 
-def audit(root: Path) -> dict:
-    flow = root / FLOW_REL
+def audit(root: Path, flow: Optional[Path] = None,
+          checker: Optional[Path] = None) -> dict:
+    """The declared-vs-reached census.
+
+    `flow` and `checker` may be given DIRECTLY, and a caller that knows them
+    should say so rather than hand a root and let this function re-derive them.
+
+    WHY THE OVERRIDES EXIST. The matrix substitutes its flow document through
+    `VIBE_IC_MATRIX_FLOW_YAML` -- that is its falsifiability harness -- and it
+    replays cells inside a `cp -al` mirror of the PLUGIN ALONE, with no
+    repository above it. A caller in either venue has no repo-shaped root to
+    give. MEASURED 2026-08-29: a test module that reconstructed one instead
+    reddened 70 of its own cells against a BYTE-IDENTICAL COPY of the flow
+    yaml, and another climbed out of the mirror to `/`. Both were defects in
+    the reconstruction, and both disappear when the caller simply names what it
+    already holds.
+    """
+    flow = Path(flow) if flow is not None else root / FLOW_REL
     if not flow.is_file():
-        raise FileNotFoundError(f"{FLOW_REL} is not present under {root}")
+        raise FileNotFoundError(f"{flow} is not a readable flow document")
     declared = declared_step_ids(flow)
-    evaluated, _ = evaluated_step_ids(root)
+    evaluated, _ = evaluated_step_ids(root, checker=checker, flow=flow)
     return {
         "declared": len(declared),
         "evaluated": len(evaluated),
@@ -105,6 +124,8 @@ def audit(root: Path) -> dict:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--flow", help="the flow document to judge (default: under --root)")
+    ap.add_argument("--checker", help="the evaluator to drive (default: under --root)")
     ap.add_argument("--root", default=".",
                     help="the SUBJECT tree to judge (its flow and its evaluator)")
     ap.add_argument("--json", action="store_true")
@@ -112,7 +133,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     root = Path(args.root).resolve()
     try:
-        report = audit(root)
+        report = audit(root,
+                       flow=Path(args.flow) if args.flow else None,
+                       checker=Path(args.checker) if args.checker else None)
     except (FileNotFoundError, RuntimeError) as exc:
         print(f"CANNOT CHECK: {exc}", file=sys.stderr)
         return 2

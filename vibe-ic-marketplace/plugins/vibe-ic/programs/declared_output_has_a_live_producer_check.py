@@ -210,10 +210,25 @@ def _tokens(declared: str) -> Set[str]:
     return out
 
 
-def _venue_files(root: Path) -> List[Path]:
+def venues_of(root: Path, plugin_root: Optional[Path] = None) -> List[Path]:
+    """The directories whose source may credit a producer.
+
+    A caller that already holds the PLUGIN root should pass it. The default
+    derivation walks down from a repository root, which a caller inside a
+    `cp -al` mirror of the plugin alone does not have -- MEASURED 2026-08-29:
+    a test module deriving one as `PLUGIN_ROOT.parents[2]` climbed out of such
+    a mirror to `/`, where this program raised an uncaught FileNotFoundError.
+    """
+    if plugin_root is not None:
+        pr = Path(plugin_root)
+        return [pr / "programs", pr / "tools", pr.parents[1] / "tools"
+                if len(pr.parents) > 1 else pr / "tools"]
+    return [root / rel for rel in VENUE_RELS]
+
+
+def _venue_files(root: Path, plugin_root: Optional[Path] = None) -> List[Path]:
     files: List[Path] = []
-    for rel in VENUE_RELS:
-        venue = root / rel
+    for venue in venues_of(root, plugin_root):
         if not venue.is_dir():
             continue
         for dirpath, dirnames, filenames in os.walk(venue, followlinks=False):
@@ -259,7 +274,9 @@ def _flow_commands(flow_text: str) -> str:
     return "\n".join(kept)
 
 
-def audit(root: Path, exclude_modules: Sequence[str] = ()) -> dict:
+def audit(root: Path, exclude_modules: Sequence[str] = (),
+          flow: Optional[Path] = None,
+          plugin_root: Optional[Path] = None) -> dict:
     """The producer state of every declared output.
 
     `exclude_modules` removes named files from BOTH the write-site scan and
@@ -268,15 +285,15 @@ def audit(root: Path, exclude_modules: Sequence[str] = ()) -> dict:
     flow writes its output? A test that cannot delete a producer cannot show
     the gate would notice one being deleted.
     """
-    flow = root / FLOW_REL
+    flow = Path(flow) if flow is not None else root / FLOW_REL
     if not flow.is_file():
-        raise FileNotFoundError(f"{FLOW_REL} is not present under {root}")
+        raise FileNotFoundError(f"{flow} is not a readable flow document")
     declared = OWNER.declared_outputs(flow)
 
     excluded = set(exclude_modules)
     dests: List[Tuple[str, str]] = []
     blob_parts: List[str] = []
-    for path in _venue_files(root):
+    for path in _venue_files(root, plugin_root):
         if path.name in excluded:
             continue
         try:
@@ -313,6 +330,8 @@ def audit(root: Path, exclude_modules: Sequence[str] = ()) -> dict:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=".")
+    ap.add_argument("--flow", help="the flow document to read (default: under --root)")
+    ap.add_argument("--plugin-root", help="the plugin whose source may credit a producer")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 on a NO-TRACE output or a lost write site")
@@ -334,7 +353,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   file=sys.stderr)
             return 2
     try:
-        report = audit(root)
+        report = audit(root,
+                       flow=Path(args.flow) if args.flow else None,
+                       plugin_root=Path(args.plugin_root) if args.plugin_root else None)
     except FileNotFoundError as exc:
         print(f"CANNOT CHECK: {exc}", file=sys.stderr)
         return 2
