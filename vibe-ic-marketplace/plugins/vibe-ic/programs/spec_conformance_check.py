@@ -1519,6 +1519,17 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
     smap = {p.name: p for p in spec.ports} if spec.ports else {}
     for nm, sp in smap.items():
         if nm not in rmap:
+            # A pin the INPUT marks optional may be left out: not implementing an
+            # offered pin is a declared design choice, not a conformance defect.
+            # l9_rtl_pin_consistency_check already reads this same L9 flag and
+            # reports it advisory; this gate hard-ERRORed on it, so the two gates
+            # returned contradictory verdicts from the identical evidence.
+            if getattr(sp, 'optional', False):
+                f.append(Finding(path, 'INFO', 'port-optional-not-implemented', nm,
+                    f"spec port '{nm}' ({sp.direction}[{sp.width}]) is marked "
+                    f"optional by the input and is not implemented — a declared "
+                    f"design choice, not a conformance defect."))
+                continue
             f.append(Finding(path, 'ERROR', 'port-missing', nm,
                 f"spec port '{nm}' ({sp.direction}[{sp.width}]) is not in the RTL."))
             continue

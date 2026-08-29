@@ -179,6 +179,12 @@ class Port:
     name: str
     direction: str   # input / output / inout
     width: int       # 1 for scalar
+    # A spec port the INPUT DOCUMENT marks as optional (L9 emits `optional: true`
+    # for a pin the datasheet offers rather than requires). Its absence from the
+    # RTL is a design CHOICE, not a conformance defect — the same flag
+    # l9_rtl_pin_consistency_check already honours. Defaults False so every
+    # positional Port(...) construction keeps its current meaning.
+    optional: bool = False
 
 
 # The width bracket tolerates ANY range expression, not only a `\d+:\d+` literal
@@ -1509,9 +1515,16 @@ def extract_spec_contract(text: str, is_json: bool = False,
         else:                               # {"ports":[...],"reset":{...},...}
             port_dicts = data.get('ports', [])
             rst = data.get('reset', {}) or {}
-            mod = data.get('module')
+            # A JSON spec contract names its top under `module` OR `top_module`
+            # — L9_INTEGRATION_SPEC.json emits the latter. Reading only `module`
+            # left mod=None, and the caller's `args.top or spec.module` then fell
+            # back to "the first module found" in the RTL directory: on any
+            # multi-module design that is a SUBMODULE, and the whole port
+            # conformance verdict was rendered against the wrong module.
+            mod = data.get('module') or data.get('top_module')
             lat = data.get('latency_registered')
-        ports = [Port(d['name'], _json_port_direction(d), _json_port_width(d))
+        ports = [Port(d['name'], _json_port_direction(d), _json_port_width(d),
+                      bool(d.get('optional')) if isinstance(d, dict) else False)
                  for d in port_dicts]
         return SpecContract(module=mod, ports=ports,
                             reset_mode=rst.get('mode'),
