@@ -62,6 +62,8 @@ import sys
 
 import pytest
 
+from _published_corpus import corpus_tree as _corpus_tree
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
@@ -139,7 +141,7 @@ def _committed_declarations():
         if (root / ".git").exists():
             break
         root = root.parent
-    corpus = root / "benchmark-data"
+    corpus = _corpus_tree() or (root / "benchmark-data")
     if not corpus.is_dir():
         return []
     out = []

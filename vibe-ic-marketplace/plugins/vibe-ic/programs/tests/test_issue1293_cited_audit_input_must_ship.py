@@ -42,9 +42,24 @@ from pathlib import Path
 
 import pytest
 
+from _published_corpus import corpus_tree  # noqa: E402
+
 PLUGIN = Path(__file__).resolve().parents[2]
 REPO = PLUGIN.parents[2]
-EVAL = REPO / "benchmark-data" / "evaluation"
+
+#: THE DELIVERABLES MOVED AND THIS LINE DID NOT FOLLOW THEM. It read
+#: `REPO / "benchmark-data" / "evaluation"`, a path this repository stopped
+#: carrying at v1.10.56, so all six checks below skipped on EVERY host — including
+#: one that had supplied the corpus at $VIBE_IC_BENCHMARK_DATA. The skip reason
+#: named the repo-local path, so it read as "the corpus is not checked out" when
+#: the corpus was checked out and merely somewhere else.
+#:
+#: `corpus_tree()` and not `corpus_root()`: the subject here is the `evaluation/`
+#: deliverables, which are not published CELLS, and `corpus_root` goes None the
+#: moment the cell population is zero.
+_CORPUS = corpus_tree()
+EVAL = ((_CORPUS / "evaluation") if _CORPUS is not None
+        else REPO / "benchmark-data" / "evaluation")
 
 #: The audit whose input this pins, and the file it reads.
 AUDIT = "benchmark_triage_absorption_audit"

@@ -286,6 +286,41 @@ def corpus_root() -> Optional[Path]:
     return corpus_state()[1]
 
 
+def corpus_tree() -> Optional[Path]:
+    """The corpus ROOT for subjects that are NOT published cells, or None.
+
+    :func:`corpus_root` answers "where are the published CELLS", and it returns
+    None the moment the cell population is zero. That is exactly right for a
+    check whose subject IS a cell, and it is wrong for the larger set of checks
+    whose subject is something else the corpus carries — the `evaluation/`
+    deliverables, the `protocol_parity/` runs, every
+    `phase1/generated_docs/L19_*.json`. Those are present in a corpus that
+    publishes no cell at all, so resolving them through :func:`corpus_root`
+    reports "I could not look" at a tree that is sitting right there.
+
+    THIS IS THE HOLE THE MODULE DOCSTRING ALREADY NAMES, one level up. It
+    records that a module which spelled `REPO / "benchmark-data" / "ic"` inline
+    "could no longer resolve on ANY host" once the corpus moved. The inline
+    spelling is only half the defect: the other half is that the helper offered
+    no cell-independent resolver to move those call sites TO, so a check over
+    `evaluation/` had nothing to use and kept its literal.
+
+    EVERY REFUSAL IS INHERITED, not re-implemented: this delegates to
+    :func:`corpus_state`, so a pointer set at something that is not the corpus
+    still RAISES, and a damaged checkout still raises. The only case that
+    differs from :func:`corpus_root` is MEASURED_EMPTY, where the tree was read,
+    holds no cell, and is nonetheless the right place to look for a non-cell
+    subject.
+    """
+    state, root = corpus_state()   # raises CorpusPointerBroken on a bad pointer
+    if root is not None:
+        return root
+    if state == MEASURED_EMPTY:
+        env = os.environ.get(CORPUS_ENV)
+        return Path(env) if env else _REPO / "benchmark-data"
+    return None
+
+
 def _has_cells(root: Path) -> bool:
     """A published CELL, not merely the directory.
 

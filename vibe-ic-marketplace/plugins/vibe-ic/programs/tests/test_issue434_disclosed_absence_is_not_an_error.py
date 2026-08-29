@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+from _published_corpus import corpus_tree
+
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import provenance_output_hash_completeness_check as G  # noqa: E402
@@ -343,12 +345,44 @@ def test_audit_keeps_its_two_tuple_shape_for_existing_callers():
 
 # ── the same pairs, as mutations of a REAL published cell ───────────────────
 
-_SPM = _REPO / "benchmark-data/ic/spm/v1.5.65_sky130A"
+
+def _corpus_tree_or_repo() -> Path:
+    """The resolved corpus tree, falling back to the (now absent) repo-local one."""
+    t = corpus_tree()
+    return t if t is not None else (_REPO / "benchmark-data")
+
+
+
+#: THE CELL BELOW WAS RETIRED BY THE PUBLISHER ON 2026-08-07 (v1.5.65 ->
+#: v1.9.94 -> v1.10.18), and every published cell was then WITHDRAWN on
+#: 2026-08-20; one specimen was restored on 2026-08-25 and it is not this one.
+#:
+#: THE VERSION IS LOAD-BEARING AND IS DELIBERATELY NOT GENERALISED. The eight
+#: checks below compare against counts MEASURED on this cell (declared=17,
+#: verified_present=7, superseded=0, verified_relocated=3). Selecting "any
+#: published cell carrying provenance.jsonl" instead was tried and MEASURED: the
+#: surviving specimen answers declared=32, verified_present=12, superseded=3,
+#: verified_relocated=0, so five of the seven recovered checks go red against a
+#: cell they were never measured on. That is a false red, and re-recording the
+#: numbers against the specimen would be worse — it is a re-baseline that would
+#: assert the old cell's findings about a run that never produced them.
+#:
+#: WHAT IS FIXED HERE IS THE SENTENCE, WHICH WAS FALSE. The skip read
+#: "benchmark-data not checked out", which an operator who HAD supplied the
+#: corpus reads as their own configuration error. The tree can be checked out
+#: and this cell still absent, and those are different facts.
+_SPM = _corpus_tree_or_repo() / "ic/spm/v1.5.65_sky130A"
 
 
 def _real_cell(tmp_path: Path) -> Path:
     if not (_SPM / "provenance.jsonl").is_file():
-        pytest.skip(f"benchmark-data not checked out at {_SPM}")
+        pytest.skip(
+            "this check is pinned to the published cell spm/v1.5.65_sky130A, "
+            "which the publisher RETIRED on 2026-08-07 (superseded by "
+            "v1.9.94, then v1.10.18). It is not in the corpus resolved at "
+            f"{_SPM.parents[1]}. This is NOT 'the corpus is not checked out' — "
+            "supplying the corpus does not bring this cell back, and the "
+            "recorded counts here were measured on it and on no other cell.")
     dst = tmp_path / "published"
     shutil.copytree(_SPM, dst, symlinks=True)
     return dst
