@@ -9297,7 +9297,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                     extras={"verification_track": "generic_full_stack",
                             "aid_tb_skipped_reason": track_reason,
                             "functional_verified": False,
-                            "fallback_skill": "testbench-author",
+                            "fallback_skill": "testbench-gen",
                             "iverilog_available": False,
                             "tb_frontend": tb_frontend})
             return StepResult(
@@ -9374,7 +9374,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                         "functional_verified": False,
                         "connectivity_pass_functional_deferred": True,
                         "capability_gap": "cap:cpu_functional_oracle",
-                        "fallback_skill": "testbench-author",
+                        "fallback_skill": "testbench-gen",
                         "tb_frontend": tb_frontend})
         # Ran but did not reach the completion marker → real defect.
         return StepResult(
@@ -9403,7 +9403,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             extras={"verification_track": "generic_full_stack",
                     "aid_tb_skipped_reason": track_reason,
                     "functional_verified": False,
-                    "fallback_skill": "testbench-author",
+                    "fallback_skill": "testbench-gen",
                     "iverilog_available": False})
     return StepResult(
         "reference_tb", "SKIP",
@@ -15554,16 +15554,22 @@ def step_emit_phase2_manifests(project: Path,
         if not (formal_dir / "results.json").is_file():
             _payload = {
                 "verdict": "SKIPPED-CONDITION",
-                "fallback_skill": "assertion-gen",
+                # was `assertion-gen`, which _classification.json records
+                # under `deprecated_skills` -- routed at a skill that does not
+                # ship. `formal-verify` ships and owns the .sby/SymbiYosys half.
+                "fallback_skill": "formal-verify",
                 "reason": ("no clean formal proof in this chain — reference-TB "
                            "simulation results are NOT a proof and are never "
                            "copied here (#433c/#440). The deterministic "
                            "reset-safety harness (formal_harness_gen, abc pdr) "
                            "did not produce a clean proof here; AI invokes skill "
-                           "assertion-gen: author per-IC SVA from L3 "
+                           "formal-verify: author per-IC SVA from L3 "
                            "constraints, write a real .sby, run SymbiYosys; "
                            "only that run may write formal/results.json with "
-                           "all_proved."),
+                           "all_proved. NOTE: the property-authoring half had "
+                           "its own skill, `assertion-gen`, until that was "
+                           "deprecated (skills/_classification.json); no "
+                           "shipped skill replaces that half today."),
             }
             if _formal_disclose:
                 _payload["deterministic_attempt"] = _formal_disclose
