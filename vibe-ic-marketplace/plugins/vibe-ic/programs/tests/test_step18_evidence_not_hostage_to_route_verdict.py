@@ -168,7 +168,14 @@ class TestStep18EvidenceIsNotHostageToTheRouteVerdict:
         non-converging run itself generated: whatever the router later
         decides, OpenROAD has ALREADY placed, tied off and locked the spares.
         Matches the COMMAND, not a mention of it — `detailed_route` appears in
-        prose many times before it is ever invoked."""
+        prose many times before it is ever invoked.
+
+        The base route is pinned by its own catch variable (`dr_err`), not by
+        its argument list. It used to be matched as the literal
+        `if {[catch {detailed_route}`, which broke the moment the base route
+        gained an argument (`{*}$_vic_drc_opt`, the probed `-output_drc`) —
+        the ORDERING this test is about was never affected. `dr_err` names
+        this call site and no other."""
         res, project = _drive(tmp_path, monkeypatch, [_NONCONV])
         tcl = (mod._pl.pnr_dir(project) / "pnr.tcl").read_text().splitlines()
 
@@ -182,7 +189,8 @@ class TestStep18EvidenceIsNotHostageToTheRouteVerdict:
         n_cts = _line_of(
             lambda l: l.lstrip().startswith("if {[catch {clock_tree_synthesis"))
         n_route = _line_of(
-            lambda l: l.lstrip().startswith("if {[catch {detailed_route}"))
+            lambda l: l.lstrip().startswith("if {[catch {detailed_route")
+            and "dr_err]" in l)
         assert n_ins and n_cts and n_route, (n_ins, n_cts, n_route)
         assert n_ins < n_cts < n_route, (n_ins, n_cts, n_route)
 
