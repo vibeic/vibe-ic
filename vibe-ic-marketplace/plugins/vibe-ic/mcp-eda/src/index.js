@@ -5910,6 +5910,131 @@ function _containerMemoryCeiling(inspect = _spawnSync) {
   return { ok: true, detail: `${gib(mem)}, swap disabled` };
 }
 
+
+// The image a container runs is fixed at CREATE time. `docker pull` moves a TAG;
+// it does not touch a container already created from the old bytes. So an
+// operator who pulls, then runs, executes the whole flow — every tool version,
+// every PDK, every sign-off number — on the older image.
+//
+// `container_image_provenance.py` already names this failure ("Stale-container
+// substitution (silent)") and RECORDS the identity on every run. But it only
+// ENFORCES under an explicit `--require-image`, which nothing in the flow
+// passes, so an unpinned run records the stale digest and still reports
+// `status: ok`. A fact nobody compares does not make the substitution visible.
+//
+// And `eda_doctor` — which `skills/loop2converge/SKILL.md` §1.0 tells every
+// operator to read the toolchain back FROM, in the same table that catches the
+// MCP-binding version of this same mistake:
+//
+//     | `eda_doctor` -> the EDA image digest/label | which fork build the tools come from |
+//
+// answered `docker_reachable: container reachable` and named no image at all.
+// The documented read-back had nothing to read.
+//
+// MEASURED 2026-08-30 on 8hd-3, following that step literally. `docker pull`
+// had been run and `ghcr.io/vibeic/vibeic-eda:latest` was 26 hours newer than
+// the running container, which was still serving:
+//
+//     container `vibeic-eda`  image sha256:ddbf1e71… created 2026-08-28T09:22Z
+//                             openroad -version -> 26Q3-1867-gfbdee51542
+//     :latest on the SAME host image sha256:de6b0e0f… created 2026-08-29T11:42Z
+//                             openroad -version -> 26Q3-1884-g80f878d28a
+//
+// `eda_doctor` reported "12/12 checks passed". Seventeen OpenROAD commits
+// separated the toolchain the operator believed they had pulled from the one
+// their run executed, and the gap was load-bearing: on 1867 `repair_timing
+// -setup` died of SIGSEGV inside `postroute_drv_repair` and the run halted; on
+// 1884, same design, same PDK, that stage completed four repair+reroute
+// iterations. A tool bug was filed against a build that was already superseded
+// on the very machine that filed it.
+//
+// LOCAL ONLY, deliberately. This never reaches the registry: `_eda_image.py`
+// keeps that behind an explicit `allow_pull` so two callers cannot resolve a
+// floating tag to different bytes a minute apart. A container older than an
+// image ALREADY ON THIS HOST is a discrepancy that needs no network to see.
+//
+// SOFT, deliberately, and for the same reason as the memory ceiling above: an
+// older image runs every flow correctly and an operator may be pinning one on
+// purpose. What must never happen is that they cannot TELL.
+const _EDA_IMAGE_REPO = "ghcr.io/vibeic/vibeic-eda";
+const _SHORT = (s) => String(s || "").replace(/^sha256:/, "").slice(0, 12);
+
+// `docker inspect` gives RFC3339 ("2026-08-29T11:42:34.1Z"); `docker images`
+// gives "2026-08-29 19:42:34 +0800 CST". Date.parse takes the first as-is and
+// the second only once the space before the offset is closed and the trailing
+// zone NAME dropped. NaN on anything else — never a 0 that would sort oldest.
+function _dockerEpoch(v) {
+  const s = String(v || "").trim();
+  if (!s) return NaN;
+  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([+-]\d{4})/.exec(s);
+  return Date.parse(m ? `${m[1]}T${m[2]}${m[3]}` : s);
+}
+
+function _containerImageIdentity(inspect = _spawnSync) {
+  const c = inspect("docker",
+    ["inspect", CONTAINER, "--format", "{{.Image}}\t{{.Config.Image}}"],
+    { encoding: "utf-8", timeout: 5000 });
+  if (!c || c.status !== 0 || !c.stdout) {
+    return { ok: false, detail:
+      `could not read which image ${CONTAINER} runs — its toolchain is UNIDENTIFIED` };
+  }
+  const [imageId, imageRef] = String(c.stdout).trim().split("\t");
+  if (!imageId) {
+    return { ok: false, detail:
+      `${CONTAINER}'s image identity did not parse: ${String(c.stdout).trim()}` };
+  }
+  const running = `${CONTAINER} runs ${imageRef || "?"} (${_SHORT(imageId)})`;
+
+  const meta = inspect("docker",
+    ["image", "inspect", imageId, "--format",
+     '{{.Created}}\t{{index .Config.Labels "org.opencontainers.image.version"}}'],
+    { encoding: "utf-8", timeout: 5000 });
+  let created = NaN, label = "";
+  if (meta && meta.status === 0 && meta.stdout) {
+    const [c0, l0] = String(meta.stdout).trim().split("\t");
+    created = _dockerEpoch(c0);
+    label = (l0 || "").trim();
+    if (label === "<no value>") label = "";
+  }
+  const named = label ? `${running}, version label ${label}` : running;
+
+  const ls = inspect("docker",
+    ["image", "ls", _EDA_IMAGE_REPO, "--format",
+     "{{.ID}}\t{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}"],
+    { encoding: "utf-8", timeout: 5000 });
+  if (!ls || ls.status !== 0) {
+    return { ok: true, detail:
+      `${named}; could not list local ${_EDA_IMAGE_REPO} images to compare against` };
+  }
+  let newest = null;
+  for (const line of String(ls.stdout || "").trim().split("\n")) {
+    if (!line.trim()) continue;
+    const [id, at, tag] = line.split("\t");
+    const t = _dockerEpoch(at);
+    if (!Number.isFinite(t)) continue;
+    if (_SHORT(id) === _SHORT(imageId)) continue;      // the one already running
+    if (!newest || t > newest.t) newest = { id: (id || "").trim(), t, tag: (tag || "").trim() };
+  }
+  if (!newest) return { ok: true, detail: `${named}; newest local image` };
+  if (!Number.isFinite(created)) {
+    return { ok: true, detail:
+      `${named}; could not date it, so it was NOT compared against ` +
+      `${newest.tag} (${_SHORT(newest.id)})` };
+  }
+  if (newest.t > created) {
+    const days = ((newest.t - created) / 86400000).toFixed(1);
+    return { ok: false, detail:
+      `STALE CONTAINER: ${named}, but ${newest.tag} (${_SHORT(newest.id)}) on THIS host ` +
+      `is ${days} day(s) newer. A container's image is fixed when it is CREATED — ` +
+      `\`docker pull\` moved the tag and left this container on the old bytes, so every ` +
+      `tool version, PDK and sign-off number in your run comes from the OLDER image. ` +
+      `Recreate it: docker rm -f ${CONTAINER} && docker run -d --name ${CONTAINER} ` +
+      `<your -v mounts> --memory=<N>g --memory-swap=<N>g ${newest.tag} ` +
+      `(keep the mounts and the ceiling — a recreate drops both).` };
+  }
+  return { ok: true, detail: `${named}; newest local image` };
+}
+
 // ─── Tool: eda_doctor (v2.5.0) ───
 server.tool(
   "eda_doctor",
@@ -5947,6 +6072,18 @@ server.tool(
         ok: ceiling.ok,
         detail: ceiling.detail,
         soft: ceiling.ok ? undefined : true,
+      });
+    }
+
+    // 1c. WHICH IMAGE that container actually runs — the read-back
+    //     `skills/loop2converge` §1.0 asks operators to take from this tool.
+    if (probe.ok) {
+      const img = _containerImageIdentity();
+      checks.push({
+        check: "eda_image_identity",
+        ok: img.ok,
+        detail: img.detail,
+        soft: img.ok ? undefined : true,
       });
     }
 
