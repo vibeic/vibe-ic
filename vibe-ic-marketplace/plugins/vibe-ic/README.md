@@ -231,7 +231,7 @@ plugins/vibe-ic/
 │   ├── gds_antenna/, metal_fill/  — sub-packages
 │   └── tests/                     — 2904 test files
 ├── skills/                        — 60 skills, each with SKILL.md + compliance.yaml
-│   └── <skill>/tests/             — 81 per-skill compliance regression files
+│   └── <skill>/tests/             — 82 per-skill compliance regression files
 ├── commands/                      — 6 slash commands + _anti_fabrication_rules.md
 ├── agents/                        — 9 agents (ic-expert, core, field, gatekeeper,
 │                                    repo-gatekeeper, benchmark, 3 personas)
@@ -243,7 +243,7 @@ plugins/vibe-ic/
 
 ## Test suite
 
-**2904 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+**2904 test files** under `programs/tests/`, plus **82** per-skill compliance regressions
 under `skills/*/tests/`.
 
 Run it the CI way — a bare `pytest` from the plugin root, exactly as

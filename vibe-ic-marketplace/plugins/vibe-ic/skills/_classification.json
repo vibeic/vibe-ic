@@ -74,6 +74,7 @@
         "formal-verify",
         "gatekeeper-loop",
         "hls-c2rtl",
+        "loop2converge",
         "mixed-signal-cosim",
         "open-benchmark-methodology",
         "phase1",
