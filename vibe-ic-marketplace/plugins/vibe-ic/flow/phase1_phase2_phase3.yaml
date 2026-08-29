@@ -165,6 +165,66 @@ stages:
 
   - id: stage2
     name: "Synthesis + DFT"
+    # THE ON-PASS REVIEW FOR STAGE 2 — the second wiring of the `verification`
+    # tier, on the field v1.12.87 added for stage 1. Same program, same
+    # contract, one stage-specific rule; see stage1 above for why the field
+    # exists at all and why `skills:` could not carry it.
+    #
+    # WHAT NO STAGE-2 GATE READS. MEASURED on this file at v1.12.100: stage 2
+    # declares twelve steps and every gate on them reads the ARTEFACT or
+    # another artefact — `synth_netlist_check` and `provenance_check` (step 9)
+    # ask whether the netlist is technology-mapped and whether Yosys produced
+    # it, `lec_equivalence_check` (step 13) asks whether it matches the RTL,
+    # `dft_*_coverage_check` (11 / DT1 / DT2 / DT3) ask what ATPG reached, and
+    # steps 7 / 8 / 14 read the SDC and the Yosys script. Exactly ONE of them
+    # opens `phase1/generated_docs/` at all: `sdc_validator_check --l8`, for
+    # the clock. NOTHING in this stage compares the netlist to the design's
+    # own declared INTERFACE. So the stage transforms and signs off the thing
+    # stage 3 will build without once asking whether it is the thing that was
+    # asked for.
+    #
+    # WHY THAT IS NOT STAGE 1's QUESTION ALREADY. Stage 1's R1 compares the
+    # intent's top-module NAME against the staged RTL. The netlist is where
+    # the interface first becomes CONCRETE — parameters resolved, the wrapper
+    # chosen, widths fixed — and it is the artefact place-and-route consumes.
+    # MEASURED on the published cell `ic/opentitan_aes`: R1 DISARMS (that
+    # intent discloses `no_top_module_in_input: true`), every stage-2 gate
+    # passes, and the netlist's top carries NONE of the six pins the design
+    # input's own interface table declares.
+    #
+    # WHAT THE REVIEW READS. The INTENT (L9's promoted pin table — the §4.05
+    # design input, never the oracle, the harness or the golden) and the
+    # netlist step 9 produced. It re-derives nothing: it runs no synthesis and
+    # rebuilds no netlist.
+    #
+    # BLOCKING vs ADVISORY, declared here and not by the reviewer. ADVISORY,
+    # for the same reason stage 1 is: the review reports evidence and exits 1
+    # on a rejection, and it is the executable test the rejection is required
+    # to carry — an ordinary test, in the run's own tree — that blocks.
+    #
+    # WHO OWNS THE RESIDUE, and the one skill that was ruled out. The residue a
+    # rejection here leaves is "L9 declares this interface and phase 2 did not
+    # build it", which is `phase2-rtl-verify`'s own stated subject: "AI
+    # spot-checks RTL quality and L9-contract conformance". The obvious
+    # alternative, `full-test-audit`, is NOT named: it is a verification-tier
+    # skill, but `skills/_classification.json` declares it `off_flow` with the
+    # reason "its subject is the plugin tree", and `off_flow` is falsifiable by
+    # what a skill reads. Naming it here would have forced the removal of that
+    # declaration (skill_stage_membership_check P4, DOUBLE DECLARATION) and
+    # asserted that a plugin health check reviews a design's netlist.
+    on_pass_review:
+      skill: phase2-rtl-verify
+      fires_on: stage_pass
+      verdict: advisory
+      intent:
+        - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+      intent_deny: ["oracle", "harness", "golden", "reference_output", "solution"]
+      artefact:
+        - "phase2/stage2/synth/netlist.v"
+      rejection_requires: [intent, artefact, contradiction, test]
+      emit_test_dir: "reports/phase2/gates/on_pass_review"
+      gate:
+        program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json"
 
   - id: stage_analog
     name: "Analog Design Pipeline (parallel with digital stages 1-2)"

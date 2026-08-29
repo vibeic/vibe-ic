@@ -1,0 +1,55 @@
+{
+  "_comment": "Copies of the two files stage_on_pass_review reads for stage 2, from three published benchmark-data cells. Nothing here is authored. Every file is VERBATIM except one, and that one is marked `reduction` and carries the source sha256, the reduced sha256 and the exact command that produces the second from the first, so a reader can reproduce it. The corpus-bound test re-reads the live cells when the corpus is resolvable, and asserts the reduced tree and the live 12 MB netlist reach the SAME verdict; this fixture is what makes the control run on a checkout that has no corpus.",
+  "corpus_repo": "https://github.com/vibeic/benchmark-data",
+  "trees": {
+    "accept_spm": {
+      "cell": "ic/spm/v1.10.18_sky130A",
+      "files": {
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 9995,
+          "sha256": "81b7fdd77d097ade952b7f98605a4d266f298ab76d160df7ac508ff07b16820c",
+          "verbatim": true
+        },
+        "phase2/stage2/synth/netlist.v": {
+          "bytes": 48041,
+          "sha256": "04b9532e1cc9c7b3259ae49890e1b333c547aca398e2da89d2738c5d79e8d2f2",
+          "verbatim": true
+        }
+      }
+    },
+    "disarm_caravel": {
+      "cell": "ic/caravel_user_project/v1.9.43_sky130A",
+      "files": {
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 25730,
+          "sha256": "91bf1bfb4586be96f61ab0ca2114984faa4ec58dc916f57cb987420c6ea1f320",
+          "verbatim": true
+        },
+        "phase2/stage2/synth/netlist.v": {
+          "bytes": 51639,
+          "sha256": "360a921e107e0ac5f9af4e974a6b4fed53dd7827470f12e6feb18f452da35141",
+          "verbatim": true
+        }
+      }
+    },
+    "reject_opentitan_aes": {
+      "cell": "ic/opentitan_aes",
+      "files": {
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "bytes": 12143,
+          "sha256": "8aeb832ac08c9580076bc4464e94d44ce10ecd3c84dec2eb9eba3affc7e0a0ef",
+          "verbatim": true
+        },
+        "phase2/stage2/synth/netlist.v": {
+          "bytes": 387,
+          "sha256": "702dfe35aecdbff03bf73d4617423707f36ce630cd0029becb886c2bc00f8ac4",
+          "verbatim": false,
+          "source_bytes": 11973774,
+          "source_sha256": "9bd62ecdc1a4af129eccb7f0774cb3951f5ed9db96d60add3f97c1f38ad4fefc",
+          "reduction": "awk '/^\\\\/\\\\*/ || /^module / || /^[ \\\\t]*(input|output|inout)[ \\\\t]/ || /^endmodule$/' <source>",
+          "reduction_why": "the source netlist is 11973774 bytes / 621078 lines of technology-mapped gate instances, which no test fixture should carry. The reduction keeps the producer banner, the module header and every port declaration and drops the instance body. The module header and all 8 port declarations are BYTE-IDENTICAL to the source; this rule reads nothing else, and the corpus-bound test proves both trees reach the same verdict."
+        }
+      }
+    }
+  }
+}
