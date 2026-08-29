@@ -156,6 +156,12 @@ import _progress_run as _pr  # noqa: E402
 #: keep an acknowledgement alive, never retire one early.
 _PASS = "PASS"
 _LISTED = "LISTED"
+#: The ONE state `uncheckable_until` converts. `run_tolerating_uncheckable`
+#: buys tolerance for rc 2 and for nothing else -- `_gate_dispatch.sh` maps a
+#: gate's rc 2 to this, and every other non-zero rc to FAIL -- so it is also
+#: the only state a dispatcher exemption can be said to OWN. See
+#: `dispatcher_exemptions`.
+_NOT_CHECKED = "NOT_CHECKED"
 #: `_gate_dispatch.sh:711` — a gate this shard does not own. Sharding
 #: (vibe-ic#1144) means a record can legitimately describe gates that did not
 #: run in it.
@@ -455,6 +461,12 @@ def dispatcher_exemptions(record: Dict[str, Any]) -> Dict[str, str]:
     The dispatcher already refuses those separately (`not_checked_unexempted`,
     `exemptions_expired`); this only declines to double-count the live ones.
 
+    AND ONLY OVER `NOT_CHECKED`, WHICH IS THE ONE STATE THE EXEMPTION
+    CONVERTS (measured 2026-08-29). `_gate_dispatch.sh` stamps
+    `exempt_until` on the row unconditionally, so a gate that FAILED carries
+    the date too, and crediting that to the exemption reports a BLOCKING red
+    as owned. See the branch below.
+
     IT CANNOT MOVE A VERDICT. The exit code is computed from `findings` alone —
     rows in the ledger, and nothing about `new` or `known` reaches it. This is
     a partition of a REPORT, and a gate that gains an exemption still fails the
@@ -467,6 +479,32 @@ def dispatcher_exemptions(record: Dict[str, Any]) -> Dict[str, str]:
             continue
         until = gate.get("exempt_until")
         if not until or gate.get("exemption_expired"):
+            continue
+        if str(gate.get("state") or "") != _NOT_CHECKED:
+            # AN EXEMPTION OWNS THE STATE IT CAN CONVERT, AND NO OTHER.
+            #
+            # `_gate_dispatch.sh` records `exempt_until` on the row
+            # UNCONDITIONALLY -- the append happens beside the label, before
+            # the gate has run -- so a gate wired with
+            # `run_tolerating_uncheckable` carries its date whatever it then
+            # returns. The TOLERANCE that date buys is rc 2 only: rc 1 is FAIL
+            # and the suite exits 1 on it exactly as if no exemption had been
+            # written.
+            #
+            # MEASURED 2026-08-29 on a real record of `L-doc field producer`,
+            # wired `run_tolerating_uncheckable ... --corpus-may-be-absent`
+            # under `uncheckable_until 2027-02-28`. On a host carrying the
+            # published corpus it returns rc 1 and the record reads
+            # `state: FAIL, exempt_until: 2027-02-28` -- and this function
+            # credited it, so the CLI reported a BLOCKING red as "red, and
+            # DATED by the dispatcher's own exemption". The exemption says
+            # nothing about that state and could not excuse it if it did.
+            #
+            # This is the substitution the paragraph above forbids, arriving
+            # from the other side: there an EXPIRED exemption must not read as
+            # ownership; here a state the exemption never covered must not
+            # either. The unowned bucket is the one that has to stay honest,
+            # because it is the only one anybody acts on.
             continue
         out[str(gate["label"])] = str(until)
     return out

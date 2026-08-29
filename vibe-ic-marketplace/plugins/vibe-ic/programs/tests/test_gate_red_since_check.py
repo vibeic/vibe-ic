@@ -491,7 +491,47 @@ def test_the_partition_cannot_move_the_verdict(tmp_path):
 
 
 def test_dispatcher_exemptions_reads_only_LIVE_dates():
-    rec = _record(("a", "FAIL"), ("b", "FAIL"), ("c", "FAIL"))
+    """THE STATES ARE NOT_CHECKED, AND THEY USED TO BE FAIL (2026-08-29).
+
+    The stimulus encoded the defect below: it stamped a live exemption on a
+    gate that FAILED and required it to be credited. `uncheckable_until` buys
+    tolerance for rc 2 only, so there was never a state in which that credit
+    was true.
+    """
+    rec = _record(("a", "NOT_CHECKED"), ("b", "NOT_CHECKED"),
+                  ("c", "NOT_CHECKED"))
     _exempt(rec, "a", "2027-02-28")
     _exempt(rec, "b", "2020-01-01", expired=True)
     assert G.dispatcher_exemptions(rec) == {"a": "2027-02-28"}
+
+
+def test_a_FAILED_gate_is_not_owned_by_an_uncheckable_exemption():
+    """`uncheckable_until` converts rc 2 and nothing else, so it cannot own a
+    gate that reached rc 1.
+
+    MEASURED 2026-08-29 on a real dispatch record of `L-doc field producer`,
+    which is wired `run_tolerating_uncheckable` under an exemption dated
+    2027-02-28: `_gate_dispatch.sh` stamps `exempt_until` on the row before the
+    gate runs, so with the published corpus mounted the record reads
+    `state: FAIL, exempt_until: 2027-02-28` and the CLI reported a BLOCKING red
+    as `red, and DATED by the dispatcher's own exemption`. The suite still
+    exited 1 on it — nothing was made green — but the one bucket a reader acts
+    on, `owned by nobody`, had a blocking red taken out of it.
+    """
+    rec = _record(("failed gate", "FAIL"), ("refused gate", "NOT_CHECKED"))
+    _exempt(rec, "failed gate", "2027-02-28")
+    _exempt(rec, "refused gate", "2027-02-28")
+    # BOTH directions in one record, so this cannot pass by crediting nothing:
+    # the refused gate must still be owned or the fix is a blanket refusal.
+    assert G.dispatcher_exemptions(rec) == {"refused gate": "2027-02-28"}
+
+
+@pytest.mark.parametrize("state", ["WROTE_CORPUS", "OTHER_SHARD", "LISTED",
+                                   "QUEUED", "OUT_OF_SCOPE"])
+def test_no_other_state_is_owned_by_an_uncheckable_exemption(state):
+    """The rule is stated as the one state the exemption CONVERTS, not as a
+    list of states it does not, so a state added to `_gate_dispatch.sh` later is
+    unowned by default rather than credited by default."""
+    rec = _record(("g", state))
+    _exempt(rec, "g", "2027-02-28")
+    assert G.dispatcher_exemptions(rec) == {}

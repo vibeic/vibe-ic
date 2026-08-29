@@ -1,5 +1,54 @@
 # THE LINE — where the persistent-red deadline is read, and what would set it
 
+> **STATUS: CLOSED, AND THIS DOCUMENT WAS WRONG ABOUT ITS OWN SUBJECT UNTIL
+> 2026-08-29.** Two of its statements had gone false and both pointed the next
+> reader away from the mechanism:
+>
+> * **"The program is also on nobody's landing path."** FALSE at 073a703de. The
+>   forcing function this document argued for WAS BUILT, in the place it named:
+>   `landing_merge_verdict.py:944` loads `gate_red_since_check` by path and
+>   `:1385` calls `inherited_red_reasons`, appending every string it returns to
+>   `reasons` — the refusing list, not `notes`. `gatekeeper_review.py:1634`
+>   invokes the CLI as well. The grep table below is kept because it was the
+>   measurement that motivated the work, and it now measures 3 (comments) in
+>   `gatekeeper-land.sh` and 1 in `repo_hygiene_gates.sh`.
+> * **"that ledger is `"acknowledged": []`."** FALSE when written against a tree
+>   carrying two rows. It is true again as of 2026-08-29 — for the opposite
+>   reason, and that difference is the whole point: an empty ledger USED TO mean
+>   nobody was acknowledging, because a row was voluntary and pure cost. It now
+>   means nothing is owed, because an inherited blocking red that no row names
+>   REFUSES the landing.
+>
+> **The two rows the ledger carried were retired on 2026-08-29 and neither was
+> renewed.** `tools/ci/gate_red_since.json`'s own `_doc` carries the per-row
+> evidence; in one line each:
+>
+> * `PPA measurement coverage` — **FIXED.** The row acknowledged 54 refused
+>   records and said it closes when `trials/b000` is re-produced. It was
+>   (c775e92eb, 2026-08-25). Measured through the gate's own `_index_from`:
+>   91 indexed / 54 refused at the row's `since`, 117 indexed / **0 refused** at
+>   073a703de.
+> * `L-doc field producer` — **the red is CORRECT and stays.** With no corpus the
+>   gate is rc 0 PASS and the row read `stale`; with `VIBE_IC_BENCHMARK_DATA`
+>   pointed at a clone it is rc 1 over 48 L-docs and the row read `expired`. No
+>   tree satisfied it in either direction, and its own `adjudicated` ruling
+>   ("REAL FINDING — stays red until fixed, NOT renewed") forbids the renewal
+>   that would have cleared it. Nothing in this repository can populate
+>   `floorplan_hints` / `power_budget_uw` / `sdc_constraints_path` — the subject
+>   is in `vibeic/benchmark-data` — and the gate blocks the hygiene suite on its
+>   own, with no row here. The cause, owner and closing condition live at the
+>   gate's own wiring site (`uncheckable_until 2027-02-28`,
+>   `tools/ci/repo_hygiene_gates.sh`).
+>
+> **LINE NUMBERS BELOW ARE THE 2026-08-12 TREE'S AND HAVE ALL MOVED**, and one
+> of them cites a field that no longer exists: `bound = int(row["max_commits"])`
+> became `bound = float(row["max_days"])` when the clock stopped being a commit
+> count (a commit count is a property of the merge topology; a 97-branch
+> assembly expired every shipped row). At 073a703de the same five hops are
+> `gate_red_since_check.py:552` (the loop over the ledger), `:607` (`age`),
+> `:616` (the bound), `:643` (the expiry), `:653` (the NEW partition) and
+> `:1033` (the PASS line).
+
 Published before any change, because three other lanes are working around this
 and the name is worth more to them than the fix.
 
@@ -19,10 +68,19 @@ and the name is worth more to them than the fix.
               unexpired acknowledgement"
 
 `:350` is the whole thing in one sentence: **a red owned by nobody is a PASS
-condition.** The deadline is only ever evaluated for a label that already has a
-row in `tools/ci/gate_red_since.json`, and that ledger is `"acknowledged": []`.
+condition IN THIS PROGRAM.** The deadline is only ever evaluated for a label that
+already has a row in `tools/ci/gate_red_since.json`, and on 2026-08-12 that
+ledger was `"acknowledged": []`.
 
-The program is also on nobody's landing path. `grep -c gate_red_since_check`:
+That sentence is still true of `gate_red_since_check` and is no longer true of a
+landing, which is exactly the split this document argued for: the program still
+only REPORTS an unowned red (failing it twice would say nothing extra), and
+`landing_merge_verdict` REFUSES it. So "unowned" is now the expensive state and
+an empty ledger is the cheap one — the reverse of the incentive this document
+opens by describing.
+
+The program was also on nobody's landing path — TRUE ON 2026-08-12, FALSE NOW;
+see the STATUS block. `grep -c gate_red_since_check`, as measured then:
 
     tools/gatekeeper-land.sh          0
     tools/gatekeeper-verify-merge.sh  0
@@ -122,7 +180,7 @@ passes while the base's fails; the verdict classifies that as `cleared`, which i
 reported and never required. So neither adding the row nor omitting it changes a
 landing's outcome, in either direction.
 
-## THEREFORE
+## THEREFORE — AND THIS IS WHAT WAS BUILT
 
 The forcing function has to sit where the subtraction is DECIDED, not where it is
 applied — `landing_merge_verdict.py:1183-1185` for the gate-label tier, and the
@@ -152,3 +210,63 @@ Everything except the two-line call. The adjudication is already a pure function
 without building a git history. The verdict change is then a call into tested
 code, not new logic in a protected file — which is the smallest protected diff
 this can be reduced to.
+
+---
+
+# WHAT LANDED, AND WHERE IT IS NOW (measured 2026-08-29 at 073a703de)
+
+    gate_red_since_check.inherited_red_reasons          :666
+      one refusal string per inherited BLOCKING red that is unowned, past its
+      bound, unbounded, unresolvable, or still bounded in commits
+
+    landing_merge_verdict._load_red_since               :944
+      loads it by path, at the moment it is needed, so this file's import graph
+      is unchanged — it is executed by the isolated trusted entry
+
+    landing_merge_verdict.decide                        :1385
+      for reason in _load_red_since().inherited_red_reasons(
+              list((hygiene or {}).get("carried") or []),
+              list(red_since_ledger), commit_age):
+          reasons.append(reason)          <-- `reasons`, NOT `notes`
+
+    landing_merge_verdict.decide                        :1370-1378
+      and when the ledger or the age function is missing it says so —
+      INHERITED_RED_DEADLINE_NOT_EVALUATED — rather than reading clean
+
+The protected transition the document predicted was paid: `landing_merge_verdict`
+is `["authority"]` in `tools/ci/protected_landing_transition.json` and still is.
+
+## THE ONE THING THAT WAS STILL WIRED THE OLD WAY, AND IS FIXED IN THIS CHANGE
+
+`gate_red_since_check.dispatcher_exemptions` reads `exempt_until` off a gate row
+to say which reds are owned by the dispatcher's own dated exemption rather than
+by this ledger. `_gate_dispatch.sh` stamps that field on the row BEFORE the gate
+runs, so a gate carries its date whatever it then returns — and the tolerance the
+date buys is rc 2 only. MEASURED on a real record of `L-doc field producer` with
+the corpus mounted: `state: FAIL, exempt_until: 2027-02-28`, and the CLI printed
+
+    red, and DATED by the dispatcher's own exemption …: 1 — L-doc field producer
+
+for a BLOCKING red. Nothing was made green — the suite still exits 1 — but the
+one bucket a reader acts on, `NEW red this run (owned by nobody)`, had a blocking
+red taken out of it. The credit is now given only to `NOT_CHECKED`, which is the
+one state an `uncheckable_until` converts, and the rule is stated as that one
+state rather than as a list of exclusions so a state added to `_gate_dispatch.sh`
+later is unowned by default.
+
+## WHAT IS STILL OPEN, AND IS NOT THIS CHANGE'S TO CLOSE
+
+`repo_hygiene_gates.sh` is a protected path, so the two declarations below were
+READ and not edited; each needs a PREPARE/ACTIVATE pair.
+
+  * the `uncheckable_until 2027-02-28` above `L-doc field producer` says "rc 2 is
+    a MEASURED zero over a corpus that WAS read". On a host carrying today's
+    `benchmark-data` the gate returns **rc 1** over 48 L-docs, and rc 1 is not a
+    state that exemption can convert. The exemption is not WRONG to exist — it
+    covers the pointer-unset case — but its stated mechanism no longer matches
+    the state the gate actually reaches, and a reader who takes it at its word
+    will believe that red is covered.
+  * no inventory of the rest of the suite was taken here. This change adjudicates
+    the two rows the ledger named and nothing else; if other gates are red on
+    both arms and unowned, `inherited_red_reasons` will name them at the next
+    landing, which is the mechanism working rather than a gap.

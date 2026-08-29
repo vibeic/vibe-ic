@@ -68,9 +68,34 @@ def _ack(repo, gate, since, days, **kw):
                 max_days=days, **kw)
 
 
+#: The window a synthesised bound must be able to straddle: `behind - 1` has to
+#: stay a positive bound and `behind + 1` has to stay under `MAX_BOUND_DAYS`, so
+#: the age itself has to sit strictly inside both.
+_STRADDLE_LO = 1.5
+_STRADDLE_HI = G.MAX_BOUND_DAYS - 1.0
+
+#: How far back to look for an anchor. This history runs ~78 commits/day (the
+#: cadence the retired ledger rows measured), so the six-day ceiling is ~470
+#: commits and this is an order of magnitude of headroom. Bounded rather than
+#: unbounded because the walk is a fixture, not a verdict.
+_ANCHOR_SCAN = 6000
+
+
 @pytest.fixture(scope="module")
-def straddling_clock(rows):
-    """`(age, behind)` for a clock read at a tree the row's bound can straddle.
+def straddling_clock():
+    """`(since, age, behind)` — a real commit of this repository, and a clock
+    at which a declarable bound sits on either side of its age.
+
+    THE ANCHOR IS NO LONGER A SHIPPED ROW (2026-08-29). It was `rows[0]["since"]`,
+    which made three direction tests and the ceiling test ERROR the moment the
+    ledger was emptied — and the ledger being empty is the state this whole
+    mechanism is trying to reach. A control that takes its stimulus from the
+    debt it polices dies with the fix and stops being a control without stopping
+    being green, which is the shape `test_the_1_6x_clause_was_REHOMED` records on
+    the other side of the repository. Nothing these tests assert needed the
+    shipped row: every one of them overwrites `max_days` outright and keeps only
+    the `(gate, since, since_date)` triple, which `_ack` synthesises FROM THE
+    REPOSITORY exactly as a real row carries it.
 
     WHY THE DIRECTION TESTS BELOW CANNOT READ THE CLOCK AT `HEAD`, AND WHY THE
     ANSWER IS NOT A BIGGER BOUND.
@@ -102,48 +127,43 @@ def straddling_clock(rows):
     hours. So candidates are probed with the same `age` the adjudicator uses and
     the first one landing inside the window is returned.
     """
-    since = str(rows[0]["since"])
-    # ONE `git log`, NOT ONE PROBE PER COMMIT. There are thousands of commits
-    # between the oldest `since` and HEAD on this history, and calling the age
-    # function for each is two `git` processes apiece — minutes of fixture for
-    # a value that is a subtraction of two dates. The dates are read in one
-    # pass and the arithmetic is done here.
+    # ONE `git log`, NOT ONE PROBE PER COMMIT. Calling the age function for each
+    # commit is two `git` processes apiece — minutes of fixture for a value that
+    # is a subtraction of two dates. The dates are read in one pass and the
+    # arithmetic is done here.
     listing = subprocess.run(
-        ["git", "-C", str(REPO), "log", "--reverse", "--ancestry-path",
-         "--format=%H %cI", f"{since}..HEAD"],
+        ["git", "-C", str(REPO), "log", "-n", str(_ANCHOR_SCAN),
+         "--format=%H %cI", "HEAD"],
         capture_output=True, text=True).stdout.splitlines()
-    assert listing, (
-        f"no commit of this repository lies between {since[:12]} and HEAD, so "
-        f"no endpoint can be chosen and neither direction of the expiry rule "
-        f"can be constructed here")
-    start = G._parse_iso(G.git_commit_date(REPO)(since))
-    assert start is not None, f"this repo cannot date {since[:12]}"
-    # Room for `behind + 1` to stay legal, so direction two is constructible.
-    hi = G.MAX_BOUND_DAYS - 1
+    assert listing, "this repository has no history to anchor a deadline in"
+    end = G._parse_iso(G.git_commit_date(REPO)("HEAD"))
+    assert end is not None, "this repo cannot date HEAD"
+    # The LARGEST age inside the window gives the widest straddle, so a rounding
+    # difference at either side cannot collapse it.
     best = None
     for line in listing:
         sha, _, iso = line.partition(" ")
         when = G._parse_iso(iso)
         if when is None:
             continue
-        behind = (when - start).total_seconds() / G._SECONDS_PER_DAY
-        # The LARGEST such endpoint gives the widest straddle, so a rounding
-        # difference at either side cannot collapse the window.
-        if _TIGHT_DAYS < behind <= hi and (best is None or behind > best[1]):
+        behind = (end - when).total_seconds() / G._SECONDS_PER_DAY
+        if (_STRADDLE_LO <= behind <= _STRADDLE_HI
+                and (best is None or behind > best[1])):
             best = (sha, behind)
-    if best is not None:
-        sha, behind = best
-        at = G.git_age_days(REPO, sha)
-        # MEASURED THROUGH THE PRODUCTION FUNCTION, not trusted from the loop:
-        # if `git_age_days` and this arithmetic ever disagree, the direction
-        # tests must fail rather than silently assert against a number the
-        # adjudicator never sees.
-        assert at(since) == pytest.approx(behind), (at(since), behind)
-        return at, behind
-    raise AssertionError(
-        f"no tree between {since[:12]} and HEAD sits a declarable distance "
-        f"({_TIGHT_DAYS}..{hi} days) from it, so the expiry rule cannot be "
-        f"exercised in either direction on this history")
+    if best is None:
+        raise AssertionError(
+            f"no commit within the last {_ANCHOR_SCAN} sits "
+            f"{_STRADDLE_LO}..{_STRADDLE_HI} days behind HEAD, so no bound can "
+            f"be straddled and neither direction of the expiry rule can be "
+            f"exercised on this history")
+    since, behind = best
+    at = G.git_age_days(REPO, "HEAD")
+    # MEASURED THROUGH THE PRODUCTION FUNCTION, not trusted from the loop: if
+    # `git_age_days` and this arithmetic ever disagree, the direction tests must
+    # fail rather than silently assert against a number the adjudicator never
+    # sees.
+    assert at(since) == pytest.approx(behind), (at(since), behind)
+    return since, at, behind
 
 
 def _record(states):
@@ -158,7 +178,29 @@ def _record(states):
 # --------------------------------------------------------------------------
 
 def test_every_row_carries_the_required_keys_and_the_three_human_ones(rows):
-    assert rows, "the ledger is empty -- the clock is stopped again"
+    # `assert rows, "the ledger is empty -- the clock is stopped again"` STOOD
+    # HERE AND WAS RETIRED 2026-08-29, because it made the ledger's correct
+    # state unreachable.
+    #
+    # It was true when written: vibe-ic#1025 shipped this ledger empty and
+    # nothing forced a row into it, so empty really did mean the clock was
+    # stopped. What closed that gap is `landing_merge_verdict.decide` calling
+    # `gate_red_since_check.inherited_red_reasons`, which REFUSES a landing over
+    # an inherited blocking red no row names -- and that property is pinned,
+    # over an EMPTY ledger, by
+    # `test_inherited_red_deadline.test_an_inherited_blocking_red_with_no_owner_refuses`.
+    # So the file being empty no longer means nobody is acknowledging; it means
+    # nothing is owed, and the next red that appears is refused rather than
+    # carried.
+    #
+    # Left in place, the assertion demanded that this repository always owe
+    # something. MEASURED at 073a703de: both rows it carried had to go -- one
+    # was FIXED and one was a red this repository cannot close and whose own
+    # `adjudicated` ruling forbids renewal -- so satisfying this line would have
+    # meant keeping an acknowledgement that was already false in both
+    # directions. The loop below is the check; over no rows it correctly finds
+    # nothing, and `test_gate_red_since_check` drives the same rules over
+    # fixtures where the population is never empty.
     # COLLECTED. An assert inside the row loop stops at the first offender, so
     # the failure names one row and the next is reachable only by fixing that
     # one and re-running. See the note on the bound test below.
@@ -242,17 +284,16 @@ def test_every_since_date_is_the_date_of_the_commit_it_names(rows):
 # --------------------------------------------------------------------------
 
 def test_a_row_whose_since_has_fallen_past_its_bound_refuses(
-        rows, straddling_clock):
+        straddling_clock):
     """Direction one. Take a shipped row, leave `since` where the measurement
     put it, and set the bound BELOW the red's real age. It must fail.
 
     The clock is read at a tree the bound can straddle rather than at HEAD --
     see `straddling_clock` for why, and for what stayed the same.
     """
-    age, behind = straddling_clock
-    row = dict(rows[0])
-    assert _TIGHT_DAYS < behind <= G.MAX_BOUND_DAYS, behind
-    row["max_days"] = behind - 1
+    since, age, behind = straddling_clock
+    assert _STRADDLE_LO <= behind <= _STRADDLE_HI, behind
+    row = _ack(REPO, "a gate this row acknowledges", since, behind - 1)
     findings, _, _ = G.adjudicate(
         _record({row["gate"]: "FAIL"}), [row], age)
     kinds = [f.kind for f in findings]
@@ -263,7 +304,7 @@ def test_a_row_whose_since_has_fallen_past_its_bound_refuses(
 
 
 def test_the_same_row_inside_its_bound_does_not_refuse(
-        rows, straddling_clock):
+        straddling_clock):
     """Direction two, and it is the one that makes direction one mean
     something: if every row refused, `expired` would be a constant.
 
@@ -273,9 +314,8 @@ def test_the_same_row_inside_its_bound_does_not_refuse(
     that as the rule being broken. A bound the ceiling cannot express is a
     stimulus that no longer exists, not a smaller stimulus.
     """
-    age, behind = straddling_clock
-    row = dict(rows[0])
-    row["max_days"] = behind + 1
+    since, age, behind = straddling_clock
+    row = _ack(REPO, "a gate this row acknowledges", since, behind + 1)
     assert row["max_days"] <= G.MAX_BOUND_DAYS, (
         "the endpoint left no room for a bound ABOVE the age; direction two "
         "cannot be constructed and must not be silently weakened to fit")
@@ -458,7 +498,7 @@ def test_the_ledger_is_tracked_so_every_renewal_has_an_author():
         assert author, f"a commit touching the ledger carries no author: {line}"
 
 
-def test_no_environment_variable_can_move_the_clock(rows, straddling_clock):
+def test_no_environment_variable_can_move_the_clock(straddling_clock):
     """`adjudicate` takes (record, ledger, age) and nothing else, and this is
     the behavioural proof rather than a reading of the signature: a row that
     has expired stays expired with the environment stuffed with every name a
@@ -468,9 +508,8 @@ def test_no_environment_variable_can_move_the_clock(rows, straddling_clock):
     the same way direction one did, so it went dark for the same reason. Same
     repair: the clock is read at a tree the bound can straddle.
     """
-    age, behind = straddling_clock
-    row = dict(rows[0])
-    row["max_days"] = behind - 1
+    since, age, behind = straddling_clock
+    row = _ack(REPO, "a gate this row acknowledges", since, behind - 1)
     red = _record({row["gate"]: "FAIL"})
     before = [f.line() for f in G.adjudicate(red, [row], age)[0]]
     assert any("expired" in line for line in before)
@@ -490,10 +529,13 @@ def test_no_environment_variable_can_move_the_clock(rows, straddling_clock):
     assert after == before
 
 
-def test_the_ceiling_cannot_be_raised_from_the_file_it_adjudicates(rows, age):
+def test_the_ceiling_cannot_be_raised_from_the_file_it_adjudicates(
+        straddling_clock, age):
     """A row asking for more than the ceiling is refused, so the mechanism
     cannot be switched off by editing the ledger."""
-    row = dict(rows[0], max_days=G.MAX_BOUND_DAYS + 1)
+    since, _at, _behind = straddling_clock
+    row = _ack(REPO, "a gate this row acknowledges", since,
+               G.MAX_BOUND_DAYS + 1)
     findings, _, _ = G.adjudicate(
         _record({row["gate"]: "FAIL"}), [row], age)
     assert findings, "a bound above the ceiling was accepted"
