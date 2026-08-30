@@ -521,7 +521,10 @@ def test_a_rule_with_no_emitter_refuses_the_rejection_rather_than_writing_anothe
     maimed.write_text(cut, encoding="utf-8")
 
     run_dir = tree(tmp_path, REJECT, "no_emitter")
-    emit_dir = tmp_path / "emitted"
+    # INSIDE the copy, not beside it: the engine refuses an emit destination
+    # outside the run it is reviewing, and this test's own `run()` docstring
+    # already said the regression goes INTO the run tree.
+    emit_dir = run_dir / "reports" / "emitted"
     r = subprocess.run(
         [sys.executable, str(maimed), str(run_dir), "--stage", STAGE,
          "--stage-verdict", "PASS", "--flow-def", str(FLOW),

@@ -60,6 +60,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import shutil
 import sys
 import textwrap
 from pathlib import Path
@@ -367,9 +368,17 @@ def test_a_rejection_still_writes_the_test_that_blocks(tmp_path):
 
     It also measures the claim the declaration rests on — that the blocker is
     the emitted test, one level down from the gate. rc 1 AND a test file on
-    disk in the reviewed run's own tree."""
-    emit = tmp_path / "emitted"
-    cp = _pr.run([sys.executable, str(_PROG), str(_REJECT),
+    disk IN THE REVIEWED RUN'S OWN TREE — which is what this docstring always
+    said and what the invocation did not do: it reviewed the shipped fixture
+    and redirected the emit to `tmp_path`, so the proof landed outside the run
+    it was proving something about. The engine refuses that now, so the run
+    tree is a per-test COPY and the emit goes inside it — the same shape
+    `test_stage_phase1_on_pass_review.tree()` has always used, and the reason
+    the shipped fixture is still never written to."""
+    run_dir = tmp_path / "run"
+    shutil.copytree(_REJECT, run_dir)
+    emit = run_dir / "reports" / "emitted"
+    cp = _pr.run([sys.executable, str(_PROG), str(run_dir),
                   "--stage", "stage1", "--stage-verdict", "PASS",
                   "--flow-def", str(_FLOW), "--emit-test", str(emit)],
                  capture_output=True, text=True)
