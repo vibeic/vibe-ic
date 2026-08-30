@@ -58,12 +58,22 @@ the difference between 17 findings and 1, and it is what correctly clears
 a filter. It also bounds what the rule can see, and that bound is stated here
 rather than left for a reader to discover.
 
-RE-MEASURED on this tree: of 21 registry-reading enforcement modules, **20
+RE-MEASURED on this tree: of 19 registry-reading enforcement modules, **18
 already contain at least one appending loop over a derived population**, so a
 registry-iterating finding loop added to any of them would be exculpated and
-NOT flagged. The clause's reach is **1 of 21** — `gate_red_since_check` — and
+NOT flagged. The clause's reach is **1 of 19** — `gate_red_since_check` — and
 the test pins that set BY NAME rather than by the number, because one leaving
 as another entered would keep the count and change the set.
+
+THE POPULATION TERM MOVED WITHOUT ANY MODULE CHANGING, and that is what the
+`tests` exclusion in `_tracked_json_names` now prevents. While the census
+counted fixtures, `spec.json`, `L8_RTL_CONSTANTS.json` and `waivers.json`
+existed ONLY under `programs/tests/fixtures/**`, and their presence alone made
+`analog_hw_spice_correlation_check` and `l8_frame_end_gap_derivation_check`
+count as registry readers: population 30, reach 3. Neither module had been
+touched since v1.0.0 (86cacb4b6) — a landed test FIXTURE had moved a pinned
+boundary in a shipped gate. The verdict was unaffected both before and after
+(findings 1, inventory rows applied 1); only the stated reach was wrong.
 
 WHAT MOVED, AND WHY IT IS A DEPARTURE AND NOT A REGRESSION. The reach was 2 of
 22 (`gate_red_since_check` and `spare_cell_coverage_check`) while
@@ -186,16 +196,29 @@ def _json_constants(tree: ast.AST) -> Set[str]:
 
 
 def _tracked_json_names(root: Path) -> Set[str]:
-    """Basenames of `.json` files that EXIST in the tree.
+    """Basenames of `.json` files that EXIST in the SHIPPED tree.
 
     A `.json` string that resolves to no file on disk is an output name, not a
     registry, and counting it would make every report writer a registry
     reader.
+
+    TEST DATA IS NOT THE SHIPPED TREE, and excluding it is the same predicate
+    the module walk in `main` already applies to `.py` files (`"tests" in
+    f.parts`).  Counting fixtures made the census answer a different question
+    than the one it is named for: existence ANYWHERE, including under
+    `programs/tests/fixtures/**`.  MEASURED on this tree — with fixtures
+    counted, `spec.json`, `L8_RTL_CONSTANTS.json` and `waivers.json` exist ONLY
+    as fixtures, and that alone reclassified
+    `analog_hw_spice_correlation_check` and `l8_frame_end_gap_derivation_check`
+    as registry readers and moved the clause's reach from 1 to 3.  Neither
+    module had changed since v1.0.0; a landed FIXTURE had moved the boundary.
+    Excluding test trees: 257 basenames -> 209, population 30 -> 17, reach
+    3 -> 1, and the reach is again exactly `{gate_red_since_check.py}`.
     """
     names: Set[str] = set()
     for p in root.rglob("*.json"):
         parts = p.parts
-        if ".git" in parts or "node_modules" in parts:
+        if ".git" in parts or "node_modules" in parts or "tests" in parts:
             continue
         names.add(p.name)
     return names
