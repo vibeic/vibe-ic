@@ -11384,6 +11384,24 @@ def completion_audit_verdict(
         f"refusing is not passing.")
 
 
+#: Colon-separated stack of the stage scopes an outer `flow_compliance_check`
+#: is currently evaluating. Inherited by every gate program this run spawns, so
+#: a nested pass can see that its own scope is already open. See the
+#: re-entrancy block in `main`.
+_SCOPE_STACK_ENV = "VIBEIC_FCC_ACTIVE_SCOPES"
+
+#: Scopes that contain no synthesis step, so the pre-PnR Yosys gate has nothing
+#: to read. `stage1` is spelt as an int one line below for historical reasons;
+#: these are the stages `--stage` could never name.
+_NO_SYNTH_SCOPES = ("stage1", "stage_phase1", "stage_analog")
+
+#: Scopes that contain no digital-RTL step, so the P0 structural umbrella has no
+#: subject. The existing `args.stage not in (3, 4)` says the same thing for the
+#: numbered stages; this is that sentence for the named ones.
+_NO_RTL_UMBRELLA_SCOPES = ("stage3", "stage4", "stage_phase1", "stage_analog",
+                           "stage_mixed_signal", "stage5_manufacturing")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir", nargs="?",
@@ -11395,6 +11413,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--lenient", action="store_true", help="Lenient mode: MISSING → WARN, only gate FAIL fails.")
     p.add_argument("--stage", type=int, choices=[1, 2, 3, 4],
                    help="Only check steps belonging to this stage (for interim gating).")
+    # `--stage` CANNOT NAME EVERY STAGE THIS FLOW HAS, and until now nothing
+    # said so. It is `type=int, choices=[1,2,3,4]`, while `stages:` also carries
+    # `stage_phase1`, `stage_analog`, `stage_mixed_signal` and
+    # `stage5_manufacturing`. A caller that wants an interim verdict for one of
+    # those has no way to ask for it, which is why the on-pass reviews for
+    # stage_phase1 and stage_analog had no producible verdict source at all.
+    # This takes the stage's OWN id, verbatim, so the set of askable scopes is
+    # the set of stages the flow declares rather than a hand-typed subset.
+    p.add_argument("--stage-id", dest="stage_id",
+                   help=("Only check steps belonging to this stage, named by "
+                         "the stage's own `id` (e.g. stage_phase1, "
+                         "stage_analog, stage3). Mutually exclusive with "
+                         "--stage, which can only name stages 1-4."))
     p.add_argument(
         "--skip-yosys-gates", action="store_true",
         help=("v0.70: disable the pre-PnR Yosys auditor gate "
@@ -11664,13 +11695,58 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("flow_compliance_check: flow has no steps defined", file=sys.stderr)
         return 2
 
-    # Apply --stage filter if requested.
-    if args.stage is not None:
+    # Apply --stage / --stage-id filter if requested.
+    target_stage: Optional[str] = None
+    if args.stage is not None and getattr(args, "stage_id", None):
+        print("flow_compliance_check: pass --stage OR --stage-id, not both",
+              file=sys.stderr)
+        return 2
+    if getattr(args, "stage_id", None):
+        target_stage = str(args.stage_id)
+    elif args.stage is not None:
         target_stage = f"stage{args.stage}"
+    if target_stage is not None:
+        declared_stage_ids = {str(st.get("id")) for st in (flow.get("stages") or [])
+                              if isinstance(st, dict) and st.get("id")}
+        if declared_stage_ids and target_stage not in declared_stage_ids:
+            # A SCOPE THIS FLOW DOES NOT DECLARE IS A TYPO, NOT AN EMPTY RUN.
+            # The branch below already refuses an empty selection, but it
+            # cannot tell "this stage exists and has no steps here" from "this
+            # stage does not exist"; the second is the one a caller can fix.
+            print(f"flow_compliance_check: no stage {target_stage!r} in "
+                  f"{flow_path}; declared stages are "
+                  f"{', '.join(sorted(declared_stage_ids))}", file=sys.stderr)
+            return 2
         steps = [s for s in steps if s.get("stage") == target_stage]
         if not steps:
             print(f"flow_compliance_check: no steps for {target_stage}", file=sys.stderr)
             return 2
+
+    # ── RE-ENTRANCY: A SCOPED PASS MUST NOT RE-ENTER ITS OWN SCOPE ──────────
+    # This program spawns itself: a step's gate may carry `stageN_compliance`,
+    # which is `flow_compliance_check --stage N`, and that nested pass
+    # evaluates steps whose gates may spawn it again. Today every such chain
+    # descends (stage3 -> stage2 -> stage1 -> stage_phase1) and terminates by
+    # luck rather than by construction: the moment a stage's own verdict is
+    # produced ON a step of that same stage -- which is the only place stage 4's
+    # verdict CAN be produced, because every step after 39 is conditioned on an
+    # artefact no run has -- the chain is infinite.
+    #
+    # DISCLOSED, NEVER SILENT. The refusal is rc=2 with the scope stack named,
+    # so a reader sees a scope that declined to re-enter itself rather than a
+    # pass that quietly measured nothing. rc=2 is this program's existing
+    # "the question could not be put" tier and the advisory slot already
+    # records it as such.
+    _scope = target_stage or "ALL"
+    _active = [t for t in (os.environ.get(_SCOPE_STACK_ENV) or "").split(":") if t]
+    if _scope in _active:
+        print(f"flow_compliance_check: rc=2 NOT CHECKED — scope {_scope!r} is "
+              f"already being evaluated by an outer pass "
+              f"({' -> '.join(_active)}). A scoped compliance pass does not "
+              f"re-enter its own scope; the outer pass is the one whose verdict "
+              f"this is.", file=sys.stderr)
+        return 2
+    os.environ[_SCOPE_STACK_ENV] = ":".join(_active + [_scope])
 
     # v0.119.29: --phase filter via canonical step-ID ranges. The flow
     # YAML doesn't tag steps with a phase keyword, but the conventional
@@ -11747,7 +11823,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # and `ok` is forced False.
     # ------------------------------------------------------------------
     yosys_gate_needed = not args.skip_yosys_gates
-    if args.stage == 1:
+    if args.stage == 1 or target_stage in _NO_SYNTH_SCOPES:
+        # A scope that contains no synthesis step has no subject for this gate.
+        # `stage1` was already spelt here as an int; the named scopes are the
+        # same statement for the stages `--stage` could never name.
         yosys_gate_needed = False
     # If only stage2 was requested and no .ys yet, step 9 catches it.
     # For stage2+ or all stages, we run the gate whenever a .ys exists.
@@ -11801,7 +11880,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # all) publishes "no records" rather than an empty list that would read as
     # "every gate was considered and none of them anything".
     structural_gate_records: Optional[List[Dict[str, Any]]] = None
-    if args.stage not in (3, 4):
+    if args.stage not in (3, 4) and target_stage not in _NO_RTL_UMBRELLA_SCOPES:
         structural_gate_records = []
         # #497 step 3 — `main()` no longer consumes the umbrella's PROSE
         # buckets at all. `s_passed` is the umbrella's own tri-state and

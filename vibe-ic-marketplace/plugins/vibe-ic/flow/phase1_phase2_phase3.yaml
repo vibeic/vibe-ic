@@ -493,7 +493,15 @@ stages:
       # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
       # command now lives on the step named below -- ONE declaration, in the
       # section the engine reads -- and this back-pointer says where.
-      dispatched_by: "40"
+      #
+      # 40 -> 39. Being in `steps:` was necessary and not sufficient: step 40's
+      # `condition:` names phase3/stage5_manufacturing/silicon_received.json, a
+      # path no run tree and no commit in this repository's history has ever
+      # carried, so the clause was SKIPPED-CONDITION and its gate never ran.
+      # Declared where the engine looks, on a step the engine never reaches, is
+      # the same silence one indirection further out. Step 39 is the last step
+      # in the flow that declares no `condition:`.
+      dispatched_by: "39"
 
   # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
   # Optional: only fires when project sets manufacturing.enabled = true
@@ -1439,7 +1447,22 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json --compliance reports/flow_compliance.json"
+        # THE VERDICT SOURCE, PRODUCED HERE AND READ ON THE NEXT LINE.
+        # It used to be `--compliance reports/flow_compliance.json`, which
+        # ONLY the flow's `final_gate:` block declares -- and NOTHING
+        # EXECUTES `final_gate`. Both runners invoke this program without
+        # `--json` (design_one_shot_runner._build_final_audit_cmd,
+        # phase3_one_shot_runner), `--json` has no default, and even when a
+        # caller does pass it the report is written AFTER the step loop that
+        # hosts these clauses. MEASURED: the review returned rc=2 NOT CHECKED
+        # -- "[Errno 2] No such file or directory" -- on every real run, which
+        # is v1.13.42's outcome reached through a different door.
+        # A scoped pass run as the clause BEFORE the review is a verdict
+        # source with an executed producer AND a defined order: `_evaluate_gate`
+        # walks `all_of` in sequence, so the report exists when the next
+        # clause reads it.
+        - advisory_program_exit_zero: "flow_compliance_check . --stage-id stage_phase1 --strict --json reports/phase1/gates/stage_phase1_compliance.json"
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_phase1 --json reports/phase1/gates/stage_phase1_on_pass_review.json --compliance reports/phase1/gates/stage_phase1_compliance.json"
         # BLOCKING and unconditional. The judge itself records NOT_APPLICABLE
         # for an ordinary, un-rewritten design; conditioning this clause on its
         # own inputs would let a rewrite omit the evidence that checks it.
@@ -2426,7 +2449,25 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json --compliance reports/flow_compliance.json"
+        # THE VERDICT SOURCE, PRODUCED HERE AND READ ON THE NEXT LINE.
+        # It used to be `--compliance reports/flow_compliance.json`, which
+        # ONLY the flow's `final_gate:` block declares -- and NOTHING
+        # EXECUTES `final_gate`. Both runners invoke this program without
+        # `--json` (design_one_shot_runner._build_final_audit_cmd,
+        # phase3_one_shot_runner), `--json` has no default, and even when a
+        # caller does pass it the report is written AFTER the step loop that
+        # hosts these clauses. MEASURED: the review returned rc=2 NOT CHECKED
+        # -- "[Errno 2] No such file or directory" -- on every real run, which
+        # is v1.13.42's outcome reached through a different door.
+        # A scoped pass run as the clause BEFORE the review is a verdict
+        # source with an executed producer AND a defined order: `_evaluate_gate`
+        # walks `all_of` in sequence, so the report exists when the next
+        # clause reads it.
+        # `stage1_compliance` was ALREADY in this `all_of`, last, with no `--json`.
+        # It is the same clause, moved to the front and asked to write what
+        # it measured. Nothing new runs.
+        - advisory_program_exit_zero: "stage1_compliance . --json reports/phase2/gates/stage1_compliance.json"
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json --compliance reports/phase2/gates/stage1_compliance.json"
         - files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
         - program_exit_zero: "sdc_syntax_check . --json reports/phase2/gates/sdc_syntax.json"
         # ORGANIC-20260606 #442 — pvt_matrix.json with corners=[] is not
@@ -2497,7 +2538,6 @@ steps:
         # reader after the wrong artefact. The verdict belongs on the record,
         # not in step 7's tier. It writes no artefact, so nothing is added to
         # `required_outputs`.
-        - advisory_program_exit_zero: "stage1_compliance ."
     blocks_on: [1]
 
   - id: 8
@@ -3826,7 +3866,22 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json --compliance reports/flow_compliance.json"
+        # THE VERDICT SOURCE, PRODUCED HERE AND READ ON THE NEXT LINE.
+        # It used to be `--compliance reports/flow_compliance.json`, which
+        # ONLY the flow's `final_gate:` block declares -- and NOTHING
+        # EXECUTES `final_gate`. Both runners invoke this program without
+        # `--json` (design_one_shot_runner._build_final_audit_cmd,
+        # phase3_one_shot_runner), `--json` has no default, and even when a
+        # caller does pass it the report is written AFTER the step loop that
+        # hosts these clauses. MEASURED: the review returned rc=2 NOT CHECKED
+        # -- "[Errno 2] No such file or directory" -- on every real run, which
+        # is v1.13.42's outcome reached through a different door.
+        # A scoped pass run as the clause BEFORE the review is a verdict
+        # source with an executed producer AND a defined order: `_evaluate_gate`
+        # walks `all_of` in sequence, so the report exists when the next
+        # clause reads it.
+        - advisory_program_exit_zero: "flow_compliance_check . --stage-id stage_analog --strict --json reports/analog/stage_analog_compliance.json"
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json --compliance reports/analog/stage_analog_compliance.json"
         - optional_program_exit_zero:
             command: "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
             condition_files_exist: ["phase2/stage2/synth"]
@@ -3907,7 +3962,25 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json --compliance reports/flow_compliance.json"
+        # THE VERDICT SOURCE, PRODUCED HERE AND READ ON THE NEXT LINE.
+        # It used to be `--compliance reports/flow_compliance.json`, which
+        # ONLY the flow's `final_gate:` block declares -- and NOTHING
+        # EXECUTES `final_gate`. Both runners invoke this program without
+        # `--json` (design_one_shot_runner._build_final_audit_cmd,
+        # phase3_one_shot_runner), `--json` has no default, and even when a
+        # caller does pass it the report is written AFTER the step loop that
+        # hosts these clauses. MEASURED: the review returned rc=2 NOT CHECKED
+        # -- "[Errno 2] No such file or directory" -- on every real run, which
+        # is v1.13.42's outcome reached through a different door.
+        # A scoped pass run as the clause BEFORE the review is a verdict
+        # source with an executed producer AND a defined order: `_evaluate_gate`
+        # walks `all_of` in sequence, so the report exists when the next
+        # clause reads it.
+        # `stage2_compliance` was ALREADY in this `all_of`, last, with no `--json`.
+        # It is the same clause, moved to the front and asked to write what
+        # it measured. Nothing new runs.
+        - advisory_program_exit_zero: "stage2_compliance . --json reports/phase2/gates/stage2_compliance.json"
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json --compliance reports/phase2/gates/stage2_compliance.json"
         # flow v2.3.1 (review R3) — IP integration checklist: hard-macro
         # LEF/GDS/Liberty file-set alignment + lib corner coverage +
         # L21 power-domain consistency, before the macros enter
@@ -3968,7 +4041,6 @@ steps:
         # same reasoning is why stage3's wrapper is wired on a stage4 step and
         # stage4's on a stage5 step, and why none of the three may ever be
         # wired inside its own stage.
-        - advisory_program_exit_zero: "stage2_compliance ."
     blocks_on: [13, 14, A8]
 
   # ── chip/IC path only ────────────────────────────────────────────────
@@ -6868,7 +6940,25 @@ steps:
         # which #1253 refuses -- and would additionally read the program's
         # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
         # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json --compliance reports/flow_compliance.json"
+        # THE VERDICT SOURCE, PRODUCED HERE AND READ ON THE NEXT LINE.
+        # It used to be `--compliance reports/flow_compliance.json`, which
+        # ONLY the flow's `final_gate:` block declares -- and NOTHING
+        # EXECUTES `final_gate`. Both runners invoke this program without
+        # `--json` (design_one_shot_runner._build_final_audit_cmd,
+        # phase3_one_shot_runner), `--json` has no default, and even when a
+        # caller does pass it the report is written AFTER the step loop that
+        # hosts these clauses. MEASURED: the review returned rc=2 NOT CHECKED
+        # -- "[Errno 2] No such file or directory" -- on every real run, which
+        # is v1.13.42's outcome reached through a different door.
+        # A scoped pass run as the clause BEFORE the review is a verdict
+        # source with an executed producer AND a defined order: `_evaluate_gate`
+        # walks `all_of` in sequence, so the report exists when the next
+        # clause reads it.
+        # `stage3_compliance` was ALREADY in this `all_of`, last, with no `--json`.
+        # It is the same clause, moved to the front and asked to write what
+        # it measured. Nothing new runs.
+        - advisory_program_exit_zero: "stage3_compliance . --json reports/phase3/gates/stage3_compliance.json"
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json --compliance reports/phase3/gates/stage3_compliance.json"
         - files_exist: ["phase3/stage4/gds/*.gds"]
         - program_exit_zero: "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
         # Substance, not just size. gds_size_check compares against a
@@ -6969,7 +7059,6 @@ steps:
         # steps only, and step 37 is stage4 — outside the filter, so this
         # clause cannot re-enter itself. It would recurse without bound if
         # wired onto any stage3 step, which is why it is not.
-        - advisory_program_exit_zero: "stage3_compliance ."
     blocks_on: [34, 36]
 
   # ── cell/IP path — TERMINAL ──────────────────────────────────────────
@@ -7432,6 +7521,36 @@ steps:
     # hardware evidence artefact (webcam / UART / scope).
     gate:
       all_of:
+        # ── ON-PASS REVIEW of stage4 ─────────────────────────────────
+        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here.
+        # HERE, AND NOT ON STEP 40, and the difference is whether it runs at
+        # all. Step 40's `condition:` names
+        # `phase3/stage5_manufacturing/silicon_received.json`, a path that has
+        # never existed in any run tree or any commit in this repository's
+        # history, so the clause was SKIPPED-CONDITION on every project that has
+        # ever executed this flow. Step 39 is the LAST step in the flow with no
+        # `condition:` of any kind -- M1-M4 are conditioned on
+        # phase1/analog/analog_block_list.json and 40-44 on silicon_received.json
+        # -- and by the time it runs, steps 33-38 (power, fill, DFM, tapeout
+        # checklist, GDSII, foundry handoff) are done and the die exists. That
+        # is what "stage 4 passed" has to mean for a review of the die.
+        #
+        # `advisory_`, NOT `program_exit_zero`: the block declares
+        # `verdict: advisory` and the program declares
+        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
+        # rejection stop the step -- turning "unverified" into "blocking",
+        # which #1253 refuses -- and would additionally read the program's
+        # rc=2 NOT CHECKED as VACUOUS_PASS.
+        #
+        # `stage4_compliance` IS A STAGE-4 WRAPPER ON A STAGE-4 STEP, which is
+        # exactly the wiring the old comment at step 40 called unbounded
+        # recursion. It is bounded now, by construction rather than by
+        # placement: `flow_compliance_check` carries a scope stack
+        # (`VIBEIC_FCC_ACTIVE_SCOPES`) and a nested pass whose scope is already
+        # open returns rc=2 with the stack named. The outer pass writes the
+        # report; the inner one declines, out loud.
+        - advisory_program_exit_zero: "stage4_compliance . --json reports/phase3/gates/stage4_compliance.json"
+        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/phase3/gates/stage4_compliance.json"
         - json_field_true: {file: "reports/phase2/fpga/on_board_pass.json", field: "all_scenarios_passed", expect: true}
         - program_exit_zero: "fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1"
         # WHO IS BLOCKED, THE BOARD OR THE RTL — asked at the step that owns the
@@ -7701,17 +7820,26 @@ steps:
       - "phase3/stage5_manufacturing/wafer_lot_received.json"
     gate:
       all_of:
-        # ── ON-PASS REVIEW of stage4 ─────────────────────────────────
-        # Declared on the stage (`stages[].on_pass_review`), DISPATCHED here:
-        # the step that already carries `stage4_compliance .`.
-        # `advisory_`, NOT `program_exit_zero`, and that is the whole point:
-        # the block declares `verdict: advisory` and the program declares
-        # `DECLARED_ENFORCEMENT = "advisory"`. The blocking slot would make a
-        # rejection stop the step -- turning "unverified" into "blocking",
-        # which #1253 refuses -- and would additionally read the program's
-        # rc=2 NOT CHECKED as VACUOUS_PASS. The advisory slot RUNS it and
-        # RECORDS the verdict without changing the step's tier.
-        - advisory_program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json --compliance reports/flow_compliance.json"
+        # THE ON-PASS REVIEW OF STAGE 4 USED TO BE DECLARED HERE, AND HERE IS
+        # A STEP NO RUN HAS EVER REACHED. This step's `condition:` is
+        # `files_exist: [phase3/stage5_manufacturing/silicon_received.json]`.
+        # MEASURED at v1.13.70: `find` over the tree returns 0 such files and
+        # `git log --all --diff-filter=A -- '*silicon_received.json'` is EMPTY --
+        # no commit in the repository's history has ever added that path. A step
+        # whose condition is unmet is SKIPPED-CONDITION and ITS GATE IS NOT RUN,
+        # so R4_DIE_IS_NOT_THE_DESIGN -- the one rule that reads the artefact
+        # that actually LEAVES -- had never executed inside the flow and could
+        # not until silicon is physically received.
+        #
+        # The comment this replaces named the reason it was put here: "Wired
+        # onto any stage4 step (37.5ic, 38, 39 are the tempting ones) it would
+        # re-enter itself without bound, which is why it is not." That was true
+        # and it is now false: `flow_compliance_check` refuses to re-enter a
+        # stage scope an outer pass already has open (`_SCOPE_STACK_ENV`), so
+        # `stage4_compliance` is safe on a stage-4 step. Both the review and the
+        # wrapper now live on step 39, the LAST step in this flow that carries
+        # no `condition:` at all -- every step after it (M1-M4, 40-44) is
+        # conditioned on an artefact a doc-to-GDS run does not produce.
         - program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
         # THE STAGE-4 BOUNDARY, ASKED BY THE STEP THAT SPENDS THE MASK SET.
         # `stage4_compliance` is the end-of-stage gate the README names for
@@ -7729,11 +7857,9 @@ steps:
         # intake record for a defect the intake did not cause. The wrapper also
         # hardcodes `--strict`.
         #
-        # NO RECURSION: `flow_compliance_check --stage 4` evaluates stage4
-        # steps only, and step 40 is stage5_manufacturing — outside the filter.
-        # Wired onto any stage4 step (37.5ic, 38, 39 are the tempting ones) it
-        # would re-enter itself without bound, which is why it is not.
-        - advisory_program_exit_zero: "stage4_compliance ."
+        # MOVED TO STEP 39 with the review it produces the verdict for. The
+        # recursion this paragraph used to fear is now refused by name rather
+        # than avoided by placement, and placement was costing the whole review.
     blocks_on: [38]
     notes: |
       External step. Plugin records lot id, mask set version, and

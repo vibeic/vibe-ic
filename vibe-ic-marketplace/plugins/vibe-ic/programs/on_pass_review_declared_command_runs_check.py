@@ -74,6 +74,62 @@ P6  IT RUNS, AND IT REFUSES.  The declared argv is executed VERBATIM against
     that stage's own published known-BAD tree; rc must be 1, the record must
     carry at least one rejection, and each rejection's emitted `test:` must
     resolve INSIDE the run tree and exist on disk.
+P8  THE HOST STEP IS REACHABLE.  A clause the engine can SEE is not a clause
+    the engine RUNS. A step whose `condition:` is unmet is SKIPPED-CONDITION and
+    ITS GATE IS NOT RUN, so a review hosted there is silent on every project
+    whose tree does not happen to satisfy that condition.
+    MEASURED at v1.13.70, and this is the defect that wrote this check: stage4's
+    review — R4_DIE_IS_NOT_THE_DESIGN, the one rule that reads the artefact that
+    actually LEAVES — was hosted on step 40, whose `condition:` is
+    `files_exist: [phase3/stage5_manufacturing/silicon_received.json]`.
+    `find` over the v1.13.70 tree returns 0 such files and
+    `git log --all --diff-filter=A -- '*silicon_received.json'` is EMPTY: no
+    commit in this repository's history has ever added that path. Running
+    `flow_compliance_check` on a tree with and without the file flips step 40
+    between SKIPPED-CONDITION (clause never dispatched) and FAIL (clause
+    dispatched), so the condition is the whole of it.
+    A condition naming only paths the flow ITSELF undertakes to write (some
+    step's `required_outputs`) is not a hazard and is allowed; anything else
+    gates the review on work outside the flow.
+
+    THIS IS NOT `flow_condition_reachability_check` RESTATED, AND THE TWO MUST
+    NOT BE MERGED. That program asks the #210/#219 question -- "if the thing
+    this step checks for went wrong, would this condition still be true?" -- and
+    it reaches the OPPOSITE verdict on this very path ON PURPOSE: its `T1
+    DECLARATION` list carries `phase3/stage5_manufacturing/silicon_received.json`
+    by name, because a manufacturing INTAKE MARKER is a declaration that silicon
+    arrived, not a result the step produces, so conditioning a fab-intake step on
+    it is correct scoping. It is right, and it stays right (it is rc=0 on the
+    flow this change ships); it says nothing about the question here, which is
+    not "is this condition self-disabling" but "may a review that fires on
+    `stage_pass` be hosted behind it at all". A review is conditioned on the
+    stage passing and on nothing else, so for THIS clause the only acceptable
+    trigger is that program's `T3 BACKSTOP` shape -- a path the flow's own
+    `required_outputs` undertake to write. Same document, two questions, and
+    each program answers only its own.
+P9  THE CLAUSE ITSELF IS NOT CONDITIONED.  The same silence is available one
+    level down, through the slot's own `condition_files_exist:` +
+    `absent_condition_reason:` escape: `_evaluate_gate` then returns True with
+    "n/a (declared; condition ... matched 0 path(s), so it did not run)" and the
+    program is never started. Same rule as P8: flow-produced paths only.
+
+WHY P8 AND P9 EXIST AT ALL, WHEN P6 ALREADY EXECUTES THE COMMAND
+================================================================
+Because P6 executes it ITSELF. It resolves the argv, materialises a fixture, and
+runs the child with `cwd=<that tree>`; it proves the COMMAND works and cannot
+prove that the ENGINE ever reaches it. Both nets were measured green against two
+deliberate mutations of v1.13.70's flow, each of which leaves the command
+perfectly answerable and perfectly executable and stops the engine from starting
+it:
+    M1  `condition: {files_exist: ["never/exists/at/all.json"]}` on step 7
+        (the host of stage1's review, which today declares none)
+    M2  the same condition moved onto the clause, as
+        `condition_files_exist:` + `absent_condition_reason:`
+    on_pass_review_answerable_check            rc=0 on both
+    on_pass_review_declared_command_runs_check rc=0 on both  (before P8/P9)
+A guard that cannot go red for the reason it exists is worse than no guard, so
+reachability is checked here, where the host step is already resolved.
+
 P7  AND IT DOES NOT ALWAYS REFUSE.  The same declared argv is executed VERBATIM
     against that stage's own published known-GOOD tree; rc must be 0. This is
     the control, and it is inside the gate on purpose: a "fix" that simply made
@@ -126,6 +182,7 @@ or process.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import gzip
 import json
 import os
@@ -231,7 +288,18 @@ def step_clauses(flow: dict) -> List[Dict[str, Any]]:
                             out.append({"slot": key, "command": cmd,
                                         "argv": argv,
                                         "step": str((step or {}).get("id")),
-                                        "stage": _flag_value(argv, "--stage")})
+                                        "stage": _flag_value(argv, "--stage"),
+                                        # P8/P9 read these two. The host step's
+                                        # `condition:` and the clause's own
+                                        # `condition_files_exist:` are the two
+                                        # places the engine decides NOT to run
+                                        # a clause it can otherwise see.
+                                        "host_condition":
+                                            (step or {}).get("condition"),
+                                        "clause_condition":
+                                            (val.get("condition_files_exist")
+                                             if isinstance(val, dict)
+                                             else None)})
                 walk(val, step)
         elif isinstance(node, list):
             for item in node:
@@ -241,6 +309,41 @@ def step_clauses(flow: dict) -> List[Dict[str, Any]]:
         if isinstance(step, dict):
             walk(step.get("gate"), step)
     return out
+
+
+#: Paths the flow itself undertakes to produce. A `condition:` naming one of
+#: these is not a reachability hazard: the run that reaches the step has already
+#: been required to write it. A condition naming anything else gates the clause
+#: on something outside the flow's own work, and P8/P9 refuse that for a review.
+def flow_produced_paths(flow: dict) -> set:
+    """Every `required_outputs` pattern any step declares, `OR` alternates split."""
+    out = set()
+    for step in flow.get(DISPATCHED_SECTION) or []:
+        if not isinstance(step, dict):
+            continue
+        for o in step.get("required_outputs") or []:
+            for part in str(o).split(" OR "):
+                part = part.strip()
+                if part:
+                    out.add(part)
+    return out
+
+
+def unproduced(paths, produced: set) -> List[str]:
+    """The condition paths this flow never undertakes to write.
+
+    Compared BOTH WAYS with fnmatch, because either side may be the glob: a
+    condition may say `phase3/stage4/gds/*.gds` against a literal output, and an
+    output may say `reports/*/x.json` against a literal condition.
+    """
+    missing = []
+    for pat in (paths or []):
+        pat = str(pat)
+        if any(pat == q or fnmatch.fnmatch(pat, q) or fnmatch.fnmatch(q, pat)
+               for q in produced):
+            continue
+        missing.append(pat)
+    return missing
 
 
 def declared_reviews(flow: dict) -> List[Dict[str, Any]]:
@@ -422,6 +525,50 @@ def analyse(flow_path: Path) -> Tuple[List[str], Dict[str, Any]]:
         else:
             row["checks"]["P5"] = "ok"
 
+        # P8 — is the step that carries the clause one the engine ever reaches?
+        produced = flow_produced_paths(flow)
+        host_cond = clause.get("host_condition")
+        cond_paths = []
+        if isinstance(host_cond, dict):
+            for key in ("files_exist", "files_absent"):
+                cond_paths.extend(host_cond.get(key) or [])
+        bad_paths = unproduced(cond_paths, produced)
+        if bad_paths:
+            findings.append(
+                f"P8 THE HOST STEP IS NOT REACHABLE [{stage}]: the clause is on "
+                f"step {clause['step']!r}, which declares `condition: "
+                f"{host_cond}`. A step whose condition is unmet is "
+                f"SKIPPED-CONDITION and ITS GATE IS NOT RUN, and no step in "
+                f"this flow declares "
+                f"{', '.join(repr(b) for b in bad_paths)} among its "
+                f"`required_outputs` — so nothing the flow does can satisfy it "
+                f"and this review is silent on every run. Being declared where "
+                f"the engine LOOKS is not the same as being declared where the "
+                f"engine ARRIVES. Host it on a step with no condition, or on "
+                f"one conditioned only on artefacts the flow itself writes.")
+            row["checks"]["P8"] = "FAIL"
+        else:
+            row["checks"]["P8"] = "ok"
+
+        # P9 — and is the clause itself conditioned out of existence?
+        clause_cond = clause.get("clause_condition")
+        bad_clause = unproduced(clause_cond or [], produced)
+        if bad_clause:
+            findings.append(
+                f"P9 THE CLAUSE IS CONDITIONED OUT [{stage}]: the clause "
+                f"carries `condition_files_exist: {clause_cond}`, and no step "
+                f"in this flow declares "
+                f"{', '.join(repr(b) for b in bad_clause)} among its "
+                f"`required_outputs`. `_evaluate_gate` then returns True with "
+                f"\"n/a (declared; condition ... matched 0 path(s), so it did "
+                f"not run)\" and never starts the program — the same silence as "
+                f"P8, one level down and wearing a disclosure. A review that "
+                f"fires on `stage_pass` is conditioned on the stage passing and "
+                f"on nothing else.")
+            row["checks"]["P9"] = "FAIL"
+        else:
+            row["checks"]["P9"] = "ok"
+
         # P6 / P7 — it runs, it refuses, and it does not always refuse
         pair = ARMS.get(stage)
         if pair is None:
@@ -548,10 +695,11 @@ def main(argv=None) -> int:
                   f"BAD {arms.get('P6', {}).get('tree')} rc=1  "
                   f"GOOD {arms.get('P7', {}).get('tree')} rc=0")
         print(f"[PASS] on_pass_review_declared_command_runs_check: "
-              f"{report['enabled']} declared on-pass command(s) were EXECUTED "
-              f"verbatim; each refused its published known-BAD tree at rc=1 "
-              f"with its regression inside the run, and accepted its published "
-              f"known-GOOD tree at rc=0.")
+              f"{report['enabled']} declared on-pass command(s) sit on a step "
+              f"the engine REACHES (no unsatisfiable `condition:` on the host "
+              f"or on the clause) and were EXECUTED verbatim; each refused its "
+              f"published known-BAD tree at rc=1 with its regression inside the "
+              f"run, and accepted its published known-GOOD tree at rc=0.")
     return 1 if findings else 0
 
 
