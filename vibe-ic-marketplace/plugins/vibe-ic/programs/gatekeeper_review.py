@@ -176,6 +176,58 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# BEFORE THE FIRST IN-TREE IMPORT, AND THAT PLACEMENT IS THE WHOLE POINT
+# (vibe-ic#1893).
+#
+# This program runs INSIDE the tree it audits: every name below it is imported
+# out of the `programs/` directory whose cleanliness `attestation_preflight_
+# check` is about to measure. `tools/ci/repo_hygiene_gates.sh:52` exports the
+# same guard for its own children and writes down why -- a `.pyc` "lands inside
+# the tree the later attestation and host-independence gates re-derive and
+# compare. `git status --porcelain` cannot see it (`.gitignore`) and
+# `_run_isolation.snapshot` can, and that asymmetry is the measured 13-of-39
+# differential failure `attestation_preflight_check` was written from."
+#
+# That export cannot reach THIS process: `tools/gatekeeper-land.sh:2013` starts
+# it as a plain `python3 "$PROGRAMS/gatekeeper_review.py"`, and by the time any
+# line of this file runs, an unguarded interpreter would already be committed to
+# writing bytecode for everything it imports. MEASURED on a pristine worktree of
+# a4604d3fa, one `--help`:
+#
+#     unguarded   6 .pyc in programs/  (_watchdog, _atomic_artefact,
+#                 agent_checkin_scope_guard, git_prohibition_guard,
+#                 run_output_completeness_check, version_bump_monotonic_check)
+#     guarded     0
+#
+# and the same shape one level down, where `repo_hygiene_parallel.py` writes its
+# own ten-module import list. The consequence, one full parallel hygiene DAG per
+# arm, same commit, the guard the only variable:
+#
+#     unguarded   attestation preflight FAIL, gates are host-independent FAIL
+#                 ("1 of 140 probed corpus gate(s) did not give one reproducible
+#                 verdict across two trees" -- and the one gate IS attestation
+#                 preflight), failed=11
+#     guarded     both PASS, residue none, tree dirty 0, failed=9
+#
+# So it was never host dependence: it was dirt this process wrote seconds
+# earlier, and one unguarded interpreter reddened two gates.
+#
+# WHY AN ASSIGNMENT HERE RATHER THAN `-B` AT THE CALLER. `-B` would have to be
+# added to `tools/gatekeeper-land.sh`, which is a PROTECTED landing-runtime path
+# whose every edit needs a base-authorised PREPARE/ACTIVATE transition. This
+# assignment is the same guarantee owned by the program that needs it, and it
+# holds however the program is started -- including the hand-run path this file
+# calls "the gate a maintainer runs", where no landing driver exists to export
+# anything.
+#
+# BOTH HALVES, because they cover different things: the attribute freezes THIS
+# interpreter's remaining imports, and the environment variable is what every
+# CHILD inherits (`repo_hygiene_gate` hands `os.environ.copy()` to the hygiene
+# coordinator). An `-I` child sees neither -- `-I` implies `-E` -- which is why
+# the isolated call sites in this repo carry their own `-B` and must keep it.
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 import _watchdog as _wd
 
 
@@ -1510,7 +1562,48 @@ def repo_hygiene_gate(repo: Path,
         #
         # The shell script has no such flag and must not be given one here; only
         # the parallel runner is passed the number.
-        command = ([sys.executable, str(path),
+        # `-B`, AND THE VARIABLE, BECAUSE THE COORDINATOR IS A PYTHON PROCESS
+        # INSIDE THE TREE IT AUDITS (vibe-ic#1893).
+        #
+        # `repo_hygiene_gates.sh:52` exports `PYTHONDONTWRITEBYTECODE=1` and
+        # says why: a `.pyc` "lands inside the tree the later attestation and
+        # host-independence gates re-derive and compare. `git status
+        # --porcelain` cannot see it (`.gitignore`) and `_run_isolation.
+        # snapshot` can, and that asymmetry is the measured 13-of-39
+        # differential failure `attestation_preflight_check` was written from."
+        #
+        # That export protects every gate the SHELL spawns. It cannot protect
+        # THIS process: `repo_hygiene_parallel.py` imports ten modules out of
+        # `programs/` at startup — before any shard, before that shell exists —
+        # so its own import phase writes the residue the shell was told to
+        # prevent. MEASURED on a pristine worktree of a4604d3fa, one DAG run:
+        #
+        #   programs/__pycache__/ holds exactly this module's import list
+        #   (_atomic_artefact, _crash_safe_scratch, _owned_process_supervisor,
+        #   _progress_run, _semantic_child_progress, _watchdog,
+        #   gate_process_attestation, hygiene_shard_plan,
+        #   policy_direction_pin_check, + hygiene_shard_aggregate from the
+        #   lazy call-site import at the end of the run)
+        #
+        #   attestation preflight      checkout rc=1  fresh worktree rc=0
+        #   gates are host-independent FAIL — 1 of 140 probed gates did not give
+        #                              one reproducible verdict across two trees,
+        #                              and it is `attestation preflight`
+        #
+        # So one unguarded interpreter reddens TWO gates, and the second one
+        # reports it as host dependence when the difference is residue this
+        # process wrote a few seconds earlier.
+        #
+        # BOTH HALVES, which is the lesson `tools/gatekeeper-land.sh:1169`
+        # already records for the pytest lanes: `-B` freezes THIS interpreter
+        # and does not propagate, the variable propagates and does not reach an
+        # isolated child. Supplying only one "is what shipped, and it wrote 500+
+        # `.pyc` into $ROOT in 7 minutes of one landing."
+        #
+        # NOTHING IS CHECKED LESS. The stimulus for host-independence becomes
+        # the checkout's PRE-EXISTING dirt, which `gate_host_independence_check`
+        # states is its subject; what is removed is dirt this run manufactured.
+        command = ([sys.executable, "-B", str(path),
                     "--stall-grace", str(stall_grace)] if path == parallel
                    else ["bash", str(path)])
     if not path.is_file():
@@ -1539,6 +1632,8 @@ def repo_hygiene_gate(repo: Path,
         try:
             env = os.environ.copy()
             env.update(corpus_env)
+            # The propagating half. See the block at `command` above.
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
             if progress_out is not None:
                 progress = Path(progress_out).resolve()
                 progress.parent.mkdir(parents=True, exist_ok=True)
