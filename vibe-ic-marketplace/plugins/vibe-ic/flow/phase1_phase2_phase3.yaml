@@ -426,7 +426,20 @@ stages:
         roots, measured 2026-08-30), so both halves of the control would have
         to be authored. Declared here so the gap is visible; not wired, so
         nothing reports a review it did not perform.
-      skill: benchmark-verify
+      # NOT `benchmark-verify`, which is what this block named when it was
+      # written against v1.13.2. `skills/_classification.json` has ruled that
+      # skill `off_flow` since v1.12.99 — "a BENCHMARK artefact; it belongs to
+      # the benchmark programme, not to a stage of the flow" — so naming it
+      # here asserted a stage membership the classification denies, and
+      # `skill_stage_membership_check` (wired at v1.13.16) says so: P4 DOUBLE
+      # DECLARATION. The ruling is older than this PR's base, so the PR yields.
+      #
+      # `compliance-gate-spot-check` is the verification-tier skill whose
+      # subject IS this stage's problem: it spot-checks a PASS for false-PASS
+      # and gameable patterns, and stage 5 reads GREEN by way of five
+      # SKIPPED-CONDITION rows. It is already DERIVED from stage 4's block, so
+      # it carries no `stage_axis` declaration to collide with.
+      skill: compliance-gate-spot-check
       fires_on: stage_pass
       verdict: advisory
       rule: R5_PACKAGE_CANNOT_BOND_DESIGN
