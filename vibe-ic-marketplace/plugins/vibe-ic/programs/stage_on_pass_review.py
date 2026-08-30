@@ -3883,95 +3883,107 @@ def emit_test(dest: Path, finding: Dict[str, Any], stage_id: str) -> Path:
 #: Each rule is owned by its stage. Stage_phase1 has two independent questions
 #: over the first translated artefact; stage1 compares declared top with RTL;
 #: stage2 compares the declared interface with the concrete netlist interface.
-_RULES = {
-    # stage_phase1's artefact is the L-docs, and the only thing they can be
-    # checked against is the design INPUT — a document. So the question is not
-    # "does the artefact build what the intent names" but "does the input SAY
-    # what the artefact quotes it as saying". There is no upstream artefact to
-    # diff, which is why a constant phase 1 gets wrong is wrong nowhere
-    # downstream: the oracle is derived from the same L-doc.
-    #
-    # THREE INDEPENDENT QUESTIONS, one per registration, and the first stage of
-    # this program to carry more than one. They came from TWO pull requests
-    # (#1845's first two, #1854's third) and are declared together because the
-    # doctrine allows a stage exactly one `on_pass_review:` block. They read
-    # disjoint claims and none subsumes another:
-    # R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE asks whether a quoted HEXADECIMAL
-    # CONSTANT occurs in the document the artefact cites it to;
-    # R2_TOP_MODULE_PROVENANCE_REFUTED asks whether the declared TOP MODULE
-    # NAME came from the input or its declared source; R1_CITED_INPUT_ABSENT
-    # asks whether the cited SOURCE FILE is one this run contains at all. A
-    # citation can name a file that exists and still quote a constant that is
-    # not in it, and a run can ground every constant while citing a directory
-    # it does not have — MEASURED on the published corpus, the cells the three
-    # reject are different cells.
-    "stage_phase1": [("R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE",
-                      rule_cited_constant_not_in_source),
-                     ("R2_TOP_MODULE_PROVENANCE_REFUTED",
-                      rule_top_module_provenance_refuted),
-                     ("R1_CITED_INPUT_ABSENT", rule_cited_input_absent)],
-    "stage1": [("R1_INTENT_TOP_NOT_BUILT", rule_intent_top_not_built)],
-    "stage2": [("R2_INTENT_PIN_NOT_IN_NETLIST", rule_intent_pin_not_in_netlist)],
-    "stage3": [("R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT",
-                rule_signoff_clock_slower_than_intent)],
-    "stage_analog": [("R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC",
-                      rule_intent_spec_not_the_graded_spec)],
-    # R4 reads the intent against stage 4's DIE — the artefact that LEAVES, and
-    # the first one no earlier rung can speak about: R1 and R2 both compare the
-    # intent to something the flow is still building, and a run can satisfy
-    # both while streaming a different subject into the tape-out slot.
-    "stage4": [("R4_DIE_IS_NOT_THE_DESIGN", rule_die_is_not_the_design)],
+class DuplicateRuleId(RuntimeError):
+    """Two registrations claimed one rule id. Raised at IMPORT, never at a run."""
 
-}
 
-#: The emitter for each rule's own regression. Keyed by rule id, beside
-#: `_RULES`, so a rule added without one fails loudly at emit time.
-_EMITTERS = {"R1_INTENT_TOP_NOT_BUILT": _body_r1,
-             "R2_INTENT_PIN_NOT_IN_NETLIST": _body_r2,
-             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _body_r3,
-             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _body_analog,
-             "R4_DIE_IS_NOT_THE_DESIGN": _body_r4,
-             # R5's rule is DECLARED AND NOT ENABLED, so `emit_test` is never
-             # reached for it from `main`. Its emitter is registered anyway:
-             # the KeyError guard exists to stop a rule writing SOMEBODY
-             # ELSE's test, and leaving R5 out would mean enabling it later
-             # silently produced exactly that, or a refusal nobody expected.
-             # Registered here, enabling R5 is one line in `_RULES` and the
-             # test it writes is its own.
-             "R5_PACKAGE_CANNOT_BOND_DESIGN": _body_r5,
-             "R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE": _body_phase1,
-             "R2_TOP_MODULE_PROVENANCE_REFUTED": _body_phase1_r2,
-             "R1_CITED_INPUT_ABSENT": _body_phase1_cited_input}
+#: {stage_id: [(rule_id, rule_fn)]}. A stage with no rule is NOT CHECKED.
+_RULES: Dict[str, List[Any]] = {}
 
-#: The rules this program DECLARES BUT DOES NOT RUN, per stage, each with the
-#: reason it is not enabled. A rule lands here — not in `_RULES` — when the
-#: contradiction it names is real and there is no evidence to prove it on, so
-#: that the gap is written down instead of being a thing nobody can see.
+#: {rule_id: _body_x(finding, stage_id) -> str}. The emitter for each rule's own
+#: regression, keyed by rule id, so a rule registered without one fails loudly
+#: at emit time rather than writing somebody else's test.
+_EMITTERS: Dict[str, Any] = {}
+
+#: {rule_id: _print_x(finding) -> None}. Each rule renders its own evidence.
+_PRINTERS: Dict[str, Any] = {}
+
+#: The rules this program DECLARES BUT DOES NOT RUN, per stage. A rule lands
+#: here — not in `_RULES` — when the contradiction it names is real and there is
+#: no evidence to prove it on, so that the gap is written down instead of being
+#: a thing nobody can see. SAME SHAPE AS `_RULES`, deliberately: enabling a rule
+#: is then flipping one keyword, not rewriting it.
 #:
 #: THE ENTRY CONDITION FOR LEAVING THIS DICT is a control on artefacts this
 #: program's author did not create: one real known-GOOD and one real known-BAD.
-#: Moving a rule to `_RULES` on the strength of an artefact written to make it
-#: fire proves only that its author can write a file, and it puts the flow's
-#: confidence behind a rule nothing has ever contradicted.
-#: SAME SHAPE AS `_RULES`, deliberately: enabling a rule is then moving one
-#: entry between two dicts, not rewriting it. The reason lives beside it keyed
-#: by rule id, the way `_EMITTERS` and `_PRINTERS` are.
-_DECLARED_NOT_ENABLED = {
-    "stage5_manufacturing": [("R5_PACKAGE_CANNOT_BOND_DESIGN",
-                              rule_package_cannot_bond_design)],
-}
+#: Moving a rule out of it on the strength of an artefact written to make it
+#: fire proves only that its author can write a file.
+_DECLARED_NOT_ENABLED: Dict[str, List[Any]] = {}
 
-#: Why each declared rule is not enabled. Carries the MEASUREMENT, so a reader
-#: can re-check the claim instead of taking it.
-_NOT_ENABLED_REASON = {
-    "R5_PACKAGE_CANNOT_BOND_DESIGN":
-        "no run has ever produced a stage-5 artefact: MEASURED 2026-08-30, 0 of "
-        "105 published run roots carry phase3/stage5_manufacturing/, 0 carry "
-        "silicon_received.json, and no commit in either repository's history "
-        "ever added a file under that path. Both halves of the control would "
-        "have to be authored, and a reviewer proven on its author's own "
-        "fixture has never been tested.",
-}
+#: {rule_id: why it is not enabled}. Carries the MEASUREMENT, so a reader can
+#: re-check the claim instead of taking it.
+_NOT_ENABLED_REASON: Dict[str, str] = {}
+
+#: rule_id -> the registration site that claimed it, for the duplicate message.
+_RULE_ORIGIN: Dict[str, str] = {}
+
+
+def register(*, stage: str, rule_id: str, rule, emitter=None, printer=None,
+             enabled: bool = True, not_enabled_reason: Optional[str] = None,
+             origin: Optional[str] = None) -> None:
+    """Record one rule. The three tables are BUILT here rather than typed.
+
+    WHY THIS IS NOT THREE DICT LITERALS ANY MORE
+    ============================================
+    `emit_test` names the emitted regression `test_<rule_id>.py`, and two
+    stages can share an `emit_test_dir` — stage1 and stage2 both write to
+    `reports/phase2/gates/on_pass_review`, stage3 and stage4 both to
+    `reports/phase3/gates/on_pass_review`. So two rules sharing an id would have
+    one silently overwrite the other's proof, and a duplicate key in a dict
+    LITERAL is silent by construction: Python keeps the last value and says
+    nothing. MEASURED on v1.13.70 by retargeting stage2's registration to
+    stage1's id — `_EMITTERS` went from 9 written keys to 8 held keys and the
+    module imported without a murmur. The failure surfaced three layers away, as
+    five red tests and a census finding blaming STAGE1, which is not where the
+    rename was.
+
+    `register` refuses the second claim by name, at import of this program,
+    naming BOTH registration sites — the run that would have been miswritten
+    never starts.
+
+    ORIGINALLY AUTHORED ON `fix/on-pass-registry-stage-owns-a-file`, which built
+    it as a `programs/on_pass_rules/` package with one file per stage. That
+    branch forked at v1.13.28 and its package registers SIX rules; this tree has
+    NINE, because stage_phase1's three (#1845, #1887, #1891, #1892, #1898) all
+    landed after it. Taking the branch's files would have deleted a third of the
+    rule population and dropped `stage_phase1` out of `_RULES` entirely, so the
+    MECHANISM is re-authored here against the rules this tree actually has, and
+    the file-per-stage split — whose own motive, a merge-conflict cost, is real
+    and unaddressed here — is left to be done on top of today's nine.
+
+    `emitter` and `printer` are OPTIONAL ON PURPOSE. A stage may register a rule
+    and no emitter; nothing is then added to `_EMITTERS`, `emit_test` raises
+    KeyError exactly as it always did, `review()` leaves `test` absent, and the
+    unproven-rejection branch refuses the rejection. Making the emitter
+    mandatory would make that path unreachable, defeating a deliberate refusal
+    rather than preserving it.
+    """
+    if not stage or not rule_id:
+        raise ValueError("register() needs both a stage and a rule_id")
+    here = origin or getattr(rule, "__name__", "?")
+    if rule_id in _RULE_ORIGIN:
+        raise DuplicateRuleId(
+            f"rule id {rule_id!r} is registered twice: first by "
+            f"{_RULE_ORIGIN[rule_id]!r}, again by {here!r}. `emit_test` names "
+            f"the emitted regression test_{rule_id.lower()}.py and two stages "
+            f"share an `emit_test_dir`, so two rules with one id would silently "
+            f"overwrite each other's proof. Rule ids are GLOBAL, not per-stage "
+            f"— rename one.")
+    if not enabled and not (not_enabled_reason or "").strip():
+        raise ValueError(
+            f"rule {rule_id!r} is declared with enabled=False and no "
+            f"not_enabled_reason. A rule is written down so the gap is VISIBLE; "
+            f"one that never runs and says nothing about why is invisible.")
+    _RULE_ORIGIN[rule_id] = here
+    if enabled:
+        _RULES.setdefault(stage, []).append((rule_id, rule))
+    else:
+        _DECLARED_NOT_ENABLED.setdefault(stage, []).append((rule_id, rule))
+        _NOT_ENABLED_REASON[rule_id] = not_enabled_reason
+    if emitter is not None:
+        _EMITTERS[rule_id] = emitter
+    if printer is not None:
+        _PRINTERS[rule_id] = printer
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4273,15 +4285,77 @@ def _print_evidence_lines(f: Dict[str, Any]) -> None:
         print(f"    {label:<8} {value}")
 
 
-_PRINTERS = {"R1_INTENT_TOP_NOT_BUILT": _print_r1,
-             "R2_INTENT_PIN_NOT_IN_NETLIST": _print_r2,
-             "R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT": _print_r3,
-             "R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC": _print_analog,
-             "R4_DIE_IS_NOT_THE_DESIGN": _print_r4,
-             "R5_PACKAGE_CANNOT_BOND_DESIGN": _print_r5,
-             "R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE": _print_phase1,
-             "R2_TOP_MODULE_PROVENANCE_REFUTED": _print_evidence_lines,
-             "R1_CITED_INPUT_ABSENT": _print_phase1_cited_input}
+# ─────────────────────────────────────────────────────────────────────────────
+# THE REGISTRY — nine rules, one call each, and a duplicate id cannot land
+# ─────────────────────────────────────────────────────────────────────────────
+# ONE CALL PER RULE, carrying its stage, its rule function, its emitted-test
+# body and its printer together. They were three separate dict literals in three
+# separate places, which is how a rule could be added to two of the three and
+# how a duplicate id could shadow an `_EMITTERS` entry in silence.
+#
+# HERE, AT THE BOTTOM, because a registration names its printer and the printers
+# are defined above it. `_RULES` / `_EMITTERS` / `_PRINTERS` are read at call
+# time by `review()` and `emit_test()`, never at import, so nothing moved.
+
+# stage_phase1 — THREE INDEPENDENT QUESTIONS, and the first stage of this
+# program to carry more than one. They came from TWO pull requests (#1845's
+# first two, #1854's third) and are declared together because the doctrine
+# allows a stage exactly one `on_pass_review:` block. They read disjoint claims
+# and none subsumes another: R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE asks whether a
+# quoted HEXADECIMAL CONSTANT occurs in the document the artefact cites it to;
+# R2_TOP_MODULE_PROVENANCE_REFUTED asks whether the declared TOP MODULE NAME
+# came from the input or its declared source; R1_CITED_INPUT_ABSENT asks whether
+# the cited SOURCE FILE is one this run contains at all. A citation can name a
+# file that exists and still quote a constant that is not in it, and a run can
+# ground every constant while citing a directory it does not have — MEASURED on
+# the published corpus, the cells the three reject are different cells.
+register(stage="stage_phase1", rule_id="R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE",
+         rule=rule_cited_constant_not_in_source, emitter=_body_phase1,
+         printer=_print_phase1)
+register(stage="stage_phase1", rule_id="R2_TOP_MODULE_PROVENANCE_REFUTED",
+         rule=rule_top_module_provenance_refuted, emitter=_body_phase1_r2,
+         printer=_print_evidence_lines)
+register(stage="stage_phase1", rule_id="R1_CITED_INPUT_ABSENT",
+         rule=rule_cited_input_absent, emitter=_body_phase1_cited_input,
+         printer=_print_phase1_cited_input)
+
+register(stage="stage1", rule_id="R1_INTENT_TOP_NOT_BUILT",
+         rule=rule_intent_top_not_built, emitter=_body_r1, printer=_print_r1)
+
+register(stage="stage2", rule_id="R2_INTENT_PIN_NOT_IN_NETLIST",
+         rule=rule_intent_pin_not_in_netlist, emitter=_body_r2,
+         printer=_print_r2)
+
+register(stage="stage3", rule_id="R3_SIGNOFF_CLOCK_SLOWER_THAN_INTENT",
+         rule=rule_signoff_clock_slower_than_intent, emitter=_body_r3,
+         printer=_print_r3)
+
+register(stage="stage_analog",
+         rule_id="R_ANALOG_INTENT_SPEC_NOT_THE_GRADED_SPEC",
+         rule=rule_intent_spec_not_the_graded_spec, emitter=_body_analog,
+         printer=_print_analog)
+
+# R4 reads the intent against stage 4's DIE — the artefact that LEAVES, and the
+# first one no earlier rung can speak about: R1 and R2 both compare the intent
+# to something the flow is still building, and a run can satisfy both while
+# streaming a different subject into the tape-out slot.
+register(stage="stage4", rule_id="R4_DIE_IS_NOT_THE_DESIGN",
+         rule=rule_die_is_not_the_design, emitter=_body_r4, printer=_print_r4)
+
+# R5 is DECLARED AND NOT ENABLED. Its emitter and printer register anyway: the
+# KeyError guard exists to stop a rule writing SOMEBODY ELSE's test, and leaving
+# them out would mean enabling the rule later silently produced exactly that.
+# Enabling it is now flipping one keyword on this call.
+register(stage="stage5_manufacturing", rule_id="R5_PACKAGE_CANNOT_BOND_DESIGN",
+         rule=rule_package_cannot_bond_design, emitter=_body_r5,
+         printer=_print_r5, enabled=False,
+         not_enabled_reason=
+        "no run has ever produced a stage-5 artefact: MEASURED 2026-08-30, 0 of "
+        "105 published run roots carry phase3/stage5_manufacturing/, 0 carry "
+        "silicon_received.json, and no commit in either repository's history "
+        "ever added a file under that path. Both halves of the control would "
+        "have to be authored, and a reviewer proven on its author's own "
+        "fixture has never been tested.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

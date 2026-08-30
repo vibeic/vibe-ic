@@ -42,8 +42,19 @@ HYGIENE = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 #: The label `tools/ci/repo_hygiene_gates.sh` declares this gate under.
 GATE_LABEL = "on-pass gates can establish a verdict"
 
-#: The report `final_gate` writes and every on-pass gate reads.
+#: A compliance-report path used by the ENGINE fixtures further down, which
+#: build their own trees and only need a filename. It is NOT the flow's verdict
+#: source any more: since the P2 rewrite each stage reads a report an EARLIER
+#: clause in its own step's `all_of` writes, so there is no single path to pin
+#: and `_verdict_source()` reads each stage's own out of the flow.
 REPORT = "reports/flow_compliance.json"
+
+
+def _verdict_source(doc, stage_id: str) -> str:
+    """The `--compliance` path THIS stage's declared clause reads."""
+    clause, key = _clause(doc, stage_id)
+    argv = clause[key].split()
+    return argv[argv.index("--compliance") + 1]
 
 #: WHICH stages the shipped flow declares an ENABLED on-pass gate for.
 #:
@@ -150,17 +161,40 @@ def test_the_shipped_flow_declares_exactly_these_enabled_on_pass_gates():
         "deliberately -- a count would not have shown you this line.")
 
 
-def test_every_shipped_gate_reads_the_report_the_final_gate_writes():
+def test_every_shipped_gate_reads_a_report_an_earlier_clause_writes():
+    """It used to be `final_gate`'s `--json` that had to match, and NOTHING
+    EXECUTES `final_gate`. The producer must be a clause the engine runs, in
+    the same `all_of`, BEFORE the review — `_evaluate_gate` walks that list in
+    sequence, so "earlier" is what makes the file exist when it is opened."""
     doc = _flow_doc()
-    written = doc["final_gate"]["args"]
-    assert f"--json {REPORT}" in written, (
-        f"final_gate must write the compliance report the gates read: {written}")
     for s in _enabled_with_gate(doc):
         clause, key = _clause(doc, s["id"])
         assert key == SLOT, (s["id"], key)
-        cmd = clause[key]
-        assert f"--compliance {REPORT}" in cmd, (
-            f"{s['id']} cannot establish a stage verdict: {cmd}")
+        named = _verdict_source(doc, s["id"])
+        step = _step_carrying(doc, s["id"])
+        seen_producer = False
+        for sub in step["gate"]["all_of"]:
+            if sub is clause:
+                break
+            for val in sub.values():
+                cmd = val.get("command") if isinstance(val, dict) else val
+                if isinstance(cmd, str) and f"--json {named}" in cmd:
+                    seen_producer = True
+        assert seen_producer, (
+            f"{s['id']} reads --compliance {named} and no EARLIER clause in "
+            f"step {step['id']!r}'s all_of writes it")
+
+
+def _step_carrying(doc, stage_id):
+    for step in doc["steps"]:
+        for sub in (step.get("gate") or {}).get("all_of") or []:
+            for val in sub.values():
+                cmd = val.get("command") if isinstance(val, dict) else val
+                if (isinstance(cmd, str)
+                        and cmd.startswith("stage_on_pass_review")
+                        and f"--stage {stage_id} " in cmd + " "):
+                    return step
+    raise AssertionError(f"no step carries {stage_id}'s clause")
 
 
 # ── P1: a gate with no verdict source ────────────────────────────────────────
@@ -168,7 +202,8 @@ def test_p1_a_gate_with_no_verdict_source_is_refused_by_name(tmp_path):
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
     gate, key = _clause(doc, victim["id"])
-    gate[key] = gate[key].replace(f" --compliance {REPORT}", "")
+    gate[key] = gate[key].replace(
+        f" --compliance {_verdict_source(doc, victim['id'])}", "")
     rc, out = _run(_write(tmp_path, doc))
     assert rc == 1, f"planting P1 must FAIL, got rc={rc}:\n{out}"
     assert "P1 CANNOT REJECT" in out
@@ -182,7 +217,8 @@ def test_p1_the_same_flow_passes_once_the_verdict_source_is_restored(tmp_path):
     victim = _enabled_with_gate(doc)[0]
     gate, key = _clause(doc, victim["id"])
     original = gate[key]
-    gate[key] = original.replace(f" --compliance {REPORT}", "")
+    gate[key] = original.replace(
+        f" --compliance {_verdict_source(doc, victim['id'])}", "")
     assert _run(_write(tmp_path, doc, "broken.yaml"))[0] == 1
     gate[key] = original
     rc, out = _run(_write(tmp_path, doc, "repaired.yaml"))
@@ -193,7 +229,8 @@ def test_p1_fires_on_every_offending_stage_not_just_the_first(tmp_path):
     doc = _flow_doc()
     for s in _enabled_with_gate(doc):
         g, key = _clause(doc, s["id"])
-        g[key] = g[key].replace(f" --compliance {REPORT}", "")
+        g[key] = g[key].replace(
+            f" --compliance {_verdict_source(doc, s['id'])}", "")
     rc, out = _run(_write(tmp_path, doc))
     assert rc == 1
     named = {sid for sid in ENABLED_ON_PASS_STAGES if sid in out}
@@ -205,34 +242,53 @@ def test_p1_fires_on_every_offending_stage_not_just_the_first(tmp_path):
         f"one finding per offending stage, not just the first:\n{out}")
 
 
-# ── P2: the report nothing writes ────────────────────────────────────────────
-def test_p2_a_gate_reading_a_report_the_flow_never_writes_is_refused(tmp_path):
-    doc = _flow_doc()
-    doc["final_gate"]["args"] = doc["final_gate"]["args"].replace(
-        f" --json {REPORT}", "")
-    rc, out = _run(_write(tmp_path, doc))
-    assert rc == 1, f"planting P2 must FAIL, got rc={rc}:\n{out}"
-    assert "P2 NAMES A REPORT THE FLOW NEVER WRITES" in out
-
-
-def test_p2_a_gate_reading_a_different_report_is_refused_by_name(tmp_path):
+# ── P2: the report with no EXECUTED producer ─────────────────────────────────
+# The old P2 compared the gate's `--compliance` string to the string in the
+# flow's `final_gate:` block. MEASURED at v1.13.70: nothing in the tree executes
+# `final_gate`, so that comparison certified a report no run ever produced and
+# every gate returned rc=2 forever underneath it. These three tests ask the
+# question that has an answer: does a clause THE ENGINE RUNS write that path,
+# and does it run BEFORE the review.
+def test_p2_a_gate_reading_a_report_nothing_produces_is_refused(tmp_path):
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
     gate, key = _clause(doc, victim["id"])
     gate[key] = gate[key].replace(
-        f"--compliance {REPORT}", "--compliance reports/typo_compliance.json")
+        f"--compliance {_verdict_source(doc, victim['id'])}",
+        "--compliance reports/nobody_writes_this.json")
     rc, out = _run(_write(tmp_path, doc))
-    assert rc == 1, f"planting a path typo must FAIL, got rc={rc}:\n{out}"
-    assert "P2 READS A DIFFERENT REPORT THAN THE FLOW WRITES" in out
-    assert victim["id"] in out
+    assert rc == 1, f"planting P2 must FAIL, got rc={rc}:\n{out}"
+    assert "P2 NAMES A REPORT WITH NO EXECUTED PRODUCER" in out
+    assert victim["id"] in out, "the finding must NAME the offending stage"
+
+
+def test_p2_a_producer_declared_only_in_final_gate_is_not_a_producer(tmp_path):
+    """The exact substitution the old P2 accepted, asserted as refused."""
+    doc = _flow_doc()
+    args = str(doc["final_gate"]["args"])
+    declared = args.split()[args.split().index("--json") + 1]
+    victim = _enabled_with_gate(doc)[0]
+    gate, key = _clause(doc, victim["id"])
+    gate[key] = gate[key].replace(
+        f"--compliance {_verdict_source(doc, victim['id'])}",
+        f"--compliance {declared}")
+    rc, out = _run(_write(tmp_path, doc))
+    assert rc == 1, (
+        f"a path only `final_gate:` declares must NOT count as produced — "
+        f"nothing executes final_gate. rc={rc}:\n{out}")
+    assert "P2 NAMES A REPORT WITH NO EXECUTED PRODUCER" in out
 
 
 def test_p2_repairs_green(tmp_path):
     doc = _flow_doc()
-    original = doc["final_gate"]["args"]
-    doc["final_gate"]["args"] = original.replace(f" --json {REPORT}", "")
+    victim = _enabled_with_gate(doc)[0]
+    gate, key = _clause(doc, victim["id"])
+    original = gate[key]
+    gate[key] = original.replace(
+        f"--compliance {_verdict_source(doc, victim['id'])}",
+        "--compliance reports/nobody_writes_this.json")
     assert _run(_write(tmp_path, doc, "broken.yaml"))[0] == 1
-    doc["final_gate"]["args"] = original
+    gate[key] = original
     assert _run(_write(tmp_path, doc, "repaired.yaml"))[0] == 0
 
 

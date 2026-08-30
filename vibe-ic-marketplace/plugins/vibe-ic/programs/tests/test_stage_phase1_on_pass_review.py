@@ -515,8 +515,13 @@ def test_a_rule_with_no_emitter_refuses_the_rejection_rather_than_writing_anothe
     changed and not asserted as correct."""
     import re
     src = PROG.read_text(encoding="utf-8")
-    cut = re.sub(r'\n *"R1_CITED_CONSTANT_NOT_IN_ITS_SOURCE": _body_phase1,', "", src)
-    assert cut != src, "the _EMITTERS entry this test removes was not found"
+    # THE EMITTER IS NOW A KEYWORD ON THE RULE'S OWN `register()` CALL, not an
+    # entry in an `_EMITTERS` dict literal. Dropping the keyword is the same
+    # mutation the literal-cut used to be — `register` adds nothing to
+    # `_EMITTERS` when `emitter is None`, which is the documented shape a stage
+    # uses to say "this rule cannot prove itself yet".
+    cut = re.sub(r'\s*emitter=_body_phase1,', "", src)
+    assert cut != src, "the `emitter=` this test removes was not found"
     maimed = tmp_path / "maimed.py"
     maimed.write_text(cut, encoding="utf-8")
 

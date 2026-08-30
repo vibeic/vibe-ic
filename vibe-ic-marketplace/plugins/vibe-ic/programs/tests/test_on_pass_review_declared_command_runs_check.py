@@ -34,9 +34,16 @@ PROGRAM = PROGRAMS / "on_pass_review_declared_command_runs_check.py"
 #: Asserted present by `test_the_clause_this_file_mutates_is_in_the_flow`, so a
 #: rename upstream reddens HERE rather than turning every mutation into a
 #: silent no-op that passes.
+#: The stage-3 clause, verbatim from the shipped flow. Its `--compliance` names
+#: `reports/phase3/gates/stage3_compliance.json` — the report the clause BEFORE
+#: it in the same `all_of` writes — and not `reports/flow_compliance.json`,
+#: which the flow's `final_gate:` declares and NOTHING EXECUTES. Pinned as a
+#: literal so a silent repoint of the verdict source shows up here as a red
+#: `test_the_clause_this_file_mutates_is_in_the_flow` rather than as a mutation
+#: battery quietly firing at a clause that no longer exists.
 CLAUSE = ("stage_on_pass_review . --stage stage3 --json "
           "reports/phase3/gates/stage3_on_pass_review.json "
-          "--compliance reports/flow_compliance.json")
+          "--compliance reports/phase3/gates/stage3_compliance.json")
 
 
 def _run(flow: Path):

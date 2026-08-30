@@ -64,11 +64,33 @@ P1  ANSWERABLE.  Every ENABLED `on_pass_review:` whose gate invokes
                  `stage_on_pass_review` passes a VERDICT SOURCE -- `--compliance`
                  or `--stage-verdict`. A command with neither returns 2 on every
                  input and is a comment wearing a gate's name.
-P2  THE NAMED REPORT IS PRODUCED BY THE FLOW.  A command that names
-                 `--compliance <path>` is unanswerable one indirection out if
-                 nothing in the flow writes `<path>`. The flow's `final_gate`
-                 declares the run's compliance report, so `<path>` must be the
-                 path `final_gate` writes with `--json`.
+P2  THE NAMED REPORT HAS AN EXECUTED PRODUCER, AND IT RUNS FIRST.
+                 A command naming `--compliance <path>` is unanswerable one
+                 indirection out if nothing WRITES `<path>` before it reads it.
+                 The producer must be an EARLIER clause in the SAME `all_of`,
+                 naming that path with `--json`.
+
+                 THIS CHECK USED TO ASK A DIFFERENT QUESTION AND THE DIFFERENCE
+                 COST THE WHOLE AXIS. It compared the gate's `--compliance`
+                 string to the string in the flow's `final_gate:` block: a
+                 declaration validated against a declaration, in the same file
+                 -- the v1.13.32 shape this program exists to refuse, sitting
+                 inside the program written to refuse it. MEASURED at v1.13.70:
+                 NOTHING EXECUTES `final_gate`. It is read by this program and
+                 by `tools/d9_corpus_baseline.py` (which censuses its program
+                 name) and by nothing else. `flow_compliance_check`'s `--json`
+                 has no default and both drivers omit it --
+                 `design_one_shot_runner._build_final_audit_cmd` builds
+                 `[project, --phase N, --strict-structural, --allow-thin-input]`
+                 and `phase3_one_shot_runner` builds `[project, --strict]`. So
+                 `reports/flow_compliance.json` was written on no run, all six
+                 gates returned rc=2 NOT CHECKED ("[Errno 2] No such file or
+                 directory") forever, and this check said PASS about it.
+                 SECOND AND INDEPENDENT: even when a caller DOES pass `--json`,
+                 that report is written AFTER `flow_compliance_check`'s step
+                 loop, and these clauses are evaluated INSIDE it. Ordering is
+                 therefore part of the question, and "an earlier clause in the
+                 same `all_of`" is the only shape that answers it.
 P3  A DISABLED CLAUSE DECLARES NO GATE.  `enabled: false` and a dispatchable
                  `gate:` contradict each other: the clause would be invoked
                  while declaring that it is not wired. `stage5_manufacturing`
@@ -76,6 +98,14 @@ P3  A DISABLED CLAUSE DECLARES NO GATE.  `enabled: false` and a dispatchable
 
 NOT CHECKED HERE, ON PURPOSE
 ============================
+Whether the host step is REACHABLE. That is
+`on_pass_review_declared_command_runs_check`'s P8/P9: it already resolves the
+host step in order to execute the argv, so it is the one that can see a
+`condition:` the engine will never satisfy. Answerability and reachability are
+orthogonal -- a clause nobody reaches is still broken if it could not answer
+when reached, and a clause that can answer is still silent if nothing reaches
+it. Two programs, two questions, no shared premise for them to disagree about.
+
 Whether anything DISPATCHES these clauses. That is
 `flow_gate_enforcement_audit`'s disclosure and a flow owner's decision; this
 program would report the same finding twice and the two could then disagree.
@@ -153,6 +183,28 @@ GATE_SLOTS = ("program_exit_zero", "optional_program_exit_zero",
               "advisory_program_exit_zero")
 
 
+def _commands_in(node) -> list:
+    """Every gate command string anywhere under `node`, in document order.
+
+    Used to build the "what already ran" list for P2. It reads ALL the slots,
+    not just the ones that can fail: an `advisory_` producer still writes its
+    `--json`, and a producer whose findings must not block the step is exactly
+    the shape a verdict source wants.
+    """
+    found = []
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if key in GATE_SLOTS:
+                cmd = val.get("command") if isinstance(val, dict) else val
+                if isinstance(cmd, str):
+                    found.append(cmd)
+            found.extend(_commands_in(val))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_commands_in(item))
+    return found
+
+
 def step_clauses(flow: dict) -> list:
     """Every clause under `steps:` that invokes the subject, tagged by stage.
 
@@ -162,7 +214,7 @@ def step_clauses(flow: dict) -> list:
     """
     out = []
 
-    def walk(node, step):
+    def walk(node, step, earlier=()):
         if isinstance(node, dict):
             for key, val in node.items():
                 if key in GATE_SLOTS:
@@ -173,11 +225,22 @@ def step_clauses(flow: dict) -> list:
                             out.append({"slot": key, "command": cmd,
                                         "argv": argv,
                                         "step": str((step or {}).get("id")),
-                                        "stage": _flag_value(argv, "--stage")})
-                walk(val, step)
+                                        "stage": _flag_value(argv, "--stage"),
+                                        # The commands the engine runs BEFORE
+                                        # this one, in order, so P2 can ask WHO
+                                        # WROTE the report this clause reads.
+                                        "earlier": list(earlier)})
+                walk(val, step, earlier)
         elif isinstance(node, list):
+            # `all_of` IS AN ORDERED SHAPE. `flow_compliance_check.
+            # _evaluate_gate` walks it in sequence, so a clause can legitimately
+            # read a file an EARLIER sibling wrote — and cannot read one a later
+            # sibling writes. P2 is that distinction, so the order has to be
+            # carried here rather than reconstructed from a set later.
+            seen = []
             for item in node:
-                walk(item, step)
+                walk(item, step, tuple(earlier) + tuple(seen))
+                seen.extend(_commands_in(item))
 
     for step in flow.get(DISPATCHED_SECTION) or []:
         if isinstance(step, dict):
@@ -217,17 +280,27 @@ def declared_reviews(flow: dict) -> list:
             "command": command,
             "slot": mine[0]["slot"] if mine else None,
             "step": mine[0]["step"] if mine else None,
+            "earlier": mine[0]["earlier"] if mine else [],
             "argv": _argv(command) if command else [],
         })
     return out
 
 
-def final_gate_report(flow: dict):
-    """The compliance report path the flow's `final_gate` writes, if any."""
-    fg = flow.get("final_gate")
-    if not isinstance(fg, dict):
-        return None
-    return _flag_value(_argv(str(fg.get("args") or "")), "--json")
+def producer_of(path: str, earlier: list):
+    """The earlier clause that writes `path` with `--json`, or None.
+
+    THE PRODUCER MUST BE A COMMAND THE ENGINE EXECUTES, AND IT MUST RUN FIRST.
+    `earlier` is the ordered list of commands `_evaluate_gate` runs before the
+    review inside the same `all_of`, so "found here" means both halves at once:
+    something writes the file, and it has already written it by the time the
+    review opens it. A producer declared anywhere else -- a later sibling, a
+    different step, or the flow's `final_gate:` block, which nothing executes --
+    cannot satisfy either half.
+    """
+    for cmd in earlier or []:
+        if _flag_value(_argv(str(cmd)), "--json") == path:
+            return str(cmd)
+    return None
 
 
 def analyse(flow_path: Path):
@@ -237,7 +310,6 @@ def analyse(flow_path: Path):
         raise ValueError(f"{flow_path} is not a mapping")
 
     reviews = declared_reviews(flow)
-    produced = final_gate_report(flow)
     findings = []
 
     for r in reviews:
@@ -289,24 +361,26 @@ def analyse(flow_path: Path):
                 f"Command: {r['command']}")
             continue
 
-        # P2 - and is the report it names actually written by this flow?
+        # P2 - and does anything the ENGINE RUNS write that report FIRST?
         named = _flag_value(r["argv"], "--compliance")
         if named is None:
             continue
-        if produced is None:
+        wrote = producer_of(named, r.get("earlier"))
+        if wrote is None:
             findings.append(
-                f"P2 NAMES A REPORT THE FLOW NEVER WRITES [{r['stage']}]: the "
-                f"gate reads `--compliance {named}`, and the flow's "
-                f"`final_gate` runs `flow_compliance_check` with no `--json`, "
-                f"so no compliance report is produced anywhere in the flow. "
-                f"The gate is unanswerable one indirection out: rc=2 for a "
-                f"missing file instead of rc=2 for a missing flag.")
-        elif named != produced:
-            findings.append(
-                f"P2 READS A DIFFERENT REPORT THAN THE FLOW WRITES "
-                f"[{r['stage']}]: the gate reads `--compliance {named}` while "
-                f"`final_gate` writes `--json {produced}`. One of the two is a "
-                f"typo, and the gate is the half that goes quiet.")
+                f"P2 NAMES A REPORT WITH NO EXECUTED PRODUCER [{r['stage']}]: "
+                f"the gate reads `--compliance {named}` and NO clause the "
+                f"engine runs before it -- none of the "
+                f"{len(r.get('earlier') or [])} earlier command(s) in step "
+                f"{r['step']!r}'s `all_of` -- writes that path with `--json`. "
+                f"`stage_passed()` then gets an unreadable file, returns "
+                f"UNESTABLISHED, and the program exits 2 NOT CHECKED before "
+                f"consulting a rule: rc=2 for a missing file instead of rc=2 "
+                f"for a missing flag, which is the same silence one "
+                f"indirection out. A path named in the flow's `final_gate:` "
+                f"block does NOT count: nothing executes `final_gate`, and a "
+                f"report written after the step loop is written after this "
+                f"clause has already read it.")
 
     enabled = [r for r in reviews if r["enabled"] and r["command"]]
     # NOTHING TO CHECK IS A FAIL, AND THIS BRANCH IS HERE BECAUSE IT ALREADY
@@ -328,7 +402,9 @@ def analyse(flow_path: Path):
         "flow": str(flow_path),
         "declared_reviews": len(reviews),
         "enabled_with_gate": len(enabled),
-        "final_gate_report": produced,
+        "verdict_sources": {r["stage"]: producer_of(
+            _flag_value(r["argv"], "--compliance") or "", r.get("earlier"))
+            for r in enabled},
         "stages": [r["stage"] for r in enabled],
     }
 
@@ -368,8 +444,8 @@ def main(argv=None) -> int:
     if not findings:
         print(f"[PASS] on_pass_review_answerable_check: "
               f"{report['enabled_with_gate']} enabled on-pass gate(s) can "
-              f"establish a verdict and read the report `final_gate` writes "
-              f"({report['final_gate_report']}).")
+              f"establish a verdict, and each reads a report an EARLIER clause "
+              f"in its own step's `all_of` writes with `--json`.")
     return 1 if findings else 0
 
 
