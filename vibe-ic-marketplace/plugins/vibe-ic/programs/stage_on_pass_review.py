@@ -433,6 +433,11 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _design_module_set as _dms  # noqa: E402
+# THE ONE NEGATION VOCABULARY AND THE ONE SENTENCE REACH
+# (vibe-ic#712). `grounding_occurrence` below reads both from
+# here rather than growing this module's own copy, which is the
+# divergence `_prose_polarity`'s own header exists to end.
+import _prose_polarity  # noqa: E402
 # THE GDSII READER IS NOT WRITTEN TWICE. `gds_topcell_name_check.parse_structures`
 # already walks the record stream and returns (defined, referenced, valid_header);
 # R4 reads a die with it rather than shipping a second parser that could drift
@@ -2243,10 +2248,85 @@ def rule_cited_constant_not_in_source(project: Path,
                        "literal": cite["literal"], "label": cite["label"],
                        "constant": m.group(0)}
                 checked.append(row)
-                if hex_occurrence_re(m.group(1)).search(haystack):
+                # AN OCCURRENCE IS NOT AN ASSERTION (vibe-ic#712).
+                #
+                # This was `hex_occurrence_re(...).search(haystack)`, which
+                # reads "the string appears somewhere in the input" as "the
+                # input STATES it". They are different claims, and this repo has
+                # paid for the substitution twice in one day in two other
+                # fields: #706 read `pdk_target` out of "this block is NOT
+                # targeted at <PDK>", and #711 re-declared as a mandate a die
+                # the document said "has NO meaning here and is REMOVED".
+                #
+                # Here it lands on the ACCEPT side, which is the quiet
+                # direction. An input saying "the polynomial is NOT 0x1021, use
+                # 0x8005" grounds a cited 0x1021 on its own denial, and this
+                # review then reports a fabricated constant as a faithful
+                # VERBATIM quotation — citing the sentence that refutes it as
+                # the authority.
+                #
+                # THE VOCABULARY AND THE REACH BOTH COME FROM `_prose_polarity`,
+                # which owns them so a fourth private copy cannot drift from the
+                # three that already exist.
+                #
+                # `extra_breaks=("\n",)` — THE RECORD REACH, and it is the one
+                # `_prose_polarity` documents for "input that is not prose:
+                # consecutive lines of a machine-generated report are unrelated
+                # RECORDS". The substrate this rule reads is a hexadecimal
+                # constant, and in a specification those live in OPCODE TABLES.
+                # MEASURED on the published `accept_espi` cell with the prose
+                # reach instead: `0x00`'s own row says
+                #
+                #     0x00  PUT_PC   Put a posted/completion … transaction
+                #     0x04  PUT_NP   Put a non-posted … transaction
+                #
+                # and with no ". " anywhere in the table the sentence scope ran
+                # three rows on and read `0x04`'s "non-" as a denial of `0x00`.
+                # A neighbouring row is a different statement; taking it as this
+                # one's polarity manufactured a contradiction on a cell the
+                # review had always accepted, and five shipped ACCEPT controls
+                # went red at once. `drc_vacuous_pass_check._record_span`
+                # already passes this same break for the same reason.
+                #
+                # THE LIMIT, STATED RATHER THAN HIDDEN: a denial WRAPPED across
+                # a line break ("the opcodes are NOT\n0x11 …") is not seen, and
+                # that is an under-reach in the direction that publishes a
+                # denied value. It is accepted deliberately here, because the
+                # opposite error on this rule is a review REJECTING a faithful
+                # artefact — and the reviewer that rejects everything is the
+                # failure this stage's own test file is written against. Both
+                # directions are pinned by tests.
+                #
+                # EVERY OCCURRENCE IS TRIED, not just the first: one denial does
+                # not retract a constant the document also states plainly
+                # somewhere else, and stopping at the first hit would let the
+                # order of two sentences decide the verdict.
+                #
+                # WRITTEN HERE RATHER THAN IN A HELPER. The consultation has to
+                # be visible in the function that reads the prose — that is what
+                # `prose_polarity_consulted_check` scans, and a helper would
+                # make this true in spirit and unverifiable in fact. Hiding a
+                # policy call one frame down is the refactor-blindness this
+                # repo has already measured in its own polarity scan.
+                grounded, denial = False, None
+                for hit in hex_occurrence_re(m.group(1)).finditer(haystack):
+                    lo, hi = _prose_polarity.sentence_scope(
+                        haystack, hit.start(), hit.end(),
+                        extra_breaks=("\n",))
+                    found = _prose_polarity.is_denied(haystack[lo:hi])
+                    if found is None:
+                        grounded = True
+                        break
+                    denial = denial or found
+                if grounded:
                     continue
                 row = dict(row)
                 row["used_as_value_at"] = value_sites(d, m.group(0))[:12]
+                # ABSENT AND DENIED ARE DIFFERENT FINDINGS, and a reader sent to
+                # look for a missing string when the string is right there — in
+                # a sentence that refutes it — is sent to the wrong place.
+                if denial is not None:
+                    row["denied_by"] = denial
                 ungrounded.append(row)
 
     # The finding carries the declared intent dirs itself, so the emitter can
@@ -2288,6 +2368,11 @@ def rule_cited_constant_not_in_source(project: Path,
     n = len(ungrounded)
     shown = ", ".join(sorted({u["constant"] for u in ungrounded})[:8])
     used = sum(1 for u in ungrounded if u.get("used_as_value_at"))
+    denied = sorted({u["denied_by"] for u in ungrounded if u.get("denied_by")})
+    denied_note = (
+        f" — {sum(1 for u in ungrounded if u.get('denied_by'))} of them DO "
+        f"appear, only inside a sentence that denies them ({', '.join(denied)})"
+        if denied else "")
     return {
         "verdict": "REJECT",
         "intent": intent,
@@ -2298,8 +2383,8 @@ def rule_cited_constant_not_in_source(project: Path,
             f"{', '.join(sorted({u['doc'] for u in ungrounded}))} as VERBATIM "
             f"quotations from the design input "
             f"({', '.join(sorted({u['source'] for u in ungrounded}))}), and no "
-            f"input document writes any of them as a hexadecimal number in any "
-            f"notation (0x2A / 2Ah / 'h2A / $2A / 16#2A): {shown}"
+            f"input document ASSERTS any of them as a hexadecimal number in any "
+            f"notation (0x2A / 2Ah / 'h2A / $2A / 16#2A){denied_note}: {shown}"
             f"{', …' if n > 8 else ''}. {used} of them is/are used as a VALUE "
             f"in the artefact, so the design is specified on a number the "
             f"input never states."),
