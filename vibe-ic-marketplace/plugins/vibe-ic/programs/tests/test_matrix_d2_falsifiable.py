@@ -1496,9 +1496,11 @@ def _f_hardmacro_kit_incomplete(p: Path) -> None:
 def _f_extract_illegal_overlap(p: Path) -> None:
     """Magic filed illegal-overlap feedback areas; the extraction is fiction.
 
-    Reddens the Step-31 clause
+    Reddens both Step-31 illegal-overlap clauses: the record validator
+    ``magic_illegal_overlap_record_check . --record
+    reports/phase3/magic_illegal_overlap.json`` and the independent audit
     ``magic_illegal_overlap_check . --json
-    reports/phase3/magic_illegal_overlap.json``.
+    reports/audit/magic_illegal_overlap_audit.json``.
 
     EMPTY cannot reach it, and the gate's docstring says why in its own terms:
     with no extraction in scope there is "no run for the question to be about",
@@ -1938,6 +1940,9 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
                "reports/phase3/digital_hardmacro.json"):
         "HARDMACRO_KIT_INCOMPLETE",
     ("31", "magic_illegal_overlap_check . --json "
+           "reports/audit/magic_illegal_overlap_audit.json"):
+        "EXTRACT_ILLEGAL_OVERLAP",
+    ("31", "magic_illegal_overlap_record_check . --record "
            "reports/phase3/magic_illegal_overlap.json"):
         "EXTRACT_ILLEGAL_OVERLAP",
     ("25", "em_peak_current_authority_check . --json "

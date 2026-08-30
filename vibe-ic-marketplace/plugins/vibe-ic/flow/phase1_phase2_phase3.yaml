@@ -5683,6 +5683,11 @@ steps:
     skills: [drc-fix, lvs-triage]
     mcp_tools: [eda_drc_klayout, eda_lvs]
     programs:
+      # The runner executes this producer inline after extraction and before
+      # LVS; the gate below first validates its record, then runs an
+      # independent judge into reports/audit/.  Declaring the producer here is
+      # what distinguishes a reader that names the path from its writer.
+      - magic_illegal_overlap_check
       - erc_density_check
     required_outputs:
       - "reports/phase3/drc_signoff.rpt"
@@ -5957,14 +5962,21 @@ steps:
         # zero is the defect, not the fix. Re-extracting with the recipe this
         # change ships turns every one of those NOT DETERMINEDs into a number.
         #
-        # THE GATE'S OWN --json TARGET IS DELIBERATELY NOT DECLARED in
-        # required_outputs. No producer outside this clause writes it, so
-        # declaring it would put this step in the same SELF-CERTIFIED EVIDENCE
-        # position the lvs.json / erc_density.json note above describes — the
-        # audit would re-probe after the gate and credit the copy the gate just
-        # wrote. It buys no evidence and costs a MISSING on every tree that has
-        # not re-run. The gate clause is what enforces; the report is triage.
-        - program_exit_zero: "magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json"
+        # The runner-produced record is an input to this audit, not something
+        # the audit may manufacture and then credit as production evidence.
+        # Validate the record's ACTUAL verdict, determined bit and zero count;
+        # a bare files_exist clause would accept an empty or failing JSON and
+        # would not carry the executable program contract every Step-31 clause
+        # below relies on for ordered short-circuiting.
+        - program_exit_zero: "magic_illegal_overlap_record_check . --record reports/phase3/magic_illegal_overlap.json"
+        # The runner writes the declared production record at
+        # `reports/phase3/magic_illegal_overlap.json` before LVS.  The
+        # compliance auditor must re-run the judge without manufacturing that
+        # same evidence in an older tree, so its own triage copy lives under
+        # reports/audit/.  Measured control: pointing this clause back at the
+        # declared path makes the D3 self-certification guard report exactly
+        # `31::reports/phase3/magic_illegal_overlap.json` as newly created.
+        - program_exit_zero: "magic_illegal_overlap_check . --json reports/audit/magic_illegal_overlap_audit.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # vibe-ic#693 — the LVS counterpart, and a DIFFERENT question from the
         # gate above: not "did netgen say match" but "could netgen's match mean

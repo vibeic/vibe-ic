@@ -106,7 +106,10 @@ WIRING
   above is claiming, and `flow_gate_enforcement_audit` is what checks the claim.
 * `flow/phase1_phase2_phase3.yaml` step 31 declares it in `gate.all_of`,
   positioned BEFORE the `lvs_report_check` clause, so the compliance audit reads
-  the same evidence in the same order.
+  the same evidence in the same order.  The sibling
+  ``magic_illegal_overlap_record_check`` first validates the runner-produced
+  record without rewriting it; this program then independently recomputes the
+  verdict into ``reports/audit/``.
 
 chip-AGNOSTIC: no IC, vendor, PDK or process literal appears or can affect any
 branch. The only tool literal is magic's own message text, which is what the
@@ -673,6 +676,67 @@ def publish_metrics(project: Path, report: Dict[str, Any]) -> Optional[Path]:
     except (OSError, ValueError):
         return None
 
+
+def validate_record(project: Path, record_rel: str) -> Tuple[bool, str]:
+    """Validate the runner-produced Step-31 verdict without rewriting it.
+
+    Presence alone is not the producer contract: an empty JSON, a FAIL record,
+    or a document whose count was not determined must all block before the
+    independent audit reruns this checker.  The path is project-relative and
+    must be a regular non-symlink file so the clause cannot be redirected out
+    of the run tree.
+    """
+    rel = Path(record_rel)
+    if rel.is_absolute() or not rel.parts or ".." in rel.parts:
+        return False, f"record path is not a safe project-relative path: {record_rel!r}"
+    path = project / rel
+    if path.is_symlink():
+        return False, f"producer record is a symlink, not run-owned bytes: {record_rel}"
+    if not path.is_file():
+        return False, f"producer record is missing or not a regular file: {record_rel}"
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return False, f"producer record is unreadable or malformed: {record_rel}: {exc}"
+    if not isinstance(doc, dict):
+        return False, f"producer record is {type(doc).__name__}, not a JSON object"
+
+    problems: List[str] = []
+    expected_metrics = _metrics(0, 0, determined=True)
+    if doc.get("gate") != GATE:
+        problems.append(f"gate={doc.get('gate')!r}, expected {GATE!r}")
+    if doc.get("flow_step") != FLOW_STEP:
+        problems.append(f"flow_step={doc.get('flow_step')!r}, expected {FLOW_STEP}")
+    if doc.get("threshold") != THRESHOLD:
+        problems.append(f"threshold={doc.get('threshold')!r}, expected {THRESHOLD}")
+    if doc.get("passed") is not True:
+        problems.append(f"passed={doc.get('passed')!r}, expected true")
+    if doc.get("skipped") is not False:
+        problems.append(f"skipped={doc.get('skipped')!r}, expected false")
+
+    summary = doc.get("summary")
+    if not isinstance(summary, dict) or summary.get("reason") != "clean":
+        problems.append("summary.reason is not 'clean'")
+    counts = doc.get("counts")
+    if not isinstance(counts, dict):
+        problems.append("counts is missing or not an object")
+    else:
+        if counts.get("determined") is not True:
+            problems.append(f"counts.determined={counts.get('determined')!r}, expected true")
+        if counts.get("gate_count") != 0:
+            problems.append(f"counts.gate_count={counts.get('gate_count')!r}, expected 0")
+    metrics = doc.get("metrics")
+    if not isinstance(metrics, dict):
+        problems.append("metrics is missing or not an object")
+    else:
+        for name, expected in expected_metrics.items():
+            if metrics.get(name) != expected:
+                problems.append(f"metrics.{name}={metrics.get(name)!r}, expected {expected!r}")
+
+    if problems:
+        return False, "; ".join(problems)
+    return True, (f"runner record {record_rel} carries a determined zero-"
+                  "illegal-overlap PASS")
 
 # --------------------------------------------------------------------------- #
 # CLI

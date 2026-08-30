@@ -30626,7 +30626,7 @@ _ILLEGAL_OVERLAP_GATE_TIMEOUT = 120
 
 def _run_illegal_overlap_gate(project: Path, out_json: Path
                               ) -> Tuple[int, str]:
-    """Spawn `magic_illegal_overlap_check` and return ``(rc, one-line reason)``.
+    """Spawn producer + validator.
 
     Spawned as a SUBPROCESS rather than called in-process on purpose. The gate
     declares ``ENFORCEMENT: blocking``, and `flow_gate_enforcement_audit` grades
@@ -30641,9 +30641,10 @@ def _run_illegal_overlap_gate(project: Path, out_json: Path
     `_run_declared_signoff_gate` applies to the step-23/25 gates).
     """
     prog = PROGRAMS_DIR / "magic_illegal_overlap_check.py"
-    if not prog.is_file():
+    validator = PROGRAMS_DIR / "magic_illegal_overlap_record_check.py"
+    if not prog.is_file() or not validator.is_file():
         return 2, (f"NOT CHECKED — the illegal-overlap gate is not present in "
-                   f"this deployment ({prog}); the extraction feedback channel "
+                   f"this deployment ({prog}, {validator}); the extraction feedback channel "
                    f"was never read.")
     try:
         out_json.parent.mkdir(parents=True, exist_ok=True)
@@ -30655,8 +30656,30 @@ def _run_illegal_overlap_gate(project: Path, out_json: Path
                             check=False, capture_output=True, text=True)
     except Exception as exc:                                   # noqa: BLE001
         return 2, f"NOT CHECKED — the illegal-overlap gate could not run: {exc}"
-    return cp.returncode, _gate_detail(out_json, cp.stdout or "",
-                                       cp.stderr or "")
+    detail = _gate_detail(out_json, cp.stdout or "", cp.stderr or "")
+    if cp.returncode != 0:
+        return cp.returncode, detail
+
+    try:
+        record_rel = out_json.resolve().relative_to(project.resolve()).as_posix()
+        validator_root = project
+    except ValueError:
+        # Unit-level callers historically choose an external output path.  Keep
+        # the same safe-relative contract by making that file's parent the root.
+        record_rel = out_json.name
+        validator_root = out_json.parent
+    validate_cmd = [sys.executable, str(validator), str(validator_root),
+                    "--record", record_rel]
+    try:
+        checked = subprocess.run(
+            validate_cmd, timeout=_ILLEGAL_OVERLAP_GATE_TIMEOUT, check=False,
+            capture_output=True, text=True)
+    except Exception as exc:                                   # noqa: BLE001
+        return 2, f"NOT CHECKED — the illegal-overlap record validator could not run: {exc}"
+    if checked.returncode != 0:
+        reason = (checked.stderr or checked.stdout or "record validation failed")
+        return checked.returncode, " ".join(reason.split())[:500]
+    return 0, detail
 
 
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
