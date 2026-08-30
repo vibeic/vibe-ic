@@ -381,8 +381,21 @@ def test_the_flow_declares_this_stages_review():
                                          "contradiction", "test"]
     assert blk["intent"] == ["phase1/generated_docs/L5_ADI_SPEC.json"]
     assert "phase3/analog/" in blk["artefact"]
-    assert STAGE in blk["gate"]["program_exit_zero"]
-    assert "stage_on_pass_review" in blk["gate"]["program_exit_zero"]
+    # THE COMMAND MOVED TO `steps:`, WHICH IS WHERE THE ENGINE READS IT.
+    # This used to assert `STAGE in blk["gate"]["program_exit_zero"]` — two
+    # SUBSTRING tests over a string nothing executed. That was the strongest
+    # assertion on a declared command anywhere in this tree, and six
+    # reachability mutants passed it (see
+    # `on_pass_review_declared_command_runs_check`). The block now carries a
+    # `dispatched_by:` back-pointer and the clause lives on that step; the
+    # command's own answerability is executed, not spelled, by that gate.
+    assert blk["dispatched_by"], "the block names no dispatching step"
+    step = next(s for s in flow["steps"]
+                if str(s.get("id")) == str(blk["dispatched_by"]))
+    cmds = [v for sub in (step["gate"]["all_of"]) if isinstance(sub, dict)
+            for v in sub.values() if isinstance(v, str)]
+    assert any(c.startswith("stage_on_pass_review") and f"--stage {STAGE} " in c
+               for c in cmds), (blk["dispatched_by"], cmds)
 
 
 def test_the_reviewer_skill_is_not_declared_twice():

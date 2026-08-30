@@ -225,44 +225,82 @@ def _stages_declaring_a_clause():
     form of the state this file reports, and counting it as a finding would
     punish the one stage that got it right."""
     return {sid: opr for sid, opr in _on_pass_review_stages().items()
-            if isinstance(opr.get("gate"), dict)}
+            if opr.get("dispatched_by") is not None}
 
 
-def test_every_on_pass_review_clause_in_the_shipped_flow_is_unreachable():
-    """DERIVED, never typed. The count comes from the flow itself, so a sixth
-    stage landing tomorrow is covered without editing this file — and a stage
+def test_every_on_pass_review_clause_in_the_shipped_flow_IS_reachable():
+    """THE FINDING IS CLOSED, AND THIS TEST IS HOW IT STAYS CLOSED.
+
+    Its previous name ended `_is_unreachable` and its docstring said "a stage
     that gets WIRED makes this test red, which is the correct way to be told
-    the finding is closing."""
+    the finding is closing". This is that day. The six clauses moved from
+    `stages[].on_pass_review.gate` into `steps:` — the only section
+    `flow_compliance_check.main` reads — and the assertion inverts with them:
+    every clause is now dispatchable, and one that slides back out of `steps:`
+    reddens here.
+
+    DERIVED, never typed: the count comes from the flow, so a seventh stage
+    landing tomorrow is covered without editing this file."""
     stages = _stages_declaring_a_clause()
-    assert stages, "no stage declares an `on_pass_review:` gate — empty denominator"
+    assert stages, "no stage declares an `on_pass_review:` clause — empty denominator"
     cs = A.clauses_in_flow(FLOW)
     opr = [c for c in cs if c["gate"] == "stage_on_pass_review"]
     assert len(opr) == len(stages), (len(opr), sorted(stages))
-    assert all(_dispatchable(c) is False for c in opr), opr
-    assert all(_section(c) == "stages" for c in opr), opr
-    # and the rest of the document IS reachable, so this is a finding about
-    # five clauses and not about the walker.
+    assert all(_dispatchable(c) is True for c in opr), opr
+    assert all(_section(c) == A.DISPATCHED_SECTION for c in opr), opr
+    # and the rest of the document is reachable too, so a green here is about
+    # the clauses and not about a walker that lost its way.
     rest = [c for c in cs if c["gate"] != "stage_on_pass_review"]
     assert rest, "no other clause to compare against"
     assert all(_dispatchable(c) is True for c in rest), \
         [c for c in rest if _dispatchable(c) is not True][:5]
 
 
-def test_the_audit_names_the_gate_on_the_shipped_flow():
+def test_the_audit_has_nothing_left_to_disclose_on_the_shipped_flow():
+    """The disclosure this file was written to pin is now EMPTY, and empty is
+    the claim. It used to assert `names == ["stage_on_pass_review"]` with
+    `sections == ["stages"]`; the clauses were moved and the audit agrees."""
     rep = A.audit(FLOW, PROGRAMS)
     undisp = rep.get("undispatchable") or []
-    names = [u["gate"] for u in undisp]
-    assert names == ["stage_on_pass_review"], names
-    row = undisp[0]
-    assert row["sections"] == ["stages"], row
-    assert row["clauses"] == len(_stages_declaring_a_clause()), row
+    assert undisp == [], undisp
 
 
-def test_the_disclosure_reaches_the_console_on_both_paths(capsys):
+def test_the_disclosure_reaches_the_console_on_both_paths(capsys, tmp_path):
     """A fact about a gate that is not running is needed whichever way the
     exit code went, so unlike `declared_weaker_than_wired` this one is not
-    printed only on the PASS path."""
-    rc = A.main([])
+    printed only on the PASS path.
+
+    THE SUBJECT IS NOW A PLANTED CLAUSE, NOT THE SHIPPED FLOW. This used to run
+    `A.main([])` over the shipped document and assert the disclosure appeared,
+    which was a true statement about a real defect: six clauses sat outside
+    `steps:`. They were moved, so asserting the disclosure on the shipped flow
+    would now be asserting that the defect is still there. The machinery is
+    what this test is about, so it is exercised on a flow that puts one clause
+    back where the engine cannot reach it."""
+    doc = yaml.safe_load(FLOW.read_text(encoding="utf-8"))
+    # EVERY clause goes back under `stages:` — the exact pre-fix shape.
+    # ALL of them, not one, and the reason is a property of the audit worth
+    # knowing: `undispatchable` groups BY GATE PROGRAM, so a gate with five
+    # dispatchable clauses and one stranded is not disclosed at all. Moving a
+    # single clause here would therefore have proved nothing. Per-CLAUSE
+    # coverage is `on_pass_review_declared_command_runs_check` P1, which keys
+    # on the stage.
+    moved = []
+    for st in doc["steps"]:
+        for sub in ((st.get("gate") or {}).get("all_of") or []):
+            if isinstance(sub, dict):
+                for k, v in list(sub.items()):
+                    if isinstance(v, str) and v.startswith("stage_on_pass_review"):
+                        moved.append(sub.pop(k))
+    assert moved, "no on-pass clause found under `steps:` to move back"
+    for cmd in moved:
+        sid = cmd.split("--stage ", 1)[1].split()[0]
+        target = next(s for s in doc["stages"] if s["id"] == sid)
+        target["on_pass_review"]["gate"] = {"program_exit_zero": cmd}
+    planted = tmp_path / "flow.yaml"
+    planted.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+
+    rc = A.main(["--flow", str(planted)])
     out = capsys.readouterr().out
     assert rc in (0, 1), rc
     assert "sit OUTSIDE `steps:`" in out, out[-3000:]

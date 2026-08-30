@@ -140,8 +140,63 @@ def _flag_value(argv: list, flag: str):
     return None
 
 
+#: The one top-level section `flow_compliance_check.main` dispatches from
+#: (`steps = flow.get("steps", [])`). A clause anywhere else is declared and
+#: dispatched by nothing -- v1.13.32's finding, and the reason this checker
+#: resolves the command from HERE rather than from the stage block.
+DISPATCHED_SECTION = "steps"
+
+#: Every gate slot the engine evaluates. The command is looked for in all
+#: three: a review wired through the wrong slot is a different defect, and
+#: this checker must be able to SEE it rather than report the clause missing.
+GATE_SLOTS = ("program_exit_zero", "optional_program_exit_zero",
+              "advisory_program_exit_zero")
+
+
+def step_clauses(flow: dict) -> list:
+    """Every clause under `steps:` that invokes the subject, tagged by stage.
+
+    Structural walk of the shapes `flow_compliance_check._evaluate_gate`
+    executes -- not a text scan, so a program name inside a comment or a path
+    argument is not read as a clause.
+    """
+    out = []
+
+    def walk(node, step):
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key in GATE_SLOTS:
+                    cmd = val.get("command") if isinstance(val, dict) else val
+                    if isinstance(cmd, str):
+                        argv = _argv(cmd)
+                        if argv and SUBJECT in argv[0]:
+                            out.append({"slot": key, "command": cmd,
+                                        "argv": argv,
+                                        "step": str((step or {}).get("id")),
+                                        "stage": _flag_value(argv, "--stage")})
+                walk(val, step)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, step)
+
+    for step in flow.get(DISPATCHED_SECTION) or []:
+        if isinstance(step, dict):
+            walk(step.get("gate"), step)
+    return out
+
+
 def declared_reviews(flow: dict) -> list:
-    """Every stage carrying an `on_pass_review:`, enabled or not."""
+    """Every stage carrying an `on_pass_review:`, enabled or not.
+
+    THE COMMAND IS READ FROM `steps:`, NOT FROM THE STAGE BLOCK, and that is
+    the whole of this function's history. Until the six clauses were wired,
+    the command lived in `stages[].on_pass_review.gate` -- a section the flow
+    engine never reads -- and this checker read it from there, so it was
+    grading an argv nothing would ever run. It now asks its question about the
+    argv the engine will actually dispatch, which is the only one whose
+    answerability is a fact about this flow.
+    """
+    clauses = step_clauses(flow)
     out = []
     for stage in flow.get("stages") or []:
         if not isinstance(stage, dict):
@@ -149,18 +204,19 @@ def declared_reviews(flow: dict) -> list:
         review = stage.get("on_pass_review")
         if not isinstance(review, dict):
             continue
-        gate = review.get("gate")
-        command = None
-        if isinstance(gate, dict):
-            command = gate.get("program_exit_zero")
+        sid = str(stage.get("id") or stage.get("name") or "?")
+        mine = [c for c in clauses if c["stage"] == sid]
+        command = mine[0]["command"] if mine else None
         out.append({
-            "stage": str(stage.get("id") or stage.get("name") or "?"),
+            "stage": sid,
             # ABSENT `enabled:` MEANS ENABLED. Five of the six declare no
             # `enabled` key at all and are live; only stage5 opts out
             # explicitly. Defaulting the other way would exempt every clause
             # that never thought about it, which is all of them.
             "enabled": review.get("enabled", True) is not False,
             "command": command,
+            "slot": mine[0]["slot"] if mine else None,
+            "step": mine[0]["step"] if mine else None,
             "argv": _argv(command) if command else [],
         })
     return out
@@ -190,13 +246,34 @@ def analyse(flow_path: Path):
             # dispatchable gate.
             if r["command"]:
                 findings.append(
-                    f"P3 DISABLED CLAUSE CARRIES A GATE [{r['stage']}]: the "
-                    f"clause declares `enabled: false` and also declares "
-                    f"`gate.program_exit_zero`. A dispatcher reaching that "
-                    f"gate would run a review the clause says is not wired. "
-                    f"Drop the gate, or drop `enabled: false`.")
+                    f"P3 DISABLED CLAUSE IS DISPATCHED [{r['stage']}]: the "
+                    f"clause declares `enabled: false` and step {r['step']!r} "
+                    f"nevertheless dispatches `{r['slot']}: {r['command']}`. "
+                    f"The engine reaching that clause would run a review the "
+                    f"block says is not wired. Drop the step clause, or drop "
+                    f"`enabled: false`.")
             continue
         if not r["command"]:
+            # A DECLARED REVIEW THIS CHECKER CANNOT FIND IS NOT A SILENT SKIP.
+            # It used to be: `continue`, from when the command lived in the
+            # stage block and "no command" meant "this stage declared none".
+            # The command now lives in `steps:`, so not finding one means the
+            # review is DISPATCHED BY NOTHING -- the v1.13.32 defect -- and
+            # this checker has no argv to grade. MEASURED while landing the
+            # wiring: retargeting ONE clause's `--stage` left this program
+            # printing `[PASS] ... 5 enabled on-pass gate(s)` and exiting 0.
+            # A population that quietly shrank by one read exactly like a
+            # clean result. This is not `flow_gate_enforcement_audit`'s
+            # disclosure restated: that one reports where a clause SITS, this
+            # one reports that its own subject is missing.
+            findings.append(
+                f"P0 DECLARED BUT NOT DISPATCHED [{r['stage']}]: the stage "
+                f"declares an enabled `on_pass_review:` and no clause under "
+                f"`{DISPATCHED_SECTION}:` invokes {SUBJECT} with `--stage "
+                f"{r['stage']}`. `flow_compliance_check` reads `steps = "
+                f"flow.get(\"{DISPATCHED_SECTION}\", [])` and nothing else, so "
+                f"this review is dispatched by nothing and this check has no "
+                f"command to grade.")
             continue
         if not r["argv"] or SUBJECT not in r["argv"][0]:
             continue
@@ -232,6 +309,21 @@ def analyse(flow_path: Path):
                 f"typo, and the gate is the half that goes quiet.")
 
     enabled = [r for r in reviews if r["enabled"] and r["command"]]
+    # NOTHING TO CHECK IS A FAIL, AND THIS BRANCH IS HERE BECAUSE IT ALREADY
+    # HAPPENED. Moving the six clauses out of `stages[].on_pass_review.gate`
+    # and into `steps:` -- the change that made them dispatchable at all --
+    # left this checker reading a key that no longer exists, and it printed
+    # `[PASS] ... 0 enabled on-pass gate(s) can establish a verdict` and
+    # exited 0. A checker whose subject vanished must not report a clean
+    # result about it; that substitution is the exact defect this whole axis
+    # exists to refuse, and it is one line to prevent.
+    if reviews and not enabled and any(r["enabled"] for r in reviews):
+        findings.append(
+            f"P0 NO DECLARED REVIEW IS DISPATCHED: {sum(1 for r in reviews if r['enabled'])} "
+            f"stage(s) declare an enabled `on_pass_review:` and NOT ONE of "
+            f"them is invoked by a clause under `{DISPATCHED_SECTION}:`, the "
+            f"only section `flow_compliance_check` reads. This check examined "
+            f"0 commands, which refutes nothing and certifies nothing.")
     return findings, {
         "flow": str(flow_path),
         "declared_reviews": len(reviews),

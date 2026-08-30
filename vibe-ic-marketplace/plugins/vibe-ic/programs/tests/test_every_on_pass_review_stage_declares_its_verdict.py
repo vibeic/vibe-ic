@@ -198,18 +198,47 @@ def test_the_advisory_declaration_is_still_true_of_the_tree():
         f"has become false and must be re-declared `blocking`")
 
 
-def test_the_declaration_did_not_move_the_gate_out_of_the_blocking_slot():
-    """`advisory` answers "no runner spawns this inline"; it is not permission
-    to move the clause to `advisory_program_exit_zero`. Read from
-    `clauses_in_flow` — the audit's own structural walk — so this is about what
-    a dispatcher would see, not about the text of a YAML line."""
+def test_the_clause_is_in_the_slot_its_own_declared_verdict_names():
+    """THE SLOT MUST AGREE WITH `verdict:`, and this test used to assert the
+    opposite because the clause was never dispatched.
+
+    It read `assert slots == ["program_exit_zero"]`, on the reasoning that an
+    rc=1 "must stay in the slot that says so". That was free while the clause
+    sat under `stages:` — a section `flow_compliance_check` never reads — so
+    the slot name cost nothing and blocked nobody. Dispatched, it is not free:
+    `program_exit_zero` FAILS the step on rc=1, which would turn every
+    `verdict: advisory` block into a blocking one (#1253: wiring a gate that
+    has never run turns "unverified" into "blocking", a different change), and
+    would additionally read the program's rc=2 NOT CHECKED as VACUOUS_PASS.
+
+    So the invariant is not a slot NAME, it is AGREEMENT: whatever each block
+    declares, the clause must be wired through the slot that means it. Wiring
+    it to block is then one edit to `verdict:` and one to the slot, together.
+    Read from `clauses_in_flow` — the audit's own structural walk — so this is
+    about what a dispatcher would see, not about the text of a YAML line."""
     mod = _audit_mod()
-    slots = sorted({c["slot"] for c in mod.clauses_in_flow(_FLOW)
-                    if c["gate"] == _GATE})
-    assert slots == ["program_exit_zero"], (
-        f"{_GATE} is wired in {slots}; its rc=1 is a proven contradiction "
-        f"between the intent and the artefact and must stay in the slot that "
-        f"says so")
+    want = {"advisory": "advisory_program_exit_zero",
+            "blocking": "program_exit_zero"}
+    doc = yaml.safe_load(_FLOW.read_text(encoding="utf-8"))
+    declared = {s["id"]: s["on_pass_review"].get("verdict")
+                for s in doc["stages"]
+                if isinstance(s.get("on_pass_review"), dict)
+                and s["on_pass_review"].get("enabled", True) is not False}
+    assert declared, "no enabled on_pass_review block to check"
+    by_stage = {}
+    for c in mod.clauses_in_flow(_FLOW):
+        if c["gate"] != _GATE:
+            continue
+        toks = str(c["command"]).split()
+        sid = toks[toks.index("--stage") + 1] if "--stage" in toks else None
+        by_stage[sid] = c["slot"]
+    for sid, verdict in declared.items():
+        assert sid in by_stage, (
+            f"{sid} declares `verdict: {verdict}` and no clause dispatches it")
+        assert by_stage[sid] == want[verdict], (
+            f"{sid} declares `verdict: {verdict}` and is wired through "
+            f"{by_stage[sid]!r}, not {want[verdict]!r}. The slot is what "
+            f"decides whether the verdict stops the step.")
 
 
 # ═══════════════════ THE GAP: every stage that wires the review declares a

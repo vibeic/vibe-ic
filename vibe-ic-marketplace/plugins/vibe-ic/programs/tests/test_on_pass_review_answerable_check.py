@@ -84,13 +84,43 @@ def _reviews(doc):
     return [s for s in doc["stages"] if isinstance(s.get("on_pass_review"), dict)]
 
 
+#: The slot every enabled on-pass clause is wired through. `verdict: advisory`
+#: means the advisory slot: `program_exit_zero` FAILS the step on rc=1, which
+#: would turn an advisory review into a blocking one, and would read the
+#: program's rc=2 NOT CHECKED as VACUOUS_PASS.
+SLOT = "advisory_program_exit_zero"
+
+
+def _clause(doc, stage_id):
+    """The MUTABLE step clause that dispatches `stage_id`'s review, and its slot.
+
+    THE COMMAND LIVES IN `steps:` NOW, and every mutation below reaches it
+    through here. It used to live in `stages[].on_pass_review.gate` — a section
+    `flow_compliance_check.main` never reads (`steps = flow.get("steps", [])`),
+    so the argv these tests graded was one nothing would ever dispatch.
+    """
+    for st in doc.get("steps") or []:
+        for sub in ((st.get("gate") or {}).get("all_of") or []):
+            if not isinstance(sub, dict):
+                continue
+            for k, v in sub.items():
+                if (isinstance(v, str) and v.startswith("stage_on_pass_review")
+                        and f"--stage {stage_id} " in v + " "):
+                    return sub, k
+    raise AssertionError(f"no clause under `steps:` dispatches {stage_id!r}")
+
+
 def _enabled_with_gate(doc):
     out = []
     for s in _reviews(doc):
         r = s["on_pass_review"]
-        if r.get("enabled", True) is not False and (r.get("gate") or {}).get(
-                "program_exit_zero"):
-            out.append(s)
+        if r.get("enabled", True) is False:
+            continue
+        try:
+            _clause(doc, s["id"])
+        except AssertionError:
+            continue
+        out.append(s)
     return out
 
 
@@ -126,7 +156,9 @@ def test_every_shipped_gate_reads_the_report_the_final_gate_writes():
     assert f"--json {REPORT}" in written, (
         f"final_gate must write the compliance report the gates read: {written}")
     for s in _enabled_with_gate(doc):
-        cmd = s["on_pass_review"]["gate"]["program_exit_zero"]
+        clause, key = _clause(doc, s["id"])
+        assert key == SLOT, (s["id"], key)
+        cmd = clause[key]
         assert f"--compliance {REPORT}" in cmd, (
             f"{s['id']} cannot establish a stage verdict: {cmd}")
 
@@ -135,9 +167,8 @@ def test_every_shipped_gate_reads_the_report_the_final_gate_writes():
 def test_p1_a_gate_with_no_verdict_source_is_refused_by_name(tmp_path):
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
-    gate = victim["on_pass_review"]["gate"]
-    gate["program_exit_zero"] = gate["program_exit_zero"].replace(
-        f" --compliance {REPORT}", "")
+    gate, key = _clause(doc, victim["id"])
+    gate[key] = gate[key].replace(f" --compliance {REPORT}", "")
     rc, out = _run(_write(tmp_path, doc))
     assert rc == 1, f"planting P1 must FAIL, got rc={rc}:\n{out}"
     assert "P1 CANNOT REJECT" in out
@@ -149,11 +180,11 @@ def test_p1_the_same_flow_passes_once_the_verdict_source_is_restored(tmp_path):
     """The negative control's other arm: repairing it must go green."""
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
-    gate = victim["on_pass_review"]["gate"]
-    original = gate["program_exit_zero"]
-    gate["program_exit_zero"] = original.replace(f" --compliance {REPORT}", "")
+    gate, key = _clause(doc, victim["id"])
+    original = gate[key]
+    gate[key] = original.replace(f" --compliance {REPORT}", "")
     assert _run(_write(tmp_path, doc, "broken.yaml"))[0] == 1
-    gate["program_exit_zero"] = original
+    gate[key] = original
     rc, out = _run(_write(tmp_path, doc, "repaired.yaml"))
     assert rc == 0, f"restoring the flag must PASS, got rc={rc}:\n{out}"
 
@@ -161,9 +192,8 @@ def test_p1_the_same_flow_passes_once_the_verdict_source_is_restored(tmp_path):
 def test_p1_fires_on_every_offending_stage_not_just_the_first(tmp_path):
     doc = _flow_doc()
     for s in _enabled_with_gate(doc):
-        g = s["on_pass_review"]["gate"]
-        g["program_exit_zero"] = g["program_exit_zero"].replace(
-            f" --compliance {REPORT}", "")
+        g, key = _clause(doc, s["id"])
+        g[key] = g[key].replace(f" --compliance {REPORT}", "")
     rc, out = _run(_write(tmp_path, doc))
     assert rc == 1
     named = {sid for sid in ENABLED_ON_PASS_STAGES if sid in out}
@@ -188,8 +218,8 @@ def test_p2_a_gate_reading_a_report_the_flow_never_writes_is_refused(tmp_path):
 def test_p2_a_gate_reading_a_different_report_is_refused_by_name(tmp_path):
     doc = _flow_doc()
     victim = _enabled_with_gate(doc)[0]
-    gate = victim["on_pass_review"]["gate"]
-    gate["program_exit_zero"] = gate["program_exit_zero"].replace(
+    gate, key = _clause(doc, victim["id"])
+    gate[key] = gate[key].replace(
         f"--compliance {REPORT}", "--compliance reports/typo_compliance.json")
     rc, out = _run(_write(tmp_path, doc))
     assert rc == 1, f"planting a path typo must FAIL, got rc={rc}:\n{out}"
@@ -212,12 +242,17 @@ def test_p3_a_disabled_clause_carrying_a_gate_is_refused(tmp_path):
     disabled = [s for s in _reviews(doc)
                 if s["on_pass_review"].get("enabled") is False]
     assert disabled, "the flow no longer ships a disabled clause to test P3 on"
-    disabled[0]["on_pass_review"]["gate"] = {
-        "program_exit_zero": (f"stage_on_pass_review . --stage "
-                              f"{disabled[0]['id']} --compliance {REPORT}")}
+    # The clause is planted where the ENGINE would reach it — under `steps:` —
+    # because that is where "this disabled review would nevertheless run" is
+    # now a true sentence. Planted on the step the block itself names.
+    sid = disabled[0]["id"]
+    host = next(st for st in doc["steps"] if (st.get("gate") or {}).get("all_of"))
+    host["gate"]["all_of"].append(
+        {SLOT: (f"stage_on_pass_review . --stage {sid} "
+                f"--compliance {REPORT}")})
     rc, out = _run(_write(tmp_path, doc))
     assert rc == 1, f"planting P3 must FAIL, got rc={rc}:\n{out}"
-    assert "P3 DISABLED CLAUSE CARRIES A GATE" in out
+    assert "P3 DISABLED CLAUSE IS DISPATCHED" in out
     assert disabled[0]["id"] in out
 
 
@@ -225,10 +260,13 @@ def test_p3_repairs_green(tmp_path):
     doc = _flow_doc()
     disabled = [s for s in _reviews(doc)
                 if s["on_pass_review"].get("enabled") is False][0]
-    disabled["on_pass_review"]["gate"] = {
-        "program_exit_zero": "stage_on_pass_review . --stage x --compliance y"}
+    sid = disabled["id"]
+    host = next(st for st in doc["steps"] if (st.get("gate") or {}).get("all_of"))
+    planted = {SLOT: (f"stage_on_pass_review . --stage {sid} "
+                      f"--compliance {REPORT}")}
+    host["gate"]["all_of"].append(planted)
     assert _run(_write(tmp_path, doc, "broken.yaml"))[0] == 1
-    del disabled["on_pass_review"]["gate"]
+    host["gate"]["all_of"].remove(planted)
     assert _run(_write(tmp_path, doc, "repaired.yaml"))[0] == 0
 
 

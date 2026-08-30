@@ -783,6 +783,25 @@ run "skills declare their stage"        "$ROOT" python3 "$PG/skill_stage_members
 # continuation -- two probes parse this file with a single-line regex.
 run "on-pass gates can establish a verdict" "$ROOT" python3 "$PG/on_pass_review_answerable_check.py" --flow "$PLUGIN/flow/phase1_phase2_phase3.yaml"
 
+# vibe-ic: NOTHING ANYWHERE EXECUTED THE FLOW-DECLARED `gate.program_exit_zero`.
+# The gate above asks whether the declared argv SAYS something answerable; this
+# one asks whether it CAN RUN. MEASURED on v1.13.54 by mutating stage3's clause
+# and running both nets against the repo's own known-BAD tree reject_sgmii
+# (pristine: rc=1 REJECT, regression emitted): SIX mutants -- `--stage`
+# retargeted to another stage / to one that does not exist / to the
+# declared-not-enabled stage5, the project positional pointed at a missing dir,
+# `--emit-test` at an unwritable dir, a second `--flow-def /dev/null` smuggled
+# in -- left the gate above at rc=0 PASS AND the whole 14-file on-pass pytest
+# suite at 304 passed, while the gate itself returned rc=2 NOT CHECKED forever.
+# Every one of them keeps `--compliance`, so no text test reaches them. This
+# gate executes each declared command verbatim against that stage's published
+# known-BAD tree (must refuse, rc=1, proof inside the run) and its published
+# known-GOOD tree (must accept, rc=0 -- the control that stops "always block"
+# passing as a fix). Its subject is the shipped flow document, which is what
+# puts it in this file. ONE LINE, no `\` continuation -- two probes parse this
+# file with a single-line regex.
+run "on-pass declared commands are executed" "$ROOT" python3 "$PG/on_pass_review_declared_command_runs_check.py" --flow "$PLUGIN/flow/phase1_phase2_phase3.yaml"
+
 # vibe-ic#1121 family, landed in the v1.11.19..v1.11.32 PPA stack and wired
 # here by the lander because `flow/` and `tools/ci/` are single-writer surfaces
 # the lane could not touch.
