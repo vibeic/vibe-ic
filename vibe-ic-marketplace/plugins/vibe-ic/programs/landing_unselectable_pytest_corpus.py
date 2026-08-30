@@ -158,30 +158,51 @@ def _covered(plugin_rel: str = _PLUGIN_REL) -> Tuple[Covered, ...]:
     )
 
 
-#: NOTHING IS EXCLUDED, AND THAT EMPTINESS IS DECLARED RATHER THAN LEFT SILENT.
+#: ONE TREE IS EXCLUDED: the fixture trees under `programs/tests/fixtures/`.
 #:
-#: This held exactly one entry, `benchmark-data/`, excluding the CVDP corpus's own
-#: harness files — cocotb `test_runner.py` and the per-problem testbenches it drives,
-#: which are INPUTS to a benchmark rather than tests of this repo.
+#: This roster held `benchmark-data/` (the CVDP corpus's own harness files),
+#: `audit()` faulted it once that corpus moved to `vibeic/benchmark-data`, and it
+#: was withdrawn — correctly. It stood at `()` from then until v1.13.77.
 #:
-#: That corpus now lives in `vibeic/benchmark-data`. There is no `benchmark-data/` in
-#: this repository, so the exclusion subtracted nothing, and `audit()` said so:
+#: WHAT PUT AN ENTRY BACK. `programs/tests/fixtures/` holds published run trees
+#: copied VERBATIM from real cells, and a REJECTING cell carries the regression
+#: `stage_on_pass_review` emitted into it. `reject_caravel` carries one, tracked
+#: since v1.12.87:
 #:
-#:     declared exclusion 'benchmark-data/' matches NO tracked test file
-#:     — the reason it states no longer describes this tree.
+#:     .../reject_caravel/reports/phase2/gates/on_pass_review/
+#:         test_r1_intent_top_not_built.py
 #:
-#: It was right, and it was right BEFORE the removal too: measured at `6d70bd74c`
-#: (trees still present) and at `e23d0be5e` (trees gone), rc=1 with the identical
-#: finding. The 121 harness files had already left when the corpus was pruned to the
-#: cells that actually pass, so the roster had been stale for longer than the split.
+#: It is R1's own regression sitting on R1's own rejecting tree, so it FAILS by
+#: construction and is SUPPOSED to. It is published evidence — deleting it would
+#: delete the evidence — so v1.13.77 stopped COLLECTING it instead
+#: (`pytest.ini: norecursedirs`), which is why it is in this repository and is
+#: not a test of it.
 #:
-#: An empty tuple is the correct state and NOT an oversight. It is spelled out here
-#: because a registry that silently holds nothing is indistinguishable from one
-#: somebody emptied by accident, and `audit()` cannot tell those apart either — it
-#: can only fault a declaration that matches nothing, never the absence of one.
+#: But the census still counted it `covered` by `run_pytest`, and that claim was
+#: false in both directions, MEASURED on 0405c4de96: `run_pytest` is
+#: selector-driven and `ci_targeted_test_select.py` emits 0 paths under
+#: `fixtures/` (267 files for the commit that changed `stage_on_pass_review.py`
+#: itself); bare `pytest` and `run_tests.sh` cannot collect it at all. A file no
+#: landing can reach was being counted as one a landing could be blocked by —
+#: the exact defect this program exists to detect.
 #:
-#: If a corpus is ever vendored back into this tree, the entry comes back with it.
-_EXCLUDED: Tuple[Excluded, ...] = ()
+#: An entry alone could never have fixed it: `partition()` tested `covered`
+#: FIRST, and every exclusion worth stating is a SUBTREE of some covered tree, so
+#: the entry matched nothing and `audit()` faulted it as stale. The precedence in
+#: `partition()` is the other half of this change, and neither half moves a file
+#: without the other.
+_EXCLUDED: Tuple[Excluded, ...] = (
+    Excluded(
+        prefix=f"{_PLUGIN_REL}/programs/tests/fixtures/",
+        why="a fixture tree is DATA, not a suite: published run trees copied "
+            "verbatim from real cells, one of which carries the regression its "
+            "own rejecting run emitted (tracked since v1.12.87). `pytest.ini` "
+            "declines to recurse into it (norecursedirs, v1.13.77) and the "
+            "targeted selector emits no path under it, so NO landing stage and "
+            "no bare run can reach it. Counting it covered claimed a landing "
+            "could be blocked by a file nothing runs.",
+    ),
+)
 
 
 def repo_root(start: Optional[Path] = None) -> Optional[Path]:
@@ -244,15 +265,21 @@ def partition(files: Sequence[str], plugin: str = _PLUGIN_REL) -> Dict[str, obje
     by_stage: Dict[str, List[str]] = {c.prefix: [] for c in covered}
     by_exclusion: Dict[str, List[str]] = {e.prefix: [] for e in _EXCLUDED}
     unselectable: List[str] = []
+    # EXCLUSIONS ARE CONSULTED FIRST, and the order is half the fix. An
+    # exclusion worth STATING is always a SUBTREE of some covered tree — that is
+    # what makes it worth stating — so testing `covered` first meant a declared
+    # exclusion could never fire. It did not fail quietly: `audit()` then faulted
+    # the entry as matching nothing, which reads as "the roster is stale" rather
+    # than "the roster cannot be consulted".
     for rel in files:
-        for c in covered:
-            if rel.startswith(c.prefix):
-                by_stage[c.prefix].append(rel)
+        for e in _EXCLUDED:
+            if rel.startswith(e.prefix):
+                by_exclusion[e.prefix].append(rel)
                 break
         else:
-            for e in _EXCLUDED:
-                if rel.startswith(e.prefix):
-                    by_exclusion[e.prefix].append(rel)
+            for c in covered:
+                if rel.startswith(c.prefix):
+                    by_stage[c.prefix].append(rel)
                     break
             else:
                 unselectable.append(rel)
