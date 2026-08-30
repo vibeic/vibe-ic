@@ -79,11 +79,26 @@ def test_real_dispatch_writes_owner_only_records_into_its_summary(tmp_path):
         capture_output=True, text=True)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     records = A.load_jsonl(jsonl)
-    assert [r["label"] for r in records] == ["green gate", "red gate"]
+    # ORDER-INDEPENDENT ON PURPOSE. `_gate_dispatch.sh` appends each attestation
+    # WHEN ITS GATE COMPLETES, under a lock, and `gate_dispatch_finish` reads the
+    # file back without sorting -- so the order is COMPLETION order, and with the
+    # default job count the two gates race. `GATE_DISPATCH_JOBS` here is 8: the
+    # corpus-write guard that would force 1 cannot see a `benchmark-data` inside
+    # a tmp_path that is no git tree. Measured 2026-08-31 on untouched main:
+    # asserting declaration order failed 10 runs in 40 at load ~60, and a probe
+    # that makes the FIRST-declared gate finish LAST reverses the record every
+    # time. The production consumer (`hygiene_finding_delta.py`) is
+    # order-independent by construction -- it keys `by_label` and compares with
+    # `Counter` -- so declaration order was never a property of this record,
+    # only an accident of which gate won the race.
+    assert sorted(r["label"] for r in records) == ["green gate", "red gate"]
     assert stat.S_IMODE(jsonl.stat().st_mode) == 0o600
     doc = json.loads(summary.read_text())
     assert doc["process_attestations"] == records
-    assert records[1]["finding_identities"] == ["[FAIL] named-red"]
+    # By LABEL, not by index, for the same reason.
+    red = [r for r in records if r["label"] == "red gate"]
+    assert len(red) == 1, records
+    assert red[0]["finding_identities"] == ["[FAIL] named-red"]
 
 
 def test_real_dispatch_mirrors_each_complete_record_to_live_progress(tmp_path):
