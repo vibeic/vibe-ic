@@ -340,6 +340,12 @@ def _stated(rows: Sequence[Row], document: str,
     return None
 
 
+#: Where the chip path's route leaves its gate-level netlist. A glob, because
+#: the emitter names it after the design and a design name is exactly the
+#: literal a chip-AGNOSTIC gate may not carry.
+IC_NETLIST_GLOB = "phase3/stage3/pnr/*_pnr.v"
+
+
 def _netlist_signal_ports(project: Path, arm: str,
                           release: str) -> Optional[Tuple[int, Path]]:
     """The logical port count a SECOND view declares, re-derived by this gate.
@@ -378,11 +384,6 @@ def _netlist_signal_ports(project: Path, arm: str,
     ports = parsed.get("ports")
     return (len(ports) if isinstance(ports, set) else 0), v_path
 
-
-#: Where the chip path's route leaves its gate-level netlist. A glob, because
-#: the emitter names it after the design and a design name is exactly the
-#: literal a chip-AGNOSTIC gate may not carry.
-IC_NETLIST_GLOB = "phase3/stage3/pnr/*_pnr.v"
 
 
 def _check_pin_count(project: Path, arm: str, release: str,
@@ -547,12 +548,26 @@ def _check_die_area(project: Path, release: str, rows: Sequence[Row],
     doc = _load_json(metrics_path)
     bbox = doc.get(IC_DIE_BBOX_KEY) if isinstance(doc, dict) else None
     parts = str(bbox).split() if isinstance(bbox, str) else []
-    if len(parts) != 4:
+    coords = None
+    if len(parts) == 4:
+        try:
+            coords = tuple(float(token) for token in parts)
+        except ValueError:
+            coords = None
+    if coords is None:
+        # DISCLOSED, NOT SILENT, and the same reading the pin cross-check emits
+        # when it has no second view: a cross-check that could not run and a
+        # cross-check that agreed must never print the same nothing.
+        if any(row.label in (IC_WIDTH_LABEL, IC_HEIGHT_LABEL)
+               and row.value != NOT_MEASURED for row in rows):
+            findings.append(Finding(
+                "DIE_SIZE_NOT_CROSS_CHECKED", "INFO", release,
+                f"this release states a die size and `{IC_METRICS_REL}` "
+                f"carries no readable `{IC_DIE_BBOX_KEY}`, so the outline "
+                f"could not be re-derived from a second artefact. NOT "
+                f"DETERMINED, not accepted."))
         return "NOT_DETERMINED"
-    try:
-        x0, y0, x1, y1 = (float(token) for token in parts)
-    except ValueError:
-        return "NOT_DETERMINED"
+    x0, y0, x1, y1 = coords
     expected = {IC_WIDTH_LABEL: abs(x1 - x0), IC_HEIGHT_LABEL: abs(y1 - y0)}
 
     states: List[str] = []

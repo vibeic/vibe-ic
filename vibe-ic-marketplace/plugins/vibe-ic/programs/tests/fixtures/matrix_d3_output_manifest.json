@@ -1235,6 +1235,24 @@
         },
         "phase3/stage4/hardmacro/*.v": {
           "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/documentation_manifest.yaml": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/DELIVERABLES_MANIFEST.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/ERRATA.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/RELEASE_NOTES.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/IP_INTEGRATION_GUIDE.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/IP_DATASHEET.md": {
+          "status": "UNPROVEN"
         }
       },
       "condition_files": [
@@ -1257,6 +1275,18 @@
           "status": "UNPROVEN"
         },
         "reports/phase3/docs/BRIEF_*.html": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ic/*/documentation_manifest.yaml": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ic/*/ERRATA.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ic/*/RELEASE_NOTES.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ic/*/PRELIMINARY_DATASHEET.md": {
           "status": "UNPROVEN"
         }
       },

@@ -561,3 +561,21 @@ def test_the_ip_arm_is_untouched_by_the_ic_arms_new_checks(tmp_path):
         assert detail["artefact_substance"] == "NOT_APPLICABLE"
         assert detail["pin_count_cross_check"] == "AGREES", (
             "the ip arm's own cross-check stopped running")
+
+
+def test_a_die_size_that_cannot_be_cross_checked_is_disclosed_not_accepted(
+        tmp_path):
+    """A cross-check that could not run and one that agreed must never print
+    the same nothing."""
+    project = released(tmp_path)
+    metrics = project / "phase3" / "final" / "metrics.json"
+    doc = json.loads(metrics.read_text(encoding="utf-8"))
+    doc.pop("design__die__bbox")
+    metrics.write_text(json.dumps(doc), encoding="utf-8")
+    generate(project)          # the digest of a shared artefact moved with it
+    result, data = report(project)
+    assert result.returncode == RC_PASS, result.stdout + result.stderr
+    for detail in data["summary"]["releases"]:
+        assert detail["die_size_cross_check"] == "NOT_DETERMINED", detail
+    assert any(f["rule"] == "DIE_SIZE_NOT_CROSS_CHECKED"
+               for f in data["findings"]), data["findings"]

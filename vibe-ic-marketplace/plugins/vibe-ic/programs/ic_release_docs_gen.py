@@ -279,11 +279,16 @@ def contents_fields(audit: _art.ArtefactAudit) -> List[Field]:
     """
     out: List[Field] = []
     for state in audit.classes:
-        if state.present:
-            out.append(measured(state.label, len(state.paths),
-                                state.source()))
-        else:
+        if not state.present:
             out.append(unmeasured(state.label, state.absent_reason))
+            continue
+        # THE FILENAME WHEN THERE IS ONE, the count when there are several. A
+        # bare "1" tells a reader nothing they could look up; the name is what
+        # they will search the delivery for. The same choice the IP arm's
+        # `view_fields` already makes over its four views.
+        value = (Path(state.paths[0]).name if len(state.paths) == 1
+                 else f"{len(state.paths)} files")
+        out.append(measured(state.label, value, state.source()))
     return out
 
 
