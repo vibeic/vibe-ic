@@ -421,6 +421,30 @@ def test_a_release_with_no_manifest_is_refused(tmp_path):
     assert "MANIFEST_ABSENT" in rules_for(data, SUBJECT)
 
 
+def test_a_manifest_that_does_not_parse_is_refused(tmp_path):
+    """An unreadable manifest binds nothing, and must not read as no manifest."""
+    project = released(tmp_path)
+    manifest = docs_dir(project, SUBJECT) / MANIFEST_NAME
+    manifest.write_text(manifest.read_text(encoding="utf-8")
+                        + "\n  - : this is not YAML\n\t\tand neither is this\n",
+                        encoding="utf-8")
+    result, data = report(project)
+    assert result.returncode == RC_FAIL
+    assert "MANIFEST_UNREADABLE" in rules_for(data, SUBJECT)
+    assert verdict_of(data, CONTROL) is True
+
+
+def test_a_pin_count_that_is_not_a_count_is_refused(tmp_path):
+    """A count the gate cannot read is not a count it may skip."""
+    project = released(tmp_path)
+    edit(docs_dir(project, SUBJECT) / "IP_DATASHEET.md",
+         "| Signal pins | 3 |", "| Signal pins | three |")
+    result, data = report(project)
+    assert result.returncode == RC_FAIL
+    assert "PIN_COUNT_UNREADABLE" in rules_for(data, SUBJECT)
+    assert verdict_of(data, CONTROL) is True
+
+
 def test_a_tree_sha_that_is_neither_a_commit_nor_not_measured_is_refused(tmp_path):
     project = released(tmp_path)
     manifest = docs_dir(project, SUBJECT) / MANIFEST_NAME
