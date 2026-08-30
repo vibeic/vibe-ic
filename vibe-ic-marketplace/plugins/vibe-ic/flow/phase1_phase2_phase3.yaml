@@ -321,6 +321,58 @@ stages:
 
   - id: stage4
     name: "Output + Validation"
+    # THE ON-PASS RUNG FOR THE SHIP STEP (the `verification` tier, member 2 of
+    # 8). Stage 2 checks the netlist against the RTL; stage 3 checks the layout
+    # against the netlist and the PDK. Both are INTERNAL comparisons -- each
+    # asks whether an artefact agrees with the artefact one rung below it.
+    # Stage 4 is where the run stops comparing and starts SHIPPING: step 37
+    # streams `phase3/stage4/gds/*.gds` and step 38 hands it to a foundry. The
+    # question that appears exactly here is whether the file in the die slot is
+    # the design the INTENT asked for, and no gate in this flow asks it --
+    # step 37's four blocking clauses (size, substance, port labels,
+    # provenance) are satisfied by any well-formed layout of any design, and
+    # `gds_topcell_name_check` must be TOLD the name it matches and is named in
+    # no gate at all.
+    #
+    # MEASURED, which is why this is a rung and not an opinion:
+    # `ic/u_hawaii_adc/v1.9.86_sky130A` publishes `Verdict: PASS` with
+    # `flow_compliance_check --strict -> Overall PASS, exit 0` while its die
+    # slot holds a layout whose hierarchy root is a sub-block, byte-identical
+    # to that run's own block deliverable. The first party to notice was an
+    # external shuttle's precheck.
+    #
+    # ADVISORY, same reading as stage1: the review reports evidence and exits 1
+    # on a rejection; the executable test it emits into the run is what blocks.
+    on_pass_review:
+      skill: compliance-gate-spot-check
+      fires_on: stage_pass
+      verdict: advisory
+      intent:
+        - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+      intent_deny: ["oracle", "harness", "golden", "reference_output", "solution"]
+      # TWO ARTEFACT PATHS, AND THEY ARE NOT READ THE SAME WAY. The `gds` dir is
+      # the DIE SLOT -- the subject. The `hardmacro` dir holds this run's BLOCK
+      # deliverables and is read only to CORROBORATE a rejection already proven
+      # on the die's own hierarchy root: when the two carry identical bytes, the
+      # finding stops being a naming quibble and becomes "the mask shop was sent
+      # a copy of one block". A run that publishes no hardmacro is judged
+      # identically.
+      artefact:
+        - "phase3/stage4/gds/"
+        - "phase3/analog/hardmacro/"
+      # THE FLOW'S OWN WRAPPER NAME, declared here rather than assumed in the
+      # program. A die's hierarchy root is legitimately either the module the
+      # intent names or this wrapper -- the module `design_one_shot_runner`
+      # auto-emits around a design, and the placeholder the
+      # `canonical_chip_top_sentinel` strategy publishes. Measured over the 10
+      # published cells that carry a stage-4 die: 3 roots equal the intent's
+      # `top_module`, 6 are this wrapper, 1 is neither. Dropping this line would
+      # reject 5 of 10, four of them ordinary flattened runs.
+      canonical_top_wrapper: "chip_top"
+      rejection_requires: [intent, artefact, contradiction, test]
+      emit_test_dir: "reports/phase3/gates/on_pass_review"
+      gate:
+        program_exit_zero: "stage_on_pass_review . --stage stage4 --json reports/phase3/gates/stage4_on_pass_review.json"
 
   # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
   # Optional: only fires when project sets manufacturing.enabled = true
