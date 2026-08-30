@@ -85,6 +85,35 @@ _BASELINE_NAME = "hdl_declaration_scan_baseline.json"
 #: populations were produced.
 _META = re.compile(r"\\[a-zA-Z]|\(\?[^)]*\)|[\[\]()+*?{}^$|]")
 _KW = re.compile(r"\b(?:module|input|output|inout)\b")
+#: A keyword GLUED TO A CHARACTER CLASS THAT CONTAINS A PATH SEPARATOR is
+#: matching a path token, not a declaration. An HDL declaration is
+#: `keyword <whitespace> identifier` and is never followed by `/`.
+#:
+#: MEASURED: `input[\\/]+docs|input_doc|\.(?:txt|pdf|...)` is a FILE-PATH and
+#: EXTENSION matcher. `_META` blanks the brackets before the keyword search, so
+#: it normalises to `input \\/  docs` and the bare `input` matched — the regex
+#: was classified as an HDL declaration scan and its call site was reported for
+#: not stripping comments it can never see. The value it scans is a provenance
+#: SOURCE LABEL (a key of `extraction_evidence`), never HDL.
+#:
+#: THE SEPARATOR MUST BE A LITERAL `/`, not "any backslash in the class". Two
+#: broader rules were written and measured against the whole tree first, and
+#: both were WRONG in the direction that matters — they made the gate blind:
+#:
+#:   keyword followed by whitespace syntax   243 -> 90   lost `\bmodule\s+(\w*)`
+#:   class containing `[\\/]`                243 -> 238  lost `inout[ \t]+`,
+#:                                                       `module[ \t]+`,
+#:                                                       `module[\s_-]?list`
+#:                                                       (the backslash of `\t`
+#:                                                        and `\s` is inside the
+#:                                                        class)
+#:
+#: This rule removes EXACTLY the two path matchers tree-wide and gains nothing:
+#: 243 -> 241, the two being this pattern in `stage_on_pass_review` and in
+#: `phase1_evidence_grounding_check`. Proven by diffing the SETS, never counts —
+#: a smaller population is what both wrong rules produced too.
+_KW_PATH_TOKEN = re.compile(
+    r"\b(?:module|input|output|inout)\b(?=\[[^\]]*/[^\]]*\])")
 #: A name that means "comments are gone".
 _STRIPPER = re.compile(r"strip.*comment|_strip_hdl|decomment|no_comment", re.I)
 #: A regex SOURCE that removes comments by naming a comment INTRODUCER. Stripping
@@ -115,8 +144,14 @@ def _strips_comments_inline(call: ast.Call) -> bool:
 
 
 def declares_hdl(pattern: str) -> bool:
-    """Does this regex SOURCE name an HDL declaration keyword?"""
-    return bool(_KW.search(_META.sub(" ", pattern or "")))
+    """Does this regex SOURCE name an HDL declaration keyword?
+
+    Path-token occurrences are blanked FIRST, on the ORIGINAL pattern: `_META`
+    blanks the class brackets, so after it runs a path separator can no longer
+    be told from whitespace.
+    """
+    p = _KW_PATH_TOKEN.sub(lambda m: " " * len(m.group(0)), pattern or "")
+    return bool(_KW.search(_META.sub(" ", p)))
 
 
 def _pattern_of(node: ast.AST) -> Optional[str]:
