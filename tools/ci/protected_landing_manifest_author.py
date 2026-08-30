@@ -32,10 +32,19 @@ nothing rendered the file for them.
 WHAT A LEGAL MANIFEST LOOKS LIKE, AND WHY THAT IS NOT OBVIOUS BY HAND
 ====================================================================
 There is no "settled" manifest.  A manifest names the LAST transition and keeps
-naming it: after an ACTIVATE the live tuple equals `next`, `_match_state`
-returns `next.id`, and every subsequent landing is STEADY against the same
-unchanged bytes.  Collapsing `current` onto `next` to express "nothing pending"
-is therefore never necessary and always fatal.
+naming it: after an ACTIVATE the live tuple equals `next` on the paths that
+transition moved, `classify_move` reports `next.id` as the base state, and
+every subsequent landing is STEADY against the same unchanged bytes.
+Collapsing `current` onto `next` to express "nothing pending" is therefore
+never necessary and always fatal.
+
+`current` covers all the protected paths because it is OBSERVED at one commit
+and there is no reason to observe a subset -- but only the rows it disagrees
+with `next` on are ever read as an authorisation.  A protected path that
+legitimately changes on trunk under some LATER transition does not falsify
+this manifest and does not have to be re-rendered into it; that is the
+difference between a register that records a move and a photograph of a tree,
+and it is why this file no longer has to be re-authored after every landing.
 
 The two states are produced at DIFFERENT times, which is the part a hand edit
 gets wrong:

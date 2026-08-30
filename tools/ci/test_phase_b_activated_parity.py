@@ -25,27 +25,57 @@ still measured against the object database and the live bytes; nothing is a
 restatement of a production constant, and nothing was dropped to go green.
 
 The state machine, which is what makes "properties" the right altitude
-(`protected_landing_transition.py`, `_match_state` and `build_receipt`):
+(`protected_landing_transition.py`, `classify_move` and `build_receipt`):
 
   * PREPARE lands a NEW manifest and is REFUSED if it moves protected bytes,
     so at a PREPARE commit the live tuple equals `current`.
   * ACTIVATE moves the protected bytes and leaves the manifest untouched, so
-    afterwards the live tuple equals `next` and every later landing is STEADY.
-  * `_match_state` accepts a tuple equal to `current` or equal to `next` and
-    REFUSES anything else.  A per-file mixture is the refusal with teeth.
+    afterwards the live tuple equals `next`.  This repository SQUASH-merges,
+    so a PREPARE+ACTIVATE branch lands as ONE commit that carries the manifest
+    and records `next`; that shape is a first-class recorded state here, not a
+    mixture.
+  * `classify_move` compares the candidate against the BASE's OBSERVED tuple
+    and accepts STEADY (nothing protected moved) or ACTIVATE (exactly the
+    authorised paths, to exactly the authorised bytes).  Anything else is
+    REFUSED, and the refusal NAMES the paths.  That is the refusal with teeth.
+
+WHY THE REFERENCE POINT IS THE BASE AND NOT A PHOTOGRAPH.  This file used to
+ask whether the LIVE tuple was byte-identical to one of the two tuples the
+manifest records for all 52 protected paths.  That question has a stale answer
+by construction: the recorded tuples photograph every protected path at ONE
+commit, so any later landing that moves any protected path -- including one no
+transition ever named -- falsifies BOTH of them and reddens this file until a
+human re-renders the register.  It happened again fourteen landings after the
+register's path set was made self-deriving:
+
+    v1.13.8   tools/gatekeeper-land.sh                   (durable JUnit)
+    v1.13.16  tools/ci/repo_hygiene_gates.sh             (wiring a gate)
+              ci_harness_timeout_ceiling_check.py
+
+three legitimate changes, all staying, none of them a defect, and between them
+enough drift to put three of this file's seven cases red on trunk -- which
+blocks every landing, including the one that would repair it.  A re-author
+somebody has to remember to run is the same defect wearing a smaller hat.  So
+the byte-state half stops being a photograph: the state a path moved FROM is
+now OBSERVED at the base, the manifest records only the move it authorises,
+and nothing in the register goes stale when an unrelated protected file
+legitimately changes.  What the manifest still has to record -- the exact
+future bytes of the paths a transition authorises -- is the half that cannot
+be observed, because at PREPARE time those bytes do not exist yet.
 
 Both states are real states of main, measured in this history: at 15e4c463a6
 ("PREPARE: authorise the xdist per-worker progress protocol") the live tuple
 equals `current` exactly; at 74ac9fa788, after 2b93d8723f ("ACTIVATE"), it
 equals `next` exactly.  A test that demanded `next` specifically would be red
 on main for the whole PREPARE..ACTIVATE window -- the identical failure mode,
-rearmed.  So the assertion here is the exact XOR: the live tuple equals ONE
-recorded state on EVERY protected path -- mode, git blob oid, sha256 and byte
-length -- and the paths where `current` and `next` disagree are exactly the
-paths the transition moves.  Nothing outside that set may differ, and the
-moved paths may not straddle the two states.
+rearmed.  So the assertion on the AUTHORISED paths is still the exact XOR --
+mode, git blob oid, sha256 and byte length -- and they may not straddle the
+two states.  The paths the transition does NOT move are held to the two
+questions that have non-stale answers: their live bytes are the bytes this
+commit records (nothing was edited into the tree behind git's back), and the
+candidate does not move them at all relative to its base.
 
-The three invariants, as properties:
+The four invariants, as properties:
 
   1. The manifest is well formed and internally consistent: the exact schema
      the verifier parses, canonical distinct state ids, a sorted unique
@@ -58,7 +88,14 @@ The three invariants, as properties:
      object database (and its parent too, since PREPARE may not move bytes).
      The anchor commit is DISCOVERED by matching the live manifest bytes
      against the manifest's own history, not pinned as a literal sha.
-  3. The live tree is exactly one recorded state, per path, with no mixture.
+  3. The live tree is exactly one recorded state of the AUTHORISED move, per
+     path, with no mixture -- and on every protected path, authorised or not,
+     the live bytes are the bytes this commit records.
+  4. Against the BASE this tree lands on, the only protected paths that move
+     are the ones the manifest authorises, and they move to exactly the bytes
+     it records.  This is `classify_move`, run on the live tree; it is the
+     clause that refuses an undeclared change to a protected file, and it
+     names the file.
 
 `transition_id == next.id` is deliberately NOT asserted: measured across all
 four manifest versions in this history, it held only for `semantic-landing-v1`
@@ -74,7 +111,9 @@ says UNVERIFIED, which is not the same as verified.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import os
 import re
 import stat
 import subprocess
@@ -266,6 +305,98 @@ def _moved(manifest: dict) -> set[str]:
     return {path for path in nxt if current[path] != nxt[path]}
 
 
+@lru_cache(maxsize=1)
+def _verifier():
+    """The landing verifier itself, loaded by exact path.
+
+    NO SECOND DEFINITION.  The question "does this tree move a protected path
+    the base did not authorise" is answered here by running the SAME function
+    the landing runs (`classify_move`), not by a restatement of it that can
+    drift from it.  Loaded by path rather than by name so a same-named module
+    on `sys.path` cannot answer for it.
+    """
+    target = _ROOT / "tools" / "ci" / "protected_landing_transition.py"
+    spec = importlib.util.spec_from_file_location(
+        "_parity_protected_landing_transition", target)
+    assert spec is not None and spec.loader is not None, target
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _row(path: str, observed: tuple[str, str, str, int]) -> dict:
+    """One tuple in the manifest's own row shape, for `classify_move`."""
+    mode, blob_oid, sha256, size = observed
+    return {"path": path, "mode": mode, "blob_oid": blob_oid,
+            "sha256": sha256, "size": size}
+
+
+def _rows(observed: dict[str, tuple[str, str, str, int]]) -> list[dict]:
+    return [_row(path, value) for path, value in sorted(observed.items())]
+
+
+@lru_cache(maxsize=1)
+def _base_commit() -> str | None:
+    """The commit this tree lands ON TOP OF, or None if it cannot be named.
+
+    `tools/gatekeeper-land.sh` line 68 spells the base as
+    `${GATEKEEPER_BASE:-origin/main}`, so that is asked FIRST and by the same
+    name; the merge-base with it is the commit the candidate forked from.  On
+    trunk itself the merge-base is HEAD, which makes the comparison STEADY --
+    correct, and the reason this file stops going red behind an ordinary
+    landing.
+    """
+    if not _history_readable():
+        return None
+    for ref in (os.environ.get("GATEKEEPER_BASE") or "", "origin/main", "main"):
+        if not ref:
+            continue
+        if _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")[0] != 0:
+            continue
+        code, out = _git("merge-base", "HEAD", ref)
+        if code == 0 and out.strip():
+            return out.decode("ascii").strip()
+    return None
+
+
+@lru_cache(maxsize=1)
+def _predecessor_of_the_anchor() -> str | None:
+    """The commit whose tree `current` must record: the state moved FROM.
+
+    On trunk, where the transition has already landed as ONE squashed commit,
+    that is the anchor's first parent.  On the BRANCH that authors it, the
+    anchor is a branch commit and its parent is whatever the author happened
+    to commit before it -- an intermediate state that records neither tuple and
+    that a squash-merge will erase.  There the state moved FROM is the BASE the
+    branch forked at, which is exactly the commit
+    `protected_landing_manifest_author.py --commit` observes.
+
+    Which of the two is decided by measurement, not by a flag: an anchor the
+    base can reach has landed; one it cannot is still on a branch.
+    """
+    author = _authoring_commit()
+    if author is None:
+        return None
+    base = _base_commit()
+    if base is not None and _git(
+            "merge-base", "--is-ancestor", author, base)[0] != 0:
+        return base
+    if _git("rev-parse", "--verify", "--quiet", f"{author}^{{commit}}")[0] != 0:
+        return None
+    return f"{author}^"
+
+
+@lru_cache(maxsize=1)
+def _head_tuple() -> dict[str, tuple[str, str, str, int]] | None:
+    """What HEAD's tree records for the protected paths."""
+    if not _history_readable():
+        return None
+    manifest = json.loads((_ROOT / _MANIFEST).read_text(encoding="utf-8"))
+    if _git("rev-parse", "--verify", "--quiet", "HEAD^{commit}")[0] != 0:
+        return None
+    return _tree_tuple("HEAD", _paths(manifest))
+
+
 @pytest.fixture(scope="module")
 def manifest() -> dict:
     return json.loads((_ROOT / _MANIFEST).read_text(encoding="utf-8"))
@@ -381,32 +512,82 @@ def test_the_current_tuple_is_the_tuple_recorded_where_the_manifest_was_authored
             "its two states exactly; it records a mixture")
         return
 
-    drift = sorted(path for path in paths if observed[path] != current[path])
-    assert drift == [], (
-        f"{author[:12]} authored this manifest over an existing one, which the "
-        "landing verifier only accepts as a PREPARE, and a PREPARE may not "
-        "move protected bytes; `current` must therefore be the tuple that "
-        f"commit records, and these paths disagree: {drift}")
+    predecessor = _predecessor_of_the_anchor()
+    if predecessor is None:
+        pytest.fail(
+            f"{author[:12]} carries the live manifest but the state it moved "
+            "FROM is not in this checkout, so `current` cannot be checked "
+            "against anything")
+    _assert_authoring_shape(
+        author, paths, observed, _tree_tuple(predecessor, paths),
+        current, _state_map(manifest, "next"))
 
-    parent_observed = _tree_tuple(f"{author}^", paths)
+
+def _assert_authoring_shape(author, paths, observed, parent_observed,
+                            current, nxt) -> None:
+    """The two recorded shapes, and the refusal of everything else.
+
+    Its own function so a FORGED tuple can be pushed through exactly the code
+    the live manifest goes through: a refusal only ever exercised by the one
+    input that passes is a refusal nobody has checked.
+    `test_a_tuple_no_commit_records_is_still_refused` is that exercise.
+
+    THE PARENT IS THE ANCHOR OF `current`, IN BOTH SHAPES, AND IT IS NOT
+    RELAXED.  Whatever the authoring commit did, the state it moved FROM has
+    to be one this repository actually held, on the commit immediately before
+    it.  This is the clause that makes `current` a record instead of a claim.
+
+    THE AUTHORING COMMIT IS THEN EITHER SHAPE, AND EXACTLY ONE OF THEM.  A
+    PREPARE records `current` -- it declares the move without making it.  A
+    SQUASHED PREPARE+ACTIVATE records `next` -- it declares the move and makes
+    it in one commit, which is what a squash-merge of a two-commit branch
+    produces and is how this repository lands.  MEASURED at v1.13.21, anchor
+    66fa718ae3 (`git rev-list --parents -n 1` returns ONE parent, so a squash,
+    not a merge): the anchor differs from `next` on 0 of 52 paths and its
+    parent differs from `current` on 0 of 52.  Both endpoints are recorded, on
+    adjacent commits.  The check refused it anyway, because it assumed an
+    authoring commit with a predecessor manifest could only ever be a PREPARE
+    -- so a correctly recorded ACTIVATE read as an unrecorded claim.  The
+    diagnosis and the shape of this limb are vibe-ic#1862's; it is carried
+    here because this file is rewritten around it and the two cannot land
+    side by side.
+    """
     assert sorted(parent_observed) == sorted(paths), (
-        f"the PREPARE at {author[:12]} added protected paths, which it may not: "
-        f"{sorted(set(paths) - set(parent_observed))}")
+        f"the transition at {author[:12]} added protected paths, which it may "
+        f"not: {sorted(set(paths) - set(parent_observed))}")
     parent_drift = sorted(
         path for path in paths if parent_observed[path] != current[path])
     assert parent_drift == [], (
-        f"the PREPARE at {author[:12]} moved protected bytes together with the "
-        f"manifest; these differ from `current` at its parent: {parent_drift}")
+        f"the transition at {author[:12]} does not move FROM `current`; these "
+        f"differ at its parent: {parent_drift}")
+
+    if observed == current:
+        return                                            # PREPARE
+    activate_drift = sorted(path for path in paths if observed[path] != nxt[path])
+    assert activate_drift == [], (
+        f"{author[:12]} carries the manifest but records NEITHER state: it is "
+        "not `current` (a PREPARE) and it is not `next` (a squashed "
+        f"PREPARE+ACTIVATE). These paths differ from `next`: {activate_drift}")
 
 
 def test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture(manifest):
-    """Invariant 3. `_match_state`, restated on the live bytes.
+    """Invariant 3. The authorised move, restated on the live bytes.
 
-    Equal to `current` means PREPAREd and not yet activated; equal to `next`
-    means activated. Anything else -- one path drifted, one path left behind,
-    an activation applied by hand to half the tuple -- is the mixture the
-    landing verifier refuses, and it is refused here on every protected path by
+    On the paths the transition AUTHORISES, equal to `current` means PREPAREd
+    and not yet activated; equal to `next` means activated.  Anything else --
+    one path left behind, an activation applied by hand to half the tuple --
+    is the mixture the landing verifier refuses, and it is refused here by
     mode, git blob oid, sha256 and byte length.
+
+    On EVERY protected path, authorised or not, the live bytes must be the
+    bytes THIS COMMIT records.  That is the half of the old whole-tuple
+    comparison which has a non-stale answer, and it is the one with the teeth
+    at run time: the register exists so that the runtime deciding a landing is
+    the runtime somebody measured, and a file edited into the checkout behind
+    git's back is exactly the substitution it has to refuse.  The other half --
+    "has any protected path moved since the last transition" -- is answered
+    against the BASE by `test_the_live_tree_moves_no_protected_path_the_base_
+    did_not_authorise`, because a photograph of one commit answers it stale.
     """
     paths = _paths(manifest)
     for path in paths:
@@ -414,18 +595,64 @@ def test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture(manifes
             f"{path} is named by the manifest but absent from the live tree")
     observed = {path: _observed(path) for path in paths}
 
+    head = _head_tuple()
+    if head is not None:
+        unlanded = sorted(path for path in paths if observed[path] != head[path])
+        assert unlanded == [], (
+            "these protected paths do not hold the bytes this commit records, "
+            "so the runtime in this tree is not the runtime any commit "
+            f"measured: {unlanded}")
+
+    moved = sorted(_moved(manifest))
     matched: list[str] = []
     drift: dict[str, list[str]] = {}
     for side in ("current", "next"):
         recorded = _state_map(manifest, side)
-        differing = sorted(path for path in paths if observed[path] != recorded[path])
+        differing = sorted(path for path in moved if observed[path] != recorded[path])
         drift[manifest[side]["id"]] = differing
         if not differing:
             matched.append(manifest[side]["id"])
 
     assert len(matched) == 1, (
-        "the live protected tuple is not exactly one recorded state of "
-        f"`{manifest['transition_id']}`; paths differing from each state: {drift}")
+        "the authorised paths of `" + str(manifest["transition_id"]) + "` are "
+        "not exactly one recorded state; paths differing from each state: "
+        f"{drift}")
+
+
+def test_the_live_tree_moves_no_protected_path_the_base_did_not_authorise(
+        manifest):
+    """Invariant 4, and the clause with the teeth: `classify_move` on this tree.
+
+    The undeclared-change refusal used to be spelled here as "the live bytes
+    differ from both recorded states", which reads the answer off a photograph
+    of one commit and therefore goes stale on every unrelated protected-file
+    landing.  The same question against the BASE this tree lands on does not:
+    the base is OBSERVED, so the only thing the manifest still has to record
+    is the move it authorises.
+
+    On trunk the merge-base with `origin/main` is HEAD, so this is STEADY and
+    green -- which is the point; an ordinary landing leaves no residue.  On a
+    branch it is the fork point, so a protected path this branch moves without
+    a transition naming it is REFUSED here, by name, before it can land.
+
+    `classify_move` is imported from the verifier rather than restated, so
+    there is one definition of what an authorised move is.
+    """
+    base = _base_commit()
+    if base is None:
+        pytest.skip(_UNVERIFIED.format(
+            what="the base commit this tree lands on ($GATEKEEPER_BASE, "
+                 "origin/main or main)"))
+    paths = _paths(manifest)
+    verifier = _verifier()
+    base_rows = _rows(_tree_tuple(base, paths))
+    live_rows = _rows({path: _observed(path) for path in paths})
+    operation, base_state_id, candidate_state_id = verifier.classify_move(
+        base_rows, live_rows, manifest)
+    assert operation in {"STEADY", "ACTIVATE"}, operation
+    assert base_state_id in {manifest["current"]["id"], manifest["next"]["id"]}
+    assert candidate_state_id in {
+        manifest["current"]["id"], manifest["next"]["id"]}
 
 
 def test_the_move_is_exactly_the_paths_the_two_states_disagree_on(manifest):
@@ -448,13 +675,15 @@ def test_the_move_is_exactly_the_paths_the_two_states_disagree_on(manifest):
     for path in moved:
         assert role_map.get(path), f"{path} moves but carries no role"
 
+    head = _head_tuple()
     for path in paths:
         if path in set(moved):
             continue
         assert current[path] == nxt[path], path
-        assert _observed(path) == current[path], (
-            f"{path} is outside the authorised move but its live bytes differ "
-            "from both recorded states")
+        if head is not None:
+            assert _observed(path) == head[path], (
+                f"{path} is outside the authorised move and its live bytes are "
+                "not the bytes this commit records")
 
     sides = set()
     for path in moved:
@@ -543,3 +772,156 @@ def test_the_activated_runtime_no_longer_uses_a_wall_clock_pytest_timeout():
     assert "--timeout" not in fn
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in fn
     assert "trusted_pytest_entry.py" in fn
+
+
+# --------------------------------------------------------------------------
+# THE PAIRED REFUSALS.
+#
+# Every clause above is satisfied by the tree it runs in, so on its own each
+# one is a check nobody has seen say no. These push CONSTRUCTED inputs through
+# the SAME code -- `_assert_authoring_shape` and the verifier's own
+# `classify_move` -- and require the refusal, and require it to NAME the file.
+# A register that stops refusing is not a register, and it is worse than a
+# stale one, because the staleness was at least visible.
+# --------------------------------------------------------------------------
+
+def _forge(row: dict) -> dict:
+    """The same path, in a state no commit records."""
+    return {**row,
+            "blob_oid": "0" * len(row["blob_oid"]),
+            "sha256": "f" * len(row["sha256"]),
+            "size": row["size"] + 1}
+
+
+def _live_rows(manifest: dict) -> list[dict]:
+    return _rows({path: _observed(path) for path in _paths(manifest)})
+
+
+def test_a_tuple_no_commit_records_is_still_refused(manifest):
+    """Accepting the squashed shape must not accept a tuple nobody recorded.
+
+    Runs the LIVE anchor and the LIVE parent through `_assert_authoring_shape`
+    with one path of `current` -- and then of `next` -- forged into a state no
+    commit holds. If this ever passes, invariant 2 has stopped checking and
+    every clause in it is decoration.
+    """
+    if not _manifest_history():
+        pytest.skip(_UNVERIFIED.format(what="the manifest's commit history"))
+    author = _authoring_commit()
+    if author is None:
+        pytest.skip(_UNVERIFIED.format(what="the authoring commit"))
+    paths = _paths(manifest)
+    predecessor = _predecessor_of_the_anchor()
+    if predecessor is None:
+        pytest.skip(_UNVERIFIED.format(what="the state the anchor moved FROM"))
+    observed = _tree_tuple(author, paths)
+    parent_observed = _tree_tuple(predecessor, paths)
+    current = _state_map(manifest, "current")
+    nxt = _state_map(manifest, "next")
+
+    # THE CONTROL. The live tuple is accepted, or the negatives below prove
+    # nothing -- a refusal that fires on everything is not discriminating.
+    _assert_authoring_shape(author, paths, observed, parent_observed,
+                            current, nxt)
+
+    for victim in (sorted(current)[0], sorted(current)[-1]):
+        forged = dict(current)
+        mode, oid, sha256, size = forged[victim]
+        forged[victim] = (mode, "0" * len(oid), "f" * len(sha256), size + 1)
+        with pytest.raises(AssertionError) as caught:
+            _assert_authoring_shape(author, paths, observed, parent_observed,
+                                    forged, nxt)
+        assert victim in str(caught.value), (victim, str(caught.value)[:400])
+
+    if observed != current:                      # the squashed ACTIVATE limb
+        victim = sorted(nxt)[0]
+        forged_next = dict(nxt)
+        mode, oid, sha256, size = forged_next[victim]
+        forged_next[victim] = (mode, "0" * len(oid), "f" * len(sha256), size + 1)
+        with pytest.raises(AssertionError) as caught:
+            _assert_authoring_shape(author, paths, observed, parent_observed,
+                                    current, forged_next)
+        assert victim in str(caught.value), str(caught.value)[:400]
+
+
+def test_a_protected_path_the_manifest_authorises_no_move_of_is_refused(
+        manifest):
+    """The undeclared change, CONSTRUCTED -- one per role, named in the refusal.
+
+    This is the case the whole register exists for and the one an "accept any
+    tree" repair would silently lose: a protected file changed by a candidate
+    that no transition names. The base here is the live tree, so the control
+    is STEADY and the only difference between the arms is the one mutated row.
+    """
+    verifier = _verifier()
+    live = _live_rows(manifest)
+    moved = _moved(manifest)
+    roles = {row["path"]: frozenset(row["roles"]) for row in manifest["paths"]}
+
+    # THE CONTROL, in both arms: an untouched tree is STEADY, not a refusal.
+    operation, _base_id, _cand_id = verifier.classify_move(live, live, manifest)
+    assert operation == "STEADY", operation
+
+    victims = []
+    for role in sorted(_ROLES):
+        for row in live:
+            if row["path"] not in moved and role in roles[row["path"]]:
+                victims.append(row["path"])
+                break
+    assert len(victims) == len(_ROLES), (
+        f"no unauthorised path to mutate for every role: {victims}")
+
+    for victim in victims:
+        candidate = [_forge(row) if row["path"] == victim else row
+                     for row in live]
+        with pytest.raises(verifier.Refusal) as caught:
+            verifier.classify_move(live, candidate, manifest)
+        assert victim in str(caught.value), str(caught.value)[:400]
+        assert "authorises no move" in str(caught.value), str(caught.value)[:400]
+
+
+def test_an_activation_to_bytes_next_does_not_record_is_refused(manifest):
+    """The authorised path, moved to the wrong bytes, and moved back.
+
+    `classify_move` accepts an ACTIVATE only when the candidate installs
+    EXACTLY the bytes `next` records, and only while the base still stands at
+    `current`. Both refusals are constructed here, against a base built to
+    stand at `current` on the authorised paths -- so the ACTIVATE control
+    below is a real acceptance and not a vacuous one.
+    """
+    verifier = _verifier()
+    live = _live_rows(manifest)
+    current = {row["path"]: row for row in manifest["current"]["files"]}
+    nxt = {row["path"]: row for row in manifest["next"]["files"]}
+    moved = sorted(_moved(manifest))
+    assert moved, "the manifest authorises a transition that moves nothing"
+
+    prepared = [dict(current[row["path"]]) if row["path"] in set(moved) else row
+                for row in live]
+
+    # THE CONTROL: from `current`, installing exactly `next` IS an ACTIVATE.
+    activated = [dict(nxt[row["path"]]) if row["path"] in set(moved) else row
+                 for row in live]
+    operation, base_id, cand_id = verifier.classify_move(
+        prepared, activated, manifest)
+    assert operation == "ACTIVATE", operation
+    assert base_id == manifest["current"]["id"]
+    assert cand_id == manifest["next"]["id"]
+
+    # Bytes `next` does not record, on an authorised path.
+    for victim in moved:
+        wrong = [_forge(row) if row["path"] == victim else row
+                 for row in prepared]
+        with pytest.raises(verifier.Refusal) as caught:
+            verifier.classify_move(prepared, wrong, manifest)
+        assert victim in str(caught.value), str(caught.value)[:400]
+        assert "neither authorised atomic state" in str(caught.value)
+
+    # And a spent transition may not be re-run: from `next`, back to `current`.
+    for victim in moved:
+        rolled = [dict(current[row["path"]]) if row["path"] == victim else row
+                  for row in activated]
+        with pytest.raises(verifier.Refusal) as caught:
+            verifier.classify_move(activated, rolled, manifest)
+        assert victim in str(caught.value), str(caught.value)[:400]
+        assert "rollback or unprepared move" in str(caught.value)
