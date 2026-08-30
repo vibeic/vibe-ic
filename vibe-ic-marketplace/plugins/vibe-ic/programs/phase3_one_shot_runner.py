@@ -11974,7 +11974,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         else:
             _atail = ((_acp.stdout or "") + (_acp.stderr or "")).strip()[-600:]
             if _acp.returncode == 1:
-                # ── THE AREA LOOP, step 9 -> 1 ──────────────────────────────
+                # ── THE AREA LOOP, step 9 -> 9 ──────────────────────────────
                 #
                 # The flow has declared this edge since the closed-loop census
                 # existed, and NOTHING re-entered: `closed_loop_executable_

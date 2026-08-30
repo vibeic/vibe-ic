@@ -464,6 +464,19 @@ def declared_edges(root: Path) -> List[str]:
     return out
 
 
+def registered_entrypoints(programs: Path) -> Dict[str, List[str]]:
+    """The sibling's HAND-MAINTAINED actuator register, step -> entrypoint(s),
+    read from the sibling rather than re-typed here. Re-typing it would make
+    this file a second copy of the same stale list, which is the defect."""
+    sys.path.insert(0, str(programs))
+    try:
+        import closed_loop_executable_coverage_check as _clec  # noqa: PLC0415
+        return {k: list(v)
+                for k, v in sorted(_clec.STEP_EXECUTION_ENTRYPOINTS.items())}
+    except Exception:                                        # noqa: BLE001
+        return {}
+
+
 def registered_steps(programs: Path) -> List[str]:
     """The sibling's HAND-MAINTAINED actuator register, read from the sibling
     rather than re-typed here. Re-typing it would make this file a second copy
@@ -548,17 +561,32 @@ def main(argv=None) -> int:
         print(f"  [REGRESSION] {r}")
 
     n_dec = len(rep["declared_edges"])
-    n_reg = len(rep["hand_registered_steps"])
+    reg = registered_entrypoints(programs)
+    # THE OVERLAP IS MEASURED, NOT ASSERTED. An earlier version of this block
+    # stated the disjointness as a sentence, which is how a finding stops being
+    # a finding: the day a registration is backed by a real actuator the line
+    # would still have read "shares no member". It is now a join between the
+    # register's entrypoints and the callees this scan actually found.
+    seen_callees = {row["callee"] for row in sites} | {row["fn"] for row in sites}
+    def _step_order(k: str):
+        # "9" before "32": the ids are step numbers, and a lexicographic list
+        # reads as a different flow than the one the reader is holding.
+        return (0, int(k)) if k.isdigit() else (1, 0, k)
+    overlap = sorted((k for k, v in reg.items()
+                      if any(e in seen_callees for e in v)), key=_step_order)
+    rep["register_overlap_steps"] = overlap
     print(f"closed_loop_executed_reentry_census: {len(sites)} executed "
           f"re-entry site(s) across {len(runners)} runner(s); "
           f"ACTUATING={counts[ACTUATING]}, "
           f"SELF_CHECKED_ONLY={counts[SELF_CHECKED_ONLY]}, "
           f"INERT={counts[INERT]}.")
-    print(f"  DISJOINTNESS: the flow DECLARES {n_dec} closed_loop edge(s); the "
-          f"hand-maintained actuator register covers {n_reg} step(s) "
-          f"({', '.join(rep['hand_registered_steps']) or 'none'}). The census "
-          f"above is DERIVED from the runners and shares no member with the "
-          f"declaration set. A count of declarations is not a count of loops.")
+    print(f"  REGISTER OVERLAP: the flow DECLARES {n_dec} closed_loop edge(s); "
+          f"the hand-maintained actuator register names {len(reg)} step(s) "
+          f"({', '.join(sorted(reg, key=_step_order)) or 'none'}), of which "
+          f"{len(overlap)} ({', '.join(overlap) or 'none'}) name an entrypoint "
+          f"this scan found re-entering. The population above is DERIVED from "
+          f"the runners; a count of declarations is not a count of loops, and "
+          f"this line is the join that says how far apart they are.")
     return 1 if (counts[INERT] or regs) else 0
 
 
