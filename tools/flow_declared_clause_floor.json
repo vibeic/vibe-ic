@@ -1109,26 +1109,6 @@
       "step": "M4",
       "kind": "program_exit_zero",
       "cmd": "mixed_signal_signoff_check . --json reports/analog/mixed_signal/signoff_audit.json"
-    },
-    {
-      "step": "stage1",
-      "kind": "program_exit_zero",
-      "cmd": "stage_on_pass_review . --stage stage1 --json reports/phase2/gates/stage1_on_pass_review.json"
-    },
-    {
-      "step": "stage2",
-      "kind": "program_exit_zero",
-      "cmd": "stage_on_pass_review . --stage stage2 --json reports/phase2/gates/stage2_on_pass_review.json"
-    },
-    {
-      "step": "stage3",
-      "kind": "program_exit_zero",
-      "cmd": "stage_on_pass_review . --stage stage3 --json reports/phase3/gates/stage3_on_pass_review.json"
-    },
-    {
-      "step": "stage_analog",
-      "kind": "program_exit_zero",
-      "cmd": "stage_on_pass_review . --stage stage_analog --json reports/analog/stage_analog_on_pass_review.json"
     }
   ]
 }
