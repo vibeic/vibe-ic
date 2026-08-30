@@ -192,6 +192,81 @@ class _FakeProc:
         self.stderr = ""
 
 
+def test_marked_yosys_uses_container_tree_progress_and_attempt_budget(
+        monkeypatch):
+    """A quiet host docker client must not hide a busy in-container Yosys.
+
+    This is the exact RTLLM div_16bit/pe failure shape: the old `_progress_run`
+    path watched only `docker exec`, declared it still, and returned while the
+    7195-second container timeout + Yosys kept running.  A marked long command
+    must enter the shared docker supervisor, with the Yosys script as its CPU
+    marker and the producer attempt budget as its ceiling.
+    """
+    import _docker_watchdog as dw
+
+    seen = {}
+
+    def fake_supervised(container, cmd, marker, **kw):
+        seen.update(container=container, cmd=cmd, marker=marker, **kw)
+        return 0, "Yosys 0.68\n", ""
+
+    monkeypatch.setattr(dw, "run_docker_supervised", fake_supervised)
+    monkeypatch.setattr(
+        lec_run._pr, "run",
+        lambda *a, **k: pytest.fail(
+            "marked long LEC must not use the host-only progress monitor"))
+
+    got = lec_run._docker(
+        "vibeic-eda", "yosys -s /work/equiv.ys", timeout=73,
+        marker="/work/equiv.ys")
+
+    assert got.returncode == 0
+    assert got.stdout == "Yosys 0.68\n"
+    assert seen["container"] == "vibeic-eda"
+    assert seen["marker"] == "/work/equiv.ys"
+    assert seen["hard_ceiling_s"] == 73.0
+    assert seen["docker_exec_raw"] is lec_run._docker_exec_raw
+
+
+def test_run_yosys_equiv_binds_exact_script_as_progress_marker(monkeypatch):
+    seen = {}
+
+    def fake_docker(container, cmd, timeout=120, marker=None):
+        seen.update(container=container, cmd=cmd, timeout=timeout,
+                    marker=marker)
+        return _FakeProc(0, PASS_OUTPUT)
+
+    monkeypatch.setattr(lec_run, "_docker", fake_docker)
+    launched, out = lec_run.run_yosys_equiv(
+        "vibeic-eda", "/work/hash-bound-equiv.ys", timeout=61)
+
+    assert launched is True
+    assert out == PASS_OUTPUT.rstrip("\n")
+    assert seen["marker"] == "/work/hash-bound-equiv.ys"
+    assert seen["timeout"] == 61
+
+
+def test_progress_stall_is_disclosed_no_verdict_and_blocks_retry(monkeypatch):
+    """A watchdog stop is a host/tool condition, never non-equivalence."""
+    monkeypatch.setattr(
+        lec_run, "_docker",
+        lambda *a, **k: _FakeProc(
+            lec_run._pr.RC_STALLED,
+            "Yosys 0.68\nFound 8 unproven $equiv cells (8 groups) in equiv:\n"))
+
+    launched, out = lec_run.run_yosys_equiv(
+        "vibeic-eda", "/work/stalled.ys", timeout=7200)
+
+    assert launched is True
+    assert lec_run._STALL_MARKER in out
+    parsed = lec_run.parse_equiv_output(out)
+    assert parsed["verdict"] == "INCONCLUSIVE"
+    assert parsed["equivalent"] is False
+    blocked, evidence = lec_run.budget_kill_blocks_frontend_retry(out)
+    assert blocked is True
+    assert "no-forward-progress watchdog" in evidence
+
+
 # The exact shape the opentitan_aes run produced: only the INITIAL $equiv total
 # banner leaked (equiv_simple was still churning when SIGKILL landed) — no
 # `N proven / M unproven` completion line, no counterexample.
@@ -1561,14 +1636,13 @@ def test_no_yosys_attempt_may_be_handed_a_fresh_full_budget():
         "each retry site must refuse to launch on a spent budget")
 
 
-def test_the_retry_decision_still_guards_the_budget_kill_class():
-    """RATCHET. Fails if the budget-kill guard is removed from the retry
-    decision, letting a timeout select the gold-read retry again."""
+def test_the_retry_decision_still_guards_the_execution_stop_class():
+    """RATCHET. A timeout/stall must not select the gold-read retry again."""
     src = SCRIPT.read_text(encoding="utf-8")
     fn = src[src.index("def should_retry_gold_with_slang("):]
     fn = fn[:fn.index("\ndef ")]
-    assert "_TIMEOUT_RE.search(gold_log)" in fn, (
-        "a wall-budget kill must not select the gold-read retry")
+    assert "budget_kill_blocks_frontend_retry(gold_log)" in fn, (
+        "a producer-owned execution stop must not select the gold-read retry")
 
 
 # ---------------------------------------------------------------------------
