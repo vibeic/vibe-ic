@@ -113,6 +113,9 @@ import _path_layout as _pl
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
 from l_doc_consumer_contract import project_relative_source
+from _prose_polarity import is_denied as _prose_is_denied
+from _prose_polarity import sentence_scope as _prose_sentence_scope
+from _specrtl_common import strip_comments as _strip_hdl_comments
 # THE L-document write chokepoint. Every path in this file that writes a
 # `generated_docs/*.json` goes through `_stamp.dump`, which records the
 # plugin release and the L-doc taxonomy that produced the file. Before this
@@ -43768,9 +43771,9 @@ def _is_vendor_tool_doc(filename: str) -> bool:
 # (caller falls through to L1.ic_name fallback then to the canonical
 # `chip_top` sentinel).
 #
-# Priority order:
-#   1. Fenced Verilog code block containing `module <name>` (highest
-#      confidence — the doc author transcribed actual RTL).
+# Priority order after an explicit implementation-target request and a real
+# Verilog declaration have been checked:
+#   1. Fenced Verilog code block containing `module <name>`.
 #   2. README/AsciiDoc/RST line matching "Top-level entity/module: <name>"
 #      (high confidence — explicit naming intent).
 #   3. AsciiDoc/RST section heading `== <name>` followed by "module"/"top"
@@ -43844,14 +43847,48 @@ _RE_DOC_TOP_MODULE_NAME_LABEL = re.compile(
 _RE_DOC_TOP_MODULE_INLINE_BACKTICK = re.compile(
     r"(?i)\bmodule\s+[`'\"](?P<name>[A-Za-z_][A-Za-z0-9_]{1,39})\s*[`'\"]"
 )
+# #1900 — public benchmark prompts often state the required interface using an
+# imperative request rather than a ``Module Name:`` label, for example:
+#
+#     I would like you to implement a module named TopModule ...
+#
+# This is explicit naming intent, but deliberately anchor the pattern at the
+# start of a line and require either an imperative verb or a direct request
+# preface.  A narrative sentence such as "this guide explains how to implement
+# a module named ..." must not silently become the design top.
+_RE_DOC_TOP_MODULE_DESIGN_REQUEST_NAMED = re.compile(
+    r"(?im)(?:^[ \t]*|(?<=[.!?;])[ \t]+)(?:[-*+]\s+)?"
+    r"(?:"
+    r"(?:please|kindly)\s+"
+    r"|i\s+(?:would\s+like|want|need)\s+you\s+to\s+"
+    r"|(?:can|could|would)\s+you\s+(?:please\s+)?"
+    r"|your\s+task\s+is\s+to\s+"
+    r")?"
+    r"(?:implement|design|create|write|build|provide|define)\s+"
+    r"(?:(?:a|an|the)\s+)?"
+    r"(?:(?:verilog|systemverilog|rtl)\s+)?"
+    r"(?:(?:top(?:[-_\s]+level)?)\s+)?module\s+"
+    r"(?:named|called)\s+"
+    r"[`'\"]{0,2}(?P<name>[A-Za-z_][A-Za-z0-9_]{1,39})[`'\"]{0,2}\b"
+)
+# A denial can name the alternative being excluded rather than retract the
+# requested target: ``implement TopModule, not LegacyTop``.  Blank only that
+# narrow, identifier-bearing contrast before consulting the shared polarity
+# vocabulary.  A vague suffix such as ``not required`` is deliberately not
+# blanked because ``required`` is not a valid explicit module identifier.
+_RE_DOC_TOP_MODULE_CONTRASTIVE_EXCLUSION = re.compile(
+    r"(?i)(?:,\s*|\bbut\s+)not\s+"
+    r"[`'\"]{0,2}(?P<name>[A-Za-z_][A-Za-z0-9_]{1,39})[`'\"]{0,2}\b"
+)
 
 
 def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]:
-    """The module identifier named by an explicit "Module Name:" label or an
-    inline ``module `<name>` `` prose reference — the two canonical spec-prose
-    naming forms (ORGANIC-20260705). Returns the most-frequent valid candidate
-    (Module-Name label wins over inline reference on a tie), or None.
-    Chip-AGNOSTIC."""
+    """Return a module identifier stated by an explicit prose convention.
+
+    Recognizes a formal ``Module Name:`` label or an inline
+    ``module `<name>` `` reference. Returns the most-frequent valid candidate
+    from the strongest convention, or None. Chip-AGNOSTIC.
+    """
     if not extracted:
         return None
     label_counts: Dict[str, int] = {}
@@ -43867,11 +43904,54 @@ def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]
             nm = (m.group("name") or "").strip()
             if nm and _is_valid_explicit_module_name_candidate(nm):
                 inline_counts[nm] = inline_counts.get(nm, 0) + 1
-    # The explicit "Module Name:" label is the stronger intent; prefer it.
+    # A formal label is stronger than a passing inline module reference.
     for counts in (label_counts, inline_counts):
         if counts:
             return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
     return None
+
+
+def _doc_design_request_module_name(extracted: Dict[str, str]) -> Optional[str]:
+    """Return the module explicitly requested as the implementation target.
+
+    This intent outranks an embedded Verilog declaration because specifications
+    commonly include a reference parent module while asking the implementer to
+    create a named submodule. Chip-AGNOSTIC.
+    """
+    counts: Dict[str, int] = {}
+    for _src, text in (extracted or {}).items():
+        if not text:
+            continue
+        comment_stripped = _strip_hdl_comments(text)
+        for match in _RE_DOC_TOP_MODULE_DESIGN_REQUEST_NAMED.finditer(
+                comment_stripped):
+            lo, hi = _prose_sentence_scope(
+                comment_stripped, match.start("name"), match.end("name"),
+                extra_breaks=("; ",))
+            requested = (match.group("name") or "").strip()
+            scope = comment_stripped[lo:hi]
+
+            def _blank_other_target(contrast: "re.Match[str]") -> str:
+                other = (contrast.group("name") or "").strip()
+                if (other != requested
+                        and _is_valid_explicit_module_name_candidate(other)):
+                    return " " * len(contrast.group(0))
+                return contrast.group(0)
+
+            polarity_scope = _RE_DOC_TOP_MODULE_CONTRASTIVE_EXCLUSION.sub(
+                _blank_other_target, scope)
+            if _prose_is_denied(polarity_scope) is not None:
+                continue
+            name = requested
+            if name and _is_valid_explicit_module_name_candidate(name):
+                counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return None
+    if len(counts) != 1:
+        raise ValueError(
+            f"conflicting direct module targets: {len(counts)} distinct names"
+        )
+    return next(iter(counts))
 # ORGANIC-20260703 (runner-l9-topmodule-misextraction, P1) — a REAL Verilog
 # module DECLARATION anywhere in the doc/context text (fenced OR unfenced). This
 # is the authoritative top-module signal: `module <name> [#(...)] ( <ports> );`.
@@ -44282,9 +44362,18 @@ def _extract_top_module_from_docs(extracted: Dict[str, str]) -> Optional[str]:
     if not extracted:
         return None
 
+    # #1900 — a direct request names the object the user wants implemented.
+    # It outranks an embedded reference declaration, which may intentionally be
+    # a parent/context module rather than the requested deliverable.
+    _requested = _doc_design_request_module_name(extracted)
+    if _requested:
+        return _normalize_top_module_case(_requested, extracted)
+
     # ORGANIC-20260703 (runner-l9-topmodule-misextraction, P1) — an actual
     # `module <name> ( <ports> );` DECLARATION in the docs/context is the
-    # authoritative signal and OUTRANKS every prose heuristic below. This closes
+    # authoritative signal and OUTRANKS every lower-confidence prose heuristic
+    # below. An explicit implementation-target request was handled above. This
+    # closes
     # the class where the design's real RTL header is staged into the docs but
     # not inside a ```verilog fence, so a step header / parameter name used to
     # win. When present it wins; when absent we fall through to the (now

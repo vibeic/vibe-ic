@@ -662,6 +662,8 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
         problem_id, project, got, run_p, candidate_origin)
     if candidate_origin == "PROGRAM":
         program_candidate = candidate
+    import emit_attestation as emit_attestation          # noqa: PLC0415
+    phase1_provenance = emit_attestation.phase1_provenance(project)
     challenges = verification_challenges or []
     review_key = (f"{_safe_problem_id(candidate_origin).lower()}-"
                   f"r{len(challenges)}-{candidate['rtl_sha256']}")
@@ -680,6 +682,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
         "rtl_paths": candidate["rtl_paths"],
         "working_rtl_paths": [str(p.resolve()) for p in paths],
         "prompt_sha256": _sha256_text(prompt.read_text(errors="replace")),
+        "phase1_provenance": phase1_provenance,
         "rtl_sha256": candidate["rtl_sha256"],
         "program_routing": {
             "nature": routing.get("nature"),
@@ -762,7 +765,9 @@ def _current_task_material(task: dict) -> tuple[str | None, str | None,
     """Current prompt/frozen-RTL hashes plus frozen/stated RTL path sets."""
     prompt = Path(str(task.get("prompt_path") or ""))
     stated = sorted(str(Path(p).resolve()) for p in task.get("rtl_paths") or [])
-    candidate = task.get("candidate_snapshot") or {}
+    candidate = task.get("candidate_snapshot")
+    if not isinstance(candidate, dict):
+        candidate = {}
     current_paths = sorted(
         str(Path(p).resolve()) for p in candidate.get("rtl_paths") or [])
     prompt_hash = (_sha256_text(prompt.read_text(errors="replace"))
@@ -1454,6 +1459,347 @@ def _require_program_first_ai_acceptance(run_p: Path) -> None:
                          + "\n  ".join(failures))
 
 
+def _shape_c_task_binding_reasons(task: dict, run_p: Path,
+                                  solve_result: dict | None) -> list[str]:
+    """Bind a Shape-C review task back to its runner-owned run evidence."""
+    import emit_attestation as emit_attestation          # noqa: PLC0415
+
+    run_p = Path(run_p).resolve()
+    pid = str(task.get("id") or "")
+    safe = _safe_problem_id(pid)
+    reasons: list[str] = []
+    expected_project = (run_p / "projects" / safe).resolve()
+    project = Path(str(task.get("project") or "")).resolve()
+    if project != expected_project:
+        reasons.append("project is not the runner-owned project for this id")
+    expected_prompt = expected_project / "input" / "phase1_prompt.md"
+    if Path(str(task.get("prompt_path") or "")).resolve() != expected_prompt:
+        reasons.append("prompt path is not inside the runner-owned project")
+    expected_response = (run_p / "responses" / f"{safe}.json").resolve()
+    if Path(str(task.get("response_path") or "")).resolve() != expected_response:
+        reasons.append("response path is not the runner-owned response path")
+    review_root = (run_p / "ai_reviews" / safe).resolve()
+    try:
+        Path(str(task.get("review_path") or "")).resolve().relative_to(review_root)
+    except ValueError:
+        reasons.append("review path escapes the runner-owned review directory")
+
+    candidate = task.get("candidate_snapshot")
+    if not isinstance(candidate, dict):
+        reasons.append("candidate snapshot record is malformed")
+        candidate = {}
+    candidate_root = (run_p / "candidate_snapshots" / safe).resolve()
+    candidate_paths = [Path(str(p)).resolve() for p in
+                       candidate.get("rtl_paths") or []]
+    for path in candidate_paths + [
+            Path(str(candidate.get("completion_path") or "")).resolve(),
+            Path(str(candidate.get("response_payload_path") or "")).resolve(),
+            Path(str(candidate.get("manifest_path") or "")).resolve()]:
+        try:
+            path.relative_to(candidate_root)
+        except ValueError:
+            reasons.append("candidate evidence escapes its runner-owned snapshot")
+            break
+
+    expected_phase1 = task.get("phase1_provenance")
+    current_phase1 = emit_attestation.phase1_provenance(expected_project)
+    if (not isinstance(expected_phase1, dict)
+            or expected_phase1.get("ran") is not True):
+        reasons.append("task lacks hash-bound Phase-1 provenance")
+    elif current_phase1 != expected_phase1:
+        reasons.append("Phase-1 L-doc provenance changed after task creation")
+
+    if not isinstance(solve_result, dict):
+        reasons.append("problem is absent from solve_report")
+        return reasons
+    if (solve_result.get("ok") is not True
+            or solve_result.get("candidate_ready") is not True):
+        reasons.append("solve_report did not mark a runner-owned candidate ready")
+    if solve_result.get("accepted") is not True:
+        reasons.append("solve_report did not mark this candidate accepted")
+    if str(solve_result.get("candidate_origin")) != str(
+            task.get("candidate_origin")):
+        reasons.append("candidate origin differs from solve_report")
+    if Path(str(solve_result.get("review_task") or "")).resolve() != Path(
+            str(task.get("review_path") or "")).resolve():
+        reasons.append("review task path differs from solve_report")
+
+    verification = task.get("program_verification")
+    if not isinstance(verification, dict):
+        reasons.append("Program verification record is malformed")
+        verification = {}
+    if verification.get("actor") != "vibe_ic_one_shot_runner":
+        reasons.append("Program verification actor is not the canonical runner")
+    task_rc = verification.get("runner_rc")
+    result_rc = solve_result.get("rc")
+    if type(task_rc) is not int or type(result_rc) is not int:
+        reasons.append(
+            "runner rc is absent or not an integer in task or solve_report")
+    elif task_rc != result_rc:
+        reasons.append("runner rc differs from solve_report")
+    phases = solve_result.get("phases")
+    if not isinstance(phases, dict):
+        reasons.append("solve_report phases record is malformed")
+        phases = {}
+    phase3 = phases.get("phase3_verifying")
+    if not isinstance(phase3, dict):
+        reasons.append("solve_report verifying phase is malformed")
+        phase3 = {}
+    ran = phase3.get("ran")
+    if not isinstance(ran, dict):
+        reasons.append("solve_report Program gate record is malformed")
+        ran = {}
+    recorded_rtl_gen = ran.get("rtl_gen")
+    if verification.get("rtl_gen") != recorded_rtl_gen:
+        reasons.append("RTL-owning Program gate differs from solve_report")
+    if recorded_rtl_gen not in {"PASS", "SKIPPED-BY-ENTRY"}:
+        reasons.append("RTL-owning Program gate did not pass its allowed status")
+    return reasons
+
+
+def _export_accepted_shape_c_task(task: dict, samples: Path,
+                                  top_module: str, *, run_p: Path,
+                                  solve_result: dict | None) -> dict:
+    """BLOCKING Shape-C sole emit for one accepted, frozen runner candidate.
+
+    This is deliberately downstream of ``_require_program_first_ai_acceptance``:
+    it never authors RTL.  It re-validates the hash-bound AI review, immutable
+    candidate snapshot, Phase-1 provenance, RTL-owning Program gate,
+    scorer-facing top, standalone compile, and prompt-derived export guards
+    before atomically publishing the exact reviewed bytes.  The broader runner
+    rc remains type-checked, cross-record bound, and disclosed in solve_report;
+    it is not a functional VerilogEval score gate because unrelated SDC,
+    physical, or full-design audit failures do not invalidate reviewed RTL.
+    Any unavailable required proof is a named BLOCKED result; it is never an
+    advisory and never a silent skip.
+    """
+    import emit_attestation as emit_attestation          # noqa: PLC0415
+    import shape_b_sample_export as guarded_export       # noqa: PLC0415
+
+    pid = str(task.get("id") or "")
+    safe = _safe_problem_id(pid)
+    reasons: list[str] = _shape_c_task_binding_reasons(
+        task, run_p, solve_result)
+    if not pid or safe != pid or "/" in pid or "\\" in pid:
+        reasons.append("problem id is absent or unsafe for a sample filename")
+    verdict = _validate_ai_review(task)
+    if verdict.get("status") != "ACCEPTED":
+        reasons.append("hash-bound blind AI review is not ACCEPTED")
+        reasons.extend(str(v) for v in verdict.get("reasons") or [])
+
+    candidate = task.get("candidate_snapshot")
+    if not isinstance(candidate, dict):
+        candidate = {}
+    reasons.extend(_validate_candidate_snapshot(candidate, pid))
+    paths = [Path(str(p)) for p in candidate.get("rtl_paths") or []]
+    try:
+        rtl_text = _candidate_text(paths) if paths else ""
+    except OSError as exc:
+        rtl_text = ""
+        reasons.append(f"candidate RTL is unreadable: {exc}")
+    if _sha256_text(rtl_text) != task.get("rtl_sha256"):
+        reasons.append("candidate RTL bytes do not match the reviewed hash")
+    if top_module not in guarded_export._module_names(rtl_text):
+        reasons.append(f"scorer-facing top module {top_module!r} is absent")
+
+    prompt = Path(str(task.get("prompt_path") or ""))
+    try:
+        prompt_text = prompt.read_text(errors="replace")
+    except OSError as exc:
+        prompt_text = ""
+        reasons.append(f"staged prompt is unreadable: {exc}")
+    if _sha256_text(prompt_text) != task.get("prompt_sha256"):
+        reasons.append("staged prompt bytes do not match the reviewed hash")
+
+    project = Path(str(task.get("project") or ""))
+    provenance = emit_attestation.phase1_provenance(project)
+    if provenance.get("ran") is not True:
+        reasons.append("Phase-1 L-doc provenance is absent")
+    if shutil.which("iverilog") is None:
+        reasons.append("standalone compile capability is unavailable")
+    if reasons:
+        return {"verdict": "BLOCKED", "id": pid, "reasons": reasons,
+                "exported": None}
+
+    samples.mkdir(parents=True, exist_ok=True)
+    destination = samples / f"{pid}_sample01.sv"
+    temporary = samples / f".{pid}_sample01.sv.pending"
+    try:
+        temporary.write_text(rtl_text)
+        guard_ok, guard_detail = guarded_export.guard_export(
+            temporary, prompt_text)
+        if not guard_ok:
+            return {"verdict": "BLOCKED", "id": pid,
+                    "reasons": [str(v) for v in guard_detail],
+                    "exported": None}
+        temporary.replace(destination)
+        try:
+            emit_attestation.record(
+                samples, destination,
+                gates=["vibe_ic_one_shot_runner", "program_first_ai_review",
+                       "shape_c_guard_export"],
+                shape="C", phase1=provenance)
+            records = emit_attestation._load(samples)
+            record = records.get(destination.name) or {}
+            attestation_matches = (
+                record.get("sha256")
+                == emit_attestation.sha256_file(destination)
+                and record.get("shape") == "C"
+                and (record.get("phase1") or {}).get("ran") is True
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            destination.unlink(missing_ok=True)
+            return {"verdict": "BLOCKED", "id": pid,
+                    "reasons": [f"Shape-C emit attestation failed: {exc}"],
+                    "exported": None}
+        if not attestation_matches:
+            destination.unlink(missing_ok=True)
+            return {"verdict": "BLOCKED", "id": pid,
+                    "reasons": ["Shape-C emit attestation was not recorded"],
+                    "exported": None}
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"verdict": "PASS", "id": pid,
+            "rtl_sha256": task.get("rtl_sha256"),
+            "exported": str(destination),
+            "gates": ["vibe_ic_one_shot_runner",
+                      "program_first_ai_review", "shape_c_guard_export"]}
+
+
+def _export_accepted_shape_c_samples(bench: str, run_p: Path) -> None:
+    """Export accepted frozen Shape-C candidates through their sole emit.
+
+    Program First deliberately publishes hash-bound response payloads only
+    after AI acceptance.  The scorer, however, consumes ``samples/`` carrying
+    emit attestations.  Bridge those two contracts here, after blindness and
+    acceptance gates but before the scorer. Shape C publishes the exact reviewed
+        bytes only after the blocking RTL-gate/review/provenance/top/compile/export
+        guard above. Broader runner failures stay visible in solve_report without
+        being relabelled PASS. Shape B remains in its byte-identical historical
+        function below.
+    """
+    entry = _entry(bench)
+    shape = entry.get("shape")
+    if shape != "C":
+        return
+    if shape == "C":
+        import emit_attestation as emit_attestation      # noqa: PLC0415
+
+        run_p = Path(run_p).resolve()
+        strategy = (entry.get("layout") or {}).get("module_name_strategy")
+        if strategy != "always_TopModule":
+            raise SystemExit("accepted Shape-C sample export BLOCKED: module "
+                             f"name strategy {strategy!r} is unsupported")
+        try:
+            tasks = _read_jsonl(run_p / _REVIEW_WORKLIST)
+            solve = json.loads(
+                (run_p / "solve_report.json").read_text(errors="replace"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit(
+                f"accepted Shape-C sample export setup failed: {exc}") from exc
+        if not tasks:
+            raise SystemExit("accepted Shape-C sample export BLOCKED: review "
+                             "worklist is empty")
+        if not isinstance(solve, dict):
+            raise SystemExit("accepted Shape-C sample export BLOCKED: "
+                             "solve_report root is not an object")
+        solve_results = solve.get("results") or []
+        if (not isinstance(solve_results, list)
+                or any(not isinstance(row, dict) for row in solve_results)):
+            raise SystemExit("accepted Shape-C sample export BLOCKED: "
+                             "solve_report results are malformed")
+        solve_by_id = {str(row.get("id")): row for row in solve_results}
+        task_ids = [str(task.get("id")) for task in tasks]
+        if (len(solve_by_id) != len(solve_results)
+                or len(set(task_ids)) != len(task_ids)
+                or sorted(task_ids) != sorted(solve_by_id)):
+            raise SystemExit("accepted Shape-C sample export BLOCKED: review "
+                             "worklist does not exactly match solve_report")
+
+        failures = []
+        # Validate and emit every task into a private transaction first. A
+        # failure in task N must not leave task 1..N-1 visible to the scorer.
+        with tempfile.TemporaryDirectory(
+                prefix=".shape-c-export-", dir=run_p) as transaction:
+            staged_samples = Path(transaction) / "samples"
+            for task in tasks:
+                pid = str(task.get("id"))
+                result = _export_accepted_shape_c_task(
+                    task, staged_samples, "TopModule", run_p=run_p,
+                    solve_result=solve_by_id.get(pid))
+                if result.get("verdict") != "PASS":
+                    failures.append(
+                        f"{pid}: " + "; ".join(
+                            str(v) for v in result.get("reasons") or []))
+            if failures:
+                raise SystemExit("accepted Shape-C sample export BLOCKED:\n  "
+                                 + "\n  ".join(failures))
+
+            samples = run_p / "samples"
+            expected_names = {f"{pid}_sample01.sv" for pid in task_ids}
+            existing_names = ({p.name for p in samples.iterdir()
+                               if p.is_file() and p.suffix in {".sv", ".v"}
+                               and not p.name.startswith(".")}
+                              if samples.is_dir() else set())
+            if existing_names:
+                records = emit_attestation._load(samples)
+                existing_ok = existing_names == expected_names
+                for task in tasks:
+                    pid = str(task.get("id"))
+                    destination = samples / f"{pid}_sample01.sv"
+                    record = records.get(destination.name) or {}
+                    if (not destination.is_file()
+                            or emit_attestation.sha256_file(destination)
+                            != task.get("rtl_sha256")
+                            or record.get("sha256") != task.get("rtl_sha256")
+                            or record.get("shape") != "C"
+                            or record.get("phase1")
+                            != task.get("phase1_provenance")):
+                        existing_ok = False
+                if not existing_ok:
+                    raise SystemExit(
+                        "accepted Shape-C sample export BLOCKED: samples/ "
+                        "contains stale, partial, or foreign scoring artifacts")
+                print(f"Program First Shape-C export: {len(tasks)}/{len(tasks)} "
+                      "already carries exact accepted, attested samples")
+                return
+
+            samples.mkdir(parents=True, exist_ok=True)
+            published: list[Path] = []
+            try:
+                for task in tasks:
+                    pid = str(task.get("id"))
+                    staged = staged_samples / f"{pid}_sample01.sv"
+                    destination = samples / staged.name
+                    staged.replace(destination)
+                    published.append(destination)
+                    emit_attestation.record(
+                        samples, destination,
+                        gates=["vibe_ic_one_shot_runner",
+                               "program_first_ai_review",
+                               "shape_c_guard_export"],
+                        shape="C", phase1=task.get("phase1_provenance"))
+                records = emit_attestation._load(samples)
+                for task, destination in zip(tasks, published):
+                    record = records.get(destination.name) or {}
+                    if (record.get("sha256") != task.get("rtl_sha256")
+                            or record.get("shape") != "C"
+                            or record.get("phase1")
+                            != task.get("phase1_provenance")):
+                        raise ValueError(
+                            f"attestation read-back mismatch for {task.get('id')}")
+            except (OSError, ValueError, TypeError) as exc:
+                for destination in published:
+                    destination.unlink(missing_ok=True)
+                raise SystemExit(
+                    "accepted Shape-C sample export BLOCKED: transactional "
+                    f"publish failed: {exc}") from exc
+        print(f"Program First Shape-C export: {len(tasks)}/{len(tasks)} "
+              f"accepted frozen candidate(s) passed blocking sole emit -> "
+              f"{run_p / 'samples'}")
+        return
+
+
 def _export_accepted_shape_b_samples(bench: str, dataset: Path,
                                      run_p: Path) -> None:
     """Export accepted frozen candidates through Shape B's sole emit path.
@@ -1598,7 +1944,10 @@ def cmd_score(bench: str, run: str, dataset: str | None,
               "scored on this branch MUST disclose 'blindness audit "
               "unavailable' in its RESULT.md (ORGANIC-20260605-transcripts-"
               "export-default).")
-    _export_accepted_shape_b_samples(bench, ds_p, run_p)
+    if e["shape"] == "C":
+        _export_accepted_shape_c_samples(bench, run_p)
+    else:
+        _export_accepted_shape_b_samples(bench, ds_p, run_p)
     # Front-door GATE-AS-SOLE-EMIT-PATH guard: every scoreable sample MUST carry a
     # valid emit-path attestation (gates_atomic / shape_b_sample_export wrote it on a
     # clean emit). A sample authored directly into samples/ — bypassing the emit gates
@@ -1884,13 +2233,16 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0) -> int:
         "accepted": 0, "total": len(results),
         "acceptance_policy": {
             "required": True,
-            "rule": ("PROGRAM gates PASS AND blind AI semantic PASS; AI route "
+            "rule": ("runner-owned RTL gate PASS (or supplied-RTL re-entry), "
+                     "exact overall runner rc preserved, blocking sole-emit "
+                     "compile/guards PASS, AND blind AI semantic PASS; AI route "
                      "may AGREE or evidence-backed OVERRIDE_PROGRAM"),
             "semantic_authority": "AI",
             "program_disagreement": (
                 "AI must prove the issue with a prompt-derived executable test "
                 "that the frozen Program candidate fails; repair must pass the "
-                "same immutable test, all Program gates, and a fresh AI review"),
+                "same immutable test, runner-owned RTL gate, blocking sole-emit "
+                "compile/guards, and a fresh AI review"),
             "review_task_schema": _REVIEW_TASK_SCHEMA,
             "review_schema": _AI_REVIEW_SCHEMA,
             "score_gate": _ACCEPTANCE_REPORT,
