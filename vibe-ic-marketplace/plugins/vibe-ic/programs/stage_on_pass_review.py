@@ -35,6 +35,20 @@ this repo (the flow yaml, `benchmark/CAPTURE_ROUTING.json`,
 failure here, so this program adds a fourth of nothing: a stage with no
 `on_pass_review:` block is NOT CHECKED, never a pass.
 
+ENFORCEMENT: advisory — and it is stated HERE, one heading after "the
+declaration lives in the flow", because those are two different declarations
+and `flow_gate_enforcement_audit` can only read one of them. That audit reads a
+gate's OWN source for what its rc means to a landing; a gate that says nothing
+is `undeclared`, and before #886 saying nothing was the reliable way to stay
+clean, which is how 113 of 150 gates came to be in that class. This line does
+NOT add a fourth mapping of the kind the paragraph above refuses: every
+stage-specific rule still comes from the flow and this program still adds none.
+It records what an rc from THIS program means, which is a property of this
+program, and it agrees with both wirings that exist — stage1 and stage2 each
+carry `verdict: advisory` in their `on_pass_review:` block, and the audit
+measures the wiring as AUDIT_ONLY. If a stage is ever wired to block, the flow
+is what changes and this line changes with it.
+
 RULE R1 — INTENT_TOP_NOT_BUILT (stage1)
 =======================================
 The intent (`L9_INTEGRATION_SPEC.json`) names the design's top module. The
