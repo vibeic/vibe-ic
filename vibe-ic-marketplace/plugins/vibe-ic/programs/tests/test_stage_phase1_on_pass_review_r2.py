@@ -409,6 +409,85 @@ def test_the_emitted_test_refuses_an_absent_input_rather_than_passing(tmp_path):
     assert "cannot be put over an absent input" in out.stdout
 
 
+def test_the_emitted_test_refuses_a_DELETED_claim_rather_than_passing(tmp_path):
+    """Deleting the field the rejection names must not be a way to go green.
+
+    THIS IS THE ONE THE OTHER TWO EMITTED-TEST CONTROLS COULD NOT SEE. R2's
+    emitted body opened `if not top or top == SENTINEL_TOP or strategy ==
+    SENTINEL_STRATEGY: return`, fusing "the claim is ABSENT" into the sentinel
+    disarm. So `python3 test_r2_top_module_provenance_refuted.py` printed
+    "PASS: the declared top module is grounded in the input or in L1.ic_name"
+    on the very tree that emitted it, as soon as `top_module` was removed --
+    a regression that cannot fail for the reason it exists, which is worse
+    than no regression because it counts as coverage.
+
+    THE PROPERTY IS AGREEMENT WITH THE REVIEW, not a preference about asserts:
+    on this same tree the review reports rc=2 NOT_CHECKED -- "a document that
+    claims nothing cannot be contradicted, and an absent claim is not a
+    grounded one". The emitted regression must not certify green what the
+    review declines to certify. Both halves are asserted below, so the day the
+    RULE changes its mind about an absent claim, this test says so.
+
+    ITS TWO SIBLING top_module READERS ALREADY DO THIS: R1's template asserts
+    `declared, "%s declares no top_module"` and R4's asserts the same. R2 was
+    the odd one of the three.
+    """
+    run_dir = tree(tmp_path, REJECT)
+    r = run(run_dir, "--stage-verdict", "PASS", "--json", str(tmp_path / "r.json"))
+    assert r.returncode == 1
+    emitted = run_dir / json.loads(
+        (tmp_path / "r.json").read_text())["rejections"][0]["test"]
+
+    p = l9(run_dir)
+    d = json.loads(p.read_text(encoding="utf-8"))
+    d.pop("top_module", None)
+    p.write_text(json.dumps(d, indent=2), encoding="utf-8")
+
+    out = subprocess.run([sys.executable, str(emitted)],
+                         capture_output=True, text=True)
+    assert out.returncode == 1, (
+        "the emitted test PASSES once the claim it was emitted about is "
+        "DELETED; deleting the field is not a repair:\n" + out.stdout + out.stderr)
+    assert "DELETING THE CLAIM IS NOT A REPAIR" in out.stdout, out.stdout
+
+    # and the REVIEW agrees: it declines to certify this tree at all.
+    again = run(run_dir, "--stage-verdict", "PASS")
+    assert again.returncode == 2, again.stdout
+    assert "declares no `top_module`" in again.stdout, again.stdout
+
+
+def test_the_emitted_test_still_accepts_the_sentinel_it_is_meant_to_accept(tmp_path):
+    """The false-positive half. The fix above must not broaden the emitted test
+    into refusing the disclosure the flow offers as the SECOND repair.
+
+    The emitted docstring names it: "L9 stops claiming a top module and
+    publishes the canonical placeholder with the sentinel strategy". That was
+    already the contract; what the code accepted was a THIRD thing the contract
+    never offered. Both spellings of the disarm are asserted because the rule
+    disarms on EITHER -- the placeholder name or the strategy -- and a fix that
+    kept only one would move cells the rule does not move."""
+    run_dir = tree(tmp_path, REJECT)
+    r = run(run_dir, "--stage-verdict", "PASS", "--json", str(tmp_path / "r.json"))
+    assert r.returncode == 1
+    emitted = run_dir / json.loads(
+        (tmp_path / "r.json").read_text())["rejections"][0]["test"]
+
+    rel = emitted.relative_to(run_dir)
+    for tag, field in (("name", {"top_module": "chip_top"}),
+                       ("strategy", {"top_module_extraction_strategy":
+                                     "canonical_chip_top_sentinel"})):
+        d = tree(tmp_path / ("sentinel_" + tag), REJECT)
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(emitted, d / rel)
+        edit_l9(d, **field)
+        out = subprocess.run([sys.executable, str(d / rel)],
+                             capture_output=True, text=True)
+        assert out.returncode == 0, (
+            f"the emitted test refuses the sentinel disclosure {field!r}, "
+            f"which is the repair its own docstring offers:\n"
+            + out.stdout + out.stderr)
+
+
 def test_the_emitted_test_is_the_r2_one_and_not_the_stage1_template(tmp_path):
     """Each rule owns its regression. Emitting R1's template here would assert
     something this rejection never proved — that the staged RTL declares a

@@ -3526,8 +3526,17 @@ def test_the_declared_top_module_came_from_the_input_or_its_declared_source():
     l9 = json.loads((root / L9_REL).read_text(encoding="utf-8", errors="replace"))
     top = (l9.get("top_module") or "").strip()
     strategy = l9.get("top_module_extraction_strategy")
-    if not top or top == SENTINEL_TOP or strategy == SENTINEL_STRATEGY:
+    if top == SENTINEL_TOP or strategy == SENTINEL_STRATEGY:
         return  # the document discloses a placeholder; nothing is claimed
+    assert top, (
+        "%s declares no top_module at all. DELETING THE CLAIM IS NOT A REPAIR: "
+        "over an absent claim the review reports NOT_CHECKED -- 'a document "
+        "that claims nothing cannot be contradicted, and an absent claim is "
+        "not a grounded one' -- and this test must not certify green what the "
+        "review declines to certify. To disclose that the input named no top "
+        "module, publish %r with top_module_extraction_strategy=%r, which is "
+        "the sentinel this test does accept." % (L9_REL, SENTINEL_TOP,
+                                                 SENTINEL_STRATEGY))
 
     text = []
     for rel in INPUT_RELS:
