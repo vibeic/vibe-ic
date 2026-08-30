@@ -466,3 +466,71 @@ def test_the_partition_over_the_published_corpus_does_not_move():
         str(c.relative_to(root)) for c in cells), (
         f"the rejection set moved: {sorted(rejects)}")
     assert accepts, "every cell was refused; a reviewer that rejects all is none"
+
+
+# ── the enforcement declaration ──────────────────────────────────────────────
+def test_it_declares_its_enforcement_intent_inside_the_read_window():
+    """A gate that says nothing about its own rc is `undeclared` to the audit.
+
+    MEASURED on clean main 6c798ce4be (v1.13.3): `flow_gate_enforcement_audit`
+    refused with `undeclared::stage_on_pass_review`, at an UNCHANGED total of
+    116 — the case a count-comparing ratchet cannot reach and this one names.
+    Before #886 a gate that declared nothing could not fail that audit at all,
+    so silence was the reliable way to stay clean; 113 of 150 gates were in
+    that class while the audit printed PASS.
+
+    The window is IMPORTED, never re-typed: a declaration past it is present
+    and UNREAD, which reports identically to no declaration at all, and two
+    copies of the bound are two numbers that will disagree.
+    """
+    import flow_gate_enforcement_audit as A
+    src = PROG.read_text(encoding="utf-8")
+    idx = src.find("ENFORCEMENT:")
+    assert idx >= 0, "the gate declares no enforcement intent at all"
+    assert idx < A.DECL_WINDOW_BYTES, (
+        f"the ENFORCEMENT declaration sits at byte {idx}, past the "
+        f"{A.DECL_WINDOW_BYTES}-byte window `declared_intent` reads — present "
+        f"and unread, which the audit reports as UNDECLARED. Move it above "
+        f"the prose that pushed it down.")
+    m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
+    assert m, ("`ENFORCEMENT:` appears but not in a form the audit's own regex "
+               "accepts — a MENTION in prose is not a declaration")
+    assert m.group(1) == "advisory", (
+        f"declares {m.group(1)!r}; both wirings of this program carry "
+        f"`verdict: advisory` in their `on_pass_review:` block, and a gate "
+        f"that declares blocking while wired AUDIT_ONLY is the audit's "
+        f"`contradiction` class")
+
+
+def test_the_flow_wirings_are_what_that_declaration_claims():
+    """The declaration is checked against the FLOW, not merely against itself.
+
+    Asserting only that the file says `advisory` would keep passing after
+    somebody wired a stage to block: the gate would then be lying and both
+    halves of the lie would be inside the same file. The flow is the other
+    half, so it is read here.
+    """
+    import yaml
+    doc = yaml.safe_load(
+        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    wired = [(s.get("id"), s["on_pass_review"].get("verdict"))
+             for s in _walk_stages(doc)
+             if isinstance(s, dict) and isinstance(s.get("on_pass_review"), dict)]
+    assert wired, ("no stage wires an on_pass_review block; this test would "
+                   "otherwise pass over an empty set")
+    off = [(sid, v) for sid, v in wired if v != "advisory"]
+    assert not off, (
+        f"stage(s) {off} wire this program to something other than advisory, "
+        f"so its `ENFORCEMENT: advisory` declaration is now false. Change the "
+        f"declaration with the wiring.")
+
+
+def _walk_stages(node):
+    """Every mapping in the flow document, at any depth."""
+    if isinstance(node, dict):
+        yield node
+        for v in node.values():
+            yield from _walk_stages(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk_stages(v)

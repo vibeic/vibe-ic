@@ -58,6 +58,7 @@ import _atomic_artefact as A  # noqa: E402
 import atomic_artifact_write_check as G  # noqa: E402
 import generated_artifact_conflict_resolve as RESOLVER  # noqa: E402
 import hygiene_finding_delta as DELTA  # noqa: E402
+import skill_stage_membership_check as MEMBERSHIP  # noqa: E402
 import stage_on_pass_review as REVIEW  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
@@ -74,8 +75,20 @@ BASELINE = PROGRAMS / "_atomic_artefact_residual.json"
 #: 7d059e03b (v1.12.93) as the one and only new offender. Its `emit()` writes
 #: the review's VERDICT (NOT_CHECKED with its reason, or the rejections a
 #: landing acts on), which is exactly the class the other two are in.
+#: `skill_stage_membership_check` is the FOURTH, and it arrived exactly as the
+#: third did: it landed at v1.12.99 (f9c86fe03) AFTER the residual was measured,
+#: so the register could not excuse it and the ratchet named it on sight —
+#: `skill_stage_membership_check.py:278  .write_text(...)`, MEASURED on clean
+#: main 6c798ce4be (v1.13.3) as the one and only new offender. Its `main()`
+#: writes `verdict` plus the findings a caller acts on, which is the same class
+#: as the other three.
+#:
+#: FOUR programs in four versions is the rate, and it is worth naming: this
+#: register does not go stale because anyone edits it, it goes stale because
+#: the tree keeps growing programs that write a declared report. The ratchet
+#: catching each one BY NAME is the mechanism working, not a defect in it.
 CONVERTED = ["generated_artifact_conflict_resolve", "hygiene_finding_delta",
-             "stage_on_pass_review"]
+             "stage_on_pass_review", "skill_stage_membership_check"]
 
 #: The register's size at the tranche that last pulled it down (#1082's
 #: `open(..., 'w')` closure). It may SHRINK below this; growing past it is the
@@ -117,11 +130,21 @@ def _argv_delta(dest: Path, repo: Path):
             "--json", str(dest)]
 
 
+def _argv_membership(dest: Path, repo: Path):
+    # The REAL plugin tree, not `repo`: `analyse` must SUCCEED for the write to
+    # be reached at all — an unreadable input returns 2 before writing — and
+    # the death test below is only a measurement if the run reaches the write.
+    # It reads the shipped skills and the flow definition, starts no
+    # subprocess, and needs no project tree.
+    return ["--plugin", str(PROGRAMS.parent), "--json", str(dest)]
+
+
 #: (label, module, argv-builder). Driven end to end in both runtime tests.
 DRIVEN = [
     ("generated_artifact_conflict_resolve", RESOLVER, _argv_resolver),
     ("hygiene_finding_delta", DELTA, _argv_delta),
     ("stage_on_pass_review", REVIEW, _argv_review),
+    ("skill_stage_membership_check", MEMBERSHIP, _argv_membership),
 ]
 
 
