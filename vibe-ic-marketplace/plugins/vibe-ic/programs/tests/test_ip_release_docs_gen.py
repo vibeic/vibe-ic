@@ -18,7 +18,6 @@ own: it must never state a SECOND opinion about whether the kit is deliverable.
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
