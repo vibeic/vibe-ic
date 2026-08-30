@@ -39,9 +39,10 @@ import memory_array_synth as memory  # noqa: E402
 def test_captured_templates_preserve_prompt_visible_architecture():
     odd = canonical.emit_rtl("odd_clock_divider")
     assert "clk_div1 <= 1'b1" in odd
-    assert "((cnt1 + 32'd1) < (NUM_DIV / 2))" in odd
-    assert "((cnt2 + 32'd1) < (NUM_DIV / 2))" in odd
-    assert "cnt1 < NUM_DIV / 2" not in odd
+    assert "clk_div1 <= (cnt1 < (NUM_DIV / 2))" in odd
+    assert "clk_div2 <= (cnt2 < (NUM_DIV / 2))" in odd
+    assert "cnt1 + 32'd1) <" not in odd
+    assert "cnt2 + 32'd1) <" not in odd
 
     pulse = canonical.emit_rtl("pulse_detect_0to1to0")
     assert "output reg data_out" in pulse
@@ -54,10 +55,10 @@ def test_captured_templates_preserve_prompt_visible_architecture():
     assert "if (din_valid)" in serial
 
     fifo = canonical.emit_rtl("async_gray_fifo")
-    assert "wptr_next = bin2gray(waddr_bin_next)" in fifo
-    assert "rptr_next = bin2gray(raddr_bin_next)" in fifo
-    assert "wptr      <= wptr_next" in fifo
-    assert "rptr      <= rptr_next" in fifo
+    assert "wptr      <= bin2gray(waddr_bin)" in fifo
+    assert "rptr      <= bin2gray(raddr_bin)" in fifo
+    assert "wptr_next" not in fifo
+    assert "rptr_next" not in fifo
 
     pipe = canonical.emit_rtl("pipelined_unsigned_multiplier_8")
     assert "assign mul_en_out = mul_en_out_reg[2]" in pipe
@@ -370,7 +371,54 @@ endmodule
 
 @pytest.mark.skipif(not _HAVE_TOOLS,
                     reason="Icarus Verilog is required")
-def test_fifo_gray_pointer_tracks_each_accepted_binary_position(tmp_path):
+def test_odd_divider_current_state_decode_preserves_first_half_phase(tmp_path):
+    rtl = tmp_path / "freq_divbyodd.v"
+    rtl.write_text(canonical.emit_rtl("odd_clock_divider"))
+    tb = tmp_path / "tb.v"
+    tb.write_text(r"""
+module tb;
+  reg clk=1, rst_n=0;
+  wire clk_div;
+  integer i;
+  reg [31:0] prior;
+  freq_divbyodd #(.NUM_DIV(5)) dut(.clk(clk),.rst_n(rst_n),.clk_div(clk_div));
+  always #5 clk=~clk;
+  initial begin
+    #12 rst_n=1;
+    for (i=0; i<8; i=i+1) begin
+      @(negedge clk); #1; prior = dut.cnt1;
+      @(posedge clk); #1;
+      if (dut.clk_div1 !== (prior < (5/2))) begin
+        $display("FAIL posedge prior=%0d got=%b",prior,dut.clk_div1);
+        $fatal;
+      end
+    end
+    for (i=0; i<8; i=i+1) begin
+      @(posedge clk); #1; prior = dut.cnt2;
+      @(negedge clk); #1;
+      if (dut.clk_div2 !== (prior < (5/2))) begin
+        $display("FAIL negedge prior=%0d got=%b",prior,dut.clk_div2);
+        $fatal;
+      end
+    end
+    $display("PASS odd-divider-current-state-phase"); $finish;
+  end
+endmodule
+""")
+    out = tmp_path / "simv"
+    comp = progress.run([shutil.which("iverilog"), "-g2012", "-s", "tb",
+                         "-o", str(out), str(rtl), str(tb)],
+                        capture_output=True, text=True)
+    assert comp.returncode == 0, comp.stderr
+    sim = progress.run([shutil.which("vvp"), str(out)],
+                       capture_output=True, text=True)
+    assert sim.returncode == 0, sim.stdout + sim.stderr
+    assert "PASS odd-divider-current-state-phase" in sim.stdout
+
+
+@pytest.mark.skipif(not _HAVE_TOOLS,
+                    reason="Icarus Verilog is required")
+def test_fifo_gray_pointer_registers_current_binary_position(tmp_path):
     rtl = tmp_path / "asyn_fifo.v"
     rtl.write_text(canonical.emit_rtl("async_gray_fifo"))
     tb = tmp_path / "tb.v"
@@ -389,16 +437,16 @@ module tb;
     #2; wrstn=0; rrstn=0; #40;
     @(negedge wclk); wrstn=1; rrstn=1; winc=1; wdata=8'h11;
     @(posedge wclk); #1;
-    if (dut.waddr_bin !== 5'd1 || dut.wptr !== 5'd1) begin
+    if (dut.waddr_bin !== 5'd1 || dut.wptr !== 5'd0) begin
       $display("FAIL first-position bin=%0d gray=%0d",dut.waddr_bin,dut.wptr);
       $fatal;
     end
     @(negedge wclk); wdata=8'h22; @(posedge wclk); #1;
-    if (dut.waddr_bin !== 5'd2 || dut.wptr !== 5'd3) begin
+    if (dut.waddr_bin !== 5'd2 || dut.wptr !== 5'd1) begin
       $display("FAIL second-position bin=%0d gray=%0d",dut.waddr_bin,dut.wptr);
       $fatal;
     end
-    $display("PASS accepted-position-gray"); $finish;
+    $display("PASS registered-current-position-gray"); $finish;
   end
 endmodule
 """)
@@ -410,7 +458,7 @@ endmodule
     sim = progress.run([shutil.which("vvp"), str(out)],
                        capture_output=True, text=True)
     assert sim.returncode == 0, sim.stdout + sim.stderr
-    assert "PASS accepted-position-gray" in sim.stdout
+    assert "PASS registered-current-position-gray" in sim.stdout
 
 
 @pytest.mark.skipif(not _HAVE_IVERILOG,

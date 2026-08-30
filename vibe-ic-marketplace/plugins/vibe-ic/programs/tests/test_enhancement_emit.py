@@ -57,6 +57,21 @@ def test_bucket_A_routes_per_step(tmp_path):
         f"phase2.rtl_gen Bucket A should route to rtl_hygiene_lint; got {a_files}"
 
 
+def test_canonical_primitive_recovery_routes_to_owning_generator(tmp_path):
+    rec = [{
+        "step": "phase2.rtl_gen.canonical_primitive",
+        "design": "generic_odd_divider", "bucket": "A",
+        "rule_name": "current-counter-level-decode",
+        "docstring": "Register the divided-clock level decoded from the current counter.",
+        "expected_signal": "AUTO-FIX",
+        "fix_action": "Correct the existing deterministic canonical-primitive template.",
+    }]
+    res = run(tmp_path, rec)
+    a_files = res["summary"].get("bucket_A_files", [])
+    assert any("canonical_primitive_synth" in f for f in a_files), \
+        f"canonical primitive recovery must route to its owning generator; got {a_files}"
+
+
 # ── 2. Bucket B routes to the skill file declared in the routing table ──
 def test_bucket_B_routes_per_step(tmp_path):
     rec = [{
