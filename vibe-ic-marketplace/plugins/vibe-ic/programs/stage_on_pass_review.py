@@ -894,9 +894,22 @@ def read_intent_pins(l9_path: Path) -> Dict[str, Any]:
 
 
 def netlist_port_directions(text: str) -> Dict[str, str]:
-    """`{port name: direction}` for one module body. PURE."""
+    """`{port name: direction}` for one module body. PURE.
+
+    COMMENTS ARE REMOVED HERE, not left to the caller. The live caller
+    (`read_netlist_interface`) hands over a body from `_dms.module_bodies_in_text`,
+    which already strips -- so this call is a no-op on that path and the strip
+    is idempotent. It is here because the function is public and PURE, and its
+    signature promises an answer about a module body, not about whichever
+    caller remembered. A retired-interface note left in a `/* ... */` block --
+    `input phantom_clk;` on its own line -- is a port declaration to this
+    regex, and stage 2 compares these names against the pins the intent
+    declared. A phantom port is then either a pin the netlist appears to carry
+    and does not, or an extra-port finding against a netlist that has none.
+    """
     out: Dict[str, str] = {}
-    for direction, _msb, _lsb, name in _NETLIST_PORT_RE.findall(text):
+    clean = _dms.strip_comments(text)
+    for direction, _msb, _lsb, name in _NETLIST_PORT_RE.findall(clean):
         out.setdefault(name, direction)
     return out
 
