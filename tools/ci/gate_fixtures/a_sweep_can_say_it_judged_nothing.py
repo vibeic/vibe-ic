@@ -20,14 +20,28 @@ drive `discovered` to 0, the survey would return rc 2 through `_sweep_reach`
 ("surveyed nothing") rather than a ratio, and the red would prove the vacuity
 path instead of the predicate. The population is held constant on purpose.
 
-WHY N IS READ FROM THE DECLARATION. The gate lands as a RATCHET
-(`--max-silent N`) and N is expected to shrink as sweeps are fixed. A fixture
-that hard-coded today's N would go red the day the ratchet tightened — for the
-gate improving, which is the one direction a fixture must never punish. The
-population is sized from the declared N at run time: N silent sweeps plus one
-that discloses is exactly at the limit, and the mutation puts it one over.
+THE MUTATION IS A SWAP, AND THE TOTAL DOES NOT MOVE. The bound is the NAMED SET
+in the register the declaration points `--silent-set` at, so the case worth
+proving is the one no count can reach: one registered sweep starts disclosing
+and one UNREGISTERED sweep goes silent, in the same commit. `silent` is 3 before
+and 3 after — a count bound of any value accepts both trees identically — and the
+set refuses, because a name it never sanctioned is now silent.
+
+WHY THE FIXTURE SHIPS ITS OWN REGISTER. `$PLUGIN` resolves to the fixture's
+subject tree, so `--silent-set "$PLUGIN/programs/sweep_silence_register.json"`
+reads the register written HERE and never the shipped one. A fixture whose
+subject the gate could not move would prove nothing about the gate.
+
+WHAT THIS FIXTURE DELIBERATELY DOES NOT PROVE: that a SHRINKING register passes.
+The engine's contract is one accept and one refuse, and a shrink is a third tree
+that must be ACCEPTED — it is proven in
+`programs/tests/test_sweep_silence_register.py`, which asserts the exact exit
+code on all three trees, because a ratchet that punishes tightening is the
+defect this bound was written to remove and it must be pinned somewhere that can
+assert a PASS.
 """
 from pathlib import Path
+import json
 import re
 import shlex
 import sys
@@ -83,42 +97,81 @@ _DISCLOSES = ('        print("VACUOUS_PASS: examined %d file(s), '
 _SILENT = "        pass"
 
 
-def _declared_max_silent() -> int:
-    """The `--max-silent N` the dispatcher declares for this gate."""
+def _register_path(subject_root: Path) -> Path:
+    """Where the DECLARATION tells the gate to read its register.
+
+    Derived from the declared argv rather than assumed, so a fixture cannot
+    write its register somewhere the gate does not look and then read the
+    resulting refusal as the predicate firing.
+    """
     decl = next(d for d in F.declarations() if d.label == GATE)
     toks = shlex.split(decl.cmd)
-    i = toks.index("--max-silent")
-    return int(toks[i + 1])
+    i = toks.index("--silent-set")
+    rel = re.sub(r"^\$\{?(ROOT|PLUGIN)\}?/", "", toks[i + 1])
+    return subject_root / rel
 
 
-def _tree(work: Path, disclosing_sweeps: int) -> Path:
-    """N silent sweeps + `disclosing_sweeps` that disclose. N is the ratchet."""
+def _write_register(root: Path, permitted: "list[str]") -> None:
+    """A register naming exactly `permitted`, each with the argument the loader
+    demands. An entry with no written justification is REFUSED by the loader, so
+    the fixture cannot accidentally prove the bound with a nameless blessing."""
+    path = _register_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "register": "sweep_silence_register",
+        "permitted": {
+            n: {"why_permitted": "fixture-only probe sweep; describes nothing "
+                                 "real and is registered so that the tree "
+                                 "under test starts from an accepted state"}
+            for n in permitted},
+        "known_silent_untriaged": {},
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+#: How many silent probe sweeps the subject carries. Small and FIXED: with a set
+#: bound there is no declared N to size the population from, and the swap below
+#: is decisive at any size.
+_N_SILENT = 3
+
+
+def _tree(work: Path) -> Path:
+    """`_N_SILENT` silent sweeps, all registered, plus one that discloses."""
     root = F.git_init(work / "subject")
     progs = root / "programs"
     progs.mkdir(parents=True, exist_ok=True)
-    n = _declared_max_silent()
-    for i in range(n):
-        (progs / f"probe_quiet_sweep_{i:03d}.py").write_text(
-            _SWEEP.format(disclosure=_SILENT), encoding="utf-8")
-    for i in range(disclosing_sweeps):
-        (progs / f"probe_loud_sweep_{i:03d}.py").write_text(
-            _SWEEP.format(disclosure=_DISCLOSES), encoding="utf-8")
+    quiet = []
+    for i in range(_N_SILENT):
+        name = f"probe_quiet_sweep_{i:03d}.py"
+        (progs / name).write_text(_SWEEP.format(disclosure=_SILENT),
+                                  encoding="utf-8")
+        quiet.append(name)
+    (progs / "probe_loud_sweep_000.py").write_text(
+        _SWEEP.format(disclosure=_DISCLOSES), encoding="utf-8")
+    _write_register(root, quiet)
     return root
 
 
 def can_pass(work: Path) -> Path:
-    """N silent + 1 disclosing: exactly at the ratchet, and it must be accepted."""
-    root = _tree(work, disclosing_sweeps=1)
+    """Every silent sweep is named in the register, so the gate must accept."""
+    root = _tree(work)
     F.git_commit(root)
     return root
 
 
 def can_fail(work: Path):
-    """The same population; the one sweep that could disclose no longer can."""
-    root = _tree(work, disclosing_sweeps=1)
+    """A SWAP: the total stays at `_N_SILENT` and an unsanctioned name is silent.
+
+    One registered sweep gains the disclosure it lacked; the sweep that had it
+    loses it and is in no list. `silent` is `_N_SILENT` before and after, so a
+    count bound of any value cannot separate these two trees. The set can.
+    """
+    root = _tree(work)
     F.git_commit(root)
-    loud = root / "programs" / "probe_loud_sweep_000.py"
-    assert _DISCLOSES in loud.read_text(encoding="utf-8")
-    loud.write_text(_SWEEP.format(disclosure=_SILENT), encoding="utf-8")
-    F.git_commit(root, "mutate")
-    return root, "driven sweep(s) are SILENT"
+    progs = root / "programs"
+    registered = progs / "probe_quiet_sweep_000.py"
+    unregistered = progs / "probe_loud_sweep_000.py"
+    assert _DISCLOSES in unregistered.read_text(encoding="utf-8")
+    registered.write_text(_SWEEP.format(disclosure=_DISCLOSES), encoding="utf-8")
+    unregistered.write_text(_SWEEP.format(disclosure=_SILENT), encoding="utf-8")
+    F.git_commit(root, "swap")
+    return root, "named in NEITHER list"

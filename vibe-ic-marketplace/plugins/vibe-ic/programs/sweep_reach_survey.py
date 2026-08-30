@@ -52,13 +52,62 @@ ADVISORY BY DEFAULT
 ===================
 Most sweeps in this tree are SILENT today, so failing on that would make this
 permanently red and tell nobody anything. rc 0 = surveyed; rc 2 = surveyed
-nothing. ``--max-silent N`` turns it into a ratchet for a caller that wants one.
+nothing. ``--silent-set PATH`` turns it into a ratchet for a caller that wants
+one.
+
+THE BOUND IS A NAMED SET, NOT A COUNT (vibe-ic#1410 follow-up)
+==============================================================
+``--max-silent N`` was the first bound and it was wrong in a way that took a
+repair to expose. A COUNT cannot tell "a new sweep went silent" from "something
+that legitimately grew", and it is blind the moment one member swaps for
+another: 28 -> 28 with a different member is invisible to a number and obvious
+to a set.
+
+MEASURED, ONE FILE, BOTH DIRECTIONS. ``task_nature_route`` took the count from
+27 to 28 without going silent. Until ``ebe08a870`` its CLI died on
+``UnboundLocalError`` for every invocation without ``--json`` -- a defect present
+since the file's first commit -- so this survey classified it NOT_DRIVABLE and
+it never entered the denominator at all. Repairing the crash moved it into
+``driven``, where a silence that had always been there became visible. Nothing
+about its reporting changed. The tree got strictly better and the gate went red:
+a ratchet that punishes tightening, which is a defect this repository has been
+bitten by before.
+
+So the bound is the SET OF NAMES in ``sweep_silence_register.json``:
+
+  * a SILENT sweep named in NEITHER list is UNREGISTERED and FAILS (rc 1), even
+    when the total has not moved -- which is the case no count can reach;
+  * a registered sweep that STOPS being silent is reported as removable and is
+    NEVER a failure. THE ASYMMETRY IS DELIBERATE AND IS WRITTEN HERE RATHER THAN
+    LEFT TO BE INFERRED: the register records a defect, and a defect that has
+    been repaired must not be the thing that reddens the gate. Shrinking it is
+    the point of having it.
+
+The register carries TWO lists because there are two different claims and
+collapsing them is what would make it worthless later:
+
+  ``permitted``               a claim that this sweep's silence is LEGITIMATE,
+                              with the measurement that argues it: handed an
+                              EMPTY corpus it REFUSES rather than returning the
+                              same rc 0 it returns over a populated one, so its
+                              clean exit cannot be reached without reading
+                              input and is not confusable with a no-input run.
+  ``known_silent_untriaged``  NOT a claim of legitimacy. Recorded, with the
+                              measurement that DISQUALIFIES it, so the gate is
+                              not born red over a backlog this change does not
+                              triage -- the same reason the first bound chose a
+                              ratchet over ``--strict``. Printed as debt on
+                              every run and bounded by identity like the rest.
+
+A ``permitted`` entry with no written argument is REFUSED (rc 2) rather than
+honoured: an entry nobody can justify is precisely the thing that makes a
+register worthless, so it may not silence this gate by sitting in the file.
 
 Usage:
     python3 sweep_reach_survey.py                       # survey programs/
     python3 sweep_reach_survey.py --json report.json    # + machine-readable
     python3 sweep_reach_survey.py --only perc_corpus_sweep.py --only rom_init_lint.py
-    python3 sweep_reach_survey.py --max-silent 28       # ratchet
+    python3 sweep_reach_survey.py --silent-set sweep_silence_register.json
     python3 sweep_reach_survey.py --empty-corpus dirs   # the CONTRAST number
     python3 sweep_reach_survey.py --empty-corpus none   # "I was given nothing"
 
@@ -332,6 +381,90 @@ def survey(programs_dir: Path, only: Optional[List[str]] = None,
     return doc
 
 
+# ------------------------------------------------------------------ the bound
+#: The two lists a register may carry. Both PERMIT today's silence; only the
+#: first is a CLAIM about it. Kept as one tuple so a third list cannot be added
+#: in the file and silently honoured by a reader that never heard of it.
+REGISTER_LISTS = ("permitted", "known_silent_untriaged")
+
+
+class RegisterRefused(Exception):
+    """The register could not be used as a bound, so nothing was bounded.
+
+    Raised rather than returned: "I could not read the bound" must not reach a
+    caller on the same path as "I read it and nothing was unregistered", which
+    is the vacuous pass this survey exists to remove one level down.
+    """
+
+
+def load_silent_set(path: Path) -> Dict[str, Dict[str, Any]]:
+    """``{program: entry}`` from ``path``, or raise :class:`RegisterRefused`.
+
+    A ``permitted`` entry MUST carry a non-empty ``why_permitted``. The rule is
+    enforced here, at load, rather than at comparison time: an unjustified name
+    must not be able to silence this gate merely by being present in the file.
+    ``known_silent_untriaged`` entries make no claim, so they carry
+    ``why_not_permitted`` instead and are held to that key.
+    """
+    try:
+        doc = json.loads(path.read_text())
+    except OSError as exc:
+        raise RegisterRefused(f"cannot read {path}: {exc}") from exc
+    except ValueError as exc:
+        raise RegisterRefused(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise RegisterRefused(f"{path} must hold an object, not "
+                              f"{type(doc).__name__}")
+    unknown = [k for k in doc
+               if k in ("permitted", "known_silent_untriaged", "permited")
+               and k not in REGISTER_LISTS]
+    if unknown:
+        raise RegisterRefused(f"{path} carries unknown list(s): {unknown}")
+    out: Dict[str, Dict[str, Any]] = {}
+    for which in REGISTER_LISTS:
+        block = doc.get(which, {})
+        if not isinstance(block, dict):
+            raise RegisterRefused(f"{path}: '{which}' must be an object")
+        need = "why_permitted" if which == "permitted" else "why_not_permitted"
+        for name, entry in block.items():
+            if not isinstance(entry, dict):
+                raise RegisterRefused(f"{path}: '{which}.{name}' must be an object")
+            if not str(entry.get(need, "")).strip():
+                raise RegisterRefused(
+                    f"{path}: '{which}.{name}' carries no '{need}'. An entry "
+                    f"nobody can justify may not silence this gate by sitting "
+                    f"in the register -- write the argument or take the name out")
+            if name in out:
+                raise RegisterRefused(
+                    f"{path}: '{name}' is in both lists; it cannot be both a "
+                    f"claim of legitimacy and a refusal to make one")
+            out[name] = dict(entry, _list=which)
+    return out
+
+
+def compare_to_register(doc: Dict[str, Any],
+                        register: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """What the measured SILENT set and the register say about each other.
+
+    ``unregistered`` is the only failing class. ``tightened`` is a registered
+    name that is no longer silent, and it is deliberately NOT a failure: the
+    register records a defect, and a repaired defect must never be the thing
+    that reddens the gate.
+    """
+    silent = {r["program"] for r in doc["rows"] if r["verdict"] == "SILENT"}
+    return {
+        "unregistered": sorted(silent - set(register)),
+        "tightened": sorted(set(register) - silent),
+        "held": sorted(silent & set(register)),
+        "permitted_now_silent": sorted(
+            n for n in silent & set(register)
+            if register[n].get("_list") == "permitted"),
+        "untriaged_now_silent": sorted(
+            n for n in silent & set(register)
+            if register[n].get("_list") == "known_silent_untriaged"),
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--programs-dir", default=str(Path(__file__).resolve().parent),
@@ -342,9 +475,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="write the report here ('-' = stdout)")
     ap.add_argument("--timeout", type=int, default=90,
                     help="per-invocation timeout in seconds")
-    ap.add_argument("--max-silent", type=int, default=None, metavar="N",
-                    help="ratchet: FAIL when more than N driven sweeps are "
-                         "SILENT (default: advisory, never fails on this)")
+    ap.add_argument("--silent-set", metavar="PATH", default=None,
+                    help="ratchet: FAIL when a driven sweep is SILENT and is "
+                         "named in NEITHER list of the register at PATH. The "
+                         "bound is the SET, so a member swapped for another is "
+                         "refused at an unchanged total; a member that stops "
+                         "being silent is reported and is never a failure. "
+                         "(default: advisory, never fails on this)")
     ap.add_argument("--empty-corpus", choices=("dirs", "none"), default=None,
                     help="drive the sweeps against an EMPTY corpus instead of "
                          "the populated probe corpus: 'dirs' = three readable "
@@ -359,8 +496,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     reach: _sr.SweepReach = doc.pop("_reach")
 
     passed = True
-    if args.max_silent is not None and doc["silent"] > args.max_silent:
-        passed = False
+    cmp: Optional[Dict[str, Any]] = None
+    if args.silent_set is not None:
+        try:
+            register = load_silent_set(Path(args.silent_set))
+        except RegisterRefused as exc:
+            # rc 2, never rc 0: the bound could not be applied, so NOTHING was
+            # bounded, and that must not reach a reader as "nothing was
+            # unregistered". Printed before the report so the refusal cannot be
+            # lost under 28 rows of survey output.
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            print(f"[VACUOUS] {GATE} — the silent-set bound could not be read, "
+                  f"so no sweep was bounded; this is NOT a pass", file=sys.stderr)
+            return _vx.RC_VACUOUS
+        cmp = compare_to_register(doc, register)
+        doc["silent_set"] = {"path": str(args.silent_set), **cmp}
+        passed = not cmp["unregistered"]
 
     if args.json:
         text = json.dumps(doc, indent=2, sort_keys=True)
@@ -386,9 +537,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"({row['deciding_invocation']})")
             if ev:
                 print(f"        | {ev}")
-    if not passed:
-        print(f"FAIL: {doc['silent']} driven sweep(s) are SILENT, "
-              f"--max-silent was {args.max_silent}", file=sys.stderr)
+    if cmp is not None and args.json != "-":
+        print(f"  silent-set bound: {len(cmp['held'])} of {doc['silent']} silent "
+              f"sweep(s) are registered "
+              f"({len(cmp['permitted_now_silent'])} permitted with a written "
+              f"argument, {len(cmp['untriaged_now_silent'])} recorded UNTRIAGED "
+              f"and blessed by nobody)")
+        if cmp["tightened"]:
+            # NOT a failure, and said in the words that make that unmistakable.
+            # A register entry is a recorded defect; a repaired defect reddening
+            # the gate is the exact shape this bound replaced.
+            print(f"  [TIGHTENED] {len(cmp['tightened'])} registered sweep(s) "
+                  f"are no longer SILENT and can be removed from the register — "
+                  f"this is NOT a failure: "
+                  f"{', '.join(cmp['tightened'])}")
+    if not passed and cmp is not None:
+        print(f"FAIL: {len(cmp['unregistered'])} driven sweep(s) are SILENT and "
+              f"named in NEITHER list of {args.silent_set}:", file=sys.stderr)
+        for name in cmp["unregistered"]:
+            row = next(r for r in doc["rows"] if r["program"] == name)
+            ev = (row["evidence"] or [""])[0][:88]
+            print(f"   {name}  ({row['deciding_invocation']})  | {ev}",
+                  file=sys.stderr)
+        print("  A sweep that reads a populated corpus, judges none of it and "
+              "exits 0 clean is indistinguishable from one that never reached "
+              "its check. Give it the rc-2 / VACUOUS_PASS disclosure, or add it "
+              "to the register WITH the argument for why its silence is "
+              "legitimate. The bound is a SET: do not widen a number.",
+              file=sys.stderr)
 
     reach.announce(GATE, passed=passed)
     return reach.exit_code(passed)
