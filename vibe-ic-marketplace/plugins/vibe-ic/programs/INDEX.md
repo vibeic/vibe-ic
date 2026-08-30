@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1228
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1228)
+- **Total programs (excluding helpers / shims):** 1232
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1232)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1219 |
+| `any` | 1223 |
 
 ## Alphabetical listing
 
@@ -545,6 +545,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ip_catalog_upstream_audit` | any | — | Verify catalog manifests against canonical upstream repos. |
 | `ip_catalog_validate` | any | — | Validate catalog manifests against schema + permissive-license whitelist. |
 | `ip_integration_check` | any | — | hard-macro / IP integration checklist gate (flow v2.3.1, external review R3). |
+| `ip_release_docs_gen` | any | — | the release documents for a delivered hard IP. |
 | `ir_drop_budget_check` | any | — | numeric IR-drop budget gate for tapeout sign-off. |
 | `ir_drop_report_check` | any | — | IR-drop report check — wrapper for eda_report_audit --mode ir_drop. |
 | `ir_drop_triage_classify` | any | v0.1.50 | IR-drop triage classifier (Pattern-B → program). |
@@ -734,6 +735,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ocp_protocol_synth` | any | — | Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70). |
 | `oe_pattern_check` | any | — | Analyze output-enable (OE) patterns for tristate bus drivers. |
 | `offgrid_drc_classify_check` | any | — | ORGANIC #594. |
+| `on_pass_review_answerable_check` | any | — | an on-pass gate that can only ever say rc=2. |
 | `onehot_fsm_synth` | any | — | DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
@@ -952,6 +954,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `regression_issue_intake_check` | any | — | Issue-#5 lesson-learned enforcement: before a debug agent attempts a |
 | `regression_report_aggregate` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format. |
 | `regression_severity_classify` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3. |
+| `release_docs_check` | any | — | the gate over a release document set. |
 | `repo_hygiene_parallel` | any | — | Run repo hygiene as a fail-closed local parallel DAG. |
 | `report_belongs_to_project_check` | any | — | a runner report must be ABOUT the project it sits in. |
 | `reported_figure_artifact_backing_check` | any | — | the ARTIFACT-BACKING gate. |
@@ -1210,6 +1213,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `utilization_band_check` | any | v0.2.69 | Floorplan/placement utilization band classifier. |
 | `vacuous_disclosure_needs_a_runtime_condition_check` | any | — | A disclosure token is not a working gate — the skip must be CONDITIONED. |
 | `vacuous_testbench_check` | any | — | Phase-2 gate against VACUOUS testbenches. |
+| `valid_ready_independence_check` | any | — | a producer's VALID must not wait on the consumer's READY. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vector_ops_synth` | any | — | deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables. |
@@ -1300,7 +1304,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1219 programs)
+### `any` (1223 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1817,6 +1821,7 @@ _(no programs in this group)_
 - `ip_catalog_upstream_audit` — Verify catalog manifests against canonical upstream repos.
 - `ip_catalog_validate` — Validate catalog manifests against schema + permissive-license whitelist.
 - `ip_integration_check` — hard-macro / IP integration checklist gate (flow v2.3.1, external review R3).
+- `ip_release_docs_gen` — the release documents for a delivered hard IP.
 - `ir_drop_budget_check` — numeric IR-drop budget gate for tapeout sign-off.
 - `ir_drop_report_check` — IR-drop report check — wrapper for eda_report_audit --mode ir_drop.
 - `ir_drop_triage_classify` — IR-drop triage classifier (Pattern-B → program).  _[v0.1.50]_
@@ -2005,6 +2010,7 @@ _(no programs in this group)_
 - `ocp_protocol_synth` — Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70).
 - `oe_pattern_check` — Analyze output-enable (OE) patterns for tristate bus drivers.
 - `offgrid_drc_classify_check` — ORGANIC #594.
+- `on_pass_review_answerable_check` — an on-pass gate that can only ever say rc=2.
 - `onehot_fsm_synth` — DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
@@ -2223,6 +2229,7 @@ _(no programs in this group)_
 - `regression_issue_intake_check` — Issue-#5 lesson-learned enforcement: before a debug agent attempts a
 - `regression_report_aggregate` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format.
 - `regression_severity_classify` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3.
+- `release_docs_check` — the gate over a release document set.
 - `repo_hygiene_parallel` — Run repo hygiene as a fail-closed local parallel DAG.
 - `report_belongs_to_project_check` — a runner report must be ABOUT the project it sits in.
 - `reported_figure_artifact_backing_check` — the ARTIFACT-BACKING gate.
@@ -2479,6 +2486,7 @@ _(no programs in this group)_
 - `utilization_band_check` — Floorplan/placement utilization band classifier.  _[v0.2.69]_
 - `vacuous_disclosure_needs_a_runtime_condition_check` — A disclosure token is not a working gate — the skip must be CONDITIONED.
 - `vacuous_testbench_check` — Phase-2 gate against VACUOUS testbenches.
+- `valid_ready_independence_check` — a producer's VALID must not wait on the consumer's READY.
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vector_ops_synth` — deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder.
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables.  _[v0.119.30]_

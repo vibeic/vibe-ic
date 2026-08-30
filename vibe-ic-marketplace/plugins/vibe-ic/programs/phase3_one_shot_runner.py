@@ -33423,6 +33423,48 @@ def step_digital_hardmacro_gen(project: Path,
                       msg, out)
 
 
+def step_ip_release_docs_gen(project: Path) -> StepResult:
+    """Canonical step 37.5ip's release-document producer.
+
+    WHY IT IS HERE AND NOT IN THE GATE, for the reason `step_digital_hardmacro_gen`
+    above already records: `flow_compliance_check` is the phase-2+3 ACCEPTANCE
+    AUDITOR, and an auditor that writes a declared `required_output` into the
+    project it is auditing certifies its own output. `ip_release_docs_gen` is
+    declared in step 37.5ip's `programs:` and is invoked from HERE — the path a
+    real run takes — so `release_docs_check` judges documents the audit did not
+    write.
+
+    NEVER FAILS THE RUN. A producer refusal (rc 1 — the kit's own gate refuses
+    it, so no release document may be written for it) and "no kit to document"
+    (rc 2) are recorded as SKIP: the GATE is what fails. If the documents are
+    absent or wrong, `release_docs_check` refuses the step on its own evidence
+    rather than on this step's exit code.
+    """
+    t0 = time.time()
+    prog = PROGRAMS_DIR / "ip_release_docs_gen.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("ip_release_docs_gen", "SKIP", 0.0,
+                          f"{prog.name} not present in this tree")
+    cmd = [sys.executable, str(prog), str(project)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            errors="replace", timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("ip_release_docs_gen", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"producer did not complete: {exc}")
+    detail_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
+    detail = detail_lines[0] if detail_lines else f"rc={cp.returncode}"
+    status = {0: "PASS", 1: "SKIP", 2: "SKIP"}.get(cp.returncode,
+                                                   "ENV_UNAVAILABLE")
+    doc_root = project / "phase3" / "stage4" / "documentation" / "ip"
+    outputs = ([str(f) for f in sorted(doc_root.rglob("*")) if f.is_file()]
+               if doc_root.is_dir() else [])
+    return StepResult("ip_release_docs_gen", status, time.time() - t0,
+                      detail, outputs,
+                      {"producer_rc": cp.returncode, "flow_step": "37.5ip"})
+
+
 def _canonical_step_condition(project: Path, step_id: str
                               ) -> Tuple[Optional[bool], str]:
     """Read one step's applicability from the canonical flow declaration.
@@ -43273,6 +43315,11 @@ def main() -> int:
     # contained no `.lef` anywhere. Immediately after canonicalisation, which
     # is what puts the sign-off GDS at this producer's declared input path.
     plan.append(step_digital_hardmacro_gen(project, pdk, args.container))
+
+    # And the documents that make the kit usable by somebody who was not in the
+    # room. AFTER the kit producer above, because it reads the four views it
+    # documents; the gate at step 37.5ip then judges what this wrote.
+    plan.append(step_ip_release_docs_gen(project))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
