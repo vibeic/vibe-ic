@@ -46,7 +46,10 @@ def test_captured_templates_preserve_prompt_visible_architecture():
 
     pulse = canonical.emit_rtl("pulse_detect_0to1to0")
     assert "output reg data_out" in pulse
-    assert "data_out <= ~data_in" in pulse
+    assert "reg [1:0] state" in pulse
+    assert "localparam ST_EMPTY" in pulse
+    assert "data_out <= (state == ST_ZERO_ONE) && !data_in" in pulse
+    assert "state <= data_in ? ST_ZERO_ONE : ST_ZERO" in pulse
     assert "assign data_out" not in pulse
 
     serial = canonical.emit_rtl("serial_to_parallel_8")
@@ -340,18 +343,21 @@ def test_pulse_output_is_clocked_and_matches_disclosed_trace(tmp_path):
 module tb;
   reg clk=0, rst_n=0, data_in=0;
   wire data_out;
-  reg [4:0] got;
-  reg [4:0] stim=5'b01010;
+  reg [10:0] got;
+  // Starts with post-reset 1,0 (not a pulse), then includes both the disclosed
+  // overlapping trace and a wider 0,1,1,0 interval, which must not be mistaken
+  // for an exact three-cycle pulse.
+  reg [10:0] stim=11'b10010100110;
   integer i;
   pulse_detect dut(.clk(clk),.rst_n(rst_n),.data_in(data_in),.data_out(data_out));
   always #5 clk=~clk;
   initial begin
     #2; rst_n=0; #6; rst_n=1;
-    for (i=0; i<5; i=i+1) begin
-      data_in = stim[4-i];
-      @(posedge clk); #1; got[4-i]=data_out;
+    for (i=0; i<11; i=i+1) begin
+      data_in = stim[10-i];
+      @(posedge clk); #1; got[10-i]=data_out;
     end
-    if (got !== 5'b00101) begin $display("FAIL got=%b",got); $fatal; end
+    if (got !== 11'b00001010000) begin $display("FAIL got=%b",got); $fatal; end
     $display("PASS pulse trace=%b",got); $finish;
   end
 endmodule
@@ -364,7 +370,7 @@ endmodule
     sim = progress.run([shutil.which("vvp"), str(out)],
                        capture_output=True, text=True)
     assert sim.returncode == 0, sim.stdout + sim.stderr
-    assert "PASS pulse trace=00101" in sim.stdout
+    assert "PASS pulse trace=00001010000" in sim.stdout
 
 
 @pytest.mark.skipif(not _HAVE_TOOLS,
