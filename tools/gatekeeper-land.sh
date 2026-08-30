@@ -1332,7 +1332,42 @@ run_repo_tools_pytest() {
     FAILED=1; rm -f "$snap"; return 1
   }
   list="$(mktemp -t gk_tools_sel.XXXXXX)"
-  merged="$(mktemp -t gk_tools_junit.XXXXXX)"
+  # `GATEKEEPER_REPO_TOOLS_JUNIT=<path>` keeps this lane's report instead of
+  # deleting it, and it is the MIRROR of `GATEKEEPER_PYTEST_JUNIT` in
+  # `run_pytest` — same shape, same discipline, same non-participation in the
+  # verdict. Read that block for the reasoning; only what is specific to this
+  # lane is repeated here.
+  #
+  # WHY IT WAS MISSING IS WHY IT IS NEEDED. This lane already merged a full
+  # per-file JUnit — every case name, every failure message — and then
+  # `rm -f`'d it three lines later, unconditionally. Inside a `--rm` container
+  # nothing outlives the process, so the report existed for the length of one
+  # function and was destroyed with the only copy. What survived to the operator
+  # was the count in the FAIL line below and nothing else.
+  #
+  # MEASURED, on this repository, 2026-08-29: a full tier reported "28 red
+  # cases" here and "8 red cases" in `run_unselectable_pytest`, and the names
+  # were already gone. Recovering what this lane had ALREADY COMPUTED took a
+  # re-measurement of 810 files across five machines. A 46-minute gate that
+  # cannot say WHICH case is red has produced a number, not a result.
+  #
+  # IT CHANGES NO VERDICT. `rc` below is still the only thing that decides this
+  # line, and with the variable unset the command issued is byte-for-byte the
+  # one this file has always issued: the merge target is still a `mktemp`, it is
+  # still removed, and `--junit` is passed either way. This can only ADD a
+  # readable record.
+  local merged_tmp=""
+  merged="${GATEKEEPER_REPO_TOOLS_JUNIT:-}"
+  if [ -z "$merged" ]; then
+    merged_tmp="$(mktemp -t gk_tools_junit.XXXXXX)"
+    merged="$merged_tmp"
+  else
+    # REMOVE THE TARGET FIRST — see the same removal in `run_pytest`. A lane
+    # that dies without writing must leave NO report, because a leftover from
+    # an earlier run parses, looks complete, and describes a different session.
+    # Absence is honest; a stale green report is not.
+    rm -f "$merged" 2>/dev/null || true
+  fi
   printf '%s\n' "${files[@]}" > "$list"
   # `PYTHONDONTWRITEBYTECODE=1` — see the note in `run_pytest`. This stage is
   # the one that MEASURABLY writes bytecode into $ROOT on main today: it never
@@ -1355,7 +1390,10 @@ run_repo_tools_pytest() {
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
         --compare "$snap" 2>&1)"; wrc=$?
-  rm -f "$snap" "$list" "$merged"
+  # Only the temporary target is removed. When the operator named a path, the
+  # report is theirs and this lane must not destroy it — that deletion is the
+  # entire defect being fixed.
+  rm -f "$snap" "$list" ${merged_tmp:+"$merged_tmp"}
   if [ "$rc" -ne 0 ]; then
     printf '  FAIL  repo tools tests (%s file(s))\n' "${#files[@]}"
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
@@ -1466,7 +1504,23 @@ run_unselectable_pytest() {
   # ONE session and it fails. This stage would have been the author, in the
   # landing gate, on every batch — and :213 fails the WHOLE landing when the
   # tree moves under the gates, so the price is the batch.
-  merged="$(mktemp -t gk_unsel_junit.XXXXXX)"
+  # `GATEKEEPER_UNSELECTABLE_JUNIT=<path>` keeps this lane's report instead of
+  # deleting it — the same mirror of `GATEKEEPER_PYTEST_JUNIT` that
+  # `run_repo_tools_pytest` above carries, for the same measured reason, and it
+  # matters MORE here. This corpus is by construction the tests that NO diff can
+  # select: when one of them is red, no targeted run will ever name it again, so
+  # this lane's report is the only place the name is ever written down.
+  #
+  # IT CHANGES NO VERDICT. `rc` below still decides this line; with the variable
+  # unset the command is byte-for-byte the one this file has always issued.
+  local merged_tmp=""
+  merged="${GATEKEEPER_UNSELECTABLE_JUNIT:-}"
+  if [ -z "$merged" ]; then
+    merged_tmp="$(mktemp -t gk_unsel_junit.XXXXXX)"
+    merged="$merged_tmp"
+  else
+    rm -f "$merged" 2>/dev/null || true
+  fi
   out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 \
         PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
         python3 "$PROGRAMS/pytest_per_file_junit.py" \
@@ -1482,7 +1536,8 @@ run_unselectable_pytest() {
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
         --compare "$snap" 2>&1)"; wrc=$?
-  rm -f "$snap" "$list" "$merged"
+  # Only the temporary target is removed; a named report belongs to the operator.
+  rm -f "$snap" "$list" ${merged_tmp:+"$merged_tmp"}
   # THE COUNT IS NOT IN THE LABEL, and that is deliberate. #1431: the two arms
   # of `gatekeeper-verify-merge.sh` subtract gate logs BY PRINTED LABEL, so a
   # label carrying a discovery count renames its own gate whenever a branch adds
