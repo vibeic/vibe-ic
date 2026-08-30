@@ -770,6 +770,14 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "Metal",
       vdd_pin: "VDD",
       vss_pin: "VSS",
+      // The PDN NET name eda_pnr creates, which is NOT the std-cell PIN name in
+      // vdd_pin: eda_pnr writes `add_global_connection -net <vdd_net>
+      // -pin_pattern "<vdd_pin>"`, so on sky130 the DEF's SPECIALNETS are
+      // VDD/VSS while the cell pins matched are VPWR/VGND. Any consumer that
+      // needs a NET (OpenROAD PSM's `analyze_power_grid -net`) must read this
+      // one; reading vdd_pin asks PSM for a net that does not exist.
+      vdd_net: "VDD",
+      vss_net: "VSS",
       // v1.3.53 R9 — antenna diode master from the PDK's own std-cell library
       // (data, NOT logic): consumed by antennaRepairTcl for the incremental
       // repair->reroute loop. Chip-AGNOSTIC — the Tcl-gen never hardcodes it.
@@ -784,6 +792,14 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "met",
       vdd_pin: "VPWR",
       vss_pin: "VGND",
+      // The PDN NET name eda_pnr creates, which is NOT the std-cell PIN name in
+      // vdd_pin: eda_pnr writes `add_global_connection -net <vdd_net>
+      // -pin_pattern "<vdd_pin>"`, so on sky130 the DEF's SPECIALNETS are
+      // VDD/VSS while the cell pins matched are VPWR/VGND. Any consumer that
+      // needs a NET (OpenROAD PSM's `analyze_power_grid -net`) must read this
+      // one; reading vdd_pin asks PSM for a net that does not exist.
+      vdd_net: "VDD",
+      vss_net: "VSS",
       // v1.3.53 R9 — same sky130 diode master the phase3 runner uses
       // (phase3_one_shot_runner.py PdkConfig.antenna_diode_cell), so both PnR
       // paths repair antennas identically.
@@ -804,6 +820,14 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "metal",
       vdd_pin: "VDD",
       vss_pin: "VSS",
+      // The PDN NET name eda_pnr creates, which is NOT the std-cell PIN name in
+      // vdd_pin: eda_pnr writes `add_global_connection -net <vdd_net>
+      // -pin_pattern "<vdd_pin>"`, so on sky130 the DEF's SPECIALNETS are
+      // VDD/VSS while the cell pins matched are VPWR/VGND. Any consumer that
+      // needs a NET (OpenROAD PSM's `analyze_power_grid -net`) must read this
+      // one; reading vdd_pin asks PSM for a net that does not exist.
+      vdd_net: "VDD",
+      vss_net: "VSS",
       antenna_diode_cell: "ANTENNA_X1",
     },
   };
@@ -822,6 +846,8 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: customOpts.custom_metal_prefix || "met",
       vdd_pin: customOpts.custom_vdd || "VDD",
       vss_pin: customOpts.custom_vss || "VSS",
+      vdd_net: customOpts.custom_vdd_net || "VDD",
+      vss_net: customOpts.custom_vss_net || "VSS",
       // v1.3.53 R9 — a custom PDK has no known diode master; the caller may
       // supply one (custom_antenna_diode). Absent -> null -> antennaRepairTcl
       // SKIPS the repair loop (manual diode ECO) rather than inventing a cell.
@@ -1905,10 +1931,10 @@ initialize_floorplan -utilization ${utilization} -aspect_ratio 1.0 -core_space 1
 make_tracks
 ${routingLayersSnippet}
 place_pins -hor_layers ${mp}3 -ver_layers ${mp}2
-add_global_connection -net VDD -pin_pattern "${cfg.vdd_pin}" -power
-add_global_connection -net VSS -pin_pattern "${cfg.vss_pin}" -ground
+add_global_connection -net ${cfg.vdd_net} -pin_pattern "${cfg.vdd_pin}" -power
+add_global_connection -net ${cfg.vss_net} -pin_pattern "${cfg.vss_pin}" -ground
 global_connect
-set_voltage_domain -power VDD -ground VSS
+set_voltage_domain -power ${cfg.vdd_net} -ground ${cfg.vss_net}
 define_pdn_grid -name main
 add_pdn_stripe -grid main -layer ${mp}1 -width 0.48 -followpins
 ${stripesSnippet}
@@ -3553,9 +3579,48 @@ server.tool(
     } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
     const mp = cfg.metal_prefix;
-    const vddNet = cfg.vdd_pin || "VDD";
-    const vssNet = cfg.vss_pin || "VSS";
-    const ttlEnvVoltage = `set_pdnsim_net_voltage -net ${vddNet} -voltage ${voltage}\nset_pdnsim_net_voltage -net ${vssNet} -voltage 0.0`;
+    // P-5. This tool used to read `cfg.vdd_pin` and hand it to PSM as a NET name.
+    // vdd_pin is the std-cell PIN name; on sky130 that is VPWR, while the DEF
+    // eda_pnr writes carries the NET VDD. So `analyze_power_grid -net VPWR`
+    // failed with PSM-0028 "Cannot find net VPWR in the design" on every sky130
+    // run — the tool could not read a DEF its own sibling had just produced.
+    // gf180 and nangate45 both happen to use VDD/VSS for both, which is why the
+    // disagreement was invisible there.
+    //
+    // Guessing a name is what caused the bug, so this does not guess: it reads
+    // the power/ground nets out of the DEF that was actually supplied and picks
+    // from them. A candidate list (most specific first) is preferred when
+    // present; a DEF with exactly ONE power net is unambiguous and is used even
+    // if it matches no candidate (a DEF from OpenLane names it VPWR); and a DEF
+    // where the net cannot be identified is REFUSED as NOT_MEASURED rather than
+    // analysed against a name nobody confirmed.
+    const vddCandidates = [...new Set([custom_vdd, cfg.vdd_net, cfg.vdd_pin, "VDD", "VPWR"].filter(Boolean))];
+    const vssCandidates = [...new Set([custom_vss, cfg.vss_net, cfg.vss_pin, "VSS", "VGND"].filter(Boolean))];
+    const netResolveTcl = `
+# P-5: resolve the power/ground NET names from the DEF itself, never from the
+# std-cell pin name. Emits the discovered sets so the caller can report what the
+# DEF actually contained when resolution fails.
+set _blk [ord::get_db_block]
+set _pwr {}
+set _gnd {}
+foreach _n [$_blk getNets] {
+  set _st [$_n getSigType]
+  if {$_st == "POWER"}  { lappend _pwr [$_n getName] }
+  if {$_st == "GROUND"} { lappend _gnd [$_n getName] }
+}
+puts "PSM_PWR_NETS=[join $_pwr ,]"
+puts "PSM_GND_NETS=[join $_gnd ,]"
+proc _pick {cands found} {
+  foreach _c $cands { if {[lsearch -exact $found $_c] >= 0} { return $_c } }
+  if {[llength $found] == 1} { return [lindex $found 0] }
+  return ""
+}
+set _vddnet [_pick {${vddCandidates.join(" ")}} $_pwr]
+set _vssnet [_pick {${vssCandidates.join(" ")}} $_gnd]
+puts "PSM_VDD_NET=$_vddnet"
+puts "PSM_VSS_NET=$_vssnet"`;
+    const ttlEnvVoltage = `set_pdnsim_net_voltage -net $_vddnet -voltage ${voltage}
+if {$_vssnet ne ""} { set_pdnsim_net_voltage -net $_vssnet -voltage 0.0 }`;
 
     // T3 v0.106: inject cross-layer PDN stripes for tiny designs to avoid PSM-0069
     // connectivity failure. Metal4 stripes connect isolated Metal1 per-row rails.
@@ -3579,14 +3644,19 @@ catch {
 read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
 read_def ${def_file}
+${netResolveTcl}
+if {$_vddnet eq ""} {
+  puts "=== IR_DROP_NO_POWER_NET ==="
+} else {
 ${ttlEnvVoltage}
 ${pdnStripeTcl}
-set rc [catch {analyze_power_grid -net ${vddNet}} err]
+set rc [catch {analyze_power_grid -net $_vddnet} err]
 if {$rc} {
   puts "PSM_CONNECTIVITY_WARN: $err"
   puts "=== IR_DROP_WARN ==="
 } else {
   puts "=== IR_DROP_COMPLETE ==="
+}
 }`;
     const rawIrResult = dockerExec(
       openroadScriptCmd({ tcl: irTcl, tag: "ir_drop" }),
@@ -3609,6 +3679,15 @@ if {$rc} {
     const isComplete = result.output.includes("IR_DROP_COMPLETE") && !irFailed;
     const isWarn = result.output.includes("IR_DROP_WARN") && !irFailed;
 
+    // P-5: what the DEF actually declared, and which net was analysed.
+    const _grab = (re) => { const m = result.output.match(re); return m ? m[1].trim() : null; };
+    const _list = (v) => (v ? v.split(",").filter(Boolean) : []);
+    const defPowerNets  = _list(_grab(/^PSM_PWR_NETS=(.*)$/m));
+    const defGroundNets = _list(_grab(/^PSM_GND_NETS=(.*)$/m));
+    const vddNet = _grab(/^PSM_VDD_NET=(.*)$/m) || null;
+    const vssNet = _grab(/^PSM_VSS_NET=(.*)$/m) || null;
+    const noPowerNet = result.output.includes("IR_DROP_NO_POWER_NET");
+
     if (isComplete) {
       const dir = def_file.substring(0, def_file.lastIndexOf("/"));
       writeManifest(dir || "/tmp", {
@@ -3623,6 +3702,15 @@ if {$rc} {
                    || result.output.match(/(\d+)\s+instances/i);
     if (instMatch && parseInt(instMatch[1]) < 100) {
       warnings.push(`Design has ${instMatch[1]} instances (< 100) — IR-drop results may not be meaningful for tiny designs.`);
+    }
+    if (noPowerNet) {
+      warnings.push(
+        `Could not identify the power NET to analyse in ${def_file}. `
+        + `The DEF declares POWER net(s) [${defPowerNets.join(", ") || "none"}] and `
+        + `GROUND net(s) [${defGroundNets.join(", ") || "none"}]; none matched the `
+        + `candidates [${vddCandidates.join(", ")}] and the set was not a single `
+        + `unambiguous net. NOT_MEASURED — no IR-drop number is reported. Pass `
+        + `custom_vdd/custom_vss naming the DEF's own power nets.`);
     }
     if (isWarn) {
       warnings.push("PSM connectivity check failed — cross-layer PDN stripes were injected but connectivity still incomplete. Downgraded to WARN.");
@@ -3639,9 +3727,13 @@ if {$rc} {
       content: [{
         type: "text",
         text: JSON.stringify({
-          success: isComplete || isWarn,
+          success: (isComplete || isWarn) && !noPowerNet,
           exit_code: irRun.rc,
           openroad_error_count: irRun.errorCount,
+          vdd_net: vddNet,
+          vss_net: vssNet,
+          def_power_nets: defPowerNets,
+          def_ground_nets: defGroundNets,
           warnings: warnings.length ? warnings : undefined,
           psm_warn: isWarn || undefined,
           output: result.output.slice(-2000),
