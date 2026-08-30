@@ -1211,8 +1211,21 @@ def test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag(
                 continue
             for clause in step.get("gate", {}).get("all_of", []):
                 for key, value in list(clause.items()):
+                    # A clause value is EITHER a bare command string OR the dict
+                    # form `{command: ..., ...}` — both are legal and the engine
+                    # dispatches on both (`_evaluate_gate` normalises the string
+                    # into the dict). This control used to match only the string
+                    # form, so adding `advisory_reason:` to a clause — which
+                    # requires the dict form — turned the control's `hit` to 0
+                    # and the test failed with "clause not found" rather than
+                    # with anything about its subject.
                     if isinstance(value, str) and value.strip() == target:
                         clause[key] = _STEP37_PROGRAM + " ."
+                        hit += 1
+                    elif (isinstance(value, dict)
+                          and isinstance(value.get("command"), str)
+                          and value["command"].strip() == target):
+                        value["command"] = _STEP37_PROGRAM + " ."
                         hit += 1
         assert hit == 1, f"the clause this control edits was not found: {hit}"
 
