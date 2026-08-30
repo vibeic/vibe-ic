@@ -195,6 +195,24 @@ def test_the_run_states_the_clause_reach_not_only_the_findings():
         "actually see")
 
 
+#: WHAT BINDS each member of the reach -- the register whose basename put it
+#: there. The NAME SET alone cannot see a member that stays in the reach and
+#: stops reading the file it exists for.
+#:
+#: MEASURED at v1.13.62, on the tree v1.13.62 itself created: replace
+#: `gate_red_since_check`'s `"tools/ci/gate_red_since.json"` with any other
+#: shipped tracked basename -- `benchmark/CAPTURE_ROUTING.json` was used -- and
+#: the reach is still exactly `{gate_red_since_check.py}`, so the assertion
+#: below it PASSES. The gate that exists to adjudicate the acknowledged-red
+#: register would no longer open that register, and nothing here would say so.
+#:
+#: v1.13.62 removed the way a FIXTURE could move this boundary. This is the
+#: other way it moves: the member stays and its subject changes.
+REACH_AND_WHAT_BINDS_IT = {
+    "gate_red_since_check.py": ("gate_red_since.json",),
+}
+
+
 def test_the_reach_is_pinned_by_MEMBERS_not_by_a_count():
     """The reach is 1 of 21 — and this pins WHICH 1.
 
@@ -214,7 +232,7 @@ def test_the_reach_is_pinned_by_MEMBERS_not_by_a_count():
 
     tracked = R._tracked_json_names(root)
     base = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-    reach = set()
+    binds = {}
     readers = set()
     for f in sorted(base.rglob("*.py")):
         if "tests" in f.parts or not R._is_enforcement(f):
@@ -235,14 +253,25 @@ def test_the_reach_is_pinned_by_MEMBERS_not_by_a_count():
                    and R._iter_target_name(n.iter) not in b.bound
                    and R._emits_a_finding(n.body, strict=False) is not None
                    for n in ast.walk(tree)):
-            reach.add(f.name)
+            binds[f.name] = tuple(sorted(regs))
 
-    expected = {"gate_red_since_check.py"}
+    reach = set(binds)
+    expected = set(REACH_AND_WHAT_BINDS_IT)
     assert reach == expected, (
         f"the clause's reach MOVED. entered: {sorted(reach - expected)}; "
         f"left: {sorted(expected - reach)}. Re-derive the COVERAGE section of "
         f"the checker's docstring against this set — do not just restate the "
         f"number.")
+    assert binds == REACH_AND_WHAT_BINDS_IT, (
+        "the reach holds the same modules, but not for the same reason. "
+        + "; ".join(
+            f"{k}: pinned {list(REACH_AND_WHAT_BINDS_IT.get(k, ()))} -> "
+            f"now {list(binds.get(k, ()))}"
+            for k in sorted(set(binds) | set(REACH_AND_WHAT_BINDS_IT))
+            if binds.get(k) != REACH_AND_WHAT_BINDS_IT.get(k))
+        + ". A member that stays in the reach while the register it reads "
+          "changes has stopped adjudicating its own subject, and the name set "
+          "above cannot see that.")
     assert len(reach) < len(readers), (
         "the reach must be a strict subset of the registry-reading population, "
         "or the boundary this test exists to record has stopped existing")
