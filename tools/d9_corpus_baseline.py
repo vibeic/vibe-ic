@@ -763,8 +763,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--jobs", type=int, default=min(16, (os.cpu_count() or 4)))
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument("--scratch", type=Path,
-                    default=Path("/home/reyerchu/_agentjob_d9b/scratch/iso"),
-                    help="where throwaway run copies are made for WRITERS")
+                    # NOT a home directory: this default named one machine's
+                    # scratch tree, so every other host wrote into a path that
+                    # did not exist. `shutil.copytree` (not `cp -l`) makes the
+                    # copies, so a different filesystem costs nothing here --
+                    # there are no hardlinks to break across devices.
+                    default=Path(tempfile.gettempdir()) / "d9_corpus_scratch",
+                    help="where throwaway run copies are made for WRITERS "
+                         "(default: $TMPDIR/d9_corpus_scratch; leaked copies "
+                         "are left here on purpose, so it must persist)")
     ap.add_argument("--only", action="append", default=None,
                     help="restrict to these checker names (repeatable)")
     ap.add_argument("--max-runs", type=int, default=None,
