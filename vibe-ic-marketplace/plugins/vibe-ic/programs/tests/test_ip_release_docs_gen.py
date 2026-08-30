@@ -260,9 +260,18 @@ def test_an_absent_project_directory_is_refused_not_documented(tmp_path):
 # ─────────────────── the flow declares what this writes ────────────────────
 
 def _declared_clauses(needle: str):
+    """The clauses STEP 37.5ip declares, not every clause in the flow.
+
+    Scoped to this step's own block since step 37.5ic gained its own
+    `release_docs_check` clause: an unscoped sweep collected the chip arm's
+    clause and asserted it named the IP arm, which is a test failing on a
+    correct tree.
+    """
     text = FLOW_YAML.read_text(encoding="utf-8")
+    start = text.index("  - id: 37.5ip")
+    block = text[start:text.index("  - id: 37.5ic", start)]
     out = []
-    for line in text.splitlines():
+    for line in block.splitlines():
         line = line.strip()
         if needle in line and line.startswith("- program_exit_zero:"):
             out.append(line.split(":", 1)[1].strip().strip('"'))

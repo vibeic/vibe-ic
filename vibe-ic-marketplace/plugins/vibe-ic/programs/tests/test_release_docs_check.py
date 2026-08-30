@@ -469,11 +469,18 @@ def test_an_absent_project_directory_does_not_answer_a_verdict(tmp_path):
 # ══════════════════ the gate is wired, and the wiring works ════════════════
 
 def _declared_clause() -> str:
+    """The clause step 37.5ip declares for THIS arm.
+
+    Matched on `--arm ip` rather than on position: both arms now declare a
+    `release_docs_check` clause, and "the first one in the file" is a selector
+    whose answer moves when the flow is reordered.
+    """
     for line in FLOW_YAML.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if "release_docs_check" in line and line.startswith("- program_exit_zero:"):
+        if ("release_docs_check" in line and "--arm ip" in line
+                and line.startswith("- program_exit_zero:")):
             return line.split(":", 1)[1].strip().strip('"')
-    raise AssertionError("no release_docs_check gate clause in the flow yaml")
+    raise AssertionError("no release_docs_check ip gate clause in the flow yaml")
 
 
 def test_the_invocation_the_flow_declares_is_one_this_gate_accepts(tmp_path):

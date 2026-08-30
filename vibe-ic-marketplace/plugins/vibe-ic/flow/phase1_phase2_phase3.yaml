@@ -7144,6 +7144,36 @@ steps:
         path: "input/submission_template/tapeout_declaration.json"
     programs:
       - tapeout_docs_gen
+      # THE PRODUCT DOCUMENTS ARE AN OUTPUT OF THIS STEP TOO, and they are NOT
+      # what `tapeout_docs_gen` already writes. That generator emits SIGN-OFF
+      # EVIDENCE — what was checked, what passed, what did not — for a reader
+      # who already knows what the part is. It emits nothing that states what
+      # the die IS: no interface, no outline, no mandatory operating
+      # constraint, no errata, and no manifest binding the documents to the
+      # artefacts they describe. `ic_release_docs_gen` writes that set, into a
+      # different directory, for a different audience, on a different
+      # lifecycle. The existing HTML stays exactly where it is at
+      # `reports/phase3/docs/` — it is load-bearing in this step's blocking
+      # `all_of`, and relocating it would be a change to 37.5ic's contract
+      # dressed up as a documentation task.
+      #
+      # AND IT REFUSES WHAT THE SIGN-OFF GENERATOR CANNOT SEE. Every one of the
+      # 17 properties `tapeout_docs_gen.release_blockers` decides is read from
+      # `phase3/final/metrics.json`, which is a set of numbers ABOUT a layout
+      # and not the layout: a run whose metrics state `route__drc_errors: 0`
+      # and `timing__setup__ws: 0.42` gets a full sign-off report today while
+      # its GDS carries ZERO geometry records. The new producer opens the
+      # artefacts themselves and writes NOTHING when a class is hollow, naming
+      # the rule — the chip-arm equivalent of the four `// stub` views step
+      # 37.5ip already refuses.
+      #
+      # WRITTEN BY THE RUNNER, NOT BY THE GATE, exactly as 37.5ip's producer
+      # is and for the reason `step_digital_hardmacro_gen` records: an auditor
+      # that writes a declared required_output into the project it is auditing
+      # certifies its own output. It is dispatched from
+      # `phase3_one_shot_runner.step_ic_release_docs_gen`, and the gate clause
+      # below judges documents the audit did not touch.
+      - ic_release_docs_gen
     required_outputs:
       # THE MERGED RECORD — which arms ran, what each concluded, every finding
       # labelled with the authority that produced it, and every disagreement
@@ -7176,6 +7206,25 @@ steps:
       # d4/criteria_match reported it as "named nowhere the gate can reach".
       - "reports/phase3/docs/SIGNOFF_*.html"
       - "reports/phase3/docs/BRIEF_*.html"
+      # ONE DIRECTORY PER SIGN-OFF LAYOUT, including the single-layout case: a
+      # tree with two sign-off streams has two datasheets, and a shape that
+      # collapsed the common case would make the shape exercised on every run
+      # different from the shape a two-die run takes. Named with the globs the
+      # producer actually writes, for the reason this step's own note above
+      # records about `SIGNOFF.html`: declaring a bare filename no producer in
+      # this flow writes is "named nowhere the gate can reach".
+      #
+      # THE CONDITIONAL DOCUMENT IS NOT DECLARED HERE. `USER_REFERENCE_MANUAL.md`
+      # is required only when the design is register-rich, which
+      # `_release_docs_contract` decides from `L4_REGMAP` and the manifest
+      # records; an UNCONDITIONAL claim over a conditionally-produced artefact
+      # is the "declare an undeclared artefact and relocate the red" shape this
+      # step's notes refuse. `release_docs_check` demands it on the runs that
+      # owe it, from the manifest's own recorded decision.
+      - "phase3/stage4/documentation/ic/*/PRELIMINARY_DATASHEET.md"
+      - "phase3/stage4/documentation/ic/*/RELEASE_NOTES.md"
+      - "phase3/stage4/documentation/ic/*/ERRATA.md"
+      - "phase3/stage4/documentation/ic/*/documentation_manifest.yaml"
     gate:
       all_of:
         # ONE CLAUSE FOR BOTH ARMS, on purpose. Splitting them into two
@@ -7186,6 +7235,27 @@ steps:
         # only one arm can report a disagreement between them.
         - program_exit_zero: "tapeout_precheck . --json reports/phase3/tapeout_precheck.json"
         - program_exit_zero: "tapeout_docs_gen --project . --out-dir reports/phase3/docs"
+        # THE PRODUCT DOCUMENTS ARE JUDGED ON THEIR OWN EVIDENCE, not on the
+        # producer's exit code. Nothing here trusts `ic_release_docs_gen`: this
+        # gate RE-DERIVES every quantity the documents state, from a DIFFERENT
+        # view where one exists — the signal pin count from the gate-level
+        # netlist rather than the DEF the document was written off, the die
+        # outline from `metrics.json` rather than that same DEF — and refuses a
+        # disagreement naming both sides with both paths. It recomputes every
+        # digest the manifest records, and it re-runs the artefact-substance
+        # audit, because documents are FILES: an artefact hollowed out AFTER
+        # generation leaves a beautiful set describing a die with nothing on it,
+        # and a producer-side refusal alone would have run only at the one
+        # moment the tree was known good.
+        #
+        # AND THE ONE THAT MAKES IT A GATE RATHER THAN A COMMENT: it derives
+        # the releases it EXPECTS from `phase3/stage4/gds/*.gds` rather than
+        # from the documentation directory, so "the die was signed off and
+        # nobody documented it" is rc 1 with a name instead of an empty sweep
+        # scored in a PASS tier. Until this landed the `ic` arm returned no
+        # expected release at all and could only ever answer "nothing to
+        # examine" — the v1.13.42 shape, inside the gate written to end it.
+        - program_exit_zero: "release_docs_check . --arm ic --json reports/phase3/release_docs_ic.json"
         # `ppa_signoff_records` IS NOT WIRED HERE, AND THE ATTEMPT IS WHY THIS
         # NOTE EXISTS. It was added on 2026-08-25 with the reasoning that
         # 37.5ic is the first point where every axis it reads coexists —
