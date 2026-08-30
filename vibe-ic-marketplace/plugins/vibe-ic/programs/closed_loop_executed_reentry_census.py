@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """closed_loop_executed_reentry_census.py — which loops does the tree RUN?
 
-ENFORCEMENT: blocking
+ENFORCEMENT: advisory
 
 The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
 audit.declared_intent` reads. Why it refuses rather than reports is measured
@@ -82,22 +82,49 @@ Two signals, each read off the AST, never off a name:
 
 INERT IS THE FAILING CONDITION, AND IT IS REACHABLE
 ===================================================
-A census whose verdict cannot change is a list. This one is falsified by
-mutation rather than asserted, in `tests/test_closed_loop_executed_reentry_
-census.py`: the area loop's varying argument is replaced by a pass-through of
-the enclosing parameter, its measurement is deleted, and both at once — three
-arms, and the third must read INERT. The routing loop is the CONTROL and stays
-ACTUATING in every arm. A census that cannot notice a loop someone broke is not
-a census.
+A census whose verdict cannot change is a list. The sibling's is not reachable
+at all: `grep -c "return 1" closed_loop_metric_reaches_its_producer.py` is 0, its
+`main()` has exactly three returns (`2`, `2`, `0`), and through its
+`advisory_program_exit_zero` slot rc 0 is recorded as `ADVISORY ok:` and rc 2 as
+`ADVISORY n/a` — so a tree with 21 reachable edges and a tree with none write the
+same line into the report.
+
+This one refuses, and the refusal is falsified by MUTATION rather than asserted,
+in `tests/test_closed_loop_executed_reentry_census.py`. Three arms on the area
+loop, two control loops held still in every arm, measured end to end:
+
+    arm 0  the shipped tree, unmutated             ACTUATING   rc 0
+    arm A  the varying argument replaced by a
+           pass-through of the enclosing parameter SELF_CHECKED_ONLY  rc 1
+                                                   (baseline regression)
+    arm B  the varying argument AND the read-back
+           both removed                            INERT       rc 1
+    CONTROL `step_pnr -> _docker_exec` and `main -> step_rtl_gen` hold
+            SELF_CHECKED_ONLY in every arm
+
+A census that cannot notice a loop someone broke is not a census. A census that
+reddens everything when one loop breaks has told you nothing about that loop.
 
 THE VERDICT
 ===========
-BLOCKING. Unlike the sibling's UNREACHABLE — a fact about capabilities that no
-change owns — an INERT re-entry site is a defect a change INTRODUCES: somebody
-wrote a retry that re-runs the tool with the same inputs and ignores the answer.
-`rc 1` on that, and on a BASELINE REGRESSION: a site recorded here as ACTUATING
-or SELF_CHECKED that has since lost the signal. The baseline is the shipped
-population, so the inherited state cannot redden a landing and a new defect can.
+`ENFORCEMENT: advisory` is the word `flow_gate_enforcement_audit` has for "no
+RUNNER spawns this gate inline", and that is true of it. It is NOT a claim that
+the gate cannot fail anything, and the difference from the sibling is the whole
+point of this file, so it is spelled out rather than left to the token:
+
+  * the flow clause is `program_exit_zero`, not `advisory_program_exit_zero`.
+    On rc 1 `flow_compliance_check` returns the step FAILED. The sibling's slot
+    is structurally incapable of that;
+  * `rc 1` fires on an INERT re-entry site, and on a BASELINE REGRESSION — a
+    site recorded here as ACTUATING or SELF_CHECKED that has since lost the
+    signal. The baseline is the shipped population, so inherited state cannot
+    redden a landing and a new defect can. That ratchet is what the sibling was
+    missing when it chose to report instead of refuse: UNREACHABLE is debt no
+    change owns, but a NEWLY unreachable edge is a defect, and a baseline is all
+    that separates them;
+  * `test_the_shipped_baseline_matches_the_shipped_tree` asserts rc 0 over the
+    shipped tree, so an INERT loop that lands turns the suite red whether or not
+    any project ever runs the flow clause.
 
 A ZERO DENOMINATOR REFUSES (rc 2). No runner parsed, or no re-entry site found
 at all, is the ABSENCE of the question, not a clean answer to it.
