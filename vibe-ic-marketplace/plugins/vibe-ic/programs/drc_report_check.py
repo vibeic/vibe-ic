@@ -160,6 +160,21 @@ MODE = "drc"
 #: option would additionally need `_report_check_argv.VALUE_FLAGS`.
 WRAPPER_FLAGS = ("--signoff",)
 
+#: Wrapper-owned options that TAKE A VALUE, repeatable. Each names a report
+#: path (project-relative) that this invocation asserts MUST EXIST. Registered
+#: in `_report_check_argv.VALUE_FLAGS` too, or the splitter would read the
+#: value as the positional project dir.
+#:
+#: WHY A DECLARATION IS NEEDED AT ALL. A report can be ABSENT, EMPTY or
+#: POPULATED, and those are three different answers: absent means the question
+#: could not be put, empty means it was put and the answer is zero, populated
+#: means it was put and the answer is whatever it parses to. The audit can
+#: tell empty from populated by reading the bytes. It cannot tell ABSENT from
+#: "never expected" by itself -- an undiscovered file leaves no trace -- so the
+#: caller has to say which reports it required. Without this the two collapse
+#: and absence reads as a clean pass.
+WRAPPER_VALUE_FLAGS = ("--require-report",)
+
 #: rc contract of this wrapper. 2 is deliberately absent — see the module
 #: docstring (``_check_program_exit_zero`` credits rc 2 as a vacuous PASS).
 RC_PASS = 0
@@ -219,6 +234,72 @@ def take_wrapper_flags(passthrough) -> tuple:
     """
     present = {t for t in passthrough if t in WRAPPER_FLAGS}
     return present, [t for t in passthrough if t not in WRAPPER_FLAGS]
+
+
+def take_required_reports(passthrough) -> tuple:
+    """``(required_paths, passthrough_without_them)``.
+
+    Strips `--require-report <path>` pairs. Kept separate from
+    `take_wrapper_flags` so that function's `(set, list)` contract -- which
+    callers and tests already depend on -- is unchanged.
+    """
+    required, rest, i = [], [], 0
+    toks = list(passthrough)
+    while i < len(toks):
+        t = toks[i]
+        if t in WRAPPER_VALUE_FLAGS:
+            if i + 1 < len(toks):
+                required.append(toks[i + 1])
+                i += 2
+                continue
+            # A value-taking flag with no value: drop it rather than forward
+            # it, and let `required_report_verdict` see an empty list. The
+            # caller learns from the audit that nothing was required.
+            i += 1
+            continue
+        if t.startswith(tuple(f"{f}=" for f in WRAPPER_VALUE_FLAGS)):
+            required.append(t.split("=", 1)[1])
+            i += 1
+            continue
+        rest.append(t)
+        i += 1
+    return required, rest
+
+
+def required_report_verdict(project_dir: str, required) -> tuple:
+    """``(findings, summary_additions)`` for reports the caller REQUIRED.
+
+    THE THIRD STATE. `eda_report_audit._check_drc` distinguishes EMPTY from
+    POPULATED by reading the file. This distinguishes ABSENT from both, and
+    it REFUSES: a required report that does not exist means the question was
+    never put, and a gate that reported enforcement over a measurement nobody
+    took is the defect this closes.
+
+    BLOCKING. An ERROR finding here is one of the caller's rc-1 reasons; rc 2
+    is deliberately not used, because `_check_program_exit_zero` credits rc 2
+    as a VACUOUS PASS -- measured on this host 2026-08-30: a gate exiting 2
+    is graded `passed=True`. Refusal must therefore spend rc 1.
+
+    An EMPTY required report is NOT a finding here: it exists, so the question
+    was put, and `_check_drc` credits it as a zero.
+
+    chip-AGNOSTIC: path existence only; the paths come from the caller.
+    """
+    findings, absent = [], []
+    for rel in required:
+        if not (Path(project_dir) / rel).is_file():
+            absent.append(rel)
+    if absent:
+        findings.append({
+            "rule": "DRC_REPORT_REQUIRED_ABSENT", "severity": "ERROR",
+            "message": (
+                f"{len(absent)} report(s) this invocation REQUIRED do not "
+                f"exist, so nothing measured what they were to answer -- "
+                f"this is NOT an empty report (which is a measured zero) and "
+                f"NOT a clean pass: {', '.join(absent)}"),
+            "file": absent[0]})
+    return findings, {"required_reports": list(required),
+                      "required_reports_absent": absent}
 
 
 def signoff_verdict(payload: object, project_dir: str) -> tuple:
@@ -345,6 +426,7 @@ def run(caller_argv, _audit=None) -> int:
     audit = _audit or _audit_main
     project_dir, passthrough, refusal = split_and_pin(caller_argv, mode=MODE)
     wrapper_flags, passthrough = take_wrapper_flags(passthrough)
+    required_reports, passthrough = take_required_reports(passthrough)
     signoff = "--signoff" in wrapper_flags
     target = json_target(passthrough)
 
@@ -403,8 +485,31 @@ def run(caller_argv, _audit=None) -> int:
     # audit's verdict plus a stderr line contradicting it. Only a would-be PASS
     # is re-judged: a FAIL is already a FAIL, and re-deciding it here would
     # relabel someone else's finding.
+    # --- the REQUIRED-REPORT scope ----------------------------------------
+    # Applied before the sign-off scope and before persistence, on the same
+    # only-re-judge-a-would-be-PASS rule: a FAIL is already a FAIL.
+    required_absent = False
+    if required_reports and rc == RC_PASS:
+        rf, radd = required_report_verdict(project_dir, required_reports)
+        rerrors = [f for f in rf if f.get("severity") == "ERROR"]
+        if isinstance(payload, dict):
+            payload.setdefault("findings", []).extend(rf)
+            if isinstance(payload.get("summary"), dict):
+                payload["summary"].update(radd)
+            else:
+                payload["summary"] = radd
+            if rerrors:
+                payload["passed"] = False
+                payload["summary"]["terminal_verdict"] = "REQUIRED_REPORT_ABSENT"
+            payload_text = json.dumps(payload, indent=2,
+                                      ensure_ascii=False) + "\n"
+        required_absent = bool(rerrors)
+        for f in rf:
+            print(f"drc_report_check: [{f['severity']}] {f['rule']}: "
+                  f"{f['message']}", file=sys.stderr)
+
     signoff_refused = False
-    if signoff and rc == RC_PASS:
+    if signoff and rc == RC_PASS and not required_absent:
         sf, sadd = signoff_verdict(payload, project_dir)
         errors = [f for f in sf if f.get("severity") == "ERROR"]
         if isinstance(payload, dict):
@@ -433,7 +538,11 @@ def run(caller_argv, _audit=None) -> int:
     # `eda_report_audit` writes `--json` itself, so the artefact on disk holds
     # the BASE payload. Under `--signoff` it must be overwritten with the
     # enriched one, or the persisted audit and the exit code disagree.
-    if target and (signoff or not Path(target).is_file()):
+    # `required_reports` joins `signoff` here: both ENRICH the payload, and a
+    # persisted audit saying passed=true beside an rc-1 refusal is the
+    # disagreement this branch exists to prevent.
+    if target and (signoff or required_reports
+                   or not Path(target).is_file()):
         if _write_json(target, payload_text.strip() + "\n"):
             if not signoff:
                 print(f"drc_report_check: audit re-emitted to {target} by the "
@@ -444,6 +553,14 @@ def run(caller_argv, _audit=None) -> int:
                   f"verdict below was produced but could not be persisted.",
                   file=sys.stderr)
             return RC_FAIL
+
+    if required_absent:
+        print("drc_report_check: REFUSED a PASS — a REQUIRED DRC report does "
+              "not exist, so the question it answers was never put. An absent "
+              "report is not an empty one: empty is a measured zero, absent "
+              "is NOT MEASURED. See DRC_REPORT_REQUIRED_ABSENT above.",
+              file=sys.stderr)
+        return RC_FAIL
 
     if signoff_refused:
         print("drc_report_check: REFUSED a sign-off PASS — see the "
