@@ -437,6 +437,59 @@ def test_every_rule_has_an_emitter_and_a_printer():
     assert mod._PRINTERS[RULE] is mod._print_analog
 
 
+def test_a_declared_not_enabled_rule_is_not_an_exemption():
+    """THE CONTROL ON THE WIDENING ABOVE, which landed without one.
+
+    v1.13.27 widened the set its neighbour compares by EQUALITY from `_RULES`
+    to `_RULES | _DECLARED_NOT_ENABLED`. That widening is correct — a rule that
+    is declared today is one somebody enables tomorrow, and `emit_test` looks
+    its emitter up the moment they do — but widening a set an equality is
+    taken over is exactly the move that turns a check into a rubber stamp, and
+    nothing was asserting that the wider set had to be FULL.
+
+    So it is asserted here, on the DICT rather than inferred from the equality:
+    an equality can be satisfied by two sets that are wrong together.
+
+    A rule may not sit in both dicts either. `main()` branches on
+    `stage in _DECLARED_NOT_ENABLED and stage not in _RULES`, so a stage in
+    both would RUN the rule while reporting it as not enabled — the one state
+    a "declared, not enabled" register must never be able to reach, and the
+    one the equality alone cannot see.
+
+    MEASURED against four mutations of the program, each caught, then restored:
+
+        drop R5 from _EMITTERS (declared rule, no emitter)  2 failed, 16 passed
+        an _EMITTERS key naming no rule at all (orphan)     1 failed, 17 passed
+        stage5 in BOTH _RULES and _DECLARED_NOT_ENABLED     1 failed, 17 passed
+        drop R5's _NOT_ENABLED_REASON                      13 failed,  5 passed
+        restored                                                    18 passed
+
+    The first two are the two DIRECTIONS of the equality, so the widening cost
+    neither of them.
+
+    The `getattr` and the early return are deliberate: this file must pass
+    against a tree with no `_DECLARED_NOT_ENABLED` at all, or it is an
+    accommodation of one commit rather than a control on a rule.
+    """
+    mod = _program()
+    dne = getattr(mod, "_DECLARED_NOT_ENABLED", {})
+    if not dne:
+        return                    # nothing declared-not-enabled; nothing to pin
+    for stage, rules in dne.items():
+        assert stage not in mod._RULES, (
+            f"{stage} is in BOTH _RULES and _DECLARED_NOT_ENABLED; main() would "
+            f"run its rule while reporting it as not enabled")
+        for rid, fn in rules:
+            assert rid in mod._EMITTERS, (
+                f"{rid} is declared-not-enabled with no emitter. Enabling it "
+                f"would raise KeyError inside emit_test, which is the runtime "
+                f"discovery this file exists to prevent")
+            assert rid in mod._PRINTERS, f"{rid} has no printer"
+            assert rid in mod._NOT_ENABLED_REASON, (
+                f"{rid} is not enabled and does not say why")
+            assert callable(fn)
+
+
 def test_the_accept_observation_branch_is_inert_for_the_other_stages(tree):
     """This stage added four lines to a loop `main()` shares.
 
