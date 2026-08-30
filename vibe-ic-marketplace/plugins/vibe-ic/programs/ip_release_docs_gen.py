@@ -838,35 +838,26 @@ def _kit_production_field(rel: Release) -> Field:
         f"how the four views came to be here")
 
 
-def _kit_verdict_field(rel: Release) -> Field:
-    """The verdict step 37.5ip's own gate RECORDED, quoted from its record.
-
-    Read out of the gate's JSON when the gate has written one, and NOT_MEASURED
-    with the reason when it has not. Deliberately NOT re-derived into a second
-    verdict of this program's own: the deliverability decision above already
-    consults `digital_hardmacro_check`, and a document that states a verdict no
-    written record carries is a verdict nobody can re-check.
-    """
-    rel_path = "reports/phase3/digital_hardmacro.json"
-    doc = _read_json(rel.project / rel_path)
-    tier = (doc or {}).get("verdict_tier") if isinstance(doc, dict) else None
-    summary = (doc or {}).get("summary") if isinstance(doc, dict) else None
-    if not isinstance(tier, str) or not tier:
-        if isinstance(summary, dict) and isinstance(summary.get("verdict_tier"), str):
-            tier = summary["verdict_tier"]
-    if isinstance(tier, str) and tier:
-        return measured("Delivered-kit verdict", tier, rel_path)
-    return unmeasured(
-        "Delivered-kit verdict",
-        f"{rel_path} carries no verdict_tier in this run, so no written record "
-        f"states the verdict this release was granted")
+# `Delivered-kit verdict` IS DELIBERATELY NOT A ROW HERE, and it was one until
+# d7 refused it. Reading `reports/phase3/digital_hardmacro.json` — the sibling
+# GATE clause's own declared output — made this producer a consumer of a
+# gate-designated artefact that step 37.5ip's `required_outputs` does not
+# declare, which is `W1:gate_output_read_elsewhere`: a produced-consumed-
+# undeclared path. Declaring it would have been the "relocate the red" shape
+# 37.5ic's own notes refuse, because `required_outputs` is probed BEFORE the
+# gate runs and no first run would have the file yet.
+#
+# It is also circular on its own terms. A release document that quotes the
+# verdict of the gate now judging it is a document asserting its own approval,
+# and the gate that would grant it runs afterwards. What this section can
+# honestly carry is what the run PRODUCED and what the views CONTAIN — which is
+# what the two rows above are.
 
 
 def release_notes(rel: Release) -> Tuple[str, List[Field]]:
     ident = _ident_fields(rel)
     views = view_fields(rel.kit)
-    status = [_delivered_views_field(rel), _kit_production_field(rel),
-              _kit_verdict_field(rel)]
+    status = [_delivered_views_field(rel), _kit_production_field(rel)]
     every = ident + views + status
     limitations = [
         "- Silicon measurement: not performed. There is no characterised "

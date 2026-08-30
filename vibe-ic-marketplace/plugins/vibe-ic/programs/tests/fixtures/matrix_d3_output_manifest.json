@@ -1235,6 +1235,24 @@
         },
         "phase3/stage4/hardmacro/*.v": {
           "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/IP_DATASHEET.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/IP_INTEGRATION_GUIDE.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/RELEASE_NOTES.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/ERRATA.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/DELIVERABLES_MANIFEST.md": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/documentation/ip/*/documentation_manifest.yaml": {
+          "status": "UNPROVEN"
         }
       },
       "condition_files": [

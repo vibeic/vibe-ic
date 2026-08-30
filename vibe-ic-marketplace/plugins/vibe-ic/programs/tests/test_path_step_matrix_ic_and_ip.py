@@ -952,6 +952,13 @@ WIRED_PRODUCERS = {
     ("26.5ic", "die_finishing_gen"),
     ("37.5ic", "tapeout_docs_gen"),
     ("37.5ip", "digital_hardmacro_gen"),
+    # The IP path's release documents, dispatched from
+    # `phase3_one_shot_runner.step_ip_release_docs_gen` beside the kit producer
+    # above. WIRED from the moment it landed: a document set the runner does
+    # not write is a required_output only the audit could produce, which is the
+    # arrangement `step_digital_hardmacro_gen` already refuses in its own
+    # docstring.
+    ("37.5ip", "ip_release_docs_gen"),
 }
 #: EMPTY, and it stays a name rather than being deleted: the assertion below
 #: reads `WIRED_PRODUCERS | UNWIRED_PRODUCERS` as the whole declared

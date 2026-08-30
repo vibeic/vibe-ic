@@ -1493,6 +1493,94 @@ def _f_hardmacro_kit_incomplete(p: Path) -> None:
        'END LIBRARY\n')
 
 
+def _f_release_docs_contradict_netlist(p: Path) -> None:
+    """A delivered IP whose datasheet states an interface its own netlist denies.
+
+    Reddens the Step-37.5ip clause
+    ``release_docs_check . --arm ip --json reports/phase3/release_docs.json``.
+
+    EMPTY cannot reach it BY DESIGN, and the design is the point of the gate:
+    with no kit and no documents there is no release to examine, which is rc 2
+    and never a statement that a delivery was documented. So the fixture
+    DELIVERS — a macro with a LEF and the Verilog view an integrator would
+    simulate — and then documents it WRONG.
+
+    The datasheet's `Signal pins` row says 4. The delivered Verilog declares
+    three logical ports. The gate re-derives the count from that second view and
+    refuses, naming both sides. That is a fact about what the project DID, not
+    about what it omitted: the same tree with the row saying 3 is rc 0.
+
+    The other four required documents are absent, which the same run also
+    refuses. Both refusals are content-earned and neither is the whole red:
+    deleting either leaves the clause failing on the other.
+
+    MEASURED, verbatim (rc 1):
+
+        [ERROR] PIN_COUNT_DISAGREES_WITH_NETLIST (core_macro): IP_DATASHEET.md
+        states 'Signal pins' = 4, derived from
+        `phase3/stage4/hardmacro/core_macro.lef`; the delivered netlist view
+        `phase3/stage4/hardmacro/core_macro.v` declares 3 logical port(s).
+        [ERROR] REQUIRED_DOCUMENT_ABSENT (core_macro): IP_INTEGRATION_GUIDE.md
+        is required for the ip arm and is absent ...
+
+    Chip- and PDK-AGNOSTIC: the macro name is a generic noun, the pin names are
+    the universal clock/reset/data triple, the layer name is LEF's own generic
+    ``met1``, and no branch of the gate reads any of them.
+    """
+    _w(p, "phase3/stage4/hardmacro/core_macro.lef",
+       'VERSION 5.7 ;\n'
+       'BUSBITCHARS "[]" ;\n'
+       'MACRO core_macro\n'
+       '  CLASS BLOCK ;\n'
+       '  ORIGIN 0 0 ;\n'
+       '  SIZE 100.000 BY 80.000 ;\n'
+       '  PIN clk\n'
+       '    DIRECTION INPUT ;\n'
+       '    USE SIGNAL ;\n'
+       '    PORT\n'
+       '      LAYER met1 ;\n'
+       '        RECT 1.000 1.000 1.400 1.400 ;\n'
+       '    END\n'
+       '  END clk\n'
+       'END core_macro\n'
+       'END LIBRARY\n')
+    _w(p, "phase3/stage4/hardmacro/core_macro.v",
+       'module core_macro (\n'
+       '    input  wire clk,\n'
+       '    input  wire rst_n,\n'
+       '    output wire dout\n'
+       ');\n'
+       'endmodule\n')
+    _w(p, "phase3/stage4/documentation/ip/core_macro/IP_DATASHEET.md",
+       '# IP Datasheet\n'
+       '\n'
+       '## 1. Identification\n'
+       '\n'
+       '| Field | Value | Derived from |\n'
+       '| --- | --- | --- |\n'
+       '| Design | core_macro | `phase3/stage4/hardmacro/core_macro.lef` |\n'
+       '\n'
+       '## 2. Functional Overview\n'
+       '\n'
+       'A block delivered as a hard macro.\n'
+       '\n'
+       '## 3. Interface\n'
+       '\n'
+       '| Field | Value | Derived from |\n'
+       '| --- | --- | --- |\n'
+       '| Signal pins | 4 | `phase3/stage4/hardmacro/core_macro.lef` |\n'
+       '\n'
+       '## 4. Delivered Views\n'
+       '\n'
+       '## 5. Timing\n'
+       '\n'
+       '## 6. Power\n'
+       '\n'
+       '## 7. What Is Not Measured\n'
+       '\n'
+       'Nothing is measured in this document.\n')
+
+
 def _f_extract_illegal_overlap(p: Path) -> None:
     """Magic filed illegal-overlap feedback areas; the extraction is fiction.
 
@@ -1803,6 +1891,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "AREA_OVER_CEILING": _f_area_over_ceiling,
     "DIE_UNFINISHED": _f_die_unfinished,
     "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
+    "RELEASE_DOCS_CONTRADICT_NETLIST": _f_release_docs_contradict_netlist,
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
     "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
     "PAD_DECL_PARTIAL": _f_pad_decl_partial,
@@ -1937,6 +2026,16 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("37.5ip", "digital_hardmacro_check . --json "
                "reports/phase3/digital_hardmacro.json"):
         "HARDMACRO_KIT_INCOMPLETE",
+    # The step's SECOND blocking clause, added with the IP release documents.
+    # EMPTY answers rc 2 for the same structural reason its sibling does — no
+    # kit and no documents is no release to examine — so the fixture has to
+    # DELIVER and then document the delivery wrongly. See
+    # `_f_release_docs_contradict_netlist` for the measured rc and message, and
+    # for why the chosen FAIL branch (a stated pin count the delivered netlist
+    # denies) is one the gate has to read two views of the tree to reach.
+    ("37.5ip", "release_docs_check . --arm ip --json "
+               "reports/phase3/release_docs.json"):
+        "RELEASE_DOCS_CONTRADICT_NETLIST",
     ("31", "magic_illegal_overlap_check . --json "
            "reports/phase3/magic_illegal_overlap.json"):
         "EXTRACT_ILLEGAL_OVERLAP",
