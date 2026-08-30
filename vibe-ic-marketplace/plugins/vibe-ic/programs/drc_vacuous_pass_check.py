@@ -44,16 +44,55 @@ holds -- an unreadable, garbled or unrecognised report, or a clean 0-count
 with nothing measurable behind it -- the verdict is INCONCLUSIVE. A clean is
 never the default; it must be earned.
 
+AND GEOMETRY ALONE IS NOT ENOUGH. Establishing geometry proves the LAYOUT was
+worth checking; it says nothing about whether the CHECKER ran. A scope in
+which no file reported a violation count at all -- not zero, not non-zero --
+is a scope with no verdict in it, and exit 0 there claims a clean nobody
+stated. That is refused too (`DRC_NO_VERDICT_IN_SCOPE`), at SCOPE level: an
+unparsed report sitting beside one that DID state a count still defers.
+
+(D) PROOF, PER STEP, THAT THE CHECKER EXAMINED SOMETHING. The scope rule
+      cannot help when a scope holds two checkers and only one of them ran:
+      the finished one supplies a count, the scope has a verdict in it, and
+      the one that never started is deferred over. So before deferring on an
+      unparsed report, that step must PROVE its checker examined a cell -- a
+      report-database naming one. No proof, no deferral
+      (`DRC_STEP_NEVER_REPORTED`); a finished checker elsewhere in the scope
+      does not speak for it. Only the database's HEAD is read.
+
+      REQUIRES PROOF, does not hunt for a confession, and the difference is
+      the whole point. Asking "is there a database that says UNKNOWN?" is an
+      absence-shaped tell in a positive disguise: delete that database and the
+      pass comes back, which is exactly how the 0-byte-report rule above was
+      defeated. Keyed this way round there is no file whose REMOVAL buys a
+      pass -- removing one can only remove proof.
+
+      Its blast radius is one case. A scope whose only unparsed report lacks
+      proof was ALREADY INCONCLUSIVE, via `DRC_NO_VERDICT_IN_SCOPE`, because
+      nothing in it stated a count. So requiring proof changes the verdict
+      nowhere except where another checker WAS reporting -- the masking case,
+      which is the defect.
+
 This is a *structural* check on the DRC run — it does NOT re-run DRC and does
 NOT replace the violation-count gate; it sits in front of it.
 
 Honest-failure contract
 ------------------------
   - No DRC log found             -> SKIP (exit 2)  -- nothing to vet, never PASS
-  - Unreadable / empty log file  -> INCONCLUSIVE (exit 1)
+  - Unreadable log file          -> INCONCLUSIVE (exit 1)
+  - 0-byte DRC report            -> INCONCLUSIVE (exit 1)  -- the checker
+                                    terminated without reporting; that is not
+                                    a count of zero, and it OUTRANKS the SKIP
+                                    above because it must block
   - measured layout has 0 shapes -> INCONCLUSIVE (exit 1)  -- the bug, decisive
   - 0-count, geometry NOT established -> INCONCLUSIVE (exit 1)  -- the bug
   - unparseable verdict, geometry NOT established -> INCONCLUSIVE (exit 1)
+  - NO violation count anywhere in scope -> INCONCLUSIVE (exit 1) -- geometry
+                                    established and every report unparsed, so
+                                    the deferral has nothing to defer TO
+  - unparsed report with no proof its checker examined a cell -> INCONCLUSIVE
+                                    (exit 1) -- whatever another checker in
+                                    the same scope reported
   - 0-count + geometry established -> PASS (exit 0)
   - non-zero violation count       -> PASS (exit 0)  -- not vacuous; a real
                                      violation gate (eda_report_audit) handles it
@@ -180,6 +219,113 @@ _WORDING_HINT_RE = [
 
 _DRC_GLOBS = ["*drc*.rpt", "*drc*.log", "*drc*.txt", "*drc*.out",
               "*DRC*.rpt", "*DRC*.log", "*DRC*.txt", "*DRC*.out"]
+
+# ---------------------------------------------------------------------------
+# (D) THE CHECKER'S OWN STATEMENT OF WHAT IT EXAMINED.
+#
+# A KLayout-format report-database (`.lyrdb`, and the `.rpt` files that carry
+# the same XML) names the cell the run was performed on. A run that never got
+# as far as loading a cell names none, and the flow's converter writes the
+# literal placeholder `UNKNOWN` there.
+#
+# MEASURED across all 30 report-databases this work produced, from 161 B to
+# 88 MB: exactly ONE names no cell, and it is the one run that is independently
+# known not to have finished (Magic ran 14:47 and stopped at "Loading DRC CIF
+# style."). The three genuine zero-violation runs are 162 B -- ONE BYTE larger
+# than the non-run, and the byte that differs is inside the cell name:
+#
+#     did not run   <cells><cell><name>UNKNOWN</name></cell></cells>  161 B
+#     ran, found 0  <cells><cell><name>chip_top</name></cell></cells> 162 B
+#
+# Both have empty <categories> and empty <items>, so emptiness is NOT the
+# discriminator and a rule keyed on it would condemn the genuine zeros. The
+# NAME is the discriminator.
+#
+# Only the HEAD is read. A real sign-off database reaches 88 MB and this
+# question is answered in its first few hundred bytes (`<top-cell>` sits at
+# byte 200 of a KLayout database; the compact converter form starts with
+# `<cells>`). Not finding either in the head returns None -- "not a report
+# database, or could not tell" -- which defers, never condemns.
+_REPORT_DB_HEAD = 65536
+_RE_DB_TOP_CELL = re.compile(rb"<top-cell>\s*([^<]*)</top-cell>")
+_RE_DB_CELLS_NAME = re.compile(
+    rb"<cells>\s*<cell>\s*<name>\s*([^<]*)</name>")
+# What a database writes when it has no cell to name.
+_DB_NO_CELL = {b"", b"unknown", b"(unknown)", b"none", b"n/a", b"?"}
+
+
+def report_db_cell(path: Path) -> Optional[bytes]:
+    """The cell a report-database says it examined.
+
+    b"" when it names none, the name when it does, None when this is not a
+    report-database or the head could not be read (both of which DEFER).
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(_REPORT_DB_HEAD)
+    except OSError:
+        return None
+    if b"<report-database" not in head:
+        return None
+    for rx in (_RE_DB_TOP_CELL, _RE_DB_CELLS_NAME):
+        m = rx.search(head)
+        if m:
+            name = m.group(1).strip()
+            return b"" if name.lower() in _DB_NO_CELL else name
+    return None
+
+
+def _databases_beside(fp: Path) -> List[Path]:
+    """The report-databases that belong to the same step as `fp`.
+
+    A step writes its log at `<step>/x-drc.log` and its database at
+    `<step>/reports/x.lyrdb`, so both directions are searched, plus `fp`
+    itself, which may BE a database (`drc_signoff.rpt` is one).
+
+    THE ASCENT IS CONDITIONAL, and it matters. Climbing to `fp.parent.parent`
+    unconditionally puts `<run>/` in scope for a log at `<step>/x-drc.log`, so
+    a database sitting at run level would have proved that THIS step ran --
+    which is the cross-step attribution error this whole rule exists to
+    prevent, reintroduced inside its own helper. The ascent is therefore taken
+    only from inside a `reports/` directory, where the parent IS the step.
+    """
+    out = [fp]
+    ups = [fp.parent, fp.parent / "reports"]
+    if fp.parent.name == "reports":
+        ups.append(fp.parent.parent)
+    for d in ups:
+        try:
+            if d.is_dir():
+                out.extend(sorted(d.glob("*.lyrdb")))
+        except OSError:
+            continue
+    seen, uniq = set(), []
+    for c in out:
+        try:
+            key = c.resolve()
+        except OSError:
+            key = c
+        if key not in seen:
+            seen.add(key)
+            uniq.append(c)
+    return uniq
+
+
+def completion_proof(fp: Path) -> Optional[Path]:
+    """The database proving the checker behind `fp` DID examine a cell.
+
+    REQUIRES PROOF; it does not hunt for a confession. The first version of
+    this asked "is there a database here that says UNKNOWN?", and that is an
+    absence-shaped tell wearing a positive disguise: MEASURED, deleting the
+    161-byte database alongside the already-deleted 0-byte report put the same
+    unfinished step back to PASS. Keyed this way round, deletion can only ever
+    make the rule FIRE -- there is no file whose removal buys a pass.
+    """
+    for cand in _databases_beside(fp):
+        cell = report_db_cell(cand)
+        if cell:                      # names a real cell -> this checker ran
+            return cand
+    return None
 
 _LAYOUT_GLOBS = ["*.gds", "*.gds.gz", "*.gdsii", "*.GDS",
                  "*.oas", "*.oasis", "*.def", "*.DEF"]
@@ -1192,6 +1338,14 @@ def audit(path: Path, layout: Optional[Path] = None,
     any_empty_with_clean = False
     any_real_check = False
     any_drc_log = False
+    any_empty_report = False
+    # A verdict this checker actually PARSED, anywhere in scope -- a violation
+    # count, zero or non-zero. `any_real_check` is NOT that: it is also set by
+    # `DRC_NO_VERDICT_TOKEN`, which fires when nothing was parsed at all.
+    any_parsed_verdict = False
+    # A step that offers no proof its checker examined anything. Decisive, and
+    # it must not be maskable by another step's verdict -- see the branch below.
+    any_step_never_reported = False
     layout_cands = [layout] if layout else _discover_layouts(path)
 
     for fp in files:
@@ -1207,9 +1361,36 @@ def audit(path: Path, layout: Optional[Path] = None,
                 message="DRC log could not be read.", file=str(fp)))
             continue
         if not nonempty:
+            # A ZERO-BYTE REPORT IS THE RUN SAYING IT PRODUCED NOTHING.
+            #
+            # This branch used to write the finding and then drop out of the
+            # verdict entirely: `any_empty_report` did not exist, so a run
+            # whose report was 0 bytes contributed an ERROR line and no
+            # consequence. If any OTHER discovered file looked like a DRC log
+            # and geometry was established behind it, the rollup reached
+            # `PASS` — and the empty report, the strongest tell in the
+            # directory, was the one thing the verdict did not read.
+            #
+            # MEASURED (gf180mcuD, 16-stage non-CoB precheck, step 12): Magic
+            # ran 14:47 at 99.95 % CPU and ended without writing —
+            # `drc.magic.rpt` 0 bytes, `magic-drc.log` stopping at "Loading DRC
+            # CIF style." before the checker's own output, `drc.magic.lyrdb`
+            # naming its top cell `UNKNOWN`. The image's checker printed "Check
+            # for Magic DRC errors clear." and THIS GATE, handed the same
+            # directory and the design's 4 556 379-shape GDS, returned PASS.
+            # A completed run of the same deck on the same design writes 102
+            # bytes: the top cell, `[INFO] COUNT: 0`. Nothing distinguishes the
+            # two except that one file has contents.
+            #
+            # So the empty report is decisive, in the same direction as every
+            # other rule here: a clean must be EARNED, and a checker that wrote
+            # no report has not reported zero violations — it has not reported.
+            any_empty_report = True
             result.findings.append(Finding(
-                rule="DRC_LOG_NONEMPTY", severity="ERROR",
-                message="DRC log is empty.", file=str(fp)))
+                rule="DRC_REPORT_EMPTY", severity="ERROR",
+                message="DRC report file is 0 bytes — the run produced no "
+                        "result. That is NOT zero violations; it is no "
+                        "measurement. INCONCLUSIVE.", file=str(fp)))
             per_file.append({"file": str(fp), "empty_file": True})
             continue
         if not is_drc:
@@ -1275,6 +1456,7 @@ def audit(path: Path, layout: Optional[Path] = None,
         if c["nonzero_count"] and c["nonzero_count"] > 0:
             # Real violations reported — not vacuous (a real count gate handles it).
             any_real_check = True
+            any_parsed_verdict = True
             result.findings.append(Finding(
                 rule="DRC_NONZERO_COUNT", severity="INFO",
                 message=f"DRC log reports {c['nonzero_count']} violation(s) — "
@@ -1283,6 +1465,7 @@ def audit(path: Path, layout: Optional[Path] = None,
             continue
 
         if c["zero_count"]:
+            any_parsed_verdict = True
             if not geometry_ok:
                 any_empty_with_clean = True
                 result.findings.append(Finding(
@@ -1332,6 +1515,37 @@ def audit(path: Path, layout: Optional[Path] = None,
                             f"do not quote this line as a clean DRC.{hint}",
                     file=str(fp)))
         elif geometry_ok:
+            # BEFORE DEFERRING, ASK THE CHECKER WHAT IT EXAMINED.
+            #
+            # `DRC_NO_VERDICT_IN_SCOPE` (below) refuses a scope in which
+            # NOTHING was parsed. It cannot help when a scope holds two steps
+            # and only one of them ran: the finished step supplies a count, the
+            # scope has a verdict in it, and the step that never started is
+            # deferred over in silence.
+            #
+            # MEASURED at the scope the hygiene loop actually uses -- the whole
+            # cell, no `--under` (`repo_hygiene_gates.sh` passes "$_cell") --
+            # on the real run: Magic's 0-byte report deleted, KLayout's 53 273
+            # left in place. Result: **PASS, exit 0**, with Magic having never
+            # loaded a cell. That is the masking case, and this is where it is
+            # caught: the step's own database names no cell, which is the
+            # checker stating it examined nothing.
+            #
+            # Decisive, like a measured-empty layout, and for the same reason:
+            # it is the run's own artefact contradicting the deferral, not a
+            # phrasing this gate chose to trust.
+            proof = completion_proof(fp)
+            if proof is None:
+                any_step_never_reported = True
+                result.findings.append(Finding(
+                    rule="DRC_STEP_NEVER_REPORTED", severity="ERROR",
+                    message="No verdict parsed here, and nothing in this step "
+                            "proves its checker examined a cell — no "
+                            "report-database naming one. A finished checker "
+                            "elsewhere in this scope does not speak for this "
+                            "one. INCONCLUSIVE." + hint,
+                    file=str(fp)))
+                continue
             # No verdict token parsed, but the run demonstrably examined
             # geometry: not vacuous. The violation-count gate reads the count.
             any_real_check = True
@@ -1360,10 +1574,19 @@ def audit(path: Path, layout: Optional[Path] = None,
 
     result.summary = {"files_found": len(files), "per_file": per_file, **scope}
 
+    # OUTRANKS the no-log SKIP below: a 0-byte report is not an absence of
+    # evidence ("nothing to vet"), it is evidence of a run that terminated
+    # without reporting. SKIP is exit 2 and callers are entitled to treat it as
+    # non-blocking; this must block.
+    if any_empty_report or any_step_never_reported:
+        result.verdict = "INCONCLUSIVE"
+        result.passed = False
+        return result
+
     if not any_drc_log:
         result.verdict = "SKIP"
         result.passed = False
-        if not any(f.rule in ("DRC_LOG_READABLE", "DRC_LOG_NONEMPTY")
+        if not any(f.rule in ("DRC_LOG_READABLE", "DRC_REPORT_EMPTY")
                    for f in result.findings):
             result.findings.append(Finding(
                 rule="DRC_LOG_RECOGNISED", severity="ERROR",
@@ -1373,6 +1596,48 @@ def audit(path: Path, layout: Optional[Path] = None,
     if any_empty_with_clean:
         result.verdict = "INCONCLUSIVE"
         result.passed = False
+        return result
+
+    # NOTHING IN SCOPE EVER REPORTED A VIOLATION COUNT.
+    #
+    # `DRC_NO_VERDICT_TOKEN` defers -- "no verdict parsed, but geometry was
+    # established, so this is not vacuous BY THIS GATE; the violation-count
+    # gate reads the count". That deferral is sound only while some other file
+    # in scope actually carries a count. When NO file does, the deferral has
+    # nowhere to defer TO, and exit 0 says "a clean was earned" over a scope in
+    # which no checker ever stated a result.
+    #
+    # This is the same defect one layer up from the empty-report rule above,
+    # and it survives that rule trivially: `rm` the 0-byte report and the only
+    # thing left is the truncated log, which lands here.
+    #
+    # MEASURED (gf180mcuD, 16-stage non-CoB precheck, step 12, sha256 LOWUTIL):
+    # Magic ran 14:47 at 99.95 % CPU and stopped at "Loading DRC CIF style." --
+    # before its own checker output -- writing a 0-byte `drc.magic.rpt` and a
+    # `drc.magic.lyrdb` whose top cell is `UNKNOWN`. With the report present
+    # this returns INCONCLUSIVE. With that one empty file DELETED, the same
+    # unfinished run returned **PASS**, on the strength of the 4 556 379 shapes
+    # in the GDS -- geometry the checker demonstrably never got to.
+    #
+    # So geometry is not enough. Geometry proves the LAYOUT was worth checking;
+    # it says nothing about whether the CHECKER ran. A clean must be earned by
+    # a verdict, not by the existence of something to have a verdict about.
+    #
+    # SCOPE-LEVEL, deliberately: one unparsed report beside a report that DID
+    # state a count still defers, exactly as before. Only a scope in which
+    # nothing at all was parsed is refused. Measured on the published corpus
+    # cell, which carries two unparsed reports and one real count: unchanged,
+    # still PASS.
+    if not any_parsed_verdict:
+        result.verdict = "INCONCLUSIVE"
+        result.passed = False
+        result.findings.append(Finding(
+            rule="DRC_NO_VERDICT_IN_SCOPE", severity="ERROR",
+            message="DRC log(s) present and geometry established, but NO file "
+                    "in scope reported a violation count — not zero, not "
+                    "non-zero, none. A run that never stated a result has not "
+                    "reported a clean, so there is no verdict here to call "
+                    "vacuous or earned. INCONCLUSIVE."))
         return result
 
     result.verdict = "PASS"

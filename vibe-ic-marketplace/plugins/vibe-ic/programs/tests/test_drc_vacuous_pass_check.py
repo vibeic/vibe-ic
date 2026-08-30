@@ -169,15 +169,263 @@ def test_garbage_log_file_not_pass(tmp_path):
     assert any(f.rule == "DRC_UNVERIFIABLE_RUN" for f in res.findings)
 
 
-def test_no_verdict_token_but_geometry_measured_defers(tmp_path):
-    # The same unparseable report, but a POPULATED layout sits behind it: the
-    # run demonstrably examined geometry, so this gate defers instead of
-    # blocking (no false alarm on a real-but-unparsed report).
+def test_no_verdict_token_alone_is_not_a_pass(tmp_path):
+    # THIS TEST USED TO ASSERT `passed is True`, AND THAT WAS THE HOLE.
+    #
+    # Its reasoning was: an unparseable report with a POPULATED layout behind
+    # it shows the run "demonstrably examined geometry", so defer rather than
+    # raise a false alarm. The premise does not follow. Geometry in the layout
+    # proves the layout was worth checking; it proves nothing about whether the
+    # checker ever looked at it.
+    #
+    # MEASURED, on a real run (gf180mcuD 16-stage precheck, step 12): Magic ran
+    # 14:47 and stopped at "Loading DRC CIF style.", before its own checker
+    # output. Its report was 0 bytes -- caught by DRC_REPORT_EMPTY. DELETE that
+    # one empty file, leaving only the truncated log, and the same unfinished
+    # run reached HERE and scored PASS, on the strength of 4 556 379 shapes the
+    # checker never reached.
+    #
+    # The deferral had nowhere to defer TO: no file in scope carried a count,
+    # so the "violation-count gate" this rule hands off to would have been
+    # handed nothing. That is now INCONCLUSIVE.
     _write_gds(tmp_path / "top.gds", n_shapes=64)
     (tmp_path / "drc.log").write_text("top.gds :: random error log, no count tokens")
     res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    # This report offers no proof its checker examined anything, so the STEP
+    # rule reaches it before the scope rollup does. Same verdict; only the rule
+    # that gets there changes. The rollup still owns the case where proof IS
+    # present -- pinned by the scope-rollup test below.
+    assert any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_no_verdict_token_still_defers_beside_a_real_count(tmp_path):
+    # The false-alarm concern the ORIGINAL test was written for, preserved
+    # exactly where it is now sound: an unparsed report beside a real count is
+    # not blocking WHEN THAT STEP PROVES IT RAN.
+    #
+    # NARROWED, deliberately, and re-pointed at the published corpus cell's
+    # REAL shape rather than a paraphrase of it. Its two unparsed reports are
+    # `drc.rpt` and `drc_signoff.rpt`, and both ARE report-databases naming
+    # `spm`, so they carry their own proof. MEASURED on that cell: PASS before
+    # this rule and PASS after it. An unparsed report with NO proof beside it
+    # is a different case and is now refused -- see
+    # test_deleting_the_database_too_does_not_buy_a_pass.
+    _write_gds(tmp_path / "top.gds", n_shapes=64)
+    (tmp_path / "drc.rpt").write_text(_DB_TOP_CELL_FORM)
+    (tmp_path / "drc_router.rpt").write_text(
+        "top.gds\nDRC violations found: 35\n")
+    res = dvp.audit(tmp_path)
     assert res.passed is True
+    assert res.verdict == "PASS"
     assert any(f.rule == "DRC_NO_VERDICT_TOKEN" for f in res.findings)
+    assert any(f.rule == "DRC_NONZERO_COUNT" for f in res.findings)
+    assert not any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_scope_rollup_still_refuses_a_scope_with_proof_but_no_count(tmp_path):
+    # The scope rule is NOT made unreachable by the step rule. A report that
+    # proves its checker ran but states no count passes the step rule and is
+    # then refused by the rollup: proof of a run is not a verdict.
+    _write_gds(tmp_path / "top.gds", n_shapes=64)
+    (tmp_path / "drc.rpt").write_text(_DB_TOP_CELL_FORM)
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    assert any(f.rule == "DRC_NO_VERDICT_IN_SCOPE" for f in res.findings)
+    assert not any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+# ---------------------------------------------------------------------------
+# (D) The checker's own statement of what it examined.
+#
+# These fixtures are the two REAL report-databases this work measured, byte for
+# byte. They differ by one byte, inside the cell name, and mean opposite things.
+# ---------------------------------------------------------------------------
+_DB_NO_CELL = (
+    "<?xml version='1.0' encoding='utf8'?>\n"
+    "<report-database><cells><cell><name>UNKNOWN</name></cell></cells>"
+    "<categories></categories><items></items></report-database>")
+_DB_NAMED_CELL = (
+    "<?xml version='1.0' encoding='utf8'?>\n"
+    "<report-database><cells><cell><name>chip_top</name></cell></cells>"
+    "<categories></categories><items></items></report-database>")
+_DB_TOP_CELL_FORM = (
+    '<?xml version="1.0" encoding="utf-8"?>\n<report-database>\n'
+    ' <description/>\n <generator>drc: script=\'x.drc\'</generator>\n'
+    ' <top-cell>spm</top-cell>\n <categories>\n </categories>\n'
+    ' <items>\n </items>\n</report-database>')
+
+
+def test_report_db_cell_reads_both_element_forms(tmp_path):
+    # The two shapes a report-database takes in the wild: the compact converter
+    # form that starts with <cells>, and the KLayout form with <top-cell>.
+    (tmp_path / "a.lyrdb").write_text(_DB_NO_CELL)
+    (tmp_path / "b.lyrdb").write_text(_DB_NAMED_CELL)
+    (tmp_path / "c.lyrdb").write_text(_DB_TOP_CELL_FORM)
+    (tmp_path / "not_a_db.log").write_text("Loading DRC CIF style.\n")
+    assert dvp.report_db_cell(tmp_path / "a.lyrdb") == b""
+    assert dvp.report_db_cell(tmp_path / "b.lyrdb") == b"chip_top"
+    assert dvp.report_db_cell(tmp_path / "c.lyrdb") == b"spm"
+    # Not a report-database at all -> None, which DEFERS. Never condemns.
+    assert dvp.report_db_cell(tmp_path / "not_a_db.log") is None
+    assert dvp.report_db_cell(tmp_path / "missing.lyrdb") is None
+
+
+def test_a_step_with_no_proof_of_completion_is_not_deferred_over(tmp_path):
+    # The truncated log alone would defer (geometry is established). The step's
+    # own database says it loaded no cell, which is the checker stating it
+    # examined nothing -- decisive, exactly like a measured-empty layout.
+    step = tmp_path / "12-magic-drc"
+    (step / "reports").mkdir(parents=True)
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    (step / "magic-drc.log").write_text(
+        'Reading "chip_top".\nDRC style is now "drc(full)"\n'
+        'Loading DRC CIF style.\n')
+    (step / "reports" / "drc.magic.lyrdb").write_text(_DB_NO_CELL)
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    assert any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_a_database_naming_a_cell_still_defers(tmp_path):
+    # ONE BYTE different from the fixture above, and it must not be condemned:
+    # this checker ran and found nothing, it merely phrased its verdict in a way
+    # the parser does not read. A real count elsewhere carries the scope.
+    step = tmp_path / "12-magic-drc"
+    (step / "reports").mkdir(parents=True)
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    (step / "magic-drc.log").write_text(
+        'Reading "chip_top".\nLoading DRC CIF style.\n')
+    (step / "reports" / "drc.magic.lyrdb").write_text(_DB_NAMED_CELL)
+    (tmp_path / "drc_klayout.rpt").write_text(
+        "chip_top\nDRC violations found: 12\n")
+    res = dvp.audit(tmp_path)
+    assert res.passed is True
+    assert res.verdict == "PASS"
+    assert any(f.rule == "DRC_NO_VERDICT_TOKEN" for f in res.findings)
+    assert not any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_deleting_the_database_too_does_not_buy_a_pass(tmp_path):
+    # THE RULE ABOVE, TESTED AGAINST ITS OWN STANDARD.
+    #
+    # The first version of it asked "is there a database here that says
+    # UNKNOWN?" — a confession. MEASURED: delete that 161-byte database as well
+    # as the already-deleted 0-byte report and the same unfinished step went
+    # back to PASS, exit 0. A gate keyed on a tell is defeated by removing the
+    # tell, which is the finding this whole progression exists to state.
+    #
+    # So it asks for PROOF instead: a database that names a cell. There is now
+    # no file whose deletion buys a pass — removing one can only remove proof.
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    magic = tmp_path / "12-magic-drc"
+    (magic / "reports").mkdir(parents=True)
+    (magic / "magic-drc.log").write_text(
+        'Reading "chip_top".\nLoading DRC CIF style.\n')
+    # No report. No database. Nothing but the truncated log.
+    klay = tmp_path / "14-klayout-drc"
+    klay.mkdir()
+    (klay / "klayout-drc.log").write_text("chip_top\n53273 DRC violations found\n")
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    assert any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_requiring_proof_only_changes_the_masking_case(tmp_path):
+    # The inversion's blast radius, pinned. A LONE unparsed report with no
+    # database is INCONCLUSIVE — but it was INCONCLUSIVE before this rule too,
+    # via DRC_NO_VERDICT_IN_SCOPE, because nothing in scope stated a count.
+    # So requiring proof costs nothing anywhere except where another checker
+    # WAS reporting, which is precisely the defect.
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    (tmp_path / "drc.log").write_text(
+        "chip_top :: error log with no count tokens")
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    # Both rules agree on this scope; the step rule reaches it first.
+    assert any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_proof_does_not_leak_across_steps(tmp_path):
+    # The rule's own helper must not commit the error the rule exists to stop.
+    # A database sitting at RUN level is not proof that a particular STEP ran,
+    # so a log at `<run>/<step>/x-drc.log` must not be able to reach it. If the
+    # ascent were unconditional, the run-level database below would prove the
+    # Magic step ran and this scope would go green again.
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    (tmp_path / "stray.lyrdb").write_text(_DB_NAMED_CELL)   # run level
+    magic = tmp_path / "12-magic-drc"
+    magic.mkdir()
+    (magic / "magic-drc.log").write_text(
+        'Reading "chip_top".\nLoading DRC CIF style.\n')
+    klay = tmp_path / "14-klayout-drc"
+    klay.mkdir()
+    (klay / "klayout-drc.log").write_text("chip_top\n53273 DRC violations found\n")
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_proof_is_reachable_from_inside_a_reports_directory(tmp_path):
+    # And the ascent that WAS needed still works: a report inside `reports/`
+    # reaches its own step's database one level up.
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    step = tmp_path / "12-magic-drc"
+    (step / "reports").mkdir(parents=True)
+    (step / "drc.magic.lyrdb").write_text(_DB_NAMED_CELL)
+    (step / "reports" / "drc_summary.rpt").write_text(
+        "chip_top :: error summary, no count tokens")
+    (tmp_path / "klayout-drc.log").write_text(
+        "chip_top\n53273 DRC violations found\n")
+    res = dvp.audit(tmp_path)
+    assert res.passed is True
+    assert not any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+
+
+def test_a_finished_checker_does_not_speak_for_an_unfinished_one(tmp_path):
+    # THE MASKING CASE, and it is the scope the hygiene loop actually uses: the
+    # whole cell, no --under. Two DRC steps. One never loaded a cell; the other
+    # finished and reported 53 273 violations. The scope HAS a verdict in it, so
+    # DRC_NO_VERDICT_IN_SCOPE cannot help -- and before this rule the answer was
+    # PASS, exit 0, with Magic having checked nothing.
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    magic = tmp_path / "12-magic-drc"
+    (magic / "reports").mkdir(parents=True)
+    (magic / "magic-drc.log").write_text(
+        'Reading "chip_top".\nLoading DRC CIF style.\n')
+    (magic / "reports" / "drc.magic.lyrdb").write_text(_DB_NO_CELL)
+    klay = tmp_path / "14-klayout-drc"
+    klay.mkdir()
+    (klay / "klayout-drc.log").write_text(
+        "chip_top\n53273 DRC violations found\n")
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    assert any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+    # The finished checker's count is still reported -- it is not suppressed,
+    # it simply does not speak for the step that never ran.
+    assert any(f.rule == "DRC_NONZERO_COUNT" for f in res.findings)
+
+
+def test_deleted_empty_report_does_not_escape_the_empty_report_rule(tmp_path):
+    # The exact escape, reproduced as a fixture: a run that terminated without
+    # reporting, whose 0-byte report was then cleaned up. Only the truncated
+    # log survives. Before this rule that was exit 0.
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=4096)
+    (tmp_path / "magic-drc.log").write_text(
+        'Reading "chip_top".\n[INFO] Loading chip_top\n\n'
+        'DRC style is now "drc(full)"\nLoading DRC CIF style.\n')
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    assert any(f.rule == "DRC_STEP_NEVER_REPORTED" for f in res.findings)
+    # And it is NOT the empty-report rule doing the work -- there is no report.
+    assert not any(f.rule == "DRC_REPORT_EMPTY" for f in res.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -418,3 +666,62 @@ def test_the_verdict_itself_is_unchanged_by_the_wording_fix(tmp_path):
     assert res.passed is True
     assert all(f.severity != "ERROR" for f in res.findings
                if f.rule == "DRC_CLEAN_EARNED")
+
+
+# ---------------------------------------------------------------------------
+# A CHECKER THAT WROTE NO REPORT HAS NOT REPORTED ZERO
+# ---------------------------------------------------------------------------
+# MEASURED, gf180mcuD, 16-stage non-CoB precheck, step 12 `magic-drc`: Magic
+# ran 14:47 at 99.95 % CPU and ended without writing. `drc.magic.rpt` was 0
+# bytes; `magic-drc.log` stopped at "Loading DRC CIF style." — before any
+# checker output; `drc.magic.lyrdb` named its top cell `UNKNOWN`. The precheck
+# image printed "Check for Magic DRC errors clear." and THIS gate, handed the
+# same directory plus the design's 4 556 379-shape GDS, returned PASS. A
+# completed run of the same deck writes 102 bytes: the cell name and
+# `[INFO] COUNT: 0`.
+#
+# The two tests below are the pair that has to hold together: the empty report
+# must block, and the genuine 102-byte zero must still pass. One without the
+# other is either a hole or a gate nothing survives.
+def test_zero_byte_report_blocks_even_with_geometry(tmp_path):
+    """The measured false PASS. Geometry is established and irrelevant: the
+    report is 0 bytes, so nothing was reported."""
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=512)
+    (tmp_path / "drc.magic.rpt").write_bytes(b"")
+    # The truncated companion log — DRC-ish, names the layout, no verdict.
+    (tmp_path / "magic-drc.log").write_text(
+        "magic 8.3\nchip_top.gds\nLoading DRC CIF style.\n")
+    res = dvp.audit(tmp_path)
+    assert res.passed is False
+    assert res.verdict == "INCONCLUSIVE"
+    assert any(f.rule == "DRC_REPORT_EMPTY" for f in res.findings)
+
+
+def test_completed_magic_zero_still_passes(tmp_path):
+    """The control: the same deck, same design, a report that FINISHED."""
+    _write_gds(tmp_path / "chip_top.gds", n_shapes=512)
+    # Both artefacts, exactly as a completed step 12 leaves them: the 102-byte
+    # report AND the log that runs past the checker to its own DONE marker.
+    (tmp_path / "drc.magic.rpt").write_text(
+        "chip_top\n"
+        "----------------------------------------\n"
+        "[INFO] COUNT: 0\n"
+        "[INFO] Should be divided by 3 or 4\n")
+    (tmp_path / "magic-drc.log").write_text(
+        "magic 8.3\n[INFO] Loading chip_top\nchip_top.gds\n"
+        "No errors found.\n[INFO] COUNT: 0\n"
+        "[INFO] DRC Checking DONE (reports/drc.magic.rpt)\n[INFO] Saved\n")
+    res = dvp.audit(tmp_path)
+    assert res.passed is True
+    assert res.verdict == "PASS"
+    assert not any(f.rule == "DRC_REPORT_EMPTY" for f in res.findings)
+
+
+def test_zero_byte_report_outranks_skip(tmp_path):
+    """A 0-byte report ALONE is INCONCLUSIVE, not SKIP. SKIP is exit 2 and a
+    caller may treat it as non-blocking; a run that terminated without
+    reporting must block."""
+    (tmp_path / "drc.rpt").write_bytes(b"")
+    res = dvp.audit(tmp_path)
+    assert res.verdict == "INCONCLUSIVE"
+    assert dvp.main([str(tmp_path)]) == 1
