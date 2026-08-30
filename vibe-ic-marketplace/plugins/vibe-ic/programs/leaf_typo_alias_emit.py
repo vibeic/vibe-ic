@@ -85,6 +85,23 @@ _CANONICAL_HW_TERMS = frozenset({
     "differentiator", "sequencer", "controller", "scheduler", "normalizer",
     "serializer", "deserializer", "transmitter", "receiver", "rotator",
     "barrelshifter", "incrementer", "decrementer", "saturator",
+    # QUALIFIERS. The set above is entirely agent-NOUN device names, so a
+    # misspelled ADJECTIVE inside a compound (`..._sequencial`) was invisible
+    # even when the hidden harness elaborates the correctly-spelled
+    # `..._sequential`. These are generic RTL qualifiers, not chip identities.
+    #
+    # PARTICIPLES ARE DELIBERATELY ABSENT. `pipelined` would make the real
+    # English noun `pipeline` (as in the module `pipeline_mac`) look like a
+    # one-character deletion; measured as a false fire on a passing delivery.
+    # `registered`/`register` is the same trap.
+    #
+    # `synchronous` / `asynchronous` ARE ALSO ABSENT, and that is not an
+    # oversight: every realistic misspelling of them (`syncronous`,
+    # `synchronus`, `asyncronous`) ends in `s`, so the `-s` arm of the
+    # inflection guard above returns None BEFORE the distance test ever runs.
+    # Listing them would be dead code that reads as coverage.
+    "sequential", "combinational", "hierarchical", "bidirectional",
+    "programmable", "arithmetic", "parallel", "differential",
 })
 
 # A leaf/canonical token shorter than this is never typo-matched (abbreviations

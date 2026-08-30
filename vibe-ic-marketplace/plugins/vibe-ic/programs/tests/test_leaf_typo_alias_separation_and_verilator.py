@@ -111,3 +111,55 @@ def test_verilator_accepts_the_guarded_wrapper_and_rejects_the_bare_one(tmp_path
         "being true the guard's justification has changed, not just its effect")
     assert not multitop(guarded), (
         "the guard did not suppress MULTITOP")
+
+
+def test_a_misspelled_qualifier_is_corrected():
+    """The term set held only agent-NOUN device names.
+
+    A misspelled ADJECTIVE inside a compound was therefore invisible, while the
+    hidden harness elaborates the correctly-spelled form. Verified end to end
+    through the official scorer, not by elaboration argument: the delivery
+    scores FAIL on its own (`iverilog -s binary_to_one_hot_decoder_sequential`
+    against a module declared `..._sequencial`) and PASSes with the emitted
+    wrapper appended.
+    """
+    assert (detect_leaf_typo("binary_to_one_hot_decoder_sequencial")
+            == "binary_to_one_hot_decoder_sequential")
+
+
+@pytest.mark.parametrize("leaf", [
+    "fifo_depth_controler",       # -> controller, a pre-existing noun term
+    "spi_master_sequencial_fsm",  # -> sequential, entirely different vocabulary
+    "dma_hierarchial_mux",        # -> hierarchical
+])
+def test_the_qualifier_rule_is_not_tied_to_one_design(leaf):
+    assert detect_leaf_typo(leaf) is not None
+
+
+@pytest.mark.parametrize("leaf", [
+    "pipeline_mac",               # `pipelined` would make this a 1-char typo
+    "registered_output",          # same trap via `registered`
+    "combinatorial_alu",          # d=3 from `combinational`, must stay silent
+    "unidirectional_bridge",      # d=2 from `bidirectional` — a d=1 here would
+                                  # have INVERTED the design's intent
+    "parallel_in_serial_out",     # exact term, not a typo
+])
+def test_the_qualifier_rule_stays_silent_on_legitimate_neighbours(leaf):
+    assert detect_leaf_typo(leaf) is None
+
+
+def test_terms_whose_misspellings_the_inflection_guard_eats_are_not_listed():
+    """Do not list a term that can never fire — it reads as coverage.
+
+    Every realistic misspelling of `synchronous` / `asynchronous` ends in `s`,
+    and the `-s` arm of the inflection guard returns None before the distance
+    test runs. Listing them would be dead code.
+    """
+    import leaf_typo_alias_emit as L
+    dead = [t for t in L._CANONICAL_HW_TERMS
+            if t.endswith(L._INFLECTION_SUFFIXES)]
+    assert not dead, (
+        f"these canonical terms can never be matched — every misspelling of "
+        f"them is eaten by the inflection guard first: {sorted(dead)}")
+    for m in ("syncronous", "synchronus", "asyncronous"):
+        assert detect_leaf_typo(m) is None
