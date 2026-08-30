@@ -820,6 +820,78 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
     return rc, body, problem
 
 
+def coverage_problems(aggregate: Any, argv: List[str],
+                      coverage_json: Path) -> List[str]:
+    """Ask the shard aggregate the COVERAGE question, and read THAT answer.
+
+    THE ROWS, NOT THE EXIT CODE, AND NEVER THE VERDICT (vibe-ic#1892).
+
+    The call site used to be `if coverage_rc != 0: problems.append(...)`, which
+    asked this program the coverage question and read the answer to a different
+    one. `hygiene_shard_aggregate` returned 1 both for a lost shard AND for a
+    gate that merely FAILED, so a hygiene run containing one honest red arrived
+    here as a coverage problem, became a `wiring_errors` row in `_merge`, and
+    reached the reader through `gatekeeper_review._hygiene_verdict` as "the
+    hygiene set produced NO RECORD for 1 of its own shards, so it certifies
+    nothing".
+
+    MEASURED on 7203d6fce (v1.13.39), one full hygiene set through
+    `gatekeeper_review.repo_hygiene_gate`, 501 s:
+
+        146/146 gate(s) ran, 9 of 9 shard records present, every planned label
+        decided exactly once by the shard that owned it, and 6 gates FAILED.
+        aggregate -> "[FAIL] hygiene_shard_aggregate: 6 gate(s) FAILED: …"
+                     rc 1, and NOT ONE [COVERAGE] line, because there was no
+                     coverage problem to print.
+        review    -> "ERROR — the hygiene set produced NO RECORD for 1 of its
+                     own shards … see the [COVERAGE] lines above"   rc 2
+
+    Not one shard was missing. The six reds were upgraded to UNKNOWN and the
+    reader was sent to look for a lost shard that never existed, at [COVERAGE]
+    lines that were never printed — and which `repo_hygiene_gate` captures and
+    discards in any case. So the set could not report a red at all: any gate
+    going FAIL collapsed the whole run to "certifies nothing".
+
+    `--json` is read instead of the rc because the machine record NAMES each
+    coverage row. That is what makes the coverage question ANSWERABLE by the
+    only reader that ever sees the verdict.
+
+    FAIL-CLOSED ON THE INSTRUMENT ITSELF: an unwritten or unreadable coverage
+    record, an rc this file does not enumerate, or a refusal that names no row
+    is a coverage problem in its own right. A run whose coverage police could
+    not report is exactly as uncertifiable as one that lost a shard.
+
+    NOTHING STOPS BEING ASKED. Every coverage refusal still becomes a problem,
+    `_merge` still renames them `parallel coverage: …`, and `_summary_rc` still
+    returns 2 over them. What changes is that a run whose gates FAILED now
+    reports FAILED — the verdict `_merge` already computes from these same
+    records and `_summary_rc` already blocks on at rc 1.
+    """
+    rc = aggregate.main([*argv, "--json", str(coverage_json)])
+    try:
+        doc = _load_json(coverage_json)
+        rows = doc["problems"]
+        if not isinstance(rows, list) or not all(
+                isinstance(row, str) for row in rows):
+            raise ValueError("coverage `problems` is not a list of strings")
+    except (OSError, ValueError, KeyError, TypeError,
+            json.JSONDecodeError) as exc:
+        return ["hygiene_shard_aggregate wrote no readable coverage record "
+                f"(rc={rc}), so the run's reach against the measured plan is "
+                f"unknown: {exc}"]
+    problems = [f"hygiene_shard_aggregate: {row}" for row in rows]
+    if rc not in (0, aggregate.VERDICT_FAILED,
+                  aggregate.COVERAGE_UNACCOUNTABLE):
+        problems.append(
+            f"hygiene_shard_aggregate returned an unenumerated exit code {rc}; "
+            "this file cannot say whether the run's coverage was accountable")
+    elif rc == aggregate.COVERAGE_UNACCOUNTABLE and not rows:
+        problems.append(
+            "hygiene_shard_aggregate refused the run's coverage against the "
+            "measured plan and named no row; the refusal cannot be attributed")
+    return problems
+
+
 def _validate_declarations(reference: Dict[str, Any], doc: Dict[str, Any],
                            where: str) -> List[str]:
     problems: List[str] = []
@@ -1396,13 +1468,11 @@ def main(argv=None) -> int:
         expect_path = tmp / "planned-labels.txt"
         expect_path.write_text("\n".join(planned) + "\n", encoding="utf-8")
         import hygiene_shard_aggregate as _shard_aggregate  # noqa: PLC0415
-        coverage_rc = _shard_aggregate.main(
+        problems.extend(coverage_problems(
+            _shard_aggregate,
             [*(str(path) for path, _ in docs), "--expect", str(expect_path),
-             "--shards", str(total_shards)])
-        if coverage_rc != 0:
-            problems.append(
-                "hygiene_shard_aggregate refused the run's coverage against "
-                "the measured plan (see the [COVERAGE] lines above)")
+             "--shards", str(total_shards)],
+            tmp / "coverage.json"))
 
         elapsed = int(time.monotonic() - started)
         final = merge_records(reference, docs, all_attestations, elapsed,
