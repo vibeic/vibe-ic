@@ -308,6 +308,192 @@ def test_an_unregistered_new_claim_is_a_failure(monkeypatch):
     assert any("UNREGISTERED" in f and "4242" in f for f in fails), fails
 
 
+# ── the round trip: a regeneration must satisfy the check that ships with it ──
+#
+# THE DEFECT THESE FOUR WERE WRITTEN FROM. Until v1.13.3's follow-up the
+# generator wrote PROGRAM_INVENTORY.json and nothing else, while `--check`
+# bound the artefact AND the prose counts quoting it. So no invocation of this
+# program could satisfy its own check, and a tree that grew past a stated count
+# stayed red until somebody hand-edited six README lines — the practice the
+# module docstring calls the defect. MEASURED on clean 6c798ce4be: the artefact
+# was already CURRENT and six prose sites were stale, so a full regeneration
+# moved none of them. Nothing here writes to the tree it measures.
+
+
+def _bound_docs(gen):
+    return sorted({r for r, _, _ in gen._CLAIMS}
+                  | {r for r, _, _ in gen._NOT_A_POPULATION_COUNT})
+
+
+def _sandbox_docs(gen, tmp_path, monkeypatch, mutate=None):
+    """Copy every bound document under `tmp_path` and point the generator there.
+
+    The generator resolves bound documents from `MARKETPLACE`, so redirecting
+    that one name is the whole sandbox. `discover()` still measures the REAL
+    programs/ population, which is what makes the numbers under test the
+    numbers the gate actually enforces.
+    """
+    root = tmp_path / "marketplace"
+    for rel in _bound_docs(gen):
+        dst = root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        text = (gen.MARKETPLACE / rel).read_text()
+        dst.write_text(mutate(rel, text) if mutate else text)
+    monkeypatch.setattr(gen, "MARKETPLACE", root)
+    return root
+
+
+def _drift(gen, inv, rel_wanted, delta=1):
+    """A `mutate` that puts every claim in `rel_wanted` off by `delta`."""
+    def mutate(rel, text):
+        if rel != rel_wanted:
+            return text
+        for claim_rel, key, pattern in gen._CLAIMS:
+            if claim_rel != rel:
+                continue
+            wrong = str(inv["populations"][key]["count"] + delta)
+            # From the end backwards: an earlier span's offsets survive a
+            # later span being resized.
+            for m in reversed(list(re.finditer(pattern, text))):
+                text = text[:m.start(1)] + wrong + text[m.end(1):]
+        return text
+    return mutate
+
+
+def test_a_regeneration_closes_the_check_it_ships_with(tmp_path, monkeypatch):
+    """RED then GREEN across the write, in one sandbox: the round trip itself.
+
+    This is the property that was false. Asserting only "check_documents is
+    empty after apply_documents" would pass against a tree that never drifted,
+    so the drift is INTRODUCED here and the before-arm is asserted RED — a
+    writer that did nothing would fail this test on the first assert.
+    """
+    gen = _load_gen()
+    inv = gen.discover()
+    _sandbox_docs(gen, tmp_path, monkeypatch,
+                  mutate=_drift(gen, inv, "README.md"))
+
+    before = gen.check_documents(inv)
+    assert before, ("the drifted sandbox reported no failure, so the after-arm "
+                    "of this test would pass without the writer doing anything")
+
+    edits, unfixable = gen.apply_documents(inv)
+    assert edits, "apply_documents rewrote nothing on a tree it called drifted"
+    assert not unfixable, f"nothing here is unfixable by substitution: {unfixable}"
+
+    after = gen.check_documents(inv)
+    assert not after, (
+        "a full regeneration left the check it ships with RED — the round trip "
+        "is open again:\n  " + "\n  ".join(after))
+
+
+def test_the_writer_is_idempotent_and_touches_nothing_that_agrees(
+        tmp_path, monkeypatch):
+    """The control on the write: an undrifted document is left BYTE-identical.
+
+    A writer that rewrote every bound site unconditionally would also pass the
+    round-trip test above, and would put a diff on every landing that changed
+    no count. Bytes, not `check_documents`, because normalising the thousands
+    separator is exactly the change the checker cannot see.
+    """
+    gen = _load_gen()
+    inv = gen.discover()
+    root = _sandbox_docs(gen, tmp_path, monkeypatch)
+    before = {rel: (root / rel).read_bytes() for rel in _bound_docs(gen)}
+
+    edits, unfixable = gen.apply_documents(inv)
+    assert not edits, f"rewrote a count that already agreed: {edits}"
+    assert not unfixable, f"the committed documents are not clean: {unfixable}"
+    for rel, body in before.items():
+        assert (root / rel).read_bytes() == body, f"{rel} was rewritten"
+
+
+def test_the_writer_cannot_launder_a_site_it_did_not_fix(tmp_path, monkeypatch):
+    """A reworded claim is REPORTED, never silently passed over.
+
+    Substituting a number cannot restore a sentence somebody deleted. If that
+    arrived as silence, a regeneration would read as "the documents are correct
+    now" while `--check` stayed red for a reason the run never mentioned —
+    which is the shape of every unmeasured-reads-as-measured-zero defect this
+    gate exists to refuse.
+    """
+    gen = _load_gen()
+    inv = gen.discover()
+    rel, key, pattern = gen._CLAIMS[0]
+
+    def reword(r, text):
+        if r != rel:
+            return text
+        m = re.search(pattern, text)
+        assert m, "the claim this test rewords is already gone"
+        return text[:m.start()] + "(count withdrawn)" + text[m.end():]
+
+    _sandbox_docs(gen, tmp_path, monkeypatch, mutate=reword)
+    edits, unfixable = gen.apply_documents(inv)
+    assert any("VANISHED" in u and key in u for u in unfixable), (
+        f"a reworded claim site was not reported as unfixable: {unfixable}")
+    assert gen.check_documents(inv), (
+        "the checker went green over a claim site that is gone")
+
+
+def test_artifact_only_regenerates_the_artefact_and_no_prose(
+        tmp_path, monkeypatch):
+    """`--artifact-only` is a CONTRACT, not a convenience.
+
+    `generated_artifact_conflict_resolve` registers this artefact, regenerates
+    it after a merge and stages exactly what it regenerated. A run that also
+    corrected prose would leave a correct edit unstaged and outside that
+    program's verdict, so the flag is asserted to write the artefact and leave
+    every bound document byte-identical — drifted ones included.
+    """
+    gen = _load_gen()
+    inv = gen.discover()
+    root = _sandbox_docs(gen, tmp_path, monkeypatch,
+                         mutate=_drift(gen, inv, "README.md"))
+    drifted = {rel: (root / rel).read_bytes() for rel in _bound_docs(gen)}
+    out = tmp_path / "PROGRAM_INVENTORY.json"
+    monkeypatch.setattr(gen, "OUT", out)
+    monkeypatch.setattr(
+        sys, "argv", ["gen_program_inventory.py", "--artifact-only"])
+
+    # The write path RETURNS; only the check paths sys.exit(). Asserting a
+    # SystemExit here would pin the wrong contract.
+    gen.main()
+    assert json.loads(out.read_text())["populations"], "no artefact written"
+    for rel, body in drifted.items():
+        assert (root / rel).read_bytes() == body, (
+            f"--artifact-only rewrote {rel}; the resolver stages one path and "
+            f"this write would fall outside its verdict")
+
+
+def test_the_resolver_asks_this_generator_for_the_artefact_alone():
+    """The registry entry and the flag are one decision; pin them together.
+
+    If the flag were dropped, the resolver would fall back to a default that
+    now also writes prose, and nothing else in either file would notice.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "generated_artifact_conflict_resolve",
+        plugin_path("programs", "generated_artifact_conflict_resolve.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(plugin_path("programs")))
+    # Registered BEFORE exec: `DerivedArtifact` is a dataclass, and dataclasses
+    # resolve their annotations through `sys.modules[cls.__module__]`. Left
+    # unregistered, that lookup returns None and the module dies on import for
+    # a reason that has nothing to do with what is being asserted.
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.modules.pop(spec.name, None)
+    entries = [a for a in mod.REGISTRY if a.generator.endswith(
+        "gen_program_inventory.py")]
+    assert len(entries) == 1, f"expected exactly one entry, got {entries}"
+    assert "--artifact-only" in entries[0].regenerate, (
+        f"the resolver regenerates with {entries[0].regenerate}; without "
+        f"--artifact-only it would also rewrite prose it does not stage")
+
+
 def test_clean_tree_reports_no_failure():
     """Negative control for the three tests above: the same code path must be
     silent on the tree as committed, or their red proves nothing."""
