@@ -1,0 +1,5 @@
+{
+  "_comment": "Advisory flow clauses that state NO reason for being advisory (vibe-ic: advisory_clause_states_its_reason). MAY ONLY SHRINK. An entry is a FINDING AWAITING ITS AUTHOR, not a dispensation and not an answer. It is paid by that gate's own author stating why — `ADVISORY_REASON:` in the gate source inside the declaration window, or `advisory_reason:` on the clause — or by rewiring the clause out of the advisory slot. It is NOT paid by deleting the line: this gate recomputes the set every run, so a deleted entry returns as NEW and fails. A reason invented by someone other than the gate's author to clear an entry satisfies this checker and informs nobody, which is worse than the silence it replaces.",
+  "previous_size": 77,
+  "known": []
+}

@@ -34,6 +34,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `achieved_period_recorded_check` | any | — | "asked" and "reached" must both be on disk. |
 | `adder_map_techmap` | any | — | make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log. |
 | `adversarial_agent` | any | — | a role whose objective is to make PASS a lie. #1119. |
+| `advisory_clause_states_its_reason` | any | — | an advisory gate must say WHY it is advisory. |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
 | `agent_checkin_scope_guard` | any | — | role-based check-in (commit) path-scope gate. |
 | `agent_report_presence_check` | any | — | verify the project ships a structured top-level AGENT_REPORT.md summarising what the run delivered. |
@@ -1319,6 +1320,7 @@ _(no programs in this group)_
 - `achieved_period_recorded_check` — "asked" and "reached" must both be on disk.
 - `adder_map_techmap` — make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log.
 - `adversarial_agent` — a role whose objective is to make PASS a lie. #1119.
+- `advisory_clause_states_its_reason` — an advisory gate must say WHY it is advisory.
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
 - `agent_checkin_scope_guard` — role-based check-in (commit) path-scope gate.
 - `agent_report_presence_check` — verify the project ships a structured top-level AGENT_REPORT.md summarising what the run delivered.
