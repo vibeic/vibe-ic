@@ -83,8 +83,32 @@ report that states a program count must read `populations.<key>.count` from it.
 A hand-typed count is a defect this gate exists to fail on, whether or not it
 happens to be right on the day it is typed.
 
+THE DEFAULT RUN CLOSES THE ROUND TRIP (vibe-ic v1.13.3 follow-up)
+=================================================================
+It did not, and that is what made this gate recur. The default run wrote the
+artefact; `--check` bound the artefact AND the prose that quotes it; so there
+was NO invocation of this program that could satisfy the check it ships with,
+and the only way to clear a drift was to hand-edit six README lines — the
+practice three paragraphs above call the defect.
+
+The tell that this was structural and not an oversight: TWO places in the tree
+had already measured it and routed around it rather than closing it. `main()`
+carried "which a regeneration cannot fix", and
+`generated_artifact_conflict_resolve.REGISTRY` carried "Measured: with the JSON
+freshly regenerated, --check was still red on five README lines". It was five
+then and six on 6c798ce4be. An open round trip does not hold still: every claim
+the tree grows past adds a site.
+
+So the default run now writes BOTH, driven by the SAME `_CLAIMS` table that
+checks them — see `apply_documents`. `--artifact-only` opts out for the one
+caller whose contract is a single registered path.
+
 Usage:
-  python3 programs/gen_program_inventory.py            # regenerate + print
+  python3 programs/gen_program_inventory.py            # regenerate artefact
+                                                       # AND rewrite the stated
+                                                       # counts that quote it
+  python3 programs/gen_program_inventory.py --artifact-only
+                                                       # the artefact alone
   python3 programs/gen_program_inventory.py --check    # verify committed == tree
                                                        # AND stated docs == tree
 
@@ -455,8 +479,9 @@ def check_documents(inv: dict) -> list[str]:
                 fails.append(
                     f"{rel}:{line}: states {m.group(1)} for {key}, tree has "
                     f"{want} (counts: {pops[key]['definition'][:72]}...). "
-                    f"Re-run `python3 programs/gen_program_inventory.py` and "
-                    f"read populations.{key}.count from PROGRAM_INVENTORY.json.")
+                    f"Run `python3 programs/gen_program_inventory.py`: it "
+                    f"rewrites this number from populations.{key}.count. Do "
+                    f"not hand-type it.")
 
     for rel, snippet, _reason in _NOT_A_POPULATION_COUNT:
         idx = texts[rel].find(snippet)
@@ -480,6 +505,110 @@ def check_documents(inv: dict) -> list[str]:
                 f"_NOT_A_POPULATION_COUNT with a reason). "
                 f"Populations: {', '.join(sorted(pops))}.")
     return fails
+
+
+def _format_like(sample: str, value: int) -> str:
+    """`value` spelled the way `sample` was: grouped iff `sample` was grouped.
+
+    The two READMEs mix `2925` and `2,545` for numbers of the same size, and
+    both are correct today because `check_documents` strips the separator
+    before comparing. A writer that imposed one style would rewrite lines it
+    did not need to touch, so the diff of a count change would no longer be the
+    count change.
+    """
+    return f"{value:,}" if "," in sample else str(value)
+
+
+def apply_documents(inv: dict) -> tuple[list[str], list[str]]:
+    """Rewrite every bound stated count in the bound documents IN PLACE.
+
+    Returns ``(edits, unfixable)``. ``edits`` is one line per number actually
+    changed; ``unfixable`` is every failure `check_documents` reports that
+    substituting a number cannot close -- a claim site reworded away, a claim
+    bound to an unknown population, or a new count claim bound to nothing.
+
+    WHY THIS EXISTS: THE ROUND TRIP WAS OPEN
+    ========================================
+    Until this function, the generator wrote PROGRAM_INVENTORY.json and nothing
+    else, while `--check` bound BOTH that artefact and the prose counts in the
+    two READMEs. So `--check` asked a question that no run of this program
+    could answer yes to, and the drift it reported could only be cleared by
+    hand-editing prose -- which is the very thing the module docstring calls a
+    defect ("READ THE NUMBER FROM THE ARTEFACT, DO NOT HAND-TYPE IT").
+
+    MEASURED on 6c798ce4be (v1.13.3), on a clean clone: the tree had grown by
+    three test files and three `*.py`, `--check` was red on SIX prose sites in
+    two READMEs, and a full regeneration moved NONE of them. Two places in this
+    repository had already written the gap down and worked around it rather
+    than closing it -- `main()` below ("which a regeneration cannot fix") and
+    `generated_artifact_conflict_resolve.REGISTRY` ("Measured: with the JSON
+    freshly regenerated, --check was still red on five README lines"). FIVE
+    when that was written, SIX now: an open round trip does not stay the same
+    size, it accumulates one site per claim the tree grows past.
+
+    The substitution is driven by `_CLAIMS` -- the SAME table `check_documents`
+    reads -- so the writer cannot drift from the checker: a site the checker
+    binds is a site the writer fixes, and a site bound to nothing is fixed by
+    neither. That is the point. A second, independent list of "where the
+    numbers live" would be one more place to state the same fact, which is the
+    defect this whole file was written about.
+    """
+    pops = inv["populations"]
+    edits: list[str] = []
+    unfixable: list[str] = []
+    docs = sorted({rel for rel, _, _ in _CLAIMS})
+
+    for rel in docs:
+        path = MARKETPLACE / rel
+        text = path.read_text()
+        # (start, end, replacement) for every site whose number is wrong.
+        # Collected first and applied from the END backwards, so an earlier
+        # span's offsets are still valid after a later span is resized.
+        spans: list[tuple[int, int, str, str, str]] = []
+        for claim_rel, key, pattern in _CLAIMS:
+            if claim_rel != rel:
+                continue
+            if key not in pops:
+                unfixable.append(f"{rel}: claim bound to unknown population "
+                                 f"{key!r} — no number can be written for a "
+                                 f"population that does not exist.")
+                continue
+            want = pops[key]["count"]
+            found = list(re.finditer(pattern, text))
+            if not found:
+                unfixable.append(
+                    f"{rel}: claim site for {key} has VANISHED — no match for "
+                    f"/{pattern}/. A reworded claim is unchecked, not correct, "
+                    f"and no substitution can restore a sentence that is gone: "
+                    f"restore the wording or update _CLAIMS.")
+                continue
+            for m in found:
+                got = m.group(1)
+                if int(got.replace(",", "")) == want:
+                    continue
+                spans.append((m.start(1), m.end(1),
+                              _format_like(got, want), got, key))
+
+        if not spans:
+            continue
+        for start, end, new, old, key in sorted(spans, reverse=True):
+            line = text[:start].count("\n") + 1
+            text = text[:start] + new + text[end:]
+            edits.append(f"{rel}:{line}: {key} {old} -> {new}")
+        # Written through the same atomic helper the rest of this tree uses, so
+        # a writer interrupted mid-README cannot leave a half-written document
+        # behind claiming a count nobody measured.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
+
+    # An UNREGISTERED claim is a number this file has never been told the
+    # meaning of. Writing one would be inventing a population; it is reported
+    # so the default run cannot look like it closed a gap it did not touch.
+    for line in check_documents(inv):
+        if "UNREGISTERED count claim" in line:
+            unfixable.append(line)
+    return sorted(edits), unfixable
 
 
 def compare_committed(inv: dict, committed: dict) -> tuple[str, list[str]]:
@@ -549,6 +678,15 @@ def main() -> None:
                          "differs from the tree; ignore prose in bound "
                          "documents. For callers that regenerate the artefact "
                          "and need to know whether THOSE BYTES are now correct")
+    ap.add_argument("--artifact-only", action="store_true",
+                    dest="artifact_only",
+                    help="regenerate PROGRAM_INVENTORY.json and NOTHING else. "
+                         "For a caller whose contract is that one path: "
+                         "`generated_artifact_conflict_resolve` registers this "
+                         "artefact, regenerates it after a merge and stages "
+                         "exactly what it regenerated, so a run that also "
+                         "corrected prose would leave a correct edit unstaged "
+                         "and outside its verdict")
     a = ap.parse_args()
 
     try:
@@ -580,13 +718,19 @@ def main() -> None:
         # --check-artifact STOPS HERE, and the reason is a real caller.
         # `generated_artifact_conflict_resolve.py` regenerates a derived file
         # after a merge and then asks "are the committed bytes now the derived
-        # bytes?". Full --check also binds PROSE counts in the READMEs, which a
-        # regeneration cannot fix, so it answers "no" for a reason that has
-        # nothing to do with the artefact -- and the resolver's own degradation
+        # bytes?" about ONE registered path. Full --check also binds PROSE
+        # counts in the READMEs, so it answers "no" for a reason that has
+        # nothing to do with that path -- and the resolver's own degradation
         # table turns a still-red --check into rc 2, UNMEASURABLE. That would
         # report an unmeasurable tree where the artefact is provably correct.
-        # The prose obligation is real and full --check still enforces it; it
-        # is simply not the question this flag asks.
+        #
+        # The comment that stood here said the prose was something "a
+        # regeneration cannot fix". That was true when it was written and it is
+        # why the round trip stayed open: a default run wrote the artefact, a
+        # default --check demanded the prose too, and no invocation of this
+        # program could satisfy the check it shipped with. `apply_documents`
+        # closes it, and the resolver now asks for `--artifact-only` so its
+        # narrow question keeps its narrow answer.
         if not a.check_artifact:
             try:
                 fails += check_index_cross(inv)
@@ -616,6 +760,36 @@ def main() -> None:
     print(f"wrote {OUT}")
     for key, p in sorted(inv["populations"].items()):
         print(f"  {key:32s} = {p['count']}")
+
+    # THE ROUND TRIP. The default run writes the artefact AND the prose that
+    # quotes it, so `--check` after a plain regeneration is a question this
+    # program can answer yes to. --artifact-only opts out for the one caller
+    # whose contract is a single path.
+    if not a.artifact_only:
+        try:
+            edits, unfixable = apply_documents(inv)
+        except OSError as exc:
+            print(f"\nNOT WRITTEN: cannot read or write a bound document: "
+                  f"{exc}. The artefact above is correct; the prose that "
+                  f"quotes it was NOT examined.", file=sys.stderr)
+            sys.exit(2)
+        if edits:
+            print(f"\nrewrote {len(edits)} stated count(s) from the artefact:")
+            for line in edits:
+                print(f"  {line}")
+        else:
+            print("\nevery stated count in the bound documents already "
+                  "matched; nothing to rewrite.")
+        # Printed on the same run that wrote, and never swallowed: a
+        # substitution cannot restore a sentence somebody reworded away, and a
+        # run that stayed quiet about that would read as "the documents are
+        # now correct" when they are not. --check is still the gate.
+        if unfixable:
+            print(f"\nSTILL RED — {len(unfixable)} problem(s) no substitution "
+                  f"can fix:", file=sys.stderr)
+            for line in unfixable:
+                print(f"  - {line}", file=sys.stderr)
+
     print("\nEvery one of these is true and they measure different things — "
           "quote the KEY, never a bare number.")
 

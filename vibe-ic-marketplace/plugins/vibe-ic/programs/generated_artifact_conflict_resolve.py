@@ -155,19 +155,29 @@ REGISTRY: tuple[DerivedArtifact, ...] = (
     # a FOREIGN path and refused the whole resolution -- including the derived
     # half that was resolvable -- so the merge was finished by hand.
     #
-    # `--check-artifact`, NOT `--check`. Full --check also binds stated counts
-    # in the two READMEs, which regenerating this artefact cannot fix. Measured:
-    # with the JSON freshly regenerated, --check was still red on five README
-    # lines. Registered with --check, this entry would therefore leave `check`
-    # red after a correct regeneration, and the degradation table above turns
-    # that into rc 2, UNMEASURABLE -- reporting an unmeasurable tree where the
-    # artefact is provably correct. The prose obligation is real and full
-    # --check still enforces it at landing; it is not the question a
-    # post-merge resolver asks.
+    # `--check-artifact`, NOT `--check`, and `--artifact-only`, NOT a bare run.
+    # BOTH flags exist because THIS entry's contract is ONE registered path:
+    # `regenerate` writes it, `check` verifies it, and `_resolve` stages
+    # exactly it.
+    #
+    # Full --check also binds the stated counts in the two READMEs. Registered
+    # with --check, this entry would leave `check` red after a correct
+    # regeneration, and the degradation table above turns that into rc 2,
+    # UNMEASURABLE -- reporting an unmeasurable tree where the artefact is
+    # provably correct. Measured when this comment was first written: with the
+    # JSON freshly regenerated, --check was still red on five README lines.
+    #
+    # That was five because a bare run could not write prose AT ALL, which is
+    # the round trip v1.13.3's follow-up closed: a bare run now rewrites the
+    # counts that quote the artefact. Good everywhere else, wrong HERE -- a
+    # resolver that corrected prose would leave a correct edit unstaged and
+    # outside its own verdict, and this program's whole claim is that what it
+    # regenerated is what it staged. So it asks for the artefact alone, by
+    # name, rather than relying on a default that has now legitimately grown.
     DerivedArtifact(
         path="vibe-ic-marketplace/plugins/vibe-ic/programs/PROGRAM_INVENTORY.json",
         generator=_INV,
-        regenerate=("python3", _INV),
+        regenerate=("python3", _INV, "--artifact-only"),
         check=("python3", _INV, "--check-artifact"),
     ),
 )
