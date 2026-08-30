@@ -52,7 +52,7 @@ import { registerDevices } from "./devices/_registry.js";
 // _spawnSync used by dockerExec + host handlers is the existing legacy
 // import declared further down (`spawnSync as _spawnSyncEarly`).
 import {
-  shq, assertSafeIdent, assertSafeToken, assertNoShellMeta,
+  shq, assertSafeIdent, assertSafeToken, assertSafeContainer, assertNoShellMeta,
   assertSafePath, assertSafePaths,
   optPath, optIdent, optToken, optNoShellMeta, guardError,
 } from "./lib/shell_safety.mjs";
@@ -2229,7 +2229,7 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
-      optPath(si_mcf_project, "si_mcf_project"); assertSafeIdent(container, "container");
+      optPath(si_mcf_project, "si_mcf_project"); assertSafeContainer(container, "container");
     } catch (e) { return guardError(e); }
     // Opt-in MCF SI-aware crosstalk-delay STA (project-level; shells to program).
     if (si_mcf_project !== undefined) {
@@ -5651,7 +5651,7 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
-      optPath(field_solve_spef, "field_solve_spef"); assertSafeIdent(field_solve_container, "field_solve_container");
+      optPath(field_solve_spef, "field_solve_spef"); assertSafeContainer(field_solve_container, "field_solve_container");
     } catch (e) { return guardError(e); }
     // Opt-in field-solved coupling upgrade (shells to the plugin program).
     if (field_solve_spef !== undefined) {
