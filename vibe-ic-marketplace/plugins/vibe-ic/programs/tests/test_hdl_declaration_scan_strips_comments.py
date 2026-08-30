@@ -263,3 +263,50 @@ def test_the_comment_pattern_is_read_from_the_ast_constant():
         __import__("ast").parse('re.sub(r"/\\*.*?\\*/", " ", t)').body[0].value)
     assert not G._strips_comments_inline(
         __import__("ast").parse('re.sub(r"\\s+", " ", t)').body[0].value)
+
+
+# --- the path-token rule ----------------------------------------------------
+#
+# A keyword glued to a character class containing a PATH SEPARATOR is matching a
+# path token, not a declaration. Both directions are asserted: a rule that only
+# excluded things could be satisfied by excluding everything, which is exactly
+# what the two rejected candidates did (243 -> 90 and 243 -> 238, each losing a
+# real HDL scan). The NEGATIVE half below is the half that catches that.
+
+_PATH_MATCHER = r"input[\\/]+docs|input_doc|\.(?:txt|pdf|docx?|md|csv)"
+
+
+def test_a_path_matcher_is_not_a_declaration_scan():
+    """The measured false positive: a FILE-PATH and EXTENSION matcher.
+
+    `_META` blanks the class brackets, so this normalises to `input \\/  docs`
+    and the bare `input` used to match. The value it scans is a provenance
+    SOURCE LABEL, never HDL, so no comment can ever reach it.
+    """
+    assert G.declares_hdl(_PATH_MATCHER) is False
+
+
+def test_the_path_rule_keeps_every_real_declaration_shape():
+    """The NEGATIVE control. Each of these was lost by a rejected candidate."""
+    for pattern in (
+        r"\bmodule\s+(\w*)",                        # the known true positive
+        r"\bmodule\s+([A-Za-z_]\w*)",
+        r"^[ \t]*inout[ \t]+(?:(?:wire|reg)[ \t]+)?(\w+)",   # lost by cand. 2
+        r"(?m)^[ \t]*module[ \t]+([A-Za-z_]\w*)",            # lost by cand. 2
+        r"(?i)module[\s_-]?list",                            # lost by cand. 2
+        r"\binput\s+(\w+)",
+        r"(input|output|inout)\s+(?:wire|logic|reg)?\s*(\w+)",
+    ):
+        assert G.declares_hdl(pattern) is True, pattern
+
+
+def test_a_whitespace_class_is_not_a_path_separator():
+    """`[ \\t]` and `[\\s_-]` carry a BACKSLASH but no path separator.
+
+    Candidate 2 tested for any backslash inside the class and so silently
+    reclassified three real HDL scans as paths. The separator must be a
+    literal `/`.
+    """
+    assert G.declares_hdl(r"module[ \t]+(\w+)") is True
+    assert G.declares_hdl(r"module[\s_-]?list") is True
+    assert G.declares_hdl(r"module[\\/]+x") is False
