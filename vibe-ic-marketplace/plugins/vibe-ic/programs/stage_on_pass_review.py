@@ -1662,41 +1662,134 @@ def rule_die_is_not_the_design(project: Path, decl: Dict[str, Any]) -> Dict[str,
 # AND a valid `python3 <file>` script, and resolves the run root by walking up
 # from itself to the directory carrying `phase1/generated_docs`, so moving the
 # run does not break it and no absolute path is baked in.
-_EMITTED_TEST = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
+# ─────────────────────────────────────────────────────────────────────────────
+# the emitted test's SHARED SKELETON — defined ONCE, composed per rule
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS IS A FUNCTION AND NOT FIVE COPIES. Every emitted regression opens
+# with the same eight docstring lines, carries the same `run_root()`, and closes
+# with the same `__main__` guard. Until this change each rule's template carried
+# its OWN copy of all three, so ANY TWO templates shared a 6-7 line prefix.
+#
+# That is not a tidiness complaint, it is a merge hazard, and it was MEASURED.
+# Rebasing the stage-5 rule onto main, the unconflicted region between two
+# conflict hunks was the START of a template and BOTH SIDES of the next hunk
+# were TAILS: git had aligned one template's prefix against the other's, so
+# "keep both sides" produced ONE template with TWO tails. It was caught only
+# because the two tails happened to close on different quote characters and the
+# result would not parse. A pair that agreed on its quote would have produced a
+# VALID string containing both bodies, and the emitted regression would have
+# been silently wrong.
+#
+# A line that exists once cannot be aligned against its own copy. Adding a rule
+# now appends a block that shares NO LINE with any other rule's block, so two
+# branches that each add a rule no longer overlap.
 
-    {contradiction}
 
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own INTENT and ARTEFACT — no oracle, no
-harness, no golden — and it re-derives nothing: it runs no tool and rebuilds no
-artefact.
+def _emitted_doc(quote: str, reads: str, repair: str, coda: str = "") -> str:
+    """The shebang and docstring every emitted regression opens with.
 
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * the stage builds the module the intent names, or
-  * the intent is corrected to name the module the design actually tops out
-    at, and the {n_restamped} report(s) carrying design_identity.top are
-    regenerated from it.
-"""
-import json
-import re
-import sys
-from pathlib import Path
+    `quote` is the triple-quote the EMITTED file's docstring uses — it varies
+    per rule because a template whose body contains one kind must be delimited
+    with the other. `reads` completes the "repaired. …" sentence and names the
+    inputs THAT rule reads; `repair` is its two-way repair list; `coda` is an
+    optional trailing paragraph. Placeholders (`{program}`, `{stage}`,
+    `{contradiction}`) are left intact for `.format` at emit time.
+    """
+    return (
+        "#!/usr/bin/env python3\n"
+        + quote
+        + "AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review "
+          "rejection.\n"
+          "\n"
+          "    {contradiction}\n"
+          "\n"
+          "This test FAILS while that is true of this run tree and PASSES once "
+          "it is\n"
+          "repaired. "
+        + reads
+        + "\n"
+          "\n"
+          "REPAIR is one of exactly two things, and which one is a design "
+          "decision this\n"
+          "test does not make:\n"
+        + repair
+        + (("\n\n" + coda) if coda else "")
+        + "\n" + quote + "\n")
 
-INTENT_REL = {intent_rel!r}
+
+def _emitted_imports(want_re: bool = False) -> str:
+    """The stdlib imports every emitted regression opens its code with.
+
+    STDLIB ONLY is part of the contract: the emitted file must run under a bare
+    `python3` in a tree that has no plugin on its path. `want_re` is the one
+    axis that varies -- the rules that parse Verilog, SDC or a spec need `re`
+    and the rest do not.
+    """
+    return ("import json\n"
+            + ("import re\n" if want_re else "")
+            + "import sys\n"
+              "from pathlib import Path\n"
+              "\n")
+
+
+def _emitted_run_root(sig: str = " -> Path") -> str:
+    """The run-root walk every emitted regression uses to find its own tree.
+
+    `sig` carries the return annotation verbatim because the rules do not all
+    write one, and this refactor changes no emitted byte.
+    """
+    return (
+        "def run_root()" + sig + ":\n"
+        "    for d in [Path(__file__).resolve()] + "
+        "list(Path(__file__).resolve().parents):\n"
+        '        if (d / "phase1" / "generated_docs").is_dir():\n'
+        "            return d\n"
+        '    raise AssertionError("no run root above %s" % __file__)\n')
+
+
+def _emitted_prelude(consts: str, *, want_re: bool = False,
+                     run_root_sig: str = " -> Path") -> str:
+    """Everything between the docstring and the rule's own checks.
+
+    Kept as ONE call so that adding a rule writes ONE line here rather than a
+    run of connector lines every other rule also writes -- the shared-run count
+    is the whole point of this section.
+    """
+    return (_emitted_imports(want_re) + consts + "\n\n"
+            + _emitted_run_root(run_root_sig) + "\n\n")
+
+
+def _emitted_main(call: str, passline: str) -> str:
+    """The `__main__` guard: run the one check, print PASS or FAIL, exit 1.
+
+    This is what makes the emitted file both a pytest module and a runnable
+    `python3 <file>` script, which is the contract the templates are held to.
+    """
+    return ("\n\n"
+            'if __name__ == "__main__":\n'
+            "    try:\n"
+            + call
+            + "    except AssertionError as e:\n"
+            '        print("FAIL: %s" % e)\n'
+            "        sys.exit(1)\n"
+            + passline)
+
+
+_EMITTED_TEST = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own INTENT and ARTEFACT — no oracle, no\n"
+        "harness, no golden — and it re-derives nothing: it runs no tool and rebuilds no\n"
+        "artefact.",
+        "  * the stage builds the module the intent names, or\n"
+        "  * the intent is corrected to name the module the design actually tops out\n"
+        "    at, and the {n_restamped} report(s) carrying design_identity.top are\n"
+        "    regenerated from it.")
+    + _emitted_prelude(r'''INTENT_REL = {intent_rel!r}
 RTL_RELS = {rtl_rels!r}
 _MODULE_RE = re.compile(r"(?m)^[ \t]*module\s+([A-Za-z_]\w*)")
-
-
-def run_root() -> Path:
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def test_the_intent_names_a_top_module_this_run_actually_builds():
+''', want_re=True)
+    + r'''def test_the_intent_names_a_top_module_this_run_actually_builds():
     root = run_root()
     intent = json.loads((root / INTENT_REL).read_text(encoding="utf-8",
                                                       errors="replace"))
@@ -1718,47 +1811,28 @@ def test_the_intent_names_a_top_module_this_run_actually_builds():
         "%s declares top_module=%r and this run builds %d module(s), none of "
         "them %r: %s" % (INTENT_REL, declared, len(modules), declared,
                          ", ".join(sorted(modules))))
-
-
-if __name__ == "__main__":
-    try:
-        test_the_intent_names_a_top_module_this_run_actually_builds()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: the intent names a top module this run builds")
 '''
+    + _emitted_main(
+        "        test_the_intent_names_a_top_module_this_run_actually_builds()\n",
+        '    print("PASS: the intent names a top module this run builds")\n'))
 
 
-_EMITTED_TEST_R2 = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own INTENT and ARTEFACT — no oracle, no
-harness, no golden — and it re-derives nothing: it runs no synthesis and
-rebuilds no netlist.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * the stage synthesises a top that carries the declared pin(s), or
-  * the intent is corrected to declare the interface this design actually has,
-    and every artefact derived from the old pin list is regenerated from it.
-
-It deliberately does NOT assert the reverse direction. Ports the netlist
-carries and the intent does not are routine — scan insertion, the wrapper, tie
-cells — and asserting on them would make this file red for the flow doing its
-job. It also does not assert on a pin the intent itself marks a supply: a
-non-power-aware netlist carries no supply port, and that is stage 3's to sign
-off.
-"""
-import json
-import re
-import sys
-from pathlib import Path
-
-INTENT_REL = {intent_rel!r}
+_EMITTED_TEST_R2 = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own INTENT and ARTEFACT — no oracle, no\n"
+        "harness, no golden — and it re-derives nothing: it runs no synthesis and\n"
+        "rebuilds no netlist.",
+        "  * the stage synthesises a top that carries the declared pin(s), or\n"
+        "  * the intent is corrected to declare the interface this design actually has,\n"
+        "    and every artefact derived from the old pin list is regenerated from it.",
+        "It deliberately does NOT assert the reverse direction. Ports the netlist\n"
+        "carries and the intent does not are routine — scan insertion, the wrapper, tie\n"
+        "cells — and asserting on them would make this file red for the flow doing its\n"
+        "job. It also does not assert on a pin the intent itself marks a supply: a\n"
+        "non-power-aware netlist carries no supply port, and that is stage 3's to sign\n"
+        "off.")
+    + _emitted_prelude(r'''INTENT_REL = {intent_rel!r}
 INTENT_FIELD = {intent_field!r}
 NETLIST_REL = {netlist_rel!r}
 SUPPLY_ROLES = ("power", "ground", "supply")
@@ -1769,16 +1843,8 @@ _PORT_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_$]*)[ \t]*[;,]")
 _MODULE_RE = re.compile(
     r"(?ms)^[ \t]*module[ \t]+([A-Za-z_]\w*)\b(.*?)^[ \t]*endmodule")
-
-
-def run_root() -> Path:
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def _is_supply(pin) -> bool:
+''', want_re=True)
+    + r'''def _is_supply(pin) -> bool:
     for key in ("io", "type", "kind", "role", "pin_type"):
         v = pin.get(key)
         if isinstance(v, str) and v.strip().lower() in SUPPLY_ROLES:
@@ -1837,16 +1903,10 @@ def test_every_pin_the_intent_declares_is_built_by_the_synthesised_top():
         "top builds: %s" % (INTENT_REL, INTENT_FIELD, len(pins), NETLIST_REL,
                             roots[0], len(built), len(absent),
                             ", ".join(absent), ", ".join(sorted(built))))
-
-
-if __name__ == "__main__":
-    try:
-        test_every_pin_the_intent_declares_is_built_by_the_synthesised_top()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: the synthesised top builds every pin the intent declares")
 '''
+    + _emitted_main(
+        "        test_every_pin_the_intent_declares_is_built_by_the_synthesised_top()\n",
+        '    print("PASS: the synthesised top builds every pin the intent declares")\n'))
 
 
 # R5 (stage5_manufacturing) — DECLARED, NOT ENABLED. See the module docstring.
@@ -2049,39 +2109,19 @@ def rule_package_cannot_bond_design(project: Path, decl: Dict[str, Any]) -> Dict
 # ─────────────────────────────────────────────────────────────────────────────
 #: R5's own emitted regression. It reads the run's packaging log and the run's
 #: L1 — no oracle, no harness, no golden — and re-derives nothing.
-_EMITTED_TEST_R5 = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own INTENT (the L1 datasheet) and ARTEFACT
-(the packaging log step 42 wrote); it runs no tool and assembles nothing.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * the part is assembled in a package that carries every pin the design
-    brings to the outside world, or
-  * the intent is corrected to declare the pin population the design really
-    has, and the package chosen for it.
-"""
-import json
-import re
-import sys
-from pathlib import Path
-
-INTENT_REL = {intent_rel!r}
+_EMITTED_TEST_R5 = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own INTENT (the L1 datasheet) and ARTEFACT\n"
+        "(the packaging log step 42 wrote); it runs no tool and assembles nothing.",
+        "  * the part is assembled in a package that carries every pin the design\n"
+        "    brings to the outside world, or\n"
+        "  * the intent is corrected to declare the pin population the design really\n"
+        "    has, and the package chosen for it.")
+    + _emitted_prelude(r'''INTENT_REL = {intent_rel!r}
 ARTEFACT_REL = {artefact_rel!r}
-
-
-def run_root() -> Path:
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def _count(v):
+''', want_re=True)
+    + r'''def _count(v):
     if isinstance(v, bool) or v is None:
         return None
     if isinstance(v, int):
@@ -2119,16 +2159,10 @@ def test_the_assembled_package_carries_every_pin_the_design_brings_out():
         "outside world (%s): the part cannot be bonded out."
         % (ARTEFACT_REL, art.get("package_type"), assembled, INTENT_REL,
            needs, source))
-
-
-if __name__ == "__main__":
-    try:
-        test_the_assembled_package_carries_every_pin_the_design_brings_out()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: the assembled package carries every pin the design brings out")
 '''
+    + _emitted_main(
+        "        test_the_assembled_package_carries_every_pin_the_design_brings_out()\n",
+        '    print("PASS: the assembled package carries every pin the design brings out")\n'))
 
 
 def _body_r5(finding: Dict[str, Any], stage_id: str) -> str:
@@ -2139,45 +2173,25 @@ def _body_r5(finding: Dict[str, Any], stage_id: str) -> str:
         artefact_rel=finding["artefact"]["file"])
 
 
-_EMITTED_TEST_R3 = r"""#!/usr/bin/env python3
-'''AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own INTENT (the L-docs) and ARTEFACT (the
-sign-off deck) — no oracle, no harness, no golden — and it re-derives nothing:
-it runs no tool, invokes no router and rebuilds no deck.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * the sign-off deck is regenerated at the period the intent asks for and
-    stage 3 is re-run against it, or
-  * the intent is corrected to the period this design is actually specified to
-    run at, and the {n_stamped} sign-off artefact(s) closed under the old
-    number are regenerated from it.
-'''
-import json
-import re
-import sys
-from pathlib import Path
-
-INTENT_RELS = {intent_rels!r}
+_EMITTED_TEST_R3 = (
+    _emitted_doc(
+        "'''",
+        "It reads only this run's own INTENT (the L-docs) and ARTEFACT (the\n"
+        "sign-off deck) — no oracle, no harness, no golden — and it re-derives nothing:\n"
+        "it runs no tool, invokes no router and rebuilds no deck.",
+        "  * the sign-off deck is regenerated at the period the intent asks for and\n"
+        "    stage 3 is re-run against it, or\n"
+        "  * the intent is corrected to the period this design is actually specified to\n"
+        "    run at, and the {n_stamped} sign-off artefact(s) closed under the old\n"
+        "    number are regenerated from it.")
+    + _emitted_prelude(r"""INTENT_RELS = {intent_rels!r}
 DECK_REL = {deck_rel!r}
 ASKED_NS = {asked_ns!r}
 PRIMARY_ROLES = ("primary", "master")
 _CC = re.compile(r"(?m)^[ \t]*create_clock\b([^\n]*)")
 _PER = re.compile(r"-period\s+([0-9]*\.?[0-9]+)")
-
-
-def run_root():
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def _pos(v):
+""", want_re=True, run_root_sig='')
+    + r"""def _pos(v):
     try:
         f = float(v)
     except (TypeError, ValueError):
@@ -2238,17 +2252,11 @@ def test_the_signoff_deck_is_not_slower_than_the_period_the_intent_asks_for():
         "for %.6g ns (%s): the layout is timed %.3gx slower than the design is "
         "specified to run" % (DECK_REL, fastest, len(periods), asked, why,
                               fastest / asked))
-
-
-if __name__ == "__main__":
-    try:
-        test_the_signoff_deck_is_not_slower_than_the_period_the_intent_asks_for()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: the sign-off deck is not slower than the intent (asked "
-          "%.6g ns)" % ASKED_NS)
 """
+    + _emitted_main(
+        "        test_the_signoff_deck_is_not_slower_than_the_period_the_intent_asks_for()\n",
+        '    print("PASS: the sign-off deck is not slower than the intent (asked "\n'
+        '          "%.6g ns)" % ASKED_NS)\n'))
 
 
 # The stage_analog counterpart. Same contract as the templates above:
@@ -2257,43 +2265,24 @@ if __name__ == "__main__":
 # simulator and rebuilds no deck. It reads this run's own L5 and this
 # run's own per-block spec.json and recomputes the comparison the flow
 # never makes.
-_EMITTED_TEST_ANALOG = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own INTENT and ARTEFACT — no oracle, no
-harness, no golden — and it re-derives nothing: it runs no simulator and
-rebuilds no deck.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * A1 re-extracts the block's spec.json so it carries every numeric
-    requirement the intent declares, at the values the intent declares, and
-    A2-A9 are RE-RUN on it — a spec change that was never re-simulated is not
-    a fix; or
-  * the intent is corrected to declare the requirements this design is
-    actually held to, and the blocks are re-graded from it.
-"""
-import json
-import sys
-from pathlib import Path
-
-INTENT_REL = {intent_rel!r}
+_EMITTED_TEST_ANALOG = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own INTENT and ARTEFACT — no oracle, no\n"
+        "harness, no golden — and it re-derives nothing: it runs no simulator and\n"
+        "rebuilds no deck.",
+        "  * A1 re-extracts the block's spec.json so it carries every numeric\n"
+        "    requirement the intent declares, at the values the intent declares, and\n"
+        "    A2-A9 are RE-RUN on it — a spec change that was never re-simulated is not\n"
+        "    a fix; or\n"
+        "  * the intent is corrected to declare the requirements this design is\n"
+        "    actually held to, and the blocks are re-graded from it.")
+    + _emitted_prelude(r'''INTENT_REL = {intent_rel!r}
 ANALOG_RELS = {analog_rels!r}
 BLOCKS = {blocks!r}
 NUMERIC_KEYS = ("target", "min", "max", "value", "typ")
-
-
-def run_root() -> Path:
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def numbers(row):
+''')
+    + r'''def numbers(row):
     out = dict()
     for k in NUMERIC_KEYS:
         v = row.get(k)
@@ -2368,59 +2357,34 @@ def test_the_spec_this_run_grades_against_is_the_spec_the_intent_declares():
     assert not problems, (
         "the spec %d block(s) are graded against is not the spec the intent "
         "declares:\n  " % measured + "\n  ".join(problems))
-
-
-if __name__ == "__main__":
-    try:
-        test_the_spec_this_run_grades_against_is_the_spec_the_intent_declares()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: every declared numeric requirement is in the graded spec")
 '''
+    + _emitted_main(
+        "        test_the_spec_this_run_grades_against_is_the_spec_the_intent_declares()\n",
+        '    print("PASS: every declared numeric requirement is in the graded spec")\n'))
 
 # The stage-4 counterpart. Same contract, different subject: it reads the
 # INTENT's top module and the hierarchy ROOT of the layout in the die slot, and
 # it parses the GDSII record stream itself so the emitted file stays
 # self-contained and stdlib-only, exactly as the stage-1 one parses Verilog.
-_EMITTED_TEST_R4 = r'''#!/usr/bin/env python3
-"""AUTO-EMITTED by `{program}` from a stage-{stage} ON-PASS review rejection.
-
-    {contradiction}
-
-This test FAILS while that is true of this run tree and PASSES once it is
-repaired. It reads only this run's own INTENT and the layout this run published
-for tape-out -- no oracle, no harness, no golden -- and it re-derives nothing:
-it streams no layout, runs no tool and starts no process.
-
-REPAIR is one of exactly two things, and which one is a design decision this
-test does not make:
-  * the die slot is filled with the layout of the design the intent names
-    (whose hierarchy root is that module, or this flow's own chip-top
-    wrapper), or
-  * the intent is corrected to name what this run actually delivers, and what
-    is in the die slot is moved to the deliverable slot that matches it.
-"""
-import json
-import sys
-from pathlib import Path
-
-INTENT_REL = {intent_rel!r}
+_EMITTED_TEST_R4 = (
+    _emitted_doc(
+        '"""',
+        "It reads only this run's own INTENT and the layout this run published\n"
+        "for tape-out -- no oracle, no harness, no golden -- and it re-derives nothing:\n"
+        "it streams no layout, runs no tool and starts no process.",
+        "  * the die slot is filled with the layout of the design the intent names\n"
+        "    (whose hierarchy root is that module, or this flow's own chip-top\n"
+        "    wrapper), or\n"
+        "  * the intent is corrected to name what this run actually delivers, and what\n"
+        "    is in the die slot is moved to the deliverable slot that matches it.")
+    + _emitted_prelude(r'''INTENT_REL = {intent_rel!r}
 DIE_RELS = {die_rels!r}
 WRAPPER = {wrapper!r}
 _DIE_GLOBS = ("*.gds", "*.gdsii")
 _STRNAME = (0x06, 0x06)
 _SNAME = (0x12, 0x06)
-
-
-def run_root() -> Path:
-    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
-        if (d / "phase1" / "generated_docs").is_dir():
-            return d
-    raise AssertionError("no run root above %s" % __file__)
-
-
-def structures(data: bytes):
+''')
+    + r'''def structures(data: bytes):
     defined, referenced = [], set()
     i, n = 0, len(data)
     while i + 4 <= n:
@@ -2469,16 +2433,10 @@ def test_the_die_published_for_tapeout_is_the_design_the_intent_names():
             INTENT_REL, declared, ", ".join(sorted(tops)), WRAPPER, declared,
             "defined" if declared in defined else "defined nowhere",
             len(defined)))
-
-
-if __name__ == "__main__":
-    try:
-        test_the_die_published_for_tapeout_is_the_design_the_intent_names()
-    except AssertionError as e:
-        print("FAIL: %s" % e)
-        sys.exit(1)
-    print("PASS: the die published for tape-out is the design the intent names")
 '''
+    + _emitted_main(
+        "        test_the_die_published_for_tapeout_is_the_design_the_intent_names()\n",
+        '    print("PASS: the die published for tape-out is the design the intent names")\n'))
 
 
 def _body_r4(finding: Dict[str, Any], stage_id: str) -> str:
