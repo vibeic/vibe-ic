@@ -347,7 +347,7 @@ edges:
   "4":    {controller: null, fallback_to: 1,   note: "Test failure traceable to RTL. Diagnosis is not an actuator."}
   "5":    {controller: null, fallback_to: 1,   note: "SVA failure -> RTL change."}
   "8":    {controller: null, fallback_to: 7,   note: "SDC syntax/semantic error. sdc_gen is board-scoped (FPGA), not a general constraint actuator."}
-  "9":    {controller: null, fallback_to: 1,   note: "Area above the DECLARED ceiling. Needs area.physical measured; that domain is DECLARED_ONLY."}
+  "9":    {controller: null, fallback_to: 9,   note: "Area above the DECLARED ceiling. fallback_to FOLLOWED THE FLOW from 1 to 9: the actuator that runs on this trigger is phase3_one_shot_runner.step_synth re-entering ITSELF at AREA_RETRY_PERIOD_RELAX, never step_rtl_gen, and the runner already recorded that mismatch at the site as CLC-ACTUATION-NOT-FALLBACK-REENTRY. controller stays null: a controller here would be a BOUNDED SEARCH over the relaxation, and what exists is one bounded retry with an adoption test, which is not the same object."}
   "10":   {controller: null, fallback_to: 7,   note: "Setup violation -> constraint or synthesis redo. Needs timing.setup; DECLARED_ONLY."}
   "13":   {controller: null, fallback_to: 9,   note: "Non-equivalence after synthesis/DFT. A repair here would be a correctness change, never automatic."}
   "A7":   {controller: null, fallback_to: "A3", note: "Analog performance degradation > 10% post-extraction. No analog actuator is declared."}
