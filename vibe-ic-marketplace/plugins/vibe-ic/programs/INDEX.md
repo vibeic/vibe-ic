@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1228
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1228)
+- **Total programs (excluding helpers / shims):** 1230
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1230)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1219 |
+| `any` | 1221 |
 
 ## Alphabetical listing
 
@@ -734,6 +734,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ocp_protocol_synth` | any | — | Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70). |
 | `oe_pattern_check` | any | — | Analyze output-enable (OE) patterns for tristate bus drivers. |
 | `offgrid_drc_classify_check` | any | — | ORGANIC #594. |
+| `on_pass_review_answerable_check` | any | — | an on-pass gate that can only ever say rc=2. |
 | `onehot_fsm_synth` | any | — | DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
@@ -1210,6 +1211,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `utilization_band_check` | any | v0.2.69 | Floorplan/placement utilization band classifier. |
 | `vacuous_disclosure_needs_a_runtime_condition_check` | any | — | A disclosure token is not a working gate — the skip must be CONDITIONED. |
 | `vacuous_testbench_check` | any | — | Phase-2 gate against VACUOUS testbenches. |
+| `valid_ready_independence_check` | any | — | a producer's VALID must not wait on the consumer's READY. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vector_ops_synth` | any | — | deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables. |
@@ -1300,7 +1302,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1219 programs)
+### `any` (1221 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2005,6 +2007,7 @@ _(no programs in this group)_
 - `ocp_protocol_synth` — Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70).
 - `oe_pattern_check` — Analyze output-enable (OE) patterns for tristate bus drivers.
 - `offgrid_drc_classify_check` — ORGANIC #594.
+- `on_pass_review_answerable_check` — an on-pass gate that can only ever say rc=2.
 - `onehot_fsm_synth` — DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
@@ -2479,6 +2482,7 @@ _(no programs in this group)_
 - `utilization_band_check` — Floorplan/placement utilization band classifier.  _[v0.2.69]_
 - `vacuous_disclosure_needs_a_runtime_condition_check` — A disclosure token is not a working gate — the skip must be CONDITIONED.
 - `vacuous_testbench_check` — Phase-2 gate against VACUOUS testbenches.
+- `valid_ready_independence_check` — a producer's VALID must not wait on the consumer's READY.
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vector_ops_synth` — deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder.
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables.  _[v0.119.30]_
