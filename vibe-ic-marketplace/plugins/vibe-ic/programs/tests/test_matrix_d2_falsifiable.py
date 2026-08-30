@@ -224,6 +224,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -239,6 +240,11 @@ from matrix_63x8 import waivers as W
 from matrix_63x8.cells import cells_for
 
 DIM = 2
+
+#: The shipped ``programs/`` directory — this file's own parent's parent.
+#: Two release-document fixtures below run a producer out of it rather than
+#: hand-writing a document set; :func:`_run_producer` records why.
+_PROGRAMS = Path(__file__).resolve().parents[1]
 
 # ─────────────────────────────────────────────────────────────────────
 # Outcome tiers
@@ -1493,6 +1499,189 @@ def _f_hardmacro_kit_incomplete(p: Path) -> None:
        'END LIBRARY\n')
 
 
+def _run_producer(p: Path, script: str) -> None:
+    """Run one of the flow's own document producers over the fixture tree.
+
+    The two release-document fixtures below are the only ones in this module
+    that call a producer instead of writing every byte, and the reason is the
+    thing ``_release_docs_contract`` exists to prevent. That module is the ONE
+    declaration of which documents a release carries and which H2 sections each
+    must hold, in which order; it was written because "a generator that decides
+    which sections it writes, and a checker that decides which sections it
+    demands, are two definitions of the same contract". A hand-typed document
+    set in this file would be a THIRD, and the direction it drifts is the
+    invisible one: the contract gains a section, the fixture does not, the
+    fixture's release reddens on the missing section, and this cell stays green
+    while proving something entirely different from what its docstring claims.
+
+    So the clean release is GENERATED from the contract and the defect is
+    planted on top of it. What the cell then measures is the gate re-deriving a
+    stated quantity and refusing the disagreement — which is the only thing a
+    hand-written release could never establish, because it would agree with the
+    checker by construction.
+    """
+    result = subprocess.run(
+        [sys.executable, str(_PROGRAMS / script), str(p)],
+        capture_output=True, text=True)
+    assert result.returncode == 0, (
+        f"{script} could not build the clean release this fixture plants its "
+        f"defect on — the fixture is broken, not the gate: "
+        f"{(result.stdout + result.stderr)[-600:]}")
+
+
+def _restate_signal_pins(doc: Path, was: int, now: int) -> None:
+    """Edit ONE stated pin count in a generated datasheet.
+
+    Asserts the row is there before touching it. A silent no-op here would hand
+    the cell a CLEAN release, the clause would answer PASS, and the cell would
+    go red saying the gate cannot fail — a true statement about the wrong
+    subject. This turns that into a fixture failure that names the row.
+    """
+    text = doc.read_text(encoding="utf-8")
+    old, new = f"| Signal pins | {was} |", f"| Signal pins | {now} |"
+    assert old in text, (
+        f"{doc.name} no longer states {old!r}, so this fixture plants nothing. "
+        f"The datasheet's interface table was re-worded upstream and the "
+        f"mutation must be re-aimed, not deleted")
+    doc.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def _f_ip_release_docs_pin_count_lie(p: Path) -> None:
+    """A delivered IP kit whose datasheet states a pin count no view supports.
+
+    Reddens the Step-37.5ip clause ``release_docs_check . --arm ip --json
+    reports/phase3/release_docs.json``.
+
+    EMPTY CANNOT REACH IT, BY A DESIGN THE FLOW YAML SPELLS OUT at this very
+    step: "rc 2 IS RESERVED AND IS NOT REACHABLE HERE ON A RUN THAT DELIVERS A
+    KIT. The gate answers rc 2 for exactly one state — no kit and no documents,
+    so there is no release to examine". An empty tmp_path IS that one state, so
+    the default fixture measured the reserved tier and nothing else.
+
+    Two things are deliberately NOT done here. The fixture does not simply
+    delete the documentation: a kit with no documents beside it IS rc 1 (the
+    gate's own ``test_a_kit_that_ships_with_no_documentation_is_a_refusal_not_
+    a_skip``), but it would show only that the gate noticed a hole, and this
+    module's other fixtures are built the other way — every file PRESENT, the
+    producer looking RUN AND WRONG. And it does not hand-write the document set;
+    see :func:`_run_producer` for why a third copy of the contract is the one
+    thing that must not be added.
+
+    So: ``_release_kit`` builds the IP-path project with TWO delivered packages,
+    ``ip_release_docs_gen`` documents both, and then the SUBJECT release's
+    datasheet is edited to state 7 signal pins. The delivered Verilog view still
+    declares 3. That is rule R3, the gate's own headline — "R3 AND R6 ARE THE
+    TWO THAT CANNOT BE SATISFIED BY WRITING PROSE" — and it is a branch the gate
+    can only reach by reading a SECOND view and comparing.
+
+    MEASURED through ``flow_compliance_check._check_program_exit_zero`` on the
+    declared clause (rc 1):
+
+        [ERROR] PIN_COUNT_DISAGREES_WITH_NETLIST (block_a): IP_DATASHEET.md
+        states 'Signal pins' = 7, derived from
+        `phase3/stage4/hardmacro/block_a.lef`; the netlist view
+        `phase3/stage4/hardmacro/block_a.v` declares 3 logical port(s). A
+        datasheet with a pin count no view supports is stale on arrival.
+
+    and the UNTOUCHED second package stays green in the same invocation, so the
+    red is content-earned and not environmental. Restoring the row returns the
+    clause to PASS.
+
+    Chip- and PDK-AGNOSTIC: every literal belongs to ``_release_kit``, whose own
+    docstring records that its package names are generic nouns and its PDK
+    string is an open PDK this flow already targets.
+    """
+    import _release_kit as _RK
+
+    _RK.build_project(p)
+    _run_producer(p, "ip_release_docs_gen.py")
+    _restate_signal_pins(_RK.docs_dir(p) / "IP_DATASHEET.md", 3, 7)
+
+
+def _f_ic_release_docs_pin_count_lie(p: Path) -> None:
+    """A signed-off die whose datasheet states a pin count the netlist refutes.
+
+    Reddens the Step-37.5ic clause ``release_docs_check . --arm ic --json
+    reports/phase3/release_docs_ic.json``. The ip sibling above carries the full
+    reasoning; this is the SAME defect over the OTHER arm's tree, and the two
+    trees are genuinely different — a chip has a routed DEF, a gate-level
+    netlist and a metrics file where a hard IP has four views, so sharing one
+    fixture would judge one arm over a tree it never sees in a real run. That is
+    the same split ``test_release_docs_check_ic_arm`` states for itself.
+
+    ``_ic_release_kit`` builds the chip-path project with two releases,
+    ``ic_release_docs_gen`` documents both, and the SUBJECT's
+    ``PRELIMINARY_DATASHEET.md`` is edited to state 7 signal pins against a
+    netlist that declares 3.
+
+    MEASURED through the same consumer (rc 1):
+
+        [ERROR] PIN_COUNT_DISAGREES_WITH_NETLIST (...): PRELIMINARY_DATASHEET.md
+        states 'Signal pins' = 7, derived from `phase3/stage3/pnr/routed.def`;
+        the netlist view `phase3/stage3/pnr/widget_pnr.v` declares 3 logical
+        port(s). ...
+
+    with the untouched second release green in the same invocation.
+    """
+    import _ic_release_kit as _IK
+
+    _IK.build_project(p)
+    _run_producer(p, "ic_release_docs_gen.py")
+    _restate_signal_pins(_IK.docs_dir(p) / "PRELIMINARY_DATASHEET.md", 3, 7)
+
+
+def _f_reentry_loop_inert(p: Path) -> None:
+    """A runner whose only re-entry can neither change nor detect anything.
+
+    Reddens the Step-37.5ic clause ``closed_loop_executed_reentry_census .
+    --json reports/phase3/closed_loop_executed_reentry.json``.
+
+    THIS CLAUSE IS THE ONE IN THE MATRIX WHOSE SUBJECT IS NOT THE PROJECT. The
+    loops it censuses live in the shipped plugin, not in the tree it is pointed
+    at, so ``_plugin_root`` (programs/closed_loop_executed_reentry_census.py)
+    falls back to THIS REPOSITORY when the root it is given carries no
+    ``vibe-ic-marketplace/plugins/vibe-ic/programs/``. Its own docstring records
+    why: without the fallback "the gate would return its zero-denominator
+    refusal on every real project and be recorded as `n/a`, which is how a
+    census becomes decoration".
+
+    The consequence for THIS module is exact and was measured before this
+    fixture existed: on EMPTY the clause censused the shipped plugin — 27 sites
+    across 8 runners, INERT=0 — and answered rc 0. Not VACUOUS_PASS, which would
+    at least have disclosed a skip: a confident PASS about a tree the fixture
+    never wrote. Every project-shaped fixture in FIXTURES would have done the
+    same, so no amount of building a better PROJECT could ever have reddened it.
+
+    But the fallback is CONDITIONAL, and that is the way in. A fixture that
+    plants the plugin path is censused instead of the repository, and one
+    ``step_*`` function calling itself with no varying argument and no read-back
+    is the census's INERT verdict — the failing condition its docstring names as
+    reachable, here made reachable from a tmp_path.
+
+    MEASURED through ``flow_compliance_check._check_program_exit_zero`` (rc 1):
+
+        [INERT] probe_one_shot_runner.py:2 step_probe -> step_probe: this
+        re-entry passes no argument that can differ and the region never reads
+        back a result. It re-runs the work and cannot change or detect anything.
+        closed_loop_executed_reentry_census: 1 executed re-entry site(s) across
+        1 runner(s); ACTUATING=0, SELF_CHECKED_ONLY=0, INERT=1.
+
+    THE CONTROL IS THE SAME FILE WITH THE TWO SIGNALS PUT BACK — a varying
+    argument and a read-back the region branches on — which the census grades
+    ACTUATING and answers rc 0 for. So the red is earned by the loop's shape and
+    not by the fixture having planted a plugin directory at all, which is the
+    one alternative explanation available here.
+
+    Chip-AGNOSTIC: the planted module names a step and a runner in the repo's
+    own ``step_`` / ``*_one_shot_runner`` convention and nothing else.
+    """
+    _w(p, "vibe-ic-marketplace/plugins/vibe-ic/programs/probe_one_shot_runner.py",
+       "def step_probe(ctx):\n"
+       "    for _ in range(3):\n"
+       "        step_probe(ctx)\n"
+       "    return 0\n")
+
+
 def _f_extract_illegal_overlap(p: Path) -> None:
     """Magic filed illegal-overlap feedback areas; the extraction is fiction.
 
@@ -1805,6 +1994,9 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "AREA_OVER_CEILING": _f_area_over_ceiling,
     "DIE_UNFINISHED": _f_die_unfinished,
     "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
+    "IP_RELEASE_PIN_COUNT_LIE": _f_ip_release_docs_pin_count_lie,
+    "IC_RELEASE_PIN_COUNT_LIE": _f_ic_release_docs_pin_count_lie,
+    "REENTRY_LOOP_INERT": _f_reentry_loop_inert,
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
     "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
     "PAD_DECL_PARTIAL": _f_pad_decl_partial,
@@ -1939,6 +2131,34 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("37.5ip", "digital_hardmacro_check . --json "
                "reports/phase3/digital_hardmacro.json"):
         "HARDMACRO_KIT_INCOMPLETE",
+    # 2026-08-31 — THE SAME MISTAKE THREE TIMES, and the shape is worth naming
+    # because it is the one this whole dimension exists to catch arriving by
+    # the back door. Each of these three clauses was wired BLOCKING into the
+    # flow with no entry here, so the harness defaulted it to EMPTY, and for
+    # each of them EMPTY is the one input the clause is DESIGNED not to judge:
+    #
+    #   v1.13.58  37.5ip gains `release_docs_check --arm ip`. Its flow-yaml note
+    #             says outright "rc 2 IS RESERVED AND IS NOT REACHABLE HERE ON A
+    #             RUN THAT DELIVERS A KIT ... no kit and no documents". EMPTY is
+    #             that state. Cell red from that commit, measured at its parent.
+    #   v1.13.66  37.5ic gains `closed_loop_executed_reentry_census`, whose
+    #             subject is the PLUGIN and not the project — on EMPTY it
+    #             censuses this repository and answers a confident rc 0.
+    #   v1.13.76  37.5ic gains `release_docs_check --arm ic` on top of an
+    #             already-red cell, taking it from one unproven clause to two.
+    #
+    # None of the three is unfalsifiable and none is registered in UNREDDENED:
+    # each has a fixture below that reddens it and a control that does not. What
+    # was missing was the fixture, and a cell red for a missing fixture reads
+    # exactly like a cell red for an unfailable gate — which is why these are
+    # assignments and not excuses.
+    ("37.5ip", "release_docs_check . --arm ip --json "
+               "reports/phase3/release_docs.json"): "IP_RELEASE_PIN_COUNT_LIE",
+    ("37.5ic", "release_docs_check . --arm ic --json "
+               "reports/phase3/release_docs_ic.json"): "IC_RELEASE_PIN_COUNT_LIE",
+    ("37.5ic", "closed_loop_executed_reentry_census . --json "
+               "reports/phase3/closed_loop_executed_reentry.json"):
+        "REENTRY_LOOP_INERT",
     ("31", "magic_illegal_overlap_check . --json "
            "reports/audit/magic_illegal_overlap_audit.json"):
         "EXTRACT_ILLEGAL_OVERLAP",
@@ -2857,6 +3077,128 @@ def test_d2_the_two_newly_wired_blocking_clauses_redden_and_only_on_content(
     assert tier == PASS, (
         "agreeing evidence must not be reddened: worst-of is worst-of the "
         f"verdicts REACHED, not a second way to fail :: {out[-300:]}")
+
+
+#: The three step-37.5 clauses that had no fixture, with the one that reddens
+#: each. Kept beside the control below for the same reason as the pairs above,
+#: and for one more specific to these three: two of them are graded over trees
+#: this module does not otherwise build (a documented IP release, a documented
+#: die) and the third is graded over a PLANTED PLUGIN, so "the fixture stopped
+#: reddening" and "the fixture stopped building" look identical in the matrix
+#: cell and are told apart here.
+_RELEASE_BLOCKING: Tuple[Tuple[str, str, str], ...] = (
+    ("37.5ip", "release_docs_check . --arm ip --json "
+               "reports/phase3/release_docs.json", "IP_RELEASE_PIN_COUNT_LIE"),
+    ("37.5ic", "release_docs_check . --arm ic --json "
+               "reports/phase3/release_docs_ic.json", "IC_RELEASE_PIN_COUNT_LIE"),
+    ("37.5ic", "closed_loop_executed_reentry_census . --json "
+               "reports/phase3/closed_loop_executed_reentry.json",
+     "REENTRY_LOOP_INERT"),
+)
+
+#: The datasheet each release arm's mutation is planted in.
+_RELEASE_DATASHEET = {
+    "IP_RELEASE_PIN_COUNT_LIE": "IP_DATASHEET.md",
+    "IC_RELEASE_PIN_COUNT_LIE": "PRELIMINARY_DATASHEET.md",
+}
+
+
+def _datasheet_in(project: Path, name: str) -> Path:
+    """The SUBJECT release's datasheet, found by walking the tree the fixture
+    built rather than by re-deriving the kits' package names here.
+
+    A second copy of "which package is the subject" would be a second answer to
+    it the day either kit renames one.
+    """
+    hits = sorted(project.glob(f"phase3/stage4/documentation/*/*/{name}"))
+    assert hits, f"{name} is nowhere under {project} — the fixture built nothing"
+    return hits[0]
+
+
+def _census_verdicts(project: Path):
+    """The per-site verdicts the census WROTE, not the tail of what it printed.
+
+    The clause declares ``--json reports/phase3/closed_loop_executed_reentry.
+    json``, so the report is the gate's own record of what it graded. The
+    consumer returns a 400-character tail of stdout and the counts line does not
+    fit inside it, so a control asserted on the snippet would silently stop
+    asserting the day the gate prints one more sentence.
+    """
+    report = project / "reports/phase3/closed_loop_executed_reentry.json"
+    assert report.is_file(), f"the census wrote no report under {project}"
+    return [s["verdict"]
+            for s in json.loads(report.read_text(encoding="utf-8"))["sites"]]
+
+
+def test_d2_the_three_step_37_5_clauses_redden_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """The claims in the three step-37.5 fixture docstrings, RUN.
+
+    Each arm is the SMALLEST edit to the SAME tree that flips the verdict, so a
+    red earned by the tree's shape — no kit, no plugin directory, an
+    unparseable file — cannot be mistaken for the gate's verdict on content.
+    """
+    for i, (key, command, fixture) in enumerate(_RELEASE_BLOCKING):
+        red, out_red = _tier(_build_project(tmp_path, f"r{i}", fixture), command)
+        assert red == RED, (
+            f"step {key}: fixture {fixture} no longer reddens {command!r} -> "
+            f"{red} :: {out_red[-300:]}")
+        empty, out_empty = _tier(_build_project(tmp_path, f"e{i}", "EMPTY"),
+                                 command)
+        assert empty != RED, (
+            f"step {key}: EMPTY now reddens {command!r}, so the dedicated "
+            f"fixture is measuring nothing the bare tree does not :: "
+            f"{out_empty[-300:]}")
+        if fixture == "REENTRY_LOOP_INERT":
+            # WHICH tree the census graded, from its own report. On EMPTY it
+            # falls back to THIS repository and answers rc 0 about a population
+            # the fixture never wrote; the planted plugin must have replaced
+            # that population entirely, or the red above is this repo's.
+            assert _census_verdicts(tmp_path / f"r{i}") == ["INERT"], (
+                f"the planted runner is not the population the census graded: "
+                f"{_census_verdicts(tmp_path / f'r{i}')}")
+            assert len(_census_verdicts(tmp_path / f"e{i}")) > 1, (
+                "EMPTY no longer censuses the shipped plugin, so the fallback "
+                "this fixture exists to work around is gone and the fixture "
+                "must be re-decided")
+
+    # ── the two release arms, negative control: the SAME generated release
+    #    with the one edited row put back. Nothing else is touched, so a PASS
+    #    here is the pin-count disagreement and not the document set.
+    for i, (key, command, fixture) in enumerate(_RELEASE_BLOCKING[:2]):
+        project = _build_project(tmp_path, f"c{i}", fixture)
+        _restate_signal_pins(
+            _datasheet_in(project, _RELEASE_DATASHEET[fixture]), 7, 3)
+        tier, out = _tier(project, command)
+        assert tier == PASS, (
+            f"step {key}: the repaired release must PASS on the identical "
+            f"tree, else the red above is the fixture and not the stated pin "
+            f"count -> {tier} :: {out[-300:]}")
+
+    # ── the census, negative control: the SAME planted plugin, the SAME single
+    #    re-entry site, with the varying argument and the read-back put back.
+    #    Graded ACTUATING, so the red above is the LOOP'S SHAPE and not the
+    #    fixture having planted a plugin directory at all — which is the one
+    #    alternative explanation this clause admits.
+    census = _build_project(tmp_path, "cc", "REENTRY_LOOP_INERT")
+    (census / "vibe-ic-marketplace/plugins/vibe-ic/programs"
+            / "probe_one_shot_runner.py").write_text(
+        "def step_probe(ctx, n):\n"
+        "    r = step_probe(ctx, n - 1)\n"
+        "    if r:\n"
+        "        return r\n"
+        "    return 0\n", encoding="utf-8")
+    tier, out = _tier(census, _RELEASE_BLOCKING[2][1])
+    assert tier == PASS, (
+        "a re-entry that varies its argument and branches on what came back is "
+        f"ACTUATING; reddening it would make the census unusable :: {out[-300:]}")
+    # Read off the census's OWN report rather than its stdout: the consumer
+    # hands this module a 400-character tail, and the counts line is not in it.
+    # A control asserted on a truncated snippet is a control that stops being
+    # asserted the day the gate prints one more sentence.
+    assert _census_verdicts(census) == ["ACTUATING"], (
+        f"the control loop was not graded ACTUATING, so this control is not "
+        f"the one the docstring claims :: {_census_verdicts(census)}")
 
 
 #: The two obstruction gates, with the fixture that reddens each. Kept beside
