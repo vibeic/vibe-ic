@@ -1703,10 +1703,37 @@ _REQ_FILENAME_RE = re.compile(
 # declaration recovers the real prompt-derived top so it (not the id stem) is
 # the authoritative conformance target. chip-AGNOSTIC: pure prompt-prose
 # structure, no chip / vendor / SKU literal.
+# `name` NEEDS A WORD BOUNDARY, and without one this read `module named
+# \`cvdp_prbs_gen\`` as the declaration "module name" followed by the identifier
+# `d` — the leftover of `named`. Measured over the 302 public prompts: of the 63
+# this extractor answered at all, 39 returned an English fragment (`d`, `The`,
+# `and`) instead of a module name. Since the returned stem is what the gate
+# checks a completion's module name AGAINST, a junk stem is not inert.
+#
+# Two forms, both structural:
+#   (a) the DECLARATION — "Module Name: `foo`" / "### Module Name\n`foo`"
+#   (b) the PROSE form  — "a module named `foo`", which (a) used to swallow
 _REQ_MODULE_NAME_RE = re.compile(
-    r"module\s+name\s*[`'\"*]*\s*[:\-]?\s*\n?\s*"
+    r"module\s+name\b\s*[`'\"*]*\s*[:\-]?\s*\n?\s*"
     r"(?:[`'\"*]+\s*)?([A-Za-z_]\w*)",
     re.IGNORECASE)
+
+#: "…module named `foo`" / "…module called foo" — the identifier is the thing
+#: after the verb, and in practice it is quoted, which is what makes it safe to
+#: read: an unquoted match would happily take the next English word.
+_REQ_MODULE_NAMED_RE = re.compile(
+    r"module\s+(?:named|called)\s*[:\-]?\s*[`'\"*]+\s*([A-Za-z_]\w*)",
+    re.IGNORECASE)
+
+#: English fragments a broken match leaves behind, plus words no author writes
+#: as a module name. A stem this short or this generic is evidence the regex
+#: caught prose, not a declaration — dropping it is strictly safer than checking
+#: a completion against it.
+_MODULE_NAME_STOPWORDS = frozenset({
+    "a", "an", "and", "as", "at", "be", "by", "d", "for", "in", "is", "it",
+    "module", "name", "named", "called", "of", "or", "s", "that", "the",
+    "then", "this", "to", "with",
+})
 
 
 def required_module_names_from_prompt(prompt_text):
@@ -1725,9 +1752,13 @@ def required_module_names_from_prompt(prompt_text):
         nm = m.group(1) or m.group(2)
         if nm:
             stems.add(nm)
+    for m in _REQ_MODULE_NAMED_RE.finditer(prompt_text or ""):
+        nm = m.group(1)
+        if nm and nm.lower() not in _MODULE_NAME_STOPWORDS:
+            stems.add(nm)
     for m in _REQ_MODULE_NAME_RE.finditer(prompt_text or ""):
         nm = m.group(1)
-        if nm:
+        if nm and nm.lower() not in _MODULE_NAME_STOPWORDS:
             stems.add(nm)
     return stems
 
