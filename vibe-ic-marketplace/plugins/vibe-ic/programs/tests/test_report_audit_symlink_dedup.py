@@ -131,6 +131,116 @@ def test_genuinely_distinct_reports_are_still_counted_separately(tmp_path):
     )
 
 
+def test_an_independent_byte_identical_copy_is_one_measurement(tmp_path):
+    """The other half of the same defect: two INODES, one measurement.
+
+    MEASURED (subservient x gf180mcuD, plugin v1.13.40, image 0.3.39). The
+    phase-3 runner writes one report body to two paths on purpose
+    (`phase3_one_shot_runner.py`: "Mirror to reports/phase3/ where the gate's
+    --json output lands"), so the pair is two inodes with identical bytes::
+
+        phase3/stage3/pnr/routed.drc.rpt   66306:86959502  19113 B
+        reports/phase3/drc_router.rpt      66306:86959503  19113 B
+        md5sum both                        10ef04cdcae8e7ef2f0abaead418ea16
+
+    `--under` had already narrowed the router-DRC gate to these two, and the
+    inode dedup had already collapsed each one's `steps/**` symlink, and the
+    gate still recorded `real_violation_total = 36` for a router that said
+    `Number of violations = 18` -- and called it `tool_corroborated_files: 2`.
+
+    The mirroring is unconditional, so this is chip-AGNOSTIC and fires on every
+    design that routes.
+    """
+    (tmp_path / 'reports/phase3').mkdir(parents=True)
+    (tmp_path / 'phase3/stage3/pnr').mkdir(parents=True)
+    body = _klayout_drc(3)
+
+    # Two independent writes of ONE body -- exactly what the runner does.
+    (tmp_path / 'reports/phase3/drc_signoff.rpt').write_text(body)
+    (tmp_path / 'phase3/stage3/pnr/routed.drc.rpt').write_text(body)
+
+    a = (tmp_path / 'reports/phase3/drc_signoff.rpt').stat()
+    b = (tmp_path / 'phase3/stage3/pnr/routed.drc.rpt').stat()
+    assert (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino), (
+        "fixture must be two INDEPENDENT copies; if they share an inode this "
+        "test is re-testing the symlink case and proves nothing new"
+    )
+
+    # The SAME body filed once, as the reference. Comparing the pair against
+    # this rather than against literals keeps the assertion about the mirror
+    # and not about what this particular fixture can corroborate.
+    solo = tmp_path.parent / (tmp_path.name + '_solo')
+    (solo / 'reports/phase3').mkdir(parents=True)
+    (solo / 'reports/phase3/drc_signoff.rpt').write_text(body)
+
+    _, once = _audit(solo, tmp_path / 'solo.json')
+    _, twice = _audit(tmp_path, tmp_path / 'out.json')
+
+    assert once['files_found'] == 1 and once['real_violation_total'] == 3, (
+        f"reference arm is not the expected single measurement: {once}"
+    )
+    for field in ('files_found', 'real_violation_total',
+                  'determined_files', 'tool_corroborated_files'):
+        assert twice[field] == once[field], (
+            f"filing one report twice changed {field}: "
+            f"{once[field]} -> {twice[field]}. Two byte-identical reports are "
+            f"one measurement of one layout, and a re-filing is not a second, "
+            f"corroborating source."
+        )
+
+
+def test_two_empty_reports_are_two_holes_not_one(tmp_path):
+    """Negative control for the CARVE-OUT, not for the dedup.
+
+    Empty files trivially share content. They are NOT one measurement -- they
+    are two measurements that did not happen, and v1.13.21's ABSENT / EMPTY /
+    POPULATED split exists precisely so a report that is present-and-empty is
+    not read as a clean one. Collapsing them would hide one hole behind the
+    other and undo half of that split.
+    """
+    (tmp_path / 'reports/phase3').mkdir(parents=True)
+    (tmp_path / 'phase3/stage3/pnr').mkdir(parents=True)
+    (tmp_path / 'reports/phase3/drc_signoff.rpt').write_text('')
+    (tmp_path / 'phase3/stage3/pnr/routed.drc.rpt').write_text('')
+
+    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+
+    assert summary['files_found'] == 2, (
+        "two empty reports must stay two; got "
+        f"files_found={summary['files_found']}"
+    )
+    assert summary['empty_report_files'] == 2, (
+        "both holes must be disclosed; got "
+        f"empty_report_files={summary['empty_report_files']}"
+    )
+
+
+def test_same_size_different_bytes_are_still_two(tmp_path):
+    """The size pre-filter must not become the decision.
+
+    Size only selects which files are worth hashing. Two reports of equal
+    length carrying different violations are two measurements and must both
+    count -- a fix that dropped one on the size collision alone would silently
+    halve a real count.
+    """
+    (tmp_path / 'reports/phase3').mkdir(parents=True)
+    (tmp_path / 'phase3/stage3/pnr').mkdir(parents=True)
+    one = _klayout_drc(3, top='alpha')
+    two = _klayout_drc(3, top='bravo')
+    assert len(one) == len(two) and one != two, "fixture needs equal size, different bytes"
+    (tmp_path / 'reports/phase3/drc_signoff.rpt').write_text(one)
+    (tmp_path / 'phase3/stage3/pnr/routed.drc.rpt').write_text(two)
+
+    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+
+    assert summary['files_found'] == 2, (
+        f"equal size is not equal content; got files_found={summary['files_found']}"
+    )
+    assert summary['real_violation_total'] == 6, (
+        f"3 + 3 distinct violations; got {summary['real_violation_total']}"
+    )
+
+
 def test_discover_keys_on_the_physical_file(tmp_path):
     """Unit-level: _discover collapses a symlink onto its target."""
     (tmp_path / 'a').mkdir()

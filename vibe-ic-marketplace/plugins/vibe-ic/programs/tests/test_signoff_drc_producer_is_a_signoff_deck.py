@@ -428,7 +428,14 @@ def test_step21_router_gate_is_untouched(tmp_path):
                                    "--under", "reports/phase3/drc_router.rpt"])
     payload = json.loads(out.getvalue())
     assert rc == 1
-    assert payload["summary"]["real_violation_total"] == 14   # 7 in each report
+    # ONE measurement, filed twice. The runner writes a single body to both
+    # of these paths ("Mirror to reports/phase3/ where the gate's --json
+    # output lands"), so the pair is two inodes carrying identical bytes and
+    # the router ran once. This literal was 14 with the comment "7 in each
+    # report" — the count multiplied by how many times the flow had written
+    # it down. See test_report_audit_symlink_dedup::
+    # test_an_independent_byte_identical_copy_is_one_measurement.
+    assert payload["summary"]["real_violation_total"] == 7
     assert payload["summary"]["tool_authentic"] is True
     assert "signoff_scope" not in payload["summary"]
 
