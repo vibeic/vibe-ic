@@ -46,6 +46,31 @@ _SRC = (_PROGRAMS / "phase1_doc_one_shot_runner.py").read_text(encoding="utf-8")
 
 
 def _load(name, fn):
+    """Import a sibling program by path, and NEVER as a second identity.
+
+    Returning early when the name is already imported is the whole point.
+    Unconditionally rebinding `sys.modules[name]` builds a SECOND module
+    object for one file, and every module that already did
+    `from <name> import X` keeps the FIRST X. The suite then fails an
+    identity assertion in a file that has nothing to do with this one.
+
+    MEASURED, before this guard, in one pytest process over three files in
+    collection order:
+
+        test_crc_polynomial_width.py           imports phase1_doc_one_shot_runner,
+                                               which binds _code_literal.CODE_LITERAL_RE
+        test_issue592_hex_enum_table_lift.py   rebinds sys.modules["_code_literal"]
+        test_v1_7_72_..._code_literals.py      CL, and l4_regmap_... imported after,
+                                               both see the NEW object
+
+    so `test_gate_and_lifter_share_one_reader` failed on
+    `RUNNER._CODE_LITERAL_RE is CL.CODE_LITERAL_RE` while the `L4GATE` assert
+    one line above passed — the asymmetry that identifies this cause and not
+    a drifted regex.
+    """
+    mod = sys.modules.get(name)
+    if mod is not None:
+        return mod
     spec = importlib.util.spec_from_file_location(name, _PROGRAMS / fn)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
